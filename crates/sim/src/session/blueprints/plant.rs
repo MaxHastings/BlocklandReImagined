@@ -94,7 +94,11 @@ impl PlantWork {
         anchor: [f32; 3],
         (partial, float): (bool, bool),
     ) -> Self {
-        let support = if float { Support::Float } else { Support::Required };
+        let support = if float {
+            Support::Float
+        } else {
+            Support::Required
+        };
         let phase = if partial {
             Phase::Each {
                 waiting: (0..copy.len() as u32).collect(),
@@ -224,7 +228,9 @@ impl PlantWork {
                             return Ok(false);
                         }
                         *next += 1;
-                        let brick = self.placement.brick(&self.copy, &self.copy.bricks[i as usize]);
+                        let brick = self
+                            .placement
+                            .brick(&self.copy, &self.copy.bricks[i as usize]);
                         match s.simulation.plant_try(&self.actor, brick, free) {
                             Ok(id) => planted(
                                 s,
@@ -250,7 +256,8 @@ impl PlantWork {
                     }
                     if self.ids.len() == *planted_before {
                         if self.support != Support::Float {
-                            self.refused.add_many(PlantFailure::Float.into(), floating.len());
+                            self.refused
+                                .add_many(PlantFailure::Float.into(), floating.len());
                             return Ok(true);
                         }
                         // Nothing of the copy holds the rest up: the lowest
@@ -263,7 +270,9 @@ impl PlantWork {
                             })
                             .expect("not empty");
                         let i = floating.swap_remove(lowest);
-                        let mut base = self.placement.brick(&self.copy, &self.copy.bricks[i as usize]);
+                        let mut base = self
+                            .placement
+                            .brick(&self.copy, &self.copy.bricks[i as usize]);
                         base.base_plate = true;
                         match s.simulation.plant_try(&self.actor, base, true) {
                             Ok(id) => planted(
@@ -296,7 +305,12 @@ impl PlantWork {
             s.report_place(
                 package,
                 owner,
-                (self.ids.len(), self.copy.len(), canceled, self.float_refused),
+                (
+                    self.ids.len(),
+                    self.copy.len(),
+                    canceled,
+                    self.float_refused,
+                ),
                 &self.refused,
                 &self.inexact,
             );

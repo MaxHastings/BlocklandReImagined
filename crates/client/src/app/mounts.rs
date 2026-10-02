@@ -90,10 +90,7 @@ impl App {
         motion.set_drive_prefs(prefs);
         if let Some((_, _, pose)) = wanted {
             let corrected = motion.observe_vehicle(pose);
-            if faults
-                .absorb("vehicle prediction", corrected)
-                .is_none()
-            {
+            if faults.absorb("vehicle prediction", corrected).is_none() {
                 motion.drive_state.refused = motion.drive_state.target.take();
                 let _ = motion.drive(None);
             }

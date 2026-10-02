@@ -44,7 +44,13 @@ fn named(mut c: Control, name: &str) -> Control {
 }
 fn push_button(r: Rect, label: &str, name: &str) -> Control {
     named(
-        button("BlockButtonProfile", r, "base/client/ui/button1", label, name),
+        button(
+            "BlockButtonProfile",
+            r,
+            "base/client/ui/button1",
+            label,
+            name,
+        ),
         name,
     )
 }
@@ -116,9 +122,15 @@ fn is_team_color(text: &str) -> bool {
 
 /// Whether two `"r g b a"` colours are the same to a paint step.
 fn same_color(a: &str, b: &str) -> bool {
-    let parse = |t: &str| -> Vec<f32> { t.split_whitespace().filter_map(|v| v.parse().ok()).collect() };
+    let parse = |t: &str| -> Vec<f32> {
+        t.split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect()
+    };
     let (a, b) = (parse(a), parse(b));
-    a.len() == b.len() && !a.is_empty() && a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.5 / 255.0)
+    a.len() == b.len()
+        && !a.is_empty()
+        && a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.5 / 255.0)
 }
 
 impl AddOnSettings {
@@ -134,13 +146,23 @@ impl AddOnSettings {
         win.h_sizing = HSizing::Center;
         win.v_sizing = VSizing::Center;
         let mut scroll = named(
-            ctrl("GuiScrollCtrl", "BlockScrollProfile", Rect::new(12, 32, W - 24, H - 140)),
+            ctrl(
+                "GuiScrollCtrl",
+                "BlockScrollProfile",
+                Rect::new(12, 32, W - 24, H - 140),
+            ),
             SCROLL,
         );
-        scroll.fields.insert("hScrollBar".into(), "alwaysOff".into());
+        scroll
+            .fields
+            .insert("hScrollBar".into(), "alwaysOff".into());
         scroll.fields.insert("vScrollBar".into(), "dynamic".into());
         scroll.children.push(named(
-            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, W - 42, 10)),
+            ctrl(
+                "GuiControl",
+                "GuiDefaultProfile",
+                Rect::new(0, 0, W - 42, 10),
+            ),
             ROWS,
         ));
         win.children.push(scroll);
@@ -151,27 +173,50 @@ impl AddOnSettings {
         status.class = "GuiMLTextCtrl".into();
         win.children.push(status);
         // Favourites: ten slots of the whole setup.
-        win.children.push(text("GuiTextProfile", Rect::new(12, H - 66, 70, 20), "Favourites:"));
+        win.children.push(text(
+            "GuiTextProfile",
+            Rect::new(12, H - 66, 70, 20),
+            "Favourites:",
+        ));
         let mut favs = popup(Rect::new(84, H - 66, 110, 20), FAVS);
         favs.command = Some(FAVS.into());
         win.children.push(favs);
+        win.children.push(push_button(
+            Rect::new(198, H - 68, 56, 24),
+            "Load",
+            "AOS_FavLoad",
+        ));
+        win.children.push(push_button(
+            Rect::new(258, H - 68, 56, 24),
+            "Save",
+            "AOS_FavSave",
+        ));
         win.children
-            .push(push_button(Rect::new(198, H - 68, 56, 24), "Load", "AOS_FavLoad"));
-        win.children
-            .push(push_button(Rect::new(258, H - 68, 56, 24), "Save", "AOS_FavSave"));
-        win.children.push(check(Rect::new(326, H - 66, 20, 20), NOTIFY));
-        win.children
-            .push(text("GuiTextProfile", Rect::new(348, H - 66, W - 360, 20), "Tell players"));
+            .push(check(Rect::new(326, H - 66, 20, 20), NOTIFY));
+        win.children.push(text(
+            "GuiTextProfile",
+            Rect::new(348, H - 66, W - 360, 20),
+            "Tell players",
+        ));
         win.children
             .push(push_button(Rect::new(12, H - 36, 64, 28), "Reset", RESET));
         win.children
             .push(push_button(Rect::new(80, H - 36, 64, 28), "End", END));
-        win.children
-            .push(push_button(Rect::new(W - 316, H - 36, 80, 28), "Close", "AOS_Close"));
-        win.children
-            .push(push_button(Rect::new(W - 232, H - 36, 120, 28), "Apply & Reset", APPLY_RESET));
-        win.children
-            .push(push_button(Rect::new(W - 108, H - 36, 94, 28), "Apply", APPLY));
+        win.children.push(push_button(
+            Rect::new(W - 316, H - 36, 80, 28),
+            "Close",
+            "AOS_Close",
+        ));
+        win.children.push(push_button(
+            Rect::new(W - 232, H - 36, 120, 28),
+            "Apply & Reset",
+            APPLY_RESET,
+        ));
+        win.children.push(push_button(
+            Rect::new(W - 108, H - 36, 94, 28),
+            "Apply",
+            APPLY,
+        ));
         let mut root = root;
         root.children.push(win);
         let mut view = View::new(&root);
@@ -231,7 +276,10 @@ impl AddOnSettings {
         let slot = self.favorite_slot();
         // The game's vanilla rules go with it (Slayer's favourites kept
         // every preference), or the ones a loaded favourite brought.
-        let rules = self.rules.clone().or_else(|| self.summary(core).map(|g| g.rules.clone()));
+        let rules = self
+            .rules
+            .clone()
+            .or_else(|| self.summary(core).map(|g| g.rules.clone()));
         core.settings.addon_favorites.insert(
             slot,
             AddOnFavorite {
@@ -298,7 +346,10 @@ impl AddOnSettings {
             self.rules = fav.rules;
         }
         self.build(core);
-        self.status(core, Some(&format!("Loaded slot {}. Apply to use it.", slot + 1)));
+        self.status(
+            core,
+            Some(&format!("Loaded slot {}. Apply to use it.", slot + 1)),
+        );
     }
     /// Whether a setting may hold `value` (a favourite's, kept from before).
     fn takes(s: &MiniGameAddOnSetting, value: &MiniGameSettingValue) -> bool {
@@ -318,7 +369,12 @@ impl AddOnSettings {
     /// Categories of team settings that hold a look's parts.
     fn look_categories(core: &Core) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.avatar.is_some()) {
+        for s in core
+            .minigames
+            .addon_settings
+            .iter()
+            .filter(|s| s.team && s.avatar.is_some())
+        {
             if !out.contains(&s.category) {
                 out.push(s.category.clone());
             }
@@ -342,7 +398,12 @@ impl AddOnSettings {
         values: &dyn Fn(&MiniGameAddOnSetting) -> MiniGameSettingValue,
     ) -> AvatarPrefs {
         let mut look = AvatarPrefs::default();
-        for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.category == category) {
+        for s in core
+            .minigames
+            .addon_settings
+            .iter()
+            .filter(|s| s.team && s.category == category)
+        {
             let Some(part) = &s.avatar else { continue };
             let text = value_text(&values(s));
             match team_color {
@@ -356,12 +417,19 @@ impl AddOnSettings {
     /// Open the avatar editor on team `t`'s look in `category`.
     fn edit_look(&mut self, core: &mut Core, t: usize, category: &str) {
         let _ = self.read_fields(core);
-        let Some(team) = self.teams.get(t) else { return };
+        let Some(team) = self.teams.get(t) else {
+            return;
+        };
         let team_color = Self::team_color_text(core, team.color);
         let look = Self::look(core, category, team_color.as_deref(), &|s| {
-            team.settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone())
+            team.settings
+                .get(&s.key)
+                .cloned()
+                .unwrap_or_else(|| s.default.clone())
         });
-        let default = Self::look(core, category, team_color.as_deref(), &|s| s.default.clone());
+        let default = Self::look(core, category, team_color.as_deref(), &|s| {
+            s.default.clone()
+        });
         core.avatar_value = Some(crate::ui::AvatarValue {
             title: format!("Edit {category}: {}", team.name),
             look,
@@ -373,15 +441,28 @@ impl AddOnSettings {
     }
     /// Take the look the avatar editor left, if it was one of ours.
     fn take_look(&mut self, core: &mut Core) {
-        let Some(value) = core.avatar_value.as_ref() else { return };
-        let Some(look) = value.done.clone() else { return };
+        let Some(value) = core.avatar_value.as_ref() else {
+            return;
+        };
+        let Some(look) = value.done.clone() else {
+            return;
+        };
         let key = value.key.clone();
         core.avatar_value = None;
-        let Some((t, category)) = key.split_once(':') else { return };
-        let Some(t) = t.parse::<usize>().ok().filter(|t| *t < self.teams.len()) else { return };
+        let Some((t, category)) = key.split_once(':') else {
+            return;
+        };
+        let Some(t) = t.parse::<usize>().ok().filter(|t| *t < self.teams.len()) else {
+            return;
+        };
         let positions = look.part_positions(&core.pack.data.data.avatar);
         let team_color = Self::team_color_text(core, self.teams[t].color);
-        for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.category == category) {
+        for s in core
+            .minigames
+            .addon_settings
+            .iter()
+            .filter(|s| s.team && s.category == category)
+        {
             let Some(part) = &s.avatar else { continue };
             let value = match &s.kind {
                 MiniGameSettingKind::Int { min, max } => match positions.get(part.as_str()) {
@@ -539,14 +620,18 @@ impl AddOnSettings {
                     .map(|s| {
                         (
                             s.key.clone(),
-                            t.settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone()),
+                            t.settings
+                                .get(&s.key)
+                                .cloned()
+                                .unwrap_or_else(|| s.default.clone()),
                         )
                     })
                     .collect(),
             })
             .collect();
         if let Some(n) = self.view.id("AOS_Window") {
-            self.view.set_text(n, format!("Add-On Settings: {}", g.title));
+            self.view
+                .set_text(n, format!("Add-On Settings: {}", g.title));
         }
         self.values = values.clone();
         self.teams = teams.clone();
@@ -563,7 +648,10 @@ impl AddOnSettings {
         let current = self
             .values
             .get(key)
-            .or_else(|| team.and_then(|t| self.teams.get(t)).and_then(|t| t.settings.get(key)))
+            .or_else(|| {
+                team.and_then(|t| self.teams.get(t))
+                    .and_then(|t| t.settings.get(key))
+            })
             .cloned()
             .or_else(|| Self::setting(core, key).map(|d| d.default.clone()));
         current.is_some_and(|v| when.holds(&v))
@@ -592,7 +680,8 @@ impl AddOnSettings {
         let settings = core.minigames.addon_settings.clone();
         let mut last_group = (String::new(), String::new());
         for (i, s) in settings.iter().enumerate() {
-            if !self.mine(s) || s.avatar.is_some() || !self.open(core) || !self.shown(core, s, None) {
+            if !self.mine(s) || s.avatar.is_some() || !self.open(core) || !self.shown(core, s, None)
+            {
                 continue;
             }
             if last_group.0 != s.add_on {
@@ -602,16 +691,28 @@ impl AddOnSettings {
             if last_group.1 != s.category && !s.category.is_empty() {
                 self.view.add(
                     rows,
-                    text("GuiTextProfile", Rect::new(8, y, width - 16, 20), &format!("{}:", s.category)),
+                    text(
+                        "GuiTextProfile",
+                        Rect::new(8, y, width - 16, 20),
+                        &format!("{}:", s.category),
+                    ),
                 );
                 y += 22;
                 last_group.1 = s.category.clone();
             }
-            let value = self.values.get(&s.key).cloned().unwrap_or_else(|| s.default.clone());
+            let value = self
+                .values
+                .get(&s.key)
+                .cloned()
+                .unwrap_or_else(|| s.default.clone());
             self.row(Target::Game(i), s, &value, 20, y, editable, core);
             y += ROW;
         }
-        if Self::team_setup(core) && !self.server && self.summary(core).is_some() && self.teams_shown(core) {
+        if Self::team_setup(core)
+            && !self.server
+            && self.summary(core).is_some()
+            && self.teams_shown(core)
+        {
             heading(&mut self.view, &mut y, "Teams");
             for t in 0..self.teams.len() {
                 let team = self.teams[t].clone();
@@ -620,7 +721,9 @@ impl AddOnSettings {
                 self.view.set_text(n, team.name.clone());
                 self.view.set_active(n, editable);
                 let color = format!("AOS_T{t}_Color");
-                let n = self.view.add(rows, popup(Rect::new(196, y, 90, 20), &color));
+                let n = self
+                    .view
+                    .add(rows, popup(Rect::new(196, y, 90, 20), &color));
                 self.view.state(n).items = (0..core.minigames.palette.len().min(64))
                     .map(|c| (format!("Colour {}", c + 1), c as i64))
                     .collect();
@@ -635,33 +738,45 @@ impl AddOnSettings {
                 self.view.add(
                     rows,
                     named(
-                        swatch(Rect::new(290, y + 2, 16, 16), rgba([
-                            f32::from(rgb[0]) / 255.0,
-                            f32::from(rgb[1]) / 255.0,
-                            f32::from(rgb[2]) / 255.0,
-                            1.0,
-                        ])),
+                        swatch(
+                            Rect::new(290, y + 2, 16, 16),
+                            rgba([
+                                f32::from(rgb[0]) / 255.0,
+                                f32::from(rgb[1]) / 255.0,
+                                f32::from(rgb[2]) / 255.0,
+                                1.0,
+                            ]),
+                        ),
                         &format!("AOS_T{t}_Swatch"),
                     ),
                 );
                 if editable {
                     let remove = format!("AOS_T{t}_Remove");
-                    self.view
-                        .add(rows, push_button(Rect::new(width - 84, y - 2, 76, 24), "Remove", &remove));
+                    self.view.add(
+                        rows,
+                        push_button(Rect::new(width - 84, y - 2, 76, 24), "Remove", &remove),
+                    );
                 }
                 y += ROW;
                 for (i, s) in settings.iter().enumerate() {
                     if !s.team || s.avatar.is_some() || !self.shown(core, s, Some(t)) {
                         continue;
                     }
-                    let value = team.settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone());
+                    let value = team
+                        .settings
+                        .get(&s.key)
+                        .cloned()
+                        .unwrap_or_else(|| s.default.clone());
                     self.row(Target::Team(t, i), s, &value, 36, y, editable, core);
                     y += ROW;
                 }
                 // A look's parts open together in the avatar editor.
                 for category in Self::look_categories(core) {
                     let shown = settings.iter().any(|s| {
-                        s.team && s.avatar.is_some() && s.category == category && self.shown(core, s, Some(t))
+                        s.team
+                            && s.avatar.is_some()
+                            && s.category == category
+                            && self.shown(core, s, Some(t))
                     });
                     if !shown {
                         continue;
@@ -669,7 +784,11 @@ impl AddOnSettings {
                     let name = format!("AOS_T{t}_Look_{category}");
                     let n = self.view.add(
                         rows,
-                        push_button(Rect::new(36, y - 2, 150, 24), &format!("Edit {category}"), &name),
+                        push_button(
+                            Rect::new(36, y - 2, 150, 24),
+                            &format!("Edit {category}"),
+                            &name,
+                        ),
                     );
                     self.view.set_active(n, editable);
                     y += ROW;
@@ -677,8 +796,10 @@ impl AddOnSettings {
                 y += 6;
             }
             if editable {
-                self.view
-                    .add(rows, push_button(Rect::new(20, y, 110, 24), "Add Team", "AOS_AddTeam"));
+                self.view.add(
+                    rows,
+                    push_button(Rect::new(20, y, 110, 24), "Add Team", "AOS_AddTeam"),
+                );
                 y += ROW + 4;
             }
             y = self.player_rows(core, y, editable);
@@ -716,7 +837,11 @@ impl AddOnSettings {
         let width = W - 42;
         self.view.add(
             rows,
-            text("GuiBigTextProfile", Rect::new(4, y, width - 8, 22), "Players"),
+            text(
+                "GuiBigTextProfile",
+                Rect::new(4, y, width - 8, 22),
+                "Players",
+            ),
         );
         y += 24;
         let mut people: Vec<(MiniGamePlayerId, String, Option<Option<u32>>)> = game
@@ -745,7 +870,9 @@ impl AddOnSettings {
                 text("GuiTextProfile", Rect::new(20, y, 200, 20), name),
             );
             let pick = format!("AOS_P{}_Team", id.0);
-            let n = self.view.add(rows, popup(Rect::new(230, y, 150, 20), &pick));
+            let n = self
+                .view
+                .add(rows, popup(Rect::new(230, y, 150, 20), &pick));
             let mut items = Vec::new();
             if team.is_none() {
                 items.push(("Not playing".to_owned(), OUT_OF_GAME));
@@ -808,7 +935,8 @@ impl AddOnSettings {
         let n = match &s.kind {
             MiniGameSettingKind::Bool => {
                 let n = self.view.add(rows, check(Rect::new(230, y, 20, 20), &name));
-                self.view.set_bool(n, value == &MiniGameSettingValue::Bool(true));
+                self.view
+                    .set_bool(n, value == &MiniGameSettingValue::Bool(true));
                 n
             }
             MiniGameSettingKind::Int { .. } | MiniGameSettingKind::Text { .. } => {
@@ -821,7 +949,11 @@ impl AddOnSettings {
                 let top = (*max).min(core.minigames.palette.len() as i64 - 1);
                 self.view.state(n).items = (*min..=top)
                     .map(|c| {
-                        let label = if c < 0 { "None".to_owned() } else { format!("Colour {}", c + 1) };
+                        let label = if c < 0 {
+                            "None".to_owned()
+                        } else {
+                            format!("Colour {}", c + 1)
+                        };
                         (label, c)
                     })
                     .collect();
@@ -830,15 +962,21 @@ impl AddOnSettings {
                     _ => -1,
                 };
                 self.view.select(n, Some(current));
-                if let Some(rgb) = usize::try_from(current).ok().and_then(|c| core.minigames.palette.get(c)) {
+                if let Some(rgb) = usize::try_from(current)
+                    .ok()
+                    .and_then(|c| core.minigames.palette.get(c))
+                {
                     self.view.add(
                         rows,
-                        swatch(Rect::new(324, y + 2, 16, 16), rgba([
-                            f32::from(rgb[0]) / 255.0,
-                            f32::from(rgb[1]) / 255.0,
-                            f32::from(rgb[2]) / 255.0,
-                            1.0,
-                        ])),
+                        swatch(
+                            Rect::new(324, y + 2, 16, 16),
+                            rgba([
+                                f32::from(rgb[0]) / 255.0,
+                                f32::from(rgb[1]) / 255.0,
+                                f32::from(rgb[2]) / 255.0,
+                                1.0,
+                            ]),
+                        ),
                     );
                 }
                 n
@@ -850,8 +988,10 @@ impl AddOnSettings {
                     .enumerate()
                     .map(|(i, (_, label))| (label.clone(), i as i64))
                     .collect();
-                self.view
-                    .select(n, items.iter().position(|(v, _)| v == value).map(|i| i as i64));
+                self.view.select(
+                    n,
+                    items.iter().position(|(v, _)| v == value).map(|i| i as i64),
+                );
                 n
             }
         };
@@ -864,7 +1004,11 @@ impl AddOnSettings {
             };
             self.view.add(
                 rows,
-                push_button(Rect::new(width - 30, y - 1, 22, 22), "?", &format!("AOS_H{i}")),
+                push_button(
+                    Rect::new(width - 30, y - 1, 22, 22),
+                    "?",
+                    &format!("AOS_H{i}"),
+                ),
             );
         }
         self.rows.push((target, name));
@@ -873,11 +1017,15 @@ impl AddOnSettings {
     /// Read typed fields (numbers, text, team names) into the draft.
     fn read_fields(&mut self, core: &Core) -> Result<(), String> {
         for (target, name) in self.rows.clone() {
-            let Some(n) = self.view.id(&name) else { continue };
+            let Some(n) = self.view.id(&name) else {
+                continue;
+            };
             let i = match target {
                 Target::Game(i) | Target::Team(_, i) => i,
             };
-            let Some(s) = core.minigames.addon_settings.get(i) else { continue };
+            let Some(s) = core.minigames.addon_settings.get(i) else {
+                continue;
+            };
             let value = match &s.kind {
                 MiniGameSettingKind::Int { min, max } => {
                     let text = self.view.edit_text(n);
@@ -946,9 +1094,8 @@ impl AddOnSettings {
             self.teams
                 .iter()
                 .map(|t| {
-                    let before = t
-                        .id
-                        .and_then(|id| self.base.1.iter().find(|b| b.id == Some(id)));
+                    let before =
+                        t.id.and_then(|id| self.base.1.iter().find(|b| b.id == Some(id)));
                     MiniGameTeamEdit {
                         id: t.id,
                         name: t.name.trim().to_owned(),
@@ -1038,8 +1185,8 @@ impl AddOnSettings {
         }
         if settings.is_empty() && teams.is_none() {
             if reset {
-                self.request =
-                    core.minigame_request(MiniGameOperation::Reset, UiAction::ResetMiniGame { game });
+                self.request = core
+                    .minigame_request(MiniGameOperation::Reset, UiAction::ResetMiniGame { game });
             } else {
                 self.status(core, Some("Nothing has changed."));
             }
@@ -1207,7 +1354,9 @@ impl Screen for AddOnSettings {
         if key == Key::Delete && self.editable(core) {
             let focused = self.view.focus.and_then(|n| {
                 let ctrl = &self.view.node(n).ctrl;
-                (ctrl.class != "GuiTextEditCtrl").then(|| ctrl.name.clone()).flatten()
+                (ctrl.class != "GuiTextEditCtrl")
+                    .then(|| ctrl.name.clone())
+                    .flatten()
             });
             if let Some(t) = focused
                 .as_deref()
@@ -1232,7 +1381,13 @@ impl Screen for AddOnSettings {
         if !self.view.node(ev.node).state.active {
             return;
         }
-        let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+        let name = self
+            .view
+            .node(ev.node)
+            .ctrl
+            .name
+            .clone()
+            .unwrap_or_default();
         let row = self.rows.iter().find(|(_, n)| *n == name).map(|(t, _)| *t);
         if ev.kind == EventKind::Changed {
             if let Some(player) = name
@@ -1275,7 +1430,10 @@ impl Screen for AddOnSettings {
                 .strip_prefix("AOS_T")
                 .and_then(|r| r.strip_suffix("_Color"))
                 .and_then(|t| t.parse::<usize>().ok())
-                && let Some(c) = self.view.selected(ev.node).and_then(|c| u8::try_from(c).ok())
+                && let Some(c) = self
+                    .view
+                    .selected(ev.node)
+                    .and_then(|c| u8::try_from(c).ok())
             {
                 let _ = self.read_fields(core);
                 if let Some(team) = self.teams.get_mut(t) {
@@ -1297,8 +1455,10 @@ impl Screen for AddOnSettings {
             APPLY_RESET => self.apply(core, true),
             RESET => {
                 if let Some(game) = self.game {
-                    self.request =
-                        core.minigame_request(MiniGameOperation::Reset, UiAction::ResetMiniGame { game });
+                    self.request = core.minigame_request(
+                        MiniGameOperation::Reset,
+                        UiAction::ResetMiniGame { game },
+                    );
                 }
             }
             END => {
@@ -1348,7 +1508,10 @@ impl Screen for AddOnSettings {
                     .and_then(|(t, c)| Some((t.parse::<usize>().ok()?, c.to_owned())))
                 {
                     self.edit_look(core, t, &category);
-                } else if let Some(i) = command.strip_prefix("AOS_H").and_then(|i| i.parse::<usize>().ok()) {
+                } else if let Some(i) = command
+                    .strip_prefix("AOS_H")
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
                     if let Some(s) = core.minigames.addon_settings.get(i) {
                         let (title, help) = (s.title.clone(), s.help.clone());
                         core.message_ok(&title, &help);
@@ -1384,7 +1547,11 @@ impl Screen for AddOnSettings {
                 {
                     let on = self.view.bool_value(ev.node);
                     let _ = self.read_fields(core);
-                    self.set(row.expect("matched"), &s.key, MiniGameSettingValue::Bool(on));
+                    self.set(
+                        row.expect("matched"),
+                        &s.key,
+                        MiniGameSettingValue::Bool(on),
+                    );
                     self.build(core);
                 }
             }

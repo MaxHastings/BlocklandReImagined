@@ -25,7 +25,10 @@ fn load_side(root: &Path, server: bool) -> (Option<Arc<Catalog>>, Vec<Diagnostic
     let set = match bri_package::packages::PackageSet::load_root(root) {
         Ok(set) => set,
         Err(error) => {
-            return (None, vec![Diagnostic::error("set.read", format!("{error:#}"))]);
+            return (
+                None,
+                vec![Diagnostic::error("set.read", format!("{error:#}"))],
+            );
         }
     };
     load_set(root, &set, server)
@@ -93,7 +96,12 @@ pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_u
                 id: id.clone(),
                 name: p.manifest.name.clone(),
                 // Player-facing: "Add-On", never "package".
-                description: format!("{} (Add-On {} {})", p.manifest.description, p.id(), p.manifest.version),
+                description: format!(
+                    "{} (Add-On {} {})",
+                    p.manifest.description,
+                    p.id(),
+                    p.manifest.version
+                ),
                 preview: base.preview.clone(),
             })
         })
@@ -137,7 +145,11 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
                 package: bind.package.clone(),
                 command: name,
                 screen: bind.screen.clone(),
-                key: if mac { bind.mac_key.clone().or_else(|| bind.key.clone()) } else { bind.key.clone() },
+                key: if mac {
+                    bind.mac_key.clone().or_else(|| bind.key.clone())
+                } else {
+                    bind.key.clone()
+                },
                 hold: bind.hold,
             });
         }
@@ -180,8 +192,13 @@ pub fn panels(
         // nothing for it, so the panel stays hidden. The server names every
         // package it runs in its state, even while empty.
         let serves = |package: &str| state.packages.contains_key(package);
-        let binds = hud.rows.iter().filter_map(|row| content::Binding::parse(&row.bind));
-        if !binds.map(|b| b.package).all(|p| serves(&p)) || !hud.keys.iter().all(|k| serves(&k.package)) {
+        let binds = hud
+            .rows
+            .iter()
+            .filter_map(|row| content::Binding::parse(&row.bind));
+        if !binds.map(|b| b.package).all(|p| serves(&p))
+            || !hud.keys.iter().all(|k| serves(&k.package))
+        {
             continue;
         }
         let text = rgba(hud.text);
@@ -196,11 +213,19 @@ pub fn panels(
         let mut hints = Vec::new();
         for k in &hud.keys {
             let letter = k.key.chars().next().unwrap_or('?').to_ascii_lowercase();
-            if taken(letter) || keys.iter().any(|existing: &PackageKey| existing.key == letter) {
+            if taken(letter)
+                || keys
+                    .iter()
+                    .any(|existing: &PackageKey| existing.key == letter)
+            {
                 continue;
             }
             hints.push((letter, k.label.clone()));
-            keys.push(PackageKey { key: letter, package: k.package.clone(), command: k.command.clone() });
+            keys.push(PackageKey {
+                key: letter,
+                package: k.package.clone(),
+                command: k.command.clone(),
+            });
         }
         panels.push(PackagePanel {
             anchor: match hud.anchor {
@@ -232,8 +257,16 @@ pub struct Placement<'a> {
     pub label: &'a str,
 }
 /// Every entity where it stands.
-pub fn entity_placements(entities: &BTreeMap<u64, EntityInfo>) -> impl Iterator<Item = Placement<'_>> {
-    entities.values().map(|e| Placement { model: &e.model, position: e.position, yaw: e.yaw, scale: e.scale, label: &e.label })
+pub fn entity_placements(
+    entities: &BTreeMap<u64, EntityInfo>,
+) -> impl Iterator<Item = Placement<'_>> {
+    entities.values().map(|e| Placement {
+        model: &e.model,
+        position: e.position,
+        yaw: e.yaw,
+        scale: e.scale,
+        label: &e.label,
+    })
 }
 /// Players whose archetype's look replaces the Blockhead: a package model
 /// (`Some`: draw it in place), or no body at all (`None`, for an Add-On's
@@ -251,27 +284,56 @@ pub fn body_placements<'a>(
                 return Some((*owner, None));
             }
             catalog.model(&look.model)?;
-            let placement = Placement { model: &look.model, position: p.feet, yaw: p.yaw, scale: p.scale, label: "" };
+            let placement = Placement {
+                model: &look.model,
+                position: p.feet,
+                yaw: p.yaw,
+                scale: p.scale,
+                label: "",
+            };
             Some((*owner, Some(placement)))
         })
         .collect()
 }
 /// Each entity's model as box instances.
-pub fn box_instances(catalog: &Catalog, entities: &BTreeMap<u64, EntityInfo>, cube: f32) -> Vec<SceneTransform> {
+pub fn box_instances(
+    catalog: &Catalog,
+    entities: &BTreeMap<u64, EntityInfo>,
+    cube: f32,
+) -> Vec<SceneTransform> {
     place_boxes(catalog, entity_placements(entities), cube)
 }
 /// Each placed model as box instances.
-pub fn place_boxes<'a>(catalog: &Catalog, placements: impl IntoIterator<Item = Placement<'a>>, cube: f32) -> Vec<SceneTransform> {
+pub fn place_boxes<'a>(
+    catalog: &Catalog,
+    placements: impl IntoIterator<Item = Placement<'a>>,
+    cube: f32,
+) -> Vec<SceneTransform> {
     let mut out = Vec::new();
     for e in placements {
-        let Some(model) = catalog.model(e.model) else { continue };
-        let scale = if e.scale.is_finite() && e.scale > 0.0 { e.scale } else { 1.0 };
-        let frame = Mat4::from_scale_rotation_translation(Vec3::splat(scale), Quat::from_rotation_y(-e.yaw), Vec3::from(e.position));
+        let Some(model) = catalog.model(e.model) else {
+            continue;
+        };
+        let scale = if e.scale.is_finite() && e.scale > 0.0 {
+            e.scale
+        } else {
+            1.0
+        };
+        let frame = Mat4::from_scale_rotation_translation(
+            Vec3::splat(scale),
+            Quat::from_rotation_y(-e.yaw),
+            Vec3::from(e.position),
+        );
         for b in &model.boxes {
             let color = b.label_colors.get(e.label).copied().unwrap_or(b.color);
             let scale = Vec3::from(b.size) / cube;
             out.push(SceneTransform {
-                transform: frame * Mat4::from_scale_rotation_translation(scale, Quat::IDENTITY, Vec3::from(b.center)),
+                transform: frame
+                    * Mat4::from_scale_rotation_translation(
+                        scale,
+                        Quat::IDENTITY,
+                        Vec3::from(b.center),
+                    ),
                 tint: color.map(|v| v.clamp(0.0, 1.0)),
             });
         }
@@ -326,10 +388,22 @@ impl PackageModels {
                 name: "Package models".into(),
                 map_id: "package-models".into(),
                 palette: vec![[1.0; 4]],
-                bricks: bri_world::Bricks::unit(0, bri_world::Brick::new(ContentRef::Resolved(MODEL_CUBE.into()), [0.0; 3], 0)),
+                bricks: bri_world::Bricks::unit(
+                    0,
+                    bri_world::Brick::new(ContentRef::Resolved(MODEL_CUBE.into()), [0.0; 3], 0),
+                ),
             };
-            let data = crate::world_scene::build_world_scene_materials(&world, meshes, 200_000, Some(materials))?;
-            self.gpu = Some(renderer.upload(device, queue, &data).context("Package model cube")?);
+            let data = crate::world_scene::build_world_scene_materials(
+                &world,
+                meshes,
+                200_000,
+                Some(materials),
+            )?;
+            self.gpu = Some(
+                renderer
+                    .upload(device, queue, &data)
+                    .context("Package model cube")?,
+            );
         }
         if self.instances.is_none() && !transforms.is_empty() {
             self.instances = Some(GpuInstances::new(device, MAX_BOXES)?);
@@ -372,7 +446,8 @@ mod tests {
         load(false)
     }
     fn load(server: bool) -> Catalog {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/stresslab");
+        let root =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/stresslab");
         let bricks = PackageEntry {
             id: "v20-bricks".into(),
             version: "4.0.0".into(),
@@ -389,10 +464,24 @@ mod tests {
             ("stresslab-mode", Side::Server),
         ]
         .into_iter()
-        .map(|(id, side)| PackageEntry { id: id.into(), version: "1.0.0".into(), side, dir: id.into(), role: None })
+        .map(|(id, side)| PackageEntry {
+            id: id.into(),
+            version: "1.0.0".into(),
+            side,
+            dir: id.into(),
+            role: None,
+        })
         .chain([bricks])
         .collect();
-        Catalog::load(&root, &PackageSet { schema_version: 1, packages }, server).unwrap()
+        Catalog::load(
+            &root,
+            &PackageSet {
+                schema_version: 1,
+                packages,
+            },
+            server,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -401,7 +490,10 @@ mod tests {
         let strata = "stresslab-world:world/strata";
         let infos = modes(Some(&server));
         assert_eq!(infos.len(), 1);
-        assert_eq!((infos[0].name.as_str(), infos[0].map.as_deref()), ("Stress Lab", Some(strata)));
+        assert_eq!(
+            (infos[0].name.as_str(), infos[0].map.as_deref()),
+            ("Stress Lab", Some(strata))
+        );
         // The mode picks its own world, whatever map Start Game had selected.
         let mode = hosted(Some(&server), "Slate", Some(&infos[0].id)).unwrap();
         assert_eq!(mode.map, strata);
@@ -410,12 +502,21 @@ mod tests {
         assert!(mode.catalog.as_ref().is_some_and(|c| c.world().is_some()));
         // Custom on the package world runs the Add-Ons made for it.
         let world = hosted(Some(&server), strata, None).unwrap();
-        assert!(world.catalog.is_some_and(|c| c.packages.contains_key("stresslab-creeper")));
+        assert!(
+            world
+                .catalog
+                .is_some_and(|c| c.packages.contains_key("stresslab-creeper"))
+        );
         // Custom on a base map runs no Add-On a game mode claims.
         let base = hosted(Some(&server), "Slate", None).unwrap();
         assert!(base.catalog.is_none());
-        assert_eq!((base.map.as_str(), base.save_key.as_str()), ("Slate", "Slate"));
-        let off = hosted(None, "Slate", Some(&infos[0].id)).unwrap_err().to_string();
+        assert_eq!(
+            (base.map.as_str(), base.save_key.as_str()),
+            ("Slate", "Slate")
+        );
+        let off = hosted(None, "Slate", Some(&infos[0].id))
+            .unwrap_err()
+            .to_string();
         assert!(off.contains("not turned on in Add-Ons"), "{off}");
     }
 
@@ -423,15 +524,32 @@ mod tests {
     fn miner_panel_shows_the_viewers_server_state() {
         let catalog = catalog();
         let mut state = PackageStateView::default();
-        let ns = state.packages.entry("stresslab-economy".into()).or_default();
-        ns.players.insert(4, [("bits".to_string(), serde_json::json!(125)), ("copper".to_string(), serde_json::json!(3))].into());
-        ns.players.insert(5, [("bits".to_string(), serde_json::json!(9))].into());
-        state.packages.entry("stresslab-creeper".into()).or_default();
+        let ns = state
+            .packages
+            .entry("stresslab-economy".into())
+            .or_default();
+        ns.players.insert(
+            4,
+            [
+                ("bits".to_string(), serde_json::json!(125)),
+                ("copper".to_string(), serde_json::json!(3)),
+            ]
+            .into(),
+        );
+        ns.players
+            .insert(5, [("bits".to_string(), serde_json::json!(9))].into());
+        state
+            .packages
+            .entry("stresslab-creeper".into())
+            .or_default();
         let (panels, keys) = panels(&catalog, &state, 4, "", |c| c == 'g');
         assert_eq!(panels.len(), 1);
         let p = &panels[0];
         assert_eq!(p.title, "STRESS LAB MINER");
-        assert_eq!(p.rows[0], ("Bits".into(), "125".into(), [252, 209, 77, 255]));
+        assert_eq!(
+            p.rows[0],
+            ("Bits".into(), "125".into(), [252, 209, 77, 255])
+        );
         assert_eq!(p.rows[2].1, "3");
         assert_eq!(p.rows[1].1, "-", "no coal value yet");
         // G is taken by a base-game bind here, so only H and J are offered.
@@ -447,9 +565,15 @@ mod tests {
         assert!(panels.is_empty() && keys.is_empty());
         // The economy runs but the creeper Add-On (the J key) is off.
         let mut state = PackageStateView::default();
-        state.packages.entry("stresslab-economy".into()).or_default();
+        state
+            .packages
+            .entry("stresslab-economy".into())
+            .or_default();
         assert!(panels_of(&catalog, &state).is_empty());
-        state.packages.entry("stresslab-creeper".into()).or_default();
+        state
+            .packages
+            .entry("stresslab-creeper".into())
+            .or_default();
         assert_eq!(panels_of(&catalog, &state).len(), 1);
     }
     fn panels_of(catalog: &Catalog, state: &PackageStateView) -> Vec<PackagePanel> {
@@ -475,7 +599,10 @@ mod tests {
         assert!(boxes[0].tint[1] > boxes[0].tint[0], "green");
         entity.label = "fuse_a".into();
         let lit = box_instances(&catalog, &[(1, entity)].into(), 2.0);
-        assert!(lit[0].tint.iter().take(3).all(|c| *c > 0.9), "flashes white");
+        assert!(
+            lit[0].tint.iter().take(3).all(|c| *c > 0.9),
+            "flashes white"
+        );
     }
 
     #[test]
@@ -516,7 +643,10 @@ mod tests {
         giant.scale = 2.0;
         let big = body_placements(&catalog, &archetypes, &BTreeMap::from([(2, giant)]));
         let big = place_boxes(&catalog, big.into_iter().filter_map(|(_, p)| p), 2.0);
-        let (small, large) = (boxes[0].transform.transform_point3(Vec3::ZERO), big[0].transform.transform_point3(Vec3::ZERO));
+        let (small, large) = (
+            boxes[0].transform.transform_point3(Vec3::ZERO),
+            big[0].transform.transform_point3(Vec3::ZERO),
+        );
         assert!((large.y - small.y * 2.0).abs() < 1e-4, "{small} {large}");
     }
 

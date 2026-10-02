@@ -949,7 +949,10 @@ mod tests {
         assert!((wheel(1.0).steer_angle(-0.3) + 0.09).abs() < 1e-5);
         assert!((wheel(1.0).steer_angle(0.9785) - 0.9785f32.powi(2)).abs() < 1e-5);
         let rear = wheel(-0.8).steer_angle(0.9785);
-        assert!((rear + (0.8 * 0.9785f32.powi(2).tan()).atan()).abs() < 1e-5, "{rear}");
+        assert!(
+            (rear + (0.8 * 0.9785f32.powi(2).tan()).atan()).abs() < 1e-5,
+            "{rear}"
+        );
         assert_eq!(wheel(0.0).steer_angle(0.9785), 0.0);
     }
 }

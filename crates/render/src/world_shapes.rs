@@ -222,7 +222,13 @@ mod tests {
     fn box_faces_are_six_outward_quads() {
         let mut out = vec![];
         let (min, max) = (Vec3::new(0.0, 1.0, 2.0), Vec3::new(1.0, 3.0, 5.0));
-        box_faces(min, max, [[0.0, 0.0, 0.0, 0.35]; 3], [0.0, 0.0, 0.0, 0.6], &mut out);
+        box_faces(
+            min,
+            max,
+            [[0.0, 0.0, 0.0, 0.35]; 3],
+            [0.0, 0.0, 0.0, 0.6],
+            &mut out,
+        );
         assert_eq!(out.len(), 36);
         let centre = (min + max) / 2.0;
         for v in &out {

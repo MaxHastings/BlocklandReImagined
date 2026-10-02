@@ -96,14 +96,18 @@ struct Turn(std::sync::MutexGuard<'static, Option<Gpu>>);
 impl std::ops::Deref for Turn {
     type Target = Gpu;
     fn deref(&self) -> &Gpu {
-        self.0.as_ref().expect("the device is made before a turn starts")
+        self.0
+            .as_ref()
+            .expect("the device is made before a turn starts")
     }
 }
 impl Gpu {
     /// Wait for this test's turn on the shared device, making it first.
     fn turn() -> Result<Turn> {
         // A test that failed on its turn leaves the device as good as ever.
-        let mut gpu = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut gpu = GPU
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if gpu.is_none() {
             *gpu = Some(Self::new()?);
         }
@@ -487,7 +491,14 @@ fn a_portal_the_eye_is_about_to_go_through_shows_what_the_far_side_will() -> Res
     let gpu = Gpu::new()?;
     let (data, windows, carry) = portals();
     let camera = |eye: Vec3| {
-        Camera::perspective(eye.to_array(), (eye - Vec3::Z).to_array(), 1.0, 1.0, 0.05, 100.0)
+        Camera::perspective(
+            eye.to_array(),
+            (eye - Vec3::Z).to_array(),
+            1.0,
+            1.0,
+            0.05,
+            100.0,
+        )
     };
     for distance in [0.6, 0.2, 0.06, 0.02, 0.004] {
         let eye = Vec3::new(0.1, 0.05, distance);
@@ -500,8 +511,14 @@ fn a_portal_the_eye_is_about_to_go_through_shows_what_the_far_side_will() -> Res
         // Where the eye's view comes from: past `b`, where it carries on
         // to once through.
         let out = carry.transform_point3(eye);
-        let (after, _) =
-            gpu.frame_with(&camera(out), 1, ReflectionSettings::MEDIUM, &data, &windows, 1)?;
+        let (after, _) = gpu.frame_with(
+            &camera(out),
+            1,
+            ReflectionSettings::MEDIUM,
+            &data,
+            &windows,
+            1,
+        )?;
         let differ = before
             .chunks_exact(4)
             .zip(after.chunks_exact(4))
@@ -510,7 +527,10 @@ fn a_portal_the_eye_is_about_to_go_through_shows_what_the_far_side_will() -> Res
         let share = differ as f32 / (SIZE * SIZE) as f32;
         assert!(share < 0.02, "{:.1}% differ at {distance}", share * 100.0);
         // The card past `b` shows; the one behind `a` never does.
-        assert!(halves(&before, 0).iter().sum::<usize>() > 200, "at {distance}");
+        assert!(
+            halves(&before, 0).iter().sum::<usize>() > 200,
+            "at {distance}"
+        );
         assert_eq!(halves(&before, 1), [0, 0], "at {distance}");
     }
     Ok(())

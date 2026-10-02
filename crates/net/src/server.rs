@@ -212,8 +212,10 @@ impl PerfWindow {
         }
         let steps = self.steps.max(1) as f32;
         let ms = |d: Duration| d.as_secs_f32() * 1000.0;
-        let mut script_ms: Vec<(String, f32)> =
-            script.into_iter().map(|(id, t)| (id, ms(t) / steps)).collect();
+        let mut script_ms: Vec<(String, f32)> = script
+            .into_iter()
+            .map(|(id, t)| (id, ms(t) / steps))
+            .collect();
         script_ms.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let perf = ServerPerf {
             ticks_per_second: self.steps as f32 / span.as_secs_f32(),
@@ -253,14 +255,21 @@ pub struct ServerReport {
 }
 impl ServerHandle {
     /// Answer LAN discovery queries for this host until it stops.
-    pub async fn advertise(&mut self, name: String, map: String, max_players: u32, content_id: String) -> Result<()> {
+    pub async fn advertise(
+        &mut self,
+        name: String,
+        map: String,
+        max_players: u32,
+        content_id: String,
+    ) -> Result<()> {
         // Tests set BRI_TEST_DISCOVERY_PORT (0 picks a free port) so they
         // never collide with a game hosting on this machine.
         let discovery = std::env::var("BRI_TEST_DISCOVERY_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(crate::discovery::DISCOVERY_PORT);
-        self.advertise_on(discovery, name, map, max_players, content_id).await?;
+        self.advertise_on(discovery, name, map, max_players, content_id)
+            .await?;
         Ok(())
     }
     /// Answer LAN queries on `discovery_port` (0 picks a free port, for tests
@@ -408,7 +417,11 @@ struct Outbox {
     frames: mpsc::Sender<Frame>,
     bytes: Arc<std::sync::atomic::AtomicUsize>,
 }
-fn outbox() -> (Outbox, mpsc::Receiver<Frame>, Arc<std::sync::atomic::AtomicUsize>) {
+fn outbox() -> (
+    Outbox,
+    mpsc::Receiver<Frame>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (frames, receiver) = mpsc::channel::<Frame>(RELIABLE_BACKLOG_FRAMES);
     let bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     (
@@ -447,7 +460,8 @@ impl Peer {
     /// than buffered without bound.
     fn send(&self, frame: Frame) {
         if self.out.try_send(frame).is_err() {
-            self.connection.close(1_u32.into(), b"Reliable backlog exceeded");
+            self.connection
+                .close(1_u32.into(), b"Reliable backlog exceeded");
         }
     }
     /// Encode and queue a message for this peer only.
@@ -459,7 +473,8 @@ impl Peer {
             }
             Err(error) => {
                 eprintln!("Server could not encode a message: {error:#}");
-                self.connection.close(2_u32.into(), b"Host state exceeds transfer budget");
+                self.connection
+                    .close(2_u32.into(), b"Host state exceeds transfer budget");
             }
         }
     }
@@ -480,7 +495,8 @@ fn broadcast<'a>(peers: impl IntoIterator<Item = &'a Peer>, kind: Kind, message:
         Err(error) => {
             eprintln!("Server could not encode a broadcast: {error:#}");
             for peer in peers {
-                peer.connection.close(2_u32.into(), b"Host state exceeds transfer budget");
+                peer.connection
+                    .close(2_u32.into(), b"Host state exceeds transfer budget");
             }
         }
     }
@@ -648,15 +664,24 @@ async fn connection_task(
 ) -> Result<()> {
     // The whole pre-join exchange shares one deadline, so a peer cannot hold
     // its handshake slot for a timeout per step.
-    let (mut send, mut receive) = tokio::time::timeout_at(deadline, connection.accept_bi()).await??;
+    let (mut send, mut receive) =
+        tokio::time::timeout_at(deadline, connection.accept_bi()).await??;
     let begin: JoinBegin =
         tokio::time::timeout_at(deadline, codec::read_small_request(&mut receive)).await??;
     if begin.version != VERSION {
         let reason = format!(
             "This server runs a {} version of Blockland ReImagined (protocol {VERSION}, yours is {}). {}",
-            if begin.version < VERSION { "newer" } else { "older" },
+            if begin.version < VERSION {
+                "newer"
+            } else {
+                "older"
+            },
             begin.version,
-            if begin.version < VERSION { "Update your game to join." } else { "The host needs to update to the version you have." },
+            if begin.version < VERSION {
+                "Update your game to join."
+            } else {
+                "The host needs to update to the version you have."
+            },
         );
         codec::write_frame(&mut send, &codec::encode(&Message::Rejected(reason))?).await?;
         send.finish()?;
@@ -677,13 +702,18 @@ async fn connection_task(
                 return Ok(());
             }
         };
-        codec::write_frame(&mut send, &codec::encode(&Message::Rejected(refusal.into()))?).await?;
+        codec::write_frame(
+            &mut send,
+            &codec::encode(&Message::Rejected(refusal.into()))?,
+        )
+        .await?;
         send.finish()?;
         linger(&mut send, &connection).await;
         return Ok(());
     }
     let mut nonce = [0; 32];
-    getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("OS randomness failed: {error}"))?;
+    getrandom::fill(&mut nonce)
+        .map_err(|error| anyhow::anyhow!("OS randomness failed: {error}"))?;
     codec::write_frame(
         &mut send,
         &codec::encode(&Message::Challenge { nonce, listing })?,
@@ -944,7 +974,10 @@ fn verify_identity(
 ) -> Result<Option<Principal>> {
     hello.validate_bounds()?;
     let Some(proof) = &hello.identity else {
-        ensure!(!require_identity, "This server requires persistent client identity proof");
+        ensure!(
+            !require_identity,
+            "This server requires persistent client identity proof"
+        );
         return Ok(None);
     };
     let transcript = identity_transcript(hello, nonce, server_fingerprint)?;
@@ -1058,7 +1091,9 @@ fn send_state(
         })
         .collect();
     for (owner, peer) in peers {
-        let mine = encoded.iter().filter(|(_, audience, _)| audience.includes(*owner));
+        let mine = encoded
+            .iter()
+            .filter(|(_, audience, _)| audience.includes(*owner));
         for (kind, _, bytes) in mine.clone() {
             traffic.add(*kind, bytes.len(), 1);
         }
@@ -1075,7 +1110,8 @@ fn broadcast_admin_snapshots(session: &Session, peers: &BTreeMap<OwnerId, Peer>)
             Ok(snapshot) => peer.send_message(Kind::Admin, &Message::AdminSnapshot(snapshot)),
             Err(error) => {
                 eprintln!("Server could not build an admin snapshot: {error:#}");
-                peer.connection.close(2_u32.into(), b"Administration state unavailable");
+                peer.connection
+                    .close(2_u32.into(), b"Administration state unavailable");
             }
         }
     }
@@ -1096,7 +1132,12 @@ struct EventNotes {
 impl EventNotes {
     const PER_WINDOW: u32 = 8;
     const WINDOW: Duration = Duration::from_secs(10);
-    fn log(&mut self, now: std::time::Instant, notes: Vec<String>, slow: Option<bri_sim::session::SlowEventTicks>) {
+    fn log(
+        &mut self,
+        now: std::time::Instant,
+        notes: Vec<String>,
+        slow: Option<bri_sim::session::SlowEventTicks>,
+    ) {
         if let Some(slow) = slow {
             let seen = self.slow.get_or_insert_with(Default::default);
             seen.count += slow.count;
@@ -1104,9 +1145,15 @@ impl EventNotes {
                 seen.worst = slow.worst;
             }
         }
-        if self.window.is_none_or(|at| now.duration_since(at) >= Self::WINDOW) {
+        if self
+            .window
+            .is_none_or(|at| now.duration_since(at) >= Self::WINDOW)
+        {
             if self.suppressed > 0 {
-                eprintln!("Events: {} more notes in the last 10 s were not logged", self.suppressed);
+                eprintln!(
+                    "Events: {} more notes in the last 10 s were not logged",
+                    self.suppressed
+                );
             }
             if let Some(slow) = self.slow.take() {
                 let w = &slow.worst;
@@ -1120,7 +1167,10 @@ impl EventNotes {
                     w.pending
                 );
             }
-            *self = Self { window: Some(now), ..Self::default() };
+            *self = Self {
+                window: Some(now),
+                ..Self::default()
+            };
         }
         for note in notes {
             if self.logged < Self::PER_WINDOW {
@@ -1171,7 +1221,11 @@ impl PanicFuse {
     const WINDOW: Duration = Duration::from_secs(60);
     /// `Ok(Ok(value))` normally, `Ok(Err(fault))` when `work` panicked, and
     /// `Err` once the fuse has blown.
-    fn guard<T>(&mut self, what: &str, work: impl FnOnce() -> T) -> Result<std::result::Result<T, String>> {
+    fn guard<T>(
+        &mut self,
+        what: &str,
+        work: impl FnOnce() -> T,
+    ) -> Result<std::result::Result<T, String>> {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
             Ok(value) => Ok(Ok(value)),
             Err(panic) => {
@@ -1192,7 +1246,9 @@ impl PanicFuse {
                     "The host kept failing ({} faults in a minute); last, in {what}: {message}",
                     self.recent.len()
                 );
-                Ok(Err(format!("The host hit an internal error in {what}; it was logged")))
+                Ok(Err(format!(
+                    "The host hit an internal error in {what}; it was logged"
+                )))
             }
         }
     }
@@ -1231,10 +1287,18 @@ async fn run(
     let mut avatars = BTreeMap::new();
     let mut tools = BTreeMap::new();
     let mut weapons = crate::stream::WeaponStream::default();
-    weapons.reset(session.weapon_view(), session.simulation().state().tick, session.projectile_falls());
+    weapons.reset(
+        session.weapon_view(),
+        session.simulation().state().tick,
+        session.projectile_falls(),
+    );
     let mut palette = session.simulation().state().palette.clone();
     let mut vitals = BTreeMap::new();
-    let mut entities: BTreeMap<u64, _> = session.package_entities().into_iter().map(|e| (e.id, e)).collect();
+    let mut entities: BTreeMap<u64, _> = session
+        .package_entities()
+        .into_iter()
+        .map(|e| (e.id, e))
+        .collect();
     // Entities players who joined since the last update were handed.
     let mut joined_entities: Vec<Vec<bri_sim::session::EntityInfo>> = Vec::new();
     // What each client last received of package state (per viewer).
@@ -1470,7 +1534,9 @@ mod tests {
         assert_eq!(fuse.guard("a tick", || 7).unwrap(), Ok(7));
         for _ in 0..PanicFuse::LIMIT {
             let fault = fuse
-                .guard("a player's request", || -> u32 { panic!("bug in a handler") })
+                .guard("a player's request", || -> u32 {
+                    panic!("bug in a handler")
+                })
                 .expect("one fault does not stop the host");
             assert_eq!(
                 fault,
@@ -1478,16 +1544,24 @@ mod tests {
             );
         }
         let blown = fuse
-            .guard("a player's request", || -> u32 { panic!("bug in a handler") })
+            .guard("a player's request", || -> u32 {
+                panic!("bug in a handler")
+            })
             .expect_err("a host that keeps failing stops");
-        assert!(format!("{blown:#}").contains("bug in a handler"), "{blown:#}");
+        assert!(
+            format!("{blown:#}").contains("bug in a handler"),
+            "{blown:#}"
+        );
     }
     #[test]
     fn host_certificate_is_one_file_kept_across_restarts() {
         let dir = tempfile::tempdir().unwrap();
         let first = HostCertificate::load_or_create(dir.path()).unwrap();
         let again = HostCertificate::load_or_create(dir.path()).unwrap();
-        assert_eq!((first.der.clone(), first.key.clone()), (again.der, again.key));
+        assert_eq!(
+            (first.der.clone(), first.key.clone()),
+            (again.der, again.key)
+        );
         assert!(dir.path().join("host-identity.bin").is_file());
         // A damaged file is reported and left in place, never silently replaced.
         let path = dir.path().join("host-identity.bin");
@@ -1525,7 +1599,10 @@ mod tests {
         assert_eq!(p.tick_ms_mean, 5.0);
         assert_eq!(p.tick_ms_max, 8.0);
         assert_eq!(p.players, 3);
-        assert_eq!(p.script_ms, vec![("busy".into(), 2.0), ("quiet".into(), 0.25)]);
+        assert_eq!(
+            p.script_ms,
+            vec![("busy".into(), 2.0), ("quiet".into(), 0.25)]
+        );
         // The next window starts empty.
         assert_eq!(w.steps, 0);
     }
@@ -1538,12 +1615,17 @@ mod tests {
             tickets.insert(key, ticket(n + 1), |_| false).unwrap();
         }
         // Owner 1 holds the oldest ticket but is still connected.
-        tickets.insert([0xff; 32], ticket(9999), |o| o == 1).unwrap();
+        tickets
+            .insert([0xff; 32], ticket(9999), |o| o == 1)
+            .unwrap();
         assert_eq!(tickets.entries.len(), Tickets::CAPACITY);
         assert!(tickets.get(&[0; 32]).is_some(), "connected owner kept");
         let mut second = [0; 32];
         second[0] = 1;
-        assert!(tickets.get(&second).is_none(), "oldest disconnected evicted");
+        assert!(
+            tickets.get(&second).is_none(),
+            "oldest disconnected evicted"
+        );
         assert_eq!(tickets.get(&[0xff; 32]).unwrap().owner, 9999);
         // Refreshing an existing ticket never evicts.
         tickets.insert([0xff; 32], ticket(9999), |_| true).unwrap();

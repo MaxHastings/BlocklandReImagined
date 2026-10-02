@@ -184,7 +184,10 @@ fn preset(
             spent.push(c);
             work.push(debris.work());
         }
-        ensure!(debris.is_empty(), "limit {limit} run {run}: debris outlived its fade");
+        ensure!(
+            debris.is_empty(),
+            "limit {limit} run {run}: debris outlived its fade"
+        );
     }
     Ok((spent, work, debris))
 }
@@ -600,8 +603,14 @@ fn main() -> Result<()> {
     rocket.retain(|id| Vec3::from(world.bricks[id].position).distance(centre) <= 5.0);
     let blasts = [
         ("rocket_r5", blast(rocket, Some(5.0))),
-        ("mass_1024", blast(nearest(&world, centre, 1024, &none), None)),
-        ("mass_4096", blast(nearest(&world, centre, 4096, &none), None)),
+        (
+            "mass_1024",
+            blast(nearest(&world, centre, 1024, &none), None),
+        ),
+        (
+            "mass_4096",
+            blast(nearest(&world, centre, 4096, &none), None),
+        ),
     ];
     let limits = [
         ("low", 128),
@@ -613,7 +622,15 @@ fn main() -> Result<()> {
     // This PC's cycles per CPU millisecond, from one whole run.
     let (c0, t0) = (cycles(), cpu_time());
     preset(
-        &blasts[2].1, 4096, None, &world, &mut building, &meshes, &materials, &palette, &gpu,
+        &blasts[2].1,
+        4096,
+        None,
+        &world,
+        &mut building,
+        &meshes,
+        &materials,
+        &palette,
+        &gpu,
     )?;
     let per_ms = (cycles() - c0) as f64 / ms(cpu_time() - t0);
     let to_ms = |c: u64| (c as f64 / per_ms * 1000.0).round() / 1000.0;
@@ -627,7 +644,14 @@ fn main() -> Result<()> {
             let mut row = serde_json::Map::new();
             for (mode, budget) in [("raw", None), ("budgeted", Some(per_ms))] {
                 let (spent, work, debris) = preset(
-                    kills, limit, budget, &world, &mut building, &meshes, &materials, &palette,
+                    kills,
+                    limit,
+                    budget,
+                    &world,
+                    &mut building,
+                    &meshes,
+                    &materials,
+                    &palette,
                     &gpu,
                 )?;
                 let peak = (0..spent.len()).max_by_key(|&i| spent[i]).unwrap_or(0);

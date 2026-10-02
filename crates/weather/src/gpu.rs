@@ -163,7 +163,9 @@ impl WeatherRenderer {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("native rain snow and splash atlases"),
-            source: wgpu::ShaderSource::Wgsl(bri_render::color::shader_source(include_str!("weather.wgsl")).into()),
+            source: wgpu::ShaderSource::Wgsl(
+                bri_render::color::shader_source(include_str!("weather.wgsl")).into(),
+            ),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("weather"),
@@ -245,7 +247,8 @@ impl WeatherRenderer {
             self.views.push(empty);
         }
         if view == self.views.len() {
-            self.views.push(Self::view(device, &self.camera_layout, needed));
+            self.views
+                .push(Self::view(device, &self.camera_layout, needed));
         } else if self.views[view].capacity < frame.instances.len() {
             self.views[view] = Self::view(device, &self.camera_layout, needed);
         }

@@ -3,8 +3,8 @@
 //! over its life. One cue per beam; nothing is sent while it shows.
 use anyhow::Result;
 use bri_render::scene::{
-    AlphaMode, GpuInstances, GpuScene, Material, MaterialKind, MeshBatch, SceneData,
-    SceneRenderer, SceneTransform, SceneVertex,
+    AlphaMode, GpuInstances, GpuScene, Material, MaterialKind, MeshBatch, SceneData, SceneRenderer,
+    SceneTransform, SceneVertex,
 };
 use glam::{Mat4, Quat, Vec3};
 
@@ -55,7 +55,13 @@ impl Beams {
         self.live.push(Beam {
             from,
             to,
-            color: color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 1.0 }),
+            color: color.map(|c| {
+                if c.is_finite() {
+                    c.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                }
+            }),
             width,
             seconds,
             age: 0.0,
@@ -230,7 +236,10 @@ mod tests {
         beams.advance(0.2);
         let late = beams.transforms[0];
         assert!(late.tint[3] < early.tint[3], "fades");
-        assert!(late.transform.x_axis.length() < early.transform.x_axis.length(), "thins");
+        assert!(
+            late.transform.x_axis.length() < early.transform.x_axis.length(),
+            "thins"
+        );
         assert_eq!(early.tint[..3], [1.0, 0.5, 0.0]);
         beams.advance(0.25);
         assert_eq!(beams.live_count(), 0);

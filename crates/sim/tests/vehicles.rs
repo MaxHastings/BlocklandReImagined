@@ -1361,7 +1361,11 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs(f: &Fixtur
 /// On the Jeep the turns are about 0.27 and 0.35; the made-up car, lighter
 /// to launch but on a longer wheelbase, turns about 0.19 and 0.2.
 fn mouse_turn_floors(f: &Fixture) -> (f32, f32) {
-    if f.is_native() { (0.2, 0.3) } else { (0.15, 0.15) }
+    if f.is_native() {
+        (0.2, 0.3)
+    } else {
+        (0.15, 0.15)
+    }
 }
 
 /// Heading of the one vehicle in the session.

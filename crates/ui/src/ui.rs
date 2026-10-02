@@ -150,14 +150,17 @@ pub fn web_url(link: &str) -> Option<String> {
     let lower = link.to_ascii_lowercase();
     let url = if lower.starts_with("http://") || lower.starts_with("https://") {
         link.to_string()
-    } else if link.contains("://") || lower.starts_with("javascript:") || lower.starts_with("file:") {
+    } else if link.contains("://") || lower.starts_with("javascript:") || lower.starts_with("file:")
+    {
         return None;
     } else {
         format!("http://{link}")
     };
     (url.len() <= 256
         && url.len() > "http://".len()
-        && url.bytes().all(|b| b.is_ascii_graphic() && !b"<>\"\\`".contains(&b)))
+        && url
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && !b"<>\"\\`".contains(&b)))
     .then_some(url)
 }
 
@@ -620,22 +623,25 @@ impl Core {
             } => Some(*game),
             _ => self.minigames.active_game,
         };
-        let allowed = self.minigames.can_on(match operation {
-            MiniGameOperation::List => Op::List,
-            MiniGameOperation::Create => Op::Create,
-            MiniGameOperation::Configure => Op::Configure,
-            MiniGameOperation::Join => Op::Join,
-            MiniGameOperation::Leave => Op::Leave,
-            MiniGameOperation::Invite => Op::Invite,
-            MiniGameOperation::AcceptInvite => Op::AcceptInvite,
-            MiniGameOperation::RejectInvite => Op::RejectInvite,
-            MiniGameOperation::IgnoreInvite => Op::IgnoreInvite,
-            MiniGameOperation::RemoveMember => Op::RemoveMember,
-            MiniGameOperation::Reset => Op::Reset,
-            MiniGameOperation::RespawnAll => Op::RespawnAll,
-            MiniGameOperation::End => Op::End,
-            MiniGameOperation::AddOnSettings => Op::AddOnSettings,
-        }, game);
+        let allowed = self.minigames.can_on(
+            match operation {
+                MiniGameOperation::List => Op::List,
+                MiniGameOperation::Create => Op::Create,
+                MiniGameOperation::Configure => Op::Configure,
+                MiniGameOperation::Join => Op::Join,
+                MiniGameOperation::Leave => Op::Leave,
+                MiniGameOperation::Invite => Op::Invite,
+                MiniGameOperation::AcceptInvite => Op::AcceptInvite,
+                MiniGameOperation::RejectInvite => Op::RejectInvite,
+                MiniGameOperation::IgnoreInvite => Op::IgnoreInvite,
+                MiniGameOperation::RemoveMember => Op::RemoveMember,
+                MiniGameOperation::Reset => Op::Reset,
+                MiniGameOperation::RespawnAll => Op::RespawnAll,
+                MiniGameOperation::End => Op::End,
+                MiniGameOperation::AddOnSettings => Op::AddOnSettings,
+            },
+            game,
+        );
         if !allowed {
             self.minigames.status =
                 "This mini-game action is unavailable or no longer permitted.".into();
@@ -2215,9 +2221,8 @@ impl Ui {
                     if t.is_none()
                         && button == MouseButton::Left
                         && self.content.id() == ScreenId::Play
-                        && let Some(url) =
-                            crate::screens::play::chat_link_at(&self.core, lx, ly)
-                                .and_then(|u| web_url(&u))
+                        && let Some(url) = crate::screens::play::chat_link_at(&self.core, lx, ly)
+                            .and_then(|u| web_url(&u))
                     {
                         self.core.message_yes_no(
                             "Open Link",
@@ -2291,7 +2296,10 @@ impl Ui {
                 // scrollInventory: ignored while any dialog other than the
                 // chat HUD is open (Canvas count > 2), and on LoadingGui.
                 let dialogs = self.dialogs.iter().filter(|d| !d.passive()).count();
-                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.tool_takes_wheel() {
+                if self.content.id() == ScreenId::Play
+                    && dialogs == 0
+                    && self.core.tool_takes_wheel()
+                {
                     let most = NUM_WHEEL_STEPS as i32;
                     let notches = (steps as i32).clamp(-most, most);
                     self.core.game(GameAction::ToolWheel { notches });
@@ -2365,13 +2373,13 @@ impl Ui {
         // bare-key fallback is for play, where Shift is held to crouch.
         let typing = (mods.shift || mods.alt) && self.takes_text();
         let global = if typing {
-            self.core.globals.command_for(&BindInput::Key(Chord { mods, key }))
+            self.core
+                .globals
+                .command_for(&BindInput::Key(Chord { mods, key }))
         } else {
             self.core.globals.command_for_key(key, mods)
         };
-        if !repeat
-            && let Some(cmd) = global.map(str::to_string)
-        {
+        if !repeat && let Some(cmd) = global.map(str::to_string) {
             self.core.run_command(&cmd, true);
             self.swallow_char = true;
             self.flush();
@@ -2568,10 +2576,15 @@ impl Ui {
     pub fn welcome_addons(&mut self) {
         let c = &mut self.core;
         // Shown once per Add-On, or on every join with the Options toggle.
-        let always = c.prefs.bool_or(crate::screens::options::WELCOME_ALWAYS, false);
+        let always = c
+            .prefs
+            .bool_or(crate::screens::options::WELCOME_ALWAYS, false);
         let Some(page) = c.addon_help.iter().find(|p| {
             p.welcome
-                && (always || !c.prefs.bool_or(&format!("$Pref::AddOnWelcome::{}", p.package), false))
+                && (always
+                    || !c
+                        .prefs
+                        .bool_or(&format!("$Pref::AddOnWelcome::{}", p.package), false))
         }) else {
             return;
         };
@@ -2665,7 +2678,6 @@ impl Ui {
             (r.y as f32 + r.h as f32 / 2.0) * sc,
         ))
     }
-
 }
 
 #[cfg(test)]

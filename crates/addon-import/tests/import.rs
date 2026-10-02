@@ -723,7 +723,9 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
         notes.iter().any(|n| n.add_on == "second"
             && n.kind == bri_package::health::Kind::DamageType
             && n.reference == "syntheticblaster"
-            && n.effect.contains("weapon_second_blaster's is kept as weapon_second_blaster:SyntheticBlaster")),
+            && n.effect.contains(
+                "weapon_second_blaster's is kept as weapon_second_blaster:SyntheticBlaster"
+            )),
         "{notes:?}"
     );
     assert!(
@@ -1018,7 +1020,11 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].ui_name, "Kit Ammo");
     assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
     // Its sound description is read into the sound, not left over.
-    let description = report.datablocks.iter().find(|d| d.name == "kitClose2d").unwrap();
+    let description = report
+        .datablocks
+        .iter()
+        .find(|d| d.name == "kitClose2d")
+        .unwrap();
     assert_eq!(description.status, "consumed", "{description:?}");
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
@@ -1399,11 +1405,18 @@ datablock AudioProfile(JingleBell) { fileName = "./bell.wav"; description = Audi
     };
     let (music, notes) = status("JingleMusic");
     assert_eq!(music, "external", "{notes}");
-    assert!(notes.contains("downloaded from an external site, not in the copy"), "{notes}");
+    assert!(
+        notes.contains("downloaded from an external site, not in the copy"),
+        "{notes}"
+    );
     assert_eq!(status("JingleBell").0, "recognised_only");
     assert_eq!(report.summary.datablocks_external, 1);
     assert_eq!(report.summary.datablocks_recognised_only, 1);
-    assert!(report.markdown().contains("Datablocks needing a download (not in the copy) | 1"));
+    assert!(
+        report
+            .markdown()
+            .contains("Datablocks needing a download (not in the copy) | 1")
+    );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
@@ -1476,7 +1489,11 @@ fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
 fn a_material_with_no_texture_draws_plain_and_keeps_its_model() {
     let source = fresh("plain-source").with_file_name("Weapon_Plain");
     std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("description.txt"), "Title: Plain\nAuthor: Tester\nA test.").unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Plain\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
     std::fs::write(source.join("server.cs"), "exec(\"./plain.cs\");\n").unwrap();
     std::fs::write(
         source.join("gun.dts"),
@@ -1525,7 +1542,11 @@ datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = pl
             .unwrap(),
     );
     let clear = image::open(clear).unwrap().to_rgba8();
-    assert_eq!(clear.get_pixel(0, 0).0[3], 0, "the colour shift shows through");
+    assert_eq!(
+        clear.get_pixel(0, 0).0[3],
+        0,
+        "the colour shift shows through"
+    );
     assert_eq!(
         presentation["items"]["weapon_plain:weapon/plaingunitem"]["tint"],
         serde_json::json!([0.2f32, 0.2f32, 1.0, 1.0])

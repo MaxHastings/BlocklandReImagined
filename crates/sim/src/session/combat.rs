@@ -276,7 +276,9 @@ impl MiniGameView {
         self.members.len() <= 64
             && self.color < 10
             && self.paint_color.is_none_or(|c| c < 64)
-            && self.name_distance.is_none_or(|d| d <= mg::MAX_NAME_DISTANCE)
+            && self
+                .name_distance
+                .is_none_or(|d| d <= mg::MAX_NAME_DISTANCE)
             && self.settings.title.len() <= 256
             && !self.settings.title.chars().any(char::is_control)
             && self.teams.len() <= mg::MAX_TEAMS
@@ -361,7 +363,9 @@ pub enum Notice {
     /// Mirror the copy this player holds, as they see and place it: across
     /// the world's z axis (north and south swap), or else across its x
     /// axis (east and west swap).
-    MirrorCopy { across_z: bool },
+    MirrorCopy {
+        across_z: bool,
+    },
     /// This player's ghost brick becomes `definition` turned
     /// `quarter_turns` where it stands: its mirror image
     /// ([`super::Session::mirror_ghost`]).
@@ -372,27 +376,36 @@ pub enum Notice {
     /// Put the copy this player holds against the surface at `point`
     /// facing out along `normal`, as a ghost brick is put where it is
     /// aimed.
-    MoveCopy { point: [f32; 3], normal: [f32; 3] },
+    MoveCopy {
+        point: [f32; 3],
+        normal: [f32; 3],
+    },
     /// Turn the copy this player holds upside down where it stands, as
     /// they see and place it.
     FlipCopy,
     /// What this player's copies turn about, are super shifted by and put
     /// against a clicked surface by from now on: the whole copy (`whole`),
     /// else the brick each was taken from first.
-    PivotCopy { whole: bool },
+    PivotCopy {
+        whole: bool,
+    },
     /// Move the copy this player holds as their brick shift keys would.
     ShiftCopy {
         offset: [i32; 3],
         super_shift: bool,
     },
     /// Turn the copy this player holds as their rotate keys would.
-    RotateCopy { direction: i8 },
+    RotateCopy {
+        direction: i8,
+    },
     /// Plant the copy this player holds where it stands, as their plant
     /// key would.
     PlantCopy,
     /// Open the wrench for every brick of this player's copy: what they
     /// tick comes back as `Command::WrenchCopy`.
-    WrenchCopy { bricks: u32 },
+    WrenchCopy {
+        bricks: u32,
+    },
     /// Whether the image in this player's hand takes their paint and FX
     /// cans (its `commands.paint`) rather than the can coming out.
     TakePaint(bool),
@@ -424,14 +437,30 @@ pub enum Notice {
     deny_unknown_fields
 )]
 pub enum MiniGameRequest {
-    Create { color: u8, settings: mg::Settings },
-    Configure { settings: mg::Settings },
-    Join { game: u64 },
+    Create {
+        color: u8,
+        settings: mg::Settings,
+    },
+    Configure {
+        settings: mg::Settings,
+    },
+    Join {
+        game: u64,
+    },
     Leave,
-    Invite { target: OwnerId },
-    Accept { game: u64 },
-    Reject { game: u64, ignore_owner: bool },
-    Kick { target: OwnerId },
+    Invite {
+        target: OwnerId,
+    },
+    Accept {
+        game: u64,
+    },
+    Reject {
+        game: u64,
+        ignore_owner: bool,
+    },
+    Kick {
+        target: OwnerId,
+    },
     Reset,
     RespawnAll,
     End,
@@ -663,7 +692,10 @@ pub(super) fn apply_minigame_settings(
     // A start tool this server lacks is left out rather than refusing the
     // Add-On.
     for slot in &mut d.loadout {
-        if slot.as_ref().is_some_and(|id| !catalog.items.contains_key(id)) {
+        if slot
+            .as_ref()
+            .is_some_and(|id| !catalog.items.contains_key(id))
+        {
             *slot = None;
         }
     }
@@ -963,7 +995,8 @@ impl Session {
     pub(super) fn spawn_protected(&self, owner: OwnerId) -> bool {
         let tick = self.simulation.state().tick;
         self.peers.get(&owner).is_some_and(|peer| {
-            tick.saturating_sub(peer.combat.spawn_tick) < INVULNERABLE_TICKS && !peer.combat.shot_once
+            tick.saturating_sub(peer.combat.spawn_tick) < INVULNERABLE_TICKS
+                && !peer.combat.shot_once
         })
     }
 
@@ -1026,7 +1059,12 @@ impl Session {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
         }
         // Where it struck, measured before any hook moves the body.
-        let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
+        let hit = at.map(|point| {
+            (
+                point,
+                crate::player::hit_region(&peer.player, point.to_array()),
+            )
+        });
         // Add-Ons have the last word on how much it hurts.
         let (amount, renamed) = self.package_damage(target, source, amount, &kind, hit);
         if amount <= 0.0 {
@@ -1423,7 +1461,12 @@ impl Session {
         owner: OwnerId,
         request: MiniGameRequest,
     ) -> Result<()> {
-        let player = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+        let player = self
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .combat
+            .player;
         let own = self.minigames.player(player).ok().and_then(|p| p.game);
         // An editor acting on another game names it.
         let (on, request) = match request {
@@ -1472,7 +1515,11 @@ impl Session {
         // (an admin managing the game they play in), the engine's own rule:
         // its editors (owner or admin) may.
         let foreign = on.filter(|g| {
-            Some(*g) != own || self.minigames.game(*g).is_ok_and(|game| game.owner != player)
+            Some(*g) != own
+                || self
+                    .minigames
+                    .game(*g)
+                    .is_ok_and(|game| game.owner != player)
         });
         let team = match &request {
             MiniGameRequest::SetTeam { team, .. } => *team,
@@ -1507,7 +1554,10 @@ impl Session {
                     None,
                 )
             }
-            super::packages::Answer::Refused { title: Some(title), text } => {
+            super::packages::Answer::Refused {
+                title: Some(title),
+                text,
+            } => {
                 self.notify(owner, Notice::MessageBox { title, text });
                 Ok(())
             }
@@ -1596,10 +1646,7 @@ impl Session {
                 }
                 MiniGameRequest::Join { game } => {
                     let game = GameId(game);
-                    ensure!(
-                        mine(self).ok() != Some(game),
-                        "Already in that mini-game"
-                    );
+                    ensure!(mine(self).ok() != Some(game), "Already in that mini-game");
                     let effects = self
                         .minigames
                         .host_place(actor, Some(game))
@@ -1610,7 +1657,9 @@ impl Session {
                 MiniGameRequest::Invite { target } => {
                     manage(mg::Manage::Invite(lookup(self, target)?))?
                 }
-                MiniGameRequest::Kick { target } => manage(mg::Manage::Kick(lookup(self, target)?))?,
+                MiniGameRequest::Kick { target } => {
+                    manage(mg::Manage::Kick(lookup(self, target)?))?
+                }
                 MiniGameRequest::Reset => manage(mg::Manage::Reset)?,
                 MiniGameRequest::RespawnAll => manage(mg::Manage::RespawnAll)?,
                 MiniGameRequest::End => manage(mg::Manage::End)?,
@@ -1697,11 +1746,18 @@ impl Session {
 
     /// Put `target` on `team` of `game`, bringing them into it first.
     fn move_to_team(&mut self, game: GameId, target: OwnerId, team: Option<u32>) -> Result<()> {
-        let player = self.peers.get(&target).context("Unknown player")?.combat.player;
+        let player = self
+            .peers
+            .get(&target)
+            .context("Unknown player")?
+            .combat
+            .player;
         let team = team.map(mg::TeamId);
         if let Some(t) = team {
             ensure!(
-                self.minigames.game(game).is_ok_and(|g| g.teams.get(t).is_some()),
+                self.minigames
+                    .game(game)
+                    .is_ok_and(|g| g.teams.get(t).is_some()),
                 "No such team"
             );
         }
@@ -1763,9 +1819,8 @@ impl Session {
         } else {
             Vec::new()
         };
-        let kicked = kicked.and_then(|t| {
-            Some((self.owner_of(t)?, self.minigames.player(t).ok()?.game?))
-        });
+        let kicked =
+            kicked.and_then(|t| Some((self.owner_of(t)?, self.minigames.player(t).ok()?.game?)));
         let effects = self.minigames.execute(command).map_err(|e| {
             anyhow::anyhow!(match e {
                 mg::Error::Cooldown => "Please wait before doing that again".to_string(),
@@ -1870,7 +1925,9 @@ impl Session {
                         // Rule-engine ticks advance with ours; convert to world ticks.
                         let delay = match peer.respawn_ms {
                             // A rule's own time for them (`setRespawnTime`).
-                            Some(ms) => (u64::from(ms) * u64::from(bri_weapons::TICK_HZ)).div_ceil(1000),
+                            Some(ms) => {
+                                (u64::from(ms) * u64::from(bri_weapons::TICK_HZ)).div_ceil(1000)
+                            }
                             None => ready_at.saturating_sub(self.minigames.tick()),
                         };
                         peer.combat.respawn_tick = tick + delay.max(MIN_RESPAWN_TICKS);
@@ -2159,7 +2216,12 @@ impl Session {
             // Bots follow their spawn brick owner's mini-game.
             return Ok(());
         }
-        let player = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+        let player = self
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .combat
+            .player;
         let Some(game) = self.minigames.server_game() else {
             // Players in no game join the default one (Slayer's Default
             // Minigame) as they first spawn.

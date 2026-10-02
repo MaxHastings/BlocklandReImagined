@@ -256,7 +256,10 @@ pub struct Rank {
 }
 impl Rank {
     fn allows(&self, editor: SettingEditor, creator: Option<OwnerId>) -> bool {
-        let trust = creator.and_then(|c| self.trust.get(&c)).copied().unwrap_or(0);
+        let trust = creator
+            .and_then(|c| self.trust.get(&c))
+            .copied()
+            .unwrap_or(0);
         match editor {
             SettingEditor::Owner => true,
             SettingEditor::Admin => self.admin || self.super_admin || self.host,
@@ -332,7 +335,11 @@ pub fn with_addon_settings(
                     max: s.def.max.unwrap_or(0),
                 },
                 SettingType::List => MiniGameSettingKind::List {
-                    items: s.items.iter().map(|i| (ui_value(&i.value), i.name.clone())).collect(),
+                    items: s
+                        .items
+                        .iter()
+                        .map(|i| (ui_value(&i.value), i.name.clone()))
+                        .collect(),
                 },
                 SettingType::Text => MiniGameSettingKind::Text {
                     max_length: s.def.max_length.unwrap_or(0),
@@ -340,9 +347,12 @@ pub fn with_addon_settings(
                 // The server's items and player types, as the mini-game's
                 // own loadout offers them.
                 SettingType::Item => MiniGameSettingKind::List {
-                    items: std::iter::once((MiniGameSettingValue::Text(String::new()), "NONE".into()))
-                        .chain(state.items.iter().map(choice))
-                        .collect(),
+                    items: std::iter::once((
+                        MiniGameSettingValue::Text(String::new()),
+                        "NONE".into(),
+                    ))
+                    .chain(state.items.iter().map(choice))
+                    .collect(),
                 },
                 SettingType::PlayerType => MiniGameSettingKind::List {
                     items: state.player_types.iter().map(choice).collect(),
@@ -544,7 +554,9 @@ mod tests {
     }
     #[test]
     fn a_player_managing_a_game_they_do_not_own_names_it() {
-        let reset = UiAction::ResetMiniGame { game: MiniGameId(4) };
+        let reset = UiAction::ResetMiniGame {
+            game: MiniGameId(4),
+        };
         let invite = UiAction::InviteMiniGame {
             target: MiniGamePlayerId(9),
         };
@@ -585,7 +597,15 @@ mod tests {
         };
         let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Admin".to_string())].into();
         let views = [view];
-        let base = state(3, &views, &BTreeMap::new(), &names, &[], &Default::default(), 1);
+        let base = state(
+            3,
+            &views,
+            &BTreeMap::new(),
+            &names,
+            &[],
+            &Default::default(),
+            1,
+        );
         let admin = Rank {
             admin: true,
             ..Default::default()

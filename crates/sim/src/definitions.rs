@@ -337,8 +337,11 @@ impl Definitions {
                     tint: [1.0; 3],
                     strength: 1.0,
                 };
-                let covered: Vec<bool> =
-                    mesh.quads.iter().map(|q| cover.replaces(&mesh, q)).collect();
+                let covered: Vec<bool> = mesh
+                    .quads
+                    .iter()
+                    .map(|q| cover.replaces(&mesh, q))
+                    .collect();
                 let panes: Vec<[f32; 4]> = mesh
                     .quads
                     .iter()
@@ -383,8 +386,11 @@ impl Definitions {
                     .with_context(|| format!("Brick {}", entry.id))?;
                 // What the mirror covers is not drawn: a borrowed window
                 // shape loses its glass.
-                let covered: Vec<bool> =
-                    mesh.quads.iter().map(|q| reflection.replaces(&mesh, q)).collect();
+                let covered: Vec<bool> = mesh
+                    .quads
+                    .iter()
+                    .map(|q| reflection.replaces(&mesh, q))
+                    .collect();
                 let mut covered = covered.into_iter();
                 mesh.quads.retain(|_| !covered.next().unwrap_or(false));
             }
@@ -465,10 +471,7 @@ mod tests {
         let portal = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../packages/brick_portal/assets/brick-catalog");
         let full = catalog_with(&base, &[("brick_portal".into(), portal.clone())]).unwrap();
-        let twice = catalog_with(
-            &base,
-            &[("a".into(), portal.clone()), ("b".into(), portal)],
-        );
+        let twice = catalog_with(&base, &[("a".into(), portal.clone()), ("b".into(), portal)]);
         std::fs::remove_dir_all(&base).unwrap();
         let ids: Vec<_> = full.bricks.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(ids[0], "plate");
@@ -556,27 +559,23 @@ mod tests {
             "frame": 0.05, "name": "Portal" });
         let mut plain = entry("portal:brick/plain", "v20/window.blb", None);
         plain["stretch"] = json!([8, 1, 6]);
-        catalog(
-            &addon,
-            &[portal],
-            &[("portal:brick/big", json!({}))],
-            &[],
-        );
+        catalog(&addon, &[portal], &[("portal:brick/big", json!({}))], &[]);
         let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
         let big = &loaded.entries["portal:brick/big"];
         assert_eq!(big.mesh.id, "v20/window.blb#8x1x6");
-        assert_eq!((big.mesh.footprint_studs, big.mesh.height_plates), ([8, 1], 6));
-        assert_eq!(loaded.entries["v20/brick/window"].mesh.footprint_studs, [4, 1]);
+        assert_eq!(
+            (big.mesh.footprint_studs, big.mesh.height_plates),
+            ([8, 1], 6)
+        );
+        assert_eq!(
+            loaded.entries["v20/brick/window"].mesh.footprint_studs,
+            [4, 1]
+        );
         let aabb = big.shape.compute_local_aabb();
         assert!((aabb.maxs.x - 2.0).abs() < 1e-5 && (aabb.maxs.y - 0.6).abs() < 1e-5);
         // Without openings bodies pass, the shape's collision stretches
         // with it: the whole 4 by 1.2 by 0.5 brick.
-        catalog(
-            &addon,
-            &[plain],
-            &[("portal:brick/plain", json!({}))],
-            &[],
-        );
+        catalog(&addon, &[plain], &[("portal:brick/plain", json!({}))], &[]);
         let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
         let plain = &loaded.entries["portal:brick/plain"];
         assert_eq!(plain.collision.id, "portal:brick/plain");

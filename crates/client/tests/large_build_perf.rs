@@ -247,7 +247,9 @@ fn load_part(
             last.set((count, Instant::now()));
         }
         settled.set(stacked && last.get().1.elapsed() > Duration::from_secs(20));
-        (count + 16 >= total || settled.get()) && a.world_render_ready() && a.pending_requests() == 0
+        (count + 16 >= total || settled.get())
+            && a.world_render_ready()
+            && a.pending_requests() == 0
     })?;
     Ok(if settled.get() {
         last.get().1 - start
@@ -676,7 +678,9 @@ fn large_build_frame_times() -> Result<()> {
         }
         let at = |axis: &mut Vec<f32>, p: f32| {
             axis.sort_by(f32::total_cmp);
-            axis.get(((axis.len().max(1) - 1) as f32 * p) as usize).copied().unwrap_or(0.0)
+            axis.get(((axis.len().max(1) - 1) as f32 * p) as usize)
+                .copied()
+                .unwrap_or(0.0)
         };
         let [x, y, z] = &mut axes;
         (

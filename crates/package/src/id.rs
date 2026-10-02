@@ -367,7 +367,10 @@ mod tests {
             id("file", "Add-Ons\\Brick_Large_Cubes\\64x Cube.blb"),
             "v20:file/add-ons/brick_large_cubes/64x_cube.blb"
         );
-        assert_eq!(id("vehicle", "horsearmor::activate"), "v20:vehicle/horsearmor__activate");
+        assert_eq!(
+            id("vehicle", "horsearmor::activate"),
+            "v20:vehicle/horsearmor__activate"
+        );
         assert_eq!(
             id("sound", "rocketExplodeSound (alternate definition)"),
             "v20:sound/rocketexplodesound__alternate_definition_"
@@ -376,10 +379,16 @@ mod tests {
         assert!(native("v20", "file", &"x".repeat(65)).is_err());
         let mut minter = Minter::default();
         assert!(minter.mint("v20", "brick", "Brick 2x2").is_ok());
-        assert!(minter.mint("v20", "brick", "Brick 2x2").is_ok(), "same source twice");
+        assert!(
+            minter.mint("v20", "brick", "Brick 2x2").is_ok(),
+            "same source twice"
+        );
         let clash = minter.mint("v20", "brick", "brick_2x2").unwrap_err();
         assert!(clash.contains("Brick 2x2"), "{clash}");
-        assert!(minter.mint("addon", "brick", "brick_2x2").is_ok(), "other namespace");
+        assert!(
+            minter.mint("addon", "brick", "brick_2x2").is_ok(),
+            "other namespace"
+        );
     }
 
     #[test]

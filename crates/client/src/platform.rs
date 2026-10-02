@@ -27,7 +27,13 @@ pub struct PlatformConfig {
     pub early_gpu: Option<EarlyGpu>,
 }
 
-type Opened = (wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue, UiRenderer);
+type Opened = (
+    wgpu::Instance,
+    wgpu::Adapter,
+    wgpu::Device,
+    wgpu::Queue,
+    UiRenderer,
+);
 
 /// The GPU opened on a worker thread while the game loads its content, so
 /// the two waits overlap instead of adding up. It picks the adapter before
@@ -317,7 +323,9 @@ impl Graphics {
             // A saved preference can outlive the GPU/monitor it was applied on.
             // Interactive changes still reject unsupported modes explicitly.
             present_mode: present_mode(vsync, &caps.present_modes).unwrap_or_else(|error| {
-                bri_console::warn(format!("Saved display mode unavailable: {error}; starting with VSync."));
+                bri_console::warn(format!(
+                    "Saved display mode unavailable: {error}; starting with VSync."
+                ));
                 wgpu::PresentMode::Fifo
             }),
             desired_maximum_frame_latency: 2,
@@ -768,7 +776,10 @@ impl Runner {
         };
         if self.modes.as_ref() != Some(&modes) {
             self.modes = Some(modes.clone());
-            self.config.app.ui_mut().apply(UiUpdate::DisplayModes(modes));
+            self.config
+                .app
+                .ui_mut()
+                .apply(UiUpdate::DisplayModes(modes));
         }
     }
     fn pump(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
@@ -814,7 +825,9 @@ impl Runner {
             self.gpu_losses.len() <= 3,
             "The GPU device was lost repeatedly: {reason}"
         );
-        bri_console::warn(format!("GPU device lost ({reason}); restarting the renderer."));
+        bri_console::warn(format!(
+            "GPU device lost ({reason}); restarting the renderer."
+        ));
         let (Some(window), Some(lost)) = (self.window.clone(), self.graphics.take()) else {
             return Ok(());
         };
@@ -951,17 +964,23 @@ impl Runner {
         }
         self.screenshots.submitted();
         for text in self.screenshots.poll(&g.device) {
-            self.config.app.ui_mut().apply(bri_ui::api::UiUpdate::BottomPrint {
-                text,
-                seconds: 3.0,
-                hide_bar: false,
-            });
+            self.config
+                .app
+                .ui_mut()
+                .apply(bri_ui::api::UiUpdate::BottomPrint {
+                    text,
+                    seconds: 3.0,
+                    hide_bar: false,
+                });
         }
         window.pre_present_notify();
         let presenting = Instant::now();
         g.queue.present(surface);
         let now = Instant::now();
-        let frame = self.last_present.replace(now).map(|at| now.duration_since(at));
+        let frame = self
+            .last_present
+            .replace(now)
+            .map(|at| now.duration_since(at));
         let cpu = std::mem::take(&mut self.frame_cpu);
         if timing && let Some(frame) = frame {
             let gpu = match &mut g.frame_timer {
@@ -1114,13 +1133,12 @@ impl Screenshots {
                     Ok(Ok(())) => {
                         let done = done.clone();
                         let Reading { shot, capture, .. } = reading;
-                        let spawned =
-                            std::thread::Builder::new()
-                                .name("screenshot".into())
-                                .spawn(move || {
-                                    let result = capture.write(&shot.path, shot.fit);
-                                    let _ = done.send((shot, result));
-                                });
+                        let spawned = std::thread::Builder::new().name("screenshot".into()).spawn(
+                            move || {
+                                let result = capture.write(&shot.path, shot.fit);
+                                let _ = done.send((shot, result));
+                            },
+                        );
                         match spawned {
                             Ok(_) => self.writing += 1,
                             Err(error) => messages.push(format!("Screenshot failed: {error}")),
@@ -1883,7 +1901,10 @@ mod tests {
                 saved += 1;
             }
             let quiet = app.poll(&gpu.device);
-            anyhow::ensure!(quiet.is_empty(), "a save picture is written quietly: {quiet:?}");
+            anyhow::ensure!(
+                quiet.is_empty(),
+                "a save picture is written quietly: {quiet:?}"
+            );
             std::thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(saved, 2);

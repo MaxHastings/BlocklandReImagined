@@ -169,7 +169,12 @@ fn offline_load(setup: &Setup, workload: &Workload) -> Result<(Value, Session, V
                 let state = session.simulation().state();
                 let bricks: BTreeMap<_, _> = dirty
                     .into_iter()
-                    .map(|id| (id, state.bricks.get(&id).map(bri_net::protocol::public_brick)))
+                    .map(|id| {
+                        (
+                            id,
+                            state.bricks.get(&id).map(bri_net::protocol::public_brick),
+                        )
+                    })
                     .collect();
                 let (bytes, _, c) = timed(|| {
                     codec::encode(&bri_net::protocol::Message::WorldChunk(
@@ -246,7 +251,10 @@ fn placement_profile(setup: &Setup, workload: &Workload) -> Result<Value> {
         }
         t[0] += clock.elapsed();
         let clock = Instant::now();
-        let slice: Vec<_> = slice.into_iter().filter_map(|b| mapping.brick(b).ok()).collect();
+        let slice: Vec<_> = slice
+            .into_iter()
+            .filter_map(|b| mapping.brick(b).ok())
+            .collect();
         t[1] += clock.elapsed();
         let clock = Instant::now();
         let slice: Vec<_> = slice.into_iter().filter(|b| sim.fits_grid(b)).collect();
@@ -266,7 +274,15 @@ fn placement_profile(setup: &Setup, workload: &Workload) -> Result<Value> {
             t[6] += clock.elapsed();
         }
     }
-    let names = ["take", "validate_map", "fits_grid", "drop_overlapping", "plan", "insert", "physics_step"];
+    let names = [
+        "take",
+        "validate_map",
+        "fits_grid",
+        "drop_overlapping",
+        "plan",
+        "insert",
+        "physics_step",
+    ];
     Ok(json!({
         "placed": placed,
         "ms": names.iter().zip(t).map(|(n, d)| (n.to_string(), json!(ms(d)))).collect::<serde_json::Map<_, _>>(),
@@ -356,7 +372,9 @@ async fn live_load(setup: &Setup, workload: &Workload, created: usize) -> Result
     if request.is_err() {
         drop((host, watcher));
         let _ = server.stop().await;
-        return Ok(json!({"request_bytes": request_bytes, "failed": "request exceeds the command limit"}));
+        return Ok(
+            json!({"request_bytes": request_bytes, "failed": "request exceeds the command limit"}),
+        );
     }
     let (host_before, watch_before) = (host.link_probe().sample(), watcher.link_probe().sample());
     let start = Instant::now();
@@ -374,8 +392,10 @@ async fn live_load(setup: &Setup, workload: &Workload, created: usize) -> Result
     let sent_ms = ms(start.elapsed());
     let accepted = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            if let bri_net::client::ClientEvent::Reply { sequence: s, result } =
-                host.receive().await?
+            if let bri_net::client::ClientEvent::Reply {
+                sequence: s,
+                result,
+            } = host.receive().await?
             {
                 ensure!(s == sequence, "Unexpected reply");
                 result.map_err(anyhow::Error::msg)?;
@@ -443,7 +463,11 @@ async fn live_load(setup: &Setup, workload: &Workload, created: usize) -> Result
 }
 
 /// What the client does with a joined world before it can play.
-fn client_stages(setup: &Setup, map: &str, world: Arc<bri_net::protocol::PublicWorld>) -> Result<Value> {
+fn client_stages(
+    setup: &Setup,
+    map: &str,
+    world: Arc<bri_net::protocol::PublicWorld>,
+) -> Result<Value> {
     let (session, _, loaded) = setup.session(map)?;
     let definitions = session.simulation().definitions.clone();
     let waters = session.simulation().waters.clone();
@@ -503,7 +527,10 @@ async fn join_only(setup: &Setup, map: &str, session: Session, spawns: Vec<Vec3>
     let join_complete_ms = ms(join_start.elapsed());
     let join_cpu_ms = ms(cpu() - join_cpu);
     let sample = late.link_probe().sample();
-    ensure!(late.replica.world.bricks.len() == count, "Join is missing bricks");
+    ensure!(
+        late.replica.world.bricks.len() == count,
+        "Join is missing bricks"
+    );
     let world = near_world;
     drop(late);
     let _ = server.stop().await;
@@ -550,7 +577,9 @@ fn synthetic(setup: &Setup, like: &World, count: usize, spawns: &[Vec3]) -> Resu
         seed ^= seed << 17;
         let (x, z, y) = (i % side, (i / side) % side, i / (side * side));
         let template = table[(seed >> 16) as usize % table.len()];
-        let ContentRef::Resolved(id) = &template.definition else { unreachable!() };
+        let ContentRef::Resolved(id) = &template.definition else {
+            unreachable!()
+        };
         let height = setup.meshes[id].height_plates as f32 * 0.2;
         let [tx, ty, tz] = template.position;
         let bottom = ty - height * 0.5;
@@ -776,7 +805,10 @@ async fn main() -> Result<()> {
     if let Some(parent) = report_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&report_path, serde_json::to_vec_pretty(&Value::Object(report))?)?;
+    std::fs::write(
+        &report_path,
+        serde_json::to_vec_pretty(&Value::Object(report))?,
+    )?;
     println!("Report: {}", report_path.display());
     Ok(())
 }

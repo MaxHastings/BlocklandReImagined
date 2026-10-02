@@ -62,11 +62,21 @@ pub(super) fn map_light_tints(
 ) -> Vec<Vec3> {
     lights
         .iter()
-        .zip(bri_render::map_lighting::fixture_owners(lights, light_shapes))
+        .zip(bri_render::map_lighting::fixture_owners(
+            lights,
+            light_shapes,
+        ))
         .map(|(light, owners)| {
             let tint = bri_sim::session::MapLightRule::tint_at(rules, Vec3::from(light.position));
-            let whole = owners.iter().filter(|&&(node, _)| !broken.contains(&node)).count();
-            if owners.is_empty() { tint } else { tint * (whole as f32 / owners.len() as f32) }
+            let whole = owners
+                .iter()
+                .filter(|&&(node, _)| !broken.contains(&node))
+                .count();
+            if owners.is_empty() {
+                tint
+            } else {
+                tint * (whole as f32 / owners.len() as f32)
+            }
         })
         .collect()
 }
@@ -98,7 +108,8 @@ impl LightVolumeState {
         let spawned = std::thread::Builder::new()
             .name("light volume".into())
             .spawn(move || {
-                let hex = |key: [u8; 32]| key.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                let hex =
+                    |key: [u8; 32]| key.iter().map(|b| format!("{b:02x}")).collect::<String>();
                 let key = baker.key(Self::MIN_CELL, Self::MAX_CELLS);
                 let file = cache.join(format!("{}.lightvolume", hex(key)));
                 let stored = std::fs::read(&file)
@@ -118,9 +129,9 @@ impl LightVolumeState {
                 let Some(map) = map else { return };
                 let key = map.key();
                 let file = cache.join(format!("{}.maplighting", hex(key)));
-                let stored = std::fs::read(&file)
-                    .ok()
-                    .and_then(|bytes| bri_render::map_lighting::MapLighting::from_bytes(&bytes, key));
+                let stored = std::fs::read(&file).ok().and_then(|bytes| {
+                    bri_render::map_lighting::MapLighting::from_bytes(&bytes, key)
+                });
                 match stored {
                     Some(lighting) => {
                         let _ = tx.send(Baked::Map(Box::new(lighting), true));
@@ -128,8 +139,12 @@ impl LightVolumeState {
                     None => {
                         // The other modes start without waiting for the
                         // Dynamic mode's own residual volume.
-                        let (mut lighting, rest) =
-                            map.bake_staged(Self::MIN_CELL, Self::MAX_CELLS, Self::VIS_CELL, Self::VIS_CELLS);
+                        let (mut lighting, rest) = map.bake_staged(
+                            Self::MIN_CELL,
+                            Self::MAX_CELLS,
+                            Self::VIS_CELL,
+                            Self::VIS_CELLS,
+                        );
                         let _ = tx.send(Baked::Map(Box::new(lighting.clone()), rest.is_none()));
                         if let Some(rest) = rest {
                             lighting.residual_all = rest.bake(Self::MIN_CELL, Self::MAX_CELLS);
@@ -148,7 +163,11 @@ impl LightVolumeState {
     pub(super) fn set_light_shapes(&mut self, breakables: &[bri_sim::map::Breakable]) {
         self.light_shapes = breakables
             .iter()
-            .filter(|b| LIGHT_SHAPES.iter().any(|name| b.datablock.eq_ignore_ascii_case(name)))
+            .filter(|b| {
+                LIGHT_SHAPES
+                    .iter()
+                    .any(|name| b.datablock.eq_ignore_ascii_case(name))
+            })
             .map(|b| (b.node, b.center))
             .collect();
     }
@@ -162,7 +181,10 @@ impl LightVolumeState {
         rules: &[bri_sim::session::MapLightRule],
     ) {
         if let Some(map) = &self.map {
-            renderer.set_map_light_tints(queue, &map_light_tints(&map.lights, &self.light_shapes, broken, rules));
+            renderer.set_map_light_tints(
+                queue,
+                &map_light_tints(&map.lights, &self.light_shapes, broken, rules),
+            );
         }
     }
     /// The lighting mode frames can draw with now: a Unified mode needs the

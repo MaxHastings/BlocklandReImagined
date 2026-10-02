@@ -14,8 +14,8 @@
 //! - **operations**, each passing `ops::authorize` (the one capability gate)
 //!   and then an ownership check here, carried out by their `Perform` impls
 //!   (`perform/`, one file per capability module).
-use bri_package_runtime::ops;
 use super::*;
+use bri_package_runtime::ops;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
     content::{ArgType, ChunkWorld, Visible},
@@ -30,20 +30,20 @@ mod brick_events;
 mod brick_fields;
 mod brick_hooks;
 mod chat_hooks;
-pub(in crate::session) use chat_hooks::{ChatAnswer, DeathLine};
 pub(in crate::session) use brick_events::Follower;
+pub(in crate::session) use chat_hooks::{ChatAnswer, DeathLine};
 mod game_hooks;
 mod host_data;
 pub(super) mod perform;
-pub use host_data::{AddOnData, MemoryAddOnData};
 pub(in crate::session) use game_hooks::Answer;
+pub use host_data::{AddOnData, MemoryAddOnData};
 pub(super) mod copy_hooks;
 mod item_hooks;
 mod reports;
 mod saved_games;
 mod settings;
-pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
 pub(in crate::session) use settings::Editor;
+pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
 
 pub(super) use item_hooks::Pickup;
 
@@ -303,15 +303,12 @@ impl GeneratedWorld {
             0,
         );
         brick.color = self.colors[material];
-        brick.look = self.def.materials[material]
-            .block
-            .clone()
-            .map(|block| {
-                Box::new(bri_world::BlockLook {
-                    block,
-                    state: String::new(),
-                })
-            });
+        brick.look = self.def.materials[material].block.clone().map(|block| {
+            Box::new(bri_world::BlockLook {
+                block,
+                state: String::new(),
+            })
+        });
         brick
     }
     fn chunk_of_voxel(&self, [x, _, z]: [i64; 3]) -> (i64, i64) {
@@ -952,7 +949,10 @@ impl Session {
         };
         let mut freed = 0;
         for ns in host.store.namespaces.values_mut() {
-            freed += ns.players.remove(&key).map_or(0, |v| state::stored_size(&v));
+            freed += ns
+                .players
+                .remove(&key)
+                .map_or(0, |v| state::stored_size(&v));
         }
         if freed > 0 {
             host.state_bytes = host.state_bytes.saturating_sub(freed);
@@ -1496,10 +1496,7 @@ impl Session {
             ObjectRef::Vehicle(vehicle) => {
                 let world = self.vehicles.world.as_ref().context("No such vehicle")?;
                 let centre = world
-                    .vehicle_snapshot(
-                        &self.simulation.physics,
-                        bri_vehicles::VehicleId(vehicle),
-                    )
+                    .vehicle_snapshot(&self.simulation.physics, bri_vehicles::VehicleId(vehicle))
                     .filter(|v| !v.destroyed)
                     .context("No such vehicle")?
                     .transform
@@ -1724,7 +1721,10 @@ impl Session {
         let tick = self.simulation.state().tick;
         let origin = package.to_string();
         let host = self.packages.as_mut().context("No packages are enabled")?;
-        let world = host.world.as_ref().context("No generated world is running")?;
+        let world = host
+            .world
+            .as_ref()
+            .context("No generated world is running")?;
         let m = world
             .material(material)
             .with_context(|| format!("The world has no material `{material}`"))?;
@@ -2400,7 +2400,10 @@ impl Session {
             .find(|(id, _)| **id == request.package)
             .map_or(0, |(_, b)| u64::from(b.command_cooldown_ticks));
         if host.cooldowns.get(&key).is_some_and(|until| tick < *until)
-            || host.cooldowns.get(&shared_key).is_some_and(|until| tick < *until)
+            || host
+                .cooldowns
+                .get(&shared_key)
+                .is_some_and(|until| tick < *until)
         {
             return Err(reject(
                 "command.cooldown",
@@ -2517,7 +2520,10 @@ impl Session {
             let _ = self.run_package(
                 &package,
                 "on_path_node",
-                vec![Dynamic::from_int(owner as i64), Dynamic::from_int(knot as i64)],
+                vec![
+                    Dynamic::from_int(owner as i64),
+                    Dynamic::from_int(knot as i64),
+                ],
                 Budget::Command,
                 None,
                 None,

@@ -1122,7 +1122,11 @@ impl Magazine {
     }
     /// Whether it ever reloads.
     pub fn reloads(&self) -> bool {
-        !self.from_reserve && matches!(self.supply, Supply::Reserve | Supply::Endless | Supply::Both)
+        !self.from_reserve
+            && matches!(
+                self.supply,
+                Supply::Reserve | Supply::Endless | Supply::Both
+            )
     }
     /// Whether its display shows.
     pub fn displayed(&self) -> bool {
@@ -1347,9 +1351,15 @@ impl ImageCommands {
     /// The commands the client sends itself as a key is pressed with the
     /// image in hand, rather than the host's image running them.
     pub fn sent_by_client(&self, command: &str) -> bool {
-        [&self.wheel, &self.shift, &self.rotate, &self.plant, &self.paint]
-            .into_iter()
-            .any(|c| c.as_deref() == Some(command))
+        [
+            &self.wheel,
+            &self.shift,
+            &self.rotate,
+            &self.plant,
+            &self.paint,
+        ]
+        .into_iter()
+        .any(|c| c.as_deref() == Some(command))
     }
     /// Whether the image runs `command` (`package:command`) from any of its
     /// moments: a state, jet, light, wheel, cancel, brick key or paint can.
@@ -1368,8 +1378,8 @@ impl ImageCommands {
                 &self.unmount,
                 &self.paint,
             ]
-                .into_iter()
-                .any(|c| c.as_deref() == Some(command))
+            .into_iter()
+            .any(|c| c.as_deref() == Some(command))
     }
     /// The command for entering a state with `script`, if any.
     pub fn for_script(&self, script: &str) -> Option<&String> {

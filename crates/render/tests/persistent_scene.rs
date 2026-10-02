@@ -1330,7 +1330,12 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
             );
             camera.apply_environment(&data);
             for t in &mut terrain {
-                t.update(&gpu.device, &gpu.queue, &[far], camera.atmosphere[1].max(1.))?;
+                t.update(
+                    &gpu.device,
+                    &gpu.queue,
+                    &[far],
+                    camera.atmosphere[1].max(1.),
+                )?;
             }
             let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
             assert!(draws.iter().any(|(_, i)| !i.is_empty()));

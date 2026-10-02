@@ -25,7 +25,8 @@ impl App {
     /// game this process hosts, which v20 skips as a "local" connection.
     pub(super) fn update_lag(&mut self) {
         let joined = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| Some((a.id, a.worker.probes.get()?)))
@@ -44,9 +45,15 @@ impl App {
             .prefs
             .i64_or("$Pref::Net::LagThreshold", default)
             .clamp(1, 60_000);
-        self.perf.lag_watch.set_threshold(Duration::from_millis(threshold as u64));
+        self.perf
+            .lag_watch
+            .set_threshold(Duration::from_millis(threshold as u64));
         let received = probes.link.received();
-        if let Some(lagging) = self.perf.lag_watch.observe(std::time::Instant::now(), received) {
+        if let Some(lagging) = self
+            .perf
+            .lag_watch
+            .observe(std::time::Instant::now(), received)
+        {
             self.ui.apply_session(id, UiUpdate::Lagging(lagging));
         }
     }
@@ -61,7 +68,8 @@ impl App {
         }
         let now = std::time::Instant::now();
         let probes = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.worker.probes.get())
@@ -103,7 +111,8 @@ impl App {
             server,
             gpu: self.gpu.gpu_name.clone(),
             gpu_passes: self
-                .gpu.gpu_passes
+                .gpu
+                .gpu_passes
                 .iter()
                 .map(|(pass, ms)| ((*pass).to_string(), *ms))
                 .collect(),

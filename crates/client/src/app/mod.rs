@@ -35,40 +35,40 @@ use std::{
     time::Duration,
 };
 
-mod lobby;
-mod gpu;
-mod scene;
 mod actions;
 mod addons;
 mod avatars;
 mod building;
 mod frame;
 mod fx;
+mod gpu;
 mod hud;
 mod lighting;
 mod load;
+mod lobby;
 mod mounts;
 mod net_events;
 mod perf;
 mod probes;
 mod render;
 mod saves;
+mod scene;
 mod session;
 mod view;
-use building::*;
-use perf::*;
-use lobby::*;
-use saves::*;
 use addons::*;
 use avatars::*;
+use building::*;
 use fx::*;
-use mounts::*;
-use view::*;
 use gpu::*;
-use scene::*;
-use session::*;
 use hud::*;
 use lighting::*;
+use lobby::*;
+use mounts::*;
+use perf::*;
+use saves::*;
+use scene::*;
+use session::*;
+use view::*;
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
 /// One player's script-thread animations by thread number (`playThread`).
 type AvatarThreads = [Option<crate::avatar::ActionAnimation>; 4];
@@ -463,7 +463,8 @@ pub struct App {
     addons: AddOns,
     /// Add-On world shapes (`show_shapes`), and the sets last uploaded.
     world_shapes: Option<bri_render::world_shapes::ShapeRenderer>,
-    shapes_uploaded: Option<BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>>,
+    shapes_uploaded:
+        Option<BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>>,
     /// View kick: hitscan shots seen this frame (actor, hand), and the
     /// newest projectile id the kick has looked at (None before the first
     /// view, so a join does not kick).
@@ -535,13 +536,7 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
         .map_err(|error| anyhow::anyhow!("Could not use the clipboard: {error}"))
 }
 
-impl App {
-
-
-
-
-
-}
+impl App {}
 /// How long a load or map change must stop changing the world before later
 /// changes count as unsaved.
 const SETTLE: Duration = Duration::from_secs(3);
@@ -662,9 +657,8 @@ fn name_tags(
     drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
-    let sees = |from: Vec3, to: Vec3| {
-        building.is_none_or(|b| b.name_visible(from, to).unwrap_or(true))
-    };
+    let sees =
+        |from: Vec3, to: Vec3| building.is_none_or(|b| b.name_visible(from, to).unwrap_or(true));
     // Where a name anchored at `target` goes on screen, and how strongly:
     // where its body shows, straight on or in a portal's view, never
     // through a portal's view of somewhere else.
@@ -711,14 +705,18 @@ fn name_tags(
             continue;
         };
         let game = view.minigames.iter().find(|m| m.members.contains(owner));
-        let name_distance = game.and_then(|m| m.name_distance).map_or(8192.0, |d| d as f32);
+        let name_distance = game
+            .and_then(|m| m.name_distance)
+            .map_or(8192.0, |d| d as f32);
         let Some((x, y, opacity)) = place(view.archetypes.eye(state), name_distance) else {
             continue;
         };
         // A team member's name is in their team's paint colour.
-        let team = view.vitals.get(owner).and_then(|v| v.team).and_then(|team| {
-            paint(game?.teams.iter().find(|t| t.id.0 == team)?.color)
-        });
+        let team = view
+            .vitals
+            .get(owner)
+            .and_then(|v| v.team)
+            .and_then(|team| paint(game?.teams.iter().find(|t| t.id.0 == team)?.color));
         // A game's own paint colour (Slayer's Color) over its v20 one.
         let color = team
             .or_else(|| game.and_then(|m| m.paint_color).and_then(paint))
@@ -739,7 +737,12 @@ fn name_tags(
         .static_items
         .iter()
         .map(|i| (i.item.as_str(), Vec3::from(i.position)))
-        .chain(view.weapons.drops.iter().map(|d| (d.item.as_str(), d.position)));
+        .chain(
+            view.weapons
+                .drops
+                .iter()
+                .map(|d| (d.item.as_str(), d.position)),
+        );
     for (item, at) in lying {
         let Some(label) = pack
             .items
@@ -1000,7 +1003,11 @@ fn report_view(
     ReportView {
         title: plain_chat(&report.title),
         banner: report.banner.as_deref().map(plain_chat),
-        columns: report.columns.iter().map(|c| plain_chat(&c.title)).collect(),
+        columns: report
+            .columns
+            .iter()
+            .map(|c| plain_chat(&c.title))
+            .collect(),
         sections: report
             .sections
             .iter()
@@ -1018,7 +1025,11 @@ fn report_view(
                         cells: report
                             .columns
                             .iter()
-                            .map(|c| r.cells.get(&c.key).map_or_else(String::new, |v| plain_chat(v)))
+                            .map(|c| {
+                                r.cells
+                                    .get(&c.key)
+                                    .map_or_else(String::new, |v| plain_chat(v))
+                            })
                             .collect(),
                     })
                     .collect(),
@@ -1098,7 +1109,6 @@ fn steering_in_use(
 pub fn dark_sun(color: [f32; 3]) -> bool {
     color.iter().all(|c| *c < 0.4)
 }
-
 
 /// Ghost/plant/brick-selection actions recorded by build macros.
 fn macro_action(action: &UiAction) -> bool {

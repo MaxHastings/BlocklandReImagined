@@ -74,8 +74,14 @@ impl Upload {
             build.world.bricks.is_empty() && build.world.unloaded.is_empty(),
             "An uploaded build also carries bricks of its own"
         );
-        let bricks = self.bricks.unpack(bri_world::MAX_BRICKS).map_err(anyhow::Error::msg)?;
-        let unloaded = self.unloaded.unpack(bri_world::MAX_BRICKS).map_err(anyhow::Error::msg)?;
+        let bricks = self
+            .bricks
+            .unpack(bri_world::MAX_BRICKS)
+            .map_err(anyhow::Error::msg)?;
+        let unloaded = self
+            .unloaded
+            .unpack(bri_world::MAX_BRICKS)
+            .map_err(anyhow::Error::msg)?;
         anyhow::ensure!(
             bricks.len() + unloaded.len() <= bri_world::MAX_BRICKS,
             "Uploaded build exceeds the world brick limit"
@@ -88,9 +94,10 @@ impl Upload {
             );
         }
         for (_, brick) in unloaded {
-            build.world.unloaded.push(
-                brick.ok_or_else(|| anyhow::anyhow!("Removal in an uploaded build"))?,
-            );
+            build
+                .world
+                .unloaded
+                .push(brick.ok_or_else(|| anyhow::anyhow!("Removal in an uploaded build"))?);
         }
         Ok(())
     }
@@ -118,7 +125,10 @@ mod tests {
             b.color_effect = (i % 7) as u8;
             b.shape_effect = (i % 3) as u8;
             if i % 11 == 0 {
-                b.print = Some(ContentRef::unresolved("print", format!("Letters/{}", i % 4)));
+                b.print = Some(ContentRef::unresolved(
+                    "print",
+                    format!("Letters/{}", i % 4),
+                ));
             }
             if i % 13 == 0 {
                 b.name = Some(format!("brick{i}"));
@@ -155,7 +165,8 @@ mod tests {
         let chunk = Chunk(sample());
         let bytes = rmp_serde::to_vec_named(&chunk).unwrap();
         assert_eq!(rmp_serde::from_slice::<Chunk>(&bytes).unwrap(), chunk);
-        let mut update: BTreeMap<_, _> = sample().into_iter().map(|(id, b)| (id, Some(b))).collect();
+        let mut update: BTreeMap<_, _> =
+            sample().into_iter().map(|(id, b)| (id, Some(b))).collect();
         update.insert(5, None);
         let update = Update(update);
         let bytes = rmp_serde::to_vec_named(&update).unwrap();

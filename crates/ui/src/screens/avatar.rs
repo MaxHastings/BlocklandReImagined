@@ -268,7 +268,10 @@ impl Avatar {
             .walk()
             .filter(|&n| {
                 let t = self.view.text_of(n);
-                matches!(t.trim(), "Name:" | "LAN Name:" | "Clan Prefix:" | "Clan Suffix:" | "Prefix:" | "Suffix:")
+                matches!(
+                    t.trim(),
+                    "Name:" | "LAN Name:" | "Clan Prefix:" | "Clan Suffix:" | "Prefix:" | "Suffix:"
+                )
             })
             .collect();
         for n in labels {
@@ -1246,7 +1249,11 @@ mod tests {
     }
     /// Position of the drafted choice in the part's current list.
     fn pos(screen: &Avatar, part: &str) -> usize {
-        selected(&screen.draft, part, &options(&screen.data, &screen.draft, part))
+        selected(
+            &screen.draft,
+            part,
+            &options(&screen.data, &screen.draft, part),
+        )
     }
     fn click_choice(screen: &mut Avatar, index: usize, core: &mut Core) {
         let n = screen.view.id(&format!("Avatar_Choice{index}")).unwrap();
@@ -1374,7 +1381,11 @@ mod tests {
         let mut ui = fixture();
         let mut s = Avatar::new(&ui.core);
         s.on_wake(&mut ui.core);
-        assert!(s.view.walk().all(|n| s.view.text_of(n).trim() != "LAN Name:"));
+        assert!(
+            s.view
+                .walk()
+                .all(|n| s.view.text_of(n).trim() != "LAN Name:")
+        );
         let n = s.view.id("Avatar_Name").unwrap();
         s.view.focus = Some(n);
         s.view.state(n).cursor = s.view.edit_text(n).chars().count();
@@ -1386,9 +1397,9 @@ mod tests {
         let actions = ui.drain_actions();
         let expected = format!("{} Typed", ui.core.settings.avatar.lan_name.trim());
         assert!(
-            actions.iter().any(
-                |(_, a)| matches!(a, UiAction::SetAvatar(a) if a.lan_name == expected)
-            ),
+            actions
+                .iter()
+                .any(|(_, a)| matches!(a, UiAction::SetAvatar(a) if a.lan_name == expected)),
             "{actions:?}"
         );
     }
@@ -1571,7 +1582,12 @@ mod tests {
             &pack.data.data.avatar,
         );
         assert!(
-            ui.core.settings.avatar.part("Hat").parse::<usize>().is_err(),
+            ui.core
+                .settings
+                .avatar
+                .part("Hat")
+                .parse::<usize>()
+                .is_err(),
             "v20 part positions are named"
         );
         let mut s = Avatar::new(&ui.core);

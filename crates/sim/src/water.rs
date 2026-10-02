@@ -190,7 +190,10 @@ mod tests {
 
     #[test]
     fn colours_and_tints_follow_v20() {
-        assert_eq!(brick_water_color([0.1, 0.2, 0.3, 1.0]), [0.1, 0.2, 0.3, 0.75]);
+        assert_eq!(
+            brick_water_color([0.1, 0.2, 0.3, 1.0]),
+            [0.1, 0.2, 0.3, 0.75]
+        );
         assert!(tint_blends_alpha(brick_water_color([0.0, 0.0, 1.0, 1.0])));
         assert!(!tint_blends_alpha(MAP_WATER_COLOR));
         assert_eq!(screen_tint([1.0, 1.0, 1.0, 2.0])[3], 0.9);

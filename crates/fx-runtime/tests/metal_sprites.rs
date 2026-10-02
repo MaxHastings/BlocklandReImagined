@@ -60,7 +60,11 @@ fn ball() -> SceneData {
         let theta = ring as f32 / rings as f32 * std::f32::consts::PI;
         for segment in 0..=segments {
             let phi = segment as f32 / segments as f32 * std::f32::consts::TAU;
-            let n = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
+            let n = Vec3::new(
+                theta.sin() * phi.cos(),
+                theta.cos(),
+                -theta.sin() * phi.sin(),
+            );
             data.vertices.push(SceneVertex {
                 position: n.to_array(),
                 normal: n.to_array(),
@@ -119,7 +123,14 @@ fn frame(sprites_in_probe: bool) -> Result<Vec<u8>> {
     camera.apply_environment(&data);
     renderer.update_camera(&queue, &camera);
     let mut probe = EnvironmentProbe::new(&device, &renderer, FORMAT, 1);
-    probe.prepare(&device, &queue, &mut renderer, &camera, Some(Vec3::ZERO), 32.0);
+    probe.prepare(
+        &device,
+        &queue,
+        &mut renderer,
+        &camera,
+        Some(Vec3::ZERO),
+        32.0,
+    );
     let mut sprites = EffectsRenderer::new(
         &device,
         &queue,
@@ -182,7 +193,15 @@ fn frame(sprites_in_probe: bool) -> Result<Vec<u8>> {
     let clear = wgpu::Color::BLACK;
     let mut encoder = device.create_command_encoder(&Default::default());
     let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| sprites.render_view(pass, view);
-    probe.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {}, &late);
+    probe.render(
+        &renderer,
+        &mut encoder,
+        &[&scene],
+        &[],
+        clear,
+        &|_, _| {},
+        &late,
+    );
     renderer.render_world(
         &mut encoder,
         WorldPass {

@@ -435,15 +435,18 @@ impl CopyBuilder {
                 kind
             }
         };
-        let print = brick.print.as_ref().map(|print| match self.print_of.get(print) {
-            Some(&index) => index,
-            None => {
-                let index = self.prints.len() as u32;
-                self.prints.push(print.clone());
-                self.print_of.insert(print.clone(), index);
-                index
-            }
-        });
+        let print = brick
+            .print
+            .as_ref()
+            .map(|print| match self.print_of.get(print) {
+                Some(&index) => index,
+                None => {
+                    let index = self.prints.len() as u32;
+                    self.prints.push(print.clone());
+                    self.print_of.insert(print.clone(), index);
+                    index
+                }
+            });
         for axis in 0..3 {
             self.min[axis] = self.min[axis].min(bounds.min[axis]);
             self.max[axis] = self.max[axis].max(bounds.max()[axis]);
@@ -678,7 +681,10 @@ impl Blueprint {
             !self.kinds.is_empty()
                 && self.kinds.len() <= self.bricks.len()
                 && self.prints.len() <= self.bricks.len()
-                && self.kinds.iter().all(|id| !id.is_empty() && id.len() <= 512),
+                && self
+                    .kinds
+                    .iter()
+                    .all(|id| !id.is_empty() && id.len() <= 512),
             "Invalid copied brick kinds"
         );
         for brick in &self.bricks {
@@ -737,7 +743,9 @@ impl Blueprint {
         ghost.bricks = if n <= most {
             self.bricks.clone()
         } else {
-            (0..most.max(1)).map(|i| self.bricks[i * n / most.max(1)]).collect()
+            (0..most.max(1))
+                .map(|i| self.bricks[i * n / most.max(1)])
+                .collect()
         };
         ghost
     }
@@ -1035,7 +1043,11 @@ mod tests {
         let copy = Blueprint::capture("dup:weapon/tool", &source, &defs).unwrap();
         assert_eq!(copy.origin, [0.5, 0.0, 0.0]);
         assert_eq!(copy.size, [2, 4, 1]);
-        assert!(copy.world_bricks().iter().all(|b| b.owner == 0 && b.color == 3));
+        assert!(
+            copy.world_bricks()
+                .iter()
+                .all(|b| b.owner == 0 && b.color == 3)
+        );
         copy.validate().unwrap();
         // Unturned at its own origin it is the source again.
         let same = copy.placed(copy.origin, 0);

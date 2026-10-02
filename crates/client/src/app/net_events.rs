@@ -101,9 +101,7 @@ impl App {
         }
         // The server's Add-Ons' wrench events join the wrench's lists.
         if let Some(view) = &a.view
-            && let Some(update) = self
-                .build.tool_ui
-                .offer_events(&view.brick_events)
+            && let Some(update) = self.build.tool_ui.offer_events(&view.brick_events)
             && a.entered
         {
             self.ui.apply_session(a.id, update);
@@ -206,14 +204,18 @@ impl App {
         }
         if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
             && self
-                .scene.query_source
+                .scene
+                .query_source
                 .as_ref()
                 .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
         {
             let known = self
-                .scene.query_log
+                .scene
+                .query_log
                 .as_ref()
-                .filter(|(log, _)| self.scene.query_source.is_some() && Arc::ptr_eq(log, &view.world_log))
+                .filter(|(log, _)| {
+                    self.scene.query_source.is_some() && Arc::ptr_eq(log, &view.world_log)
+                })
                 .and_then(|(log, revision)| log.between(*revision, view.world_revision));
             if let Err(error) = building.sync_world_changes(&view.world, known.as_ref()) {
                 self.ui.apply_session(
@@ -227,7 +229,8 @@ impl App {
             }
             if a.entered
                 && self
-                    .scene.query_source
+                    .scene
+                    .query_source
                     .as_ref()
                     .is_none_or(|old| old.palette != view.world.palette)
             {
@@ -249,7 +252,9 @@ impl App {
             );
             // One set of openings: the windows show where bodies go.
             if let Some(collision) = self.motion.collision() {
-                self.scene.mirror_index.link(collision.links(), &self.scene.mirror_shapes);
+                self.scene
+                    .mirror_index
+                    .link(collision.links(), &self.scene.mirror_shapes);
             }
         }
         if let Some(job) = &mut self.scene.world_job
@@ -265,7 +270,9 @@ impl App {
                     for (key, built) in changes {
                         if let Some(built) = built {
                             self.scene.cpu_chunks.insert(key, built.scene);
-                            self.scene.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
+                            self.scene
+                                .cpu_chunk_bricks
+                                .insert(key, Arc::new(built.bricks));
                             self.gpu.chunk_uploads.insert(key);
                         } else {
                             self.scene.cpu_chunks.remove(&key);
@@ -292,13 +299,21 @@ impl App {
             }
         }
         if self.scene.world_job.is_none()
-            && let (Some(meshes), Some(materials), Some(palette), Some(view)) =
-                (&self.scene.meshes, &self.scene.materials, &self.scene.palette, &a.view)
+            && let (Some(meshes), Some(materials), Some(palette), Some(view)) = (
+                &self.scene.meshes,
+                &self.scene.materials,
+                &self.scene.palette,
+                &a.view,
+            )
             && (self
-                .scene.world_source
+                .scene
+                .world_source
                 .as_ref()
                 .is_none_or(|previous| !Arc::ptr_eq(previous, &view.world))
-                || self.fx.brick_fades.needs_rebuild(&self.scene.chunks_left_out))
+                || self
+                    .fx
+                    .brick_fades
+                    .needs_rebuild(&self.scene.chunks_left_out))
         {
             let meshes = meshes.clone();
             let materials = materials.clone();
@@ -308,14 +323,16 @@ impl App {
             // Compare only the bricks the replica reports changed since the
             // applied revision; without that history, compare whole worlds.
             let known = self
-                .scene.world_log
+                .scene
+                .world_log
                 .as_ref()
                 .filter(|applied| Arc::ptr_eq(applied, &log))
                 .and_then(|log| log.between(self.scene.world_revision, revision));
             // v20 eases repainted bricks to their new colour (`brick_fade`).
             match (&self.scene.world_source, &known) {
                 (Some(drawn), Some(known)) if !known.palette => {
-                    self.fx.brick_fades
+                    self.fx
+                        .brick_fades
                         .observe(drawn, &world, known.bricks.iter().copied());
                     // A knocked-out brick does not fade out in place: its
                     // debris replaces it at once. Easing it would draw it
@@ -369,7 +386,8 @@ impl App {
             && let Some(view) = &a.view
             && self.scene.scene_map.as_deref() == Some(view.world.map_id.as_str())
             && self
-                .scene.world_source
+                .scene
+                .world_source
                 .as_ref()
                 .is_some_and(|source| Arc::ptr_eq(source, &view.world))
         {
@@ -707,9 +725,11 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::RotateCopy { direction } => {
-                            self.ui.core.request(UiAction::Game(GameAction::RotateBrick {
-                                dir: i32::from(direction),
-                            }));
+                            self.ui
+                                .core
+                                .request(UiAction::Game(GameAction::RotateBrick {
+                                    dir: i32::from(direction),
+                                }));
                             continue;
                         }
                         bri_sim::session::Notice::PlantCopy => {
@@ -883,9 +903,11 @@ impl App {
             // Code the player has not trusted on this server yet: ask before
             // any of it runs. Leave ends the game.
             if !a.local
-                && let Some(prompt) =
-                    self.addons.client_code
-                        .trust_prompt(&server, &plain_chat(&a.name), &self.state_dir)
+                && let Some(prompt) = self.addons.client_code.trust_prompt(
+                    &server,
+                    &plain_chat(&a.name),
+                    &self.state_dir,
+                )
             {
                 self.ui
                     .apply_session(a.id, UiUpdate::Question(trust_question(&prompt)));
@@ -927,13 +949,18 @@ impl App {
                     settings: view.environment.clone(),
                     tick: view.tick,
                 };
-                let due = self.net.environment_sent.as_ref().is_none_or(|(session, sent)| {
-                    *session != a.id
-                        || sent.authored != next.authored
-                        || sent.settings != next.settings
-                        || next.settings.day_cycle.is_some()
-                            && next.tick.abs_diff(sent.tick) >= bri_content::atmosphere::TICKS_PER_SECOND
-                });
+                let due = self
+                    .net
+                    .environment_sent
+                    .as_ref()
+                    .is_none_or(|(session, sent)| {
+                        *session != a.id
+                            || sent.authored != next.authored
+                            || sent.settings != next.settings
+                            || next.settings.day_cycle.is_some()
+                                && next.tick.abs_diff(sent.tick)
+                                    >= bri_content::atmosphere::TICKS_PER_SECOND
+                    });
                 if due {
                     self.net.environment_sent = Some((a.id, next.clone()));
                     self.ui.apply_session(a.id, UiUpdate::Environment(next));

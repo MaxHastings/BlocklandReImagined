@@ -78,7 +78,12 @@ fn definition(w: u32, d: u32, h: u32, top: [[f32; 3]; 4]) -> Definition {
 /// supercut puts back over what stuck out of its box.
 fn plain(w: u32, d: u32) -> Definition {
     let (x, z) = (w as f32 * 0.25, d as f32 * 0.25);
-    let mut plain = definition(w, d, 1, [[-x, 0.1, -z], [x, 0.1, -z], [x, 0.1, z], [-x, 0.1, z]]);
+    let mut plain = definition(
+        w,
+        d,
+        1,
+        [[-x, 0.1, -z], [x, 0.1, -z], [x, 0.1, z], [-x, 0.1, z]],
+    );
     plain.mesh.quads[0].surface = Surface::Top;
     plain.mesh.collision_boxes = vec![bri_content::brick::CollisionBox {
         center: [0.0; 3],
@@ -134,21 +139,13 @@ fn add_ons() -> Arc<Catalog> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/duplicators");
     let packages = [
         ("duplicator", "duplicator", Side::Server),
-        (
-            "duplicator-tool",
-            "duplicator-tool",
-            Side::Shared,
-        ),
+        ("duplicator-tool", "duplicator-tool", Side::Shared),
         (
             "advanced-duplicator-tool",
             "advanced-duplicator-tool",
             Side::Shared,
         ),
-        (
-            "advanced-duplicator",
-            "advanced-duplicator",
-            Side::Server,
-        ),
+        ("advanced-duplicator", "advanced-duplicator", Side::Server),
     ]
     .into_iter()
     .map(|(id, dir, side)| PackageEntry {
@@ -178,8 +175,7 @@ fn tool_pack() -> bri_weapons::Pack {
         bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
     };
     let mut pack = read("tests/fixtures/duplicators/duplicator-tool/assets/weapons.json");
-    let advanced =
-        read("tests/fixtures/duplicators/advanced-duplicator-tool/assets/weapons.json");
+    let advanced = read("tests/fixtures/duplicators/advanced-duplicator-tool/assets/weapons.json");
     pack.items.extend(advanced.items);
     pack.images.extend(advanced.images);
     pack
@@ -876,9 +872,13 @@ fn a_supercut_puts_plain_bricks_over_what_stuck_out_and_its_undo_goes_over_ticks
     // Half of it reaches into the box.
     g.plant_as(host, "plain-4x1", [0.0, 0.1, 0.25], 0);
     let before: Vec<Brick> = g.bricks().into_values().collect();
-    let cut = g
-        .s
-        .super_cut(host, [0.0, 0.0, -6.0], [2.0, 0.2, 0.5], Some("advanced-duplicator"))
+    let cut =
+        g.s.super_cut(
+            host,
+            [0.0, 0.0, -6.0],
+            [2.0, 0.2, 0.5],
+            Some("advanced-duplicator"),
+        )
         .unwrap();
     assert_eq!((cut.bricks, cut.placed, cut.refused), (9, 1, 0));
     let world = g.bricks();
@@ -894,7 +894,10 @@ fn a_supercut_puts_plain_bricks_over_what_stuck_out_and_its_undo_goes_over_ticks
     g.undo(host);
     finish_work(&mut g, host);
     let prints = prints(&g.notices(host));
-    assert!(prints.iter().any(|p| p.contains("Something is in the way")), "{prints:?}");
+    assert!(
+        prints.iter().any(|p| p.contains("Something is in the way")),
+        "{prints:?}"
+    );
     let world = g.bricks();
     assert_eq!(world.len(), 2);
     assert!(world.values().any(|b| b.position == [-0.5, 0.1, 0.25]));
@@ -927,14 +930,26 @@ fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
     };
     scene(&mut g, host);
     copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
-    g.cmd(host, Command::MiniGame(MiniGameRequest::Create { color: 3, settings: settings.clone() }))
-        .unwrap();
+    g.cmd(
+        host,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 3,
+            settings: settings.clone(),
+        }),
+    )
+    .unwrap();
     g.steps(130);
     let Ok(Reply::Planted(_)) = g.place(host, [-4.0, 0.0, -3.0], 0, false) else {
         panic!("the copy plants")
     };
     assert_eq!(g.bricks().len(), 7);
-    let build = match g.cmd(host, Command::SaveBuild { events: true, ownership: true }) {
+    let build = match g.cmd(
+        host,
+        Command::SaveBuild {
+            events: true,
+            ownership: true,
+        },
+    ) {
         Ok(Reply::Saved(build)) => build,
         other => panic!("{other:?}"),
     };
@@ -942,7 +957,14 @@ fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
     let shape = |bricks: BTreeMap<BrickId, Brick>| {
         let mut v: Vec<_> = bricks
             .into_values()
-            .map(|b| (b.definition, b.position.map(f32::to_bits), b.quarter_turns, b.color))
+            .map(|b| {
+                (
+                    b.definition,
+                    b.position.map(f32::to_bits),
+                    b.quarter_turns,
+                    b.color,
+                )
+            })
             .collect();
         v.sort_by(|x, y| x.1.cmp(&y.1));
         v
@@ -953,8 +975,14 @@ fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
     let loader = self::host(&mut h);
     let bytes = bri_world::build::encode(&build).unwrap();
     let build = bri_world::build::decode(&bytes).unwrap();
-    h.cmd(loader, Command::LoadBuild { build: Box::new(build), ownership: true })
-        .unwrap();
+    h.cmd(
+        loader,
+        Command::LoadBuild {
+            build: Box::new(build),
+            ownership: true,
+        },
+    )
+    .unwrap();
     while h.s.build_loading() {
         h.steps(1);
     }
@@ -964,7 +992,10 @@ fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
     assert_eq!(view.len(), 1);
     assert_eq!(view[0].settings, settings);
     // The loaded build is the loader's to copy and plant again.
-    assert_eq!(copy_box(&mut h, loader, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100), Ok(3));
+    assert_eq!(
+        copy_box(&mut h, loader, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100),
+        Ok(3)
+    );
     h.steps(130);
     let Ok(Reply::Planted(_)) = h.place(loader, [4.0, 0.0, 4.0], 0, false) else {
         panic!("the loaded build copies")
@@ -991,10 +1022,20 @@ fn a_cut_of_each_brick_leaves_what_its_player_may_not_cut() {
     let bob = verified(&mut g, "Bob", 2.0, 2);
     let [a, b, c, d] = scene(&mut g, ann);
     // Build trust both ways: Ann may copy Bob's plate, not cut it.
-    g.cmd(ann, Command::TrustInvite { target: bob, level: 1 }).unwrap();
+    g.cmd(
+        ann,
+        Command::TrustInvite {
+            target: bob,
+            level: 1,
+        },
+    )
+    .unwrap();
     g.cmd(bob, Command::AcceptTrust { from: ann }).unwrap();
     let theirs = g.plant(bob, [-0.5, 0.1, 0.25]);
-    assert_eq!(copy_box(&mut g, ann, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100), Ok(4));
+    assert_eq!(
+        copy_box(&mut g, ann, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100),
+        Ok(4)
+    );
     assert!(g.s.cut_copy(ann).is_err(), "all or none: none");
     assert_eq!(g.bricks().len(), 5);
     g.notices(ann);
@@ -1044,7 +1085,15 @@ fn a_copy_floats_admin_only_for_administrators_alone() {
         limited: true,
     };
     for (who, brick) in [(guest, theirs), (host, d)] {
-        let copied = g.s.copy_build(who, brick, 100, up, CopyRule::default(), TOOL, "advanced-duplicator");
+        let copied = g.s.copy_build(
+            who,
+            brick,
+            100,
+            up,
+            CopyRule::default(),
+            TOOL,
+            "advanced-duplicator",
+        );
         assert!(copied.error.is_none());
         g.typed(who, "floatadmin");
     }
@@ -1074,7 +1123,14 @@ fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
     };
     let ann = verified(&mut g, "Ann", 0.0, 1);
     let bob = verified(&mut g, "Bob", 2.0, 2);
-    g.cmd(ann, Command::TrustInvite { target: bob, level: 1 }).unwrap();
+    g.cmd(
+        ann,
+        Command::TrustInvite {
+            target: bob,
+            level: 1,
+        },
+    )
+    .unwrap();
     g.cmd(bob, Command::AcceptTrust { from: ann }).unwrap();
     let a = g.plant(ann, [0.5, 0.1, 0.25]);
     let b = g.plant(bob, [0.5, 0.3, 0.25]);
@@ -1083,7 +1139,11 @@ fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
     let sim = g.s.simulation();
     assert_eq!(sim.stack_owner(a), Some(ann));
     assert_eq!(sim.stack_owner(b), Some(ann), "built on Ann's plate");
-    assert_eq!(sim.stack_owner(c), Some(ann), "built on Bob's, in Ann's stack");
+    assert_eq!(
+        sim.stack_owner(c),
+        Some(ann),
+        "built on Bob's, in Ann's stack"
+    );
     assert_eq!(sim.stack_owner(own), Some(bob));
 
     let up = StackReach {
@@ -1097,17 +1157,25 @@ fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
     };
     // Full trust needed: Bob's bricks stop the copy, as they are not
     // Ann's to change...
-    let copied = g.s.copy_build(ann, a, 100, up, full, TOOL, "advanced-duplicator");
+    let copied =
+        g.s.copy_build(ann, a, 100, up, full, TOOL, "advanced-duplicator");
     assert_eq!(copied.selection.bricks.len(), 1, "{:?}", copied.error);
     // ...unless the rule counts the stack: they stand on hers.
-    let stacked = CopyRule { stack: true, ..full };
-    let copied = g.s.copy_build(ann, a, 100, up, stacked, TOOL, "advanced-duplicator");
+    let stacked = CopyRule {
+        stack: true,
+        ..full
+    };
+    let copied =
+        g.s.copy_build(ann, a, 100, up, stacked, TOOL, "advanced-duplicator");
     assert_eq!(copied.selection.bricks.len(), 3, "{:?}", copied.error);
     g.steps(61);
     g.typed(ann, "cuteach");
     finish_work(&mut g, ann);
     let world = g.bricks();
-    assert!(![a, b, c].iter().any(|id| world.contains_key(id)), "all three cut");
+    assert!(
+        ![a, b, c].iter().any(|id| world.contains_key(id)),
+        "all three cut"
+    );
     assert!(world.contains_key(&own));
     // Put back by the undo, they are still in Ann's stack.
     g.undo(ann);
@@ -1115,10 +1183,12 @@ fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
     let world = g.bricks();
     assert_eq!(world.len(), 4);
     let sim = g.s.simulation();
-    assert!(world
-        .iter()
-        .filter(|(_, brick)| brick.owner == bob && brick.position[0] < 1.0)
-        .all(|(id, _)| sim.stack_owner(*id) == Some(ann)));
+    assert!(
+        world
+            .iter()
+            .filter(|(_, brick)| brick.owner == bob && brick.position[0] < 1.0)
+            .all(|(id, _)| sim.stack_owner(*id) == Some(ann))
+    );
 }
 
 /// v20's four trust limits a copy may ask: `None` takes anyone's bricks,
@@ -1157,10 +1227,21 @@ fn a_copy_asks_no_trust_build_trust_or_only_its_own_bricks() {
     };
     assert_eq!(copies(&mut g, his, CopyTrust::Build), 0, "no trust given");
     assert_eq!(copies(&mut g, his, CopyTrust::None), 1, "none asked");
-    g.cmd(bob, Command::TrustInvite { target: ann, level: 2 }).unwrap();
+    g.cmd(
+        bob,
+        Command::TrustInvite {
+            target: ann,
+            level: 2,
+        },
+    )
+    .unwrap();
     g.cmd(ann, Command::AcceptTrust { from: bob }).unwrap();
     assert_eq!(copies(&mut g, his, CopyTrust::Full), 1);
-    assert_eq!(copies(&mut g, his, CopyTrust::Own), 0, "full trust is not her own");
+    assert_eq!(
+        copies(&mut g, his, CopyTrust::Own),
+        0,
+        "full trust is not her own"
+    );
     assert_eq!(copies(&mut g, hers, CopyTrust::Own), 1);
 }
 
@@ -1189,7 +1270,8 @@ fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
         color: 0,
         print: None,
     };
-    g.cmd(host, Command::GhostBrick(Some(ghost("wedge-right", 1)))).unwrap();
+    g.cmd(host, Command::GhostBrick(Some(ghost("wedge-right", 1))))
+        .unwrap();
     g.notices(host);
     g.typed(host, "mirghostx");
     let mirrored = g.notices(host).into_iter().find_map(|n| match n {
@@ -1200,7 +1282,11 @@ fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
         _ => None,
     });
     // The same brick copied and placed mirrored across x.
-    let wedge = Brick::new(ContentRef::Resolved("wedge-right".into()), [0.25, 0.3, 0.5], host);
+    let wedge = Brick::new(
+        ContentRef::Resolved("wedge-right".into()),
+        [0.25, 0.3, 0.5],
+        host,
+    );
     let mut turned = wedge.clone();
     turned.quarter_turns = 1;
     let defs = definitions();
@@ -1229,7 +1315,8 @@ fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
     let told = g.notices(host);
     assert!(!told.iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
     assert!(
-        told.iter().any(|n| matches!(n, Notice::Chat(t) if t == "That brick has no image upside down")),
+        told.iter()
+            .any(|n| matches!(n, Notice::Chat(t) if t == "That brick has no image upside down")),
         "{told:?}"
     );
     // With no ghost out, nothing is mirrored.
@@ -1244,7 +1331,11 @@ fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
     .unwrap();
     g.notices(host);
     g.typed(host, "mirghostx");
-    assert!(!g.notices(host).iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
+    assert!(
+        !g.notices(host)
+            .iter()
+            .any(|n| matches!(n, Notice::MirrorGhost { .. }))
+    );
 }
 
 /// A copy carries its bricks' names, lights, emitters, items and events

@@ -10,10 +10,10 @@ pub mod console;
 pub mod environment;
 pub mod help;
 pub mod menus;
-pub mod modes;
-pub mod music;
 pub mod minigame_addons;
 pub mod minigames;
+pub mod modes;
+pub mod music;
 pub mod name;
 pub mod options;
 pub mod perf;
@@ -181,7 +181,9 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::PlayerList => return Box::new(players::Players::new(core)),
         ScreenId::MiniGames => return Box::new(minigames::MiniGameScreen::list(core)),
         ScreenId::MiniGameSettings => return Box::new(minigames::MiniGameScreen::settings(core)),
-        ScreenId::MiniGameInvitation => return Box::new(minigames::MiniGameScreen::invitation(core)),
+        ScreenId::MiniGameInvitation => {
+            return Box::new(minigames::MiniGameScreen::invitation(core));
+        }
         ScreenId::MiniGameAddOns => return Box::new(minigame_addons::AddOnSettings::new(core)),
         ScreenId::TrustInvitation => return Box::new(trust::TrustInvite::new(core)),
         ScreenId::Admin

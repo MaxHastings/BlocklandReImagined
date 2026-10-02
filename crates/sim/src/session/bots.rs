@@ -28,8 +28,8 @@
 //! way it walked, through openings included.
 use super::*;
 use crate::bot_kind::BotKind;
-use behaviour::{Behaviour, Situation, choose};
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
+use behaviour::{Behaviour, Situation, choose};
 use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
@@ -261,7 +261,11 @@ impl Brain {
         if self.goal.is_none() && tick >= self.next_wander {
             let angle = self.random() * std::f32::consts::TAU;
             let radius = self.random() * self.kind.wander_radius;
-            let around = if self.brick.is_none() { feet } else { self.home };
+            let around = if self.brick.is_none() {
+                feet
+            } else {
+                self.home
+            };
             let point = around + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
             self.set_goal(Some(Goal::Wander(point)));
             self.next_wander = tick + 240 + (self.random() * 480.0) as u64;
@@ -727,8 +731,7 @@ impl Session {
             && (0..8).all(|i| {
                 let a = i as f32 * std::f32::consts::TAU / 8.0;
                 let out = Vec3::new(a.sin(), 0.0, a.cos());
-                clear(chest, out, OPEN_ROOM)
-                    && clear(chest + out * OPEN_SWING, Vec3::Y, OPEN_SKY)
+                clear(chest, out, OPEN_ROOM) && clear(chest + out * OPEN_SWING, Vec3::Y, OPEN_SKY)
             })
     }
     /// The nearest open place around `feet` to throw from: `None` when it
@@ -833,7 +836,11 @@ impl Session {
         if !peer.combat.alive {
             // A brick's bot comes back a second after it may; a rules bot
             // as soon as its game lets it (Slayer's bot respawn time).
-            let wait = if self.bots.by_rules.contains_key(&bot) { 0 } else { 120 };
+            let wait = if self.bots.by_rules.contains_key(&bot) {
+                0
+            } else {
+                120
+            };
             if tick >= peer.combat.respawn_tick + wait {
                 let _ = self.request_respawn(bot);
             }
@@ -898,8 +905,8 @@ impl Session {
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
-        let carry_to = (holding && self.bots.brains[&bot].carry.is_none())
-            .then(|| self.open_spot(feet));
+        let carry_to =
+            (holding && self.bots.brains[&bot].carry.is_none()).then(|| self.open_spot(feet));
         let air = self.air_chase(&self.bots.brains[&bot], &sight, feet, eye, state.grounded);
         let target_velocity = sight.target.map_or(Vec3::ZERO, |seen| {
             self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
@@ -1195,7 +1202,11 @@ impl Session {
                     direction = if air.roofed {
                         // Under something: out from under it first.
                         let away = -toward;
-                        if away.length() > 0.1 { away.normalize() } else { forward }
+                        if away.length() > 0.1 {
+                            away.normalize()
+                        } else {
+                            forward
+                        }
                     } else if feet.y > air.to.y + 1.0 && toward.length() > 1.0 {
                         toward.normalize() * (toward.length() / 3.0).min(1.0)
                     } else {

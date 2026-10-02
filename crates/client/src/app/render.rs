@@ -44,7 +44,8 @@ impl App {
             }
         }
         let renderer = self
-            .gpu.renderer
+            .gpu
+            .renderer
             .as_mut()
             .context("Scene GPU not initialized")?
             .wait();
@@ -65,7 +66,8 @@ impl App {
             self.gpu.gpu_scene = Some(renderer.upload(frame.device, frame.queue, scene)?);
             self.lighting.light_volume.uploaded = false;
             self.gpu.gpu_terrain = self
-                .scene.cpu_terrain
+                .scene
+                .cpu_terrain
                 .iter()
                 .map(|terrain| {
                     bri_render::terrain_scene::GpuTerrain::upload(
@@ -78,21 +80,33 @@ impl App {
                 })
                 .collect::<Result<_>>()?;
         }
-        self.lighting.light_volume
-            .upload(renderer, frame.device, frame.queue, self.graphics.lighting)?;
+        self.lighting.light_volume.upload(
+            renderer,
+            frame.device,
+            frame.queue,
+            self.graphics.lighting,
+        )?;
         if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
-            self.lighting.light_volume
-                .tint(renderer, frame.queue, &view.broken_shapes, &view.map_lights);
+            self.lighting.light_volume.tint(
+                renderer,
+                frame.queue,
+                &view.broken_shapes,
+                &view.map_lights,
+            );
         }
         if self.gpu.gpu_palette.is_none()
             && let Some(palette) = &self.scene.palette
         {
-            self.gpu.gpu_palette = Some(renderer.upload(frame.device, frame.queue, &palette.scene)?);
-            self.gpu.chunk_uploads.extend(self.scene.cpu_chunks.keys().copied());
+            self.gpu.gpu_palette =
+                Some(renderer.upload(frame.device, frame.queue, &palette.scene)?);
+            self.gpu
+                .chunk_uploads
+                .extend(self.scene.cpu_chunks.keys().copied());
         }
         if let Some(palette) = &self.gpu.gpu_palette {
             let pending: Vec<&SceneData> = self
-                .gpu.chunk_uploads
+                .gpu
+                .chunk_uploads
                 .iter()
                 .filter_map(|key| self.scene.cpu_chunks.get(key))
                 .collect();
@@ -101,8 +115,10 @@ impl App {
             }
             for key in std::mem::take(&mut self.gpu.chunk_uploads) {
                 if let Some(chunk) = self.scene.cpu_chunks.get(&key) {
-                    self.gpu.gpu_chunks
-                        .insert(key, renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?);
+                    self.gpu.gpu_chunks.insert(
+                        key,
+                        renderer.upload_chunk(frame.device, frame.queue, chunk, palette)?,
+                    );
                     if let Some(bricks) = self.scene.cpu_chunk_bricks.get(&key) {
                         self.gpu.gpu_chunk_bricks.insert(key, bricks.clone());
                     }
@@ -135,9 +151,10 @@ impl App {
                 continue;
             }
             *applied = true;
-            if let (Some(gpu), Some(bricks)) =
-                (self.gpu.gpu_chunks.get(key), self.gpu.gpu_chunk_bricks.get(key))
-                && let Some(vertices) = bricks.vertices(*brick)
+            if let (Some(gpu), Some(bricks)) = (
+                self.gpu.gpu_chunks.get(key),
+                self.gpu.gpu_chunk_bricks.get(key),
+            ) && let Some(vertices) = bricks.vertices(*brick)
             {
                 gpu.hide_vertices(frame.queue, vertices);
             }
@@ -193,10 +210,14 @@ impl App {
                 };
                 let mut data = crate::world_scene::build_world_scene_materials(
                     &world,
-                    self.scene.meshes.as_ref().context("Ghost mesh catalog missing")?,
+                    self.scene
+                        .meshes
+                        .as_ref()
+                        .context("Ghost mesh catalog missing")?,
                     100_000,
                     Some(
-                        self.scene.materials
+                        self.scene
+                            .materials
                             .as_ref()
                             .context("Ghost material catalog missing")?,
                     ),
@@ -283,7 +304,9 @@ impl App {
                 .transpose()?,
                 _ => None,
             };
-            self.build.remote_ghosts.insert(*owner, (ghost.clone(), gpu));
+            self.build
+                .remote_ghosts
+                .insert(*owner, (ghost.clone(), gpu));
         }
         let shapes_changed = self.shapes_uploaded.as_ref().is_none_or(|sent| {
             sent.len() != view.world_shapes.len()
@@ -391,7 +414,8 @@ impl App {
                 lines.set_lines(frame.device, &vertices)?;
                 self.gpu.selection_uploaded = Some(selection);
             }
-            if let (Some(palette), Some(gpu_palette)) = (&self.scene.palette, &self.gpu.gpu_palette) {
+            if let (Some(palette), Some(gpu_palette)) = (&self.scene.palette, &self.gpu.gpu_palette)
+            {
                 self.fx.debris_models.upload(
                     &self.fx.brick_debris,
                     renderer,
@@ -428,7 +452,8 @@ impl App {
             )?;
         }
         if self
-            .gpu.depth
+            .gpu
+            .depth
             .as_ref()
             .is_none_or(|(_, _, size)| *size != frame.size)
         {
@@ -469,13 +494,16 @@ impl App {
             frame.device,
             frame.queue,
         )?;
-        self.fx.explosion_shapes
+        self.fx
+            .explosion_shapes
             .upload(renderer, frame.device, frame.queue)?;
         self.fx.beams.upload(renderer, frame.device, frame.queue)?;
-        self.fx.tutorial_targets
+        self.fx
+            .tutorial_targets
             .upload(renderer, frame.device, frame.queue)?;
         let shells: Vec<_> = self
-            .fx.weapon_shells
+            .fx
+            .weapon_shells
             .instances()
             .map(|i| bri_render::scene::SceneTransform {
                 transform: i.transform,
@@ -506,14 +534,16 @@ impl App {
         let (eye, yaw, pitch, roll) = Self::view_camera(
             controls,
             self.motion.presented(),
-            self.build.building
+            self.build
+                .building
                 .as_ref()
                 .context("Camera collision mirror missing")?,
             &self.vehicle_assets,
             &self.vehicles,
             view,
             local,
-            self.mounts.rider_eye
+            self.mounts
+                .rider_eye
                 .or(self.motion.local_eye())
                 .unwrap_or_else(|| view.archetypes.eye(local)),
             &self.motion.passages(),
@@ -572,7 +602,8 @@ impl App {
         // Mirrors an Add-On's bricks carry: the planes that reflect live
         // this frame, each with its own view of the world.
         if self
-            .lighting.reflections
+            .lighting
+            .reflections
             .as_ref()
             .is_none_or(|r| !r.matches(frame.format, renderer.samples()))
         {
@@ -589,7 +620,10 @@ impl App {
         // its debris instead.
         let debris = &self.fx.brick_debris;
         let eye = glam::Vec4::from(camera.eye).truncate();
-        let mut mirrors = self.scene.mirror_index.mirrors(|id| debris.is_dead(id), eye);
+        let mut mirrors = self
+            .scene
+            .mirror_index
+            .mirrors(|id| debris.is_dead(id), eye);
         crate::mirrors::debris(debris, &self.scene.mirror_shapes, eye, &mut mirrors);
         reflections.prepare(
             frame.device,
@@ -603,16 +637,18 @@ impl App {
         // Metal reflects the world around the nearest metal surface within
         // mirror distance, with mirrors on; otherwise only the sky.
         if self
-            .lighting.environment_probe
+            .lighting
+            .environment_probe
             .as_ref()
             .is_none_or(|p| !p.matches(renderer, frame.format))
         {
-            self.lighting.environment_probe = Some(bri_render::environment_probe::EnvironmentProbe::new(
-                frame.device,
-                renderer,
-                frame.format,
-                renderer.samples(),
-            ));
+            self.lighting.environment_probe =
+                Some(bri_render::environment_probe::EnvironmentProbe::new(
+                    frame.device,
+                    renderer,
+                    frame.format,
+                    renderer.samples(),
+                ));
         }
         let settings = self.graphics.reflections;
         let metal = (settings.planes > 0)
@@ -639,7 +675,8 @@ impl App {
         let in_view =
             crate::culling::Frustum::new(glam::Mat4::from_cols_array(&camera.view_projection));
         let probing = self
-            .lighting.environment_probe
+            .lighting
+            .environment_probe
             .as_ref()
             .is_some_and(|p| !p.faces().is_empty());
         let anywhere = casts || reflecting || probing;
@@ -674,16 +711,20 @@ impl App {
             let world = if self.addons.client_code.reads_world() {
                 let image_meshes = self.world_items.held_image_meshes();
                 let skeletons = if self.addons.client_code.poses_bodies() {
-                    self.avatar.avatars
+                    self.avatar
+                        .avatars
                         .iter_mut()
-                        .map(|(owner, avatar)| (*owner, avatar.skeleton(&self.avatar.avatar_assets)))
+                        .map(|(owner, avatar)| {
+                            (*owner, avatar.skeleton(&self.avatar.avatar_assets))
+                        })
                         .collect()
                 } else {
                     Default::default()
                 };
                 // Death and respawn as drawn, not the newest vitals.
                 let lives = self
-                    .avatar.avatars
+                    .avatar
+                    .avatars
                     .iter()
                     .filter_map(|(owner, avatar)| Some((*owner, avatar.life()?)))
                     .collect();
@@ -710,8 +751,13 @@ impl App {
                 aiming: self.controls.aiming(),
                 alive: view.vitals.get(&view.owner).is_none_or(|v| v.alive),
             };
-            self.addons.client_code
-                .run_frame(self.avatar.animation_time, eye, forward, world, player_view);
+            self.addons.client_code.run_frame(
+                self.avatar.animation_time,
+                eye,
+                forward,
+                world,
+                player_view,
+            );
             for (asset, at, volume) in self.addons.client_code.take_sounds() {
                 let placement = match at {
                     Some(at) => bri_audio::Placement::World(bri_audio::Vec3::from(at)),
@@ -734,12 +780,14 @@ impl App {
         // environment probe's faces) and the eyes they all see from: the
         // terrain tiles and effect lights every view shares cover them all.
         let planes = self
-            .lighting.reflections
+            .lighting
+            .reflections
             .as_ref()
             .map(|r| r.plan().planes.clone())
             .unwrap_or_default();
         let probe_views = self
-            .lighting.environment_probe
+            .lighting
+            .environment_probe
             .as_ref()
             .map(|p| p.face_views())
             .unwrap_or_default();
@@ -776,10 +824,15 @@ impl App {
         );
         let world_frame = self.fx.effects.world.snapshot_in_view(&effects_camera);
         let weapon_frame = self
-            .fx.weapon_effects
+            .fx
+            .weapon_effects
             .world()
             .snapshot_in_view(&effects_camera);
-        let actor_frame = self.fx.actor_effects.world().snapshot_in_view(&effects_camera);
+        let actor_frame = self
+            .fx
+            .actor_effects
+            .world()
+            .snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
             combine_effect_frames(world_frame, [weapon_frame, actor_frame], &eyes);
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
@@ -827,13 +880,15 @@ impl App {
             .collect();
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
-            .gpu.effects_renderer
+            .gpu
+            .effects_renderer
             .as_mut()
             .context("Effects GPU not initialized")?;
         effects_renderer.set_fog(camera.atmosphere, camera.fog_color);
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
         let weather_renderer = self
-            .gpu.weather_renderer
+            .gpu
+            .weather_renderer
             .as_mut()
             .context("Weather GPU not initialized")?;
         if let Some(lines) = &self.gpu.hidden_lines {
@@ -843,7 +898,11 @@ impl App {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
         if let Some(shapes) = &self.world_shapes {
-            shapes.prepare(frame.queue, effects_camera.view_projection, effects_camera.position);
+            shapes.prepare(
+                frame.queue,
+                effects_camera.view_projection,
+                effects_camera.position,
+            );
         }
         weather_renderer.prepare(
             frame.queue,
@@ -892,7 +951,9 @@ impl App {
         let world_target = multisampled.as_ref().unwrap_or(frame.target);
         // A changed fog colour clears the frame with it too.
         let clear_color = match &live {
-            Some(l) if l.fog_color != scene.fog.color => [l.fog_color[0], l.fog_color[1], l.fog_color[2], 1.0],
+            Some(l) if l.fog_color != scene.fog.color => {
+                [l.fog_color[0], l.fog_color[1], l.fog_color[2], 1.0]
+            }
             _ => scene.clear_color,
         };
         let [r, g, b, a] = clear_color.map(f64::from);
@@ -909,26 +970,35 @@ impl App {
                 .filter_map(|node| self.scene.shape_indices.get(node).cloned())
                 .collect();
             gpu.hide_indices(&ranges);
-            self.gpu.gpu_broken.extend(view.broken_shapes.iter().copied());
+            self.gpu
+                .gpu_broken
+                .extend(view.broken_shapes.iter().copied());
         }
         let mut scenes = vec![self.gpu.gpu_scene.as_ref().unwrap()];
         scenes.extend(self.gpu.gpu_chunks.values());
 
         scenes.extend(
-            self.build.remote_ghosts
+            self.build
+                .remote_ghosts
                 .values()
                 .filter_map(|(_, gpu)| gpu.as_ref()),
         );
         // Bodies draw through their one-instance body transform.
         let avatar_draws: Vec<_> = self
-            .avatar.avatars
+            .avatar
+            .avatars
             .iter()
             .filter(|(owner, _)| bodies_drawn.contains(*owner))
             .filter_map(|(owner, avatar)| {
                 Some((*owner, (avatar.gpu.as_ref()?, avatar.instance.as_ref()?)))
             })
             .collect();
-        scenes.extend(self.avatar.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
+        scenes.extend(
+            self.avatar
+                .mount_meshes
+                .values()
+                .filter_map(|m| m.gpu.as_ref()),
+        );
         scenes.extend(self.fx.fade_models.scenes());
         // Models every view draws; the player's own body and held items
         // differ between the player's view and a mirror's.
@@ -964,7 +1034,8 @@ impl App {
             // them. The map (interiors and terrain) neither casts nor stops
             // them: its shadows are baked (see bri_render::shadow).
             let chunks: Vec<&GpuScene> = self
-                .gpu.gpu_chunks
+                .gpu
+                .gpu_chunks
                 .values()
                 .chain(self.fx.fade_models.scenes())
                 .collect();
@@ -977,7 +1048,12 @@ impl App {
 
             // Rigged mounts (the horse) draw through their own meshes, not
             // the vehicle models, but cast like every other vehicle.
-            bodies.extend(self.avatar.mount_meshes.values().filter_map(|m| m.gpu.as_ref()));
+            bodies.extend(
+                self.avatar
+                    .mount_meshes
+                    .values()
+                    .filter_map(|m| m.gpu.as_ref()),
+            );
             // The player's own items cast from their hands, as others see
             // them, not from the first-person copy at the eye.
             let mut models = self.world_items.reflection_draws();
@@ -1054,9 +1130,18 @@ impl App {
                 skins.render_view(pass, view);
                 layers.render_view(pass, view);
             };
-            let surfaces =
-                |pass: &mut wgpu::RenderPass<'_>, view: usize| reflections.draw_surfaces(pass, view);
-            probe.render(renderer, frame.encoder, &scenes, &around, clear, &surfaces, &late);
+            let surfaces = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
+                reflections.draw_surfaces(pass, view)
+            };
+            probe.render(
+                renderer,
+                frame.encoder,
+                &scenes,
+                &around,
+                clear,
+                &surfaces,
+                &late,
+            );
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
@@ -1145,9 +1230,15 @@ impl App {
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
         if std::mem::take(&mut self.gpu.gpu_restart)
             || bri_render::color::color_vision() != vision
-            || self.gpu.renderer.as_mut().and_then(|r| r.ready()).is_some_and(|r| {
-                r.samples() != self.graphics.samples || r.shadow_settings() != self.graphics.shadows
-            })
+            || self
+                .gpu
+                .renderer
+                .as_mut()
+                .and_then(|r| r.ready())
+                .is_some_and(|r| {
+                    r.samples() != self.graphics.samples
+                        || r.shadow_settings() != self.graphics.shadows
+                })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
@@ -1156,12 +1247,19 @@ impl App {
         if self.avatar.preview_dirty
             && let Some((appearance, rotation, distance)) = &self.avatar.preview_request
             && let Some(preview) = self
-                .avatar.avatar_preview
+                .avatar
+                .avatar_preview
                 .as_mut()
                 .context("Avatar preview GPU not initialized")?
                 .ready()
         {
-            preview.render(&self.avatar.avatar_assets, appearance, *rotation, *distance, frame)?;
+            preview.render(
+                &self.avatar.avatar_assets,
+                appearance,
+                *rotation,
+                *distance,
+                frame,
+            )?;
             self.ui.apply(UiUpdate::AvatarPreview(IconRef::External(
                 crate::avatar::Preview::ID,
             )));
@@ -1216,14 +1314,22 @@ impl App {
         // to break, an Add-On's rules), so a switched light leaves exactly
         // the light it baked, the same as in Dynamic. Otherwise no mode
         // carries them.
-        let rules = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()).is_some_and(|v| !v.map_lights.is_empty());
+        let rules = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.view.as_ref())
+            .is_some_and(|v| !v.map_lights.is_empty());
         let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
         if (self.graphics.lighting == 3 || (self.graphics.lighting > 0 && switchable))
             && !self.lighting.light_volume.dynamic_equipped
             && self.lighting.light_volume.map.is_some()
             && let Some(scene) = self.scene.cpu_scene.as_mut()
         {
-            bri_render::map_lighting::DynamicSheet::equip(&self.lighting.light_volume.dynamic, scene);
+            bri_render::map_lighting::DynamicSheet::equip(
+                &self.lighting.light_volume.dynamic,
+                scene,
+            );
             self.lighting.light_volume.dynamic_equipped = true;
             self.gpu.gpu_scene = None;
         }

@@ -71,7 +71,10 @@ fn game() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     // The elevated helper the host starts to let the game through Windows
     // Firewall (one Windows permission prompt); it does nothing else.
-    if args.first().is_some_and(|a| a == bri_client::firewall::ALLOW_FLAG) {
+    if args
+        .first()
+        .is_some_and(|a| a == bri_client::firewall::ALLOW_FLAG)
+    {
         let port = args.get(1).and_then(|a| a.to_str()).unwrap_or_default();
         return bri_client::firewall::run_helper(port);
     }
@@ -232,7 +235,10 @@ mod mac_bundle {
     /// `<name>.app/Contents/MacOS`.
     fn bundled_content() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-        let contents = exe.parent().filter(|d| d.ends_with("Contents/MacOS"))?.parent()?;
+        let contents = exe
+            .parent()
+            .filter(|d| d.ends_with("Contents/MacOS"))?
+            .parent()?;
         let content = contents.join("Resources/content");
         content.is_dir().then_some(content)
     }
@@ -242,32 +248,47 @@ mod mac_bundle {
         // One folder per build: a new build starts from its own content.
         let build: String = bri_client::updates::version()
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
-        let root = PathBuf::from(home).join("Library/Application Support/BlocklandReImagined/content");
+        let root =
+            PathBuf::from(home).join("Library/Application Support/BlocklandReImagined/content");
         let target = root.join(&build);
         if target.join(COMPLETE).is_file() {
             return Ok(target);
         }
-        bri_console::echo(format!("Copying the game content to {} (first launch of this build)", target.display()));
+        bri_console::echo(format!(
+            "Copying the game content to {} (first launch of this build)",
+            target.display()
+        ));
         std::fs::create_dir_all(&root).with_context(|| format!("Creating {}", root.display()))?;
         let staging = root.join(format!(".{build}.partial"));
         if staging.exists() {
-            std::fs::remove_dir_all(&staging).with_context(|| format!("Removing {}", staging.display()))?;
+            std::fs::remove_dir_all(&staging)
+                .with_context(|| format!("Removing {}", staging.display()))?;
         }
         // std::fs::copy clones files on APFS, so this is quick on one volume.
         copy_tree(bundled, &staging)?;
         std::fs::write(staging.join(COMPLETE), bri_client::updates::version())?;
         if target.exists() {
-            std::fs::remove_dir_all(&target).with_context(|| format!("Removing {}", target.display()))?;
+            std::fs::remove_dir_all(&target)
+                .with_context(|| format!("Removing {}", target.display()))?;
         }
-        std::fs::rename(&staging, &target).with_context(|| format!("Finishing {}", target.display()))?;
+        std::fs::rename(&staging, &target)
+            .with_context(|| format!("Finishing {}", target.display()))?;
         Ok(target)
     }
 
     fn copy_tree(from: &Path, to: &Path) -> Result<()> {
         std::fs::create_dir_all(to).with_context(|| format!("Creating {}", to.display()))?;
-        for entry in std::fs::read_dir(from).with_context(|| format!("Reading {}", from.display()))? {
+        for entry in
+            std::fs::read_dir(from).with_context(|| format!("Reading {}", from.display()))?
+        {
             let entry = entry?;
             let kind = entry.file_type()?;
             let destination = to.join(entry.file_name());

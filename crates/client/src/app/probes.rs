@@ -47,7 +47,11 @@ impl App {
     }
     /// Draws and binds the last rendered frame recorded.
     pub fn render_stats(&self) -> Option<bri_render::scene::RenderStats> {
-        self.gpu.renderer.as_ref().and_then(|r| r.finished()).map(|r| r.stats())
+        self.gpu
+            .renderer
+            .as_ref()
+            .and_then(|r| r.finished())
+            .map(|r| r.stats())
     }
     /// Time each world pass on the GPU every frame (as the expanded
     /// performance overlay does), for benchmarks.
@@ -137,7 +141,8 @@ impl App {
     }
     /// A body's posed node in the world, as drawn this frame.
     pub fn avatar_node(&self, owner: bri_world::OwnerId, name: &str) -> Option<glam::Mat4> {
-        self.avatar.avatars
+        self.avatar
+            .avatars
             .get(&owner)?
             .world_node(&self.avatar.avatar_assets, name)
     }
@@ -170,7 +175,8 @@ impl App {
     /// True when the CPU render snapshot has caught up with the latest replica.
     pub fn world_render_ready(&self) -> bool {
         self.network_view().is_some_and(|view| {
-            self.scene.world_source
+            self.scene
+                .world_source
                 .as_ref()
                 .is_some_and(|source| Arc::ptr_eq(source, &view.world))
         })
@@ -196,12 +202,14 @@ impl App {
         self.net.attempt.as_ref()?.worker.probes.get()?.host_port
     }
     pub fn loading_revision(&self) -> Option<u64> {
-        self.net.attempt
+        self.net
+            .attempt
             .as_ref()
             .map(|a| a.progress.snapshot().revision)
     }
     pub fn network_view(&self) -> Option<&network::View> {
-        self.net.attempt
+        self.net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref())

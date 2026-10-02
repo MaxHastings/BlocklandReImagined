@@ -896,13 +896,18 @@ impl Library {
             .clone();
         ensure!(
             dir.starts_with(&format!("{IMPORT_DIR}/"))
-                && !dir.split('/').any(|p| p.is_empty() || p == ".." || p == "."),
+                && !dir
+                    .split('/')
+                    .any(|p| p.is_empty() || p == ".." || p == "."),
             "`{id}` was not converted by this game, so it is not removed"
         );
         let rules = format!("{dir}-rules");
         let mut also = vec![];
         for (id, dir) in [(format!("{id}-rules"), rules), (id.to_string(), dir)] {
-            if self.get(&id).is_some_and(|e| e.enabled && e.package.dir == dir) {
+            if self
+                .get(&id)
+                .is_some_and(|e| e.enabled && e.package.dir == dir)
+            {
                 let plan = self.plan(&id, false);
                 also.extend(plan.also.iter().cloned());
                 self.apply(&plan)?;

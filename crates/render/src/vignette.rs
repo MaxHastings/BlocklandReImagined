@@ -123,12 +123,7 @@ impl VignetteRenderer {
     }
     /// The vignette to draw (display-encoded colour, alpha its strength),
     /// or none; `aspect` is the frame's width over height.
-    pub fn update(
-        &mut self,
-        queue: &wgpu::Queue,
-        vignette: Option<([f32; 4], bool)>,
-        aspect: f32,
-    ) {
+    pub fn update(&mut self, queue: &wgpu::Queue, vignette: Option<([f32; 4], bool)>, aspect: f32) {
         self.active = None;
         let Some((color, multiply)) = vignette else {
             return;

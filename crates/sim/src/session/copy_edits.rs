@@ -314,19 +314,20 @@ fn fill_room(
     let (brick, size) = plain.iter().rev().find_map(|p| {
         let [w, h, d] = p.size;
         let (short, long) = (w.min(d), w.max(d));
-        let size = if turned { [long, h, short] } else { [short, h, long] };
+        let size = if turned {
+            [long, h, short]
+        } else {
+            [short, h, long]
+        };
         let quarter = (w > d) != turned && w != d;
-        (size[0] <= rx && size[1] <= ry && size[2] <= rz).then_some((
-            (p.id.clone(), u8::from(quarter)),
-            size,
-        ))
+        (size[0] <= rx && size[1] <= ry && size[2] <= rz)
+            .then_some(((p.id.clone(), u8::from(quarter)), size))
     })?;
     let mut piece = template.clone();
     piece.definition = ContentRef::Resolved(brick.0);
     piece.quarter_turns = brick.1;
-    piece.position = std::array::from_fn(|a| {
-        (room.min[a] as f32 + size[a] as f32 * 0.5) * crate::grid::CELL[a]
-    });
+    piece.position =
+        std::array::from_fn(|a| (room.min[a] as f32 + size[a] as f32 * 0.5) * crate::grid::CELL[a]);
     let [x, y, z] = room.min;
     let [sx, sy, sz] = size;
     // Above it, behind it along z, beside it along x.
@@ -406,7 +407,13 @@ impl Session {
     }
 
     /// An Add-On's paint ([`Op::PaintCopy`]) as a copy job.
-    pub(super) fn start_paint(&mut self, owner: OwnerId, package: &str, paint: FillPaint, each: bool) {
+    pub(super) fn start_paint(
+        &mut self,
+        owner: OwnerId,
+        package: &str,
+        paint: FillPaint,
+        each: bool,
+    ) {
         let started = self
             .ensure_copy_idle(owner)
             .and_then(|()| PaintWork::new(self, owner, paint, each));
@@ -496,7 +503,11 @@ impl Session {
     /// was taken from that they may change, as one undo step, a slice a
     /// tick: the number changed and the number refused, when done at
     /// once. Only once per opening.
-    pub fn wrench_copy(&mut self, owner: OwnerId, fill: &WrenchFill) -> Result<Option<(usize, usize)>> {
+    pub fn wrench_copy(
+        &mut self,
+        owner: OwnerId,
+        fill: &WrenchFill,
+    ) -> Result<Option<(usize, usize)>> {
         self.ensure_copy_idle(owner)?;
         let work = WrenchWork::new(self, owner, fill.clone())?;
         let package = self.copies.get(&owner).map(|c| c.package.clone());
@@ -545,7 +556,12 @@ impl Session {
     }
 
     /// [`Self::super_cut`] as a copy job, `package` told how it went.
-    pub(super) fn start_super_cut(&mut self, owner: OwnerId, package: &str, (min, max): ([f32; 3], [f32; 3])) {
+    pub(super) fn start_super_cut(
+        &mut self,
+        owner: OwnerId,
+        package: &str,
+        (min, max): ([f32; 3], [f32; 3]),
+    ) {
         let started = self
             .ensure_copy_idle(owner)
             .and_then(|()| SuperCutWork::new(self, owner, (min, max), Some(package)));

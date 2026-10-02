@@ -18,8 +18,8 @@ use rapier3d::prelude::*;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    sync::atomic::{AtomicUsize, Ordering},
     sync::Arc,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 const GUN: &str = "kit:weapon/gun";
@@ -226,10 +226,16 @@ fn a_round_tells_on_damage_where_it_struck() {
     g.steps(20);
     // The chest: the round's own damage.
     g.shoot_at(a, b, 1.7);
-    assert_eq!(g.hit(), json!("weapon|KitShot|torso|true|kit:projectile/round"));
+    assert_eq!(
+        g.hit(),
+        json!("weapon|KitShot|torso|true|kit:projectile/round")
+    );
     assert!((g.s.vitals()[&b].health - 80.0).abs() < 0.5);
     // The head: tripled by the rule.
     g.shoot_at(a, b, 2.45);
-    assert_eq!(g.hit(), json!("weapon|KitShot|head|true|kit:projectile/round"));
+    assert_eq!(
+        g.hit(),
+        json!("weapon|KitShot|head|true|kit:projectile/round")
+    );
     assert!((g.s.vitals()[&b].health - 20.0).abs() < 0.5);
 }

@@ -264,7 +264,9 @@ async fn fire(screens: &mut [&mut Screen; 2], who: usize, target: Vec3) -> Resul
         ..Default::default()
     };
     let sequence = screens[who].view().poses[&owner].acknowledged_input + 1;
-    screens[who].worker.movement(sequence, vec![look], None, None)?;
+    screens[who]
+        .worker
+        .movement(sequence, vec![look], None, None)?;
     until(screens, "the aim", Duration::from_secs(5), |s| {
         s.view().owner != owner || s.view().poses[&owner].acknowledged_input >= sequence
     })

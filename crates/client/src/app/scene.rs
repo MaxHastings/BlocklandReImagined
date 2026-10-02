@@ -20,7 +20,8 @@ pub(super) struct SceneState {
     pub(super) chunked: crate::world_chunks::ChunkedWorld,
     pub(super) cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
     /// Where each brick of a CPU chunk is in its vertices.
-    pub(super) cpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
+    pub(super) cpu_chunk_bricks:
+        HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
     /// Dead bricks (thrown as debris or falling) the drawn chunks may still
     /// hold, with their chunk and whether its upload hides them yet. The
     /// rebuilt chunk without them lands later (100-200 ms on a big build);

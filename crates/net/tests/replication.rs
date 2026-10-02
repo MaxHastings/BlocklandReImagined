@@ -296,15 +296,15 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         .update(Delta {
             vitals: Default::default(),
             minigames: None,
-        vehicles: None,
-        time_scale: None,
-        broken_shapes: None,
-        targets: None,
-        map_lights: None,
-        environment: None,
-        weapon_settings: None,
-        entities: None,
-        world_shapes: Default::default(),
+            vehicles: None,
+            time_scale: None,
+            broken_shapes: None,
+            targets: None,
+            map_lights: None,
+            environment: None,
+            weapon_settings: None,
+            entities: None,
+            world_shapes: Default::default(),
             weapons: None,
             tools: Default::default(),
             cues: vec![],
@@ -543,8 +543,15 @@ fn a_joiner_gets_the_bricks_around_it_first_and_the_rest_while_it_plays() {
     let mut bricks = bri_world::Bricks::new();
     let (near, far) = (WORLD_CHUNK as u64 + 5, WORLD_CHUNK as u64 * 2);
     for i in 0..near + far {
-        let x = if i % 3 == 0 && i / 3 < near { (i / 3) as f32 * 0.01 } else { 500.0 + i as f32 };
-        bricks.insert(i + 1, Brick::new(ContentRef::Resolved("plate".into()), [x, 0.0, 0.0], 0));
+        let x = if i % 3 == 0 && i / 3 < near {
+            (i / 3) as f32 * 0.01
+        } else {
+            500.0 + i as f32
+        };
+        bricks.insert(
+            i + 1,
+            Brick::new(ContentRef::Resolved("plate".into()), [x, 0.0, 0.0], 0),
+        );
     }
     let near_count = bricks.values().filter(|b| b.position[0] < 100.0).count();
     let mut head = checkpoint();
@@ -559,7 +566,10 @@ fn a_joiner_gets_the_bricks_around_it_first_and_the_rest_while_it_plays() {
     let Message::MapChanged(head) = codec::decode(&frames[0]).unwrap() else {
         panic!("expected the checkpoint first")
     };
-    assert_eq!(head.world_near_chunks, near_count.div_ceil(WORLD_CHUNK) as u64);
+    assert_eq!(
+        head.world_near_chunks,
+        near_count.div_ceil(WORLD_CHUNK) as u64
+    );
     let mut world = WorldAssembly::new(head.clone()).unwrap();
     let chunks: Vec<_> = frames[1..]
         .iter()
@@ -574,7 +584,13 @@ fn a_joiner_gets_the_bricks_around_it_first_and_the_rest_while_it_plays() {
     }
     let (partial, mut rest) = world.split(early as u64).unwrap();
     assert!(
-        partial.world.bricks.values().filter(|b| b.position[0] < 100.0).count() == near_count,
+        partial
+            .world
+            .bricks
+            .values()
+            .filter(|b| b.position[0] < 100.0)
+            .count()
+            == near_count,
         "every nearby brick is in before play"
     );
     let mut replica = partial.world.clone();
@@ -605,7 +621,11 @@ fn a_joiner_gets_the_bricks_around_it_first_and_the_rest_while_it_plays() {
 fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     let mut bricks = bri_world::Bricks::new();
     for id in 1..=(WORLD_CHUNK as u64 * 2 + 17) {
-        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [id as f32, 0.0, 0.0], 0);
+        let mut brick = Brick::new(
+            ContentRef::Resolved("plate".into()),
+            [id as f32, 0.0, 0.0],
+            0,
+        );
         brick.source_records.push(bri_world::SourceRecord {
             line: 1,
             text: "private original record".into(),
@@ -640,7 +660,13 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     }
     let received = world.finish().unwrap();
     assert_eq!(received.world.bricks.len(), bricks.len());
-    assert!(received.world.bricks.values().all(|b| b.source_records.is_empty()));
+    assert!(
+        received
+            .world
+            .bricks
+            .values()
+            .all(|b| b.source_records.is_empty())
+    );
     assert_eq!(received.world.bricks, public_bricks(&bricks));
 
     // Hostile or broken streams never assemble.
@@ -653,15 +679,28 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
     small.world_bricks = 1;
     small.world_chunks = 1;
     small.world_near_chunks = 1;
-    assert!(WorldAssembly::new(small).unwrap().add(chunks[2].clone()).is_err());
-    assert!(WorldAssembly::new(announced.clone()).unwrap().finish().is_err());
+    assert!(
+        WorldAssembly::new(small)
+            .unwrap()
+            .add(chunks[2].clone())
+            .is_err()
+    );
+    assert!(
+        WorldAssembly::new(announced.clone())
+            .unwrap()
+            .finish()
+            .is_err()
+    );
     let mut prefilled = announced;
     prefilled.world.bricks.insert(1, bricks[&1].clone());
     assert!(WorldAssembly::new(prefilled).is_err());
     let mut uncounted = received.clone();
     uncounted.world.bricks = Default::default();
     uncounted.world_chunks = 0;
-    assert!(WorldAssembly::new(uncounted).is_err(), "bricks need chunks to carry them");
+    assert!(
+        WorldAssembly::new(uncounted).is_err(),
+        "bricks need chunks to carry them"
+    );
     let mut empty = checkpoint();
     empty.world_bricks = 0;
     assert!(WorldAssembly::new(empty).unwrap().complete());
@@ -758,13 +797,20 @@ fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
 #[test]
 fn map_light_rules_replicate_whole_and_are_checked() {
     use bri_sim::session::MapLightRule;
-    let rule = MapLightRule { position: [1.0, 2.0, 3.0], radius: 4.0, tint: [0.0; 3] };
+    let rule = MapLightRule {
+        position: [1.0, 2.0, 3.0],
+        radius: 4.0,
+        tint: [0.0; 3],
+    };
     let mut start = checkpoint();
     start.map_lights = vec![rule];
     let mut replica = Replica::new(start.clone()).unwrap();
     assert_eq!(replica.map_lights, [rule]);
     let mut bad = start;
-    bad.map_lights = vec![MapLightRule { tint: [f32::NAN, 1.0, 1.0], ..rule }];
+    bad.map_lights = vec![MapLightRule {
+        tint: [f32::NAN, 1.0, 1.0],
+        ..rule
+    }];
     assert!(Replica::new(bad).is_err());
     let delta = Delta {
         vitals: Default::default(),
@@ -773,7 +819,10 @@ fn map_light_rules_replicate_whole_and_are_checked() {
         time_scale: None,
         broken_shapes: None,
         targets: None,
-        map_lights: Some(vec![MapLightRule { radius: -1.0, ..rule }]),
+        map_lights: Some(vec![MapLightRule {
+            radius: -1.0,
+            ..rule
+        }]),
         environment: None,
         weapon_settings: None,
         entities: None,
@@ -793,7 +842,10 @@ fn map_light_rules_replicate_whole_and_are_checked() {
     };
     assert!(!delta.is_empty());
     assert!(replica.update(delta.clone()).is_err());
-    let changed = MapLightRule { tint: [2.0, 1.0, 0.5], ..rule };
+    let changed = MapLightRule {
+        tint: [2.0, 1.0, 0.5],
+        ..rule
+    };
     let mut delta = delta;
     delta.map_lights = Some(vec![rule, changed]);
     replica.update(delta).unwrap();
@@ -817,7 +869,13 @@ fn world_shapes_replicate_by_set_and_are_checked() {
     let mut replica = Replica::new(start.clone()).unwrap();
     assert_eq!(*replica.world_shapes["nd/1/box"], [shape(0.0)]);
     let mut bad = start;
-    bad.world_shapes.insert("nd/2/box".into(), vec![WorldShape { max: [f32::NAN; 3], ..shape(0.0) }]);
+    bad.world_shapes.insert(
+        "nd/2/box".into(),
+        vec![WorldShape {
+            max: [f32::NAN; 3],
+            ..shape(0.0)
+        }],
+    );
     assert!(Replica::new(bad).is_err());
     // The host sends only the sets that changed, and an empty one for a
     // set taken away.
@@ -850,7 +908,13 @@ fn world_shapes_replicate_by_set_and_are_checked() {
         map_lights: None,
         environment: None,
         entities: None,
-        world_shapes: BTreeMap::from([("nd/2/box".to_string(), vec![WorldShape { label: "x".repeat(49), ..shape(1.0) }])]),
+        world_shapes: BTreeMap::from([(
+            "nd/2/box".to_string(),
+            vec![WorldShape {
+                label: "x".repeat(49),
+                ..shape(1.0)
+            }],
+        )]),
         weapons: None,
         weapon_settings: None,
         tools: Default::default(),
@@ -869,7 +933,10 @@ fn world_shapes_replicate_by_set_and_are_checked() {
     assert!(replica.update(delta.clone()).is_err(), "label too long");
     delta.world_shapes = changed;
     replica.update(delta).unwrap();
-    assert_eq!(replica.world_shapes.keys().collect::<Vec<_>>(), ["nd/2/box"]);
+    assert_eq!(
+        replica.world_shapes.keys().collect::<Vec<_>>(),
+        ["nd/2/box"]
+    );
     assert_eq!(*replica.world_shapes["nd/2/box"], [shape(1.0)]);
     assert!(!replica.world_shapes.contains_key("nd/1/box"));
 }
@@ -880,7 +947,11 @@ fn environment_replicates_whole_and_is_checked() {
     let set = Settings {
         sun_azimuth: Some(90.0),
         fog_color: Some([0.2, 0.3, 0.4]),
-        day_cycle: Some(DayCycle { length_seconds: 300.0, time: 0.25, anchor_tick: 7 }),
+        day_cycle: Some(DayCycle {
+            length_seconds: 300.0,
+            time: 0.25,
+            anchor_tick: 7,
+        }),
         ..Default::default()
     };
     let mut start = checkpoint();
@@ -902,7 +973,10 @@ fn environment_replicates_whole_and_is_checked() {
         broken_shapes: None,
         targets: None,
         map_lights: None,
-        environment: Some(Settings { ambient_light: Some([3.0, 0.0, 0.0]), ..Default::default() }),
+        environment: Some(Settings {
+            ambient_light: Some([3.0, 0.0, 0.0]),
+            ..Default::default()
+        }),
         weapon_settings: None,
         entities: None,
         world_shapes: Default::default(),

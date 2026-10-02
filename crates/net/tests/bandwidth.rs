@@ -488,8 +488,7 @@ async fn crowd(
         .collect();
     let server = host_with(empty_world(), options)?;
     let clients = join(&server, players).await?;
-    let (report, clients) =
-        drive(name, &server, clients, |_| Act::Walk, WARMUP, WINDOW).await?;
+    let (report, clients) = drive(name, &server, clients, |_| Act::Walk, WARMUP, WINDOW).await?;
     Ok((report, clients, server))
 }
 
@@ -505,7 +504,10 @@ async fn finish(clients: Vec<Client>, server: ServerHandle) -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "prints the crowd rows of the audit table; run with --ignored --nocapture"]
 async fn crowd_bandwidth_table() -> Result<()> {
-    for (name, spacing) in [("32 running, spread out", 64.0), ("32 running, crowded", 3.0)] {
+    for (name, spacing) in [
+        ("32 running, spread out", 64.0),
+        ("32 running, crowded", 3.0),
+    ] {
         let (_, clients, server) = crowd(name, 32, spacing).await?;
         finish(clients, server).await?;
     }

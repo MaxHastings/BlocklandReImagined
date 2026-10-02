@@ -99,13 +99,20 @@ fn imported(
     library.apply(&plan).unwrap();
     let set = PackageSet::load_root(root).unwrap();
     assert!(
-        set.packages.iter().any(|p| p.id == format!("{namespace}-rules")),
+        set.packages
+            .iter()
+            .any(|p| p.id == format!("{namespace}-rules")),
         "turning {namespace} on turns its rules on: {:?}",
         set.packages.iter().map(|p| &p.id).collect::<Vec<_>>()
     );
     let catalog = Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
     let pack = bri_weapons::Pack::from_json(
-        &std::fs::read(root.join("addons").join(namespace).join("assets/weapons.json")).unwrap(),
+        &std::fs::read(
+            root.join("addons")
+                .join(namespace)
+                .join("assets/weapons.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     (pack, Arc::new(catalog))
@@ -134,7 +141,10 @@ fn bundled(root: &Path, addon: &str, namespace: &str) {
                       "version": "1.0.0", "sha256": [sha] } }] });
     copy_port_entries(&repo, &checkout);
     for (to, from) in [
-        ("crates/package/base-packages.json", Some("crates/package/base-packages.json")),
+        (
+            "crates/package/base-packages.json",
+            Some("crates/package/base-packages.json"),
+        ),
         ("packages/default-addons.json", None),
         ("core.cs", None),
         ("game/packages.json", None),
@@ -149,9 +159,7 @@ fn bundled(root: &Path, addon: &str, namespace: &str) {
                 std::fs::write(&to, serde_json::to_vec_pretty(&list).unwrap()).unwrap()
             }
             (None, "core.cs") => std::fs::write(&to, "").unwrap(),
-            (None, _) => {
-                std::fs::write(&to, r#"{ "schema_version": 1, "packages": [] }"#).unwrap()
-            }
+            (None, _) => std::fs::write(&to, r#"{ "schema_version": 1, "packages": [] }"#).unwrap(),
         }
     }
     std::fs::create_dir_all(checkout.join("v20/base")).unwrap();
@@ -335,9 +343,10 @@ impl Game {
             pitch: self.input.pitch,
         };
         match &mut self.client {
-            Some(c) => c
-                .to_host
-                .push_back((c.tick + LAG, Send::Command(self.seq, Box::new(command), aim))),
+            Some(c) => c.to_host.push_back((
+                c.tick + LAG,
+                Send::Command(self.seq, Box::new(command), aim),
+            )),
             None => {
                 self.s
                     .command_with_aim(self.player, self.seq, command, Some(aim))
@@ -365,10 +374,8 @@ impl Game {
             if let Some(c) = &mut self.client {
                 c.tick += 1;
                 c.predictor.step(self.input).unwrap();
-                c.to_host.push_back((
-                    c.tick + LAG,
-                    Send::Move(c.predictor.sequence(), self.input),
-                ));
+                c.to_host
+                    .push_back((c.tick + LAG, Send::Move(c.predictor.sequence(), self.input)));
                 while c.to_host.front().is_some_and(|(due, _)| *due <= c.tick) {
                     match c.to_host.pop_front().unwrap().1 {
                         Send::Move(sequence, input) => {

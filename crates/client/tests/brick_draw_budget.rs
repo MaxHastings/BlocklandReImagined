@@ -59,7 +59,14 @@ fn the_largest_stock_build_stays_within_its_draw_budget() -> Result<()> {
     let palette = bri_client::world_chunks::BrickPalette::new(&materials)?;
     let mut chunked = ChunkedWorld::default();
     let chunks: Vec<_> = chunked
-        .update(world.clone(), None, &meshes, &palette, Some(&materials), 8_000_000)?
+        .update(
+            world.clone(),
+            None,
+            &meshes,
+            &palette,
+            Some(&materials),
+            8_000_000,
+        )?
         .into_iter()
         .filter_map(|(_, built)| built.map(|b| b.scene))
         .collect();
@@ -111,13 +118,21 @@ fn the_largest_stock_build_stays_within_its_draw_budget() -> Result<()> {
         .create_view(&Default::default());
     let (min, max) = world.bricks.values().fold(
         (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
-        |(lo, hi), b| (lo.min(Vec3::from(b.position)), hi.max(Vec3::from(b.position))),
+        |(lo, hi), b| {
+            (
+                lo.min(Vec3::from(b.position)),
+                hi.max(Vec3::from(b.position)),
+            )
+        },
     );
     let center = (min + max) * 0.5;
     let extent = (max - min).length().max(20.0);
     let mut worst = bri_render::scene::RenderStats::default();
     for (name, eye) in [
-        ("overview", center + Vec3::new(extent * 0.6, extent * 0.4, extent * 0.6)),
+        (
+            "overview",
+            center + Vec3::new(extent * 0.6, extent * 0.4, extent * 0.6),
+        ),
         ("near", center + Vec3::new(40.0, 25.0, 40.0)),
     ] {
         let camera = Camera::perspective(
@@ -141,7 +156,13 @@ fn the_largest_stock_build_stays_within_its_draw_budget() -> Result<()> {
                 instances: &[],
             },
         );
-        renderer.render(&mut encoder, &color, &depth, &scenes, Some(wgpu::Color::BLACK));
+        renderer.render(
+            &mut encoder,
+            &color,
+            &depth,
+            &scenes,
+            Some(wgpu::Color::BLACK),
+        );
         queue.submit([encoder.finish()]);
         let stats = renderer.stats();
         println!("{name}: {stats:?}");
@@ -181,8 +202,8 @@ fn the_largest_stock_build_stays_within_its_draw_budget() -> Result<()> {
 
 fn gpu() -> Result<(wgpu::Device, wgpu::Queue)> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = wgpu::Backends::from_env()
-        .unwrap_or(wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN);
+    descriptor.backends =
+        wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN);
     let instance = wgpu::Instance::new(descriptor);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,

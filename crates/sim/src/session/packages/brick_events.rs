@@ -430,12 +430,7 @@ impl Session {
             None => None,
         };
         let source = dispatch.source.index;
-        let owner = self
-            .simulation
-            .state()
-            .bricks
-            .get(&source)
-            .map(|b| b.owner);
+        let owner = self.simulation.state().bricks.get(&source).map(|b| b.owner);
         let Some(owner) = owner else {
             return ev::Apply::Rejected("the brick is gone".into());
         };

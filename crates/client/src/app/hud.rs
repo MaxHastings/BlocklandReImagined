@@ -12,7 +12,8 @@ pub(super) struct CombatPresentation {
     /// `/hug` and `/zombie`: `playThread(1, armReadyBoth)` holds until the
     /// arms change again (`Player::updateArm`, `fixArms`, unequip), kept
     /// with the held pose it replaced (`None` until the next frame sees it).
-    pub(super) hugging: std::collections::BTreeMap<bri_world::OwnerId, Option<crate::avatar::HeldToolPose>>,
+    pub(super) hugging:
+        std::collections::BTreeMap<bri_world::OwnerId, Option<crate::avatar::HeldToolPose>>,
     pub(super) minigame_revision: u64,
     pub(super) minigame_state: Option<MiniGameUiState>,
     /// Energy bar fraction last shown, in hundredths.

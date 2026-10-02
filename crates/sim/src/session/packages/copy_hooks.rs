@@ -125,7 +125,10 @@ impl Session {
             };
             let size = held.map_or(Dynamic::UNIT, |copy| {
                 Dynamic::from_array(
-                    copy.size.iter().map(|n| Dynamic::from_int(i64::from(*n))).collect(),
+                    copy.size
+                        .iter()
+                        .map(|n| Dynamic::from_int(i64::from(*n)))
+                        .collect(),
                 )
             });
             info.insert("size".into(), size);
@@ -138,7 +141,11 @@ impl Session {
                 _ => None,
             };
             let point = |p: glam::Vec3| {
-                Dynamic::from_array(p.to_array().map(|v| Dynamic::from_float(f64::from(v))).to_vec())
+                Dynamic::from_array(
+                    p.to_array()
+                        .map(|v| Dynamic::from_float(f64::from(v)))
+                        .to_vec(),
+                )
             };
             info.insert(
                 "box".into(),
@@ -157,7 +164,9 @@ impl Session {
             return;
         }
         if outcome.working {
-            let percent = (outcome.bricks * 100).checked_div(outcome.total).unwrap_or(0);
+            let percent = (outcome.bricks * 100)
+                .checked_div(outcome.total)
+                .unwrap_or(0);
             let text = match outcome.total {
                 0 => format!("Working... ({} bricks)", outcome.bricks),
                 _ => format!("Working... ({percent}%)"),
@@ -199,7 +208,11 @@ impl Session {
             "wrench" => self.bottom_count(player, "Wrenched", outcome.bricks),
             "fill" => self.bottom_count(player, "Filled in", outcome.bricks),
             _ => {
-                let verb = if outcome.action == "load" { "Loaded" } else { "Copied" };
+                let verb = if outcome.action == "load" {
+                    "Loaded"
+                } else {
+                    "Copied"
+                };
                 self.bottom_count(player, verb, outcome.bricks);
                 if outcome.limit_reached {
                     self.center_print(

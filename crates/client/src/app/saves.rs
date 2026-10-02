@@ -18,14 +18,16 @@ pub(super) struct Saves {
     pub(super) old_saves_started: bool,
     /// A save list read because converted saves arrived while a save
     /// dialog was open.
-    pub(super) save_refresh: Option<std::sync::mpsc::Receiver<Result<Vec<crate::saves::Entry>, String>>>,
+    pub(super) save_refresh:
+        Option<std::sync::mpsc::Receiver<Result<Vec<crate::saves::Entry>, String>>>,
     /// A read save waiting on `LoadBricksColorGui`'s choice.
     pub(super) color_load: Option<(crate::saves::Request, Box<bri_world::build::SavedBuild>)>,
 }
 
 impl App {
     pub(super) fn poll_files(&mut self) {
-        let Some((request, result)) = self.files.file_jobs.poll(&self.files.saves, &self.runtime) else {
+        let Some((request, result)) = self.files.file_jobs.poll(&self.files.saves, &self.runtime)
+        else {
             return;
         };
         let result = match result {
@@ -44,7 +46,13 @@ impl App {
                 Ok(())
             }
             Ok(crate::saves::Outcome::Loaded(build)) => {
-                if self.net.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session
+                if self
+                    .net
+                    .attempt
+                    .as_ref()
+                    .filter(|a| a.entered)
+                    .map(|a| a.id)
+                    != request.session
                     || self.ui.session_request() != request.session
                 {
                     Err(anyhow::anyhow!(
@@ -53,7 +61,8 @@ impl App {
                 } else if matches!(request.action, UiAction::LoadBricks { .. }) {
                     // `LoadBricks_ColorCheck`: differing colours ask first.
                     let differs = self
-                        .scene.query_source
+                        .scene
+                        .query_source
                         .as_ref()
                         .and_then(|w| crate::saves::color_difference(&w.palette, &build));
                     if let Some(append) = differs {
@@ -77,7 +86,11 @@ impl App {
     /// interface, and write it as the save picture at `path` (v20's
     /// `screenShot` after `Canvas.setContent(noHudGui)`). Waits for a frame
     /// with a scene to draw.
-    pub(super) fn take_save_picture(&mut self, frame: &mut RenderContext<'_>, path: PathBuf) -> Result<()> {
+    pub(super) fn take_save_picture(
+        &mut self,
+        frame: &mut RenderContext<'_>,
+        path: PathBuf,
+    ) -> Result<()> {
         let texture = frame.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Save picture frame"),
             size: wgpu::Extent3d {
@@ -200,7 +213,14 @@ impl App {
         };
         let result = if choice == ColorLoad::Cancel {
             Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED))
-        } else if self.net.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session {
+        } else if self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .map(|a| a.id)
+            != request.session
+        {
             Err(anyhow::anyhow!(
                 "Connection changed while reading the build; load canceled"
             ))

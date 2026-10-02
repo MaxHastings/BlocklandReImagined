@@ -319,7 +319,8 @@ impl App {
                 (d.seat_role(usize::from(seat)) == SeatRole::Actor).then_some(())?;
                 Some(vehicles.frame(vehicle)?.rotation)
             });
-        let (yaw, pitch) = mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
+        let (yaw, pitch) =
+            mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
         // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
         let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         if controls.observer().is_some() || pos == 0.0 {
@@ -328,8 +329,7 @@ impl App {
                 .filter(|_| controls.observer().is_none());
             let (yaw, pitch, roll) = match ride {
                 Some(ride) => {
-                    let (yaw, pitch) =
-                        crate::controls::angles(ride * Vec3::NEG_Z, ride * Vec3::Y);
+                    let (yaw, pitch) = crate::controls::angles(ride * Vec3::NEG_Z, ride * Vec3::Y);
                     (yaw, pitch, crate::controls::roll(ride))
                 }
                 // The roll a floor or ceiling opening left, easing out.
@@ -427,8 +427,8 @@ impl App {
                 crate::portal_view::leaned((yaw, pitch, controls.portal_roll()), tilt);
             // Just out of an opening in a floor or ceiling, the pivot comes
             // round from where the carry turned it (`Controls::portal_tilt`).
-            let middle = Vec3::from(local.feet)
-                + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+            let middle =
+                Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
             let pivot = middle + controls.portal_tilt() * (pivot - middle);
             let (eye, boom) = camera_eye(
                 controls,
@@ -535,7 +535,8 @@ impl App {
     /// `Image::crosshair`). Purely local.
     pub(super) fn update_held_weapon(&mut self) {
         let view = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref());

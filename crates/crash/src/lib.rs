@@ -168,12 +168,21 @@ pub fn previous_crash_message(report: &Path) -> String {
     }
     let names: Vec<String> = files
         .iter()
-        .map(|f| format!("    {}", f.file_name().unwrap_or_default().to_string_lossy()))
+        .map(|f| {
+            format!(
+                "    {}",
+                f.file_name().unwrap_or_default().to_string_lossy()
+            )
+        })
         .collect();
     format!(
         "{PRODUCT} closed unexpectedly last time it ran. It saved what happened in:\n\n{}\n\nPlease send {} to whoever gave you the game; it helps them fix the problem. Nothing is sent automatically.",
         names.join("\n"),
-        if files.len() == 1 { "that file" } else { "both files" },
+        if files.len() == 1 {
+            "that file"
+        } else {
+            "both files"
+        },
     )
 }
 
@@ -253,14 +262,29 @@ impl State {
             .map(|s| s.to_string())
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "(non-text panic payload)".into());
-        writeln!(file, "{} {} crashed (Rust panic)", self.program, env!("CARGO_PKG_VERSION"))?;
+        writeln!(
+            file,
+            "{} {} crashed (Rust panic)",
+            self.program,
+            env!("CARGO_PKG_VERSION")
+        )?;
         writeln!(file, "time: {stamp}")?;
         writeln!(file, "thread: {}", thread.name().unwrap_or("unnamed"))?;
         if let Some(location) = info.location() {
-            writeln!(file, "at: {}:{}:{}", location.file(), location.line(), location.column())?;
+            writeln!(
+                file,
+                "at: {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )?;
         }
         writeln!(file, "message: {message}\n")?;
-        writeln!(file, "backtrace:\n{}", std::backtrace::Backtrace::force_capture())?;
+        writeln!(
+            file,
+            "backtrace:\n{}",
+            std::backtrace::Backtrace::force_capture()
+        )?;
         self.append_log_tail(&mut file)?;
         file.sync_all()?;
         Ok(path)
@@ -269,7 +293,11 @@ impl State {
         let log = fs::read(&self.session_log).unwrap_or_default();
         let text = String::from_utf8_lossy(&log);
         let lines: Vec<_> = text.lines().collect();
-        writeln!(out, "\nlast {LOG_TAIL} lines of {}:", self.session_log.display())?;
+        writeln!(
+            out,
+            "\nlast {LOG_TAIL} lines of {}:",
+            self.session_log.display()
+        )?;
         for line in &lines[lines.len().saturating_sub(LOG_TAIL)..] {
             writeln!(out, "{line}")?;
         }
@@ -356,7 +384,11 @@ mod tests {
     fn rotation_keeps_the_newest_files_of_each_kind() {
         let dir = tempfile::tempdir().unwrap();
         for n in 0..25 {
-            File::create(dir.path().join(format!("session-2026010{}-0000{n:02}.log", n % 3))).unwrap();
+            File::create(
+                dir.path()
+                    .join(format!("session-2026010{}-0000{n:02}.log", n % 3)),
+            )
+            .unwrap();
         }
         File::create(dir.path().join("crash-20260101-000000.txt")).unwrap();
         rotate(dir.path(), "session-", 20).unwrap();
@@ -364,8 +396,14 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names.iter().filter(|n| n.starts_with("session-")).count(), 20);
-        assert!(names.iter().any(|n| n.starts_with("crash-")), "other kinds untouched");
+        assert_eq!(
+            names.iter().filter(|n| n.starts_with("session-")).count(),
+            20
+        );
+        assert!(
+            names.iter().any(|n| n.starts_with("crash-")),
+            "other kinds untouched"
+        );
     }
 
     #[test]

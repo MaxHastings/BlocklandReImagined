@@ -4,8 +4,8 @@
 //! `(Teamkill)`, Bonus Kills' `(Killing Spree | 5)`, hidden lines). The
 //! engine keeps rate limits, filters and the sender's own text; the rules
 //! only decide how a line looks and who reads it.
-use super::*;
 use super::game_hooks::declaring;
+use super::*;
 use bri_package_runtime::rhai::{ImmutableString, Map};
 
 /// Longest line rules may send.
@@ -54,9 +54,12 @@ pub(in crate::session) fn plain(text: &str) -> String {
 }
 
 fn text_of(v: &Dynamic) -> Option<String> {
-    v.clone()
-        .try_cast::<ImmutableString>()
-        .map(|s| s.chars().filter(|c| *c != '\n' && *c != '\r').take(MAX_LINE).collect())
+    v.clone().try_cast::<ImmutableString>().map(|s| {
+        s.chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .take(MAX_LINE)
+            .collect()
+    })
 }
 
 impl Session {
@@ -101,7 +104,10 @@ impl Session {
             let reply = self.run_package(
                 &package,
                 "on_chat",
-                vec![Dynamic::from_int(owner as i64), Dynamic::from_map(info.clone())],
+                vec![
+                    Dynamic::from_int(owner as i64),
+                    Dynamic::from_map(info.clone()),
+                ],
                 Budget::Command,
                 Some(owner),
                 None,

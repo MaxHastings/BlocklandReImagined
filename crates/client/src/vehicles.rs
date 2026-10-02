@@ -742,11 +742,7 @@ impl ClientVehicles {
         Some((position, rotation))
     }
     /// Refresh per-model instance lists (chassis, wheels, turrets).
-    pub fn prepare(
-        &mut self,
-        assets: &mut VehicleAssets,
-        infos: &BTreeMap<u64, VehicleInfo>,
-    ) {
+    pub fn prepare(&mut self, assets: &mut VehicleAssets, infos: &BTreeMap<u64, VehicleInfo>) {
         let VehicleAssets {
             pack,
             index,
@@ -914,8 +910,8 @@ fn extrapolate(history: &VecDeque<VehiclePose>, index: usize, now: f64) -> Vehic
     if let Some(before) = index.checked_sub(1).map(|i| &history[i]) {
         let ticks = pose.tick.saturating_sub(before.tick);
         if (1..=SPIN_WINDOW).contains(&ticks) {
-            let turn =
-                (frame.rotation * Quat::from_array(before.rotation).normalize().inverse()).normalize();
+            let turn = (frame.rotation * Quat::from_array(before.rotation).normalize().inverse())
+                .normalize();
             // The short way round.
             let turn = if turn.w < 0.0 { -turn } else { turn };
             let spin = turn.to_scaled_axis() * (ahead / ticks as f64) as f32;
@@ -1396,7 +1392,10 @@ mod tests {
                 vehicles.update(&infos, &poses, Some(now), driven, &Default::default());
                 drawn.push(vehicles.frame(1).unwrap().position.x);
             }
-            drawn[40..].windows(2).filter(|w| w[1] < w[0] - 1e-4).count()
+            drawn[40..]
+                .windows(2)
+                .filter(|w| w[1] < w[0] - 1e-4)
+                .count()
         };
         assert_eq!(draw(None), 0, "drawn from the host's poses");
         assert!(draw(Some(1)) > 0, "guessed ahead, it is pulled back");
@@ -1420,7 +1419,10 @@ mod tests {
             assert!((0.2..=0.4 + 1e-5).contains(&pitch));
         }
         let [yaw, _] = sample(&history, 11.0, &Default::default()).turret_aim;
-        assert!((yaw.abs() - PI).abs() < 1e-4, "midway is straight behind, got {yaw}");
+        assert!(
+            (yaw.abs() - PI).abs() < 1e-4,
+            "midway is straight behind, got {yaw}"
+        );
     }
     #[test]
     fn a_gunner_taking_over_looks_along_the_turret() {
@@ -1435,7 +1437,10 @@ mod tests {
             let (yaw, pitch) = turret_look(&p);
             let forward = Quat::from_array(p.rotation) * Vec3::NEG_Z;
             let heading = forward.x.atan2(-forward.z);
-            assert!(wrap(-wrap(yaw - heading) - aim).abs() < 1e-4, "{hull} {aim} -> {yaw}");
+            assert!(
+                wrap(-wrap(yaw - heading) - aim).abs() < 1e-4,
+                "{hull} {aim} -> {yaw}"
+            );
             assert_eq!(pitch, 0.3);
         }
     }
@@ -1457,7 +1462,13 @@ mod tests {
             velocity: [12.0, 0.0, 0.0],
             ..pose(0, 0.0)
         };
-        vehicles.update(&infos, &BTreeMap::from([(1, moving)]), Some(3.0), Some(1), &Default::default());
+        vehicles.update(
+            &infos,
+            &BTreeMap::from([(1, moving)]),
+            Some(3.0),
+            Some(1),
+            &Default::default(),
+        );
         let before = vehicles.frame(1).unwrap().position;
         assert!((before.x - 0.3).abs() < 1e-5);
         // The host says it stopped at 0.1: no pop, then it settles there.
@@ -1465,7 +1476,13 @@ mod tests {
         vehicles.update(&infos, &stopped, Some(3.0), Some(1), &Default::default());
         assert!((vehicles.frame(1).unwrap().position - before).length() < 1e-5);
         for frame in 1..=60 {
-            vehicles.update(&infos, &stopped, Some(3.0 + frame as f64 * 2.0), Some(1), &Default::default());
+            vehicles.update(
+                &infos,
+                &stopped,
+                Some(3.0 + frame as f64 * 2.0),
+                Some(1),
+                &Default::default(),
+            );
         }
         assert!((vehicles.frame(1).unwrap().position.x - 0.1).abs() < 0.01);
     }

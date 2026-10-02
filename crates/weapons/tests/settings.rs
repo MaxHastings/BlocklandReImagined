@@ -100,7 +100,10 @@ fn settings_set_their_bound_fields_and_leave_the_rest_as_authored() {
     );
     // No running Add-On declares them: as authored.
     let none = with(&[]).unwrap();
-    assert_eq!(serde_json::to_value(&none).unwrap(), serde_json::to_value(&authored).unwrap());
+    assert_eq!(
+        serde_json::to_value(&none).unwrap(),
+        serde_json::to_value(&authored).unwrap()
+    );
 
     let set = with(&[
         ("$Pref::Server::Test::Ammo", "1"),
@@ -111,7 +114,10 @@ fn settings_set_their_bound_fields_and_leave_the_rest_as_authored() {
     let magazine = pistol(&set).magazine.clone().unwrap();
     assert_eq!(magazine.supply, Supply::Endless);
     assert_eq!(magazine.display_ticks, 240, "2 seconds");
-    assert!(pistol(&set).shot.as_ref().unwrap().kick.is_none(), "kick off");
+    assert!(
+        pistol(&set).shot.as_ref().unwrap().kick.is_none(),
+        "kick off"
+    );
     // Recoil on is not listed: the authored kick stays.
     let on = with(&[("$Pref::Server::Test::Recoil", "true")]).unwrap();
     assert!(pistol(&on).shot.as_ref().unwrap().kick.is_some());
@@ -124,15 +130,24 @@ fn settings_set_their_bound_fields_and_leave_the_rest_as_authored() {
         ])
         .unwrap()
     };
-    assert_eq!(pistol(&arena("false")).magazine.as_ref().unwrap().supply, Supply::Counted);
-    assert_eq!(pistol(&arena("true")).magazine.as_ref().unwrap().supply, Supply::Both);
+    assert_eq!(
+        pistol(&arena("false")).magazine.as_ref().unwrap().supply,
+        Supply::Counted
+    );
+    assert_eq!(
+        pistol(&arena("true")).magazine.as_ref().unwrap().supply,
+        Supply::Both
+    );
 }
 
 #[test]
 fn a_value_out_of_a_fields_range_is_refused() {
     // 61 seconds is past the display's 7200 ticks.
     let error = with(&[("test-rules:display_time", "61")]).unwrap_err();
-    assert!(format!("{error:#}").contains("magazine display"), "{error:#}");
+    assert!(
+        format!("{error:#}").contains("magazine display"),
+        "{error:#}"
+    );
     let error = with(&[("test-rules:display_time", "soon")]).unwrap_err();
     assert!(format!("{error:#}").contains("not a number"), "{error:#}");
 }
@@ -146,7 +161,10 @@ fn bindings_reach_only_the_packs_own_fields() {
         );
         Pack::from_json(json.as_bytes()).unwrap_err().to_string()
     };
-    assert!(bad(r#""field": ["images", "set:image/rifle", "shot", "kick"]"#).contains("does not declare"));
+    assert!(
+        bad(r#""field": ["images", "set:image/rifle", "shot", "kick"]"#)
+            .contains("does not declare")
+    );
     assert!(bad(r#""field": ["images", "set:image/pistol", "states"]"#).contains("states"));
     assert!(bad(r#""field": ["sounds", "x", "file"]"#).contains("kind"));
 }
@@ -210,7 +228,11 @@ fn an_endless_magazine_reloads_from_nothing() {
     }
     assert!(!shoot(&mut w), "empty: it clicks and reloads");
     step(&mut w, 30);
-    assert_eq!(ammo(&w), (3, Reserve::Rounds(0)), "full, the reserve untouched");
+    assert_eq!(
+        ammo(&w),
+        (3, Reserve::Rounds(0)),
+        "full, the reserve untouched"
+    );
 }
 
 #[test]

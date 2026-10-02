@@ -148,7 +148,8 @@ impl Settings {
             "Sun azimuth must be 0 to 360"
         );
         ensure!(
-            self.sun_elevation.is_none_or(|e| (-90.0..=90.0).contains(&e)),
+            self.sun_elevation
+                .is_none_or(|e| (-90.0..=90.0).contains(&e)),
             "Sun elevation must be -90 to 90"
         );
         for c in [
@@ -178,7 +179,8 @@ impl Settings {
             "Visible distance must be 20 to 1000"
         );
         ensure!(
-            self.fog_distance.is_none_or(|d| (0.0..=MAX_DISTANCE).contains(&d)),
+            self.fog_distance
+                .is_none_or(|d| (0.0..=MAX_DISTANCE).contains(&d)),
             "Fog distance must be 0 to 1000"
         );
         Ok(())
@@ -349,7 +351,9 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     if fog_end > 0.0 {
         fog_start = fog_start.clamp(0.0, fog_end);
     }
-    let flare = settings.sun_flare.map_or(([0.0; 4], 1.0), |f| (f.color, f.size));
+    let flare = settings
+        .sun_flare
+        .map_or(([0.0; 4], 1.0), |f| (f.color, f.size));
     let mut live = Live {
         sun_direction: if settings.sun_azimuth.is_some() || settings.sun_elevation.is_some() {
             light_direction(azimuth, elevation)
@@ -371,7 +375,10 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     };
     // The sun crosses the sky on a great circle: up on one side at 0.25,
     // at `elevation` over `azimuth` at noon, down on the other at 0.75.
-    let (yaw, noon) = (azimuth.to_radians(), elevation.clamp(1.0, 90.0).to_radians());
+    let (yaw, noon) = (
+        azimuth.to_radians(),
+        elevation.clamp(1.0, 90.0).to_radians(),
+    );
     let at = |time: f64| -> [f32; 3] {
         let angle = TAU * (time as f32 - 0.5);
         let u = toward_sun(yaw, noon);
@@ -533,7 +540,10 @@ mod tests {
             let d = crate::scene::sun_direction(a, e, f32::sin, f32::cos);
             assert!(close(light_direction(a, e), [d.x, d.z, -d.y]));
             let (az, el) = angles(light_direction(a, e));
-            assert!((az - a).abs() < 1e-2 && (el - e).abs() < 1e-2, "{a} {e}: {az} {el}");
+            assert!(
+                (az - a).abs() < 1e-2 && (el - e).abs() < 1e-2,
+                "{a} {e}: {az} {el}"
+            );
         }
     }
 
@@ -591,7 +601,10 @@ mod tests {
         let noon = resolve(&map(), &s, tick(0.5));
         // Noon: the set angles and colours.
         let (az, el) = angles(noon.sun_direction);
-        assert!((az - 90.0).abs() < 0.5 && (el - 60.0).abs() < 0.5, "{az} {el}");
+        assert!(
+            (az - 90.0).abs() < 0.5 && (el - 60.0).abs() < 0.5,
+            "{az} {el}"
+        );
         assert!(close(noon.direct_light, map().direct_light));
         assert!(close(noon.ambient_light, map().ambient_light));
         // Sunrise and sunset sit on the horizon, warm and dim.
@@ -632,8 +645,17 @@ mod tests {
                 now[2] * last[0] - now[0] * last[2],
                 now[0] * last[1] - now[1] * last[0],
             ];
-            let degrees = cross.iter().map(|c| c * c).sum::<f32>().sqrt().asin().to_degrees();
-            assert!(degrees > 0.005 && degrees < 0.05, "frame {i}: {degrees} degrees");
+            let degrees = cross
+                .iter()
+                .map(|c| c * c)
+                .sum::<f32>()
+                .sqrt()
+                .asin()
+                .to_degrees();
+            assert!(
+                degrees > 0.005 && degrees < 0.05,
+                "frame {i}: {degrees} degrees"
+            );
             last = now;
         }
         // Time runs from the anchor, wrapping at a day.
@@ -654,7 +676,10 @@ mod tests {
             fog_color: Some([0.1, 0.2, 0.3]),
             ..Default::default()
         });
-        assert_eq!((s.sun_azimuth, s.fog_color), (Some(10.0), Some([0.1, 0.2, 0.3])));
+        assert_eq!(
+            (s.sun_azimuth, s.fog_color),
+            (Some(10.0), Some([0.1, 0.2, 0.3]))
+        );
         for bad in [
             Settings {
                 sun_azimuth: Some(400.0),

@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.93
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -39,6 +39,8 @@ jobs:
       - name: History check (pull request)
         if: github.event_name == 'pull_request'
         run: python tools/gate.py --history-range ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
+      - name: Format
+        run: cargo fmt --all --check
       - name: Build
         run: cargo build --workspace --all-targets --locked
       - name: Clippy

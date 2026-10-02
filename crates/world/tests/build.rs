@@ -78,10 +78,7 @@ fn append_remaps_ids_exact_colors_and_owners_and_rejects_stale_or_unprivileged_c
     assert_eq!(plan().next_owner, 5);
     // Owner 7 has a principal new to the target: it is claimed with the
     // fresh number. Owner 9 has none and stays unclaimed.
-    assert_eq!(
-        plan().owners().keys().copied().collect::<Vec<_>>(),
-        vec![3]
-    );
+    assert_eq!(plan().owners().keys().copied().collect::<Vec<_>>(), vec![3]);
     let mut authority = Authority::new(target.clone()).unwrap();
     assert!(
         authority

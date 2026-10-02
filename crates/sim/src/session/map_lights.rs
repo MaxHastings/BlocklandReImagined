@@ -22,10 +22,15 @@ pub struct MapLightRule {
 impl MapLightRule {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.position.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0)
+            self.position
+                .iter()
+                .all(|x| x.is_finite() && x.abs() <= 1_000_000.0)
                 && self.radius.is_finite()
                 && (0.0..=MAX_LIGHT_RADIUS).contains(&self.radius)
-                && self.tint.iter().all(|t| t.is_finite() && (0.0..=MAX_LIGHT_TINT).contains(t)),
+                && self
+                    .tint
+                    .iter()
+                    .all(|t| t.is_finite() && (0.0..=MAX_LIGHT_TINT).contains(t)),
             "Invalid map light rule"
         );
         Ok(())

@@ -242,8 +242,14 @@ mod tests {
         assert_eq!(verdict(true, false, None, true), Verdict::Likely);
         assert_eq!(verdict(true, false, None, false), Verdict::NeedsForward);
         // The router's outside address is private: someone else's NAT is in front.
-        assert_eq!(verdict(true, false, Some(ip("100.72.1.2")), true), Verdict::SharedAddress);
-        assert_eq!(verdict(true, false, Some(ip("10.0.0.2")), false), Verdict::SharedAddress);
+        assert_eq!(
+            verdict(true, false, Some(ip("100.72.1.2")), true),
+            Verdict::SharedAddress
+        );
+        assert_eq!(
+            verdict(true, false, Some(ip("10.0.0.2")), false),
+            Verdict::SharedAddress
+        );
         assert_eq!(verdict(false, false, None, false), Verdict::Unknown);
     }
     #[test]
@@ -271,7 +277,10 @@ mod tests {
             match verdict {
                 Verdict::Reachable | Verdict::Likely => assert!(text.contains("bri://"), "{text}"),
                 Verdict::NeedsForward => {
-                    assert!(text.contains("UDP port 28000") && text.contains("192.168.1.23"), "{text}")
+                    assert!(
+                        text.contains("UDP port 28000") && text.contains("192.168.1.23"),
+                        "{text}"
+                    )
                 }
                 _ => assert!(!text.contains("bri://"), "{text}"),
             }
@@ -291,7 +300,13 @@ mod tests {
             lan_invite: Some("bri://192.168.88.254:28000/key".into()),
         };
         let text = report.lines().join(" ");
-        assert!(text.contains("forward UDP port 28000 to this PC (192.168.88.254)"), "{text}");
-        assert!(text.contains("own network can join with: bri://192.168.88.254:28000/key"), "{text}");
+        assert!(
+            text.contains("forward UDP port 28000 to this PC (192.168.88.254)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("own network can join with: bri://192.168.88.254:28000/key"),
+            "{text}"
+        );
     }
 }

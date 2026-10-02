@@ -45,8 +45,8 @@ use bri_render::{
     light_volume::LightVolume,
     map_lighting::{Bake, MapLighting},
     scene::{
-        Camera, GpuInstances, GpuScene, Material, MeshBatch, SceneData, SceneRenderer, SceneTransform, SceneVertex,
-        ShadowCasters,
+        Camera, GpuInstances, GpuScene, Material, MeshBatch, SceneData, SceneRenderer,
+        SceneTransform, SceneVertex, ShadowCasters,
     },
     scene_loader::load_map_bundle,
     shadow::ShadowSettings,
@@ -79,9 +79,17 @@ fn synthetic(
         })
         .collect();
     ensure!(!table.is_empty(), "No small bricks to build with");
-    let mut world = World::new("Synthetic".into(), like.map_id.clone(), like.palette.clone());
+    let mut world = World::new(
+        "Synthetic".into(),
+        like.map_id.clone(),
+        like.palette.clone(),
+    );
     let snap = |v: f32, step: f32| (v / step).round() * step;
-    let origin = Vec3::new(snap(at.x - 100.0, 2.0), snap(at.y, 0.2), snap(at.z + 100.0, 2.0));
+    let origin = Vec3::new(
+        snap(at.x - 100.0, 2.0),
+        snap(at.y, 0.2),
+        snap(at.z + 100.0, 2.0),
+    );
     let side = 100usize;
     let mut seed = 0x9E37_79B9_7F4A_7C15u64;
     for i in 0..count {
@@ -90,7 +98,9 @@ fn synthetic(
         seed ^= seed << 17;
         let (x, z, y) = (i % side, (i / side) % side, i / (side * side));
         let template = table[(seed >> 16) as usize % table.len()];
-        let ContentRef::Resolved(id) = &template.definition else { unreachable!() };
+        let ContentRef::Resolved(id) = &template.definition else {
+            unreachable!()
+        };
         let height = meshes[id].height_plates as f32 * 0.2;
         let [tx, ty, tz] = template.position;
         let bottom = ty - height * 0.5;
@@ -128,7 +138,11 @@ fn cuboid(min: Vec3, max: Vec3) -> SceneData {
             };
             let quad = [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)];
             // Counter-clockwise seen from outside.
-            let order: [usize; 4] = if side == 1 { [0, 1, 2, 3] } else { [0, 3, 2, 1] };
+            let order: [usize; 4] = if side == 1 {
+                [0, 1, 2, 3]
+            } else {
+                [0, 3, 2, 1]
+            };
             let base = data.vertices.len() as u32;
             data.vertices.extend(order.map(|k| SceneVertex {
                 position: quad[k].to_array(),
@@ -138,7 +152,8 @@ fn cuboid(min: Vec3, max: Vec3) -> SceneData {
                 color: [1.0; 4],
                 fx: [0.0; 4],
             }));
-            data.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+            data.indices
+                .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
     }
     data.batches.push(MeshBatch {
@@ -157,7 +172,10 @@ fn brick_lights(
     meshes: &BTreeMap<String, bri_content::brick::Brick>,
 ) -> Result<Vec<bri_render::scene::PointLight>> {
     let pack = bri_fx_runtime::EffectsPack::load(pack)?;
-    let limits = bri_fx_runtime::EffectsLimits { lights: 4096, ..Default::default() };
+    let limits = bri_fx_runtime::EffectsLimits {
+        lights: 4096,
+        ..Default::default()
+    };
     let mut effects = bri_client::effects::WorldEffects::new(pack, limits)?;
     effects.sync(world, meshes)?;
     effects.advance(0.05, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
@@ -180,7 +198,11 @@ fn brick_lights(
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     for l in &lights {
         *kinds
-            .entry(format!("colour {:.2?} radius {:.1}", &l.color[..3], l.position_radius[3]))
+            .entry(format!(
+                "colour {:.2?} radius {:.1}",
+                &l.color[..3],
+                l.position_radius[3]
+            ))
             .or_default() += 1;
     }
     println!("Brick lights: {}", lights.len());
@@ -209,7 +231,9 @@ fn light_terms(
         .iter()
         .step_by(step)
         .filter_map(|b| {
-            let ContentRef::Resolved(id) = &b.definition else { return None };
+            let ContentRef::Resolved(id) = &b.definition else {
+                return None;
+            };
             let height = meshes.get(id)?.height_plates as f32 * 0.2;
             Some(Vec3::from(b.position) + Vec3::Y * (height * 0.5 + 0.01))
         })
@@ -226,13 +250,22 @@ fn light_terms(
         for &p in &samples {
             let mut add = |name, v: Vec3| terms.entry(name).or_default().push(v.max_element());
             add("1 ambient", Vec3::from(scene.ambient));
-            add("2 sun (unshadowed)", Vec3::from(scene.sun_color) * normal.dot(sun_toward).max(0.0));
+            add(
+                "2 sun (unshadowed)",
+                Vec3::from(scene.sun_color) * normal.dot(sun_toward).max(0.0),
+            );
             if let Some(u) = unified {
                 let v = &u.visibility;
                 let at = p + normal * v.cell * 0.5;
                 let cell = ((at - Vec3::from(v.origin)) / v.cell).floor();
                 let inside = cell.cmpge(Vec3::ZERO).all()
-                    && cell.cmplt(Vec3::new(v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32)).all();
+                    && cell
+                        .cmplt(Vec3::new(
+                            v.dims[0] as f32,
+                            v.dims[1] as f32,
+                            v.dims[2] as f32,
+                        ))
+                        .all();
                 let texel = inside.then(|| {
                     let c = cell.as_uvec3();
                     v.texels[(c.x + v.dims[0] * (c.y + v.dims[1] * c.z)) as usize]
@@ -254,10 +287,16 @@ fn light_terms(
                 }
                 add("3 map lights (channels, seen)", seen);
                 add("4 map lights (all, unshadowed)", all);
-                add("5 residual volume", Vec3::from(u.residual.light(p.to_array(), normal.to_array())));
+                add(
+                    "5 residual volume",
+                    Vec3::from(u.residual.light(p.to_array(), normal.to_array())),
+                );
             }
             if let Some(c) = classic {
-                add("6 classic volume", Vec3::from(c.light(p.to_array(), normal.to_array())));
+                add(
+                    "6 classic volume",
+                    Vec3::from(c.light(p.to_array(), normal.to_array())),
+                );
             }
             let mut point = Vec3::ZERO;
             for l in points {
@@ -265,7 +304,8 @@ fn light_terms(
                 let d = delta.length();
                 // As `vertex_point_illumination` (v20's GL attenuation).
                 if d < l.position_radius[3] {
-                    point += Vec3::from_slice(&l.color[..3]) * normal.dot(delta / d.max(1e-4)).max(0.0)
+                    point += Vec3::from_slice(&l.color[..3])
+                        * normal.dot(delta / d.max(1e-4)).max(0.0)
                         / (1.0 + 0.1 * d * d);
                 }
             }
@@ -288,13 +328,22 @@ fn light_terms(
 
 /// `name=a,b,c...` numbers from the environment.
 fn env_numbers(name: &str, count: usize) -> Result<Option<Vec<f32>>> {
-    let Ok(text) = std::env::var(name) else { return Ok(None) };
-    let v: Vec<f32> = text.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    let Ok(text) = std::env::var(name) else {
+        return Ok(None);
+    };
+    let v: Vec<f32> = text
+        .split(',')
+        .filter_map(|x| x.trim().parse().ok())
+        .collect();
     ensure!(v.len() == count, "{name} wants {count} numbers");
     Ok(Some(v))
 }
 
-fn read_back(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) -> Result<Vec<u8>> {
+fn read_back(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+) -> Result<Vec<u8>> {
     let (width, height) = (target.width(), target.height());
     let row = (width * 4).div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -380,7 +429,11 @@ fn main() -> Result<()> {
     }
     println!(
         "{} on {}: {} bricks",
-        if synthetic_count.is_some() { "Synthetic" } else { entry.name.as_str() },
+        if synthetic_count.is_some() {
+            "Synthetic"
+        } else {
+            entry.name.as_str()
+        },
         entry.map_id,
         world.bricks.len()
     );
@@ -388,14 +441,25 @@ fn main() -> Result<()> {
         name: world.name.clone(),
         map_id: world.map_id.clone(),
         palette: world.palette.clone(),
-        bricks: world.bricks.iter().map(|(k, b)| (*k, bri_net::protocol::public_brick(b))).collect(),
+        bricks: world
+            .bricks
+            .iter()
+            .map(|(k, b)| (*k, bri_net::protocol::public_brick(b)))
+            .collect(),
     });
     let materials = bri_client::materials::BrickMaterials::load(&paths.brick_materials)?;
     let palette = bri_client::world_chunks::BrickPalette::new(&materials)?;
     let mut chunked = bri_client::world_chunks::ChunkedWorld::default();
     let t = Instant::now();
     let chunks: Vec<_> = chunked
-        .update(public.clone(), None, &meshes, &palette, Some(&materials), 64_000_000)?
+        .update(
+            public.clone(),
+            None,
+            &meshes,
+            &palette,
+            Some(&materials),
+            64_000_000,
+        )?
         .into_iter()
         .filter_map(|(_, scene)| Some(scene?.scene))
         .collect();
@@ -427,7 +491,10 @@ fn main() -> Result<()> {
         let key = bake.key();
         let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
         let file = cache.join(format!("{hex}.maplighting"));
-        if let Some(stored) = std::fs::read(&file).ok().and_then(|b| MapLighting::from_bytes(&b, key)) {
+        if let Some(stored) = std::fs::read(&file)
+            .ok()
+            .and_then(|b| MapLighting::from_bytes(&b, key))
+        {
             return stored;
         }
         let lit = bake.bake(2.0, 1_000_000, 2.0, 2_000_000);
@@ -438,11 +505,19 @@ fn main() -> Result<()> {
     let light_shapes: Vec<(u32, Vec3)> = loaded
         .breakables
         .iter()
-        .filter(|b| ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n)))
+        .filter(|b| {
+            ["lightBulbA", "fluorescentLight"]
+                .iter()
+                .any(|n| b.datablock.eq_ignore_ascii_case(n))
+        })
         .map(|b| (b.node, b.center))
         .collect();
     if let Some(u) = &unified {
-        println!("Map lighting: {} lights, report {:?}", u.lights.len(), u.report);
+        println!(
+            "Map lighting: {} lights, report {:?}",
+            u.lights.len(),
+            u.report
+        );
         // The lightmap leak cleanup, as the client applies it (BRI_LEAKS=0
         // leaves the lightmaps as baked, to compare). Each changed lightmap
         // is also saved as leaks-{image}.png: the cleaned lightmap with the
@@ -455,7 +530,12 @@ fn main() -> Result<()> {
                 let label = &scene.images[image].label;
                 println!("Leak cleanup: image {image} ({label}): {fixes} texels");
                 let mut pixels = scene.images[image].rgba.clone();
-                for (i, (a, b)) in before[image].rgba.chunks_exact(4).zip(scene.images[image].rgba.chunks_exact(4)).enumerate() {
+                for (i, (a, b)) in before[image]
+                    .rgba
+                    .chunks_exact(4)
+                    .zip(scene.images[image].rgba.chunks_exact(4))
+                    .enumerate()
+                {
                     if a != b {
                         pixels[i * 4..i * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
                     } else {
@@ -463,14 +543,22 @@ fn main() -> Result<()> {
                     }
                 }
                 let (w, h) = (scene.images[image].width, scene.images[image].height);
-                image::save_buffer(out.join(format!("leaks-{image}.png")), &pixels, w, h, image::ColorType::Rgba8)?;
+                image::save_buffer(
+                    out.join(format!("leaks-{image}.png")),
+                    &pixels,
+                    w,
+                    h,
+                    image::ColorType::Rgba8,
+                )?;
             }
         }
         // Each light bulb and tube and the recovered lights within 32 units
         // of its centre (the client gives a light to its nearest shapes
         // within LIGHT_SHAPE_REACH, 24 units).
         for b in loaded.breakables.iter().filter(|b| {
-            ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n))
+            ["lightBulbA", "fluorescentLight"]
+                .iter()
+                .any(|n| b.datablock.eq_ignore_ascii_case(n))
         }) {
             let near: Vec<String> = u
                 .lights
@@ -480,12 +568,26 @@ fn main() -> Result<()> {
                 .filter(|&(_, d)| d <= 32.0)
                 .map(|(i, d)| format!("light {i} at {d:.1}"))
                 .collect();
-            println!("Light shape {} node {} at {:?}: {}", b.datablock, b.node, b.center, near.join(", "));
+            println!(
+                "Light shape {} node {} at {:?}: {}",
+                b.datablock,
+                b.node,
+                b.center,
+                near.join(", ")
+            );
         }
         // Every recovered light and the light shapes it belongs to (the
         // client's rule), then the map surfaces within 40 units of each
         // light shape: what stays lit, or glows, when it breaks.
-        for (i, (l, owners)) in u.lights.iter().zip(bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)).enumerate() {
+        for (i, (l, owners)) in u
+            .lights
+            .iter()
+            .zip(bri_render::map_lighting::fixture_owners(
+                &u.lights,
+                &light_shapes,
+            ))
+            .enumerate()
+        {
             println!(
                 "Light {i}: at {:?} colour {:?} inner {} reach {} channel {:?}, owned by nodes {:?}",
                 l.position,
@@ -496,17 +598,24 @@ fn main() -> Result<()> {
                 owners.iter().map(|(n, _)| *n).collect::<Vec<_>>()
             );
         }
-        let owned: Vec<(usize, Vec<u32>)> = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)
-            .into_iter()
-            .map(|o| o.into_iter().map(|(n, _)| n).collect())
-            .enumerate()
-            .collect();
+        let owned: Vec<(usize, Vec<u32>)> =
+            bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)
+                .into_iter()
+                .map(|o| o.into_iter().map(|(n, _)| n).collect())
+                .enumerate()
+                .collect();
         for &(node, centre) in &light_shapes {
             for (index, batch) in scene.batches.iter().enumerate() {
                 let range = batch.indices.start as usize..batch.indices.end as usize;
                 let near: Vec<f32> = scene.indices[range]
                     .chunks_exact(3)
-                    .map(|t| t.iter().map(|&v| centre.distance(Vec3::from(scene.vertices[v as usize].position))).fold(f32::INFINITY, f32::min))
+                    .map(|t| {
+                        t.iter()
+                            .map(|&v| {
+                                centre.distance(Vec3::from(scene.vertices[v as usize].position))
+                            })
+                            .fold(f32::INFINITY, f32::min)
+                    })
                     .filter(|&d| d <= 40.0)
                     .collect();
                 if near.is_empty() {
@@ -516,7 +625,14 @@ fn main() -> Result<()> {
                 let lightmap = &scene.images[m.images[8]];
                 let n = (lightmap.rgba.len() / 4).max(1) as f32;
                 let mean: Vec<u32> = (0..3)
-                    .map(|c| (lightmap.rgba.chunks_exact(4).map(|t| f32::from(t[c])).sum::<f32>() / n) as u32)
+                    .map(|c| {
+                        (lightmap
+                            .rgba
+                            .chunks_exact(4)
+                            .map(|t| f32::from(t[c]))
+                            .sum::<f32>()
+                            / n) as u32
+                    })
                     .collect();
                 println!(
                     "  near node {node}: batch {index} '{}' {:?} {:?} lightmap image {} ({}x{}, mean {mean:?}){}: {} triangles, nearest {:.1}",
@@ -526,23 +642,42 @@ fn main() -> Result<()> {
                     m.images[8],
                     lightmap.width,
                     lightmap.height,
-                    if bri_render::scene::decomposed_lightmap(m.parameters) { " decomposed" } else { "" },
+                    if bri_render::scene::decomposed_lightmap(m.parameters) {
+                        " decomposed"
+                    } else {
+                        ""
+                    },
                     near.len(),
                     near.iter().copied().fold(f32::INFINITY, f32::min)
                 );
                 // Within 8 units (a lamp and its shade): per triangle, its
                 // lightmap texel, the Dynamic leftover and light shares
                 // there, and which of the shape's lights it faces.
-                let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) else { continue };
+                let Some(sheet) = u
+                    .dynamic
+                    .iter()
+                    .find(|d| d.parts_image as usize == m.images[9])
+                else {
+                    continue;
+                };
                 let range = batch.indices.start as usize..batch.indices.end as usize;
                 for t in scene.indices[range].chunks_exact(3) {
-                    let v: Vec<&bri_render::scene::SceneVertex> = t.iter().map(|&i| &scene.vertices[i as usize]).collect();
+                    let v: Vec<&bri_render::scene::SceneVertex> =
+                        t.iter().map(|&i| &scene.vertices[i as usize]).collect();
                     let at = v.iter().map(|v| Vec3::from(v.position)).sum::<Vec3>() / 3.0;
-                    if v.iter().all(|v| centre.distance(Vec3::from(v.position)) > 8.0) {
+                    if v.iter()
+                        .all(|v| centre.distance(Vec3::from(v.position)) > 8.0)
+                    {
                         continue;
                     }
-                    let normal = v.iter().map(|v| Vec3::from(v.normal)).sum::<Vec3>().normalize_or_zero();
-                    let uv = v.iter().fold([0.0f32; 2], |a, v| [a[0] + v.lightmap_uv[0] / 3.0, a[1] + v.lightmap_uv[1] / 3.0]);
+                    let normal = v
+                        .iter()
+                        .map(|v| Vec3::from(v.normal))
+                        .sum::<Vec3>()
+                        .normalize_or_zero();
+                    let uv = v.iter().fold([0.0f32; 2], |a, v| {
+                        [a[0] + v.lightmap_uv[0] / 3.0, a[1] + v.lightmap_uv[1] / 3.0]
+                    });
                     let texel = |w: u32, h: u32| {
                         let x = ((uv[0] * w as f32) as u32).min(w - 1);
                         let y = ((uv[1] * h as f32) as u32).min(h - 1);
@@ -563,7 +698,15 @@ fn main() -> Result<()> {
                         .map(|&(k, _)| {
                             let l = &u.lights[k];
                             let delta = Vec3::from(l.position) - at;
-                            format!("{k}:{}{:.1}", if normal.dot(delta) > 0.0 { "faces " } else { "away " }, delta.length())
+                            format!(
+                                "{k}:{}{:.1}",
+                                if normal.dot(delta) > 0.0 {
+                                    "faces "
+                                } else {
+                                    "away "
+                                },
+                                delta.length()
+                            )
                         })
                         .collect();
                     println!(
@@ -590,11 +733,18 @@ fn main() -> Result<()> {
                         let i = ((y * w + x) * 4) as usize;
                         let row = (y * w * 2) as usize;
                         let (a, b) = ((row + x as usize) * 4, (row + (w + x) as usize) * 4);
-                        pixels[a..a + 3].copy_from_slice(parts.rgba.get(i..i + 3).unwrap_or(&[0; 3]));
+                        pixels[a..a + 3]
+                            .copy_from_slice(parts.rgba.get(i..i + 3).unwrap_or(&[0; 3]));
                         pixels[b..b + 3].copy_from_slice(&d.left[i..i + 3]);
                     }
                 }
-                image::save_buffer(out.join(format!("left-{}.png", d.parts_image)), &pixels, w * 2, h, image::ColorType::Rgba8)?;
+                image::save_buffer(
+                    out.join(format!("left-{}.png", d.parts_image)),
+                    &pixels,
+                    w * 2,
+                    h,
+                    image::ColorType::Rgba8,
+                )?;
             }
         }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
@@ -603,18 +753,30 @@ fn main() -> Result<()> {
         // shader samples half a cell off the surface, filtered).
         if let Ok(points) = std::env::var("BRI_LIGHT_AT") {
             for point in points.split(';') {
-                let p: Vec<f32> = point.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                let p: Vec<f32> = point
+                    .split(',')
+                    .filter_map(|v| v.trim().parse().ok())
+                    .collect();
                 ensure!(p.len() == 3, "BRI_LIGHT_AT wants x,y,z");
                 let at = Vec3::new(p[0], p[1], p[2]);
                 let v = &u.visibility;
                 let cell = ((at - Vec3::from(v.origin)) / v.cell).floor();
                 let inside = cell.cmpge(Vec3::ZERO).all()
-                    && cell.cmplt(Vec3::new(v.dims[0] as f32, v.dims[1] as f32, v.dims[2] as f32)).all();
+                    && cell
+                        .cmplt(Vec3::new(
+                            v.dims[0] as f32,
+                            v.dims[1] as f32,
+                            v.dims[2] as f32,
+                        ))
+                        .all();
                 let texel = inside.then(|| {
                     let c = cell.as_uvec3();
                     v.texels[(c.x + v.dims[0] * (c.y + v.dims[1] * c.z)) as usize]
                 });
-                println!("Light at {at:?}: volume cell {} units, texel {texel:?}", v.cell);
+                println!(
+                    "Light at {at:?}: volume cell {} units, texel {texel:?}",
+                    v.cell
+                );
                 for (i, l) in u.lights.iter().enumerate() {
                     let d = at.distance(Vec3::from(l.position));
                     if d >= l.outer {
@@ -643,27 +805,53 @@ fn main() -> Result<()> {
         vec![]
     };
     if std::env::var("BRI_TERMS").is_ok_and(|v| v == "1") {
-        light_terms(&world, &meshes, &scene, unified.as_ref(), classic.as_ref(), &brick_lights);
+        light_terms(
+            &world,
+            &meshes,
+            &scene,
+            unified.as_ref(),
+            classic.as_ref(),
+            &brick_lights,
+        );
     }
 
     // Views: given, or from spawn toward the build's centre and a closer one.
     let (lo, hi) = world.bricks.values().fold(
         (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
-        |(lo, hi), b| (lo.min(Vec3::from(b.position)), hi.max(Vec3::from(b.position))),
+        |(lo, hi), b| {
+            (
+                lo.min(Vec3::from(b.position)),
+                hi.max(Vec3::from(b.position)),
+            )
+        },
     );
-    let centre = if world.bricks.is_empty() { spawn } else { (lo + hi) * 0.5 };
+    let centre = if world.bricks.is_empty() {
+        spawn
+    } else {
+        (lo + hi) * 0.5
+    };
     let mut views: Vec<(String, Vec3, Vec3)> = args[3..]
         .iter()
         .filter_map(|a| {
             let (name, v) = a.split_once('=')?;
             let v: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
-            (v.len() == 6).then(|| (name.to_string(), Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
+            (v.len() == 6).then(|| {
+                (
+                    name.to_string(),
+                    Vec3::new(v[0], v[1], v[2]),
+                    Vec3::new(v[3], v[4], v[5]),
+                )
+            })
         })
         .collect();
     if views.is_empty() {
         views.push(("spawn".into(), spawn + Vec3::Y * 2.4, centre));
         let extent = (hi - lo).length().clamp(20.0, 120.0);
-        views.push(("overview".into(), centre + Vec3::new(extent * 0.5, extent * 0.35, extent * 0.5), centre));
+        views.push((
+            "overview".into(),
+            centre + Vec3::new(extent * 0.5, extent * 0.35, extent * 0.5),
+            centre,
+        ));
     }
 
     // BRI_PIXELS=view:x,y;x,y (pixels of the 1920x1080 `{view}-*.png`):
@@ -672,7 +860,10 @@ fn main() -> Result<()> {
     // light's share) and what is left with the bulbs and tubes broken.
     if let (Some(spec), Some(pristine), Some(u)) = (&pixels, &pristine, &unified) {
         let (view, list) = spec.split_once(':').context("BRI_PIXELS=view:x,y;x,y")?;
-        let (_, eye, look) = views.iter().find(|(n, _, _)| n == view).context("BRI_PIXELS names no view")?;
+        let (_, eye, look) = views
+            .iter()
+            .find(|(n, _, _)| n == view)
+            .context("BRI_PIXELS names no view")?;
         let (width, height) = (1920.0f32, 1080.0f32);
         let forward = (*look - *eye).normalize();
         let right = forward.cross(Vec3::Y).normalize();
@@ -683,7 +874,10 @@ fn main() -> Result<()> {
             .collect();
         let bake = Bake::new(pristine).context("no lightmapped interior")?;
         for pixel in list.split(';') {
-            let v: Vec<f32> = pixel.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            let v: Vec<f32> = pixel
+                .split(',')
+                .filter_map(|x| x.trim().parse().ok())
+                .collect();
             ensure!(v.len() == 2, "BRI_PIXELS: x,y pairs");
             // As the renderer's camera: 90 degrees across.
             let x = (v[0] + 0.5) / width * 2.0 - 1.0;
@@ -691,8 +885,11 @@ fn main() -> Result<()> {
             let ray = (forward + right * x + up * y * (height / width)).normalize();
             let mut best: Option<(f32, usize, [u32; 3], [f32; 3])> = None;
             for (b, batch) in pristine.batches.iter().enumerate() {
-                for t in pristine.indices[batch.indices.start as usize..batch.indices.end as usize].chunks_exact(3) {
-                    let p = [0, 1, 2].map(|k| Vec3::from(pristine.vertices[t[k] as usize].position));
+                for t in pristine.indices[batch.indices.start as usize..batch.indices.end as usize]
+                    .chunks_exact(3)
+                {
+                    let p =
+                        [0, 1, 2].map(|k| Vec3::from(pristine.vertices[t[k] as usize].position));
                     let (e1, e2) = (p[1] - p[0], p[2] - p[0]);
                     let h = ray.cross(e2);
                     let det = e1.dot(h);
@@ -705,7 +902,12 @@ fn main() -> Result<()> {
                     let q = s.cross(e1);
                     let bv = f * ray.dot(q);
                     let d = f * e2.dot(q);
-                    if bu < 0.0 || bv < 0.0 || bu + bv > 1.0 || d <= 0.05 || best.is_some_and(|b| b.0 <= d) {
+                    if bu < 0.0
+                        || bv < 0.0
+                        || bu + bv > 1.0
+                        || d <= 0.05
+                        || best.is_some_and(|b| b.0 <= d)
+                    {
                         continue;
                     }
                     best = Some((d, b, [t[0], t[1], t[2]], [1.0 - bu - bv, bu, bv]));
@@ -721,7 +923,12 @@ fn main() -> Result<()> {
                 let t = pristine.vertices[i as usize].lightmap_uv;
                 [a[0] + t[0] * w, a[1] + t[1] * w]
             });
-            println!("Pixel {pixel}: batch {b} '{}' at {:.2?}, lightmap uv {:.4?}", m.name, at.to_array(), uv);
+            println!(
+                "Pixel {pixel}: batch {b} '{}' at {:.2?}, lightmap uv {:.4?}",
+                m.name,
+                at.to_array(),
+                uv
+            );
             // The live sun's part: the shader adds sun colour x facing x the
             // texel's sun share, where its shadow map lets the sun through.
             let normal = tri
@@ -753,15 +960,24 @@ fn main() -> Result<()> {
                 println!("  {line}");
             }
             // What the Dynamic lightmaps draw there, bulbs whole and broken.
-            if let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) {
+            if let Some(sheet) = u
+                .dynamic
+                .iter()
+                .find(|d| d.parts_image as usize == m.images[9])
+            {
                 for &(_, i) in &texels {
                     let i = i as usize;
-                    let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32);
+                    let left = Vec3::new(
+                        sheet.left[i * 4] as f32,
+                        sheet.left[i * 4 + 1] as f32,
+                        sheet.left[i * 4 + 2] as f32,
+                    );
                     let (mut whole, mut broke) = (left, left);
                     for &k in &sheet.lights {
                         let l = &u.lights[k as usize];
                         let distance = Vec3::from(l.position).distance(at);
-                        let falloff = ((l.outer - distance) / (l.outer - l.inner).max(1e-3)).clamp(0.0, 1.0);
+                        let falloff =
+                            ((l.outer - distance) / (l.outer - l.inner).max(1e-3)).clamp(0.0, 1.0);
                         let given = Vec3::from(l.color) * falloff * 255.0 * sheet.share(k, i);
                         whole += given;
                         if !broken[k as usize] {
@@ -794,7 +1010,11 @@ fn main() -> Result<()> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("lighting probe"),
         required_limits: adapter.limits(),
-        required_features: if timed { stamps } else { wgpu::Features::empty() },
+        required_features: if timed {
+            stamps
+        } else {
+            wgpu::Features::empty()
+        },
         ..Default::default()
     }))?;
     let queries = timed.then(|| {
@@ -821,7 +1041,11 @@ fn main() -> Result<()> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("probe target"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -830,7 +1054,8 @@ fn main() -> Result<()> {
         view_formats: &[],
     });
     let view = target.create_view(&Default::default());
-    let depth = bri_render::scene::create_depth(&device, width, height).create_view(&Default::default());
+    let depth =
+        bri_render::scene::create_depth(&device, width, height).create_view(&Default::default());
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
@@ -844,9 +1069,15 @@ fn main() -> Result<()> {
     };
     // As the client: the per-texel lightmaps in Dynamic, and in the Unified
     // modes on a map with bulbs or tubes.
-    if let Some(u) = unified.as_ref().filter(|_| dynamic || !light_shapes.is_empty()) {
+    if let Some(u) = unified
+        .as_ref()
+        .filter(|_| dynamic || !light_shapes.is_empty())
+    {
         let equipped = bri_render::map_lighting::DynamicSheet::equip(&u.dynamic, &mut scene);
-        println!("Dynamic lightmaps: {} sheets, equipped {equipped}", u.dynamic.len());
+        println!(
+            "Dynamic lightmaps: {} sheets, equipped {equipped}",
+            u.dynamic.len()
+        );
     }
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let gpu_map = renderer.upload(&device, &queue, &scene)?;
@@ -876,7 +1107,11 @@ fn main() -> Result<()> {
     };
     let player = match env_numbers("BRI_PLAYER", 3)? {
         Some(p) => {
-            let body = renderer.upload(&device, &queue, &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.6, 0.3)))?;
+            let body = renderer.upload(
+                &device,
+                &queue,
+                &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.6, 0.3)),
+            )?;
             let mut instances = GpuInstances::new(&device, 1)?;
             instances.update(
                 &queue,
@@ -891,7 +1126,10 @@ fn main() -> Result<()> {
     };
     let models: Vec<(&GpuScene, &GpuInstances)> = player.iter().map(|(b, i)| (b, i)).collect();
     let no_sun = std::env::var("BRI_SUN").is_ok_and(|v| v == "0");
-    let light_scale: f32 = std::env::var("BRI_LIGHT_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let light_scale: f32 = std::env::var("BRI_LIGHT_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
     let mut scenes = vec![&gpu_map];
     scenes.extend(gpu_world.iter());
     scenes.extend(tower.iter());
@@ -922,13 +1160,22 @@ fn main() -> Result<()> {
                     for l in &mut u.lights {
                         l.color = l.color.map(|c| c * light_scale);
                     }
-                    for t in u.residual.texels.iter_mut().chain(&mut u.residual_all.texels) {
+                    for t in u
+                        .residual
+                        .texels
+                        .iter_mut()
+                        .chain(&mut u.residual_all.texels)
+                    {
                         for c in &mut t[..3] {
                             *c = (*c as f32 * light_scale).round().clamp(0.0, 255.0) as u8;
                         }
                     }
                 }
-                let residual = if mode == 3 { &u.residual_all } else { &u.residual };
+                let residual = if mode == 3 {
+                    &u.residual_all
+                } else {
+                    &u.residual
+                };
                 renderer.set_light_volume(&device, &queue, Some(residual))?;
                 renderer.set_map_lighting(&device, &queue, Some(&u), mode == 3)?;
                 // BRI_OFF=i,j,...: those recovered lights switched off, as a
@@ -937,13 +1184,23 @@ fn main() -> Result<()> {
                 // BRI_BREAK=1: every bulb and tube broken, by the client's
                 // rule (their lights off).
                 let off: Vec<usize> = std::env::var("BRI_OFF")
-                    .map(|text| text.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+                    .map(|text| {
+                        text.split(',')
+                            .filter_map(|x| x.trim().parse().ok())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let broken = std::env::var("BRI_BREAK").is_ok_and(|v| v == "1");
                 if broken || !off.is_empty() {
                     let owners = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes);
                     let tints: Vec<Vec3> = (0..u.lights.len())
-                        .map(|i| if off.contains(&i) || (broken && !owners[i].is_empty()) { Vec3::ZERO } else { Vec3::ONE })
+                        .map(|i| {
+                            if off.contains(&i) || (broken && !owners[i].is_empty()) {
+                                Vec3::ZERO
+                            } else {
+                                Vec3::ONE
+                            }
+                        })
                         .collect();
                     renderer.set_map_light_tints(&queue, &tints);
                 }
@@ -958,8 +1215,11 @@ fn main() -> Result<()> {
             for t in &mut terrain {
                 t.update(&device, &queue, &[*eye], 4000.0)?;
             }
-            let terrain_draws: Vec<_> =
-                terrain.iter().flat_map(GpuTerrain::draws).chain(models.iter().copied()).collect();
+            let terrain_draws: Vec<_> = terrain
+                .iter()
+                .flat_map(GpuTerrain::draws)
+                .chain(models.iter().copied())
+                .collect();
             let mut camera = Camera::perspective(
                 eye.to_array(),
                 look.to_array(),
@@ -1003,8 +1263,14 @@ fn main() -> Result<()> {
                 let map: &[&GpuScene] = if mode != 0 { &scenes[..1] } else { &[] };
                 renderer.render_shadows_with_map(
                     &mut encoder,
-                    ShadowCasters { scenes: if brick_shadows { &scenes[1..] } else { &[] }, instances: &models },
-                    ShadowCasters { scenes: if brick_shadows { &[] } else { &scenes[1..] }, instances: &[] },
+                    ShadowCasters {
+                        scenes: if brick_shadows { &scenes[1..] } else { &[] },
+                        instances: &models,
+                    },
+                    ShadowCasters {
+                        scenes: if brick_shadows { &[] } else { &scenes[1..] },
+                        instances: &[],
+                    },
                     map,
                 );
                 renderer.render_with_instances(
@@ -1021,12 +1287,18 @@ fn main() -> Result<()> {
                     encoder.copy_buffer_to_buffer(&resolved, 0, &readable, 0, 16);
                 }
                 queue.submit([encoder.finish()]);
-                device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None })?;
+                device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })?;
                 if i >= 10 {
                     frames.push(ms(t.elapsed()));
                     if queries.is_some() {
                         readable.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-                        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None })?;
+                        device.poll(wgpu::PollType::Wait {
+                            submission_index: None,
+                            timeout: None,
+                        })?;
                         let ticks: Vec<u64> = readable
                             .slice(..)
                             .get_mapped_range()?
@@ -1069,6 +1341,9 @@ fn main() -> Result<()> {
         "map_lights": unified.as_ref().map(|u| json!({"lights": u.lights, "report": u.report})),
         "frames": report,
     });
-    std::fs::write(out.join("report.json"), serde_json::to_string_pretty(&report)?)?;
+    std::fs::write(
+        out.join("report.json"),
+        serde_json::to_string_pretty(&report)?,
+    )?;
     Ok(())
 }

@@ -4,7 +4,12 @@ use super::*;
 impl App {
     pub(super) fn frame(&mut self, elapsed: Duration) -> Result<()> {
         self.perf.frame_stats.push(elapsed);
-        if let Some(line) = self.perf.frame_log.as_mut().and_then(|log| log.frame(elapsed)) {
+        if let Some(line) = self
+            .perf
+            .frame_log
+            .as_mut()
+            .and_then(|log| log.frame(elapsed))
+        {
             // Session log only: players send it, the console stays quiet.
             eprintln!("{line}");
         }
@@ -30,7 +35,8 @@ impl App {
         // every in-world visual advances by `game_elapsed`; only the UI,
         // camera easing and audio mixing use wall time.
         let scale = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .and_then(|a| a.view.as_ref())
             .map_or(1.0, |v| v.time_scale);
@@ -58,14 +64,18 @@ impl App {
             // server does.
             Ok(true) => {
                 let choices = self.content.weapons.item_choices.clone();
-                let rebuilt = self.build.tool_ui.install_items(choices.clone()).and_then(|()| {
-                    self.item_ui = crate::item_ui::ItemUi::new(
-                        &self.item_assets,
-                        &choices,
-                        &self.content.ui_pack,
-                    )?;
-                    Ok(())
-                });
+                let rebuilt = self
+                    .build
+                    .tool_ui
+                    .install_items(choices.clone())
+                    .and_then(|()| {
+                        self.item_ui = crate::item_ui::ItemUi::new(
+                            &self.item_assets,
+                            &choices,
+                            &self.content.ui_pack,
+                        )?;
+                        Ok(())
+                    });
                 if let Err(error) = rebuilt {
                     bri_console::warn(format!("The server's items: {error:#}"));
                 }
@@ -84,7 +94,13 @@ impl App {
         self.update_package_hud();
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
             let skins = self.addons.item_skins.take_messages();
-            for text in self.addons.client_code.take_messages().into_iter().chain(skins) {
+            for text in self
+                .addons
+                .client_code
+                .take_messages()
+                .into_iter()
+                .chain(skins)
+            {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
         }
@@ -115,11 +131,21 @@ impl App {
         self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.ease_roll(elapsed.as_secs_f32());
-        let third_person_only = self.net.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
-            let view = a.view.as_ref()?;
-            let body = self.motion.presented().get(&view.owner)?;
-            Some(view.archetypes.resolve(body.archetype).look.third_person_only)
-        });
+        let third_person_only = self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| {
+                let view = a.view.as_ref()?;
+                let body = self.motion.presented().get(&view.owner)?;
+                Some(
+                    view.archetypes
+                        .resolve(body.archetype)
+                        .look
+                        .third_person_only,
+                )
+            });
         self.controls
             .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
@@ -136,11 +162,16 @@ impl App {
         }
         let third_person = self.third_person_view();
         self.ui.apply(UiUpdate::FirstPerson(!third_person));
-        let weapon_checkpoint = self.net.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
-            a.view
-                .as_ref()
-                .map(|view| (a.id, view.checkpoint_cue_cursor))
-        });
+        let weapon_checkpoint = self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| {
+                a.view
+                    .as_ref()
+                    .map(|view| (a.id, view.checkpoint_cue_cursor))
+            });
         if let Some((session, cursor)) = weapon_checkpoint {
             self.reset_weapon_effect_session(session, cursor);
         }
@@ -195,7 +226,8 @@ impl App {
                 input,
                 bri_net::protocol::MOVEMENT_REDUNDANCY,
             )? {
-                a.worker.movement(newest, inputs, self.camera_view(), self.mounts.seat_report)?;
+                a.worker
+                    .movement(newest, inputs, self.camera_view(), self.mounts.seat_report)?;
             }
             // Through an opening: the look turns as the body did.
             if let Some(carry) = self.motion.take_passed() {
@@ -205,8 +237,11 @@ impl App {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
                     .unwrap_or_default()
                     .min_impact_speed();
-                self.fx.actor_effects
-                    .ground_impact(speed, min, self.avatar.animation_time.to_bits());
+                self.fx.actor_effects.ground_impact(
+                    speed,
+                    min,
+                    self.avatar.animation_time.to_bits(),
+                );
             }
             if let Some(view) = &a.view {
                 Self::view_kick(
@@ -238,8 +273,12 @@ impl App {
                     .is_some_and(|p| view.archetypes.resolve(p.archetype).look.first_person_only);
                 self.controls.set_first_person_only(first_person_only);
                 let head_yaw = self.controls.movement().head_yaw;
-                self.motion
-                    .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
+                self.motion.present(
+                    view,
+                    self.controls.yaw,
+                    self.controls.body_pitch(),
+                    head_yaw,
+                );
                 let driven = driven_vehicle(mounted, |vehicle, seat| {
                     view.vehicles
                         .get(&vehicle)
@@ -291,7 +330,9 @@ impl App {
                         .map(|(_, rotation)| rotation);
                     // skiVehicle::onWreck whites the screen out by the crash
                     // speed: clamp(1 + (speed - 10) / 50 * 7, 1, 7) / 7.
-                    if d.family == bri_vehicles::Family::Tumble && self.mounts.tumble != Some(vehicle) {
+                    if d.family == bri_vehicles::Family::Tumble
+                        && self.mounts.tumble != Some(vehicle)
+                    {
                         self.mounts.tumble = Some(vehicle);
                         let seconds =
                             (1.0 + (frame.velocity.length() - 10.0) / 50.0 * 7.0).clamp(1.0, 7.0);
@@ -465,14 +506,17 @@ impl App {
                         // A horse's rider rides its animated mount node, rising
                         // and falling with the gait like v20's `mountObject`.
                         if let Some(node) = self
-                            .avatar.mount_meshes
+                            .avatar
+                            .mount_meshes
                             .get(&vehicle)
                             .zip(
                                 self.vehicle_assets
                                     .definition(&info.definition)
                                     .and_then(|d| d.seats.get(usize::from(seat))),
                             )
-                            .and_then(|(mesh, s)| mesh.world_node(&self.avatar.avatar_assets, &s.node))
+                            .and_then(|(mesh, s)| {
+                                mesh.world_node(&self.avatar.avatar_assets, &s.node)
+                            })
                         {
                             let (_, node_rotation, position) = node.to_scale_rotation_translation();
                             feet = position;
@@ -539,23 +583,22 @@ impl App {
                         continue;
                     };
                     let body = glam::Quat::from_rotation_y(-mount.yaw);
-                    let (feet, rotation) = match self
-                        .avatar.avatars
-                        .get(&ride.mount)
-                        .and_then(|mesh| mesh.model_node(&self.avatar.avatar_assets, &point.node))
-                    {
-                        Some(node) => {
-                            let (_, turn, offset) = node.to_scale_rotation_translation();
-                            (
-                                Vec3::from(mount.feet) + body * offset * mount.scale,
-                                body * turn,
-                            )
-                        }
-                        None => (
-                            point.seat(Vec3::from(mount.feet), mount.yaw, mount.scale),
-                            body,
-                        ),
-                    };
+                    let (feet, rotation) =
+                        match self.avatar.avatars.get(&ride.mount).and_then(|mesh| {
+                            mesh.model_node(&self.avatar.avatar_assets, &point.node)
+                        }) {
+                            Some(node) => {
+                                let (_, turn, offset) = node.to_scale_rotation_translation();
+                                (
+                                    Vec3::from(mount.feet) + body * offset * mount.scale,
+                                    body * turn,
+                                )
+                            }
+                            None => (
+                                point.seat(Vec3::from(mount.feet), mount.yaw, mount.scale),
+                                body,
+                            ),
+                        };
                     // A passenger's body turns on the seat by its own
                     // `mRot.z`; the rider steering a bot mount faces it.
                     let turn = if ride.steers {
@@ -688,7 +731,9 @@ impl App {
             let mut servers = Vec::new();
             for (address, beacon) in found.lan {
                 if let Ok(certificate) = beacon.certificate_der() {
-                    self.lobby.lan_hosts.insert(address.to_string(), certificate);
+                    self.lobby
+                        .lan_hosts
+                        .insert(address.to_string(), certificate);
                     servers.push(ServerInfo {
                         address: address.to_string(),
                         name: plain_chat(&beacon.name),
@@ -780,9 +825,15 @@ impl App {
 
     /// Step 26, in game only: moving entities, ghosts, liquids, avatar
     /// animation, rider eyes and world effects; sets the audio `listener`.
-    fn advance_world_presentation(&mut self, game_elapsed: Duration, third_person: bool, listener: &mut bri_audio::Listener) -> Result<()> {
+    fn advance_world_presentation(
+        &mut self,
+        game_elapsed: Duration,
+        third_person: bool,
+        listener: &mut bri_audio::Listener,
+    ) -> Result<()> {
         if let Some(view) = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref())
@@ -892,9 +943,11 @@ impl App {
                 view,
                 game_elapsed.as_secs_f32(),
             );
-            self.avatar.avatars
+            self.avatar
+                .avatars
                 .retain(|owner, _| view.poses.contains_key(owner));
-            self.avatar.avatar_actions
+            self.avatar
+                .avatar_actions
                 .retain(|owner, _| view.poses.contains_key(owner));
             for (owner, player) in presented {
                 let appearance = view
@@ -905,7 +958,8 @@ impl App {
                 // draw horse.dts.
                 let horse = view.archetypes.resolve(player.archetype).look.is_horse();
                 if self
-                    .avatar.avatars
+                    .avatar
+                    .avatars
                     .get(owner)
                     .is_none_or(|mesh| &mesh.appearance != appearance || mesh.horse != horse)
                 {
@@ -920,7 +974,12 @@ impl App {
                     mesh.instanced = true;
                     // Outfit changes (spray paint included) keep the running
                     // action thread instead of restarting the clip.
-                    if let Some(old) = self.avatar.avatars.get(owner).filter(|old| old.horse == horse) {
+                    if let Some(old) = self
+                        .avatar
+                        .avatars
+                        .get(owner)
+                        .filter(|old| old.horse == horse)
+                    {
                         mesh.continue_animation(old);
                     }
                     self.avatar.avatars.insert(*owner, mesh);
@@ -968,7 +1027,11 @@ impl App {
                         }
                     }
                 }
-                self.avatar.avatars.get_mut(owner).unwrap().set_hidden_nodes(hidden_nodes);
+                self.avatar
+                    .avatars
+                    .get_mut(owner)
+                    .unwrap()
+                    .set_hidden_nodes(hidden_nodes);
                 // `Player::startSkiing` shows the LSki/RSki nodes in the
                 // skier's paint colour, carried by the ski vehicle.
                 let skis = view
@@ -1012,7 +1075,8 @@ impl App {
                     .or_else(|| view.vitals.get(owner).and_then(|v| v.look_limits));
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let threads = self
-                    .avatar.avatar_threads
+                    .avatar
+                    .avatar_threads
                     .get(owner)
                     .filter(|_| !dead)
                     .cloned()
@@ -1026,7 +1090,12 @@ impl App {
                     } else {
                         self.combat.hug_pose(*owner, held)
                     },
-                    action: self.avatar.avatar_actions.get(owner).cloned().filter(|_| !dead),
+                    action: self
+                        .avatar
+                        .avatar_actions
+                        .get(owner)
+                        .cloned()
+                        .filter(|_| !dead),
                     gesture: threads[3].clone(),
                     body: [threads[0].clone(), threads[1].clone()],
                     dead,
@@ -1082,8 +1151,12 @@ impl App {
                     .map_or(0.0, |(_, c)| c),
                 };
                 let avatar = self.avatar.avatars.get_mut(owner).unwrap();
-                let posed =
-                    avatar.pose_with_animation(&self.avatar.avatar_assets, player, self.avatar.animation_time, &input);
+                let posed = avatar.pose_with_animation(
+                    &self.avatar.avatar_assets,
+                    player,
+                    self.avatar.animation_time,
+                    &input,
+                );
                 // Add-On code (`avatar.pose`) may draw the body its own way:
                 // a ragdoll, a dance. Only the drawing changes.
                 if posed.is_ok()
@@ -1182,13 +1255,17 @@ impl App {
                         // the player's own transform.
                         mounts: (0..32)
                             .map(|n| {
-                                let node = avatar.mount_node(&self.avatar.avatar_assets, n as usize);
+                                let node =
+                                    avatar.mount_node(&self.avatar.avatar_assets, n as usize);
                                 (n, node.unwrap_or_else(|| avatar.body_transform()))
                             })
                             .collect(),
                         actions: (0..32)
                             .filter_map(|n| {
-                                Some((n, avatar.mount_action(&self.avatar.avatar_assets, n as usize)?))
+                                Some((
+                                    n,
+                                    avatar.mount_action(&self.avatar.avatar_assets, n as usize)?,
+                                ))
                             })
                             .collect(),
                         velocity: Vec3::from_array(player.velocity),
@@ -1212,7 +1289,8 @@ impl App {
                 })
                 .collect();
             let ropes = self
-                .fx.weapon_effects
+                .fx
+                .weapon_effects
                 .sync_ropes(&ropes, game_elapsed.as_secs_f32());
             self.cosmetic_faults.absorb("held ropes", ropes);
             let parts = Self::update_weapon_effect_parts(
@@ -1224,7 +1302,8 @@ impl App {
             );
             self.cosmetic_faults.absorb("weapon effects", parts);
             let trails = self
-                .fx.actor_effects
+                .fx
+                .actor_effects
                 .update_debris_trails(&self.fx.explosion_debris.trails());
             self.cosmetic_faults.absorb("explosion debris", trails);
             // Show Jets in First Person (`$pref::Player::renderMyJets`, off
@@ -1236,7 +1315,8 @@ impl App {
                     .core
                     .prefs
                     .bool_or("$pref::Player::renderMyJets", false);
-            self.fx.actor_effects
+            self.fx
+                .actor_effects
                 .set_own_eye(own_jets_hidden.then_some(view.owner));
             let actors = Self::update_actor_effects(
                 &mut self.fx.actor_effects,
@@ -1262,7 +1342,8 @@ impl App {
                 .absorb("player and vehicle effects", actors);
             self.fx.explosion_shapes.advance(game_elapsed.as_secs_f32());
             self.fx.beams.advance(game_elapsed.as_secs_f32());
-            self.fx.explosion_debris
+            self.fx
+                .explosion_debris
                 .advance(game_elapsed.as_secs_f32(), |from, to| {
                     let delta = to - from;
                     let length = delta.length();
@@ -1307,7 +1388,8 @@ impl App {
             });
             self.cosmetic_faults.absorb("gun casings", queued);
             let moved =
-                self.fx.weapon_shells
+                self.fx
+                    .weapon_shells
                     .advance(game_elapsed.as_secs_f32(), eject, |from, to| {
                         let delta = to - from;
                         let length = delta.length();
@@ -1339,7 +1421,8 @@ impl App {
                 if let bri_sim::presentation::CueKind::BrickKill { brick, .. } = cue.kind {
                     self.fx.brick_fades.settle(brick);
                     if self.fx.brick_debris.is_dead(brick) {
-                        self.scene.chunk_hides
+                        self.scene
+                            .chunk_hides
                             .entry(brick)
                             .or_insert((crate::world_chunks::chunk_key(cue.position), false));
                     }
@@ -1383,7 +1466,8 @@ impl App {
                 self.fx.brick_debris.shots(&shots);
             }
             let moved = self
-                .fx.brick_debris
+                .fx
+                .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
             self.fx.brick_debris.spent(debris_started.elapsed());
@@ -1405,7 +1489,8 @@ impl App {
                 );
                 self.cosmetic_faults.absorb("Add-On bodies", moved);
             }
-            self.fx.brick_fades
+            self.fx
+                .brick_fades
                 .advance(game_elapsed.as_secs_f32(), &self.scene.chunks_left_out);
             // The avatar/image shell and sequence playback APIs are still a host
             // boundary. Retain requests in the adapter and expose its queue-drop

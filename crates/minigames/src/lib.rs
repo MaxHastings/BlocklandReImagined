@@ -338,7 +338,12 @@ impl MinigamesWorld {
         }
         out.push(Effect::Ended { game: id });
     }
-    pub(crate) fn configure(&mut self, id: GameId, settings: Settings, out: &mut Vec<Effect>) -> Result<(), Error> {
+    pub(crate) fn configure(
+        &mut self,
+        id: GameId,
+        settings: Settings,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), Error> {
         settings.validate(&self.catalog)?;
         let old = self.games[&id].settings.clone();
         let members: Vec<_> = self.games[&id].members.iter().copied().collect();
@@ -352,8 +357,7 @@ impl MinigamesWorld {
                 && let LifeState::Dead { life, ready_at } = self.players[&p].life
             {
                 let died_at = ready_at - manual_respawn_ticks(old.respawn_ms);
-                let ready_at =
-                    died_at.saturating_add(manual_respawn_ticks(settings.respawn_ms));
+                let ready_at = died_at.saturating_add(manual_respawn_ticks(settings.respawn_ms));
                 self.players.get_mut(&p).expect("validated player").life =
                     LifeState::Dead { life, ready_at };
                 out.push(Effect::RespawnDeadline {
@@ -482,10 +486,8 @@ impl MinigamesWorld {
                 self.remove_member(actor, &mut out)?;
                 let id = GameId(self.next_game);
                 self.next_game += 1;
-                self.games.insert(
-                    id,
-                    MiniGame::new(id, actor, color, settings),
-                );
+                self.games
+                    .insert(id, MiniGame::new(id, actor, color, settings));
                 out.push(Effect::Created { game: id });
                 self.join_member(actor, id, &mut out)?;
             }
@@ -673,10 +675,8 @@ impl MinigamesWorld {
         }
         let id = GameId(self.next_game);
         self.next_game += 1;
-        self.games.insert(
-            id,
-            MiniGame::new(id, SERVER, color, settings),
-        );
+        self.games
+            .insert(id, MiniGame::new(id, SERVER, color, settings));
         Ok(id)
     }
     /// The game mode's mini-game, when the server runs one.
@@ -842,7 +842,10 @@ impl MinigamesWorld {
         if players.iter().any(|p| !g.members.contains(p)) {
             return Err(Error::NotMember);
         }
-        self.games.get_mut(&game).expect("validated game").round_over = true;
+        self.games
+            .get_mut(&game)
+            .expect("validated game")
+            .round_over = true;
         Ok(vec![Effect::RoundEnded {
             game,
             teams,

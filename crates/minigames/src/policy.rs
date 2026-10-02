@@ -34,7 +34,10 @@ pub enum Membership {
     /// game's [`MiniGame::region`] it is no game's.
     OwnerAt([f32; 3]),
     Outside,
-    Explicit { game: GameId, round: u64 },
+    Explicit {
+        game: GameId,
+        round: u64,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {

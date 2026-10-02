@@ -487,10 +487,10 @@ fn kept_brick_shadows_match_drawing_every_brick() -> Result<()> {
     let c = upload(&small)?;
     let target = color_target(&device, format, width, height);
     let frame = |renderer: &mut SceneRenderer,
-                     scenes: &Uploaded,
-                     camera: &Camera,
-                     player_at: Vec3,
-                     with_late: bool| {
+                 scenes: &Uploaded,
+                 camera: &Camera,
+                 player_at: Vec3,
+                 with_late: bool| {
         renderer.update_camera(&queue, camera);
         let mut casters: Vec<&GpuScene> = scenes.towers.iter().collect();
         if with_late {

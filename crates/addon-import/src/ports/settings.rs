@@ -4,9 +4,9 @@
 //! ([`bri_weapons::Binding`]), each naming the preference's global so
 //! whichever Add-On declares it (Tier+Tactical's Tier 1 declares the Ammo
 //! System every pack's guns follow) decides it.
-use super::datablocks::{set, Datablocks};
 use super::Code;
-use anyhow::{ensure, Context, Result};
+use super::datablocks::{Datablocks, set};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;

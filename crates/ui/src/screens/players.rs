@@ -88,7 +88,9 @@ impl Players {
                                 "-"
                             },
                             p.name.replace(['\t', '\n', '\r'], " "),
-                            member.filter(|m| m.in_local_game).map_or(i64::from(p.score), |m| m.score),
+                            member
+                                .filter(|m| m.in_local_game)
+                                .map_or(i64::from(p.score), |m| m.score),
                             p.bl_id.map(|id| id.to_string()).unwrap_or_default(),
                             p.trust.replace(['\t', '\n', '\r'], " ")
                         ),
@@ -114,23 +116,39 @@ impl Players {
                 ),
             );
         }
-        let selected_id = self.view.id("NPL_List").and_then(|n| self.view.selected(n))
-            .and_then(|i| self.ids.get(i as usize)).copied();
-        let selected_member = selected_id.and_then(|id| core.minigames.members.iter().find(|m| m.id.0 == id));
-        let invite = core.minigames.can(crate::models::minigames::Operation::Invite)
-            && selected_id.is_some() && selected_id != core.minigames.local_player.map(|p| p.0)
+        let selected_id = self
+            .view
+            .id("NPL_List")
+            .and_then(|n| self.view.selected(n))
+            .and_then(|i| self.ids.get(i as usize))
+            .copied();
+        let selected_member =
+            selected_id.and_then(|id| core.minigames.members.iter().find(|m| m.id.0 == id));
+        let invite = core
+            .minigames
+            .can(crate::models::minigames::Operation::Invite)
+            && selected_id.is_some()
+            && selected_id != core.minigames.local_player.map(|p| p.0)
             && selected_member.is_none_or(|m| !m.in_local_game);
-        let remove = core.minigames.can(crate::models::minigames::Operation::RemoveMember)
+        let remove = core
+            .minigames
+            .can(crate::models::minigames::Operation::RemoveMember)
             && selected_member.is_some_and(|m| m.in_local_game && !m.is_owner)
             && selected_id != core.minigames.local_player.map(|p| p.0);
         for (command, active) in [
             ("NewPlayerListGui.clickMiniGameInvite();", invite),
             ("NewPlayerListGui.clickMiniGameRemove();", remove),
         ] {
-            if let Some(n) = self.view.by_command(command) { self.view.set_active(n, active); }
+            if let Some(n) = self.view.by_command(command) {
+                self.view.set_active(n, active);
+            }
         }
-        if let Some(n) = self.view.id("NPL_MiniGameInviteBlocker") { self.view.set_visible(n, !invite); }
-        if let Some(n) = self.view.id("NPL_MiniGameRemoveBlocker") { self.view.set_visible(n, !remove); }
+        if let Some(n) = self.view.id("NPL_MiniGameInviteBlocker") {
+            self.view.set_visible(n, !invite);
+        }
+        if let Some(n) = self.view.id("NPL_MiniGameRemoveBlocker") {
+            self.view.set_visible(n, !remove);
+        }
         // `NewPlayerListGui::clickList` trust and ignore blockers.
         let row = selected_id.and_then(|id| core.players.iter().find(|p| p.id == id));
         let lan = core.players.iter().any(|p| p.trust == "LAN");
@@ -144,14 +162,38 @@ impl Players {
         };
         let unignore = row.is_some_and(|p| p.ignoring);
         for (command, blocker, active) in [
-            ("NewPlayerListGui.clickTrustInviteBuild();", "NPL_TrustInviteBuildBlocker", invite_build),
-            ("NewPlayerListGui.clickTrustInviteFull();", "NPL_TrustInviteFullBlocker", invite_full),
-            ("NewPlayerListGui.ClickTrustDemoteNONE();", "NPL_TrustRemoveBuildBlocker", remove_build),
-            ("NewPlayerListGui.ClickTrustDemoteBUILD();", "NPL_TrustRemoveFullBlocker", remove_full),
-            ("NewPlayerListGui.clickUnIgnore();", "NPL_UnIgnoreBlocker", unignore),
+            (
+                "NewPlayerListGui.clickTrustInviteBuild();",
+                "NPL_TrustInviteBuildBlocker",
+                invite_build,
+            ),
+            (
+                "NewPlayerListGui.clickTrustInviteFull();",
+                "NPL_TrustInviteFullBlocker",
+                invite_full,
+            ),
+            (
+                "NewPlayerListGui.ClickTrustDemoteNONE();",
+                "NPL_TrustRemoveBuildBlocker",
+                remove_build,
+            ),
+            (
+                "NewPlayerListGui.ClickTrustDemoteBUILD();",
+                "NPL_TrustRemoveFullBlocker",
+                remove_full,
+            ),
+            (
+                "NewPlayerListGui.clickUnIgnore();",
+                "NPL_UnIgnoreBlocker",
+                unignore,
+            ),
         ] {
-            if let Some(n) = self.view.by_command(command) { self.view.set_active(n, active); }
-            if let Some(n) = self.view.id(blocker) { self.view.set_visible(n, !active); }
+            if let Some(n) = self.view.by_command(command) {
+                self.view.set_active(n, active);
+            }
+            if let Some(n) = self.view.id(blocker) {
+                self.view.set_visible(n, !active);
+            }
         }
     }
     fn selected(&self) -> Option<u64> {
@@ -191,9 +233,19 @@ impl Screen for Players {
             }
         }
     }
-    fn on_result(&mut self, _id: RequestId, kind: Option<&Pending>, result: &Result<(), String>, core: &mut Core) -> bool {
-        if !matches!(kind, Some(Pending::MiniGame(_))) { return false; }
-        core.minigames.status = result.as_ref().map_or_else(|e| e.clone(), |_| "Mini-game request completed.".into());
+    fn on_result(
+        &mut self,
+        _id: RequestId,
+        kind: Option<&Pending>,
+        result: &Result<(), String>,
+        core: &mut Core,
+    ) -> bool {
+        if !matches!(kind, Some(Pending::MiniGame(_))) {
+            return false;
+        }
+        core.minigames.status = result
+            .as_ref()
+            .map_or_else(|e| e.clone(), |_| "Mini-game request completed.".into());
         self.refresh(core);
         // A refusal falls through to the shared notice every screen uses.
         result.is_ok()
@@ -215,7 +267,8 @@ impl Screen for Players {
             return;
         }
         if ev.kind == EventKind::Changed
-            && self.view.node(ev.node).ctrl.name.as_deref() == Some("NPL_List") {
+            && self.view.node(ev.node).ctrl.name.as_deref() == Some("NPL_List")
+        {
             self.refresh(core);
             return;
         }
@@ -226,7 +279,8 @@ impl Screen for Players {
         match cmd.as_str() {
             "canvas.popdialog(newplayerlistgui);" => core.pop(self.id()),
             "newplayerlistgui.clicklist();" => self.refresh(core),
-            "newplayerlistgui.clicktrustinvitebuild();" | "newplayerlistgui.clicktrustinvitefull();" => {
+            "newplayerlistgui.clicktrustinvitebuild();"
+            | "newplayerlistgui.clicktrustinvitefull();" => {
                 if let Some(target) = self.selected() {
                     let level = if cmd.ends_with("build();") { 1 } else { 2 };
                     core.request(UiAction::TrustInvite { target, level });
@@ -237,7 +291,8 @@ impl Screen for Players {
                     }
                 }
             }
-            "newplayerlistgui.clicktrustdemotenone();" | "newplayerlistgui.clicktrustdemotebuild();" => {
+            "newplayerlistgui.clicktrustdemotenone();"
+            | "newplayerlistgui.clicktrustdemotebuild();" => {
                 if let Some(target) = self.selected() {
                     let level = if cmd.ends_with("none();") { 0 } else { 1 };
                     core.request(UiAction::TrustDemote { target, level });
@@ -249,17 +304,42 @@ impl Screen for Players {
                 }
             }
             "newplayerlistgui.clickminigameinvite();" => {
-                if core.minigames.can(crate::models::minigames::Operation::Invite)
-                    && let Some(id) = self.view.id("NPL_List").and_then(|n| self.view.selected(n))
-                    .and_then(|i| self.ids.get(i as usize)).copied() {
-                    core.minigame_request(MiniGameOperation::Invite, UiAction::InviteMiniGame { target: MiniGamePlayerId(id) });
+                if core
+                    .minigames
+                    .can(crate::models::minigames::Operation::Invite)
+                    && let Some(id) = self
+                        .view
+                        .id("NPL_List")
+                        .and_then(|n| self.view.selected(n))
+                        .and_then(|i| self.ids.get(i as usize))
+                        .copied()
+                {
+                    core.minigame_request(
+                        MiniGameOperation::Invite,
+                        UiAction::InviteMiniGame {
+                            target: MiniGamePlayerId(id),
+                        },
+                    );
                 }
             }
             "newplayerlistgui.clickminigameremove();" => {
-                if core.minigames.can(crate::models::minigames::Operation::RemoveMember)
-                    && let Some(id) = self.view.id("NPL_List").and_then(|n| self.view.selected(n))
-                    .and_then(|i| self.ids.get(i as usize)).copied() {
-                    core.minigame_request(MiniGameOperation::RemoveMember, UiAction::RemoveMiniGameMember { target: MiniGamePlayerId(id), game: core.minigames.active_game });
+                if core
+                    .minigames
+                    .can(crate::models::minigames::Operation::RemoveMember)
+                    && let Some(id) = self
+                        .view
+                        .id("NPL_List")
+                        .and_then(|n| self.view.selected(n))
+                        .and_then(|i| self.ids.get(i as usize))
+                        .copied()
+                {
+                    core.minigame_request(
+                        MiniGameOperation::RemoveMember,
+                        UiAction::RemoveMiniGameMember {
+                            target: MiniGamePlayerId(id),
+                            game: core.minigames.active_game,
+                        },
+                    );
                 }
             }
             _ => {

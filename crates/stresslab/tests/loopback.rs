@@ -82,8 +82,10 @@ async fn two_clients_mine_meet_a_creeper_and_keep_their_bits_across_restart() ->
     mine(&mut bob, 3).await?;
     let bob_id = bob.owner;
     wait(&mut bob, 5, |c| own(c, ECONOMY, "mined") >= Some(3)).await?;
-    wait(&mut alice, 2, |c| own(c, ECONOMY, "mined") == Some(0) && c.replica.tick > 0)
-        .await?;
+    wait(&mut alice, 2, |c| {
+        own(c, ECONOMY, "mined") == Some(0) && c.replica.tick > 0
+    })
+    .await?;
     assert!(
         alice
             .replica

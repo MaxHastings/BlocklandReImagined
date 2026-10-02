@@ -26,7 +26,10 @@ impl App {
         // (`Observer::onTrigger`, `serverCmdLight`).
         if self.spectating() {
             let button = match action {
-                UiAction::Game(GameAction::Held { control, down: true }) => match control {
+                UiAction::Game(GameAction::Held {
+                    control,
+                    down: true,
+                }) => match control {
                     HeldControl::Fire => Some(bri_sim::session::ObserverButton::Fire),
                     HeldControl::Jump => Some(bri_sim::session::ObserverButton::Jump),
                     HeldControl::Jet => Some(bri_sim::session::ObserverButton::Jet),
@@ -207,7 +210,8 @@ impl App {
             }
             UiAction::RequestSaveList { .. } | UiAction::LoadBricks { .. } => {
                 // Saves dropped in while the game runs convert too.
-                if matches!(action, UiAction::RequestSaveList { .. }) && self.files.old_saves_started
+                if matches!(action, UiAction::RequestSaveList { .. })
+                    && self.files.old_saves_started
                 {
                     self.files.old_saves.start();
                 }
@@ -369,10 +373,7 @@ impl App {
                 let version = self.ui.core.version.clone();
                 let text = match crate::perf::save_capture(&dir, &self.ui.core, &version) {
                     Ok(path) => {
-                        bri_console::echo(format!(
-                            "Performance capture saved: {}",
-                            path.display()
-                        ));
+                        bri_console::echo(format!("Performance capture saved: {}", path.display()));
                         format!(
                             "Performance capture saved: {}",
                             path.file_name()
@@ -409,7 +410,9 @@ impl App {
             }
             UiAction::Game(GameAction::PlayBackBuildMacro) => {
                 if self.build.macro_recording.is_none() {
-                    self.build.macro_playback.extend(self.build.build_macro.iter().cloned());
+                    self.build
+                        .macro_playback
+                        .extend(self.build.build_macro.iter().cloned());
                 }
                 Ok(())
             }
@@ -463,11 +466,8 @@ impl App {
                         if let Some(camera) = camera {
                             self.controls.yaw = camera.yaw;
                         }
-                        let result = self.command(
-                            id,
-                            Command::DropPlayerAtCamera(camera),
-                            action.clone(),
-                        );
+                        let result =
+                            self.command(id, Command::DropPlayerAtCamera(camera), action.clone());
                         if result.is_ok() {
                             return Ok(());
                         }
@@ -510,7 +510,10 @@ impl App {
                 let request = Command::Package(bri_sim::session::PackageCommand {
                     package: package.clone(),
                     command: command.clone(),
-                    args: pressed.map(bri_sim::session::PackageArg::Bool).into_iter().collect(),
+                    args: pressed
+                        .map(bri_sim::session::PackageArg::Bool)
+                        .into_iter()
+                        .collect(),
                 });
                 let result = self.command(id, request, action.clone());
                 if result.is_ok() {
@@ -528,7 +531,8 @@ impl App {
                 }
                 // The image's `wheel` command names "package:command".
                 let Some((package, command)) = self
-                    .view.tool_wheel
+                    .view
+                    .tool_wheel
                     .as_deref()
                     .and_then(|c| c.split_once(':'))
                 else {
@@ -630,7 +634,8 @@ impl App {
             }
             UiAction::ChatCommand { ref name, ref args } => {
                 let snapshot = self
-                    .net.attempt
+                    .net
+                    .attempt
                     .as_ref()
                     .and_then(|a| a.view.as_ref())
                     .and_then(|v| v.admin_snapshot.as_ref());
@@ -756,13 +761,17 @@ impl App {
             }
             UiAction::SetAvatar(ref prefs) => {
                 let connected = self.network_view().is_some();
-                let result = self.avatar.avatar_assets.from_prefs(prefs).and_then(|appearance| {
-                    if connected {
-                        self.command(id, Command::Avatar(appearance), action.clone())
-                    } else {
-                        Ok(())
-                    }
-                });
+                let result = self
+                    .avatar
+                    .avatar_assets
+                    .from_prefs(prefs)
+                    .and_then(|appearance| {
+                        if connected {
+                            self.command(id, Command::Avatar(appearance), action.clone())
+                        } else {
+                            Ok(())
+                        }
+                    });
                 if connected && result.is_ok() {
                     self.send_name(prefs);
                     return Ok(());
@@ -789,7 +798,8 @@ impl App {
                 camera_rotation,
                 orbit_distance,
             } => self
-                .avatar.avatar_assets
+                .avatar
+                .avatar_assets
                 .from_prefs(&avatar)
                 .and_then(|appearance| {
                     ensure!(
@@ -798,7 +808,8 @@ impl App {
                             && (1.0..=20.0).contains(&orbit_distance),
                         "Invalid avatar preview camera"
                     );
-                    self.avatar.preview_request = Some((appearance, camera_rotation, orbit_distance));
+                    self.avatar.preview_request =
+                        Some((appearance, camera_rotation, orbit_distance));
                     self.avatar.preview_dirty = true;
                     Ok(())
                 }),
@@ -807,34 +818,25 @@ impl App {
                 let saved =
                     crate::servers::SavedServers::load(&self.state_dir.join("servers.json"));
                 let pins: BTreeMap<String, Vec<u8>> =
-                    read_small_json(&self.state_dir.join("trusted-hosts.json"))
-                        .unwrap_or_default();
+                    read_small_json(&self.state_dir.join("trusted-hosts.json")).unwrap_or_default();
                 self.runtime.spawn(async move {
                     let broadcast = [bri_net::discovery::broadcast()];
-                    let lan =
-                        bri_net::discovery::query(&broadcast, Duration::from_millis(1200));
+                    let lan = bri_net::discovery::query(&broadcast, Duration::from_millis(1200));
                     // Every saved server is asked at once over its game
                     // port; a probe never pins anything.
                     let probes = saved.servers.into_iter().map(|server| {
                         let pin = pins.get(&server.address).cloned();
                         async move {
                             let probe = async {
-                                let target =
-                                    bri_net::invite::JoinTarget::parse(server.target())?;
+                                let target = bri_net::invite::JoinTarget::parse(server.target())?;
                                 let route = target.resolve().await?;
                                 let pin = match (route.key, pin) {
                                     (Some(key), _) => HostPin::Key(key),
-                                    (None, Some(certificate)) => {
-                                        HostPin::Certificate(certificate)
-                                    }
+                                    (None, Some(certificate)) => HostPin::Certificate(certificate),
                                     (None, None) => HostPin::FirstUse,
                                 };
-                                bri_net::client::probe(
-                                    route.address,
-                                    &pin,
-                                    Duration::from_secs(2),
-                                )
-                                .await
+                                bri_net::client::probe(route.address, &pin, Duration::from_secs(2))
+                                    .await
                             }
                             .await
                             .map_err(|error| probe_failure(&error));
@@ -941,8 +943,7 @@ impl App {
             UiAction::AllowFirewall { port } => {
                 let (send, receive) = mpsc::sync_channel(1);
                 std::thread::spawn(move || {
-                    let _ =
-                        send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
+                    let _ = send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
                 });
                 self.lobby.firewall_fix = Some(receive);
                 Ok(())

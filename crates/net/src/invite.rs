@@ -132,7 +132,8 @@ pub fn invite(address: SocketAddr, certificate: &[u8]) -> String {
 
 fn strip_scheme(text: &str) -> Option<&str> {
     let head = text.get(..SCHEME.len())?;
-    head.eq_ignore_ascii_case(SCHEME).then(|| &text[SCHEME.len()..])
+    head.eq_ignore_ascii_case(SCHEME)
+        .then(|| &text[SCHEME.len()..])
 }
 
 fn join_host_port(host: &str, port: u16) -> String {
@@ -199,9 +200,7 @@ fn decode_key(text: &str) -> Option<HostKey> {
     let mut bytes = Vec::with_capacity(KEY_BYTES);
     let (mut buffer, mut bits) = (0u32, 0);
     for c in text.bytes() {
-        let value = ALPHABET
-            .iter()
-            .position(|&a| a == c.to_ascii_lowercase())? as u32;
+        let value = ALPHABET.iter().position(|&a| a == c.to_ascii_lowercase())? as u32;
         buffer = (buffer << 5) | value;
         bits += 5;
         if bits >= 8 {
@@ -228,15 +227,35 @@ mod tests {
     #[test]
     fn addresses_accept_ips_and_host_names_with_or_without_port() {
         let parsed = |text| JoinTarget::parse(text).unwrap();
-        assert_eq!(parsed(" 203.0.113.10:28001 "), direct("203.0.113.10", 28001));
+        assert_eq!(
+            parsed(" 203.0.113.10:28001 "),
+            direct("203.0.113.10", 28001)
+        );
         assert_eq!(parsed("100.64.1.2"), direct("100.64.1.2", 28000));
         assert_eq!(parsed("[2001:db8::1]"), direct("2001:db8::1", 28000));
         assert_eq!(parsed("[2001:db8::1]:28005"), direct("2001:db8::1", 28005));
-        assert_eq!(parsed("Play.Example.com"), direct("play.example.com", 28000));
-        assert_eq!(parsed("play.example.com:28001"), direct("play.example.com", 28001));
+        assert_eq!(
+            parsed("Play.Example.com"),
+            direct("play.example.com", 28000)
+        );
+        assert_eq!(
+            parsed("play.example.com:28001"),
+            direct("play.example.com", 28001)
+        );
         assert_eq!(parsed("localhost"), direct("localhost", 28000));
-        assert_eq!(parsed("[2001:db8::1]:28005").address(), "[2001:db8::1]:28005");
-        for bad in ["", "play example.com", "host:notaport", "host:0", "-bad.com", "a..b", "1.2.3.4:0"] {
+        assert_eq!(
+            parsed("[2001:db8::1]:28005").address(),
+            "[2001:db8::1]:28005"
+        );
+        for bad in [
+            "",
+            "play example.com",
+            "host:notaport",
+            "host:0",
+            "-bad.com",
+            "a..b",
+            "1.2.3.4:0",
+        ] {
             let error = JoinTarget::parse(bad).unwrap_err().to_string();
             assert!(error.contains("play.example.com"), "{bad}: {error}");
         }
@@ -255,23 +274,37 @@ mod tests {
         let shouted = format!(" {}/ ", text.to_ascii_uppercase());
         assert_eq!(JoinTarget::parse(&shouted).unwrap(), target);
         let v6 = invite("[2001:db8::1]:28000".parse().unwrap(), certificate);
-        assert_eq!(JoinTarget::parse(&v6).unwrap().address(), "[2001:db8::1]:28000");
+        assert_eq!(
+            JoinTarget::parse(&v6).unwrap().address(),
+            "[2001:db8::1]:28000"
+        );
     }
     #[test]
     fn damaged_invites_are_named() {
         let text = invite("203.0.113.10:28000".parse().unwrap(), b"cert");
-        for damaged in [&text[..text.len() - 1], &format!("{text}a"), &text.replace('a', "1")] {
+        for damaged in [
+            &text[..text.len() - 1],
+            &format!("{text}a"),
+            &text.replace('a', "1"),
+        ] {
             if damaged == text {
                 continue;
             }
             let error = JoinTarget::parse(damaged).unwrap_err().to_string();
-            assert!(error.contains("damaged") || error.contains("bri://"), "{damaged}: {error}");
+            assert!(
+                error.contains("damaged") || error.contains("bri://"),
+                "{damaged}: {error}"
+            );
         }
         assert!(JoinTarget::parse("bri://").is_err());
     }
     #[tokio::test]
     async fn literal_addresses_resolve_without_dns() {
-        let route = JoinTarget::parse("127.0.0.1:28001").unwrap().resolve().await.unwrap();
+        let route = JoinTarget::parse("127.0.0.1:28001")
+            .unwrap()
+            .resolve()
+            .await
+            .unwrap();
         assert_eq!(route.address, "127.0.0.1:28001".parse().unwrap());
     }
 }

@@ -143,10 +143,8 @@ fn dropped_v20_saves_list_and_load_in_load_bricks() -> Result<()> {
             "Other".to_string()
         } else {
             store.map_name(
-                bri_client::content::map_for_save_folder(
-                    save.source.split_once('/').unwrap().0,
-                )
-                .unwrap(),
+                bri_client::content::map_for_save_folder(save.source.split_once('/').unwrap().0)
+                    .unwrap(),
             )
         };
         let entry = listed

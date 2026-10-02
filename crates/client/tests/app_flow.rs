@@ -194,7 +194,10 @@ fn native_weather_map_settings_render_and_disconnect(f: &ContentRoot) -> Result<
             ("bedroom", BEDROOM, 0),
         ]
     } else {
-        vec![("rain", RAIN.0, RAIN.1 as usize), ("dry", f.map.0.as_str(), 0)]
+        vec![
+            ("rain", RAIN.0, RAIN.1 as usize),
+            ("dry", f.map.0.as_str(), 0),
+        ]
     };
     for (name, map, drops) in maps {
         action(

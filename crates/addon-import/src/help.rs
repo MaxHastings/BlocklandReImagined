@@ -24,7 +24,10 @@ pub fn page_text(src: &str) -> String {
     while let Some(i) = rest.find('<') {
         out.push_str(&rest[..i]);
         let tail = &rest[i..];
-        let Some(end) = tail[1..].find(['>', '<']).map(|e| e + 1).filter(|&e| tail.as_bytes()[e] == b'>')
+        let Some(end) = tail[1..]
+            .find(['>', '<'])
+            .map(|e| e + 1)
+            .filter(|&e| tail.as_bytes()[e] == b'>')
         else {
             out.push('<');
             rest = &tail[1..];
@@ -68,7 +71,9 @@ pub fn page_text(src: &str) -> String {
             "h2" => out.push_str("<spush><font:arial bold:20>"),
             "h3" => out.push_str("<spush><font:arial bold:17>"),
             "/h1" | "/h2" | "/h3" => out.push_str("<spop><br>"),
-            "ol" => lists.push(List::Ordered(value(1).parse::<u32>().map_or(0, |n| n.saturating_sub(1)))),
+            "ol" => lists.push(List::Ordered(
+                value(1).parse::<u32>().map_or(0, |n| n.saturating_sub(1)),
+            )),
             "ul" => lists.push(List::Bullets),
             "/ol" | "/ul" => {
                 lists.pop();

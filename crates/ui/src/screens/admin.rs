@@ -16,14 +16,24 @@ pub struct AdminScreen {
 /// Native rank buttons under adminGui's player list: name, label, the rank
 /// given, and where.
 const RANK_BUTTONS: [(&str, &str, AdminRole, Rect); 3] = [
-    ("NativeMakeAdmin", "Admin", AdminRole::Admin, Rect::new(14, 425, 92, 19)),
+    (
+        "NativeMakeAdmin",
+        "Admin",
+        AdminRole::Admin,
+        Rect::new(14, 425, 92, 19),
+    ),
     (
         "NativeMakeSuperAdmin",
         "Super Admin",
         AdminRole::SuperAdmin,
         Rect::new(108, 425, 92, 19),
     ),
-    ("NativeDeAdmin", "De-Admin", AdminRole::Player, Rect::new(14, 446, 92, 19)),
+    (
+        "NativeDeAdmin",
+        "De-Admin",
+        AdminRole::Player,
+        Rect::new(14, 446, 92, 19),
+    ),
 ];
 /// Beside De-Admin: the saved rank list.
 const SAVED_RANKS_BUTTON: Rect = Rect::new(108, 446, 92, 19);
@@ -209,7 +219,13 @@ impl AdminScreen {
             for ((name, label), r) in natives.into_iter().zip(rects) {
                 let w = &mut view.nodes[parent].ctrl.extent[0];
                 *w = (*w).max(r.right() + 9);
-                let b = button("BlockButtonProfile", r, "base/client/ui/button1", label, name);
+                let b = button(
+                    "BlockButtonProfile",
+                    r,
+                    "base/client/ui/button1",
+                    label,
+                    name,
+                );
                 add_named(&mut view, parent, b, name);
             }
             // The list (and the swatch behind it) ends above the rank rows.
@@ -260,7 +276,9 @@ impl AdminScreen {
                 "BlockScrollProfile",
                 Rect::new(15, 55, 390, 250),
             );
-            scroll.fields.insert("hScrollBar".into(), "alwaysOff".into());
+            scroll
+                .fields
+                .insert("hScrollBar".into(), "alwaysOff".into());
             scroll.fields.insert("vScrollBar".into(), "dynamic".into());
             let mut list = ctrl(
                 "GuiTextListCtrl",
@@ -382,7 +400,12 @@ impl AdminScreen {
                     let scroll = children
                         .iter()
                         .copied()
-                        .filter(|&c| view.nodes[c].ctrl.class.eq_ignore_ascii_case("GuiScrollCtrl"))
+                        .filter(|&c| {
+                            view.nodes[c]
+                                .ctrl
+                                .class
+                                .eq_ignore_ascii_case("GuiScrollCtrl")
+                        })
                         .max_by_key(|&c| view.nodes[c].ctrl.extent[1]);
                     if let Some(scroll) = scroll {
                         let bottom =
@@ -856,10 +879,7 @@ impl AdminScreen {
                 // No server checks a join password yet, so there is no
                 // Join slot to set.
                 self.view.state(n).items = if host {
-                    vec![
-                        ("Admin".into(), 1),
-                        ("Super Admin".into(), 2),
-                    ]
+                    vec![("Admin".into(), 1), ("Super Admin".into(), 2)]
                 } else {
                     vec![("Admin".into(), 1)]
                 };

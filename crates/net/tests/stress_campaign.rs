@@ -378,4 +378,3 @@ async fn many_clients_building_at_once_converge_without_dropping_ticks() -> Resu
     );
     Ok(())
 }
-

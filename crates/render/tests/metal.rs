@@ -40,8 +40,7 @@ fn quad(data: &mut SceneData, corners: [Vec3; 4], color: [f32; 4], kind: Materia
     data.vertices
         .extend(corners.map(|p| vertex(p, normal, [0.0; 2], color)));
     let start = data.indices.len() as u32;
-    data.indices
-        .extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+    data.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
     let mut material = Material::vertex_lit("quad", 0);
     material.kind = kind;
     batch(data, start, material);
@@ -116,7 +115,11 @@ fn ball(
         for segment in 0..=segments {
             let u = segment as f32 / segments as f32;
             let phi = u * std::f32::consts::TAU;
-            let n = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
+            let n = Vec3::new(
+                theta.sin() * phi.cos(),
+                theta.cos(),
+                -theta.sin() * phi.sin(),
+            );
             data.vertices
                 .push(vertex(centre + n * radius, n, [u * 2.0, v], [1.0; 4]));
         }
@@ -208,12 +211,21 @@ impl Gpu {
         let scene = renderer.upload(device, &self.queue, data)?;
         camera.apply_environment(data);
         renderer.update_camera(&self.queue, &camera);
-        let mut reflections =
-            Reflections::new(device, FORMAT, samples, ReflectionSettings::MEDIUM);
-        reflections.prepare(device, &self.queue, &mut renderer, &camera, (size, size), mirrors)?;
+        let mut reflections = Reflections::new(device, FORMAT, samples, ReflectionSettings::MEDIUM);
+        reflections.prepare(
+            device,
+            &self.queue,
+            &mut renderer,
+            &camera,
+            (size, size),
+            mirrors,
+        )?;
         let mut environment = EnvironmentProbe::new(device, &renderer, FORMAT, samples);
         environment.prepare(device, &self.queue, &mut renderer, &camera, probe, reach);
-        assert_eq!(environment.faces().len(), if probe.is_some() { 6 } else { 0 });
+        assert_eq!(
+            environment.faces().len(),
+            if probe.is_some() { 6 } else { 0 }
+        );
         for face in environment.face_views() {
             reflections.prepare_view(
                 device,
@@ -254,10 +266,17 @@ impl Gpu {
         let clear = wgpu::Color { r, g, b, a };
         let mut encoder = device.create_command_encoder(&Default::default());
         reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
-        let surfaces = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
-            reflections.draw_surfaces(pass, view)
-        };
-        environment.render(&renderer, &mut encoder, &[&scene], &[], clear, &surfaces, &|_, _| {});
+        let surfaces =
+            |pass: &mut wgpu::RenderPass<'_>, view: usize| reflections.draw_surfaces(pass, view);
+        environment.render(
+            &renderer,
+            &mut encoder,
+            &[&scene],
+            &[],
+            clear,
+            &surfaces,
+            &|_, _| {},
+        );
         let own = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
         renderer.render_world(
             &mut encoder,
@@ -357,9 +376,21 @@ fn a_smooth_ball_reflects_the_room_the_right_way_round() -> Result<()> {
         let c = size / 2;
         // The ball fills about the middle half of the frame.
         let seen = |x: u32, y: u32| named(at(&pixels, size, x, y));
-        assert_eq!(seen(c, c), "yellow", "the wall behind the viewer, {samples}x");
-        assert_eq!(seen(c + 32, c), "red", "the +X wall on the right, {samples}x");
-        assert_eq!(seen(c - 32, c), "green", "the -X wall on the left, {samples}x");
+        assert_eq!(
+            seen(c, c),
+            "yellow",
+            "the wall behind the viewer, {samples}x"
+        );
+        assert_eq!(
+            seen(c + 32, c),
+            "red",
+            "the +X wall on the right, {samples}x"
+        );
+        assert_eq!(
+            seen(c - 32, c),
+            "green",
+            "the -X wall on the left, {samples}x"
+        );
         assert_eq!(seen(c, c - 32), "white", "the ceiling above, {samples}x");
         assert_eq!(seen(c, c + 32), "dark", "the floor below, {samples}x");
     }
@@ -390,7 +421,11 @@ fn a_steel_ball_among_bricks() -> Result<()> {
     data.images.push(load("steel-detail.png", false)?);
     // Sky: a big box around it all, pale at the horizon, deeper above.
     let sky = [0.55, 0.72, 0.95, 1.0];
-    room(&mut data, 200.0, [sky, sky, [0.3, 0.5, 0.9, 1.0], GREY, sky, sky]);
+    room(
+        &mut data,
+        200.0,
+        [sky, sky, [0.3, 0.5, 0.9, 1.0], GREY, sky, sky],
+    );
     // A baseplate of grey studs-less plates and a few coloured builds.
     quad(
         &mut data,
@@ -404,12 +439,36 @@ fn a_steel_ball_among_bricks() -> Result<()> {
         MaterialKind::VertexLit,
     );
     let bricks = [
-        (Vec3::new(-6.0, 2.0, -4.0), Vec3::new(2.0, 2.0, 1.0), [0.8, 0.15, 0.1, 1.0]),
-        (Vec3::new(5.0, 3.0, -6.0), Vec3::new(1.5, 3.0, 1.5), [0.95, 0.8, 0.1, 1.0]),
-        (Vec3::new(7.0, 1.0, 3.0), Vec3::new(1.0, 1.0, 3.0), [0.1, 0.35, 0.85, 1.0]),
-        (Vec3::new(-5.0, 0.6, 5.0), Vec3::new(2.0, 0.6, 2.0), [0.95, 0.95, 0.95, 1.0]),
-        (Vec3::new(0.0, 4.0, -12.0), Vec3::new(6.0, 4.0, 0.5), [0.6, 0.35, 0.2, 1.0]),
-        (Vec3::new(-3.0, 0.2, 0.0), Vec3::new(0.5, 0.2, 0.5), [0.2, 0.7, 0.2, 1.0]),
+        (
+            Vec3::new(-6.0, 2.0, -4.0),
+            Vec3::new(2.0, 2.0, 1.0),
+            [0.8, 0.15, 0.1, 1.0],
+        ),
+        (
+            Vec3::new(5.0, 3.0, -6.0),
+            Vec3::new(1.5, 3.0, 1.5),
+            [0.95, 0.8, 0.1, 1.0],
+        ),
+        (
+            Vec3::new(7.0, 1.0, 3.0),
+            Vec3::new(1.0, 1.0, 3.0),
+            [0.1, 0.35, 0.85, 1.0],
+        ),
+        (
+            Vec3::new(-5.0, 0.6, 5.0),
+            Vec3::new(2.0, 0.6, 2.0),
+            [0.95, 0.95, 0.95, 1.0],
+        ),
+        (
+            Vec3::new(0.0, 4.0, -12.0),
+            Vec3::new(6.0, 4.0, 0.5),
+            [0.6, 0.35, 0.2, 1.0],
+        ),
+        (
+            Vec3::new(-3.0, 0.2, 0.0),
+            Vec3::new(0.5, 0.2, 0.5),
+            [0.2, 0.7, 0.2, 1.0],
+        ),
     ];
     for (centre, half, color) in bricks {
         cube(&mut data, centre, half, color);
@@ -467,6 +526,9 @@ fn a_mirror_behind_the_viewer_shows_in_the_ball() -> Result<()> {
     let centre = at(&pixels, size, size / 2, size / 2);
     assert_ne!(named(centre), "yellow", "{centre:?}");
     let [r, g, b] = centre.map(i32::from);
-    assert!(r > 60 && (r - b).abs() < 40 && (g - b).abs() < 40, "silver: {centre:?}");
+    assert!(
+        r > 60 && (r - b).abs() < 40 && (g - b).abs() < 40,
+        "silver: {centre:?}"
+    );
     Ok(())
 }

@@ -868,17 +868,32 @@ mod tests {
         mesh.quads = vec![
             quad(
                 Surface::Top,
-                [[-1.0, 1.5, 0.25], [1.0, 1.5, 0.25], [1.0, 1.5, -0.25], [-1.0, 1.5, -0.25]],
+                [
+                    [-1.0, 1.5, 0.25],
+                    [1.0, 1.5, 0.25],
+                    [1.0, 1.5, -0.25],
+                    [-1.0, 1.5, -0.25],
+                ],
                 [[0.0, 0.0], [4.0, 0.0], [4.0, 1.0], [0.0, 1.0]],
             ),
             quad(
                 Surface::Side,
-                [[0.95, -1.5, 0.25], [1.0, -1.5, 0.25], [1.0, 1.5, 0.25], [0.95, 1.5, 0.25]],
+                [
+                    [0.95, -1.5, 0.25],
+                    [1.0, -1.5, 0.25],
+                    [1.0, 1.5, 0.25],
+                    [0.95, 1.5, 0.25],
+                ],
                 [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
             ),
             quad(
                 Surface::Side,
-                [[-0.95, -1.3, 0.0], [0.95, -1.3, 0.0], [0.95, 1.45, 0.0], [-0.95, 1.45, 0.0]],
+                [
+                    [-0.95, -1.3, 0.0],
+                    [0.95, -1.3, 0.0],
+                    [0.95, 1.45, 0.0],
+                    [-0.95, 1.45, 0.0],
+                ],
                 [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
             ),
         ];
@@ -909,7 +924,10 @@ mod tests {
         assert_eq!(big.attachment_rows[0], "uuuuuuuu");
         assert_eq!(big.attachment_rows[15], "xxxxxxxx");
         assert_eq!(big.attachment_rows[29], "dddddddd");
-        assert!(near(glam::Vec3::from(big.collision_boxes[0].size), [4.0, 6.0, 0.5]));
+        assert!(near(
+            glam::Vec3::from(big.collision_boxes[0].size),
+            [4.0, 6.0, 0.5]
+        ));
         // The portal's way through grows the same and keeps its frame.
         let link: Link = serde_json::from_str(
             r#"{"faces": ["north", "south"], "depth": 0.5, "pass": true, "name": "Portal",
@@ -919,7 +937,10 @@ mod tests {
         link.validate(&big).unwrap();
         for o in link.passages(&big) {
             let half = glam::Vec2::new(o.half.min_element(), o.half.max_element());
-            assert!(half.abs_diff_eq(glam::Vec2::new(1.95, 2.875), 1e-5), "{o:?}");
+            assert!(
+                half.abs_diff_eq(glam::Vec2::new(1.95, 2.875), 1e-5),
+                "{o:?}"
+            );
         }
         // Too small to keep the edges it has.
         assert!(mesh.stretched("mesh/sliver", [4, 1, 1]).is_err());
@@ -991,7 +1012,10 @@ mod tests {
         };
         assert!(!mirror.replaces(&mesh, &east));
         // A partial mirror lets the brick's own look show through.
-        let floor = Reflection { strength: 0.5, ..mirror };
+        let floor = Reflection {
+            strength: 0.5,
+            ..mirror
+        };
         assert!(!floor.replaces(&mesh, &glass));
     }
 
@@ -1003,11 +1027,23 @@ mod tests {
             reflection(vec![]),
             reflection(vec![Face::Omni]),
             reflection(vec![Face::North, Face::North]),
-            Reflection { depth: 1.5, ..reflection(vec![Face::North]) },
-            Reflection { strength: 0.0, ..reflection(vec![Face::North]) },
-            Reflection { tint: [2.0, 1.0, 1.0], ..reflection(vec![Face::North]) },
+            Reflection {
+                depth: 1.5,
+                ..reflection(vec![Face::North])
+            },
+            Reflection {
+                strength: 0.0,
+                ..reflection(vec![Face::North])
+            },
+            Reflection {
+                tint: [2.0, 1.0, 1.0],
+                ..reflection(vec![Face::North])
+            },
             // A one-stud side is only 0.25 each way from its centre.
-            Reflection { inset: 0.25, ..reflection(vec![Face::East]) },
+            Reflection {
+                inset: 0.25,
+                ..reflection(vec![Face::East])
+            },
         ] {
             assert!(bad.validate(&mesh).is_err(), "{bad:?}");
         }
@@ -1020,6 +1056,10 @@ mod tests {
         )
         .unwrap();
         assert!(entry.reflection.is_none());
-        assert!(!serde_json::to_string(&entry).unwrap().contains("reflection"));
+        assert!(
+            !serde_json::to_string(&entry)
+                .unwrap()
+                .contains("reflection")
+        );
     }
 }

@@ -145,11 +145,18 @@ pub fn due(
             let view = SplashView {
                 layers,
                 falling,
-                tip: splash.tip.as_ref().map(|t| (t.text.clone(), t.rect, t.after_ms)),
+                tip: splash
+                    .tip
+                    .as_ref()
+                    .map(|t| (t.text.clone(), t.rect, t.after_ms)),
                 close_after_ms: splash.close_after_ms,
                 fade_out_ms: splash.fade_out_ms,
             };
-            return Some((key, view, pictures.into_iter().map(|(_, id, p)| (id, p)).collect()));
+            return Some((
+                key,
+                view,
+                pictures.into_iter().map(|(_, id, p)| (id, p)).collect(),
+            ));
         }
     }
     None

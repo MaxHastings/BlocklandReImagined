@@ -674,14 +674,18 @@ fn no_jet_players_step_up_onto_a_2x_cube_while_it_is_on() {
     for x in -5..=5 {
         g.plant(host, "brick2xcubedirtdata", [x as f32 + 0.5, 0.7, -1.5]);
     }
-    g.s.set_spawn_points(vec![Vec3::new(-3.0, 0.05, 2.0)]).unwrap();
+    g.s.set_spawn_points(vec![Vec3::new(-3.0, 0.05, 2.0)])
+        .unwrap();
     let settings = bri_minigames::Settings {
         player_type: "v20.player.playernojet".into(),
         loadout: [Some(SHOVEL.into()), Some(DIRT.into()), None, None, None],
         ..Default::default()
     };
-    g.cmd(host, Command::MiniGame(MiniGameRequest::Create { color: 1, settings }))
-        .unwrap();
+    g.cmd(
+        host,
+        Command::MiniGame(MiniGameRequest::Create { color: 1, settings }),
+    )
+    .unwrap();
     g.steps(60);
     for owner in [host, walker] {
         g.looks.get_mut(&owner).unwrap().forward = 1.0;
@@ -692,4 +696,3 @@ fn no_jet_players_step_up_onto_a_2x_cube_while_it_is_on() {
     assert!(g.feet(walker).y < 0.1, "{}", g.feet(walker));
     g.quiet();
 }
-

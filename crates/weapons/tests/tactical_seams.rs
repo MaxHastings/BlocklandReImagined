@@ -739,7 +739,10 @@ fn a_rested_round_is_checked() {
     let error = Pack::from_json(bad.as_bytes())
         .expect_err("an unknown rested round is refused")
         .to_string();
-    assert!(error.contains("Missing projectile kit:projectile/none"), "{error}");
+    assert!(
+        error.contains("Missing projectile kit:projectile/none"),
+        "{error}"
+    );
 }
 
 /// The pistol with its hitscan cast from a muzzle held 1.5 units to the
@@ -795,14 +798,23 @@ fn a_muzzle_shot_starts_at_the_eye_when_something_stands_right_before_it() {
 #[test]
 fn a_converging_muzzle_shot_lands_where_the_eye_looks() {
     let (mut w, mut q) = muzzle_off_to_the_side("");
-    assert!(!hit_b(&click(&mut w, &mut q)), "parallel to the look it misses");
+    assert!(
+        !hit_b(&click(&mut w, &mut q)),
+        "parallel to the look it misses"
+    );
     let (mut w, mut q) = muzzle_off_to_the_side(r#""converge": true,"#);
-    assert!(hit_b(&click(&mut w, &mut q)), "aimed at the look's point it hits");
+    assert!(
+        hit_b(&click(&mut w, &mut q)),
+        "aimed at the look's point it hits"
+    );
     // With nothing in the look, it aims at the far end of the range.
     let (mut w, mut q) = muzzle_off_to_the_side(r#""converge": true,"#);
     q.player = Vec3::new(50.0, 0.0, 0.0);
     let lines = tracers(&click(&mut w, &mut q));
-    assert!(lines[0].1.distance(Vec3::new(0.0, 0.0, -200.0)) < 0.5, "{lines:?}");
+    assert!(
+        lines[0].1.distance(Vec3::new(0.0, 0.0, -200.0)) < 0.5,
+        "{lines:?}"
+    );
 }
 
 /// The pistol's round turning off what it meets up to `times` times, with

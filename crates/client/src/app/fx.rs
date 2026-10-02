@@ -34,7 +34,8 @@ pub(super) struct Effects {
 impl App {
     /// Bricks whose kill cues wait for this frame's debris.
     pub(super) fn pending_kills(&self) -> BTreeSet<bri_world::BrickId> {
-        self.fx.brick_kills
+        self.fx
+            .brick_kills
             .iter()
             .filter_map(|cue| match cue.kind {
                 bri_sim::presentation::CueKind::BrickKill { brick, .. } => Some(brick),
@@ -50,7 +51,11 @@ impl App {
     }
     /// Queue a cue for `listener` (the local player's feet, None when not in
     /// a game): its caption shows only within earshot.
-    pub(super) fn queue_cue_heard_at(&mut self, cue: bri_sim::presentation::Cue, listener: Option<Vec3>) {
+    pub(super) fn queue_cue_heard_at(
+        &mut self,
+        cue: bri_sim::presentation::Cue,
+        listener: Option<Vec3>,
+    ) {
         if matches!(
             cue.kind,
             bri_sim::presentation::CueKind::WeaponAnimation { .. }
@@ -58,8 +63,11 @@ impl App {
         {
             self.fx.weapon_animation_cursor = cue.id;
             if self.fx.weapon_animation_cues.len() < bri_sim::presentation::MAX_CUES {
-                self.fx.weapon_animation_cues
-                    .push_back((cue.clone(), 0., self.avatar.animation_time));
+                self.fx.weapon_animation_cues.push_back((
+                    cue.clone(),
+                    0.,
+                    self.avatar.animation_time,
+                ));
             } else {
                 self.fx.weapon_animation_drops = self.fx.weapon_animation_drops.saturating_add(1);
             }
@@ -107,7 +115,8 @@ impl App {
             let from = muzzle
                 .and_then(|actor| self.world_items.held_muzzle(actor, 0))
                 .unwrap_or(Vec3::from(cue.position));
-            self.fx.beams
+            self.fx
+                .beams
                 .add(from, Vec3::from(*to), *color, *width, *seconds);
         }
         if let bri_sim::presentation::CueKind::Tracer { actor, hand } = &cue.kind
@@ -229,9 +238,9 @@ impl App {
             .flatten()
             .collect();
         let pose = |anchor| match anchor {
-            crate::actor_effects::Anchor::Actor { actor, mount } => avatars
-                .get(&actor)?
-                .mount_node(assets, mount as usize),
+            crate::actor_effects::Anchor::Actor { actor, mount } => {
+                avatars.get(&actor)?.mount_node(assets, mount as usize)
+            }
             crate::actor_effects::Anchor::Vehicle { vehicle } => body(vehicle),
             crate::actor_effects::Anchor::Muzzle { vehicle } => {
                 let info = view.vehicles.get(&vehicle)?;
@@ -311,7 +320,11 @@ impl App {
         );
         actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
     }
-    pub(super) fn reset_weapon_effect_session(&mut self, session: RequestId, checkpoint_cursor: u64) {
+    pub(super) fn reset_weapon_effect_session(
+        &mut self,
+        session: RequestId,
+        checkpoint_cursor: u64,
+    ) {
         if self.fx.weapon_effect_session == Some(session) {
             return;
         }
@@ -321,9 +334,11 @@ impl App {
         self.fx.beams.clear();
         self.fx.explosion_debris.reset(checkpoint_cursor);
         self.fx.weapon_shells.reset(checkpoint_cursor);
-        self.fx.weapon_cues
+        self.fx
+            .weapon_cues
             .retain(|(cue, _)| cue.id > checkpoint_cursor);
-        self.fx.weapon_animation_cues
+        self.fx
+            .weapon_animation_cues
             .retain(|(cue, _, _)| cue.id > checkpoint_cursor);
         self.fx.weapon_animation_cursor = checkpoint_cursor;
         self.fx.weapon_effect_session = Some(session);

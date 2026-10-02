@@ -171,7 +171,9 @@ impl MinigamesWorld {
                 }
             }
         }
-        if s.default_game.is_some_and(|g| !world.games.contains_key(&g)) {
+        if s.default_game
+            .is_some_and(|g| !world.games.contains_key(&g))
+        {
             return Err(Error::InvalidSnapshot);
         }
         world.default_game = s.default_game;

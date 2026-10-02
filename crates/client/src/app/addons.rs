@@ -165,7 +165,8 @@ impl App {
         // An Add-On that broke loading this list before stays left out
         // without trying it again on every host.
         let known = self
-            .addons.left_out_add_ons
+            .addons
+            .left_out_add_ons
             .as_ref()
             .is_some_and(|(requested, loaded, _)| {
                 requested == set && *loaded == self.content.paths.packages
@@ -198,7 +199,8 @@ impl App {
             self.world_items = parts.world_items;
             let world_items = &self.world_items;
             collected.extend(
-                self.fx.weapon_shells
+                self.fx
+                    .weapon_shells
                     .set_casings(&content.weapons.pack, |m| world_items.has_model(m)),
             );
             self.content_problems = collected;
@@ -217,8 +219,11 @@ impl App {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
             self.content.maps.extend(worlds);
         }
-        self.files.saves =
-            crate::saves::Store::new(&self.state_dir, &self.content, Some(self.files.old_saves.clone()));
+        self.files.saves = crate::saves::Store::new(
+            &self.state_dir,
+            &self.content,
+            Some(self.files.old_saves.clone()),
+        );
         if self.files.old_saves_started {
             self.start_old_saves();
         }
@@ -247,7 +252,11 @@ impl App {
             None => (self.content.paths.packages.clone(), Vec::new()),
         };
         let mut problems = self.content_problems.clone();
-        problems.extend(left_out.iter().map(|l| crate::add_on_health::left_out_problem(l)));
+        problems.extend(
+            left_out
+                .iter()
+                .map(|l| crate::add_on_health::left_out_problem(l)),
+        );
         problems.extend(rules.iter().map(crate::add_on_health::rules_problem));
         problems.extend(bri_package::health::check_set(&root, &requested));
         problems.extend(crate::add_on_health::check_references(
@@ -297,7 +306,8 @@ impl App {
     /// Package HUD panels and keys from the latest replicated state.
     pub(super) fn update_package_hud(&mut self) {
         let view = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref());

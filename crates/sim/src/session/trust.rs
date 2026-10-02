@@ -158,7 +158,10 @@ impl Session {
         );
     }
     fn trust_peer(&self, owner: OwnerId) -> Result<(String, Principal)> {
-        let peer = self.peers.get(&owner).context("Target client does not exist.")?;
+        let peer = self
+            .peers
+            .get(&owner)
+            .context("Target client does not exist.")?;
         let principal = peer
             .principal
             .context("That player has no verified identity to trust.")?;
@@ -166,7 +169,12 @@ impl Session {
     }
 
     /// `serverCmdTrust_Invite`.
-    pub(super) fn trust_invite(&mut self, owner: OwnerId, target: OwnerId, level: u8) -> Result<()> {
+    pub(super) fn trust_invite(
+        &mut self,
+        owner: OwnerId,
+        target: OwnerId,
+        level: u8,
+    ) -> Result<()> {
         const ERROR: &str = "Trust Invite Error";
         if self.lan_host {
             self.message_box(owner, ERROR, "Trust lists do not apply on a LAN.".into());
@@ -360,7 +368,12 @@ impl Session {
     }
 
     /// `serverCmdTrust_Demote`.
-    pub(super) fn trust_demote(&mut self, owner: OwnerId, target: OwnerId, level: u8) -> Result<()> {
+    pub(super) fn trust_demote(
+        &mut self,
+        owner: OwnerId,
+        target: OwnerId,
+        level: u8,
+    ) -> Result<()> {
         let (name, ours) = self.trust_peer(owner)?;
         let theirs = self
             .principal_of(target)
@@ -400,7 +413,10 @@ impl Session {
     /// client's saved list replaces its previous upload, and entries both
     /// sides listed become mutual trust.
     pub(super) fn trust_list(&mut self, owner: OwnerId, list: Vec<TrustEntry>) -> Result<()> {
-        ensure!(list.len() <= MAX_TRUST_LIST, "Trust list upload limit reached.");
+        ensure!(
+            list.len() <= MAX_TRUST_LIST,
+            "Trust list upload limit reached."
+        );
         if self.lan_host {
             return Ok(());
         }
@@ -433,7 +449,11 @@ impl Session {
             }
         }
         // `set_mutual` rewrote entries it touched; keep the full upload.
-        self.trust.potential.entry(ours).or_default().extend(potential);
+        self.trust
+            .potential
+            .entry(ours)
+            .or_default()
+            .extend(potential);
         self.refresh_trust();
         Ok(())
     }
@@ -530,7 +550,9 @@ impl Session {
                 self.notify(*viewer, Notice::PlayerTrust(rows));
             }
         }
-        self.trust.published.retain(|o, _| self.peers.contains_key(o));
+        self.trust
+            .published
+            .retain(|o, _| self.peers.contains_key(o));
     }
 
     fn player_trust(&self, viewer: OwnerId, other: OwnerId) -> PlayerTrust {

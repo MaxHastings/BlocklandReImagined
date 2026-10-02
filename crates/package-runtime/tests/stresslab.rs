@@ -1,7 +1,7 @@
 //! The Stress Lab packages load, compile and behave through the runtime
 //! alone, without the engine.
-use bri_package_runtime::ops;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
+use bri_package_runtime::ops;
 use bri_package_runtime::{
     Catalog, Dynamic, PlayerKey,
     ops::{Op, authorize},
@@ -203,8 +203,8 @@ fn creeper_chases_then_fuses_then_explodes() {
     let mut state = Namespace::default();
     state.global.insert("explosions".into(), 0.into());
     let think = |x: f32,
-                     vars: &mut BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
-                     state: &mut Namespace| {
+                 vars: &mut BTreeMap<u64, BTreeMap<String, serde_json::Value>>,
+                 state: &mut Namespace| {
         let me = EntityView {
             id: 9,
             kind: "stresslab-creeper:entity/creeper".into(),
@@ -239,7 +239,9 @@ fn creeper_chases_then_fuses_then_explodes() {
     );
     let exploded = (0..20).any(|_| {
         let ops = think(1.0, &mut vars, &mut state);
-        let boom = ops.iter().any(|o| matches!(o, Op::Explode(ops::Explode { .. })));
+        let boom = ops
+            .iter()
+            .any(|o| matches!(o, Op::Explode(ops::Explode { .. })));
         assert!(
             !boom
                 || ops

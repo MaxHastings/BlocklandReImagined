@@ -468,7 +468,10 @@ mod tests {
         // Nothing else keeps a mirror in debris: other bricks' debris
         // gives none.
         let mut none = Vec::new();
-        let other = shapes_of(BTreeMap::from([("other".to_string(), mirrored.mirrors["brick"].clone())]));
+        let other = shapes_of(BTreeMap::from([(
+            "other".to_string(),
+            mirrored.mirrors["brick"].clone(),
+        )]));
         super::debris(&debris, &other, Vec3::ZERO, &mut none);
         assert!(none.is_empty());
         // The hammered brick fades within a second or two; its mirror
@@ -486,9 +489,7 @@ mod tests {
     #[test]
     fn a_chain_kill_of_mirror_bricks_keeps_only_the_nearest_debris_mirrors() {
         use crate::brick_debris::{BrickDebris, tests as debris_tests};
-        let bricks: Vec<_> = (0..200u64)
-            .map(|i| (i + 1, [i as f32, 0.3, 0.0]))
-            .collect();
+        let bricks: Vec<_> = (0..200u64).map(|i| (i + 1, [i as f32, 0.3, 0.0])).collect();
         let (building, _) = debris_tests::building(&bricks);
         let shape = MirrorShape {
             quads: vec![[

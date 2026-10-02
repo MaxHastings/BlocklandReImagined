@@ -717,7 +717,8 @@ mod tests {
 
     #[test]
     fn duplication_files_of_both_v20_duplicators_read_but_are_not_saves() {
-        let body = "0.5 0.25 0 1\n".repeat(64) + "Linecount 2\n"
+        let body = "0.5 0.25 0 1\n".repeat(64)
+            + "Linecount 2\n"
             + "2x2 Brick\" 0 0 0 0 0 5  0 0 1 1 1\n"
             + "1x2 Plate\" 0.25 0.5 0.4 1 0 2  0 0 1 1 1\n";
         for first in [
@@ -725,8 +726,7 @@ mod tests {
             "Do not modify this file at all. You will break it.\n1\nSaved by Zeblote (4928)\n",
         ] {
             let source = format!("{first}{body}");
-            let (world, skipped) =
-                read_duplication(source.as_bytes(), &stock(), "dup").unwrap();
+            let (world, skipped) = read_duplication(source.as_bytes(), &stock(), "dup").unwrap();
             assert_eq!(skipped, Skipped::default());
             assert_eq!(world.bricks.len(), 2);
             assert!(read_counting(source.as_bytes(), &stock(), "dup", "map/t").is_err());

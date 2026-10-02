@@ -16,7 +16,7 @@ fn session() -> Session {
                 entries: Default::default(),
             },
             vec![
-                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))
+                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
             ],
         )
         .unwrap(),

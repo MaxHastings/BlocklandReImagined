@@ -320,9 +320,15 @@ fn own_model_problem(assets: &Path, model: &str) -> Option<String> {
     };
     let folder = file.parent().unwrap_or(assets);
     let materials = value.get("materials").and_then(|m| m.as_array());
-    for name in materials.into_iter().flatten().filter_map(|m| m.get("name")?.as_str()) {
+    for name in materials
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("name")?.as_str())
+    {
         if !folder.join(format!("{name}.png")).is_file() {
-            return Some(format!("material {name} of {model} has no {name}.png beside it"));
+            return Some(format!(
+                "material {name} of {model} has no {name}.png beside it"
+            ));
         }
     }
     None

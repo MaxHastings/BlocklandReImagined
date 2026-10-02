@@ -48,7 +48,12 @@ impl Session {
         self.simulation.set_tick(tick);
         self.weapons.tick = tick;
         // Bots stay with the old mission.
-        let bots: Vec<OwnerId> = old.peers.keys().copied().filter(|o| old.bots.is_bot(*o)).collect();
+        let bots: Vec<OwnerId> = old
+            .peers
+            .keys()
+            .copied()
+            .filter(|o| old.bots.is_bot(*o))
+            .collect();
         for bot in bots {
             old.admin_disconnect(bot);
         }
@@ -157,7 +162,10 @@ impl Session {
                 },
             );
         }
-        let name = self.peers.get(&admin).map_or_else(String::new, |p| p.name.clone());
+        let name = self
+            .peers
+            .get(&admin)
+            .map_or_else(String::new, |p| p.name.clone());
         let map = self.simulation.state().name.clone();
         self.system_chat(format!("\u{E003}{name} \u{E000}changed the map to {map}"));
         self.refresh_trust();

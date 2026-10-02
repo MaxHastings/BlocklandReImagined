@@ -762,8 +762,7 @@ impl Administration {
                     Err(Error::Denied)
                 }
             }
-            Action::HostSetPassword { .. }
-            | Action::HostConfigure { .. } => {
+            Action::HostSetPassword { .. } | Action::HostConfigure { .. } => {
                 if self.host_authority(origin)? {
                     Ok(())
                 } else {
@@ -861,8 +860,7 @@ impl Administration {
                 {
                     self.login_strikes.remove(&stale);
                 }
-                self.login_strikes
-                    .insert(principal, (s.failed_logins, now));
+                self.login_strikes.insert(principal, (s.failed_logins, now));
                 let mut out = vec![Effect::LoginRejected {
                     attempts: s.failed_logins,
                     disconnect: s.locked,
@@ -963,7 +961,10 @@ impl Administration {
                 if s.trusted.is_owner || s.trusted.is_local || s.trusted.is_bot {
                     return Err(Error::Protected);
                 }
-                let saved = s.trusted.principal.map(|p| (p, s.trusted.display_name.clone()));
+                let saved = s
+                    .trusted
+                    .principal
+                    .map(|p| (p, s.trusted.display_name.clone()));
                 let mut out = vec![Effect::RoleChanged { target, role }];
                 // Without a verified key the rank lasts for this visit only.
                 if let Some((principal, name)) = saved {
@@ -1026,7 +1027,9 @@ impl Administration {
             Action::ClearBots => GameplayCommand::ClearBots,
             Action::Warp => GameplayCommand::Warp,
             Action::TimeScale { scale } => GameplayCommand::TimeScale(scale.clamp(0.2, 2.0)),
-            Action::SetEnvironment { settings } => GameplayCommand::SetEnvironment(Box::new(settings)),
+            Action::SetEnvironment { settings } => {
+                GameplayCommand::SetEnvironment(Box::new(settings))
+            }
             Action::RequestBrickGroups => GameplayCommand::RequestBrickGroups,
             Action::RequestMaps => GameplayCommand::RequestMaps,
         };
@@ -1036,7 +1039,12 @@ impl Administration {
 
 impl Administration {
     /// Save (or, for `Player`, forget) the rank `principal` gets on joining.
-    fn set_auto_role(&mut self, principal: Principal, role: Role, name: String) -> Result<(), Error> {
+    fn set_auto_role(
+        &mut self,
+        principal: Principal,
+        role: Role,
+        name: String,
+    ) -> Result<(), Error> {
         let at = self
             .durable
             .auto_roles

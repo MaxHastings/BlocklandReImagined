@@ -9,11 +9,11 @@
 //! them away (`cut_copy`) or change them (see `copy_edits`) with the
 //! player's own trust, each as one step of their undo. A copy may be held
 //! as a selection first (`hidden`), shown to place when the Add-On says.
+use super::copy_store::CopyOutcome;
 use super::*;
 use crate::blueprint::{Blueprint, MAX_BLUEPRINT_BRICKS, Outline, snap_anchor};
 use bri_package_runtime::ops::{CopyHold, CopyRule, CopyTrust, MirrorAxis, StackReach};
 use bri_world::authority::trust as level;
-use super::copy_store::CopyOutcome;
 mod extras;
 mod plant;
 mod select;
@@ -79,7 +79,10 @@ impl std::fmt::Display for CopyRefusal {
             Self::Wait(seconds) => {
                 let whole = seconds.ceil().max(1.0) as u32;
                 let s = if whole == 1 { "" } else { "s" };
-                write!(f, "You need to wait {whole} second{s} before planting again!")
+                write!(
+                    f,
+                    "You need to wait {whole} second{s} before planting again!"
+                )
             }
             Self::Group(name) => write!(
                 f,
@@ -212,9 +215,8 @@ impl Session {
         package: &str,
         hold: CopyHold,
     ) -> Copied {
-        let work = select::SelectWork::stack(
-            self, owner, brick, limit, reach, rule, tool, package, hold,
-        );
+        let work =
+            select::SelectWork::stack(self, owner, brick, limit, reach, rule, tool, package, hold);
         self.select_now(owner, work.map(|w| w.map(Box::new)))
     }
 
@@ -259,9 +261,8 @@ impl Session {
         package: &str,
         hold: CopyHold,
     ) -> Copied {
-        let work = select::SelectWork::boxed(
-            self, owner, area, limited, limit, rule, tool, package, hold,
-        );
+        let work =
+            select::SelectWork::boxed(self, owner, area, limited, limit, rule, tool, package, hold);
         self.select_now(owner, work.map(|w| Ok(Box::new(w))))
     }
 
@@ -435,9 +436,20 @@ impl Session {
     }
 
     /// Move the copy `owner` places as their brick shift keys would.
-    pub fn shift_copy(&mut self, owner: OwnerId, offset: [i32; 3], super_shift: bool) -> Result<()> {
+    pub fn shift_copy(
+        &mut self,
+        owner: OwnerId,
+        offset: [i32; 3],
+        super_shift: bool,
+    ) -> Result<()> {
         self.shown_copy(owner)?;
-        self.notify(owner, Notice::ShiftCopy { offset, super_shift });
+        self.notify(
+            owner,
+            Notice::ShiftCopy {
+                offset,
+                super_shift,
+            },
+        );
         Ok(())
     }
 
@@ -486,7 +498,11 @@ impl Session {
             return self.unlight_bricks(ids);
         }
         let color = rgba.map(|rgba| self.closest_paint(rgba));
-        let seconds = if seconds < 0.0 { f32::INFINITY } else { seconds };
+        let seconds = if seconds < 0.0 {
+            f32::INFINITY
+        } else {
+            seconds
+        };
         self.light_bricks(ids, color, super::highlight::GLOW, seconds)
     }
 
@@ -520,8 +536,15 @@ impl Session {
     /// becomes its mirror image, itself turned or its twin, on their screen
     /// and for the others. One with no exact image stays as it is, and they
     /// are told `asymmetric`.
-    pub fn mirror_ghost(&mut self, owner: OwnerId, axis: MirrorAxis, asymmetric: &str) -> Result<()> {
-        let ghost = self.ghost_brick(owner).context("Hold a ghost brick to mirror it")?;
+    pub fn mirror_ghost(
+        &mut self,
+        owner: OwnerId,
+        axis: MirrorAxis,
+        asymmetric: &str,
+    ) -> Result<()> {
+        let ghost = self
+            .ghost_brick(owner)
+            .context("Hold a ghost brick to mirror it")?;
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         let across = match axis {
             MirrorAxis::Y => crate::mirror::Across::UpsideDown,
@@ -608,7 +631,11 @@ impl Session {
         let named = |exact: bool| {
             self.peers.iter().find(|(_, p)| {
                 let name = p.name.to_lowercase();
-                if exact { name == lower } else { name.contains(&lower) }
+                if exact {
+                    name == lower
+                } else {
+                    name.contains(&lower)
+                }
             })
         };
         if let Some((id, peer)) = named(true).or_else(|| named(false)) {
@@ -648,7 +675,10 @@ impl Session {
             match self.find_group(target) {
                 None => Err((
                     Some(target.to_string()),
-                    ("missing", format!("No brick group was found for \"{target}\".")),
+                    (
+                        "missing",
+                        format!("No brick group was found for \"{target}\"."),
+                    ),
                 )),
                 Some((group, name)) if !self.may_plant_into(owner, group, admin) => Err((
                     Some(name.clone()),
@@ -858,7 +888,13 @@ impl Session {
         let error = anyhow::Error::new(refusal);
         let refused = Refusals::all(error);
         if let Some(package) = package
-            && self.report_place(&package, owner, (0, 0, false, false), &refused, &Default::default())
+            && self.report_place(
+                &package,
+                owner,
+                (0, 0, false, false),
+                &refused,
+                &Default::default(),
+            )
         {
             return Ok(Reply::Accepted);
         }
@@ -882,7 +918,9 @@ impl Session {
             .iter()
             .position(|held| held.as_deref() == Some(item));
         let full = actor.inventory.iter().all(Option::is_some);
-        let room = actor.selected.unwrap_or(actor.inventory.len().saturating_sub(1));
+        let room = actor
+            .selected
+            .unwrap_or(actor.inventory.len().saturating_sub(1));
         let direction = actor.frame.direction;
         let slot = match held {
             Some(slot) => slot,

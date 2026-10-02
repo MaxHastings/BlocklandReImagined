@@ -6,7 +6,8 @@ pub(super) struct BuildState {
     /// Last ghost brick reported to the server, and when.
     pub(super) ghost_report: Option<(Option<bri_sim::session::GhostBrick>, std::time::Instant)>,
     /// Other players' ghost bricks as uploaded, by owner.
-    pub(super) remote_ghosts: BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
+    pub(super) remote_ghosts:
+        BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
     /// The HUD was told the tool in hand takes the paint cans.
     pub(super) tool_takes_paint: bool,
     pub(super) building: Option<crate::building::Building>,
@@ -26,7 +27,8 @@ impl App {
             return Ok(false);
         }
         if self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .is_some_and(|a| self.ui.session_request() != Some(a.id))
         {
@@ -70,10 +72,15 @@ impl App {
         // the camera; server tool targeting still uses its authoritative pose.
         player.yaw = self.controls.yaw;
         player.pitch = self.controls.pitch;
-        let ghost_before = self.build.building.as_ref().and_then(|b| b.ghost().cloned());
+        let ghost_before = self
+            .build
+            .building
+            .as_ref()
+            .and_then(|b| b.ghost().cloned());
         let copy_before = self.build.building.as_ref().and_then(|b| b.copy_pose());
         let building = self
-            .build.building
+            .build
+            .building
             .as_mut()
             .context("Building controller not ready")?;
         building.set_archetypes(archetypes);
@@ -129,9 +136,16 @@ impl App {
             if matches!(command, Command::WeaponTrigger { down: true }) {
                 self.net.trigger_epoch = Some(self.net.dialog_epoch);
             }
-            if let Err(error) = self.build.building.as_mut().unwrap().command_sent(id, &command) {
+            if let Err(error) = self
+                .build
+                .building
+                .as_mut()
+                .unwrap()
+                .command_sent(id, &command)
+            {
                 for update in self
-                    .build.building
+                    .build
+                    .building
                     .as_mut()
                     .unwrap()
                     .command_finished(id, &command, false)
@@ -142,7 +156,8 @@ impl App {
             }
             if let Err(error) = self.command(id, command.clone(), action.clone()) {
                 let updates = self
-                    .build.building
+                    .build
+                    .building
                     .as_mut()
                     .unwrap()
                     .command_finished(id, &command, false);

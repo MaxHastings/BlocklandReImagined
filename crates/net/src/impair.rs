@@ -62,7 +62,12 @@ pub struct ImpairedLink {
 impl Drop for ImpairedLink {
     fn drop(&mut self) {
         self.task.abort();
-        for reply in self.replies.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+        for reply in self
+            .replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
             reply.abort();
         }
     }
@@ -91,7 +96,11 @@ impl Direction {
         let (lost, copies, delays) = {
             let mut dice = self.dice.lock().unwrap_or_else(|e| e.into_inner());
             let lost = dice.next() < self.impairment.loss;
-            let copies = if dice.next() < self.impairment.duplicate { 2 } else { 1 };
+            let copies = if dice.next() < self.impairment.duplicate {
+                2
+            } else {
+                1
+            };
             let delays: Vec<Duration> = (0..copies)
                 .map(|_| self.impairment.latency + self.impairment.jitter.mul_f64(dice.next()))
                 .collect();

@@ -1,6 +1,7 @@
 //! Native avatar resources, outfit binding and live player pose rendering.
 use crate::crouch::CrouchThread;
 use anyhow::{Context, Result, ensure};
+use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
@@ -12,7 +13,6 @@ use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
-use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub struct AvatarAssets {
@@ -183,7 +183,12 @@ fn follow_anchors(
 }
 /// Node indices by lower-case name, first of a name winning, and the
 /// `Mount<n>` nodes' indices.
-fn node_indices(rig: &Rig) -> (std::collections::HashMap<String, usize>, [Option<usize>; 32]) {
+fn node_indices(
+    rig: &Rig,
+) -> (
+    std::collections::HashMap<String, usize>,
+    [Option<usize>; 32],
+) {
     let mut index = std::collections::HashMap::new();
     for (i, node) in rig.shape.nodes.iter().enumerate() {
         index.entry(node.name.to_ascii_lowercase()).or_insert(i);
@@ -898,7 +903,10 @@ impl AvatarMesh {
             .map(|node| (self.model_transform * *node).w_axis.truncate())
             .collect();
         let center = points.iter().sum::<Vec3>() / points.len().max(1) as f32;
-        let reach = points.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
+        let reach = points
+            .iter()
+            .map(|p| p.distance(center))
+            .fold(0.0, f32::max);
         (center, reach + 1.5 * scale)
     }
     /// The body as drawn, for Add-On code: every node's world transform,
@@ -1367,7 +1375,10 @@ impl AvatarMesh {
         };
         if self.instanced
             && !self.restructured
-            && self.drawn_pose.as_ref().is_some_and(|drawn| same_pose(drawn, pose))
+            && self
+                .drawn_pose
+                .as_ref()
+                .is_some_and(|drawn| same_pose(drawn, pose))
             && !crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, pose)?
         {
             return Ok(());
@@ -2000,7 +2011,9 @@ mod tests {
                     .insert("chest".into(), [1.0, 0.0, 0.0, 0.5]);
             }
             // A held image that draws its own hands hides the Blockhead's.
-            let hands = (34..38).contains(&frame).then(|| ["LHand".to_string(), "rhand".to_string()]);
+            let hands = (34..38)
+                .contains(&frame)
+                .then(|| ["LHand".to_string(), "rhand".to_string()]);
             mesh.set_hidden_nodes(hands.into_iter().flatten());
             mesh.pose(assets, &p, f64::from(frame) / 30.0)?;
             let pose = mesh.pending.take().context("A deferred pose")?;
@@ -2020,7 +2033,11 @@ mod tests {
                 },
                 |name| {
                     let name = name.to_ascii_lowercase();
-                    mesh.outfit.nodes.get(&name).copied().filter(|_| !mesh.hidden_nodes.contains(&name))
+                    mesh.outfit
+                        .nodes
+                        .get(&name)
+                        .copied()
+                        .filter(|_| !mesh.hidden_nodes.contains(&name))
                 },
             )?;
             mesh.restructured = false;

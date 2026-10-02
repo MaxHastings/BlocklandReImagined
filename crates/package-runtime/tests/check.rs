@@ -213,7 +213,9 @@ fn stale_or_missing_item_presentation_warns_without_failing() {
     assert!(report.ok, "{report}");
     assert_eq!(codes(&report), ["check.weapons.presentation"], "{report}");
     assert!(
-        report.diagnostics[0].message.contains("different weapons.json"),
+        report.diagnostics[0]
+            .message
+            .contains("different weapons.json"),
         "{report}"
     );
 }
@@ -252,5 +254,8 @@ fn an_items_own_model_checks_and_a_missing_texture_is_named() {
     let report = check(&tool);
     assert!(report.ok, "a look problem never stops the load: {report}");
     assert_eq!(codes(&report), ["check.weapons.model"], "{report}");
-    assert!(report.diagnostics[0].message.contains("iron.png"), "{report}");
+    assert!(
+        report.diagnostics[0].message.contains("iron.png"),
+        "{report}"
+    );
 }

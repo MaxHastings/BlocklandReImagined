@@ -67,9 +67,14 @@ fn walk(with_addon: bool) -> (f32, f32) {
     if with_addon {
         s.install_packages(catalog(), None).unwrap();
     }
-    s.set_spawn_points(vec![Vec3::new(-3.0, 0.05, 0.0)]).unwrap();
-    let host = s.join("Host".into(), Vec3::new(-3.0, 0.05, 0.0), true).unwrap();
-    let walker = s.join("Walker".into(), Vec3::new(3.0, 0.05, 0.0), false).unwrap();
+    s.set_spawn_points(vec![Vec3::new(-3.0, 0.05, 0.0)])
+        .unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(-3.0, 0.05, 0.0), true)
+        .unwrap();
+    let walker = s
+        .join("Walker".into(), Vec3::new(3.0, 0.05, 0.0), false)
+        .unwrap();
     let mut seq = BTreeMap::<OwnerId, u64>::new();
     let mut cmd = |s: &mut Session, owner: OwnerId, command: Command| {
         let n = seq.entry(owner).or_default();
@@ -80,7 +85,11 @@ fn walk(with_addon: bool) -> (f32, f32) {
         player_type: NO_JET.into(),
         ..Default::default()
     };
-    cmd(&mut s, host, Command::MiniGame(MiniGameRequest::Create { color: 1, settings }));
+    cmd(
+        &mut s,
+        host,
+        Command::MiniGame(MiniGameRequest::Create { color: 1, settings }),
+    );
     for _ in 0..60 {
         s.step().unwrap();
     }
@@ -127,12 +136,19 @@ fn an_addon_raises_no_jets_step_and_no_one_elses() {
 #[test]
 fn an_adjustment_names_a_v20_player_type_and_nothing_else() {
     use bri_package_runtime::content::ArchetypeDef;
-    let def = |json: &str| serde_json::from_str::<ArchetypeDef>(json).unwrap().validate();
+    let def = |json: &str| {
+        serde_json::from_str::<ArchetypeDef>(json)
+            .unwrap()
+            .validate()
+    };
     assert!(def(r#"{ "schema_version": 1, "adjusts": "v20.player.playernojet" }"#).is_ok());
     assert!(def(r#"{ "schema_version": 1, "adjusts": "mod:archetype/x" }"#).is_err());
     assert!(
         def(r#"{ "schema_version": 1, "adjusts": "v20.player.playernojet", "base": "v20.player.playerstandardarmor" }"#)
             .is_err()
     );
-    assert!(def(r#"{ "schema_version": 1, "adjusts": "v20.player.playernojet", "name": "Mine" }"#).is_err());
+    assert!(
+        def(r#"{ "schema_version": 1, "adjusts": "v20.player.playernojet", "name": "Mine" }"#)
+            .is_err()
+    );
 }

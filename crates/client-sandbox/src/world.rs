@@ -70,10 +70,7 @@ impl Rig {
     }
     /// The first node named `name` (any case), -1 when there is none.
     pub fn node(&self, name: &str) -> i32 {
-        Self::find(
-            self.names.iter().cloned().zip(0..),
-            name,
-        )
+        Self::find(self.names.iter().cloned().zip(0..), name)
     }
     /// The node the part `name` moves with, -1 when there is none.
     pub fn part(&self, name: &str) -> i32 {
@@ -101,20 +98,13 @@ impl Skeleton {
     /// padding.
     pub fn records(&self, capacity: usize) -> Vec<f32> {
         let mut out = Vec::new();
-        let count = self
-            .nodes
-            .len()
-            .min(capacity)
-            .min(crate::bodies::MAX_NODES);
+        let count = self.nodes.len().min(capacity).min(crate::bodies::MAX_NODES);
         for i in 0..count {
             let (scale, rotation, position) =
                 glam::Mat4::from_cols_array(&self.nodes[i]).to_scale_rotation_translation();
             let bounds = self.bounds.get(i).copied().flatten();
             let [min, max] = bounds.map_or([glam::Vec3::ZERO; 2], |[min, max]| {
-                [
-                    glam::Vec3::from(min) * scale,
-                    glam::Vec3::from(max) * scale,
-                ]
+                [glam::Vec3::from(min) * scale, glam::Vec3::from(max) * scale]
             });
             out.extend(finite(
                 [
@@ -311,7 +301,12 @@ impl World {
         }
         let length = length.min(MAX_SIGHT);
         let mut out = Vec::new();
-        for leg in self.passages.sight(from, direction, length).into_iter().take(capacity) {
+        for leg in self
+            .passages
+            .sight(from, direction, length)
+            .into_iter()
+            .take(capacity)
+        {
             let c = leg.carry;
             out.extend(finite(
                 leg.from
@@ -466,7 +461,10 @@ mod tests {
         let h = holding.held_record(2, 0).unwrap();
         assert_eq!(&h[16..], &[4.0, 5.0, 6.0, 0.0], "no muzzle: the origin");
         holding.players[0].held[0].muzzle = Some([4.0, 5.0, 5.0]);
-        assert_eq!(&holding.held_record(2, 0).unwrap()[16..], &[4.0, 5.0, 5.0, 1.0]);
+        assert_eq!(
+            &holding.held_record(2, 0).unwrap()[16..],
+            &[4.0, 5.0, 5.0, 1.0]
+        );
         assert!(holding.held_record(2, 1).is_none());
         assert!(holding.held_record(3, 0).is_none());
     }
@@ -496,7 +494,10 @@ mod tests {
         assert_eq!(&r[..2], &[-1.0, 0.0]);
         let arm = &r[16..];
         assert_eq!(&arm[..5], &[0.0, 1.0, 1.0, 2.0, 3.0]);
-        assert!((arm[6] - 0.5f32.sin()).abs() < 1e-5, "rotation without scale");
+        assert!(
+            (arm[6] - 0.5f32.sin()).abs() < 1e-5,
+            "rotation without scale"
+        );
         assert!((arm[10] + 1.0).abs() < 1e-5, "box at world scale: {arm:?}");
         assert_eq!(skeleton.records(1).len(), 16);
         assert_eq!(skeleton.origin(), Some(glam::Vec3::ZERO));

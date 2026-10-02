@@ -145,23 +145,23 @@ fn find(v: &View, control: &str) -> Option<usize> {
         _ => None,
     }
     .or_else(|| v.id(control))
-        .or_else(|| {
-            v.walk()
-                .find(|&n| v.node(n).ctrl.variable.as_deref() == Some(control))
+    .or_else(|| {
+        v.walk()
+            .find(|&n| v.node(n).ctrl.variable.as_deref() == Some(control))
+    })
+    .or_else(|| {
+        v.walk().find(|&n| {
+            v.node(n)
+                .ctrl
+                .command
+                .as_deref()
+                .is_some_and(|c| c.eq_ignore_ascii_case(control))
         })
-        .or_else(|| {
-            v.walk().find(|&n| {
-                v.node(n)
-                    .ctrl
-                    .command
-                    .as_deref()
-                    .is_some_and(|c| c.eq_ignore_ascii_case(control))
-            })
-        })
-        .or_else(|| {
-            v.walk()
-                .find(|&n| v.is_shown(n) && v.text_of(n).trim() == control)
-        })
+    })
+    .or_else(|| {
+        v.walk()
+            .find(|&n| v.is_shown(n) && v.text_of(n).trim() == control)
+    })
 }
 
 fn mouse_click(app: &mut App, (x, y): (f32, f32)) {

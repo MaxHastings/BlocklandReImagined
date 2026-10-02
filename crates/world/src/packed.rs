@@ -128,8 +128,11 @@ impl Packed {
                     flags |= bit;
                 }
             }
-            out.looks
-                .extend([brick.color, flags, brick.color_effect | brick.shape_effect << 3]);
+            out.looks.extend([
+                brick.color,
+                flags,
+                brick.color_effect | brick.shape_effect << 3,
+            ]);
             match out.owners.last_mut() {
                 Some((owner, run)) if *owner == brick.owner && *run < u32::MAX => *run += 1,
                 _ => out.owners.push((brick.owner, 1)),
@@ -263,7 +266,10 @@ pub(crate) mod tests {
             b.color_effect = (i % 7) as u8;
             b.shape_effect = (i % 3) as u8;
             if i % 11 == 0 {
-                b.print = Some(ContentRef::unresolved("print", format!("Letters/{}", i % 4)));
+                b.print = Some(ContentRef::unresolved(
+                    "print",
+                    format!("Letters/{}", i % 4),
+                ));
             }
             if i % 13 == 0 {
                 b.name = Some(format!("brick{i}"));

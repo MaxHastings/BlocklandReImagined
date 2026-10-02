@@ -2319,7 +2319,10 @@ impl WeaponsWorld {
                 "A dropped item's name is at most {MAX_DROP_NAME} characters"
             );
         }
-        self.drops.get_mut(&drop).context("No such dropped item")?.name = name;
+        self.drops
+            .get_mut(&drop)
+            .context("No such dropped item")?
+            .name = name;
         Ok(())
     }
     /// Delete a world drop without giving it to anyone (an Add-On used it

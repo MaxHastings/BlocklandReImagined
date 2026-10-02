@@ -472,7 +472,10 @@ fn leaving_and_rejoining_keeps_the_same_owner_number() {
         .join_verified("Maxwell".into(), Vec3::Y, false, Some(max))
         .unwrap();
     assert_eq!(again, first);
-    assert!(s.resume(first, Vec3::Y).is_err(), "The dropped connection is replaced");
+    assert!(
+        s.resume(first, Vec3::Y).is_err(),
+        "The dropped connection is replaced"
+    );
     // Someone else never gets it.
     s.disconnect(again).unwrap();
     let other = s
@@ -491,7 +494,9 @@ fn returning_players_get_their_bricks_back_after_a_restart() {
         Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7),
     );
     world.next_brick_id = 2;
-    world.owners.insert(7, OwnerRecord::new(max.0, "Maxwell".into()));
+    world
+        .owners
+        .insert(7, OwnerRecord::new(max.0, "Maxwell".into()));
     // The server restarts on the saved world.
     let mut s = session_with(world);
     let host = s.join("Host".into(), Vec3::Y, true).unwrap();
@@ -587,9 +592,9 @@ fn two_players_build_edit_and_late_join_share_authoritative_state() {
     let before = s.simulation().state().clone();
     assert!(
         s.edit_brick(b, id, Edit::Color(1))
-        .unwrap_err()
-        .to_string()
-        .contains("needs full trust")
+            .unwrap_err()
+            .to_string()
+            .contains("needs full trust")
     );
     assert_eq!(*s.simulation().state(), before);
     s.edit_brick(a, id, Edit::Color(1)).unwrap();
@@ -673,7 +678,8 @@ fn tool_actions_require_server_eye_visibility_and_chat_is_bounded() {
         panic!()
     };
     for seq in 3..=6 {
-        s.command(a, seq, Command::Chat(format!("hello {seq}"))).unwrap();
+        s.command(a, seq, Command::Chat(format!("hello {seq}")))
+            .unwrap();
     }
     assert!(s.command(a, 7, Command::Chat("too many".into())).is_err());
     assert_eq!(s.snapshot().chat.len(), 4);
@@ -760,15 +766,20 @@ fn physical_touch_enters_event_scheduler_once() {
     s.movement(a, 1, aim(&s, a)).unwrap();
     s.step().unwrap();
     s.equip_tool(a, Some(1)).unwrap();
-    s.edit_brick(a, id, Edit::Events(vec![EventRow {
-                preserved: None,
-                enabled: true,
-                input: "onPlayerTouch".into(),
-                delay_ms: 100,
-                target: EventTarget::Slot(bri_events::Slot::SelfBrick),
-                output: "setColor".into(),
-                params: vec![EventValue::Color(1)],
-            }])).unwrap();
+    s.edit_brick(
+        a,
+        id,
+        Edit::Events(vec![EventRow {
+            preserved: None,
+            enabled: true,
+            input: "onPlayerTouch".into(),
+            delay_ms: 100,
+            target: EventTarget::Slot(bri_events::Slot::SelfBrick),
+            output: "setColor".into(),
+            params: vec![EventValue::Color(1)],
+        }]),
+    )
+    .unwrap();
     s.join("Visitor".into(), Vec3::new(0.5, 0.25, -3.25), false)
         .unwrap();
     for _ in 0..120 {
@@ -1022,7 +1033,10 @@ fn saves_stream_in_batches_with_v20_load_messages() {
         ownership: false,
     };
     s.set_load_pace(bri_sim::session::LoadPace::Bricks(1024));
-    assert_eq!(s.command(host, 1, cmd()).unwrap(), Reply::Loaded { bricks: 2100 });
+    assert_eq!(
+        s.command(host, 1, cmd()).unwrap(),
+        Reply::Loaded { bricks: 2100 }
+    );
     assert!(s.command(host, 2, cmd()).is_err(), "One load at a time");
     let tags = |s: &Session| s.chat().iter().filter_map(|l| l.tag).collect::<Vec<_>>();
     assert_eq!(tags(&s), [MessageTag::UploadStart]);
@@ -1034,9 +1048,15 @@ fn saves_stream_in_batches_with_v20_load_messages() {
     }
     counts.dedup();
     assert_eq!(counts, [1024, 2048, 2100], "Bricks arrive batch by batch");
-    assert_eq!(tags(&s), [MessageTag::UploadStart, MessageTag::ProcessComplete]);
+    assert_eq!(
+        tags(&s),
+        [MessageTag::UploadStart, MessageTag::ProcessComplete]
+    );
     let done = s.chat().last().unwrap().text.clone();
-    assert!(done.starts_with("2100 / 2100 bricks created in 0:00.02"), "{done}");
+    assert!(
+        done.starts_with("2100 / 2100 bricks created in 0:00.02"),
+        "{done}"
+    );
 }
 #[test]
 fn loading_over_a_build_skips_overlapping_bricks_like_v20() {
@@ -1156,7 +1176,9 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
             target_collision: Default::default(),
         })
         .unwrap();
-        let owner = s.join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+        let owner = s
+            .join("Pupil".into(), Vec3::new(0.0, 0.05, 0.0), true)
+            .unwrap();
         for _ in 0..12 {
             s.step().unwrap();
         }
@@ -1172,7 +1194,8 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
     // Outside the rooms `/wand` and the spray can do nothing, as in v20.
     let (mut s, owner) = tutorial(Vec3::new(50.0, 0.0, 50.0));
     s.command(owner, 1, Command::Wand).unwrap();
-    s.command(owner, 2, Command::UseSprayCan { color: 0 }).unwrap();
+    s.command(owner, 2, Command::UseSprayCan { color: 0 })
+        .unwrap();
     s.command(owner, 3, Command::UseFxCan { fx: 0 }).unwrap();
     assert!(held(&s, owner).is_empty(), "{:?}", held(&s, owner));
     // Inside them the request goes on to mount the image, which this
@@ -1307,7 +1330,9 @@ fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
     // Nothing left to undo: v20 plays nothing.
     assert!(run(&mut s, Command::Tool(ToolAction::UndoBrick)).is_empty());
     // `activateLevel` climbs on clicks within 320 ms; the fifth repeat swings harder.
-    let swings: Vec<_> = (0..6).flat_map(|_| run(&mut s, Command::Activate)).collect();
+    let swings: Vec<_> = (0..6)
+        .flat_map(|_| run(&mut s, Command::Activate))
+        .collect();
     assert_eq!(
         swings,
         [
@@ -1324,7 +1349,10 @@ fn builder_animations_play_on_thread_three_and_bricks_raise_the_arm() {
     }
     assert_eq!(run(&mut s, Command::Activate), ["activate"]);
     assert_eq!(BuildGesture::shift(1, -1, 1), Some(BuildGesture::ShiftUp));
-    assert_eq!(BuildGesture::shift(1, -1, 0), Some(BuildGesture::ShiftRight));
+    assert_eq!(
+        BuildGesture::shift(1, -1, 0),
+        Some(BuildGesture::ShiftRight)
+    );
     assert_eq!(BuildGesture::shift(0, 0, 0), None);
 }
 
@@ -1397,16 +1425,26 @@ fn admin_fetch_find_warp_and_time_scale_follow_v20() {
     };
     let admin_cmd = |action| Command::Admin(Request::new(action));
     let target = connection(&s, "Admin");
-    assert!(s.command(guest, 1, admin_cmd(Action::Fetch { target })).is_err());
-    assert!(s.command(guest, 2, admin_cmd(Action::TimeScale { scale: 0.5 })).is_err());
+    assert!(
+        s.command(guest, 1, admin_cmd(Action::Fetch { target }))
+            .is_err()
+    );
+    assert!(
+        s.command(guest, 2, admin_cmd(Action::TimeScale { scale: 0.5 }))
+            .is_err()
+    );
     let near = |a: [f32; 3], b: [f32; 3]| Vec3::from(a).distance(Vec3::from(b)) < 0.2;
 
     let target = connection(&s, "Guest");
-    s.command(admin, 1, admin_cmd(Action::Fetch { target })).unwrap();
+    s.command(admin, 1, admin_cmd(Action::Fetch { target }))
+        .unwrap();
     assert!(near(body(&s, guest).feet, body(&s, admin).feet));
 
     s.command(guest, 3, Command::Suicide).unwrap();
-    assert!(s.command(admin, 2, admin_cmd(Action::Find { target })).is_err());
+    assert!(
+        s.command(admin, 2, admin_cmd(Action::Find { target }))
+            .is_err()
+    );
 
     // Look down at the floor ahead and warp onto it.
     let before = body(&s, admin);
@@ -1427,11 +1465,17 @@ fn admin_fetch_find_warp_and_time_scale_follow_v20() {
     assert!(moved.length() > 1.0, "{moved}");
     assert!(after.feet[1].abs() < 0.2);
 
-    s.command(admin, 4, admin_cmd(Action::TimeScale { scale: 5.0 })).unwrap();
+    s.command(admin, 4, admin_cmd(Action::TimeScale { scale: 5.0 }))
+        .unwrap();
     assert_eq!(s.time_scale(), 2.0);
-    s.command(admin, 5, admin_cmd(Action::TimeScale { scale: 0.5 })).unwrap();
+    s.command(admin, 5, admin_cmd(Action::TimeScale { scale: 0.5 }))
+        .unwrap();
     assert_eq!(s.time_scale(), 0.5);
-    assert!(s.chat().iter().any(|l| l.text == "Admin changed the timescale to 0.5"));
+    assert!(
+        s.chat()
+            .iter()
+            .any(|l| l.text == "Admin changed the timescale to 0.5")
+    );
 }
 #[test]
 fn trust_invites_uploads_demotion_and_lan_follow_v20() {
@@ -1440,29 +1484,62 @@ fn trust_invites_uploads_demotion_and_lan_follow_v20() {
     let mut s = session();
     s.set_lan_host(false);
     let spawn = Vec3::new(0.0, 0.05, 0.0);
-    let a = s.join_verified("Ann".into(), spawn - Vec3::X * 4.0, false, Some(Principal([1; 32]))).unwrap();
-    let b = s.join_verified("Bob".into(), spawn, false, Some(Principal([2; 32]))).unwrap();
+    let a = s
+        .join_verified(
+            "Ann".into(),
+            spawn - Vec3::X * 4.0,
+            false,
+            Some(Principal([1; 32])),
+        )
+        .unwrap();
+    let b = s
+        .join_verified("Bob".into(), spawn, false, Some(Principal([2; 32])))
+        .unwrap();
     let notices = |s: &mut Session| s.take_private_notices();
     let level = |n: &[(u64, Notice)], viewer: u64, other: u64| {
-        n.iter()
-            .rev()
-            .find_map(|(o, n)| match n {
-                Notice::PlayerTrust(rows) if *o == viewer => Some(rows[&other].level),
-                _ => None,
-            })
+        n.iter().rev().find_map(|(o, n)| match n {
+            Notice::PlayerTrust(rows) if *o == viewer => Some(rows[&other].level),
+            _ => None,
+        })
     };
     let first = notices(&mut s);
-    assert!(first.iter().any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob connected.".into())));
+    assert!(
+        first
+            .iter()
+            .any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob connected.".into()))
+    );
     assert_eq!(level(&first, a, b), Some(TrustLevel::None));
     assert_eq!(level(&first, a, a), Some(TrustLevel::You));
 
-    s.command(a, 1, Command::TrustInvite { target: b, level: 2 }).unwrap();
+    s.command(
+        a,
+        1,
+        Command::TrustInvite {
+            target: b,
+            level: 2,
+        },
+    )
+    .unwrap();
     let invited = notices(&mut s);
-    assert!(invited.iter().any(|(o, n)| *o == b
-        && matches!(n, Notice::TrustInvite { from, level: 2, .. } if *from == a)));
+    assert!(
+        invited.iter().any(|(o, n)| *o == b
+            && matches!(n, Notice::TrustInvite { from, level: 2, .. } if *from == a))
+    );
     // A second invite while the first is pending is refused with a message.
-    s.command(a, 2, Command::TrustInvite { target: b, level: 1 }).unwrap();
-    assert!(notices(&mut s).iter().any(|(o, n)| *o == a && matches!(n, Notice::MessageBox { .. })));
+    s.command(
+        a,
+        2,
+        Command::TrustInvite {
+            target: b,
+            level: 1,
+        },
+    )
+    .unwrap();
+    assert!(
+        notices(&mut s)
+            .iter()
+            .any(|(o, n)| *o == a && matches!(n, Notice::MessageBox { .. }))
+    );
 
     s.command(b, 1, Command::AcceptTrust { from: a }).unwrap();
     let accepted = notices(&mut s);
@@ -1471,31 +1548,86 @@ fn trust_invites_uploads_demotion_and_lan_follow_v20() {
     assert!(accepted.iter().any(|(o, n)| *o == a
         && matches!(n, Notice::TrustSaved { principal, level: 2, .. } if *principal == [2; 32])));
 
-    s.command(a, 3, Command::DemoteTrust { target: b, level: 1 }).unwrap();
+    s.command(
+        a,
+        3,
+        Command::DemoteTrust {
+            target: b,
+            level: 1,
+        },
+    )
+    .unwrap();
     assert_eq!(level(&notices(&mut s), b, a), Some(TrustLevel::Build));
 
     // Saved lists: both sides listing each other become mutual trust at the
     // uploader's level.
-    let c = s.join_verified("Cat".into(), spawn + Vec3::X * 4.0, false, Some(Principal([3; 32]))).unwrap();
-    s.command(c, 1, Command::TrustList(vec![TrustEntry { principal: [1; 32], level: 2 }])).unwrap();
+    let c = s
+        .join_verified(
+            "Cat".into(),
+            spawn + Vec3::X * 4.0,
+            false,
+            Some(Principal([3; 32])),
+        )
+        .unwrap();
+    s.command(
+        c,
+        1,
+        Command::TrustList(vec![TrustEntry {
+            principal: [1; 32],
+            level: 2,
+        }]),
+    )
+    .unwrap();
     assert_eq!(level(&notices(&mut s), a, c), Some(TrustLevel::None));
-    s.command(a, 4, Command::TrustList(vec![TrustEntry { principal: [3; 32], level: 1 }])).unwrap();
+    s.command(
+        a,
+        4,
+        Command::TrustList(vec![TrustEntry {
+            principal: [3; 32],
+            level: 1,
+        }]),
+    )
+    .unwrap();
     let uploaded = notices(&mut s);
     assert_eq!(level(&uploaded, a, c), Some(TrustLevel::Build));
     // A's upload replaced its earlier trust with Bob.
     assert_eq!(level(&uploaded, a, b), Some(TrustLevel::None));
 
     // Ignored invites are refused.
-    s.command(c, 2, Command::TrustInvite { target: b, level: 1 }).unwrap();
+    s.command(
+        c,
+        2,
+        Command::TrustInvite {
+            target: b,
+            level: 1,
+        },
+    )
+    .unwrap();
     s.command(b, 2, Command::IgnoreTrust { from: c }).unwrap();
     notices(&mut s);
-    s.command(c, 3, Command::TrustInvite { target: b, level: 1 }).unwrap();
-    assert!(!notices(&mut s).iter().any(|(o, n)| *o == b && matches!(n, Notice::TrustInvite { .. })));
+    s.command(
+        c,
+        3,
+        Command::TrustInvite {
+            target: b,
+            level: 1,
+        },
+    )
+    .unwrap();
+    assert!(
+        !notices(&mut s)
+            .iter()
+            .any(|(o, n)| *o == b && matches!(n, Notice::TrustInvite { .. }))
+    );
 
     s.set_lan_host(true);
     assert_eq!(level(&notices(&mut s), a, b), Some(TrustLevel::Lan));
     s.disconnect(b).unwrap();
-    assert!(notices(&mut s).iter().any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob has left the game.".into())));
+    assert!(
+        notices(&mut s)
+            .iter()
+            .any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob has left the game.".into()))
+    );
 }
 
 on_both! {
@@ -1620,12 +1752,16 @@ fn drop_player_at_camera_lands_at_the_camera_like_v20() {
         s.step().unwrap();
     }
     let f8 = || Command::Admin(Request::new(Action::DropCameraAtPlayer));
-    assert!(s.command(guest, 1, Command::DropPlayerAtCamera(None)).is_err());
+    assert!(
+        s.command(guest, 1, Command::DropPlayerAtCamera(None))
+            .is_err()
+    );
     // F8: the camera starts at the eye and everyone else sees its orb there.
     let standing = body(&s, admin);
     // `getEyePoint() - getPosition()` at the body's facing when F7 is
     // pressed: the Eye node's height and its lead ahead of the body.
-    let offset = standing.eye(&bri_sim::player::PlayerTuning::default()) - Vec3::from(standing.feet);
+    let offset =
+        standing.eye(&bri_sim::player::PlayerTuning::default()) - Vec3::from(standing.feet);
     let eye_height = offset.y;
     s.command(admin, 1, f8()).unwrap();
     assert_eq!(s.camera_orbs().len(), 1);
@@ -1640,7 +1776,8 @@ fn drop_player_at_camera_lands_at_the_camera_like_v20() {
     s.take_cues();
     // F7 in the air: `serverCmdDropPlayerAtCamera` sets the feet to the
     // camera minus that offset, lead included.
-    s.command(admin, 2, Command::DropPlayerAtCamera(None)).unwrap();
+    s.command(admin, 2, Command::DropPlayerAtCamera(None))
+        .unwrap();
     let dropped = body(&s, admin);
     assert!(
         Vec3::from(dropped.feet).distance(Vec3::new(5.0, 20.0, 3.0) - offset) < 1e-3,
@@ -1655,7 +1792,14 @@ fn drop_player_at_camera_lands_at_the_camera_like_v20() {
         CueKind::Teleport { actor, player: true, .. } if actor == admin
     )));
     // Reports from the body do not move the camera.
-    s.camera_report(admin, CameraView { eye: [50.0; 3], ..high }).unwrap();
+    s.camera_report(
+        admin,
+        CameraView {
+            eye: [50.0; 3],
+            ..high
+        },
+    )
+    .unwrap();
     // Closer to the ground than the eye's height: the feet stand on it.
     s.command(admin, 3, f8()).unwrap();
     let low = CameraView {
@@ -1671,7 +1815,8 @@ fn drop_player_at_camera_lands_at_the_camera_like_v20() {
         low.eye() - offset * (low.eye[1] / offset.y)
     };
     let expected = ground(&s);
-    s.command(admin, 4, Command::DropPlayerAtCamera(Some(low))).unwrap();
+    s.command(admin, 4, Command::DropPlayerAtCamera(Some(low)))
+        .unwrap();
     let landed = body(&s, admin);
     assert!(
         Vec3::from(landed.feet).distance(expected) < 1e-3,
@@ -1681,12 +1826,14 @@ fn drop_player_at_camera_lands_at_the_camera_like_v20() {
     // F7 without flying goes back to where the camera was left.
     walk(&mut s, admin, 1, 60);
     let expected = ground(&s);
-    s.command(admin, 5, Command::DropPlayerAtCamera(None)).unwrap();
+    s.command(admin, 5, Command::DropPlayerAtCamera(None))
+        .unwrap();
     assert!(Vec3::from(body(&s, admin).feet).distance(expected) < 1e-3);
     // A dead administrator respawns at once.
     s.command(admin, 6, Command::Suicide).unwrap();
     assert!(!s.is_alive(admin));
-    s.command(admin, 7, Command::DropPlayerAtCamera(None)).unwrap();
+    s.command(admin, 7, Command::DropPlayerAtCamera(None))
+        .unwrap();
     assert!(s.is_alive(admin));
     assert_eq!(s.vitals()[&admin].control, ControlObject::Player);
 }
@@ -1701,7 +1848,12 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
         .join_verified("Host".into(), Vec3::Y, true, Some(Principal([1; 32])))
         .unwrap();
     let bob = s
-        .join_verified("Bob".into(), Vec3::new(4., 1., 0.), false, Some(Principal([2; 32])))
+        .join_verified(
+            "Bob".into(),
+            Vec3::new(4., 1., 0.),
+            false,
+            Some(Principal([2; 32])),
+        )
         .unwrap();
     let chat = |n: &[(u64, Notice)], to: u64| -> Vec<String> {
         n.iter()
@@ -1749,11 +1901,17 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
         .iter()
         .find(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if definition == "BSDExplosion"))
         .expect("BSD explosion cue");
-    let feet = s.snapshot().players.iter().find(|p| p.owner == bob).unwrap().feet;
-    assert!((bsd.position[1] - feet[1] - 2.156).abs() < 1e-4);
-    assert!(cues
+    let feet = s
+        .snapshot()
+        .players
         .iter()
-        .any(|c| matches!(&c.kind, CueKind::Emote { actor, name } if *actor == bob && name == "hug")));
+        .find(|p| p.owner == bob)
+        .unwrap()
+        .feet;
+    assert!((bsd.position[1] - feet[1] - 2.156).abs() < 1e-4);
+    assert!(cues.iter().any(
+        |c| matches!(&c.kind, CueKind::Emote { actor, name } if *actor == bob && name == "hug")
+    ));
 
     let connection = |s: &Session, name: &str| {
         ConnectionId(
@@ -1767,8 +1925,12 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
         )
     };
     let target = connection(&s, "Bob");
-    s.command(host, 1, Command::Admin(Request::new(Action::Kick { target })))
-        .unwrap();
+    s.command(
+        host,
+        1,
+        Command::Admin(Request::new(Action::Kick { target })),
+    )
+    .unwrap();
     assert_eq!(
         chat(&s.take_private_notices(), host),
         ["\u{E003}Host\u{E002} kicked \u{E003}Bob"]
@@ -1777,7 +1939,12 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
     s.take_private_notices();
 
     let cat = s
-        .join_verified("Cat".into(), Vec3::new(8., 1., 0.), false, Some(Principal([3; 32])))
+        .join_verified(
+            "Cat".into(),
+            Vec3::new(8., 1., 0.),
+            false,
+            Some(Principal([3; 32])),
+        )
         .unwrap();
     s.take_private_notices();
     let target = connection(&s, "Cat");
@@ -1795,7 +1962,9 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
     .unwrap();
     assert_eq!(
         chat(&s.take_private_notices(), host),
-        ["\u{E003}Host\u{E002} banned \u{E003}Cat\u{E002} (ID: 03030303) for 5 minutes - \u{E002}\"griefing\""]
+        [
+            "\u{E003}Host\u{E002} banned \u{E003}Cat\u{E002} (ID: 03030303) for 5 minutes - \u{E002}\"griefing\""
+        ]
     );
     let _ = cat;
 }
@@ -1873,15 +2042,20 @@ fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
     use bri_sim::session::Notice;
     let mut s = session();
     let a = s.join("Blockhead".into(), Vec3::Y, false).unwrap();
-    let b = s.join("blockhead".into(), Vec3::new(4., 1., 0.), false).unwrap();
-    let c = s.join("Blockhead".into(), Vec3::new(8., 1., 0.), false).unwrap();
+    let b = s
+        .join("blockhead".into(), Vec3::new(4., 1., 0.), false)
+        .unwrap();
+    let c = s
+        .join("Blockhead".into(), Vec3::new(8., 1., 0.), false)
+        .unwrap();
     let names = s.names();
     assert_eq!(names[&a], "Blockhead");
     assert_eq!(names[&b], "blockhead 2");
     assert_eq!(names[&c], "Blockhead 3");
 
     assert!(matches!(
-        s.command(b, 1, Command::SetName("  Builder  ".into())).unwrap(),
+        s.command(b, 1, Command::SetName("  Builder  ".into()))
+            .unwrap(),
         Reply::Accepted
     ));
     assert_eq!(s.names()[&b], "Builder");
@@ -1914,7 +2088,9 @@ fn duplicate_names_get_numbers_and_live_rename_updates_everywhere() {
         .unwrap();
 
     // The freed name is available again.
-    let d = s.join("Blockhead".into(), Vec3::new(12., 1., 0.), false).unwrap();
+    let d = s
+        .join("Blockhead".into(), Vec3::new(12., 1., 0.), false)
+        .unwrap();
     assert_eq!(s.names()[&d], "Blockhead 2");
 }
 
@@ -1955,7 +2131,16 @@ fn names_keep_other_scripts_symbols_and_emoji() {
     for symbols in ["~!@#$%^&*()_+{}|:\"?", "[];',./`=-\\"] {
         assert_eq!(clean_player_name(symbols), symbols);
     }
-    for name in ["Zoë ©™ «Ñ» €£¥ ¿¡", "Жора", "Ωmega", "たろう", "小明", "민수", "★Max★", "🎮 Gamer 😀"] {
+    for name in [
+        "Zoë ©™ «Ñ» €£¥ ¿¡",
+        "Жора",
+        "Ωmega",
+        "たろう",
+        "小明",
+        "민수",
+        "★Max★",
+        "🎮 Gamer 😀",
+    ] {
         assert_eq!(clean_player_name(name), name);
     }
     // Invisible, combining and joined characters go, so a name cannot hide
@@ -1976,12 +2161,18 @@ fn names_keep_other_scripts_symbols_and_emoji() {
     // beyond ASCII, and Cyrillic or fullwidth lookalikes.
     let max = s.join("Max".into(), Vec3::new(4., 1., 0.), false).unwrap();
     let cyrillic = s.join("Мах".into(), Vec3::new(8., 1., 0.), false).unwrap();
-    let wide = s.join("ＭＡＸ".into(), Vec3::new(12., 1., 0.), false).unwrap();
+    let wide = s
+        .join("ＭＡＸ".into(), Vec3::new(12., 1., 0.), false)
+        .unwrap();
     assert_eq!(s.names()[&max], "Max");
     assert_eq!(s.names()[&cyrillic], "Мах 2");
     assert_eq!(s.names()[&wide], "ＭＡＸ 3");
-    let upper = s.join("ÉMILE".into(), Vec3::new(16., 1., 0.), false).unwrap();
-    let lower = s.join("émile".into(), Vec3::new(20., 1., 0.), false).unwrap();
+    let upper = s
+        .join("ÉMILE".into(), Vec3::new(16., 1., 0.), false)
+        .unwrap();
+    let lower = s
+        .join("émile".into(), Vec3::new(20., 1., 0.), false)
+        .unwrap();
     assert_eq!(s.names()[&upper], "ÉMILE");
     assert_eq!(s.names()[&lower], "émile 2");
 }
@@ -1991,7 +2182,9 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     use bri_sim::session::{Clan, MAX_CLAN_TAG, Notice};
     let mut s = session();
     let host = s.join("Host".into(), Vec3::Y, true).unwrap();
-    let guest = s.join("Guest".into(), Vec3::new(4., 1., 0.), false).unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4., 1., 0.), false)
+        .unwrap();
     // Taken at join (`onConnectRequest`), as a guest with default trust.
     let tags = Clan {
         prefix: "[BL]".into(),
@@ -2012,7 +2205,8 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
         prefix: format!("\u{e003}\n<color:ff0000>{}", "é".repeat(40)),
         suffix: String::new(),
     };
-    s.command(guest, 2, Command::SetClan(wanted.clone())).unwrap();
+    s.command(guest, 2, Command::SetClan(wanted.clone()))
+        .unwrap();
     let taken = &s.clans()[&guest];
     assert_eq!(taken.prefix, "é".repeat(MAX_CLAN_TAG));
     assert_eq!(taken.suffix, "");
@@ -2033,7 +2227,8 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     assert_eq!(s.clans()[&guest].prefix, "[A]");
     assert!(!told(&mut s));
     // Clearing both tags leaves the name bare.
-    s.command(guest, 5, Command::SetClan(Clan::default())).unwrap();
+    s.command(guest, 5, Command::SetClan(Clan::default()))
+        .unwrap();
     assert!(!s.clans().contains_key(&guest));
 }
 
@@ -2124,15 +2319,23 @@ fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
     for _ in 0..10 {
         s.step().unwrap();
     }
-    let set = |settings: Settings| Command::Admin(Request::new(Action::SetEnvironment { settings }));
-    let day = |time: f32, anchor_tick: u64| DayCycle { length_seconds: 120.0, time, anchor_tick };
+    let set =
+        |settings: Settings| Command::Admin(Request::new(Action::SetEnvironment { settings }));
+    let day = |time: f32, anchor_tick: u64| DayCycle {
+        length_seconds: 120.0,
+        time,
+        anchor_tick,
+    };
     let wanted = Settings {
         sun_elevation: Some(20.0),
         fog_color: Some([0.5, 0.4, 0.3]),
         day_cycle: Some(day(0.75, 999_999)),
         ..Default::default()
     };
-    assert!(s.command(guest, 1, set(wanted.clone())).is_err(), "players may not");
+    assert!(
+        s.command(guest, 1, set(wanted.clone())).is_err(),
+        "players may not"
+    );
     assert!(s.environment().is_empty());
     assert!(
         s.admin_state(admin)
@@ -2153,7 +2356,10 @@ fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
     s.command(admin, 2, set(applied.clone())).unwrap();
     assert_eq!(s.environment().day_cycle, Some(day(0.75, tick)));
     // Out-of-range values are refused; Reset is every setting unset.
-    let bad = Settings { visible_distance: Some(5.0), ..Default::default() };
+    let bad = Settings {
+        visible_distance: Some(5.0),
+        ..Default::default()
+    };
     assert!(s.command(admin, 3, set(bad)).is_err());
     s.command(admin, 4, set(Settings::default())).unwrap();
     assert!(s.environment().is_empty());

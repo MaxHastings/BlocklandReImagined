@@ -32,7 +32,13 @@ fn scroll(name: &str, r: Rect) -> Control {
 }
 fn push_button(r: Rect, label: &str, name: &str) -> Control {
     named(
-        button("BlockButtonProfile", r, "base/client/ui/button1", label, name),
+        button(
+            "BlockButtonProfile",
+            r,
+            "base/client/ui/button1",
+            label,
+            name,
+        ),
         name,
     )
 }
@@ -55,8 +61,10 @@ fn color_button(r: Rect, name: &str) -> Control {
     b.name = Some(name.into());
     let inner = Rect::new(4, 4, r.w - 8, r.h - 8);
     b.children.extend(checker(inner));
-    b.children
-        .push(named(swatch(inner, rgba([0.0; 4])), &format!("{name}_Swatch")));
+    b.children.push(named(
+        swatch(inner, rgba([0.0; 4])),
+        &format!("{name}_Swatch"),
+    ));
     b
 }
 /// Light and dark squares behind a colour with alpha.
@@ -130,12 +138,23 @@ impl Environment {
     pub fn new(core: &mut Core) -> Self {
         core.environment.begin();
         let (mut root, mut win) = dialog("Environment", 440, 440);
-        win.children.push(push_button(Rect::new(12, 30, 100, 24), "Simple", "EnvTabSimple"));
-        win.children
-            .push(push_button(Rect::new(114, 30, 100, 24), "Advanced", "EnvTabAdvanced"));
+        win.children.push(push_button(
+            Rect::new(12, 30, 100, 24),
+            "Simple",
+            "EnvTabSimple",
+        ));
+        win.children.push(push_button(
+            Rect::new(114, 30, 100, 24),
+            "Advanced",
+            "EnvTabAdvanced",
+        ));
         // Simple: a look, and the day/night cycle.
         let mut simple = named(
-            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(12, 60, 416, 306)),
+            ctrl(
+                "GuiControl",
+                "GuiDefaultProfile",
+                Rect::new(12, 60, 416, 306),
+            ),
             "EnvSimplePage",
         );
         simple
@@ -143,7 +162,11 @@ impl Environment {
             .push(text("GuiTextProfile", Rect::new(0, 0, 200, 18), "Look:"));
         let mut looks = scroll("EnvPresetScroll", Rect::new(0, 20, 200, 200));
         let mut list = named(
-            ctrl("GuiTextListCtrl", "GuiTextListProfile", Rect::new(0, 0, 184, 16)),
+            ctrl(
+                "GuiTextListCtrl",
+                "GuiTextListProfile",
+                Rect::new(0, 0, 184, 16),
+            ),
             "EnvPresets",
         );
         list.fields.insert("columns".into(), "0".into());
@@ -159,16 +182,20 @@ impl Environment {
             .enumerate()
         {
             let y = 52 + i as i32 * 50;
-            simple
-                .children
-                .push(text("GuiTextProfile", Rect::new(215, y, 120, 18), f.label()));
+            simple.children.push(text(
+                "GuiTextProfile",
+                Rect::new(215, y, 120, 18),
+                f.label(),
+            ));
             simple.children.push(named(
                 text("GuiTextProfile", Rect::new(335, y, 70, 18), ""),
                 &format!("{}_Value", number_name(f, "S")),
             ));
-            simple
-                .children
-                .push(slider(Rect::new(215, y + 20, 190, 20), &number_name(f, "S"), f.range()));
+            simple.children.push(slider(
+                Rect::new(215, y + 20, 190, 20),
+                &number_name(f, "S"),
+                f.range(),
+            ));
         }
         let mut hint = text(
             "GuiMLTextProfile",
@@ -200,17 +227,20 @@ impl Environment {
             rows.children
                 .push(text("GuiTextProfile", Rect::new(6, y, 130, 20), label));
             match *row {
-                Row::DayCycle => rows
-                    .children
-                    .push(check(Rect::new(140, y, 200, 20), "", "EnvDayCycleAdvanced")),
-                Row::VignetteMultiply => rows.children.push(check(
-                    Rect::new(140, y, 200, 20),
-                    "",
-                    "EnvVignetteMultiply",
-                )),
-                Row::Number(f) => {
+                Row::DayCycle => {
                     rows.children
-                        .push(slider(Rect::new(140, y, 180, 20), &number_name(f, "A"), f.range()));
+                        .push(check(Rect::new(140, y, 200, 20), "", "EnvDayCycleAdvanced"))
+                }
+                Row::VignetteMultiply => {
+                    rows.children
+                        .push(check(Rect::new(140, y, 200, 20), "", "EnvVignetteMultiply"))
+                }
+                Row::Number(f) => {
+                    rows.children.push(slider(
+                        Rect::new(140, y, 180, 20),
+                        &number_name(f, "A"),
+                        f.range(),
+                    ));
                     rows.children.push(named(
                         text("GuiTextProfile", Rect::new(326, y, 70, 20), ""),
                         &format!("{}_Value", number_name(f, "A")),
@@ -260,12 +290,18 @@ impl Environment {
         let m = &core.environment;
         let v = &mut self.view;
         let busy = core.admin.busy();
-        for (name, shown) in [("EnvSimplePage", !self.advanced), ("EnvAdvancedPage", self.advanced)] {
+        for (name, shown) in [
+            ("EnvSimplePage", !self.advanced),
+            ("EnvAdvancedPage", self.advanced),
+        ] {
             if let Some(n) = v.id(name) {
                 v.set_visible(n, shown);
             }
         }
-        for (name, current) in [("EnvTabSimple", !self.advanced), ("EnvTabAdvanced", self.advanced)] {
+        for (name, current) in [
+            ("EnvTabSimple", !self.advanced),
+            ("EnvTabAdvanced", self.advanced),
+        ] {
             if let Some(n) = v.id(name) {
                 v.set_active(n, !current);
             }
@@ -368,7 +404,13 @@ impl Screen for Environment {
         if !self.view.node(ev.node).state.active {
             return;
         }
-        let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+        let name = self
+            .view
+            .node(ev.node)
+            .ctrl
+            .name
+            .clone()
+            .unwrap_or_default();
         // A check box flips on `Changed`, before its `Click`; it is read
         // here, because the refresh below shows the model's value again.
         if ev.kind == EventKind::Changed {
@@ -438,8 +480,10 @@ impl ColorPicker {
         let field = core.environment.picking;
         let title = field.map_or("Color", ColorField::label);
         let (mut root, mut win) = dialog(title, 300, 310);
-        win.children.push(push_button(Rect::new(15, 30, 60, 22), "RGB", "EnvPickRgb"));
-        win.children.push(push_button(Rect::new(77, 30, 60, 22), "HSV", "EnvPickHsv"));
+        win.children
+            .push(push_button(Rect::new(15, 30, 60, 22), "RGB", "EnvPickRgb"));
+        win.children
+            .push(push_button(Rect::new(77, 30, 60, 22), "HSV", "EnvPickHsv"));
         for (i, name) in CHANNELS.iter().enumerate() {
             let y = 62 + i as i32 * 30;
             win.children.push(named(
@@ -458,8 +502,16 @@ impl ColorPicker {
             win.children.extend(checker(r));
             win.children.push(named(swatch(r, rgba([0.0; 4])), name));
         }
-        win.children.push(push_button(Rect::new(15, 262, 98, 28), "Cancel", "EnvPickCancel"));
-        win.children.push(push_button(Rect::new(187, 262, 98, 28), "Done >>", "EnvPickDone"));
+        win.children.push(push_button(
+            Rect::new(15, 262, 98, 28),
+            "Cancel",
+            "EnvPickCancel",
+        ));
+        win.children.push(push_button(
+            Rect::new(187, 262, 98, 28),
+            "Done >>",
+            "EnvPickDone",
+        ));
         root.children.push(win);
         let mut view = View::new(&root);
         view.measure(&core.pack);
@@ -483,14 +535,21 @@ impl ColorPicker {
         } else {
             self.color
         };
-        let labels = if self.hsv { ["H", "S", "V", "A"] } else { ["R", "G", "B", "A"] };
+        let labels = if self.hsv {
+            ["H", "S", "V", "A"]
+        } else {
+            ["R", "G", "B", "A"]
+        };
         for (i, name) in CHANNELS.iter().enumerate() {
             let shown = i < 3 || alpha;
             let hue = self.hsv && i == 0;
             if let Some(n) = self.view.id(name) {
                 self.view.set_visible(n, shown);
                 let range = if hue { "0 360" } else { "0 1" };
-                self.view.nodes[n].ctrl.fields.insert("range".into(), range.into());
+                self.view.nodes[n]
+                    .ctrl
+                    .fields
+                    .insert("range".into(), range.into());
                 self.view.set_num(n, values[i]);
             }
             if let Some(n) = self.view.id(&format!("{name}_Label")) {

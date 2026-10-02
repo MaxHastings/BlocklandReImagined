@@ -509,7 +509,10 @@ impl MinigameSettingsDef {
         range(self.vehicle_respawn_range, 0, "vehicle_respawn_range")?;
         range(self.brick_respawn_range, 0, "brick_respawn_range")?;
         if let Some(n) = self.title_length {
-            ensure!((1..=256).contains(&n), "minigame_settings: title_length is 1 to 256");
+            ensure!(
+                (1..=256).contains(&n),
+                "minigame_settings: title_length is 1 to 256"
+            );
         }
         if let Some(t) = &self.title {
             ensure!(
@@ -524,7 +527,10 @@ impl MinigameSettingsDef {
             ("vehicle_respawn", self.vehicle_respawn),
             ("brick_respawn", self.brick_respawn),
         ] {
-            ensure!(v.is_none_or(|v| v <= 999), "minigame_settings: {what} is at most 999");
+            ensure!(
+                v.is_none_or(|v| v <= 999),
+                "minigame_settings: {what} is at most 999"
+            );
         }
         for item in self.loadout.iter().flatten() {
             ensure!(
@@ -639,7 +645,12 @@ impl BrickTargetDef {
                 && self.name != "Self"
                 && !BRICK_INPUT_TARGETS
                     .iter()
-                    .chain(&[("Projectile", ""), ("Bot", ""), ("Driver", ""), ("Ball", "")])
+                    .chain(&[
+                        ("Projectile", ""),
+                        ("Bot", ""),
+                        ("Driver", ""),
+                        ("Ball", "")
+                    ])
                     .any(|(slot, _)| slot.eq_ignore_ascii_case(&self.name)),
             "brick target `{}`: a name like Team(Client), 1 to 64 letters, digits, _ or (), \
              not one of the engine's own",
@@ -659,7 +670,10 @@ impl BrickTargetDef {
             self.class
         );
         ensure!(
-            self.from == "Self" || BRICK_INPUT_TARGETS.iter().any(|(slot, _)| *slot == self.from),
+            self.from == "Self"
+                || BRICK_INPUT_TARGETS
+                    .iter()
+                    .any(|(slot, _)| *slot == self.from),
             "brick target `{}`: from `{}` is not Self or one of {}",
             self.name,
             self.from,
@@ -691,7 +705,11 @@ pub struct BrickOutputDef {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputParam {
     /// A whole number from `min` to `max`.
-    Int { min: i64, max: i64, default: i64 },
+    Int {
+        min: i64,
+        max: i64,
+        default: i64,
+    },
     /// A number from `min` to `max` in steps of `step`.
     Float {
         min: f32,
@@ -701,13 +719,22 @@ pub enum OutputParam {
     },
     Bool,
     /// Text of at most `max_length` characters in a box `width` wide.
-    String { max_length: u32, width: i32 },
+    String {
+        max_length: u32,
+        width: i32,
+    },
     /// A colour of the server's palette.
-    PaintColor { default: u8 },
+    PaintColor {
+        default: u8,
+    },
     /// One of named choices, each with the number the rules receive.
-    List { items: Vec<(String, i64)> },
+    List {
+        items: Vec<(String, i64)>,
+    },
     /// A vector at most `max_length` long.
-    Vector { max_length: f32 },
+    Vector {
+        max_length: f32,
+    },
 }
 impl OutputParam {
     fn valid(&self) -> bool {
@@ -746,7 +773,10 @@ impl BrickOutputDef {
     pub fn validate(&self, classes: &[&str]) -> Result<()> {
         ensure!(
             (1..=64).contains(&self.name.len())
-                && self.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
             "brick output `{}`: a name like setTeamControl, 1 to 64 letters, digits or _",
             self.name
         );
@@ -977,7 +1007,10 @@ impl Behaviour {
         if let Some(m) = &self.minigame_settings {
             m.validate()?;
         }
-        ensure!(self.on_brick.len() <= 64, "on_brick lists at most 64 brick kinds");
+        ensure!(
+            self.on_brick.len() <= 64,
+            "on_brick lists at most 64 brick kinds"
+        );
         for kind in &self.on_brick {
             ensure!(
                 kind == "*"
@@ -1010,7 +1043,11 @@ impl Behaviour {
         let mut keys = std::collections::BTreeSet::new();
         for def in &self.settings {
             def.validate().map_err(anyhow::Error::msg)?;
-            ensure!(keys.insert(&def.key), "setting `{}` declared twice", def.key);
+            ensure!(
+                keys.insert(&def.key),
+                "setting `{}` declared twice",
+                def.key
+            );
         }
         for def in &self.settings {
             if let Some(when) = &def.shown_when {
@@ -1066,12 +1103,17 @@ impl Behaviour {
                 target.name
             );
         }
-        let classes: Vec<&str> = self.brick_targets.iter().map(|t| t.class.as_str()).collect();
+        let classes: Vec<&str> = self
+            .brick_targets
+            .iter()
+            .map(|t| t.class.as_str())
+            .collect();
         for (i, output) in self.brick_outputs.iter().enumerate() {
             output.validate(&classes)?;
             ensure!(
-                !self.brick_outputs[..i].iter().any(|o| o.class == output.class
-                    && o.name.eq_ignore_ascii_case(&output.name)),
+                !self.brick_outputs[..i]
+                    .iter()
+                    .any(|o| o.class == output.class && o.name.eq_ignore_ascii_case(&output.name)),
                 "brick output `{}` declared twice for {}",
                 output.name,
                 output.class
@@ -1785,10 +1827,7 @@ impl Binds {
             "1 to {MAX_BINDS} binds"
         );
         for (i, bind) in self.binds.iter().enumerate() {
-            ensure!(
-                text(&bind.name, 64),
-                "bind names are 1 to 64 characters"
-            );
+            ensure!(text(&bind.name, 64), "bind names are 1 to 64 characters");
             ensure!(
                 !self.binds[..i].iter().any(|b| b.name == bind.name),
                 "bind `{}` listed twice",
@@ -1933,13 +1972,19 @@ impl Splash {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "splash schema_version must be 1");
         let day = |[m, d]: [u8; 2]| (1..=12).contains(&m) && (1..=31).contains(&d);
-        ensure!(day(self.from) && day(self.to), "from and to are [month, day]");
+        ensure!(
+            day(self.from) && day(self.to),
+            "from and to are [month, day]"
+        );
         ensure!(
             !self.layers.is_empty() && self.layers.len() <= 8,
             "1 to 8 layers"
         );
         let file = |f: &str| !f.is_empty() && f.len() <= 128 && !f.contains("..");
-        ensure!(self.layers.iter().all(|l| file(&l.image)), "layer images are package files");
+        ensure!(
+            self.layers.iter().all(|l| file(&l.image)),
+            "layer images are package files"
+        );
         if let Some(f) = &self.falling {
             ensure!(
                 !f.images.is_empty()
@@ -2132,10 +2177,16 @@ mod tests {
         }))
         .unwrap();
         panel.validate().unwrap();
-        assert!(panel.shows_holding("guns:image/rifle"), "any image of the package");
+        assert!(
+            panel.shows_holding("guns:image/rifle"),
+            "any image of the package"
+        );
         assert!(panel.shows_holding("tools:image/scope"), "one named image");
         assert!(!panel.shows_holding("tools:image/hammer"));
-        assert!(!panel.shows_holding("gunsmith:image/rifle"), "not a prefix match");
+        assert!(
+            !panel.shows_holding("gunsmith:image/rifle"),
+            "not a prefix match"
+        );
         assert!(!panel.shows_holding(""), "empty hands");
         panel.holding.clear();
         assert!(panel.shows_holding(""), "no list: always shown");
@@ -2196,9 +2247,18 @@ mod tests {
         };
         assert!(target("Team(Client)", "Slayer_TeamSO", "Client").is_ok());
         assert!(target("Team(Brick)", "Slayer_TeamSO", "Self").is_ok());
-        assert!(target("Client", "Slayer_TeamSO", "Self").is_err(), "a slot's name");
-        assert!(target("Team(Client)", "GameConnection", "Client").is_err(), "a native class");
-        assert!(target("Team(Client)", "Slayer_TeamSO", "Driver").is_err(), "not a base");
+        assert!(
+            target("Client", "Slayer_TeamSO", "Self").is_err(),
+            "a slot's name"
+        );
+        assert!(
+            target("Team(Client)", "GameConnection", "Client").is_err(),
+            "a native class"
+        );
+        assert!(
+            target("Team(Client)", "Slayer_TeamSO", "Driver").is_err(),
+            "not a base"
+        );
         assert!(target("Team Client", "Slayer_TeamSO", "Client").is_err());
         let output = BrickOutputDef {
             name: "IncScore".into(),
@@ -2206,7 +2266,10 @@ mod tests {
             params: vec![],
         };
         assert!(output.validate(&["Slayer_TeamSO"]).is_ok());
-        assert!(output.validate(&[]).is_err(), "only a class of its own targets");
+        assert!(
+            output.validate(&[]).is_err(),
+            "only a class of its own targets"
+        );
     }
 
     #[test]
@@ -2221,7 +2284,13 @@ mod tests {
         };
         assert!(input(Some("onPlayerTouch"), &["Player", "Client"]).is_ok());
         assert!(input(None, &["Client", "Player(Killer)", "Client(Killer)"]).is_ok());
-        assert!(input(Some("PlayerTouch"), &[]).is_err(), "not an input name");
-        assert!(input(Some("onTouch(Team1)"), &[]).is_err(), "one of the engine's, plain");
+        assert!(
+            input(Some("PlayerTouch"), &[]).is_err(),
+            "not an input name"
+        );
+        assert!(
+            input(Some("onTouch(Team1)"), &[]).is_err(),
+            "one of the engine's, plain"
+        );
     }
 }

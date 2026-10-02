@@ -728,12 +728,36 @@ pub(crate) mod tests {
             colors: None,
         };
         let quads = vec![
-            quad(Face::Top, [0., 1., 0.], [[-x, y, -z], [-x, y, z], [x, y, z], [x, y, -z]]),
-            quad(Face::Bottom, [0., -1., 0.], [[-x, -y, -z], [x, -y, -z], [x, -y, z], [-x, -y, z]]),
-            quad(Face::North, [0., 0., -1.], [[-x, -y, -z], [-x, y, -z], [x, y, -z], [x, -y, -z]]),
-            quad(Face::East, [1., 0., 0.], [[x, -y, -z], [x, y, -z], [x, y, z], [x, -y, z]]),
-            quad(Face::South, [0., 0., 1.], [[x, -y, z], [x, y, z], [-x, y, z], [-x, -y, z]]),
-            quad(Face::West, [-1., 0., 0.], [[-x, -y, z], [-x, y, z], [-x, y, -z], [-x, -y, -z]]),
+            quad(
+                Face::Top,
+                [0., 1., 0.],
+                [[-x, y, -z], [-x, y, z], [x, y, z], [x, y, -z]],
+            ),
+            quad(
+                Face::Bottom,
+                [0., -1., 0.],
+                [[-x, -y, -z], [x, -y, -z], [x, -y, z], [-x, -y, z]],
+            ),
+            quad(
+                Face::North,
+                [0., 0., -1.],
+                [[-x, -y, -z], [-x, y, -z], [x, y, -z], [x, -y, -z]],
+            ),
+            quad(
+                Face::East,
+                [1., 0., 0.],
+                [[x, -y, -z], [x, y, -z], [x, y, z], [x, -y, z]],
+            ),
+            quad(
+                Face::South,
+                [0., 0., 1.],
+                [[x, -y, z], [x, y, z], [-x, y, z], [-x, -y, z]],
+            ),
+            quad(
+                Face::West,
+                [-1., 0., 0.],
+                [[-x, -y, z], [-x, y, z], [-x, y, -z], [-x, -y, -z]],
+            ),
         ];
         let cover = |required_area| Coverage {
             hides_adjacent: true,
@@ -749,7 +773,14 @@ pub(crate) mod tests {
                 attachment_rows: vec!["b".into(); 3],
                 collision_boxes: vec![],
                 needs_external_collision: false,
-                coverage: Some([cover(1.), cover(1.), cover(3.), cover(3.), cover(3.), cover(3.)]),
+                coverage: Some([
+                    cover(1.),
+                    cover(1.),
+                    cover(3.),
+                    cover(3.),
+                    cover(3.),
+                    cover(3.),
+                ]),
                 quads,
             },
         )])
@@ -759,7 +790,11 @@ pub(crate) mod tests {
     fn neighbours_hide_covered_faces_as_v20_coverage_does() {
         let meshes = box_meshes();
         let at = |x: f32, color: u8| {
-            let mut b = Brick::new(ContentRef::Resolved("definition/box".into()), [x, 0.3, 0.25], 1);
+            let mut b = Brick::new(
+                ContentRef::Resolved("definition/box".into()),
+                [x, 0.3, 0.25],
+                1,
+            );
             b.color = color;
             b
         };
@@ -790,12 +825,18 @@ pub(crate) mod tests {
         // Two opaque bricks side by side: each loses the face they share.
         let mut state = ChunkedWorld::default();
         let pair = world([(1, at(0.25, 0)), (2, at(0.75, 0))]);
-        assert_eq!(run(&mut state, &pair, None), BTreeMap::from([(chunk_key([0.25, 0.3, 0.25]), 10)]));
+        assert_eq!(
+            run(&mut state, &pair, None),
+            BTreeMap::from([(chunk_key([0.25, 0.3, 0.25]), 10)])
+        );
         // A translucent neighbour hides nothing, but is hidden itself.
         let mut clear = (*pair).clone();
         clear.bricks.get_mut(&2).unwrap().color = 1;
         let clear = Arc::new(clear);
-        assert_eq!(run(&mut state, &clear, Some(&[2])), BTreeMap::from([(chunk_key([0.25, 0.3, 0.25]), 11)]));
+        assert_eq!(
+            run(&mut state, &clear, Some(&[2])),
+            BTreeMap::from([(chunk_key([0.25, 0.3, 0.25]), 11)])
+        );
         // Across a chunk boundary, removing one brick rebuilds the other's
         // chunk so its face comes back.
         let (a, b) = (CHUNK_SIZE - 0.25, CHUNK_SIZE + 0.25);
@@ -901,9 +942,8 @@ pub(crate) mod tests {
             b.print = print;
             b
         };
-        let unresolved = |namespace: &str, name: &str| {
-            Some(ContentRef::unresolved(namespace, name))
-        };
+        let unresolved =
+            |namespace: &str, name: &str| Some(ContentRef::unresolved(namespace, name));
         let drawn = |brick: &Brick| {
             let scene =
                 build_brick(brick, &[[1.0; 4]], &meshes, &palette, Some(&materials)).unwrap();

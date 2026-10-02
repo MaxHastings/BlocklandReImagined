@@ -74,7 +74,14 @@ impl App {
             else {
                 continue;
             };
-            if play_free_thread(avatar_threads, *actor, *thread, sequence, *image_hand, started_at) {
+            if play_free_thread(
+                avatar_threads,
+                *actor,
+                *thread,
+                sequence,
+                *image_hand,
+                started_at,
+            ) {
                 continue;
             }
             if *thread != 2 || sequence.eq_ignore_ascii_case("root") {

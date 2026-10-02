@@ -601,8 +601,10 @@ impl Building {
     /// `quarter_turns` where it stands (`Notice::MirrorGhost`), until the
     /// next click puts the brick in hand out again.
     pub fn mirror_ghost(&mut self, definition: &str, quarter_turns: u8) {
-        let (Some(entry), Some(ghost)) = (self.definitions.entries.get(definition), self.ghost.as_mut())
-        else {
+        let (Some(entry), Some(ghost)) = (
+            self.definitions.entries.get(definition),
+            self.ghost.as_mut(),
+        ) else {
             return;
         };
         ghost.definition = ContentRef::Resolved(definition.into());
@@ -633,7 +635,11 @@ impl Building {
         let mut low = Vec3::splat(f32::MAX);
         let mut high = Vec3::splat(f32::MIN);
         // The start brick goes where it is aimed, as a ghost brick would.
-        let pivot = if copy.start { &copy.bricks[..1] } else { &copy.bricks[..] };
+        let pivot = if copy.start {
+            &copy.bricks[..1]
+        } else {
+            &copy.bricks[..]
+        };
         for brick in pivot {
             let Ok(definition) = self.definitions.get(brick) else {
                 continue;
@@ -654,9 +660,8 @@ impl Building {
         let out = Vec3::from(normal).round();
         let target = Vec3::from(point) + half * out;
         let middle = (low + high) * 0.5;
-        copy.anchor = bri_sim::blueprint::snap_anchor(
-            (Vec3::from(copy.anchor) + target - middle).to_array(),
-        );
+        copy.anchor =
+            bri_sim::blueprint::snap_anchor((Vec3::from(copy.anchor) + target - middle).to_array());
         copy.place();
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
@@ -1352,9 +1357,14 @@ impl Building {
         distance: f32,
         passages: &bri_content::passage::Passages,
     ) -> Result<(Vec3, Option<glam::Affine3A>)> {
-        crate::portal_view::boom(from, pivot, forward, distance, passages, |eye, forward, d| {
-            self.camera_position(eye, forward, d)
-        })
+        crate::portal_view::boom(
+            from,
+            pivot,
+            forward,
+            distance,
+            passages,
+            |eye, forward, d| self.camera_position(eye, forward, d),
+        )
     }
 
     /// Exact terrain triangles covering a box, one patch per terrain field.
@@ -1581,15 +1591,8 @@ impl Building {
                 if let Some(copy) = self.copy_in_hand() {
                     // A super shift goes by the pivot's size.
                     let size = root_size.unwrap_or(copy.blueprint.turned_size(copy.turns));
-                    copy.anchor = bri_sim::blueprint::shift(
-                        copy.anchor,
-                        size,
-                        body,
-                        *x,
-                        *y,
-                        *z,
-                        super_shift,
-                    );
+                    copy.anchor =
+                        bri_sim::blueprint::shift(copy.anchor, size, body, *x, *y, *z, super_shift);
                     copy.place();
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
@@ -2172,7 +2175,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             &plant.commands[..],
-            [Command::Plant { quarter_turns: 1, .. }]
+            [Command::Plant {
+                quarter_turns: 1,
+                ..
+            }]
         ));
     }
 
@@ -2362,7 +2368,10 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(
-            sent(key(&mut b, GameAction::SuperShiftBrick { x: 0, y: -1, z: 3 })),
+            sent(key(
+                &mut b,
+                GameAction::SuperShiftBrick { x: 0, y: -1, z: 3 }
+            )),
             (
                 "shift".to_string(),
                 vec![
@@ -2584,7 +2593,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             plant.commands.as_slice(),
-            [Command::PlaceBlueprint { flipped: true, mirrored: false, .. }]
+            [Command::PlaceBlueprint {
+                flipped: true,
+                mirrored: false,
+                ..
+            }]
         ));
         b.flip_copy();
         assert_eq!(b.copy_ghost().unwrap(), &turned[..]);

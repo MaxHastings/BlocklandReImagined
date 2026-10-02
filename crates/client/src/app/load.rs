@@ -57,11 +57,13 @@ impl App {
         )?;
         // Without its models the practice still runs and completes on
         // schedule; only the targets go undrawn.
-        let tutorial_targets = crate::tutorial_targets::TutorialTargets::load(&content.paths.tutorial)
-            .unwrap_or_else(|error| {
-                eprintln!("Tutorial targets will not be drawn: {error:#}");
-                Default::default()
-            });
+        let tutorial_targets = crate::tutorial_targets::TutorialTargets::load(
+            &content.paths.tutorial,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("Tutorial targets will not be drawn: {error:#}");
+            Default::default()
+        });
         let ContentParts {
             weapon_effects,
             actor_effects,
@@ -79,9 +81,8 @@ impl App {
             content_problems.extend(more);
             parts?
         };
-        content_problems.extend(
-            weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)),
-        );
+        content_problems
+            .extend(weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)));
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);

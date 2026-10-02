@@ -266,7 +266,13 @@ impl SaveLoad {
         self.files = core
             .save_files
             .iter()
-            .filter(|f| searching || self.map.as_ref().is_some_and(|m| m.eq_ignore_ascii_case(&f.map)))
+            .filter(|f| {
+                searching
+                    || self
+                        .map
+                        .as_ref()
+                        .is_some_and(|m| m.eq_ignore_ascii_case(&f.map))
+            })
             .cloned()
             .collect();
         self.files.sort_by(|a, b| {
@@ -365,24 +371,25 @@ impl SaveLoad {
             let picture = core.save_preview.as_ref().filter(|(map, name, preview)| {
                 picked == Some((map.as_str(), name.as_str())) && *preview != IconRef::None
             });
-            let preview = picture.map(|p| p.2.clone()).or_else(|| self
-                .map
-                .as_ref()
-                .and_then(|name| {
-                    core.maps
-                        .iter()
-                        .find(|m| m.name.eq_ignore_ascii_case(name))
-                        .map(|m| m.preview.clone())
-                        .or_else(|| {
-                            core.pack
-                                .data
-                                .maps
-                                .iter()
-                                .find(|m| m.display_name.eq_ignore_ascii_case(name))
-                                .and_then(|m| m.preview.clone())
-                                .map(IconRef::Pack)
-                        })
-                }))
+            let preview = picture
+                .map(|p| p.2.clone())
+                .or_else(|| {
+                    self.map.as_ref().and_then(|name| {
+                        core.maps
+                            .iter()
+                            .find(|m| m.name.eq_ignore_ascii_case(name))
+                            .map(|m| m.preview.clone())
+                            .or_else(|| {
+                                core.pack
+                                    .data
+                                    .maps
+                                    .iter()
+                                    .find(|m| m.display_name.eq_ignore_ascii_case(name))
+                                    .and_then(|m| m.preview.clone())
+                                    .map(IconRef::Pack)
+                            })
+                    })
+                })
                 .unwrap_or(IconRef::None);
             if let Some(n) = self.view.id("LoadBricks_Preview") {
                 self.view.set_icon(n, &preview);
@@ -611,7 +618,11 @@ impl Screen for SaveLoad {
                     if let Some(f) = self.selected().cloned() {
                         self.set("SaveBricks_FileName", display_name(&f.name));
                         // A damaged file's description is our notice, not the player's text.
-                        let description = if f.damaged { "" } else { f.description.as_str() };
+                        let description = if f.damaged {
+                            ""
+                        } else {
+                            f.description.as_str()
+                        };
                         self.set("SaveBricks_Description", description);
                     }
                 } else if self.searching() {
@@ -992,7 +1003,10 @@ mod tests {
             &mut ui.core,
         );
         let actions = ui.drain_actions();
-        assert!(matches!(actions[..], [(_, UiAction::OpenSavesFolder)]), "{actions:?}");
+        assert!(
+            matches!(actions[..], [(_, UiAction::OpenSavesFolder)]),
+            "{actions:?}"
+        );
         // Save Bricks has no such button.
         let s = SaveLoad::new(ScreenId::SaveBricks, &ui.core);
         assert!(s.view.id(OPEN_FOLDER).is_none());

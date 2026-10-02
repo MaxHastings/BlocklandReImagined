@@ -196,10 +196,7 @@ async fn stalled(progress: &bri_progress::Progress) -> anyhow::Error {
             last = snapshot;
             since = now;
         } else if now.duration_since(since) >= PEER_STALL {
-            return anyhow::anyhow!(
-                "The server stopped responding ({})",
-                snapshot.status()
-            );
+            return anyhow::anyhow!("The server stopped responding ({})", snapshot.status());
         }
     }
 }
@@ -619,7 +616,10 @@ mod tests {
             std::future::pending::<Result<Connected>>().await
         });
         let reason = failure(&mut worker).await;
-        assert!(reason.starts_with("The server stopped responding"), "{reason}");
+        assert!(
+            reason.starts_with("The server stopped responding"),
+            "{reason}"
+        );
         // Five slow half-stalls of arrivals, then one whole stall of nothing.
         let waited = start.elapsed();
         let stall = PEER_STALL * 6;

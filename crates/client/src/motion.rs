@@ -154,7 +154,10 @@ impl Motion {
     }
     /// Collision world for prediction, prepared off the UI thread with the map.
     pub fn install(&mut self, mirror: CollisionMirror) {
-        let sent = self.predictor.as_ref().map_or(self.sent_sequence, |p| p.sequence());
+        let sent = self
+            .predictor
+            .as_ref()
+            .map_or(self.sent_sequence, |p| p.sequence());
         self.reset();
         self.sent_sequence = sent;
         self.mirror = Some(mirror);
@@ -468,8 +471,8 @@ impl Motion {
         if let Some(offset) = self.clock_offset {
             let shown = self.shown_offset.unwrap_or(offset);
             let error = offset - shown;
-            let step = (CLOCK_SLEW * TICK_RATE).max(error.abs() / CLOCK_CATCH_UP)
-                * f64::from(seconds);
+            let step =
+                (CLOCK_SLEW * TICK_RATE).max(error.abs() / CLOCK_CATCH_UP) * f64::from(seconds);
             self.shown_offset = Some(if error.abs() > CLOCK_SNAP {
                 offset
             } else {
@@ -489,7 +492,9 @@ impl Motion {
         let angle = self.drive_turn.angle_between(glam::Quat::IDENTITY);
         if angle > 0.0 {
             let keep = fade.max(1.0 - DRIVE_EASE_TURN * seconds / angle);
-            self.drive_turn = glam::Quat::IDENTITY.slerp(self.drive_turn, keep).normalize();
+            self.drive_turn = glam::Quat::IDENTITY
+                .slerp(self.drive_turn, keep)
+                .normalize();
         }
         let Some(predictor) = &mut self.predictor else {
             return Ok(None);
@@ -875,7 +880,11 @@ mod tests {
                 arrivals.push_back((sent as f64 / TICK_RATE + 0.08 + jitter, sent));
             }
             motion.advance(frame, MoveInput::default(), 1).unwrap();
-            let due: Vec<_> = arrivals.iter().filter(|(at, _)| *at <= time).copied().collect();
+            let due: Vec<_> = arrivals
+                .iter()
+                .filter(|(at, _)| *at <= time)
+                .copied()
+                .collect();
             arrivals.retain(|(at, _)| *at > time);
             for (_, tick) in due {
                 motion.observe_clock(tick);
@@ -909,7 +918,9 @@ mod tests {
         motion.observe_clock(3 + 40 + 1);
         let mut seconds = 0.0;
         while motion.server_tick().unwrap() - start - seconds * TICK_RATE < 39.0 {
-            motion.advance(1.0 / 144.0, MoveInput::default(), 1).unwrap();
+            motion
+                .advance(1.0 / 144.0, MoveInput::default(), 1)
+                .unwrap();
             seconds += 1.0 / 144.0;
             assert!(seconds < 5.0, "still behind after {seconds} s");
         }
@@ -1051,7 +1062,10 @@ mod tests {
             .definitions
             .iter()
             .find(|d| d.id == definition)
-            .map(|d| d.is_actor().then_some(d.family == bri_vehicles::Family::Horse))
+            .map(|d| {
+                d.is_actor()
+                    .then_some(d.family == bri_vehicles::Family::Horse)
+            })
             .ok_or_else(|| anyhow::anyhow!("unknown {definition}"))?;
         // The host: the vehicle settled on the ground with its driver.
         let mut host = VehiclesWorld::new(pack.clone())?;
@@ -1083,7 +1097,12 @@ mod tests {
             Ok(())
         };
         for _ in 0..60 {
-            host_step(&mut host, &mut world, &MoveInput::default(), &MoveInput::default())?;
+            host_step(
+                &mut host,
+                &mut world,
+                &MoveInput::default(),
+                &MoveInput::default(),
+            )?;
         }
         let pose = |host: &VehiclesWorld,
                     world: &rapier3d::prelude::PhysicsWorld,
@@ -1145,7 +1164,10 @@ mod tests {
             let flick = if (t * 1.3).fract() < 0.12 { 0.35 } else { 0.0 };
             MoveInput {
                 forward: 1.0,
-                yaw: (((t * 2.0).sin() * 1.2 + (t * 1.3).floor() * 0.35 + flick + std::f64::consts::PI)
+                yaw: (((t * 2.0).sin() * 1.2
+                    + (t * 1.3).floor() * 0.35
+                    + flick
+                    + std::f64::consts::PI)
                     .rem_euclid(std::f64::consts::TAU)
                     - std::f64::consts::PI) as f32,
                 pitch: ((t * 3.0).sin() * 0.35) as f32,
@@ -1179,7 +1201,11 @@ mod tests {
             // when none has arrived.
             while (host_tick + 1) as f64 / TICK_RATE <= time {
                 host_tick += 1;
-                let due: Vec<_> = to_host.iter().filter(|(at, _)| *at <= time).cloned().collect();
+                let due: Vec<_> = to_host
+                    .iter()
+                    .filter(|(at, _)| *at <= time)
+                    .cloned()
+                    .collect();
                 to_host.retain(|(at, _)| *at > time);
                 for (_, inputs) in due {
                     received.extend(inputs.into_iter().filter(|(s, _)| *s > consumed));
@@ -1216,8 +1242,14 @@ mod tests {
                 && time > 1.0
             {
                 let seconds = frame as f32;
-                run.whip.0 = run.whip.0.max(motion.drive_offset.distance(last_offset) / seconds);
-                run.whip.1 = run.whip.1.max(motion.drive_turn.angle_between(last_turn) / seconds);
+                run.whip.0 = run
+                    .whip
+                    .0
+                    .max(motion.drive_offset.distance(last_offset) / seconds);
+                run.whip.1 = run
+                    .whip
+                    .1
+                    .max(motion.drive_turn.angle_between(last_turn) / seconds);
             }
             if let Some(pose) = &newest {
                 let (offset, turn) = (motion.drive_offset, motion.drive_turn);
@@ -1287,7 +1319,16 @@ mod tests {
                 let run = drive_run(definition, seed)?;
                 println!(
                     "{definition}: pop {:.4} units {:.4} rad, whip {:.3} u/s {:.3} rad/s, {} corrections, worst {:.4} units {:.4} rad, jerk {:.2} u/s {:.2} rad/s, {} rough frames",
-                    run.pop.0, run.pop.1, run.whip.0, run.whip.1, run.corrections, run.worst.0, run.worst.1, run.jerk.0, run.jerk.1, run.rough
+                    run.pop.0,
+                    run.pop.1,
+                    run.whip.0,
+                    run.whip.1,
+                    run.corrections,
+                    run.worst.0,
+                    run.worst.1,
+                    run.jerk.0,
+                    run.jerk.1,
+                    run.rough
                 );
                 // Applying a pose never moves the drawn vehicle (f32 noise:
                 // `angle_between` reads about 1e-3 for equal rotations).
@@ -1305,7 +1346,11 @@ mod tests {
                 // Max, v0.1.6: the drawn vehicle moves smoothly frame to
                 // frame, a horse jumping about too (it stair-stepped on the
                 // motor's 32 ms ticks: 45 units/s from one frame to the next).
-                assert!(run.rough <= 12, "{definition}: the drawn vehicle jerks on {} frames", run.rough);
+                assert!(
+                    run.rough <= 12,
+                    "{definition}: the drawn vehicle jerks on {} frames",
+                    run.rough
+                );
                 // What remains eases out no faster than the camera can
                 // follow, on top of the vehicle's own motion.
                 assert!(

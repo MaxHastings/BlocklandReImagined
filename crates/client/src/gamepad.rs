@@ -127,7 +127,8 @@ impl Gamepads {
         if start && ui.core.in_game() {
             ui.core.run_command("escapeMenu.toggle();", true);
         }
-        let playing = focused && ui.core.in_game() && ui.top_id() == bri_ui::screens::ScreenId::Play;
+        let playing =
+            focused && ui.core.in_game() && ui.top_id() == bri_ui::screens::ScreenId::Play;
         let want = if playing {
             held_commands(&pad)
         } else {

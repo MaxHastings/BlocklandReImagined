@@ -397,7 +397,10 @@ mod tests {
         let there = here + Vec3::new(5.0 * period, 0.0, 0.0);
         let count = |v: &[Vec<Mat4>]| v.iter().map(Vec::len).sum::<usize>();
         let (a, b) = (s.visible(here, 300.0), s.visible(there, 300.0));
-        assert_eq!(count(&s.visible_from(&[here, there], 300.0)), count(&a) + count(&b));
+        assert_eq!(
+            count(&s.visible_from(&[here, there], 300.0)),
+            count(&a) + count(&b)
+        );
         assert_eq!(count(&s.visible_from(&[here, here], 300.0)), count(&a));
     }
 

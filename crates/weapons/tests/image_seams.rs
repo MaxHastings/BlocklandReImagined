@@ -115,7 +115,13 @@ fn bot_use_is_read_and_limited() {
     let bot = pack.images[IMAGE].bot.unwrap();
     assert_eq!(bot.fire, BotFire::Hold);
     assert_eq!(bot.reach, Some(8.0));
-    assert_eq!(with(serde_json::json!({})).unwrap().images[IMAGE].bot.unwrap().fire, BotFire::Tap);
+    assert_eq!(
+        with(serde_json::json!({})).unwrap().images[IMAGE]
+            .bot
+            .unwrap()
+            .fire,
+        BotFire::Tap
+    );
     assert!(with(serde_json::json!({"fire": "spray"})).is_err());
     assert!(with(serde_json::json!({"reach": 0.0})).is_err());
     assert!(with(serde_json::json!({"reach": 5000.0})).is_err());

@@ -285,7 +285,11 @@ impl Index {
     }
     /// Bricks registered in one bucket from [`ray_buckets`].
     pub fn bucket(&self, key: (i32, i32, i32)) -> impl Iterator<Item = BrickId> + '_ {
-        self.buckets.get(&key).into_iter().flatten().map(|(id, _)| *id)
+        self.buckets
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .map(|(id, _)| *id)
     }
 }
 
@@ -411,7 +415,13 @@ mod tests {
             // Read with the slices reversed, as before this was fixed, the
             // pair collides and the load skips one of them.
             let reversed = |m: &Mesh| Mesh {
-                attachment_rows: m.attachment_rows.chunks(3).rev().flatten().cloned().collect(),
+                attachment_rows: m
+                    .attachment_rows
+                    .chunks(3)
+                    .rev()
+                    .flatten()
+                    .cloned()
+                    .collect(),
                 ..m.clone()
             };
             let (a, b) = (reversed(a), reversed(b));

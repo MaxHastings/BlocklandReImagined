@@ -675,7 +675,8 @@ impl WorldTransfer {
     /// the head and the bricks around the receiver go out while the rest
     /// of a large world is still encoding.
     pub fn encode_each(mut self, mut emit: impl FnMut(Vec<u8>)) -> anyhow::Result<()> {
-        let mut order: Vec<(BrickId, &Brick)> = self.bricks.iter().map(|(id, b)| (*id, b)).collect();
+        let mut order: Vec<(BrickId, &Brick)> =
+            self.bricks.iter().map(|(id, b)| (*id, b)).collect();
         let mut near = order.len();
         if let Some(focus) = self.focus {
             // Nearest neighbourhood first, each neighbourhood's bricks in id
@@ -997,7 +998,10 @@ pub fn changed_world_shapes(
         .map(|k| (k.clone(), Vec::new()))
         .collect();
     for (key, set) in &now {
-        if !sent.get(key).is_some_and(|s| std::sync::Arc::ptr_eq(s, set)) {
+        if !sent
+            .get(key)
+            .is_some_and(|s| std::sync::Arc::ptr_eq(s, set))
+        {
             changed.insert(key.clone(), set.to_vec());
         }
     }

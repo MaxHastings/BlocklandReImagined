@@ -339,7 +339,10 @@ fn timed(f: impl FnOnce()) -> Duration {
 #[cfg(windows)]
 fn thread_cpu_time() -> Duration {
     use windows_sys::Win32::{Foundation::FILETIME, System::Threading};
-    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
     let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
     // SAFETY: the pseudo-handle of the current thread and four owned FILETIMEs.
     let ok = unsafe {
@@ -358,7 +361,10 @@ fn thread_cpu_time() -> Duration {
 }
 #[cfg(unix)]
 fn thread_cpu_time() -> Duration {
-    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     // SAFETY: an owned timespec for the current thread's CPU clock.
     let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
     assert_eq!(ok, 0, "clock_gettime failed");

@@ -55,7 +55,13 @@ fn row(input: &str, target: bri_events::Slot, output: &str, params: Vec<EventVal
 }
 
 /// Plant a brick for `owner` at `position` with these event rows.
-fn evented_brick(s: &mut Session, owner: OwnerId, seq: u64, position: [f32; 3], rows: Vec<EventRow>) -> u64 {
+fn evented_brick(
+    s: &mut Session,
+    owner: OwnerId,
+    seq: u64,
+    position: [f32; 3],
+    rows: Vec<EventRow>,
+) -> u64 {
     let bri_sim::session::Reply::Planted(id) = s
         .command(
             owner,
@@ -94,8 +100,12 @@ fn steps(s: &mut Session, players: &[OwnerId], n: u64) {
 fn a_kill_brick_kills_whoever_sets_it_off_outside_minigames() {
     for lan in [true, false] {
         let mut s = session(lan);
-        let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
-        let walker = s.join("Walker".into(), Vec3::new(-5.0, 0.05, 0.0), false).unwrap();
+        let builder = s
+            .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false)
+            .unwrap();
+        let walker = s
+            .join("Walker".into(), Vec3::new(-5.0, 0.05, 0.0), false)
+            .unwrap();
         steps(&mut s, &[builder, walker], 10);
         let brick = evented_brick(
             &mut s,
@@ -107,7 +117,10 @@ fn a_kill_brick_kills_whoever_sets_it_off_outside_minigames() {
         // `Armor::Damage` (9207) spares a player for the 2.5 s after spawning.
         s.fire_brick_input(brick, "onActivate", Some(walker));
         steps(&mut s, &[builder, walker], 2);
-        assert!(s.is_alive(walker), "lan {lan}: killed while spawn-protected");
+        assert!(
+            s.is_alive(walker),
+            "lan {lan}: killed while spawn-protected"
+        );
         steps(&mut s, &[builder, walker], 300);
         s.fire_brick_input(brick, "onActivate", Some(walker));
         steps(&mut s, &[builder, walker], 2);
@@ -124,8 +137,12 @@ fn a_kill_brick_kills_whoever_sets_it_off_outside_minigames() {
 fn a_lan_minigame_owner_resets_their_game_from_anyones_brick() {
     for lan in [true, false] {
         let mut s = session(lan);
-        let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
-        let host = s.join("Host".into(), Vec3::new(-5.0, 0.05, 0.0), false).unwrap();
+        let builder = s
+            .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false)
+            .unwrap();
+        let host = s
+            .join("Host".into(), Vec3::new(-5.0, 0.05, 0.0), false)
+            .unwrap();
         s.command(
             host,
             1,
@@ -141,7 +158,12 @@ fn a_lan_minigame_owner_resets_their_game_from_anyones_brick() {
             builder,
             1,
             [5.0, 0.3, -3.0],
-            vec![row("onActivate", bri_events::Slot::MiniGame, "Reset", vec![])],
+            vec![row(
+                "onActivate",
+                bri_events::Slot::MiniGame,
+                "Reset",
+                vec![],
+            )],
         );
         s.take_private_notices();
         s.fire_brick_input(brick, "onActivate", Some(host));
@@ -207,9 +229,15 @@ fn a_hidden_brick_spawns_no_explosion(f: &Fixture) {
 fn a_radius_impulse_pushes_only_the_activator_on_internet_servers() {
     for lan in [true, false] {
         let mut s = session(lan);
-        let builder = s.join("Builder".into(), Vec3::new(20.0, 0.05, 0.0), false).unwrap();
-        let walker = s.join("Walker".into(), Vec3::new(1.0, 0.05, 0.0), false).unwrap();
-        let bystander = s.join("Bystander".into(), Vec3::new(-1.0, 0.05, 0.0), false).unwrap();
+        let builder = s
+            .join("Builder".into(), Vec3::new(20.0, 0.05, 0.0), false)
+            .unwrap();
+        let walker = s
+            .join("Walker".into(), Vec3::new(1.0, 0.05, 0.0), false)
+            .unwrap();
+        let bystander = s
+            .join("Bystander".into(), Vec3::new(-1.0, 0.05, 0.0), false)
+            .unwrap();
         steps(&mut s, &[builder, walker, bystander], 30);
         let brick = evented_brick(
             &mut s,
@@ -220,7 +248,11 @@ fn a_radius_impulse_pushes_only_the_activator_on_internet_servers() {
                 "onActivate",
                 bri_events::Slot::SelfBrick,
                 "radiusImpulse",
-                vec![EventValue::Int(10), EventValue::Int(0), EventValue::Int(2000)],
+                vec![
+                    EventValue::Int(10),
+                    EventValue::Int(0),
+                    EventValue::Int(2000),
+                ],
             )],
         );
         s.fire_brick_input(brick, "onActivate", Some(walker));
@@ -233,10 +265,17 @@ fn a_radius_impulse_pushes_only_the_activator_on_internet_servers() {
                 .unwrap()
                 .velocity[1]
         };
-        assert!(up(&s, walker) > 1.0, "lan {lan}: the activator was not pushed");
+        assert!(
+            up(&s, walker) > 1.0,
+            "lan {lan}: the activator was not pushed"
+        );
         // The engine's `applyImpulse` divides by the player's mass (90):
         // 2000 at about 82% strength is about 18 units a second, not 1600.
-        assert!(up(&s, walker) < 25.0, "lan {lan}: pushed {} without the mass", up(&s, walker));
+        assert!(
+            up(&s, walker) < 25.0,
+            "lan {lan}: pushed {} without the mass",
+            up(&s, walker)
+        );
         assert_eq!(up(&s, bystander) > 1.0, lan, "lan {lan}: the bystander");
     }
 }
@@ -302,11 +341,13 @@ fn cancel_events_stops_a_players_own_pending_events() {
             slash(&mut s, builder, 3, "cancelEvents");
             steps(&mut s, &[builder], 1);
             let said = chat_to(&mut s, builder);
-            assert!(said.iter().any(|t| t.starts_with("You must wait")), "{said:?}");
+            assert!(
+                said.iter().any(|t| t.starts_with("You must wait")),
+                "{said:?}"
+            );
         }
     }
 }
-
 
 /// allGameScripts.cs:17459 `fxDTSBrick::fakeKillBrick` clamps its time to
 /// 0-300 s and schedules the respawn that far ahead: a time of 0 brings the
@@ -315,7 +356,9 @@ fn cancel_events_stops_a_players_own_pending_events() {
 fn a_zero_second_fake_kill_comes_back_at_once() {
     for seconds in [0, 1] {
         let mut s = session(true);
-        let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+        let builder = s
+            .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false)
+            .unwrap();
         steps(&mut s, &[builder], 10);
         let brick = evented_brick(
             &mut s,
@@ -326,17 +369,26 @@ fn a_zero_second_fake_kill_comes_back_at_once() {
                 "onActivate",
                 bri_events::Slot::SelfBrick,
                 "fakeKillBrick",
-                vec![EventValue::Vector(Vec3::new(0.0, 0.0, 5.0)), EventValue::Int(seconds)],
+                vec![
+                    EventValue::Vector(Vec3::new(0.0, 0.0, 5.0)),
+                    EventValue::Int(seconds),
+                ],
             )],
         );
         s.fire_brick_input(brick, "onActivate", Some(builder));
         steps(&mut s, &[builder], 1);
-        assert!(!s.simulation().state().bricks[&brick].visible, "{seconds} s: not killed");
+        assert!(
+            !s.simulation().state().bricks[&brick].visible,
+            "{seconds} s: not killed"
+        );
         steps(&mut s, &[builder], 2);
         let back = s.simulation().state().bricks[&brick].visible;
         assert_eq!(back, seconds == 0, "{seconds} s");
         steps(&mut s, &[builder], 2 * bri_world::TICKS_PER_SECOND);
-        assert!(s.simulation().state().bricks[&brick].visible, "{seconds} s: never came back");
+        assert!(
+            s.simulation().state().bricks[&brick].visible,
+            "{seconds} s: never came back"
+        );
     }
 }
 
@@ -350,12 +402,20 @@ fn bot_and_plate(s: &mut Session, builder: OwnerId, rows: Vec<EventRow>) -> (Own
     })
     .unwrap();
     let mut world = World::new("Bots".into(), "v20".into(), vec![[1.0; 4], [0.0; 4]]);
-    let mut spawn = bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [8.0, 0.3, 8.0], builder);
+    let mut spawn = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("plate".into()),
+        [8.0, 0.3, 8.0],
+        builder,
+    );
     spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
     }));
-    let mut plate = bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [-8.0, 0.3, 8.0], builder);
+    let mut plate = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("plate".into()),
+        [-8.0, 0.3, 8.0],
+        builder,
+    );
     plate.events = rows;
     world.bricks.insert(1, spawn);
     world.bricks.insert(2, plate);
@@ -371,7 +431,11 @@ fn bot_and_plate(s: &mut Session, builder: OwnerId, rows: Vec<EventRow>) -> (Own
     .unwrap();
     let players: Vec<OwnerId> = s.names().keys().copied().collect();
     steps(s, &players, 90);
-    let bot = *s.names().keys().find(|o| s.is_bot(**o)).expect("the brick spawned a bot");
+    let bot = *s
+        .names()
+        .keys()
+        .find(|o| s.is_bot(**o))
+        .expect("the brick spawned a bot");
     let plate = *s
         .simulation()
         .state()
@@ -390,33 +454,57 @@ fn bot_and_plate(s: &mut Session, builder: OwnerId, rows: Vec<EventRow>) -> (Own
 fn bot_touch_rows_run_as_the_spawn_brick_owner() {
     for lan in [true, false] {
         let mut s = session(lan);
-        s.set_vehicle_pack(bri_vehicles::Pack {
-            schema_version: bri_vehicles::schema::SCHEMA_VERSION,
-            definitions: vec![],
-            assets: vec![],
-            evidence: vec![],
-            unresolved: vec![],
-            animation_aliases: Default::default(),
-        }, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)
+        s.set_vehicle_pack(
+            bri_vehicles::Pack {
+                schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+                definitions: vec![],
+                assets: vec![],
+                evidence: vec![],
+                unresolved: vec![],
+                animation_aliases: Default::default(),
+            },
+            bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+                "../../../packages/blockhead_bot/assets/bots.json"
+            ))
+            .unwrap()
+            .bots,
+        )
         .unwrap();
-        let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), true).unwrap();
-        let other = s.join("Other".into(), Vec3::new(-5.0, 0.05, 0.0), false).unwrap();
+        let builder = s
+            .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), true)
+            .unwrap();
+        let other = s
+            .join("Other".into(), Vec3::new(-5.0, 0.05, 0.0), false)
+            .unwrap();
         let (bot, plate) = bot_and_plate(
             &mut s,
             builder,
-            vec![row("onBotTouch", bri_events::Slot::SelfBrick, "setColor", vec![EventValue::Color(1)])],
+            vec![row(
+                "onBotTouch",
+                bri_events::Slot::SelfBrick,
+                "setColor",
+                vec![EventValue::Color(1)],
+            )],
         );
         s.fire_brick_input(plate, "onBotTouch", Some(bot));
         steps(&mut s, &[builder, other], 2);
         let notes = s.take_event_diagnostics();
-        assert_eq!(s.simulation().state().bricks[&plate].color, 1, "lan {lan}: as the owner {notes:?}");
+        assert_eq!(
+            s.simulation().state().bricks[&plate].color,
+            1,
+            "lan {lan}: as the owner {notes:?}"
+        );
         // With the owner gone: LAN falls back to the first player.
         s.edit_brick(builder, plate, Edit::Color(0)).unwrap();
         s.disconnect(builder).unwrap();
         steps(&mut s, &[other], 2);
         s.fire_brick_input(plate, "onBotTouch", Some(bot));
         steps(&mut s, &[other], 2);
-        assert_eq!(s.simulation().state().bricks[&plate].color == 1, lan, "lan {lan}: owner gone");
+        assert_eq!(
+            s.simulation().state().bricks[&plate].color == 1,
+            lan,
+            "lan {lan}: owner gone"
+        );
     }
 }
 
@@ -479,15 +567,22 @@ fn a_radius_impulse_throws_items_on_lan_servers(f: &Fixture) {
 #[test]
 fn repeating_a_chat_line_within_15_seconds_is_warned() {
     let mut s = session(false);
-    let talker = s.join("Talker".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+    let talker = s
+        .join("Talker".into(), Vec3::new(5.0, 0.05, 0.0), false)
+        .unwrap();
     steps(&mut s, &[talker], 10);
     let said = |s: &Session| s.chat().iter().filter(|l| l.owner == talker).count();
     s.command(talker, 1, Command::Chat("hello".into())).unwrap();
     steps(&mut s, &[talker], 130);
     s.take_private_notices();
-    s.command(talker, 2, Command::Chat("  HELLO ".into())).unwrap();
+    s.command(talker, 2, Command::Chat("  HELLO ".into()))
+        .unwrap();
     assert_eq!(said(&s), 2, "the repeat still goes out");
-    assert!(chat_to(&mut s, talker).iter().any(|t| t.contains("Do not repeat yourself.")));
+    assert!(
+        chat_to(&mut s, talker)
+            .iter()
+            .any(|t| t.contains("Do not repeat yourself."))
+    );
     // The allowance is spent: the next line this second is held.
     assert!(s.command(talker, 3, Command::Chat("other".into())).is_err());
     // A different line, or the same one 15 s later, is fine.

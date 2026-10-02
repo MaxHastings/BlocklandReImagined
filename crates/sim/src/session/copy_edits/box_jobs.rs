@@ -39,10 +39,19 @@ pub(in crate::session) struct SuperCutWork {
     refused: usize,
 }
 impl SuperCutWork {
-    pub fn new(s: &Session, owner: OwnerId, (min, max): ([f32; 3], [f32; 3]), package: Option<&str>) -> Result<Self> {
+    pub fn new(
+        s: &Session,
+        owner: OwnerId,
+        (min, max): ([f32; 3], [f32; 3]),
+        package: Option<&str>,
+    ) -> Result<Self> {
         let area = blueprints::grid_box(min, max)?;
         let peer = s.peers.get(&owner).context("Unknown connection")?;
-        combat::ensure_may_build(&peer.combat, &s.minigames, bri_minigames::BuildAction::Build)?;
+        combat::ensure_may_build(
+            &peer.combat,
+            &s.minigames,
+            bri_minigames::BuildAction::Build,
+        )?;
         Ok(Self {
             area,
             actor: peer.actor.clone(),
@@ -117,7 +126,8 @@ impl SuperCutWork {
             }
             let brick = s.unlit(id, brick);
             let bounds = s.simulation.index_bounds(id);
-            let mut template = Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], brick.owner);
+            let mut template =
+                Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], brick.owner);
             Look::of(&brick).put(&mut template);
             template.raycast = brick.raycast;
             template.colliding = brick.colliding;
@@ -182,7 +192,14 @@ impl CopyWork for SuperCutWork {
             }
             Ending::Canceled => {
                 let edit = self.complete(s, owner);
-                report(s, &package, owner, "supercut", &edit, Some("Supercut canceled!"));
+                report(
+                    s,
+                    &package,
+                    owner,
+                    "supercut",
+                    &edit,
+                    Some("Supercut canceled!"),
+                );
             }
             _ => {
                 let edit = self.complete(s, owner);
@@ -218,7 +235,11 @@ impl FillWork {
     ) -> Result<Self> {
         let area = blueprints::grid_box(min, max)?;
         let peer = s.peers.get(&owner).context("Unknown connection")?;
-        combat::ensure_may_build(&peer.combat, &s.minigames, bri_minigames::BuildAction::Build)?;
+        combat::ensure_may_build(
+            &peer.combat,
+            &s.minigames,
+            bri_minigames::BuildAction::Build,
+        )?;
         ensure!(
             usize::from(color) < s.simulation.state().palette.len(),
             "That colour is not in this server's palette"
@@ -271,11 +292,16 @@ impl FillWork {
                 self.covered += volume(room);
                 continue;
             };
-            if s.simulation.state().bricks.len() >= limit || self.ids.len() >= MAX_COPY_BRICKS as usize {
+            if s.simulation.state().bricks.len() >= limit
+                || self.ids.len() >= MAX_COPY_BRICKS as usize
+            {
                 self.limit_reached = true;
                 return true;
             }
-            self.covered += volume(Bounds { min: room.min, size });
+            self.covered += volume(Bounds {
+                min: room.min,
+                size,
+            });
             self.rooms.extend(more);
             match s.simulation.plant_try(&self.actor, piece, true) {
                 Ok(id) => {
@@ -338,7 +364,11 @@ impl CopyWork for FillWork {
 
 /// What a supercut or fill did, for its Add-On: `canceled` with the
 /// words for it when the player stopped it.
-fn outcome(action: &'static str, edit: &BoxEdit, canceled: Option<&str>) -> copy_store::CopyOutcome {
+fn outcome(
+    action: &'static str,
+    edit: &BoxEdit,
+    canceled: Option<&str>,
+) -> copy_store::CopyOutcome {
     let error = canceled.map(|message| ("canceled", message.to_string()));
     let mut outcome = copy_store::CopyOutcome::about(action, None, error);
     outcome.bricks = edit.bricks;

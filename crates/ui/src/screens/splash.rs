@@ -39,7 +39,11 @@ impl Splash {
         root.h_sizing = HSizing::Width;
         root.v_sizing = VSizing::Height;
         // The whole screen takes the click (`HolidayButton`).
-        let mut button = ctrl("GuiBitmapButtonCtrl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
+        let mut button = ctrl(
+            "GuiBitmapButtonCtrl",
+            "GuiDefaultProfile",
+            Rect::new(0, 0, 640, 480),
+        );
         button.h_sizing = HSizing::Width;
         button.v_sizing = VSizing::Height;
         button.command = Some(CLOSE.into());
@@ -67,7 +71,10 @@ impl Splash {
             closing_ms: None,
             flakes: Vec::new(),
             step_left: 0,
-            random: core.time_ms.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407),
+            random: core
+                .time_ms
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407),
         }
     }
 
@@ -88,7 +95,9 @@ impl Splash {
 
     /// `holidays_stop`: fade out, the falling pictures speeding up.
     fn close(&mut self) {
-        let Some(s) = self.splash.as_ref() else { return };
+        let Some(s) = self.splash.as_ref() else {
+            return;
+        };
         let faster = s.falling.as_ref().map_or(0, |f| f.closing_speed) as f32;
         for flake in &mut self.flakes {
             flake.speed += faster;
@@ -108,10 +117,14 @@ impl Splash {
             f.y += f.speed;
             f.y < 480.0
         });
-        if self.closing_ms.is_none() && self.roll(falling.chance) == 0 && !falling.textures.is_empty() {
+        if self.closing_ms.is_none()
+            && self.roll(falling.chance) == 0
+            && !falling.textures.is_empty()
+        {
             let texture = falling.textures[self.roll(falling.textures.len() as u32) as usize];
             let x = self.roll(641) as f32;
-            let speed = (falling.speed[0] + self.roll(falling.speed[1] - falling.speed[0] + 1)) as f32;
+            let speed =
+                (falling.speed[0] + self.roll(falling.speed[1] - falling.speed[0] + 1)) as f32;
             self.flakes.push(Flake {
                 texture,
                 x,
@@ -129,7 +142,9 @@ impl Splash {
             (self.age_ms as f32 / fade_in_ms as f32).min(1.0)
         };
         let out = match (self.closing_ms, self.splash.as_ref()) {
-            (Some(t), Some(s)) if s.fade_out_ms > 0 => 1.0 - (t as f32 / s.fade_out_ms as f32).min(1.0),
+            (Some(t), Some(s)) if s.fade_out_ms > 0 => {
+                1.0 - (t as f32 / s.fade_out_ms as f32).min(1.0)
+            }
             (Some(_), _) => 0.0,
             (None, _) => 1.0,
         };
@@ -148,7 +163,10 @@ impl Screen for Splash {
         &mut self.view
     }
     fn on_event(&mut self, ev: &ViewEvent, _core: &mut Core) {
-        if ev.kind == EventKind::Click && command_of(&self.view, ev.node) == CLOSE && self.may_close() {
+        if ev.kind == EventKind::Click
+            && command_of(&self.view, ev.node) == CLOSE
+            && self.may_close()
+        {
             self.close();
         }
     }
@@ -183,13 +201,19 @@ impl Screen for Splash {
             }
         }
         // Gone once faded and every picture has fallen out.
-        if self.closing_ms.is_some_and(|t| t >= u64::from(s.fade_out_ms)) && self.flakes.is_empty() {
+        if self
+            .closing_ms
+            .is_some_and(|t| t >= u64::from(s.fade_out_ms))
+            && self.flakes.is_empty()
+        {
             core.splash = None;
             core.pop(ScreenId::Splash);
         }
     }
     fn draw(&self, pack: &Pack, dl: &mut DrawList, core: &Core) {
-        let Some(s) = self.splash.as_ref() else { return };
+        let Some(s) = self.splash.as_ref() else {
+            return;
+        };
         let (w, h) = core.logical;
         let (sx, sy) = (w as f32 / 640.0, h as f32 / 480.0);
         let tint = |a: f32| [255, 255, 255, (a.clamp(0.0, 1.0) * 255.0) as u8];

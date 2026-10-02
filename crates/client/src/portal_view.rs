@@ -259,10 +259,18 @@ mod tests {
             closed: vec![],
         };
         // Straight behind the near opening: hidden by its view.
-        assert_eq!(seen_at(&passages, Vec3::ZERO, Vec3::new(0., 0., -9.)), vec![]);
+        assert_eq!(
+            seen_at(&passages, Vec3::ZERO, Vec3::new(0., 0., -9.)),
+            vec![]
+        );
         // In the open: where it stands.
         let open = Vec3::new(10., 0., -9.);
-        let at = |target| seen_at(&passages, Vec3::ZERO, target).iter().map(|s| s.at).collect();
+        let at = |target| {
+            seen_at(&passages, Vec3::ZERO, target)
+                .iter()
+                .map(|s| s.at)
+                .collect()
+        };
         assert_eq!(at(open), vec![open]);
         // Out of the partner: where it stands, and past the near opening.
         let seen: Vec<Vec3> = at(Vec3::new(40., 0., -2.));
@@ -331,12 +339,16 @@ mod tests {
             closed: vec![],
         };
         let wall = |a: Vec3, b: Vec3| {
-            Ok((a.x < 12.0 && b.x >= 12.0).then(|| {
-                ((12.0 - a.x) / (b.x - a.x) * a.distance(b), Vec3::NEG_X)
-            }))
+            Ok((a.x < 12.0 && b.x >= 12.0)
+                .then(|| ((12.0 - a.x) / (b.x - a.x) * a.distance(b), Vec3::NEG_X)))
         };
-        let (hit, through) =
-            ray(Vec3::new(0.0, 1.0, 1.0), Vec3::new(0.0, 1.0, -5.0), &passages, wall).unwrap();
+        let (hit, through) = ray(
+            Vec3::new(0.0, 1.0, 1.0),
+            Vec3::new(0.0, 1.0, -5.0),
+            &passages,
+            wall,
+        )
+        .unwrap();
         let (distance, normal) = hit.unwrap();
         assert!((distance - 3.0).abs() < 1e-3, "{distance}");
         // The wall faces back along the ray, in the ray's own space.

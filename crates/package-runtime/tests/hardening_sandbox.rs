@@ -4,8 +4,8 @@
 //!
 //! Tests that expose a defect are `#[ignore = "finding H2-Fn: ..."]` and fail
 //! when run with `--ignored`; the others record checks that held.
-use bri_package_runtime::ops;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
+use bri_package_runtime::ops;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
     ops::{CAPABILITIES, ObjectRef, Op, authorize},
@@ -652,13 +652,15 @@ fn every_operation_needs_its_declared_capability() {
 #[test]
 fn extreme_operation_parameters_are_refused() {
     let all: Vec<String> = CAPABILITIES.iter().map(|c| c.to_string()).collect();
-    let explode = |p: [f32; 3], r: f32, d: f32, b: f32| Op::Explode(ops::Explode {
-        position: p,
-        radius: r,
-        damage: d,
-        brick_radius: b,
-        explosion: None,
-    });
+    let explode = |p: [f32; 3], r: f32, d: f32, b: f32| {
+        Op::Explode(ops::Explode {
+            position: p,
+            radius: r,
+            damage: d,
+            brick_radius: b,
+            explosion: None,
+        })
+    };
     let bad = [
         explode([f32::NAN, 0.0, 0.0], 1.0, 1.0, 1.0),
         explode([0.0; 3], f32::INFINITY, 1.0, 1.0),
@@ -850,7 +852,10 @@ fn extreme_operation_parameters_are_refused() {
             text: "a\u{7}b".into(),
         }),
     ];
-    assert!(bad.iter().any(|op| matches!(op, Op::Teleport(ops::Teleport { .. }))));
+    assert!(
+        bad.iter()
+            .any(|op| matches!(op, Op::Teleport(ops::Teleport { .. })))
+    );
     for op in &bad {
         assert_eq!(
             authorize("probe", &all, op).unwrap_err().code,
@@ -999,7 +1004,11 @@ fn renamed_capabilities_name_their_new_name() {
     };
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].code, "manifest.capability");
-    assert!(problems[0].message.contains("now called `effects`"), "{}", problems[0].message);
+    assert!(
+        problems[0].message.contains("now called `effects`"),
+        "{}",
+        problems[0].message
+    );
 }
 
 /// Content ids outside the package's namespace (claiming another package's
@@ -1135,7 +1144,15 @@ fn script_calls_build_their_operations_and_world_questions_need_a_world() {
             }),
         ]
     );
-    assert!(matches!(ops[2], Op::Beam(ops::Beam { width: 0.05, seconds: 0.1, muzzle: None, .. })));
+    assert!(matches!(
+        ops[2],
+        Op::Beam(ops::Beam {
+            width: 0.05,
+            seconds: 0.1,
+            muzzle: None,
+            ..
+        })
+    ));
     assert_eq!(
         ops[3],
         Op::Beam(ops::Beam {
@@ -1147,21 +1164,62 @@ fn script_calls_build_their_operations_and_world_questions_need_a_world() {
             muzzle: Some(1),
         })
     );
-    assert_eq!(ops[4], Op::MountImage(ops::MountImage { player: 1, image: None }));
-    assert_eq!(ops[5], Op::SetFov(ops::SetFov { player: 1, fov: Some(40.0) }));
-    assert_eq!(ops[6], Op::SetFov(ops::SetFov { player: 1, fov: None }));
+    assert_eq!(
+        ops[4],
+        Op::MountImage(ops::MountImage {
+            player: 1,
+            image: None
+        })
+    );
+    assert_eq!(
+        ops[5],
+        Op::SetFov(ops::SetFov {
+            player: 1,
+            fov: Some(40.0)
+        })
+    );
+    assert_eq!(
+        ops[6],
+        Op::SetFov(ops::SetFov {
+            player: 1,
+            fov: None
+        })
+    );
     assert_eq!(
         ops[7],
-        Op::PlayThread(ops::PlayThread { player: 1, thread: 3, sequence: "root".into(), after: 0.0 })
+        Op::PlayThread(ops::PlayThread {
+            player: 1,
+            thread: 3,
+            sequence: "root".into(),
+            after: 0.0
+        })
     );
     for (script, message) in [
-        ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }", "cannot be asked"),
+        (
+            "fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }",
+            "cannot be asked",
+        ),
         ("fn f() { can_damage(1, 2) }", "cannot be asked"),
-        ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 5.0) }", "cannot be zero"),
-        ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5000.0) }", "0 to 2000"),
-        ("fn f() { raycast([0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }", "[x, y, z]"),
-        ("fn f() { beam([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], #{ colour: 1 }) }", "no option `colour`"),
-        ("fn f() { damage(\"vehicle:3\", 5.0, \"vehicle:4\") }", "expected a player"),
+        (
+            "fn f() { raycast([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 5.0) }",
+            "cannot be zero",
+        ),
+        (
+            "fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5000.0) }",
+            "0 to 2000",
+        ),
+        (
+            "fn f() { raycast([0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }",
+            "[x, y, z]",
+        ),
+        (
+            "fn f() { beam([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], #{ colour: 1 }) }",
+            "no option `colour`",
+        ),
+        (
+            "fn f() { damage(\"vehicle:3\", 5.0, \"vehicle:4\") }",
+            "expected a player",
+        ),
     ] {
         let (_, rt) = runtime(script, json!([]));
         let e = rt.call("probe", call("f", Budget::Command)).unwrap_err();

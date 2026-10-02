@@ -223,7 +223,10 @@ impl Progress {
     }
 
     pub fn subject(&self) -> Option<String> {
-        self.subject.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.subject
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 

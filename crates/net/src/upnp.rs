@@ -50,7 +50,10 @@ impl PortMapping {
     fn add(&mut self, port: u16) -> Result<()> {
         let local = SocketAddr::new(self.local_ip, port);
         let udp = PortMappingProtocol::UDP;
-        match self.gateway.add_port(udp, port, local, self.lease, DESCRIPTION) {
+        match self
+            .gateway
+            .add_port(udp, port, local, self.lease, DESCRIPTION)
+        {
             // Some routers only accept permanent leases; removal on shutdown
             // still cleans them up.
             Err(AddPortError::OnlyPermanentLeasesSupported) => {
@@ -126,11 +129,21 @@ mod tests {
     fn local_router_answers_upnp() {
         let gateway = search().expect("router UPnP search");
         let ip = gateway.get_external_ip().expect("external address");
-        println!("router {} public={} external={ip}", gateway.addr, is_public(ip));
+        println!(
+            "router {} public={} external={ip}",
+            gateway.addr,
+            is_public(ip)
+        );
     }
     #[test]
     fn shared_and_private_router_addresses_are_not_public() {
-        for ip in ["192.168.1.1", "10.0.0.1", "172.20.0.1", "100.72.1.2", "0.0.0.0"] {
+        for ip in [
+            "192.168.1.1",
+            "10.0.0.1",
+            "172.20.0.1",
+            "100.72.1.2",
+            "0.0.0.0",
+        ] {
             assert!(!is_public(ip.parse().unwrap()), "{ip}");
         }
         for ip in ["203.0.113.10", "8.8.8.8", "100.128.0.1"] {

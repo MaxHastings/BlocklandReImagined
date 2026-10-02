@@ -39,7 +39,8 @@ impl App {
         action: bri_ui::models::admin::AdminAction,
     ) -> Result<()> {
         let attempt = self
-            .net.attempt
+            .net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .context("Not connected")?;
@@ -196,10 +197,7 @@ impl App {
         // that just ended.
         if let Some((request, _)) = self.files.color_load.take() {
             self.ui.core.pop(ScreenId::LoadBricksColor);
-            self.answer(
-                request.id,
-                Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED)),
-            );
+            self.answer(request.id, Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED)));
         }
     }
     /// The name and clan tags a join sends (`onConnectRequest`'s name,
@@ -278,8 +276,11 @@ impl App {
         // What runs: the chosen game mode's Add-Ons, or (Custom) every
         // enabled Add-On that fits the map. A package world stands on its
         // environment map; the packages then generate the ground.
-        let hosted =
-            crate::packages::hosted(self.addons.server_packages.as_ref(), &map, game_mode.as_deref())?;
+        let hosted = crate::packages::hosted(
+            self.addons.server_packages.as_ref(),
+            &map,
+            game_mode.as_deref(),
+        )?;
         let map = hosted.map.clone();
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
@@ -290,7 +291,8 @@ impl App {
         let paths_for_maps = paths.clone();
         let base_map = hosted.base_map.clone();
         let add_ons =
-            self.addons.server_packages
+            self.addons
+                .server_packages
                 .clone()
                 .map(|server| bri_net::host_setup::HostedAddOns {
                     server,
@@ -312,7 +314,8 @@ impl App {
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar.avatar_assets.package.clone();
-        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
+        let body_mounts =
+            bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
         let mut catalog = self.build.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -403,92 +406,90 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 (vehicle_pack, bot_kinds),
-            ) =
-                tokio::task::spawn_blocking(move || -> Result<_> {
-                    let _permit = permit;
-                    let weapons = paths.weapon_content()?;
-                    weapon_snapshot.ensure_same(&weapons)?;
-                    let item_physics = paths.item_physics(&weapons)?;
-                    physics_snapshot.ensure_same(&item_physics)?;
-                    let loaded = paths.load_map(&base_map, None)?;
-                    let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
-                    let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
-                    light_volume.set_light_shapes(&loaded.breakables);
-                    // Every package this host loaded, hashed: what joiners must match.
-                    let identity = paths.environment()?;
-                    let vehicle_pack = paths.vehicle_pack()?;
-                    let bot_kinds = paths.bot_kinds()?;
-                    let meshes = Arc::new(
-                        loaded
-                            .simulation
-                            .definitions
-                            .entries
-                            .iter()
-                            .map(|(id, def)| (id.clone(), def.mesh.clone()))
+            ) = tokio::task::spawn_blocking(move || -> Result<_> {
+                let _permit = permit;
+                let weapons = paths.weapon_content()?;
+                weapon_snapshot.ensure_same(&weapons)?;
+                let item_physics = paths.item_physics(&weapons)?;
+                physics_snapshot.ensure_same(&item_physics)?;
+                let loaded = paths.load_map(&base_map, None)?;
+                let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
+                let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                light_volume.set_light_shapes(&loaded.breakables);
+                // Every package this host loaded, hashed: what joiners must match.
+                let identity = paths.environment()?;
+                let vehicle_pack = paths.vehicle_pack()?;
+                let bot_kinds = paths.bot_kinds()?;
+                let meshes = Arc::new(
+                    loaded
+                        .simulation
+                        .definitions
+                        .entries
+                        .iter()
+                        .map(|(id, def)| (id.clone(), def.mesh.clone()))
+                        .collect(),
+                );
+                let mirror_shapes =
+                    Arc::new(crate::mirrors::shapes(&loaded.simulation.definitions));
+                let materials = Arc::new(crate::materials::BrickMaterials::load(
+                    &paths.brick_materials,
+                )?);
+                let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
+                let mut mirror = bri_sim::prediction::CollisionMirror::new(
+                    loaded.simulation.definitions.clone(),
+                    loaded.query_colliders.clone(),
+                    loaded.simulation.waters.clone(),
+                );
+                mirror.attach_terrain(loaded.terrain.clone())?;
+                mirror.set_breakables(&loaded.breakables);
+                let mut building = crate::building::Building::new(
+                    loaded.simulation.definitions.clone(),
+                    loaded.query_colliders.clone(),
+                )?;
+                building.set_breakables(&loaded.breakables);
+                building.attach_terrain(loaded.terrain.clone());
+                building.set_catalog(selected)?;
+                if let Some(print) = &catalog.default_print {
+                    building.set_default_prints(
+                        catalog
+                            .brick_print_aspects
+                            .keys()
+                            .map(|id| (id.clone(), print.clone()))
                             .collect(),
-                    );
-                    let mirror_shapes = Arc::new(crate::mirrors::shapes(
-                        &loaded.simulation.definitions,
-                    ));
-                    let materials = Arc::new(crate::materials::BrickMaterials::load(
-                        &paths.brick_materials,
-                    )?);
-                    let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
-                    let mut mirror = bri_sim::prediction::CollisionMirror::new(
-                        loaded.simulation.definitions.clone(),
-                        loaded.query_colliders.clone(),
-                        loaded.simulation.waters.clone(),
-                    );
-                    mirror.attach_terrain(loaded.terrain.clone())?;
-                    mirror.set_breakables(&loaded.breakables);
-                    let mut building = crate::building::Building::new(
-                        loaded.simulation.definitions.clone(),
-                        loaded.query_colliders.clone(),
                     )?;
-                    building.set_breakables(&loaded.breakables);
-                    building.attach_terrain(loaded.terrain.clone());
-                    building.set_catalog(selected)?;
-                    if let Some(print) = &catalog.default_print {
-                        building.set_default_prints(
-                            catalog
-                                .brick_print_aspects
-                                .keys()
-                                .map(|id| (id.clone(), print.clone()))
-                                .collect(),
-                        )?;
-                    }
-                    let waters = loaded.simulation.waters.clone();
-                    let foliage = crate::foliage::PreparedFoliage::load(
-                        &paths.foliage,
-                        &base_map,
-                        &building,
-                        &waters,
-                    )?;
-                    Ok((
-                        loaded,
-                        Prepared {
-                            foliage,
-                            map_id: base_map.clone(),
-                            waters,
-                            scene: visual.scene,
-                            terrain: visual.terrain.into_iter().map(Arc::new).collect(),
-                            meshes,
-                            mirror_shapes,
-                            materials,
-                            palette,
-                            building,
-                            mirror,
-                            shape_indices: visual.shape_indices,
-                            light_volume,
-                        },
-                        identity,
-                        catalog,
-                        weapons.pack,
-                        item_physics.bounds,
-                        (vehicle_pack, bot_kinds),
-                    ))
-                })
-                .await??;
+                }
+                let waters = loaded.simulation.waters.clone();
+                let foliage = crate::foliage::PreparedFoliage::load(
+                    &paths.foliage,
+                    &base_map,
+                    &building,
+                    &waters,
+                )?;
+                Ok((
+                    loaded,
+                    Prepared {
+                        foliage,
+                        map_id: base_map.clone(),
+                        waters,
+                        scene: visual.scene,
+                        terrain: visual.terrain.into_iter().map(Arc::new).collect(),
+                        meshes,
+                        mirror_shapes,
+                        materials,
+                        palette,
+                        building,
+                        mirror,
+                        shape_indices: visual.shape_indices,
+                        light_volume,
+                    },
+                    identity,
+                    catalog,
+                    weapons.pack,
+                    item_physics.bounds,
+                    (vehicle_pack, bot_kinds),
+                ))
+            })
+            .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
             reporting.begin(
                 bri_progress::Stage::StartingServer,
@@ -916,7 +917,12 @@ impl App {
         });
         Ok(())
     }
-    pub(super) fn command(&mut self, id: RequestId, command: Command, action: UiAction) -> Result<()> {
+    pub(super) fn command(
+        &mut self,
+        id: RequestId,
+        command: Command,
+        action: UiAction,
+    ) -> Result<()> {
         // Tool dialogs and inventory reconciliation need the command afterward. In particular,
         // do not clone/retain an entire loaded build while awaiting its reply.
         let retained = matches!(
@@ -943,7 +949,8 @@ impl App {
                     | UiAction::SendWrench { .. }
                     | UiAction::SendEvents { .. }
             );
-        self.net.attempt
+        self.net
+            .attempt
             .as_ref()
             .filter(|a| a.entered)
             .context("Not connected")?
@@ -1073,7 +1080,8 @@ impl App {
                     .as_ref()
                     .ok_or_else(|| "Inspection has no active world".to_string())?;
                 let updates = self
-                    .build.tool_ui
+                    .build
+                    .tool_ui
                     .accept_inspection(&reply, mode, expected, &view.world, &view.names, view.owner)
                     .map_err(|e| format!("{e:#}"))?;
                 for update in updates {
@@ -1086,7 +1094,8 @@ impl App {
                     | UiAction::SendEvents { .. }
             ) {
                 let last_print = self
-                    .build.tool_ui
+                    .build
+                    .tool_ui
                     .command_accepted(
                         pending
                             .command
@@ -1178,7 +1187,11 @@ impl App {
     /// Everything the HUD takes from the map and the building controller.
     /// First entry sends it, and every map change sends it again, since the
     /// change replaces both.
-    pub(super) fn map_setup_updates(&self, scene: &SceneData, palette: &[[f32; 4]]) -> Result<Vec<UiUpdate>> {
+    pub(super) fn map_setup_updates(
+        &self,
+        scene: &SceneData,
+        palette: &[[f32; 4]],
+    ) -> Result<Vec<UiUpdate>> {
         let mut updates = vec![
             UiUpdate::Bricks(self.content.bricks.clone()),
             UiUpdate::Colorset(self.colorset(palette)),
@@ -1187,7 +1200,8 @@ impl App {
         ];
         updates.extend(self.build.tool_ui.catalog_updates());
         updates.extend(
-            self.build.building
+            self.build
+                .building
                 .as_ref()
                 .context("Ready connection has no building controller")?
                 .initial_updates(),

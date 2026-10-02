@@ -58,8 +58,10 @@ impl MinigamesWorld {
             .filter(|p| self.players[p].team.is_some_and(|t| !kept.contains(&t)))
             .collect();
         let teams = &mut self.games.get_mut(&game).expect("validated game").teams;
-        let mut old: BTreeMap<TeamId, Team> =
-            std::mem::take(&mut teams.list).into_iter().map(|t| (t.id, t)).collect();
+        let mut old: BTreeMap<TeamId, Team> = std::mem::take(&mut teams.list)
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
         let mut ids = Vec::with_capacity(specs.len());
         teams.list = specs
             .into_iter()

@@ -84,7 +84,14 @@ fn frame(mirrored: bool) -> Result<Vec<u8>> {
         ReflectionSettings::OFF
     };
     let mut reflections = Reflections::new(&device, FORMAT, 1, settings);
-    reflections.prepare(&device, &queue, &mut renderer, &camera, (SIZE, SIZE), &[mirror])?;
+    reflections.prepare(
+        &device,
+        &queue,
+        &mut renderer,
+        &camera,
+        (SIZE, SIZE),
+        &[mirror],
+    )?;
     let mut sprites = EffectsRenderer::new(
         &device,
         &queue,

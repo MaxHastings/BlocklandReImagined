@@ -209,10 +209,7 @@ pub fn driver_controls(
         brake: input.jump,
         fire,
         strafe: input.right,
-        look_delta: [
-            wrap(input.yaw - last.0),
-            wrap_half(input.pitch - last.1),
-        ],
+        look_delta: [wrap(input.yaw - last.0), wrap_half(input.pitch - last.1)],
         strafe_steering_off: strafe_off,
         auto_return_off,
         ..Default::default()
@@ -318,7 +315,10 @@ impl Vehicles {
     }
     /// A player's `UseStrafeSteering` and `UseAutoReturnSteering`.
     pub(super) fn steering(&self, owner: OwnerId) -> (bool, bool) {
-        self.steering.get(&owner).copied().unwrap_or(DEFAULT_STEERING)
+        self.steering
+            .get(&owner)
+            .copied()
+            .unwrap_or(DEFAULT_STEERING)
     }
     /// `$Game::MinMountTime` has passed since this player last left a mount.
     pub(super) fn may_remount(&self, owner: OwnerId, tick: u64) -> bool {
@@ -1000,10 +1000,11 @@ impl Session {
         // from which move on it knows its seat (`SeatSince`); for one that
         // never says, a move still carrying the look the rider boarded with
         // is the old seat's.
-        let made_here = match self.peers.get(&owner).and_then(|p| {
-            p.seat_since
-                .map(|(_, seat)| (seat, p.processed_move))
-        }) {
+        let made_here = match self
+            .peers
+            .get(&owner)
+            .and_then(|p| p.seat_since.map(|(_, seat)| (seat, p.processed_move)))
+        {
             Some((seat, sequence)) => seat.is_some_and(|seat| {
                 seat.vehicle == mount.vehicle.0
                     && usize::from(seat.seat) == mount.seat
@@ -1381,7 +1382,10 @@ impl Session {
             let carried =
                 carry_through_openings(world, &mut self.simulation.physics, &passages, &before)?;
             for (vehicle, carry) in carried {
-                self.crossed(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0), carry);
+                self.crossed(
+                    bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0),
+                    carry,
+                );
             }
         }
         let world = self.vehicles.world.as_mut().context("No vehicle world")?;
@@ -1851,9 +1855,9 @@ impl Session {
         let snapshot = world.snapshot(&self.simulation.physics);
         for v in snapshot.vehicles {
             let passenger_seat = |index: usize| {
-                world.definition(&v.definition).is_some_and(|d| {
-                    d.seat_role(index) == SeatRole::Passenger
-                })
+                world
+                    .definition(&v.definition)
+                    .is_some_and(|d| d.seat_role(index) == SeatRole::Passenger)
             };
             for seat in &v.seats {
                 let Some(o) = seat.occupant else { continue };
@@ -1929,17 +1933,18 @@ impl Session {
         let Some(world) = &self.vehicles.world else {
             return Vec::new();
         };
-        let mut out: Vec<VehicleId> = world
-            .ids()
-            .filter(|id| {
-                world.definition_of(*id).is_some_and(|def| {
-                    def.is_actor()
-                        && !self.vehicles.mounted.values().any(|m| {
-                            m.vehicle == *id && def.seat_role(m.seat) == SeatRole::Actor
-                        })
+        let mut out: Vec<VehicleId> =
+            world
+                .ids()
+                .filter(|id| {
+                    world.definition_of(*id).is_some_and(|def| {
+                        def.is_actor()
+                            && !self.vehicles.mounted.values().any(|m| {
+                                m.vehicle == *id && def.seat_role(m.seat) == SeatRole::Actor
+                            })
+                    })
                 })
-            })
-            .collect();
+                .collect();
         out.sort_unstable();
         out
     }

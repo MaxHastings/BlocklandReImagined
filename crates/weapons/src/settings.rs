@@ -52,7 +52,9 @@ const KINDS: [&str; 3] = ["items", "images", "projectiles"];
 impl Binding {
     pub fn validate(&self) -> Result<()> {
         let name = |s: &str| {
-            !s.is_empty() && s.len() <= 128 && !s.chars().any(|c| c.is_control() || c.is_whitespace())
+            !s.is_empty()
+                && s.len() <= 128
+                && !s.chars().any(|c| c.is_control() || c.is_whitespace())
         };
         ensure!(
             name(&self.setting) && self.when.len() <= 4 && self.when.keys().all(|k| name(k)),
@@ -217,7 +219,10 @@ pub(crate) fn validate(pack: &Pack) -> Result<()> {
             "images" => pack.images.contains_key(id),
             _ => pack.projectiles.contains_key(id),
         };
-        ensure!(there, "A binding names {id}, which the pack does not declare");
+        ensure!(
+            there,
+            "A binding names {id}, which the pack does not declare"
+        );
     }
     Ok(())
 }

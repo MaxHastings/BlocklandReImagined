@@ -164,8 +164,15 @@ fn centre(u: &mut Ui, screen: ScreenId, node: usize) -> Result<(f32, f32), Strin
     reveal(u, screen, node);
     let v = view(u, screen);
     let r = v.node(node).rect;
-    let boxed = matches!(v.node(node).ctrl.class.as_str(), "GuiCheckBoxCtrl" | "GuiRadioCtrl");
-    let x = if boxed { r.x + (r.h / 2).min(r.w / 2) } else { r.x + r.w / 2 };
+    let boxed = matches!(
+        v.node(node).ctrl.class.as_str(),
+        "GuiCheckBoxCtrl" | "GuiRadioCtrl"
+    );
+    let x = if boxed {
+        r.x + (r.h / 2).min(r.w / 2)
+    } else {
+        r.x + r.w / 2
+    };
     let y = r.y + r.h / 2;
     let mut hit = v.hit(x, y);
     while let Some(h) = hit {
@@ -199,11 +206,11 @@ fn try_click(u: &mut Ui, screen: ScreenId, control: &str) -> Result<(), String> 
     }
     .or_else(|| v.id(control))
     .or_else(|| v.by_command(control))
-        .or_else(|| {
-            v.walk()
-                .find(|&n| v.is_shown(n) && v.text_of(n).trim() == control)
-        })
-        .ok_or_else(|| format!("{control} is not on {screen:?}"))?;
+    .or_else(|| {
+        v.walk()
+            .find(|&n| v.is_shown(n) && v.text_of(n).trim() == control)
+    })
+    .ok_or_else(|| format!("{control} is not on {screen:?}"))?;
     let at = centre(u, screen, node).map_err(|e| format!("{control} on {screen:?}: {e}"))?;
     click_at(u, at);
     Ok(())
@@ -217,7 +224,9 @@ fn click(u: &mut Ui, screen: ScreenId, control: &str) {
 /// Click the row of a list control whose text contains `shown`.
 fn click_row(u: &mut Ui, screen: ScreenId, list: &str, shown: &str) -> Result<(), String> {
     let v = view(u, screen);
-    let n = v.id(list).ok_or_else(|| format!("{list} is not on {screen:?}"))?;
+    let n = v
+        .id(list)
+        .ok_or_else(|| format!("{list} is not on {screen:?}"))?;
     let items = &v.node(n).state.items;
     let Some((row, &(_, id))) = items
         .iter()
@@ -232,7 +241,13 @@ fn click_row(u: &mut Ui, screen: ScreenId, list: &str, shown: &str) -> Result<()
     let r = v.node(n).rect;
     let h = v.node(n).state.row_height.max(1);
     let s = u.scale();
-    click_at(u, ((r.x + 8) as f32 * s, (r.y + h * row as i32 + h / 2) as f32 * s));
+    click_at(
+        u,
+        (
+            (r.x + 8) as f32 * s,
+            (r.y + h * row as i32 + h / 2) as f32 * s,
+        ),
+    );
     match view(u, screen).selected(n) {
         Some(sel) if sel == id => Ok(()),
         other => Err(format!("clicking it selects {other:?}, not row id {id}")),
@@ -330,7 +345,15 @@ fn leaves(v: &Value, path: String, out: &mut BTreeMap<String, Value>) {
     match v {
         Value::Object(m) => {
             for (k, v) in m {
-                leaves(v, if path.is_empty() { k.clone() } else { format!("{path}.{k}") }, out);
+                leaves(
+                    v,
+                    if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    },
+                    out,
+                );
             }
         }
         Value::Array(a) => {
@@ -455,8 +478,7 @@ fn change(u: &mut Ui, screen: ScreenId, key: &str, text: Option<&str>) -> Result
                 .field("maxLength")
                 .and_then(|m| m.parse().ok())
                 .unwrap_or(255);
-            let typed =
-                text.map_or_else(|| sentinel(&v.edit_text(node), key, max), str::to_string);
+            let typed = text.map_or_else(|| sentinel(&v.edit_text(node), key, max), str::to_string);
             replace_text(u, screen, node, &typed)?;
             Change::Typed(typed)
         }
@@ -496,7 +518,11 @@ fn change(u: &mut Ui, screen: ScreenId, key: &str, text: Option<&str>) -> Result
     })
 }
 
-fn run(pack: &Rc<Pack>, sc: &Scenario, probe: Option<(&str, Option<&str>)>) -> Result<Observed, String> {
+fn run(
+    pack: &Rc<Pack>,
+    sc: &Scenario,
+    probe: Option<(&str, Option<&str>)>,
+) -> Result<Observed, String> {
     let mut u = open(pack, sc)?;
     let change = match probe {
         Some((key, text)) => Some(change(&mut u, sc.screen, key, text)?),
@@ -611,7 +637,11 @@ fn check(pack: &Rc<Pack>, sc: &Scenario, print: bool) -> Vec<String> {
             match &observed {
                 Ok((after, _)) => {
                     let paths = changed(&baseline, after);
-                    println!("{} | {key} | {class} | {:?}", sc.name, paths.keys().collect::<Vec<_>>());
+                    println!(
+                        "{} | {key} | {class} | {:?}",
+                        sc.name,
+                        paths.keys().collect::<Vec<_>>()
+                    );
                     if std::env::var_os("BRI_FIELD_FLOW_VALUES").is_some() {
                         let mut was = BTreeMap::new();
                         leaves(&baseline, String::new(), &mut was);
@@ -673,7 +703,6 @@ fn check(pack: &Rc<Pack>, sc: &Scenario, print: bool) -> Vec<String> {
                 // command's name and arguments).
                 let same = shown.contains(typed.as_str())
                     || text.is_some() && !shown.is_empty() && typed.contains(shown.as_str())
-
                     || shown
                         .parse::<f64>()
                         .ok()
@@ -1006,7 +1035,8 @@ fn bricks(u: &mut Ui) {
 
 const SINGLE_PLAYER: &str =
     "single player greys the server options out behind SM_OptionsBlocker, as v20";
-const COPY: &str = "Copy keeps this field for the next brick wrenched; see copy_locks_keep_their_own_field";
+const COPY: &str =
+    "Copy keeps this field for the next brick wrenched; see copy_locks_keep_their_own_field";
 
 const UNFINISHED: &str = "a row without an output is not sent; see an_events_row_built_by_clicks";
 const ROW_DROPPED: &[&str] = &[
@@ -1033,12 +1063,28 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("SM_StartMission();"),
             confirm: &[],
             expect: &[
-            ("TxtServerName", Blocked(SINGLE_PLAYER)),
-            ("TxtServerAdminPasswordCRAP", Blocked(SINGLE_PLAYER)),
-            ("$Pref::Server::SuperAdminPassword", Blocked(SINGLE_PLAYER)),
-            ("SM_PlayerCountMenu", Blocked(SINGLE_PLAYER)),
-            ("SM_OptInternet", Sent(&["actions.HostGame.max_players", "actions.HostGame.mode", "settings.prefs.$Pref::Net::ServerType", "settings.prefs.$Pref::Server::MaxPlayers"])),
-            ("SM_OptLAN", Sent(&["actions.HostGame.max_players", "actions.HostGame.mode", "settings.prefs.$Pref::Net::ServerType", "settings.prefs.$Pref::Server::MaxPlayers"])),
+                ("TxtServerName", Blocked(SINGLE_PLAYER)),
+                ("TxtServerAdminPasswordCRAP", Blocked(SINGLE_PLAYER)),
+                ("$Pref::Server::SuperAdminPassword", Blocked(SINGLE_PLAYER)),
+                ("SM_PlayerCountMenu", Blocked(SINGLE_PLAYER)),
+                (
+                    "SM_OptInternet",
+                    Sent(&[
+                        "actions.HostGame.max_players",
+                        "actions.HostGame.mode",
+                        "settings.prefs.$Pref::Net::ServerType",
+                        "settings.prefs.$Pref::Server::MaxPlayers",
+                    ]),
+                ),
+                (
+                    "SM_OptLAN",
+                    Sent(&[
+                        "actions.HostGame.max_players",
+                        "actions.HostGame.mode",
+                        "settings.prefs.$Pref::Net::ServerType",
+                        "settings.prefs.$Pref::Server::MaxPlayers",
+                    ]),
+                ),
             ],
             rows: Some(Rows {
                 list: "SM_missionList",
@@ -1058,12 +1104,50 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("SM_StartMission();"),
             confirm: &[],
             expect: &[
-            ("TxtServerName", Sent(&["actions.HostGame.server_name", "settings.prefs.$Pref::Server::Name"])),
-            ("TxtServerAdminPasswordCRAP", Sent(&["actions.HostGame.admin_password", "settings.prefs.$Pref::Server::AdminPassword"])),
-            ("$Pref::Server::SuperAdminPassword", Sent(&["actions.HostGame.super_admin_password", "settings.prefs.$Pref::Server::SuperAdminPassword"])),
-            ("SM_PlayerCountMenu", Sent(&["actions.HostGame.max_players", "settings.prefs.$Pref::Server::MaxPlayers"])),
-            ("SM_OptInternet", Sent(&["actions.HostGame.mode", "settings.prefs.$Pref::Net::ServerType"])),
-            ("SM_OptSinglePlayer", Sent(&["actions.HostGame.max_players", "actions.HostGame.mode", "settings.prefs.$Pref::Net::ServerType", "settings.prefs.$Pref::Server::MaxPlayers"])),
+                (
+                    "TxtServerName",
+                    Sent(&[
+                        "actions.HostGame.server_name",
+                        "settings.prefs.$Pref::Server::Name",
+                    ]),
+                ),
+                (
+                    "TxtServerAdminPasswordCRAP",
+                    Sent(&[
+                        "actions.HostGame.admin_password",
+                        "settings.prefs.$Pref::Server::AdminPassword",
+                    ]),
+                ),
+                (
+                    "$Pref::Server::SuperAdminPassword",
+                    Sent(&[
+                        "actions.HostGame.super_admin_password",
+                        "settings.prefs.$Pref::Server::SuperAdminPassword",
+                    ]),
+                ),
+                (
+                    "SM_PlayerCountMenu",
+                    Sent(&[
+                        "actions.HostGame.max_players",
+                        "settings.prefs.$Pref::Server::MaxPlayers",
+                    ]),
+                ),
+                (
+                    "SM_OptInternet",
+                    Sent(&[
+                        "actions.HostGame.mode",
+                        "settings.prefs.$Pref::Net::ServerType",
+                    ]),
+                ),
+                (
+                    "SM_OptSinglePlayer",
+                    Sent(&[
+                        "actions.HostGame.max_players",
+                        "actions.HostGame.mode",
+                        "settings.prefs.$Pref::Net::ServerType",
+                        "settings.prefs.$Pref::Server::MaxPlayers",
+                    ]),
+                ),
             ],
             rows: None,
         },
@@ -1073,37 +1157,116 @@ fn scenarios() -> Vec<Scenario> {
                 u.apply(maps());
                 u.core.push(ScreenId::StartMission);
                 u.update(0);
-                click(u, ScreenId::StartMission, "canvas.pushDialog(ServerconfigGui);");
+                click(
+                    u,
+                    ScreenId::StartMission,
+                    "canvas.pushDialog(ServerconfigGui);",
+                );
             },
             screen: ScreenId::ServerConfig,
             submit: Some("canvas.popDialog(ServerConfigGui);"),
             confirm: &[],
             expect: &[
-            ("AdminOption_port", Sent(&["settings.prefs.$Pref::Server::Port"])),
-            ("AdminOption_bricklimit", Sent(&["settings.prefs.$Pref::Server::BrickLimit"])),
-            ("AdminOption_maxbrickspersecond", Sent(&["settings.prefs.$Pref::Server::MaxBricksPerSecond"])),
-            ("AdminOption_randombrickcolor", Sent(&["settings.prefs.$Pref::Server::RandomBrickColor"])),
-            ("AdminOption_maxchatlen", Sent(&["settings.prefs.$Pref::Server::MaxChatLen"])),
-            ("AdminOption_quota::schedules", Sent(&["settings.prefs.$Pref::Server::Quota::Schedules"])),
-            ("AdminOption_maxphysvehicles_total", Sent(&["settings.prefs.$Pref::Server::MaxPhysVehicles_Total"])),
-            ("AdminOption_quota::misc", Sent(&["settings.prefs.$Pref::Server::Quota::Misc"])),
-            ("AdminOption_quota::projectile", Sent(&["settings.prefs.$Pref::Server::Quota::Projectile"])),
-            ("AdminOption_etardfilter", Sent(&["settings.prefs.$Pref::Server::ETardFilter"])),
-            ("AdminOption_brickpublicdomaintimeout", Sent(&["settings.prefs.$Pref::Server::BrickPublicDomainTimeout"])),
-            ("AdminOption_fallingdamage", Sent(&["settings.prefs.$Pref::Server::FallingDamage"])),
-            ("AdminOption_maxplayervehicles_total", Sent(&["settings.prefs.$Pref::Server::MaxPlayerVehicles_Total"])),
-            ("AdminOption_quota::item", Sent(&["settings.prefs.$Pref::Server::Quota::Item"])),
-            ("AdminOption_quota::vehicle", Sent(&["settings.prefs.$Pref::Server::Quota::Vehicle"])),
-            ("AdminOption_quota::player", Sent(&["settings.prefs.$Pref::Server::Quota::Player"])),
-            ("AdminOption_quota::environment", Sent(&["settings.prefs.$Pref::Server::Quota::Environment"])),
-            ("AdminOption_quotalan::vehicle", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Vehicle"])),
-            ("AdminOption_quotalan::player", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Player"])),
-            ("AdminOption_quotalan::environment", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Environment"])),
-            ("AdminOption_quotalan::item", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Item"])),
-            ("AdminOption_quotalan::projectile", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Projectile"])),
-            ("AdminOption_quotalan::misc", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Misc"])),
-            ("AdminOption_quotalan::schedules", Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Schedules"])),
-            ("AdminOption_toofardistance", Sent(&["settings.prefs.$Pref::Server::TooFarDistance"])),
+                (
+                    "AdminOption_port",
+                    Sent(&["settings.prefs.$Pref::Server::Port"]),
+                ),
+                (
+                    "AdminOption_bricklimit",
+                    Sent(&["settings.prefs.$Pref::Server::BrickLimit"]),
+                ),
+                (
+                    "AdminOption_maxbrickspersecond",
+                    Sent(&["settings.prefs.$Pref::Server::MaxBricksPerSecond"]),
+                ),
+                (
+                    "AdminOption_randombrickcolor",
+                    Sent(&["settings.prefs.$Pref::Server::RandomBrickColor"]),
+                ),
+                (
+                    "AdminOption_maxchatlen",
+                    Sent(&["settings.prefs.$Pref::Server::MaxChatLen"]),
+                ),
+                (
+                    "AdminOption_quota::schedules",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Schedules"]),
+                ),
+                (
+                    "AdminOption_maxphysvehicles_total",
+                    Sent(&["settings.prefs.$Pref::Server::MaxPhysVehicles_Total"]),
+                ),
+                (
+                    "AdminOption_quota::misc",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Misc"]),
+                ),
+                (
+                    "AdminOption_quota::projectile",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Projectile"]),
+                ),
+                (
+                    "AdminOption_etardfilter",
+                    Sent(&["settings.prefs.$Pref::Server::ETardFilter"]),
+                ),
+                (
+                    "AdminOption_brickpublicdomaintimeout",
+                    Sent(&["settings.prefs.$Pref::Server::BrickPublicDomainTimeout"]),
+                ),
+                (
+                    "AdminOption_fallingdamage",
+                    Sent(&["settings.prefs.$Pref::Server::FallingDamage"]),
+                ),
+                (
+                    "AdminOption_maxplayervehicles_total",
+                    Sent(&["settings.prefs.$Pref::Server::MaxPlayerVehicles_Total"]),
+                ),
+                (
+                    "AdminOption_quota::item",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Item"]),
+                ),
+                (
+                    "AdminOption_quota::vehicle",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Vehicle"]),
+                ),
+                (
+                    "AdminOption_quota::player",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Player"]),
+                ),
+                (
+                    "AdminOption_quota::environment",
+                    Sent(&["settings.prefs.$Pref::Server::Quota::Environment"]),
+                ),
+                (
+                    "AdminOption_quotalan::vehicle",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Vehicle"]),
+                ),
+                (
+                    "AdminOption_quotalan::player",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Player"]),
+                ),
+                (
+                    "AdminOption_quotalan::environment",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Environment"]),
+                ),
+                (
+                    "AdminOption_quotalan::item",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Item"]),
+                ),
+                (
+                    "AdminOption_quotalan::projectile",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Projectile"]),
+                ),
+                (
+                    "AdminOption_quotalan::misc",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Misc"]),
+                ),
+                (
+                    "AdminOption_quotalan::schedules",
+                    Sent(&["settings.prefs.$Pref::Server::QuotaLAN::Schedules"]),
+                ),
+                (
+                    "AdminOption_toofardistance",
+                    Sent(&["settings.prefs.$Pref::Server::TooFarDistance"]),
+                ),
             ],
             rows: None,
         },
@@ -1156,9 +1319,13 @@ fn scenarios() -> Vec<Scenario> {
             screen: ScreenId::ManualJoin,
             submit: Some("MJ_connect();"),
             confirm: &[],
-            expect: &[
-            ("MJ_txtIP", Sent(&["actions.JoinServer.address", "settings.prefs.$pref::Join::Address"])),
-            ],
+            expect: &[(
+                "MJ_txtIP",
+                Sent(&[
+                    "actions.JoinServer.address",
+                    "settings.prefs.$pref::Join::Address",
+                ]),
+            )],
             rows: None,
         },
         Scenario {
@@ -1171,10 +1338,13 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("Avatar_Done();"),
             confirm: &[],
             expect: &[
-            ("Avatar_Prefix", Sent(&["actions.SetAvatar.clan_prefix"])),
-            ("Avatar_Suffix", Sent(&["actions.SetAvatar.clan_suffix"])),
-            ("Avatar_SymmetryCheckbox", Sent(&["actions.SetAvatar.symmetry"])),
-            ("Avatar_Name", Sent(&["actions.SetAvatar.lan_name"])),
+                ("Avatar_Prefix", Sent(&["actions.SetAvatar.clan_prefix"])),
+                ("Avatar_Suffix", Sent(&["actions.SetAvatar.clan_suffix"])),
+                (
+                    "Avatar_SymmetryCheckbox",
+                    Sent(&["actions.SetAvatar.symmetry"]),
+                ),
+                ("Avatar_Name", Sent(&["actions.SetAvatar.lan_name"])),
             ],
             rows: None,
         },
@@ -1187,9 +1357,13 @@ fn scenarios() -> Vec<Scenario> {
             screen: ScreenId::ChooseName,
             submit: Some("regNameGui::register();"),
             confirm: &[],
-            expect: &[
-            ("regName_NewName", Sent(&["settings.avatar.lan_name", "settings.prefs.$pref::Player::LANName"])),
-            ],
+            expect: &[(
+                "regName_NewName",
+                Sent(&[
+                    "settings.avatar.lan_name",
+                    "settings.prefs.$pref::Player::LANName",
+                ]),
+            )],
             rows: None,
         },
         Scenario {
@@ -1214,10 +1388,19 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("SaveBricks_Save();"),
             confirm: &[],
             expect: &[
-            ("SaveBricks_FileName", Sent(&["actions.SaveBricks.name"])),
-            ("SaveBricks_Description", Sent(&["actions.SaveBricks.description"])),
-            ("SaveBricks_ExtendedInfo", Sent(&["actions.SaveBricks.events"])),
-            ("SaveBricks_Ownership", Sent(&["actions.SaveBricks.ownership"])),
+                ("SaveBricks_FileName", Sent(&["actions.SaveBricks.name"])),
+                (
+                    "SaveBricks_Description",
+                    Sent(&["actions.SaveBricks.description"]),
+                ),
+                (
+                    "SaveBricks_ExtendedInfo",
+                    Sent(&["actions.SaveBricks.events"]),
+                ),
+                (
+                    "SaveBricks_Ownership",
+                    Sent(&["actions.SaveBricks.ownership"]),
+                ),
             ],
             rows: None,
         },
@@ -1254,10 +1437,24 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("LoadBricks_ClickLoadButton();"),
             confirm: &[],
             expect: &[
-            ("LoadBricks_MapMenu", Sent(&["actions.LoadBricks.map", "actions.LoadBricks.name", "actions.LoadBricks.ownership", "actions.RequestSaveList.map"])),
-            ("LoadBricks_DoOwnership", Sent(&["actions.LoadBricks.ownership"])),
-            // Finds and picks the best match, here another save on the same map.
-            ("LoadBricks_Search", Typed("Tower", &["actions.LoadBricks.name"])),
+                (
+                    "LoadBricks_MapMenu",
+                    Sent(&[
+                        "actions.LoadBricks.map",
+                        "actions.LoadBricks.name",
+                        "actions.LoadBricks.ownership",
+                        "actions.RequestSaveList.map",
+                    ]),
+                ),
+                (
+                    "LoadBricks_DoOwnership",
+                    Sent(&["actions.LoadBricks.ownership"]),
+                ),
+                // Finds and picks the best match, here another save on the same map.
+                (
+                    "LoadBricks_Search",
+                    Typed("Tower", &["actions.LoadBricks.name"]),
+                ),
             ],
             rows: Some(Rows {
                 list: "LoadBricks_FileList",
@@ -1281,9 +1478,10 @@ fn scenarios() -> Vec<Scenario> {
             screen: ScreenId::BrickSelector,
             submit: None,
             confirm: &[],
-            expect: &[
-            ("BSD_Search", Typed("2x4", &["actions.InstantUseBrick.brick"])),
-            ],
+            expect: &[(
+                "BSD_Search",
+                Typed("2x4", &["actions.InstantUseBrick.brick"]),
+            )],
             rows: None,
         },
         Scenario {
@@ -1354,34 +1552,115 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("CreateMiniGameGui.clickCreate();"),
             confirm: &[],
             expect: &[
-            ("$MiniGame::Title", Sent(&["actions.CreateMiniGame.rules.title"])),
-            ("CMG_ColorList", Sent(&["actions.CreateMiniGame.color"])),
-            ("$MiniGame::PlayersUseOwnBricks", Sent(&["actions.CreateMiniGame.rules.players_use_own_bricks"])),
-            ("$MiniGame::UseAllPlayersBricks", Sent(&["actions.CreateMiniGame.rules.use_all_players_bricks"])),
-            ("$MiniGame::InviteOnly", Sent(&["actions.CreateMiniGame.rules.invite_only"])),
-            ("$MiniGame::Points::BreakBrick", Sent(&["actions.CreateMiniGame.rules.points_break_brick"])),
-            ("$MiniGame::Points::PlantBrick", Sent(&["actions.CreateMiniGame.rules.points_plant_brick"])),
-            ("$MiniGame::Points::KillPlayer", Sent(&["actions.CreateMiniGame.rules.points_kill_player"])),
-            ("$MiniGame::Points::KillSelf", Sent(&["actions.CreateMiniGame.rules.points_kill_self"])),
-            ("$MiniGame::Points::Die", Sent(&["actions.CreateMiniGame.rules.points_die"])),
-            ("$MiniGame::BrickRespawnTime", Sent(&["actions.CreateMiniGame.rules.brick_respawn_seconds"])),
-            ("$MiniGame::VehicleRespawnTime", Sent(&["actions.CreateMiniGame.rules.vehicle_respawn_seconds"])),
-            ("$MiniGame::RespawnTime", Sent(&["actions.CreateMiniGame.rules.respawn_seconds"])),
-            ("$MiniGame::BrickDamage", Sent(&["actions.CreateMiniGame.rules.brick_damage"])),
-            ("$MiniGame::VehicleDamage", Sent(&["actions.CreateMiniGame.rules.vehicle_damage"])),
-            ("$MiniGame::SelfDamage", Sent(&["actions.CreateMiniGame.rules.self_damage"])),
-            ("$MiniGame::WeaponDamage", Sent(&["actions.CreateMiniGame.rules.weapon_damage"])),
-            ("$MiniGame::FallingDamage", Sent(&["actions.CreateMiniGame.rules.falling_damage"])),
-            ("$MiniGame::UseSpawnBricks", Sent(&["actions.CreateMiniGame.rules.use_spawn_bricks"])),
-            ("CMG_PlayerDataBlock", Sent(&["actions.CreateMiniGame.rules.player_type"])),
-            ("$MiniGame::EnableWand", Sent(&["actions.CreateMiniGame.rules.enable_wand"])),
-            ("$MiniGame::EnableBuilding", Sent(&["actions.CreateMiniGame.rules.enable_building"])),
-            ("$MiniGame::EnablePainting", Sent(&["actions.CreateMiniGame.rules.enable_painting"])),
-            ("CMG_StartEquip4", Sent(&["actions.CreateMiniGame.rules.loadout[4]"])),
-            ("CMG_StartEquip3", Sent(&["actions.CreateMiniGame.rules.loadout[3]"])),
-            ("CMG_StartEquip2", Sent(&["actions.CreateMiniGame.rules.loadout[2]"])),
-            ("CMG_StartEquip1", Sent(&["actions.CreateMiniGame.rules.loadout[1]"])),
-            ("CMG_StartEquip0", Sent(&["actions.CreateMiniGame.rules.loadout[0]"])),
+                (
+                    "$MiniGame::Title",
+                    Sent(&["actions.CreateMiniGame.rules.title"]),
+                ),
+                ("CMG_ColorList", Sent(&["actions.CreateMiniGame.color"])),
+                (
+                    "$MiniGame::PlayersUseOwnBricks",
+                    Sent(&["actions.CreateMiniGame.rules.players_use_own_bricks"]),
+                ),
+                (
+                    "$MiniGame::UseAllPlayersBricks",
+                    Sent(&["actions.CreateMiniGame.rules.use_all_players_bricks"]),
+                ),
+                (
+                    "$MiniGame::InviteOnly",
+                    Sent(&["actions.CreateMiniGame.rules.invite_only"]),
+                ),
+                (
+                    "$MiniGame::Points::BreakBrick",
+                    Sent(&["actions.CreateMiniGame.rules.points_break_brick"]),
+                ),
+                (
+                    "$MiniGame::Points::PlantBrick",
+                    Sent(&["actions.CreateMiniGame.rules.points_plant_brick"]),
+                ),
+                (
+                    "$MiniGame::Points::KillPlayer",
+                    Sent(&["actions.CreateMiniGame.rules.points_kill_player"]),
+                ),
+                (
+                    "$MiniGame::Points::KillSelf",
+                    Sent(&["actions.CreateMiniGame.rules.points_kill_self"]),
+                ),
+                (
+                    "$MiniGame::Points::Die",
+                    Sent(&["actions.CreateMiniGame.rules.points_die"]),
+                ),
+                (
+                    "$MiniGame::BrickRespawnTime",
+                    Sent(&["actions.CreateMiniGame.rules.brick_respawn_seconds"]),
+                ),
+                (
+                    "$MiniGame::VehicleRespawnTime",
+                    Sent(&["actions.CreateMiniGame.rules.vehicle_respawn_seconds"]),
+                ),
+                (
+                    "$MiniGame::RespawnTime",
+                    Sent(&["actions.CreateMiniGame.rules.respawn_seconds"]),
+                ),
+                (
+                    "$MiniGame::BrickDamage",
+                    Sent(&["actions.CreateMiniGame.rules.brick_damage"]),
+                ),
+                (
+                    "$MiniGame::VehicleDamage",
+                    Sent(&["actions.CreateMiniGame.rules.vehicle_damage"]),
+                ),
+                (
+                    "$MiniGame::SelfDamage",
+                    Sent(&["actions.CreateMiniGame.rules.self_damage"]),
+                ),
+                (
+                    "$MiniGame::WeaponDamage",
+                    Sent(&["actions.CreateMiniGame.rules.weapon_damage"]),
+                ),
+                (
+                    "$MiniGame::FallingDamage",
+                    Sent(&["actions.CreateMiniGame.rules.falling_damage"]),
+                ),
+                (
+                    "$MiniGame::UseSpawnBricks",
+                    Sent(&["actions.CreateMiniGame.rules.use_spawn_bricks"]),
+                ),
+                (
+                    "CMG_PlayerDataBlock",
+                    Sent(&["actions.CreateMiniGame.rules.player_type"]),
+                ),
+                (
+                    "$MiniGame::EnableWand",
+                    Sent(&["actions.CreateMiniGame.rules.enable_wand"]),
+                ),
+                (
+                    "$MiniGame::EnableBuilding",
+                    Sent(&["actions.CreateMiniGame.rules.enable_building"]),
+                ),
+                (
+                    "$MiniGame::EnablePainting",
+                    Sent(&["actions.CreateMiniGame.rules.enable_painting"]),
+                ),
+                (
+                    "CMG_StartEquip4",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[4]"]),
+                ),
+                (
+                    "CMG_StartEquip3",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[3]"]),
+                ),
+                (
+                    "CMG_StartEquip2",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[2]"]),
+                ),
+                (
+                    "CMG_StartEquip1",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[1]"]),
+                ),
+                (
+                    "CMG_StartEquip0",
+                    Sent(&["actions.CreateMiniGame.rules.loadout[0]"]),
+                ),
             ],
             rows: None,
         },
@@ -1392,38 +1671,92 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("wrenchDlg.send();"),
             confirm: &[],
             expect: &[
-            ("Wrench_Name", Sent(&["actions.SendWrench.data.name"])),
-            ("Wrench_Lights", Sent(&["actions.SendWrench.data.light"])),
-            ("Wrench_Emitters", Sent(&["actions.SendWrench.data.emitter"])),
-            ("WrenchLock_Lights", NotSent(COPY)),
-            ("WrenchLock_Name", NotSent(COPY)),
-            ("WrenchLock_Emitters", NotSent(COPY)),
-            ("Wrench_EmitterDir1", Sent(&["actions.SendWrench.data.emitter_dir"])),
-            ("Wrench_EmitterDir2", Sent(&["actions.SendWrench.data.emitter_dir"])),
-            ("Wrench_EmitterDir3", Sent(&["actions.SendWrench.data.emitter_dir"])),
-            ("Wrench_EmitterDir4", Sent(&["actions.SendWrench.data.emitter_dir"])),
-            ("Wrench_EmitterDir5", Sent(&["actions.SendWrench.data.emitter_dir"])),
-            ("WrenchLock_EmitterDir", NotSent(COPY)),
-            ("Wrench_Items", Sent(&["actions.SendWrench.data.item"])),
-            ("WrenchLock_Items", NotSent(COPY)),
-            ("Wrench_ItemPos1", Sent(&["actions.SendWrench.data.item_pos"])),
-            ("Wrench_ItemPos2", Sent(&["actions.SendWrench.data.item_pos"])),
-            ("Wrench_ItemPos3", Sent(&["actions.SendWrench.data.item_pos"])),
-            ("Wrench_ItemPos4", Sent(&["actions.SendWrench.data.item_pos"])),
-            ("Wrench_ItemPos5", Sent(&["actions.SendWrench.data.item_pos"])),
-            ("WrenchLock_ItemPos", NotSent(COPY)),
-            ("Wrench_ItemDir5", Sent(&["actions.SendWrench.data.item_dir"])),
-            ("WrenchLock_ItemDir", NotSent(COPY)),
-            ("Wrench_ItemDir3", Sent(&["actions.SendWrench.data.item_dir"])),
-            ("Wrench_ItemDir4", Sent(&["actions.SendWrench.data.item_dir"])),
-            ("WrenchLock_ItemRespawnTime", NotSent(COPY)),
-            ("Wrench_ItemRespawnTime", Sent(&["actions.SendWrench.data.item_respawn_ms"])),
-            ("WrenchLock_RayCasting", NotSent(COPY)),
-            ("Wrench_RayCasting", Sent(&["actions.SendWrench.data.raycasting"])),
-            ("Wrench_Collision", Sent(&["actions.SendWrench.data.colliding"])),
-            ("WrenchLock_Collision", NotSent(COPY)),
-            ("WrenchLock_Rendering", NotSent(COPY)),
-            ("Wrench_Rendering", Sent(&["actions.SendWrench.data.rendering"])),
+                ("Wrench_Name", Sent(&["actions.SendWrench.data.name"])),
+                ("Wrench_Lights", Sent(&["actions.SendWrench.data.light"])),
+                (
+                    "Wrench_Emitters",
+                    Sent(&["actions.SendWrench.data.emitter"]),
+                ),
+                ("WrenchLock_Lights", NotSent(COPY)),
+                ("WrenchLock_Name", NotSent(COPY)),
+                ("WrenchLock_Emitters", NotSent(COPY)),
+                (
+                    "Wrench_EmitterDir1",
+                    Sent(&["actions.SendWrench.data.emitter_dir"]),
+                ),
+                (
+                    "Wrench_EmitterDir2",
+                    Sent(&["actions.SendWrench.data.emitter_dir"]),
+                ),
+                (
+                    "Wrench_EmitterDir3",
+                    Sent(&["actions.SendWrench.data.emitter_dir"]),
+                ),
+                (
+                    "Wrench_EmitterDir4",
+                    Sent(&["actions.SendWrench.data.emitter_dir"]),
+                ),
+                (
+                    "Wrench_EmitterDir5",
+                    Sent(&["actions.SendWrench.data.emitter_dir"]),
+                ),
+                ("WrenchLock_EmitterDir", NotSent(COPY)),
+                ("Wrench_Items", Sent(&["actions.SendWrench.data.item"])),
+                ("WrenchLock_Items", NotSent(COPY)),
+                (
+                    "Wrench_ItemPos1",
+                    Sent(&["actions.SendWrench.data.item_pos"]),
+                ),
+                (
+                    "Wrench_ItemPos2",
+                    Sent(&["actions.SendWrench.data.item_pos"]),
+                ),
+                (
+                    "Wrench_ItemPos3",
+                    Sent(&["actions.SendWrench.data.item_pos"]),
+                ),
+                (
+                    "Wrench_ItemPos4",
+                    Sent(&["actions.SendWrench.data.item_pos"]),
+                ),
+                (
+                    "Wrench_ItemPos5",
+                    Sent(&["actions.SendWrench.data.item_pos"]),
+                ),
+                ("WrenchLock_ItemPos", NotSent(COPY)),
+                (
+                    "Wrench_ItemDir5",
+                    Sent(&["actions.SendWrench.data.item_dir"]),
+                ),
+                ("WrenchLock_ItemDir", NotSent(COPY)),
+                (
+                    "Wrench_ItemDir3",
+                    Sent(&["actions.SendWrench.data.item_dir"]),
+                ),
+                (
+                    "Wrench_ItemDir4",
+                    Sent(&["actions.SendWrench.data.item_dir"]),
+                ),
+                ("WrenchLock_ItemRespawnTime", NotSent(COPY)),
+                (
+                    "Wrench_ItemRespawnTime",
+                    Sent(&["actions.SendWrench.data.item_respawn_ms"]),
+                ),
+                ("WrenchLock_RayCasting", NotSent(COPY)),
+                (
+                    "Wrench_RayCasting",
+                    Sent(&["actions.SendWrench.data.raycasting"]),
+                ),
+                (
+                    "Wrench_Collision",
+                    Sent(&["actions.SendWrench.data.colliding"]),
+                ),
+                ("WrenchLock_Collision", NotSent(COPY)),
+                ("WrenchLock_Rendering", NotSent(COPY)),
+                (
+                    "Wrench_Rendering",
+                    Sent(&["actions.SendWrench.data.rendering"]),
+                ),
             ],
             rows: None,
         },
@@ -1434,10 +1767,13 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("wrenchSoundDlg.send();"),
             confirm: &[],
             expect: &[
-            ("WrenchSound_Sounds", Sent(&["actions.SendWrench.data.sound"])),
-            ("WrenchSoundLock_Sounds", NotSent(COPY)),
-            ("WrenchSound_Name", Sent(&["actions.SendWrench.data.name"])),
-            ("WrenchSoundLock_Name", NotSent(COPY)),
+                (
+                    "WrenchSound_Sounds",
+                    Sent(&["actions.SendWrench.data.sound"]),
+                ),
+                ("WrenchSoundLock_Sounds", NotSent(COPY)),
+                ("WrenchSound_Name", Sent(&["actions.SendWrench.data.name"])),
+                ("WrenchSoundLock_Name", NotSent(COPY)),
             ],
             rows: None,
         },
@@ -1448,18 +1784,36 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("wrenchVehicleSpawnDlg.send();"),
             confirm: &[],
             expect: &[
-            ("WrenchVehicleSpawn_Vehicles", Sent(&["actions.SendWrench.data.vehicle"])),
-            ("WrenchVehicleSpawnLock_Vehicles", NotSent(COPY)),
-            ("WrenchVehicleSpawn_Name", Sent(&["actions.SendWrench.data.name"])),
-            ("WrenchVehicleSpawnLock_Name", NotSent(COPY)),
-            ("WrenchVehicleSpawnLock_ReColorVehicle", NotSent(COPY)),
-            ("WrenchVehicleSpawn_ReColorVehicle", Sent(&["actions.SendWrench.data.recolor_vehicle"])),
-            ("WrenchVehicleSpawn_Rendering", Sent(&["actions.SendWrench.data.rendering"])),
-            ("WrenchVehicleSpawn_Collision", Sent(&["actions.SendWrench.data.colliding"])),
-            ("WrenchVehicleSpawn_RayCasting", Sent(&["actions.SendWrench.data.raycasting"])),
-            ("WrenchVehicleSpawnLock_RayCasting", NotSent(COPY)),
-            ("WrenchVehicleSpawnLock_Collision", NotSent(COPY)),
-            ("WrenchVehicleSpawnLock_Rendering", NotSent(COPY)),
+                (
+                    "WrenchVehicleSpawn_Vehicles",
+                    Sent(&["actions.SendWrench.data.vehicle"]),
+                ),
+                ("WrenchVehicleSpawnLock_Vehicles", NotSent(COPY)),
+                (
+                    "WrenchVehicleSpawn_Name",
+                    Sent(&["actions.SendWrench.data.name"]),
+                ),
+                ("WrenchVehicleSpawnLock_Name", NotSent(COPY)),
+                ("WrenchVehicleSpawnLock_ReColorVehicle", NotSent(COPY)),
+                (
+                    "WrenchVehicleSpawn_ReColorVehicle",
+                    Sent(&["actions.SendWrench.data.recolor_vehicle"]),
+                ),
+                (
+                    "WrenchVehicleSpawn_Rendering",
+                    Sent(&["actions.SendWrench.data.rendering"]),
+                ),
+                (
+                    "WrenchVehicleSpawn_Collision",
+                    Sent(&["actions.SendWrench.data.colliding"]),
+                ),
+                (
+                    "WrenchVehicleSpawn_RayCasting",
+                    Sent(&["actions.SendWrench.data.raycasting"]),
+                ),
+                ("WrenchVehicleSpawnLock_RayCasting", NotSent(COPY)),
+                ("WrenchVehicleSpawnLock_Collision", NotSent(COPY)),
+                ("WrenchVehicleSpawnLock_Rendering", NotSent(COPY)),
             ],
             rows: None,
         },
@@ -1471,19 +1825,31 @@ fn scenarios() -> Vec<Scenario> {
             confirm: &[],
             expect: &[
                 ("WrenchLock_Events", NotSent(COPY)),
-                ("WrenchEvent_0_enabled", Sent(&["actions.SendEvents.rows[0].Editable.enabled"])),
-                ("WrenchEvent_0_delay", Sent(&["actions.SendEvents.rows[0].Editable.delay_ms"])),
+                (
+                    "WrenchEvent_0_enabled",
+                    Sent(&["actions.SendEvents.rows[0].Editable.enabled"]),
+                ),
+                (
+                    "WrenchEvent_0_delay",
+                    Sent(&["actions.SendEvents.rows[0].Editable.delay_ms"]),
+                ),
                 // A new input or target clears the rest of the row, which is
                 // then not sent until an output is picked again (v20
                 // createTargetList/createOutputList, send skips it).
                 ("WrenchEvent_0_input", Sent(ROW_DROPPED)),
                 ("WrenchEvent_0_target", Sent(ROW_DROPPED)),
-                ("WrenchEvent_0_output", Sent(&[
-                    "actions.SendEvents.rows[0].Editable.output",
-                    "actions.SendEvents.rows[0].Editable.params[0].List",
-                    "actions.SendEvents.rows[0].Editable.params[0].PaintColor",
-                ])),
-                ("WrenchEvent_0_param0", Sent(&["actions.SendEvents.rows[0].Editable.params[0].PaintColor"])),
+                (
+                    "WrenchEvent_0_output",
+                    Sent(&[
+                        "actions.SendEvents.rows[0].Editable.output",
+                        "actions.SendEvents.rows[0].Editable.params[0].List",
+                        "actions.SendEvents.rows[0].Editable.params[0].PaintColor",
+                    ]),
+                ),
+                (
+                    "WrenchEvent_0_param0",
+                    Sent(&["actions.SendEvents.rows[0].Editable.params[0].PaintColor"]),
+                ),
                 ("WrenchEvent_1_enabled", NotSent(UNFINISHED)),
                 ("WrenchEvent_1_delay", NotSent(UNFINISHED)),
                 ("WrenchEvent_1_input", NotSent(UNFINISHED)),
@@ -1501,9 +1867,7 @@ fn scenarios() -> Vec<Scenario> {
             screen: ScreenId::AdminLogin,
             submit: None,
             confirm: &[],
-            expect: &[
-            ("txtAdminPass", Sent(&["actions.Admin.Login.password"])),
-            ],
+            expect: &[("txtAdminPass", Sent(&["actions.Admin.Login.password"]))],
             rows: None,
         },
         Scenario {
@@ -1534,11 +1898,11 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("addBanGui.ban();"),
             confirm: &[(ScreenId::AdminConfirm, YES)],
             expect: &[
-            ("AddBan_Days", Sent(&["actions.Admin.Ban.minutes"])),
-            ("AddBan_Hours", Sent(&["actions.Admin.Ban.minutes"])),
-            ("AddBan_Minutes", Sent(&["actions.Admin.Ban.minutes"])),
-            ("AddBan_Forever", Sent(&["actions.Admin.Ban.minutes"])),
-            ("addBan_reason", Sent(&["actions.Admin.Ban.reason"])),
+                ("AddBan_Days", Sent(&["actions.Admin.Ban.minutes"])),
+                ("AddBan_Hours", Sent(&["actions.Admin.Ban.minutes"])),
+                ("AddBan_Minutes", Sent(&["actions.Admin.Ban.minutes"])),
+                ("AddBan_Forever", Sent(&["actions.Admin.Ban.minutes"])),
+                ("addBan_reason", Sent(&["actions.Admin.Ban.reason"])),
             ],
             rows: None,
         },
@@ -1611,31 +1975,181 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("canvas.popDialog(ServerConfigGui);"),
             confirm: &[],
             expect: &[
-            ("AdminOption_port", Sent(&["actions.Admin.ConfigureHost.options.port", "settings.prefs.$Pref::Server::Port"])),
-            ("AdminOption_bricklimit", Sent(&["actions.Admin.ConfigureHost.options.brick_limit", "settings.prefs.$Pref::Server::BrickLimit"])),
-            ("AdminOption_maxbrickspersecond", Sent(&["actions.Admin.ConfigureHost.options.bricks_per_second", "settings.prefs.$Pref::Server::MaxBricksPerSecond"])),
-            ("AdminOption_randombrickcolor", Sent(&["actions.Admin.ConfigureHost.options.random_brick_color", "settings.prefs.$Pref::Server::RandomBrickColor"])),
-            ("AdminOption_maxchatlen", Sent(&["actions.Admin.ConfigureHost.options.max_chat_length", "settings.prefs.$Pref::Server::MaxChatLen"])),
-            ("AdminOption_quota::schedules", Sent(&["actions.Admin.ConfigureHost.options.per_player.schedules", "settings.prefs.$Pref::Server::Quota::Schedules"])),
-            ("AdminOption_maxphysvehicles_total", Sent(&["actions.Admin.ConfigureHost.options.physics_vehicles", "settings.prefs.$Pref::Server::MaxPhysVehicles_Total"])),
-            ("AdminOption_quota::misc", Sent(&["actions.Admin.ConfigureHost.options.per_player.misc", "settings.prefs.$Pref::Server::Quota::Misc"])),
-            ("AdminOption_quota::projectile", Sent(&["actions.Admin.ConfigureHost.options.per_player.projectiles", "settings.prefs.$Pref::Server::Quota::Projectile"])),
-            ("AdminOption_etardfilter", Sent(&["actions.Admin.ConfigureHost.options.chat_filter", "settings.prefs.$Pref::Server::ETardFilter"])),
-            ("AdminOption_brickpublicdomaintimeout", Sent(&["actions.Admin.ConfigureHost.options.public_domain_timeout_minutes", "settings.prefs.$Pref::Server::BrickPublicDomainTimeout"])),
-            ("AdminOption_fallingdamage", Sent(&["actions.Admin.ConfigureHost.options.falling_damage", "settings.prefs.$Pref::Server::FallingDamage"])),
-            ("AdminOption_maxplayervehicles_total", Sent(&["actions.Admin.ConfigureHost.options.player_vehicles", "settings.prefs.$Pref::Server::MaxPlayerVehicles_Total"])),
-            ("AdminOption_quota::item", Sent(&["actions.Admin.ConfigureHost.options.per_player.items", "settings.prefs.$Pref::Server::Quota::Item"])),
-            ("AdminOption_quota::vehicle", Sent(&["actions.Admin.ConfigureHost.options.per_player.vehicles", "settings.prefs.$Pref::Server::Quota::Vehicle"])),
-            ("AdminOption_quota::player", Sent(&["actions.Admin.ConfigureHost.options.per_player.players", "settings.prefs.$Pref::Server::Quota::Player"])),
-            ("AdminOption_quota::environment", Sent(&["actions.Admin.ConfigureHost.options.per_player.environment", "settings.prefs.$Pref::Server::Quota::Environment"])),
-            ("AdminOption_quotalan::vehicle", Sent(&["actions.Admin.ConfigureHost.options.lan.vehicles", "settings.prefs.$Pref::Server::QuotaLAN::Vehicle"])),
-            ("AdminOption_quotalan::player", Sent(&["actions.Admin.ConfigureHost.options.lan.players", "settings.prefs.$Pref::Server::QuotaLAN::Player"])),
-            ("AdminOption_quotalan::environment", Sent(&["actions.Admin.ConfigureHost.options.lan.environment", "settings.prefs.$Pref::Server::QuotaLAN::Environment"])),
-            ("AdminOption_quotalan::item", Sent(&["actions.Admin.ConfigureHost.options.lan.items", "settings.prefs.$Pref::Server::QuotaLAN::Item"])),
-            ("AdminOption_quotalan::projectile", Sent(&["actions.Admin.ConfigureHost.options.lan.projectiles", "settings.prefs.$Pref::Server::QuotaLAN::Projectile"])),
-            ("AdminOption_quotalan::misc", Sent(&["actions.Admin.ConfigureHost.options.lan.misc", "settings.prefs.$Pref::Server::QuotaLAN::Misc"])),
-            ("AdminOption_quotalan::schedules", Sent(&["actions.Admin.ConfigureHost.options.lan.schedules", "settings.prefs.$Pref::Server::QuotaLAN::Schedules"])),
-            ("AdminOption_toofardistance", Sent(&["actions.Admin.ConfigureHost.options.too_far_distance", "settings.prefs.$Pref::Server::TooFarDistance"])),
+                (
+                    "AdminOption_port",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.port",
+                        "settings.prefs.$Pref::Server::Port",
+                    ]),
+                ),
+                (
+                    "AdminOption_bricklimit",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.brick_limit",
+                        "settings.prefs.$Pref::Server::BrickLimit",
+                    ]),
+                ),
+                (
+                    "AdminOption_maxbrickspersecond",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.bricks_per_second",
+                        "settings.prefs.$Pref::Server::MaxBricksPerSecond",
+                    ]),
+                ),
+                (
+                    "AdminOption_randombrickcolor",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.random_brick_color",
+                        "settings.prefs.$Pref::Server::RandomBrickColor",
+                    ]),
+                ),
+                (
+                    "AdminOption_maxchatlen",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.max_chat_length",
+                        "settings.prefs.$Pref::Server::MaxChatLen",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::schedules",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.schedules",
+                        "settings.prefs.$Pref::Server::Quota::Schedules",
+                    ]),
+                ),
+                (
+                    "AdminOption_maxphysvehicles_total",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.physics_vehicles",
+                        "settings.prefs.$Pref::Server::MaxPhysVehicles_Total",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::misc",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.misc",
+                        "settings.prefs.$Pref::Server::Quota::Misc",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::projectile",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.projectiles",
+                        "settings.prefs.$Pref::Server::Quota::Projectile",
+                    ]),
+                ),
+                (
+                    "AdminOption_etardfilter",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.chat_filter",
+                        "settings.prefs.$Pref::Server::ETardFilter",
+                    ]),
+                ),
+                (
+                    "AdminOption_brickpublicdomaintimeout",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.public_domain_timeout_minutes",
+                        "settings.prefs.$Pref::Server::BrickPublicDomainTimeout",
+                    ]),
+                ),
+                (
+                    "AdminOption_fallingdamage",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.falling_damage",
+                        "settings.prefs.$Pref::Server::FallingDamage",
+                    ]),
+                ),
+                (
+                    "AdminOption_maxplayervehicles_total",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.player_vehicles",
+                        "settings.prefs.$Pref::Server::MaxPlayerVehicles_Total",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::item",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.items",
+                        "settings.prefs.$Pref::Server::Quota::Item",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::vehicle",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.vehicles",
+                        "settings.prefs.$Pref::Server::Quota::Vehicle",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::player",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.players",
+                        "settings.prefs.$Pref::Server::Quota::Player",
+                    ]),
+                ),
+                (
+                    "AdminOption_quota::environment",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.per_player.environment",
+                        "settings.prefs.$Pref::Server::Quota::Environment",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::vehicle",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.vehicles",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Vehicle",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::player",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.players",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Player",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::environment",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.environment",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Environment",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::item",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.items",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Item",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::projectile",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.projectiles",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Projectile",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::misc",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.misc",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Misc",
+                    ]),
+                ),
+                (
+                    "AdminOption_quotalan::schedules",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.lan.schedules",
+                        "settings.prefs.$Pref::Server::QuotaLAN::Schedules",
+                    ]),
+                ),
+                (
+                    "AdminOption_toofardistance",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.too_far_distance",
+                        "settings.prefs.$Pref::Server::TooFarDistance",
+                    ]),
+                ),
             ],
             rows: None,
         },
@@ -1646,10 +2160,22 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("AdminApplyPassword"),
             confirm: &[],
             expect: &[
-            ("AdminServerName", NotSent("sent by Apply; see Server name and size")),
-            ("AdminMaxPlayers", NotSent("sent by Apply; see Server name and size")),
-            ("AdminNewPassword", Sent(&["actions.Admin.SetPassword.password"])),
-            ("AdminPasswordSlot", Sent(&["actions.Admin.SetPassword.slot"])),
+                (
+                    "AdminServerName",
+                    NotSent("sent by Apply; see Server name and size"),
+                ),
+                (
+                    "AdminMaxPlayers",
+                    NotSent("sent by Apply; see Server name and size"),
+                ),
+                (
+                    "AdminNewPassword",
+                    Sent(&["actions.Admin.SetPassword.password"]),
+                ),
+                (
+                    "AdminPasswordSlot",
+                    Sent(&["actions.Admin.SetPassword.slot"]),
+                ),
             ],
             rows: None,
         },
@@ -1660,10 +2186,22 @@ fn scenarios() -> Vec<Scenario> {
             submit: Some("AdminApplyIdentity"),
             confirm: &[],
             expect: &[
-            ("AdminServerName", Sent(&["actions.Admin.ConfigureHost.options.name"])),
-            ("AdminMaxPlayers", Sent(&["actions.Admin.ConfigureHost.options.max_players"])),
-            ("AdminNewPassword", NotSent("sent by Set password; see Admin passwords")),
-            ("AdminPasswordSlot", NotSent("sent by Set password; see Admin passwords")),
+                (
+                    "AdminServerName",
+                    Sent(&["actions.Admin.ConfigureHost.options.name"]),
+                ),
+                (
+                    "AdminMaxPlayers",
+                    Sent(&["actions.Admin.ConfigureHost.options.max_players"]),
+                ),
+                (
+                    "AdminNewPassword",
+                    NotSent("sent by Set password; see Admin passwords"),
+                ),
+                (
+                    "AdminPasswordSlot",
+                    NotSent("sent by Set password; see Admin passwords"),
+                ),
             ],
             rows: None,
         },
@@ -1678,9 +2216,7 @@ fn scenarios() -> Vec<Scenario> {
             screen: ScreenId::MessageInput(ChatChannel::Say),
             submit: None,
             confirm: &[],
-            expect: &[
-            ("NMH_Type", Sent(&["actions.Chat.text"])),
-            ],
+            expect: &[("NMH_Type", Sent(&["actions.Chat.text"]))],
             rows: None,
         },
         Scenario {
@@ -1694,9 +2230,13 @@ fn scenarios() -> Vec<Scenario> {
             screen: ScreenId::Console,
             submit: None,
             confirm: &[],
-            expect: &[
-            ("ConsoleEntry", Typed("/Zqcmd Zqarg", &["actions.ChatCommand.args[0]", "actions.ChatCommand.name"])),
-            ],
+            expect: &[(
+                "ConsoleEntry",
+                Typed(
+                    "/Zqcmd Zqarg",
+                    &["actions.ChatCommand.args[0]", "actions.ChatCommand.name"],
+                ),
+            )],
             rows: None,
         },
     ]
@@ -1749,7 +2289,11 @@ fn copy_locks_keep_their_own_field(pack: &Rc<Pack>) {
             };
             let sent = |u: &mut Ui| -> BTreeMap<String, Value> {
                 let mut out = BTreeMap::new();
-                leaves(&snapshot(u)["actions"]["SendWrench"]["data"], String::new(), &mut out);
+                leaves(
+                    &snapshot(u)["actions"]["SendWrench"]["data"],
+                    String::new(),
+                    &mut out,
+                );
                 out
             };
             let mut u = new_ui(pack);

@@ -113,7 +113,8 @@ fn candidates() -> Vec<PathBuf> {
     let mut preferred: Vec<PathBuf> = Vec::new();
     let mut folders: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
-        let windir = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        let windir =
+            std::env::var_os("WINDIR").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
         let fonts = windir.join("Fonts");
         for name in [
             "arial.ttf",
@@ -164,11 +165,23 @@ fn candidates() -> Vec<PathBuf> {
     scanned.sort();
     // Linux has no fixed file names: prefer the usual broad sans faces.
     let rank = |p: &PathBuf| {
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
-        ["arial", "liberationsans-regular", "dejavusans.", "notosans-regular", "notosanscjk", "wqy", "notocoloremoji"]
-            .iter()
-            .position(|k| name.starts_with(k))
-            .unwrap_or(usize::MAX)
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        [
+            "arial",
+            "liberationsans-regular",
+            "dejavusans.",
+            "notosans-regular",
+            "notosanscjk",
+            "wqy",
+            "notocoloremoji",
+        ]
+        .iter()
+        .position(|k| name.starts_with(k))
+        .unwrap_or(usize::MAX)
     };
     scanned.sort_by_key(rank);
     let mut all: Vec<PathBuf> = preferred.into_iter().filter(|p| p.is_file()).collect();
@@ -182,7 +195,9 @@ fn candidates() -> Vec<PathBuf> {
 }
 
 fn scan(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         if out.len() >= MAX_FONT_FILES {
             return;
@@ -210,7 +225,11 @@ fn rasterise(face: &FontRef<'_>, c: char, ascent: u32) -> Option<Raster> {
         return None;
     }
     let scale = PxScale::from(ascent as f32 * face_height / face_ascent);
-    let advance = face.as_scaled(scale).h_advance(id).round().clamp(0.0, 512.0) as i16;
+    let advance = face
+        .as_scaled(scale)
+        .h_advance(id)
+        .round()
+        .clamp(0.0, 512.0) as i16;
     if let Some(outline) = face.outline_glyph(id.with_scale_and_position(scale, point(0.0, 0.0))) {
         let bounds = outline.px_bounds();
         let (width, height) = (bounds.width() as u32, bounds.height() as u32);
@@ -221,7 +240,12 @@ fn rasterise(face: &FontRef<'_>, c: char, ascent: u32) -> Option<Raster> {
         outline.draw(|x, y, coverage| {
             let i = ((y * width + x) * 4) as usize;
             if let Some(px) = rgba.get_mut(i..i + 4) {
-                px.copy_from_slice(&[255, 255, 255, (coverage.clamp(0.0, 1.0) * 255.0).round() as u8]);
+                px.copy_from_slice(&[
+                    255,
+                    255,
+                    255,
+                    (coverage.clamp(0.0, 1.0) * 255.0).round() as u8,
+                ]);
             }
         });
         return Some(Raster {
@@ -247,8 +271,15 @@ fn rasterise(face: &FontRef<'_>, c: char, ascent: u32) -> Option<Raster> {
     }
     // As tall as the text's capitals and a little below the baseline.
     let height = (ascent as f32 * 1.15).round().max(1.0) as u32;
-    let width = ((decoded.width() * height) as f32 / decoded.height() as f32).round().max(1.0) as u32;
-    let resized = image::imageops::resize(&decoded, width, height, image::imageops::FilterType::Triangle);
+    let width = ((decoded.width() * height) as f32 / decoded.height() as f32)
+        .round()
+        .max(1.0) as u32;
+    let resized = image::imageops::resize(
+        &decoded,
+        width,
+        height,
+        image::imageops::FilterType::Triangle,
+    );
     Some(Raster {
         width,
         height,
@@ -270,7 +301,9 @@ mod tests {
     fn system_fonts_draw_what_they_cover() {
         let mut faces = Faces::new(candidates());
         for c in ['Ж', 'Ω', '★', '中', 'あ', '한'] {
-            let Some(face) = faces.covering(c) else { continue };
+            let Some(face) = faces.covering(c) else {
+                continue;
+            };
             let r = rasterise(face, c, 11).expect("covered glyph rasterises");
             assert!(r.width > 0 && r.height > 0 && r.advance > 0, "{c}");
             assert!(r.y_origin > 0 && r.y_origin <= 20, "{c}: {}", r.y_origin);

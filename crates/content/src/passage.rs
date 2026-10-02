@@ -338,7 +338,10 @@ mod tests {
         assert!((far.start - total).abs() < 1e-5 && (far.start + far.length - 10.0).abs() < 1e-5);
         // Each point along it is the straight sight's, carried.
         let straight = Vec3::new(0.2, 1.0, 4.0 - 7.0);
-        assert!(far.at(7.0).abs_diff_eq(carry.transform_point3(straight), 1e-4));
+        assert!(
+            far.at(7.0)
+                .abs_diff_eq(carry.transform_point3(straight), 1e-4)
+        );
         assert!(far.off(far.at(7.0)) < 1e-4 && legs[0].off(far.at(7.0)) > 1.0);
         // Beside the opening: one leg, straight on.
         let legs = passages.sight(Vec3::new(1.5, 1.0, 4.0), Vec3::NEG_Z, 10.0);

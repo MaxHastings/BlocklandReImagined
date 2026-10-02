@@ -343,7 +343,11 @@ impl Session {
             if answer.is_unit() {
                 continue;
             }
-            if answer.clone().try_cast::<ImmutableString>().is_some_and(|s| s == "map") {
+            if answer
+                .clone()
+                .try_cast::<ImmutableString>()
+                .is_some_and(|s| s == "map")
+            {
                 return Some(self.map_spawn());
             }
             if let Ok(brick) = answer.as_int() {
@@ -531,7 +535,12 @@ impl Session {
                 ally_same_color: g.teams.ally_same_color,
                 round_over: g.round_over,
                 player_type: g.settings.player_type.clone(),
-                loadout: g.settings.loadout.iter().map(|i| i.clone().unwrap_or_default()).collect(),
+                loadout: g
+                    .settings
+                    .loadout
+                    .iter()
+                    .map(|i| i.clone().unwrap_or_default())
+                    .collect(),
                 points_kill_player: i64::from(g.settings.points_kill_player),
                 settings: serde_json::to_value(&g.settings).unwrap_or_default(),
                 default: self.minigames.default_game() == Some(g.id),
@@ -699,9 +708,13 @@ impl Session {
 
     /// The mini-game player of connected player `owner`.
     pub(super) fn minigame_player(&self, owner: u64) -> Result<mg::PlayerId> {
-        Ok(self.peers.get(&owner).context("No such player")?.combat.player)
+        Ok(self
+            .peers
+            .get(&owner)
+            .context("No such player")?
+            .combat
+            .player)
     }
-
 }
 
 impl Session {
@@ -723,13 +736,20 @@ impl Session {
         );
         info.insert(
             "spawn_brick".into(),
-            id(self.vehicles.brick_of.get(&bri_vehicles::VehicleId(vehicle)).copied()),
+            id(self
+                .vehicles
+                .brick_of
+                .get(&bri_vehicles::VehicleId(vehicle))
+                .copied()),
         );
         for package in hooks {
             let reply = self.run_package(
                 &package,
                 "on_ride",
-                vec![Dynamic::from_int(owner as i64), Dynamic::from_map(info.clone())],
+                vec![
+                    Dynamic::from_int(owner as i64),
+                    Dynamic::from_map(info.clone()),
+                ],
                 Budget::Command,
                 Some(owner),
                 None,
@@ -833,7 +853,10 @@ impl Session {
                 };
             }
             if let Some(map) = reply.clone().try_cast::<Map>() {
-                let field = |k: &str| map.get(k).and_then(|v| v.clone().try_cast::<ImmutableString>());
+                let field = |k: &str| {
+                    map.get(k)
+                        .and_then(|v| v.clone().try_cast::<ImmutableString>())
+                };
                 if let Some(text) = field("text") {
                     return Answer::Refused {
                         title: Some(field("title").map_or_else(String::new, |t| t.to_string())),
@@ -855,7 +878,10 @@ impl Session {
 
 /// `current` with the fields of `patch` over it (`set_minigame`,
 /// `create_minigame`): a mini-game's own settings as JSON.
-pub(super) fn patched_settings(current: &mg::Settings, patch: &serde_json::Value) -> Result<mg::Settings> {
+pub(super) fn patched_settings(
+    current: &mg::Settings,
+    patch: &serde_json::Value,
+) -> Result<mg::Settings> {
     let mut json = serde_json::to_value(current)?;
     let (Some(fields), Some(over)) = (json.as_object_mut(), patch.as_object()) else {
         anyhow::bail!("mini-game settings are a map");

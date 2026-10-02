@@ -48,11 +48,13 @@ fn until(
 }
 
 fn in_game(app: &App) -> bool {
-    app.network_view().is_some_and(|v| v.poses.contains_key(&v.owner))
+    app.network_view()
+        .is_some_and(|v| v.poses.contains_key(&v.owner))
 }
 
 fn load(root: &Path, name: &str) -> Result<Box<App>> {
-    let state = std::env::temp_dir().join(format!("bri-release-smoke-{name}-{}", std::process::id()));
+    let state =
+        std::env::temp_dir().join(format!("bri-release-smoke-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
     let mut app = App::load(&root.join("content"), &state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
@@ -71,19 +73,33 @@ fn host(app: &mut App, map: &str, game_mode: Option<String>, mode: ServerMode) -
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [app], "the host to enter its game", Duration::from_secs(120), |a| in_game(a[0]))
+    until(
+        &mut [app],
+        "the host to enter its game",
+        Duration::from_secs(120),
+        |a| in_game(a[0]),
+    )
 }
 
 fn leave(app: &mut App) -> Result<()> {
     app.ui.core.request(UiAction::Disconnect);
-    until(&mut [app], "leaving the game", Duration::from_secs(30), |a| a[0].network_view().is_none())
+    until(
+        &mut [app],
+        "leaving the game",
+        Duration::from_secs(30),
+        |a| a[0].network_view().is_none(),
+    )
 }
 
 fn lit_pixels(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<usize> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("release smoke"),
-        size: wgpu::Extent3d { width: SIZE.0, height: SIZE.1, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: SIZE.0,
+            height: SIZE.1,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -93,8 +109,18 @@ fn lit_pixels(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Resul
     });
     let view = target.create_view(&Default::default());
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    renderer.render(&gpu.device, &gpu.queue, &mut encoder, &view, format, SIZE, app.ui.scale(),
-        &app.ui.core.pack, &app.ui.draw(), Some(wgpu::Color::BLACK));
+    renderer.render(
+        &gpu.device,
+        &gpu.queue,
+        &mut encoder,
+        &view,
+        format,
+        SIZE,
+        app.ui.scale(),
+        &app.ui.core.pack,
+        &app.ui.draw(),
+        Some(wgpu::Color::BLACK),
+    );
     let row = (SIZE.0 * 4).div_ceil(256) * 256;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -106,17 +132,30 @@ fn lit_pixels(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Resul
         target.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(SIZE.1) },
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(SIZE.1),
+            },
         },
-        wgpu::Extent3d { width: SIZE.0, height: SIZE.1, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: SIZE.0,
+            height: SIZE.1,
+            depth_or_array_layers: 1,
+        },
     );
     gpu.queue.submit([encoder.finish()]);
     buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None })?;
+    gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    })?;
     let data = buffer.slice(..).get_mapped_range()?;
-    Ok(data.chunks(4).filter(|p| p[0] > 16 || p[1] > 16 || p[2] > 16).count())
+    Ok(data
+        .chunks(4)
+        .filter(|p| p[0] > 16 || p[1] > 16 || p[2] > 16)
+        .count())
 }
-
 
 /// Host and discovery ports for this test process, away from the game's
 /// 28000/28050 so a real game on this machine never collides with it.
@@ -152,15 +191,33 @@ fn standalone_exe_unpacks_per_user_and_starts_the_game() -> Result<()> {
             .env("BRI_NO_DIALOGS", "1")
             .output()
             .with_context(|| format!("running {}", exe.display()))?;
-        ensure!(out.status.success(), "{} {args:?} failed: {}", exe.display(), String::from_utf8_lossy(&out.stderr));
+        ensure!(
+            out.status.success(),
+            "{} {args:?} failed: {}",
+            exe.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
         Ok(out)
     };
     let started = Instant::now();
     let out = run(&["--extract-only"])?;
     let game = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    eprintln!("unpacked into {} in {:?}", game.display(), started.elapsed());
-    ensure!(game == root.join("Game"), "the game unpacks into the per-user folder, not {}", game.display());
-    for file in ["bri-client.exe", "bri-import-addon.exe", "MANIFEST.json", "content/packages.json"] {
+    eprintln!(
+        "unpacked into {} in {:?}",
+        game.display(),
+        started.elapsed()
+    );
+    ensure!(
+        game == root.join("Game"),
+        "the game unpacks into the per-user folder, not {}",
+        game.display()
+    );
+    for file in [
+        "bri-client.exe",
+        "bri-import-addon.exe",
+        "MANIFEST.json",
+        "content/packages.json",
+    ] {
         ensure!(game.join(file).is_file(), "the install has {file}");
     }
     // Something the player adds survives the next start, which reuses the install.
@@ -169,12 +226,24 @@ fn standalone_exe_unpacks_per_user_and_starts_the_game() -> Result<()> {
     std::fs::write(drop.join("Keep_Me.zip"), b"PK")?;
     let started = Instant::now();
     run(&["--extract-only"])?;
-    ensure!(started.elapsed() < Duration::from_secs(5), "the second start reuses the install");
-    ensure!(drop.join("Keep_Me.zip").is_file(), "the player's Add-On is still there");
+    ensure!(
+        started.elapsed() < Duration::from_secs(5),
+        "the second start reuses the install"
+    );
+    ensure!(
+        drop.join("Keep_Me.zip").is_file(),
+        "the player's Add-On is still there"
+    );
     let out = run(&["--check"])?;
     let said = String::from_utf8_lossy(&out.stdout);
-    ensure!(said.contains("Startup validation passed"), "the game starts from the install: {said}");
-    ensure!(!exe.parent().is_some_and(|d| d.join("content").exists()), "nothing is written beside the exe");
+    ensure!(
+        said.contains("Startup validation passed"),
+        "the game starts from the install: {said}"
+    );
+    ensure!(
+        !exe.parent().is_some_and(|d| d.join("content").exists()),
+        "nothing is written beside the exe"
+    );
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
@@ -201,7 +270,10 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     std::fs::create_dir_all(&drop)?;
     std::fs::copy(&zip, drop.join(format!("{LEGACY}.zip")))?;
     let library = bri_package::library::Library::scan(&content)?;
-    ensure!(library.legacy.iter().any(|l| l.name == LEGACY), "the Add-Ons folder lists {LEGACY}");
+    ensure!(
+        library.legacy.iter().any(|l| l.name == LEGACY),
+        "the Add-Ons folder lists {LEGACY}"
+    );
     let out = content.join(library.import_dir(LEGACY));
     let importer = root.join("bri-import-addon.exe");
     let run = std::process::Command::new(&importer)
@@ -210,7 +282,11 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
         .arg("--json")
         .output()
         .with_context(|| format!("running {}", importer.display()))?;
-    ensure!(run.status.success(), "import failed: {}", String::from_utf8_lossy(&run.stderr));
+    ensure!(
+        run.status.success(),
+        "import failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     eprintln!("imported {LEGACY} into {}", out.display());
 
     // The Add-Ons screen lists the base game and the import.
@@ -220,9 +296,24 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     app.ui.core.request(UiAction::RequestAddOns);
     step(&mut [&mut app], Duration::from_millis(16))?;
     let rows = app.ui.core.add_ons.rows.clone();
-    eprintln!("Add-Ons rows: {}", rows.iter().map(|r| format!("{} ({}{})", r.name, r.category, if r.enabled { ", on" } else { "" })).collect::<Vec<_>>().join("; "));
+    eprintln!(
+        "Add-Ons rows: {}",
+        rows.iter()
+            .map(|r| format!(
+                "{} ({}{})",
+                r.name,
+                r.category,
+                if r.enabled { ", on" } else { "" }
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
     ensure!(rows.iter().any(|r| r.locked), "base game rows");
-    ensure!(rows.iter().any(|r| r.name.to_ascii_lowercase().contains("shotgun")), "the imported shotgun row");
+    ensure!(
+        rows.iter()
+            .any(|r| r.name.to_ascii_lowercase().contains("shotgun")),
+        "the imported shotgun row"
+    );
     let lit = lit_pixels(&mut app, &gpu, &mut renderer)?;
     ensure!(lit > 10_000, "the Add-Ons screen draws ({lit} lit pixels)");
     app.ui.core.pop(ScreenId::AddOns);
@@ -230,22 +321,52 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     // Start Game's mode picker: Custom on Slate, then the Stress Lab mode when
     // the package carries it (releases no longer do; -StressLab packages do).
     let modes = app.ui.core.game_modes.clone();
-    eprintln!("game modes: {:?}", modes.iter().map(|m| (&m.id, &m.map)).collect::<Vec<_>>());
+    eprintln!(
+        "game modes: {:?}",
+        modes.iter().map(|m| (&m.id, &m.map)).collect::<Vec<_>>()
+    );
     host(&mut app, SLATE, None, ServerMode::SinglePlayer)?;
-    eprintln!("hosted Slate: {} bricks", app.network_view().map_or(0, |v| v.world.bricks.len()));
+    eprintln!(
+        "hosted Slate: {} bricks",
+        app.network_view().map_or(0, |v| v.world.bricks.len())
+    );
     leave(&mut app)?;
     if let Some(stress) = modes.iter().find(|m| m.id.starts_with("stresslab")) {
-        let map = stress.map.clone().unwrap_or("stresslab-world:world/strata".into());
-        host(&mut app, &map, Some(stress.id.clone()), ServerMode::SinglePlayer)?;
-        until(&mut [&mut app], "the Stress Lab world and miner panel", Duration::from_secs(60), |a| {
-            a[0].network_view().is_some_and(|v| v.world.bricks.len() > 5_000)
-                && a[0].ui.core.package_panels.iter().any(|p| p.title.contains("STRESS LAB"))
-        })?;
-        eprintln!("hosted Stress Lab: {} bricks", app.network_view().map_or(0, |v| v.world.bricks.len()));
+        let map = stress
+            .map
+            .clone()
+            .unwrap_or("stresslab-world:world/strata".into());
+        host(
+            &mut app,
+            &map,
+            Some(stress.id.clone()),
+            ServerMode::SinglePlayer,
+        )?;
+        until(
+            &mut [&mut app],
+            "the Stress Lab world and miner panel",
+            Duration::from_secs(60),
+            |a| {
+                a[0].network_view()
+                    .is_some_and(|v| v.world.bricks.len() > 5_000)
+                    && a[0]
+                        .ui
+                        .core
+                        .package_panels
+                        .iter()
+                        .any(|p| p.title.contains("STRESS LAB"))
+            },
+        )?;
+        eprintln!(
+            "hosted Stress Lab: {} bricks",
+            app.network_view().map_or(0, |v| v.world.bricks.len())
+        );
         leave(&mut app)?;
     } else {
         ensure!(
-            !rows.iter().any(|r| r.name.to_ascii_lowercase().contains("stress lab")),
+            !rows
+                .iter()
+                .any(|r| r.name.to_ascii_lowercase().contains("stress lab")),
             "a package without the Stress Lab still lists it"
         );
         eprintln!("no Stress Lab in this package");
@@ -260,11 +381,25 @@ fn release_hosts_modes_lists_and_imports_add_ons_and_accepts_a_loopback_join() -
     host(&mut app, SLATE, None, ServerMode::Internet)?;
     let mut guest = load(&root, "Guesty")?;
     guest.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
-    guest.ui.core.request(UiAction::JoinServer { address: format!("127.0.0.1:{port}"), password: String::new() });
-    until(&mut [&mut app, &mut guest], "the guest to join and both to list two players", Duration::from_secs(120), |a| {
-        in_game(a[1]) && a.iter().all(|x| x.ui.core.players.len() == 2)
-    })?;
-    eprintln!("loopback join: host lists {:?}", app.ui.core.players.iter().map(|p| &p.name).collect::<Vec<_>>());
+    guest.ui.core.request(UiAction::JoinServer {
+        address: format!("127.0.0.1:{port}"),
+        password: String::new(),
+    });
+    until(
+        &mut [&mut app, &mut guest],
+        "the guest to join and both to list two players",
+        Duration::from_secs(120),
+        |a| in_game(a[1]) && a.iter().all(|x| x.ui.core.players.len() == 2),
+    )?;
+    eprintln!(
+        "loopback join: host lists {:?}",
+        app.ui
+            .core
+            .players
+            .iter()
+            .map(|p| &p.name)
+            .collect::<Vec<_>>()
+    );
     leave(&mut guest)?;
     leave(&mut app)?;
     Ok(())

@@ -9,8 +9,8 @@
 //! Sandbox: no file, network, clock, module or `eval` access; a fixed
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
-use crate::ops;
 use crate::manifest::location;
+use crate::ops;
 use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, WorldShape};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
@@ -574,7 +574,11 @@ thread_local! {
 }
 /// A point as a script reads it, `[x, y, z]`.
 fn point3(p: [f32; 3]) -> Dynamic {
-    Dynamic::from_array(p.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
+    Dynamic::from_array(
+        p.iter()
+            .map(|v| Dynamic::from_float(f64::from(*v)))
+            .collect(),
+    )
 }
 /// The running call's world.
 fn with_world<T>(f: impl FnOnce(&dyn World, &mut Invocation) -> Fallible<T>) -> Fallible<T> {
@@ -615,7 +619,9 @@ fn fill_paint(what: &str, paint: &Map) -> Fallible<FillPaint> {
             }
         };
         if chosen.replace(p).is_some() {
-            return fail(format!("{what} paints one of color, color_effect or shape_effect"));
+            return fail(format!(
+                "{what} paints one of color, color_effect or shape_effect"
+            ));
         }
     }
     chosen.ok_or_else(|| format!("{what} needs #{{ color: n }} or an effect").into())
@@ -699,7 +705,8 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("host", p.host.into()),
         (
             "invite",
-            p.invite.map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+            p.invite
+                .map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
         ),
         ("copy_working", p.copy_working.into()),
         ("ghost", p.ghost.into()),
@@ -754,7 +761,8 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("cz", p.center[2]),
         (
             "slot",
-            p.slot.map_or(Dynamic::UNIT, |s| Dynamic::from_int(s as i64)),
+            p.slot
+                .map_or(Dynamic::UNIT, |s| Dynamic::from_int(s as i64)),
         ),
         ("image", p.image.clone().into()),
         ("image_state", p.image_state.clone().into()),
@@ -803,7 +811,8 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ),
         (
             "team",
-            p.team.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
+            p.team
+                .map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
         ),
         ("score", Dynamic::from_int(p.score)),
         ("bot", p.bot.into()),
@@ -864,7 +873,11 @@ fn color<const N: usize>(value: Dynamic, what: &str) -> Fallible<[f32; N]> {
         .map_err(|_| format!("{what} is a list of {N} numbers from 0 to 1").into())
 }
 fn color_value(c: &[f32]) -> Dynamic {
-    Dynamic::from_array(c.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
+    Dynamic::from_array(
+        c.iter()
+            .map(|v| Dynamic::from_float(f64::from(*v)))
+            .collect(),
+    )
 }
 /// The set environment settings as a script reads them; unset ones are
 /// absent (the map's own).
@@ -874,16 +887,21 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
         m.insert(k.into(), v);
     };
     if let Some(d) = &e.day_cycle {
-        put("day_length", Dynamic::from_float(f64::from(d.length_seconds)));
+        put(
+            "day_length",
+            Dynamic::from_float(f64::from(d.length_seconds)),
+        );
         put("time_of_day", Dynamic::from_float(d.time_at(tick as f64)));
     }
-    for (k, v) in [("sun_azimuth", e.sun_azimuth), ("sun_elevation", e.sun_elevation)]
-        .into_iter()
-        .chain([
-            ("visible_distance", e.visible_distance),
-            ("fog_distance", e.fog_distance),
-        ])
-    {
+    for (k, v) in [
+        ("sun_azimuth", e.sun_azimuth),
+        ("sun_elevation", e.sun_elevation),
+    ]
+    .into_iter()
+    .chain([
+        ("visible_distance", e.visible_distance),
+        ("fog_distance", e.fog_distance),
+    ]) {
         if let Some(v) = v {
             put(k, Dynamic::from_float(f64::from(v)));
         }
@@ -983,7 +1001,9 @@ fn set_environment(options: Map) -> Fallible<()> {
                 vignette_set = true;
             }
             "vignette_multiply" => {
-                let multiply = value.as_bool().map_err(|_| "vignette_multiply is true or false")?;
+                let multiply = value
+                    .as_bool()
+                    .map_err(|_| "vignette_multiply is true or false")?;
                 let Some(v) = &mut vignette else {
                     return fail("set vignette_color before vignette_multiply");
                 };
@@ -1078,7 +1098,11 @@ fn path_knot(value: &Dynamic) -> Fallible<crate::ops::PathKnot> {
             "normal" => crate::ops::KnotKind::Normal,
             "kink" => crate::ops::KnotKind::Kink,
             "position" | "position only" => crate::ops::KnotKind::PositionOnly,
-            other => return fail(format!("a knot's type is normal, kink or position, not {other}")),
+            other => {
+                return fail(format!(
+                    "a knot's type is normal, kink or position, not {other}"
+                ));
+            }
         },
         linear: match text("path", "spline")?.as_str() {
             "spline" => false,
@@ -1096,7 +1120,11 @@ fn vector(value: &Array) -> Fallible<[f32; 3]> {
 }
 /// The player a set of shapes goes with, or `()` for none.
 fn shape_owner(value: &Dynamic) -> Fallible<Option<u64>> {
-    if value.is_unit() { Ok(None) } else { id(value).map(Some) }
+    if value.is_unit() {
+        Ok(None)
+    } else {
+        id(value).map(Some)
+    }
 }
 /// A shape map: `#{min, max, color, inside, sides, label}`, colours RGBA
 /// from 0 to 1 (all but `min` and `max` optional; `sides` is the outside
@@ -1133,13 +1161,19 @@ fn world_shape(value: Dynamic) -> Fallible<WorldShape> {
         Some(v) => {
             let what = "a shape's sides are three colours, across x, y and z";
             let list = v.clone().into_typed_array::<Dynamic>().map_err(|_| what)?;
-            let list = list.into_iter().map(|c| byte(c, what)).collect::<Fallible<Vec<_>>>()?;
+            let list = list
+                .into_iter()
+                .map(|c| byte(c, what))
+                .collect::<Fallible<Vec<_>>>()?;
             Some(<[[u8; 4]; 3]>::try_from(list).map_err(|_| what)?)
         }
     };
     let label = match map.get("label").filter(|v| !v.is_unit()) {
         None => String::new(),
-        Some(v) => v.clone().into_string().map_err(|_| "a shape's label is text")?,
+        Some(v) => v
+            .clone()
+            .into_string()
+            .map_err(|_| "a shape's label is text")?,
     };
     Ok(WorldShape {
         min: point("min")?,
@@ -1235,7 +1269,9 @@ fn register_api(engine: &mut Engine) {
                 .map_or(Dynamic::UNIT, |c| Dynamic::from_int(c as i64)))
         })
     });
-    engine.register_fn("game_version", || with(|i| Ok(i.snapshot.game_version.clone())));
+    engine.register_fn("game_version", || {
+        with(|i| Ok(i.snapshot.game_version.clone()))
+    });
     engine.register_fn("players", || {
         with(|i| Ok(i.snapshot.players.iter().map(player_map).collect::<Array>()))
     });
@@ -1321,7 +1357,10 @@ fn register_api(engine: &mut Engine) {
                         "object_at",
                         a.object.as_ref().map_or(Dynamic::UNIT, |o| {
                             Dynamic::from_array(
-                                o.position.iter().map(|c| Dynamic::from_float(*c as f64)).collect(),
+                                o.position
+                                    .iter()
+                                    .map(|c| Dynamic::from_float(*c as f64))
+                                    .collect(),
                             )
                         }),
                     ),
@@ -1429,15 +1468,12 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("remove_brick", |brick: Dynamic| {
         push(Op::RemoveBrick(ops::RemoveBrick { brick: id(&brick)? }))
     });
-    engine.register_fn(
-        "place_voxel",
-        |x: i64, y: i64, z: i64, material: &str| {
-            push(Op::PlaceVoxel(ops::PlaceVoxel {
-                position: [x, y, z],
-                material: material.into(),
-            }))
-        },
-    );
+    engine.register_fn("place_voxel", |x: i64, y: i64, z: i64, material: &str| {
+        push(Op::PlaceVoxel(ops::PlaceVoxel {
+            position: [x, y, z],
+            material: material.into(),
+        }))
+    });
     // A brick into build `owner` (a brick's owner): plant_brick(kind,
     // [x, y, z], turns, color, owner).
     engine.register_fn(
@@ -1833,14 +1869,17 @@ fn register_api(engine: &mut Engine) {
     // mirror_ghost(player, axis, asymmetric): the player's ghost brick
     // mirrored where it stands; `asymmetric` is what they are told when it
     // has no exact mirror image.
-    engine.register_fn("mirror_ghost", |player: Dynamic, axis: &str, asymmetric: &str| {
-        push(Op::MirrorGhost(ops::MirrorGhost {
-            player: id(&player)?,
-            axis: crate::ops::MirrorAxis::parse(axis)
-                .ok_or("mirror_ghost's axis is \"x\", \"z\", \"view\" or \"y\"")?,
-            asymmetric: asymmetric.into(),
-        }))
-    });
+    engine.register_fn(
+        "mirror_ghost",
+        |player: Dynamic, axis: &str, asymmetric: &str| {
+            push(Op::MirrorGhost(ops::MirrorGhost {
+                player: id(&player)?,
+                axis: crate::ops::MirrorAxis::parse(axis)
+                    .ok_or("mirror_ghost's axis is \"x\", \"z\", \"view\" or \"y\"")?,
+                asymmetric: asymmetric.into(),
+            }))
+        },
+    );
     engine.register_fn(
         "move_copy",
         |player: Dynamic, point: Array, normal: Array| {
@@ -1900,7 +1939,9 @@ fn register_api(engine: &mut Engine) {
             float,
         }))
     }
-    engine.register_fn("plant_copy", |player: Dynamic| plant_copy(player, Map::new()));
+    engine.register_fn("plant_copy", |player: Dynamic| {
+        plant_copy(player, Map::new())
+    });
     engine.register_fn("plant_copy", plant_copy);
     engine.register_fn("float_copy", |player: Dynamic, float: bool| {
         push(Op::FloatCopy(ops::FloatCopy {
@@ -1911,24 +1952,27 @@ fn register_api(engine: &mut Engine) {
     });
     // float_copy(player, float, #{ admin_only: true }): floating only
     // while the player is an administrator, checked at each plant.
-    engine.register_fn("float_copy", |player: Dynamic, float: bool, options: Map| {
-        let mut admin_only = false;
-        for (key, value) in &options {
-            match key.as_str() {
-                "admin_only" => {
-                    admin_only = value
-                        .as_bool()
-                        .map_err(|_| "float option `admin_only` is true or false")?
+    engine.register_fn(
+        "float_copy",
+        |player: Dynamic, float: bool, options: Map| {
+            let mut admin_only = false;
+            for (key, value) in &options {
+                match key.as_str() {
+                    "admin_only" => {
+                        admin_only = value
+                            .as_bool()
+                            .map_err(|_| "float option `admin_only` is true or false")?
+                    }
+                    other => return Err(format!("unknown float option `{other}`").into()),
                 }
-                other => return Err(format!("unknown float option `{other}`").into()),
             }
-        }
-        push(Op::FloatCopy(ops::FloatCopy {
-            player: id(&player)?,
-            float,
-            admin_only,
-        }))
-    });
+            push(Op::FloatCopy(ops::FloatCopy {
+                player: id(&player)?,
+                float,
+                admin_only,
+            }))
+        },
+    );
     engine.register_fn("wrench_copy", |player: Dynamic| {
         push(Op::WrenchCopy(ops::WrenchCopy {
             player: id(&player)?,
@@ -2170,16 +2214,16 @@ fn register_api(engine: &mut Engine) {
             tool: String::new(),
         }))
     });
-    engine.register_fn(
-        "show_shapes",
-        |owner: Dynamic, key: &str, shapes: Array| {
-            push(Op::ShowShapes(ops::ShowShapes {
-                owner: shape_owner(&owner)?,
-                key: key.into(),
-                shapes: shapes.into_iter().map(world_shape).collect::<Fallible<_>>()?,
-            }))
-        },
-    );
+    engine.register_fn("show_shapes", |owner: Dynamic, key: &str, shapes: Array| {
+        push(Op::ShowShapes(ops::ShowShapes {
+            owner: shape_owner(&owner)?,
+            key: key.into(),
+            shapes: shapes
+                .into_iter()
+                .map(world_shape)
+                .collect::<Fallible<_>>()?,
+        }))
+    });
     engine.register_fn("hide_shapes", |owner: Dynamic, key: &str| {
         push(Op::ShowShapes(ops::ShowShapes {
             owner: shape_owner(&owner)?,
@@ -2202,7 +2246,9 @@ fn register_api(engine: &mut Engine) {
                 if t.is_unit() || t.to_string().is_empty() {
                     Ok(None)
                 } else {
-                    t.into_string().map(Some).map_err(|_| "a tool is an item id or ()")
+                    t.into_string()
+                        .map(Some)
+                        .map_err(|_| "a tool is an item id or ()")
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -2341,17 +2387,14 @@ fn register_api(engine: &mut Engine) {
         ("center_print_minigame", false),
         ("bottom_print_minigame", true),
     ] {
-        engine.register_fn(
-            name,
-            move |game: Dynamic, text: &str, seconds: Dynamic| {
-                push(Op::PrintMinigame(ops::PrintMinigame {
-                    game: id(&game)?,
-                    text: text.into(),
-                    seconds: float(&seconds)?,
-                    bottom,
-                }))
-            },
-        );
+        engine.register_fn(name, move |game: Dynamic, text: &str, seconds: Dynamic| {
+            push(Op::PrintMinigame(ops::PrintMinigame {
+                game: id(&game)?,
+                text: text.into(),
+                seconds: float(&seconds)?,
+                bottom,
+            }))
+        });
     }
     engine.register_fn("message_box", |player: Dynamic, title: &str, text: &str| {
         push(Op::MessageBox(ops::MessageBox {
@@ -2459,7 +2502,12 @@ fn damage_op(
 
 /// Questions for the live world: rays and the damage rules.
 fn register_queries(engine: &mut Engine) {
-    fn raycast(from: Array, direction: Array, range: Dynamic, ignore: Dynamic) -> Fallible<Dynamic> {
+    fn raycast(
+        from: Array,
+        direction: Array,
+        range: Dynamic,
+        ignore: Dynamic,
+    ) -> Fallible<Dynamic> {
         let from = vector(&from)?;
         let direction = vector(&direction)?;
         let range = float(&range)?;
@@ -2577,19 +2625,19 @@ fn register_queries(engine: &mut Engine) {
     // may_copy(player, brick, options): whether a copy by the player with
     // these copy options (`copy_build`'s) would take the brick: the New
     // Duplicator's `ndTrustCheckSelect` for a box corner.
-    engine.register_fn("may_copy", |player: Dynamic, brick: Dynamic, options: Map| {
-        let (player, brick) = (id(&player)?, id(&brick)?);
-        let (rule, _, _) = copy_rule(&options)?;
-        with_world(|world, _| Ok(world.may_copy(player, brick, rule)))
-    });
     engine.register_fn(
-        "can_plant",
-        |kind: &str, position: Array, turns: i64| {
-            let position = vector(&position)?;
-            let turns = u8::try_from(turns.rem_euclid(4)).expect("0..4");
-            with_world(|world, _| Ok(world.can_plant(kind, position, turns)))
+        "may_copy",
+        |player: Dynamic, brick: Dynamic, options: Map| {
+            let (player, brick) = (id(&player)?, id(&brick)?);
+            let (rule, _, _) = copy_rule(&options)?;
+            with_world(|world, _| Ok(world.may_copy(player, brick, rule)))
         },
     );
+    engine.register_fn("can_plant", |kind: &str, position: Array, turns: i64| {
+        let position = vector(&position)?;
+        let turns = u8::try_from(turns.rem_euclid(4)).expect("0..4");
+        with_world(|world, _| Ok(world.can_plant(kind, position, turns)))
+    });
     // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
     // units, or () when there is no such brick.
     engine.register_fn("brick_box", |brick: Dynamic| {
@@ -2739,10 +2787,14 @@ fn register_presentation(engine: &mut Engine) {
         let (mut parts, mut face, mut decal) = (BTreeMap::new(), None, None);
         if !look.is_unit() {
             let Some(look) = look.try_cast::<Map>() else {
-                return fail("set_avatar_parts takes #{ slot: part, face: name, decal: name } or ()");
+                return fail(
+                    "set_avatar_parts takes #{ slot: part, face: name, decal: name } or ()",
+                );
             };
             for (slot, name) in look {
-                let name = name.into_string().map_err(|_| "a part, face or decal is its name")?;
+                let name = name
+                    .into_string()
+                    .map_err(|_| "a part, face or decal is its name")?;
                 match slot.as_str() {
                     "face" => face = Some(name),
                     "decal" => decal = Some(name),
@@ -3062,7 +3114,14 @@ fn register_presentation(engine: &mut Engine) {
         "orbit_camera",
         |player: Dynamic, target: Dynamic, distance: Dynamic| {
             let body = crate::ops::OrbitBody::Acts;
-            orbit_camera(player, target, distance.clone(), distance.clone(), distance, body)
+            orbit_camera(
+                player,
+                target,
+                distance.clone(),
+                distance.clone(),
+                distance,
+                body,
+            )
         },
     );
     engine.register_fn(
@@ -3188,7 +3247,10 @@ fn tumble_for(
 
 fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
     for key in options.keys() {
-        if !matches!(key.as_str(), "brick" | "object" | "reel" | "swing" | "keys" | "straight") {
+        if !matches!(
+            key.as_str(),
+            "brick" | "object" | "reel" | "swing" | "keys" | "straight"
+        ) {
             return fail(format!(
                 "tether has no option `{key}` (brick, object, reel, swing, keys, straight)"
             ));
@@ -3404,7 +3466,9 @@ fn register_physics(engine: &mut Engine) {
                 .holds
                 .iter()
                 .find(|h| h.player == player)
-                .map_or(Dynamic::UNIT, |h| Dynamic::from_float(f64::from(h.distance))))
+                .map_or(Dynamic::UNIT, |h| {
+                    Dynamic::from_float(f64::from(h.distance))
+                }))
         })
     });
     engine.register_fn("let_go", |player: Dynamic| {
@@ -3429,7 +3493,8 @@ fn register_physics(engine: &mut Engine) {
                     map.insert("target".into(), Dynamic::from_float(t.target.into()));
                     map.insert(
                         "brick".into(),
-                        t.brick.map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
+                        t.brick
+                            .map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
                     );
                     map.insert(
                         "object".into(),
@@ -3545,10 +3610,13 @@ fn register_physics(engine: &mut Engine) {
 /// first problem: for tools that write scripts (an Add-On port's rules)
 /// to refuse one the game would not load.
 pub fn check_syntax(source: &str) -> Result<(), String> {
-    sandbox().compile(source).map(drop).map_err(|e| match e.1.line() {
-        Some(line) => format!("line {line}: {}", e.0),
-        None => e.0.to_string(),
-    })
+    sandbox()
+        .compile(source)
+        .map(drop)
+        .map_err(|e| match e.1.line() {
+            Some(line) => format!("line {line}: {}", e.0),
+            None => e.0.to_string(),
+        })
 }
 
 /// `\cN` colour escapes as the codes the game's text draws in colour
@@ -3769,7 +3837,11 @@ impl Runtime {
             }
             let follows = behaviour.brick_inputs.iter().any(|i| i.follows.is_some());
             if follows {
-                need("on_brick_input".into(), 3, "brick_inputs that follow an input");
+                need(
+                    "on_brick_input".into(),
+                    3,
+                    "brick_inputs that follow an input",
+                );
             }
             if behaviour.on_copy {
                 need("on_copy".into(), 2, "on_copy");
@@ -3807,7 +3879,12 @@ impl Runtime {
             let adds_events = follows
                 || !behaviour.brick_outputs.is_empty()
                 || !behaviour.brick_targets.is_empty();
-            if adds_events && !package.manifest.capabilities.iter().any(|c| c == "brick_events")
+            if adds_events
+                && !package
+                    .manifest
+                    .capabilities
+                    .iter()
+                    .any(|c| c == "brick_events")
             {
                 problems.push(
                     Diagnostic::error(
@@ -3850,7 +3927,9 @@ impl Runtime {
         let world = call.world.map(|w| {
             let w: *const (dyn World + '_) = w;
             // SAFETY: only the trait object's lifetime bound changes.
-            unsafe { std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w) }
+            unsafe {
+                std::mem::transmute::<*const (dyn World + '_), *const (dyn World + 'static)>(w)
+            }
         });
         let previous = CURRENT.with(|c| {
             c.borrow_mut().replace(Invocation {

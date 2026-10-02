@@ -279,8 +279,11 @@ fn lower_sequence(
                         subset(&p.rotations, at(s.rotation, offset, s.frames)?, s.frames)?
                 }
                 1 => {
-                    track.translations =
-                        subset(&p.translations, at(s.translation, offset, s.frames)?, s.frames)?
+                    track.translations = subset(
+                        &p.translations,
+                        at(s.translation, offset, s.frames)?,
+                        s.frames,
+                    )?
                 }
                 _ => {
                     let start = at(s.scale, offset, s.frames)?;
@@ -352,7 +355,11 @@ fn lower_sequence(
             at(s.ground, 0, s.ground_count)?,
             s.ground_count,
         )?,
-        triggers: subset(&p.triggers, at(s.trigger, 0, s.trigger_count)?, s.trigger_count)?,
+        triggers: subset(
+            &p.triggers,
+            at(s.trigger, 0, s.trigger_count)?,
+            s.trigger_count,
+        )?,
     };
     animation.validate()?;
     Ok(animation)
@@ -814,9 +821,9 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
     // after it (some exporters pad the file) are never read in Torque.
     match file.remaining() {
         0 => {}
-        n if n <= MAX_TRAILING_BYTES => provenance
-            .warnings
-            .push(format!("{n} bytes after the material list ignored, as Torque does")),
+        n if n <= MAX_TRAILING_BYTES => provenance.warnings.push(format!(
+            "{n} bytes after the material list ignored, as Torque does"
+        )),
         _ => file.finish()?,
     }
     let node_names = shape_nodes

@@ -527,8 +527,14 @@ fn picking_a_can_puts_a_paint_picker_back_as_the_selected_tool() {
         let slot = g.s.tool_inventories()[&painter].selected.unwrap();
         g.steps(30);
         for (pick, can) in [
-            (Command::UseSprayCan { color: RED }, "v20.image.bluespraycanimage"),
-            (Command::UseFxCan { fx: 3 }, bri_sim::session::FX_CAN_IMAGES[3]),
+            (
+                Command::UseSprayCan { color: RED },
+                "v20.image.bluespraycanimage",
+            ),
+            (
+                Command::UseFxCan { fx: 3 },
+                bri_sim::session::FX_CAN_IMAGES[3],
+            ),
         ] {
             g.cmd(painter, pick).unwrap();
             g.steps(30);

@@ -1582,7 +1582,10 @@ async fn avatar_changes_replicate_late_join_reject_invalid_and_resume_with(
         .colors
         .insert("torso".into(), [0.2, 0.6, 0.8, 1.0]);
     a.command(Command::Avatar(appearance.clone())).await?;
-    wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
+    wait(&mut b, |c| {
+        c.replica.avatars.get(&owner) == Some(&appearance)
+    })
+    .await?;
     assert_eq!(b.replica.avatars[&b.owner], package.defaults);
     let late = Client::connect(
         server.address,

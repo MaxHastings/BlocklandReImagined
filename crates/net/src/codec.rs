@@ -355,7 +355,10 @@ mod tests {
         assert!(word & COMPRESSED != 0 && bytes.len() * 10 < text.len());
         let decoded = request_body(bytes.clone(), true, MAX_BULK_DECODED).unwrap();
         assert_eq!(from_bytes::<String>(&decoded).unwrap(), text);
-        assert!(request_body(bytes, true, text.len() / 2).is_err(), "Expansion is bounded");
+        assert!(
+            request_body(bytes, true, text.len() / 2).is_err(),
+            "Expansion is bounded"
+        );
         let (small, word) = frame_request(&"hi", MAX_REQUEST, MAX_BULK_DECODED).unwrap();
         assert_eq!(word as usize, small.len());
     }

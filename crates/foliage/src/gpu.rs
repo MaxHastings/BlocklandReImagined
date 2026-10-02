@@ -190,7 +190,6 @@ impl FoliageRenderer {
             ],
         });
 
-
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("original foliage atlas linear clamp"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -459,7 +458,9 @@ impl FoliageRenderer {
         while self.views.len() <= view {
             self.add_view(device);
         }
-        Ok(self.write(queue, view, camera, seconds, fog_start, fog_end)?.0)
+        Ok(self
+            .write(queue, view, camera, seconds, fog_start, fog_end)?
+            .0)
     }
     /// Cull for `camera` and upload view `view`'s visible plants and uniform.
     fn write(

@@ -3,12 +3,47 @@ fn body_threads_hold_until_replaced_or_root() {
     let mut threads = std::collections::BTreeMap::new();
     // An image's own thread 0 and the image-bound thread 2 are not body
     // threads.
-    assert!(!super::play_free_thread(&mut threads, 7, 0, "fire", Some(0), 1.0));
-    assert!(!super::play_free_thread(&mut threads, 7, 2, "plant", None, 1.0));
+    assert!(!super::play_free_thread(
+        &mut threads,
+        7,
+        0,
+        "fire",
+        Some(0),
+        1.0
+    ));
+    assert!(!super::play_free_thread(
+        &mut threads,
+        7,
+        2,
+        "plant",
+        None,
+        1.0
+    ));
     assert!(threads.is_empty());
-    assert!(super::play_free_thread(&mut threads, 7, 0, "jump", None, 1.0));
-    assert!(super::play_free_thread(&mut threads, 7, 3, "talk", None, 1.5));
-    assert!(super::play_free_thread(&mut threads, 7, 0, "plant", None, 2.0));
+    assert!(super::play_free_thread(
+        &mut threads,
+        7,
+        0,
+        "jump",
+        None,
+        1.0
+    ));
+    assert!(super::play_free_thread(
+        &mut threads,
+        7,
+        3,
+        "talk",
+        None,
+        1.5
+    ));
+    assert!(super::play_free_thread(
+        &mut threads,
+        7,
+        0,
+        "plant",
+        None,
+        2.0
+    ));
     let sequences = |threads: &std::collections::BTreeMap<u64, super::AvatarThreads>| {
         threads[&7]
             .iter()
@@ -24,8 +59,22 @@ fn body_threads_hold_until_replaced_or_root() {
             Some(("talk".into(), 1.5)),
         ]
     );
-    assert!(super::play_free_thread(&mut threads, 7, 0, "Root", None, 3.0));
-    assert!(super::play_free_thread(&mut threads, 7, 3, "root", None, 3.0));
+    assert!(super::play_free_thread(
+        &mut threads,
+        7,
+        0,
+        "Root",
+        None,
+        3.0
+    ));
+    assert!(super::play_free_thread(
+        &mut threads,
+        7,
+        3,
+        "root",
+        None,
+        3.0
+    ));
     assert!(threads.is_empty());
 }
 /// A host's report reaches the Report window as plain text, a cell for
@@ -100,22 +149,48 @@ fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
     // The bulb at x = 0 and the positions v20's Bedroom fit gives its
     // lights: 5.9, 11.8 and 19.9 units off. One light across the room.
     // Two tubes at x = 100 and 107 fit as one light between them.
-    let lights = [light(5.9, 0.0), light(0.0, 11.8), light(-19.9, 0.0), light(60.0, 0.0), light(104.0, 14.0)];
+    let lights = [
+        light(5.9, 0.0),
+        light(0.0, 11.8),
+        light(-19.9, 0.0),
+        light(60.0, 0.0),
+        light(104.0, 14.0),
+    ];
     let shapes = [
         (7u32, Vec3::new(0.0, 10.0, 0.0)),
         (8, Vec3::new(100.0, 10.0, 0.0)),
         (9, Vec3::new(107.0, 10.0, 0.0)),
     ];
-    let rule = MapLightRule { position: [60.0, 10.0, 0.0], radius: 2.0, tint: [1.0, 0.0, 0.0] };
+    let rule = MapLightRule {
+        position: [60.0, 10.0, 0.0],
+        radius: 2.0,
+        tint: [1.0, 0.0, 0.0],
+    };
     let whole = map_light_tints(&lights, &shapes, &BTreeSet::new(), &[rule]);
     assert_eq!(whole, [Vec3::ONE, Vec3::ONE, Vec3::ONE, Vec3::X, Vec3::ONE]);
     let broken = map_light_tints(&lights, &shapes, &BTreeSet::from([7, 8]), &[rule]);
-    assert_eq!(broken, [Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::X, Vec3::splat(0.5)]);
+    assert_eq!(
+        broken,
+        [
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::splat(0.5)
+        ]
+    );
     let both = map_light_tints(&lights, &shapes, &BTreeSet::from([8, 9]), &[]);
     assert_eq!(both[4], Vec3::ZERO);
     // An Add-On cannot light a broken bulb again.
-    let lit = MapLightRule { position: [0.0, 10.0, 0.0], radius: 30.0, tint: [2.0; 3] };
-    assert_eq!(map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0], Vec3::ZERO);
+    let lit = MapLightRule {
+        position: [0.0, 10.0, 0.0],
+        radius: 30.0,
+        tint: [2.0; 3],
+    };
+    assert_eq!(
+        map_light_tints(&lights, &shapes, &BTreeSet::from([7]), &[lit])[0],
+        Vec3::ZERO
+    );
 }
 /// Max, v0.1.9: holding a jeep with the Gravity Gun, the wheel
 /// switched tools instead of reeling. Fire on foot goes to the
@@ -125,8 +200,16 @@ fn a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest() {
 fn the_trigger_is_noted_whichever_path_takes_the_click() {
     use bri_ui::api::{GameAction, HeldControl, UiAction};
     let mut c = super::Controls::default();
-    let fire = |down| UiAction::Game(GameAction::Held { control: HeldControl::Fire, down });
-    assert!(super::building_action(&fire(true)), "on foot, building takes the click");
+    let fire = |down| {
+        UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down,
+        })
+    };
+    assert!(
+        super::building_action(&fire(true)),
+        "on foot, building takes the click"
+    );
     super::note_trigger(&mut c, &fire(true));
     assert!(c.held(HeldControl::Fire));
     super::note_trigger(&mut c, &UiAction::Game(GameAction::DropTool));
@@ -143,6 +226,7 @@ fn the_trigger_is_noted_whichever_path_takes_the_click() {
 /// noted, control followed, the held tool's wheel claimed.
 #[test]
 fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
+    use super::{PathBuf, Ui, UiUpdate};
     use bri_ui::{
         api::{BindInput, GameAction, HeldControl, UiAction},
         binds::Platform,
@@ -152,18 +236,30 @@ fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
         screens::ctrl,
         ui::UiConfig,
     };
-    use super::{PathBuf, Ui, UiUpdate};
     let mut pack = UiPack::default();
     for name in ["PlayGui", "LoadingGui"] {
-        pack.layouts.insert(name.into(), ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)));
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
     }
     let mut ui = Ui::new(
         std::rc::Rc::new(bri_ui::pack::Pack::from_parts(pack, PathBuf::new())),
-        UiConfig { size: (1280, 960), scale: Some(2.0), platform: Platform::Windows },
-        bri_ui::api::Settings { binds: Some(vec![]), mouse_type: 2, ..Default::default() },
+        UiConfig {
+            size: (1280, 960),
+            scale: Some(2.0),
+            platform: Platform::Windows,
+        },
+        bri_ui::api::Settings {
+            binds: Some(vec![]),
+            mouse_type: 2,
+            ..Default::default()
+        },
     );
     ui.core.binds.bind(BindInput::Wheel, "scrollInventory");
-    ui.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+    ui.core
+        .binds
+        .bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
     ui.apply(UiUpdate::Connection(bri_ui::api::ConnectionState::InGame {
         server_name: "Test".into(),
         max_players: 8,
@@ -187,7 +283,10 @@ fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
         actions
     };
     let reels = |actions: &[UiAction]| {
-        actions.iter().filter(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. }))).count()
+        actions
+            .iter()
+            .filter(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. })))
+            .count()
     };
     let (x, y) = (640.0, 480.0);
     let button = MouseButton::Left;
@@ -196,14 +295,19 @@ fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
     for _ in 0..10 {
         frame(&mut ui, &mut controls);
     }
-    assert!(controls.held(HeldControl::Fire), "the trigger is still held");
+    assert!(
+        controls.held(HeldControl::Fire),
+        "the trigger is still held"
+    );
     // Rolled forward and back: each notch reels, nothing else moves.
     for delta in [1.0, 1.0, -1.0] {
         ui.handle_input(InputEvent::Wheel { delta });
         let actions = frame(&mut ui, &mut controls);
         assert_eq!(
             actions,
-            vec![UiAction::Game(GameAction::ToolWheel { notches: delta as i32 })],
+            vec![UiAction::Game(GameAction::ToolWheel {
+                notches: delta as i32
+            })],
             "only the tool sees the wheel"
         );
     }
@@ -218,9 +322,17 @@ fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
 fn only_a_steering_seat_drives_its_vehicle() {
     let steers = |yes: bool| move |_: u64, seat: usize| yes && seat == 0;
     assert_eq!(super::driven_vehicle(Some((7, 0)), steers(true)), Some(7));
-    assert_eq!(super::driven_vehicle(Some((7, 1)), steers(true)), None, "a passenger");
+    assert_eq!(
+        super::driven_vehicle(Some((7, 1)), steers(true)),
+        None,
+        "a passenger"
+    );
     // A tumble's seat: its rider is drawn from the host's poses.
-    assert_eq!(super::driven_vehicle(Some((7, 0)), steers(false)), None, "a tumble");
+    assert_eq!(
+        super::driven_vehicle(Some((7, 0)), steers(false)),
+        None,
+        "a tumble"
+    );
     assert_eq!(super::driven_vehicle(None, steers(true)), None);
 }
 #[test]
@@ -405,7 +517,8 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         was_thrown: false,
     });
     let emitter = app
-        .fx.weapon_effects
+        .fx
+        .weapon_effects
         .world()
         .pack()
         .library
@@ -450,7 +563,8 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         kind: bri_sim::presentation::CueKind::WeaponEffect {
             source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(1)),
             definition: app
-                .fx.weapon_effects
+                .fx
+                .weapon_effects
                 .world()
                 .pack()
                 .library
@@ -684,7 +798,10 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     })?;
     // The HUD names a tool by its uiName as the pack writes it.
     let ui_name = |app: &App, id: &str| app.content.weapons.pack.items[id].ui_name.clone();
-    assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::PRINTER));
+    assert_eq!(
+        app.ui.core.hud.tool_name,
+        ui_name(&app, bri_weapons::PRINTER)
+    );
     app.ui.core.request(UiAction::UseTool { slot: 1 });
     until(&mut app, "Inventory action", |a| {
         a.network_view()
@@ -692,11 +809,16 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
             && a.pending_requests() == 0
     })?;
     // As written: v20 names it "wrench" (wrenchItem uiName), lower case.
-    assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::WRENCH));
+    assert_eq!(
+        app.ui.core.hud.tool_name,
+        ui_name(&app, bri_weapons::WRENCH)
+    );
     let owner = app.network_view().unwrap().owner;
-    assert!(app.world_items.instances().any(|(identity, _)| {
-        identity == crate::world_items::ItemIdentity::Mounted(owner, 0)
-    }));
+    assert!(
+        app.world_items.instances().any(|(identity, _)| {
+            identity == crate::world_items::ItemIdentity::Mounted(owner, 0)
+        })
+    );
     assert_eq!(app.world_item_stats().missing_poses, 0);
     assert_eq!(app.world_item_stats().missing_bindings, 0);
     // A state-machine transition on the SAME mounted image must not cancel
@@ -751,8 +873,7 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
         0.01,
     );
     assert_eq!(animations[&owner].started_at, 10.);
-    animation_view.weapons.images.get_mut(&owner).unwrap()[0].image =
-        "v20.image.bowimage".into();
+    animation_view.weapons.images.get_mut(&owner).unwrap()[0].image = "v20.image.bowimage".into();
     App::update_avatar_animation_inputs(
         &mut animations,
         &mut BTreeMap::new(),
@@ -780,21 +901,22 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     );
     let dropped = app.network_view().unwrap().weapons.drops.last().unwrap().id;
     assert!(
-        app.world_items.instances().any(|(identity, _)| {
-            identity == crate::world_items::ItemIdentity::Drop(dropped)
+        app.world_items
+            .instances()
+            .any(|(identity, _)| { identity == crate::world_items::ItemIdentity::Drop(dropped) })
+    );
+    assert!(
+        !app.world_items.instances().any(|(identity, _)| {
+            identity == crate::world_items::ItemIdentity::Mounted(owner, 0)
         })
     );
-    assert!(!app.world_items.instances().any(|(identity, _)| {
-        identity == crate::world_items::ItemIdentity::Mounted(owner, 0)
-    }));
     assert_eq!(app.world_item_stats().missing_poses, 0);
     assert_eq!(app.world_item_stats().missing_bindings, 0);
     app.disconnect();
     assert!(app.network_view().is_none());
     assert!(app.ui.core.admin.snapshot.is_none());
     assert_eq!(
-        *bri_identity::ClientIdentity::load_or_create(state.join("client.identity"))?
-            .public_key(),
+        *bri_identity::ClientIdentity::load_or_create(state.join("client.identity"))?.public_key(),
         original_public_key,
     );
     assert_eq!(app.world_item_stats().cached_models, 0);
@@ -931,8 +1053,7 @@ fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {
         lights: vec![],
     };
     let others = [weapon.clone(), actor.clone()];
-    let (combined, deferred) =
-        super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO]);
+    let (combined, deferred) = super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO]);
     assert_eq!(combined.particles[0].texture, 2);
     assert_eq!(combined.particles[1].texture, 7);
     assert_eq!(combined.lights.len(), bri_render::scene::MAX_POINT_LIGHTS);
@@ -941,8 +1062,7 @@ fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {
     // A mirror's eye far down the row keeps the lights beside it: the
     // farthest from the player is kept, the next nearest dropped.
     let mirror = Vec3::new(1000. + bri_render::scene::MAX_POINT_LIGHTS as f32, 0., 0.);
-    let (combined, _) =
-        super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror]);
+    let (combined, _) = super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror]);
     let kept = |id: u64| combined.lights.iter().any(|l| l.handle.0 == id);
     assert!(kept(9000) && kept(bri_render::scene::MAX_POINT_LIGHTS as u64 - 1));
     assert!(!kept(0), "the light nearest neither eye goes");
@@ -973,7 +1093,11 @@ fn server_prints_keep_ml_markup_for_the_shared_renderer() {
 #[test]
 fn chat_links_like_v20() {
     assert_eq!(
-        super::player_chat(&Default::default(), "Max", "see https://blockland.us/x<y now"),
+        super::player_chat(
+            &Default::default(),
+            "Max",
+            "see https://blockland.us/x<y now"
+        ),
         "\u{e007}\u{e003}Max\u{e007}\u{e006}: see <a:blockland.us/xy>blockland.us/xy</a>\u{e006} now"
     );
     assert_eq!(super::linked_chat("no link <b>", '\u{e006}'), "no link ‹b›");
@@ -1005,8 +1129,7 @@ fn a_player_camera_pivots_over_the_middle_of_the_box() {
     use glam::Vec3;
     let feet = Vec3::new(3.0, 1.0, -2.0);
     // PlayerStandardArmor: feet + 2.65 / 2 + 0.75, 8 back, tilted 0.261.
-    let (distance, pivot, tilt) =
-        super::pivot_camera(2.65, 1.0, super::PLAYER_CAMERA, feet, 1.0);
+    let (distance, pivot, tilt) = super::pivot_camera(2.65, 1.0, super::PLAYER_CAMERA, feet, 1.0);
     assert_eq!(distance, 8.0);
     assert!(pivot.distance(feet + Vec3::Y * 2.075) < 1e-5, "{pivot}");
     assert_eq!(tilt, 0.261);
@@ -1078,9 +1201,7 @@ crate::testing::synthetic_and_content!(
 /// live vehicle a player steers or a player-type mount they control; a
 /// respawn (new id), a new definition or scale restarts it; the tumble
 /// body (no controls) and a destroyed vehicle show the host's poses.
-fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(
-    fx: &Mounts,
-) -> anyhow::Result<()> {
+fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(fx: &Mounts) -> anyhow::Result<()> {
     let assets = &fx.assets;
     let info = |definition: &str| bri_sim::session::VehicleInfo {
         id: 7,
@@ -1210,7 +1331,9 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     app.mounts.takes_turret = true;
     app.mounts.rider_eye = Some(Vec3::ONE);
     app.mounts.tumble = Some(9);
-    app.mounts.rider_rotations.insert(3, glam::Quat::from_rotation_y(1.0));
+    app.mounts
+        .rider_rotations
+        .insert(3, glam::Quat::from_rotation_y(1.0));
     app.view.observer_eye = Some(Vec3::ONE);
     app.view.rendered_camera = Some((Vec3::ONE, 1.0, 0.5));
     app.view.rendered_roll = 0.3;

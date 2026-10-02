@@ -158,7 +158,11 @@ fn portal() -> Definition {
 /// comes out of the one at x = 40, going on north, and back.
 const BEYOND: Vec3 = Vec3::new(40.0, 0.0, 0.0);
 fn portal_world() -> World {
-    let mut world = World::new("Showcase".into(), "showcase".into(), vec![[1.0; 4], [0.6; 4]]);
+    let mut world = World::new(
+        "Showcase".into(),
+        "showcase".into(),
+        vec![[1.0; 4], [0.6; 4]],
+    );
     for (id, x) in [(1, 0.0), (2, BEYOND.x)] {
         let mut brick = bri_world::Brick::new(
             bri_world::ContentRef::Resolved(PORTAL.into()),
@@ -523,7 +527,11 @@ fn holding_the_trigger_catches_what_comes_in_range_without_a_second_click() {
     trigger(&mut g, host, true);
     g.steps(30);
     assert_eq!(g.s.held_by(host), None, "out of reach");
-    assert_eq!(g.beam(host)[..3], [0.0, 0.0, 1.0], "the beam reaches for it");
+    assert_eq!(
+        g.beam(host)[..3],
+        [0.0, 0.0, 1.0],
+        "the beam reaches for it"
+    );
     // Walk up to it with the trigger still down: caught on the way.
     g.looks.get_mut(&host).unwrap().forward = 1.0;
     let mut caught = None;
@@ -539,9 +547,16 @@ fn holding_the_trigger_catches_what_comes_in_range_without_a_second_click() {
     assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)));
     let (at, _) = g.vehicle(crate_).unwrap();
     let gap = at.distance(g.feet(host));
-    assert!(gap > 50.0 && gap < 62.0, "caught as it came in range, {gap} off");
+    assert!(
+        gap > 50.0 && gap < 62.0,
+        "caught as it came in range, {gap} off"
+    );
     g.steps(12);
-    assert_eq!(g.beam(host)[..3], [1.0, crate_ as f64, 1.0], "and the beam shows it");
+    assert_eq!(
+        g.beam(host)[..3],
+        [1.0, crate_ as f64, 1.0],
+        "and the beam shows it"
+    );
     // Let go: nothing is reached for any more.
     trigger(&mut g, host, false);
     assert_eq!(g.s.held_by(host), None);
@@ -683,10 +698,9 @@ fn a_flung_heavy_vehicle_kills_in_a_minigame_and_credits_the_thrower() {
     g.minigame(a, &[b]);
     // A minigame hands out its own loadout; the gun is given again.
     g.s.give_tool(a, GUN, true).unwrap();
-    let crate_ = g
-        .s
-        .spawn_vehicle_at(a, CRATE, Vec3::new(-5.05, 1.0, -3.24), 0.0, Vec3::ZERO)
-        .unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(a, CRATE, Vec3::new(-5.05, 1.0, -3.24), 0.0, Vec3::ZERO)
+            .unwrap();
     g.look(a, -1.0, 0.0);
     g.steps(30);
     trigger(&mut g, a, true);
@@ -1235,13 +1249,21 @@ fn letting_go_carries_only_the_swing() {
             "sped up after letting go: {speeds:?}"
         );
     }
-    assert!(speeds[0].length() > 15.0, "the swing flung it: {}", speeds[0]);
+    assert!(
+        speeds[0].length() > 15.0,
+        "the swing flung it: {}",
+        speeds[0]
+    );
 }
 
 /// A world with one Blockhead Bot spawn brick, owned by owner 1 (the
 /// principal `[1; 32]`).
 fn bot_world() -> World {
-    let mut world = World::new("Showcase".into(), "showcase".into(), vec![[1.0; 4], [0.6; 4]]);
+    let mut world = World::new(
+        "Showcase".into(),
+        "showcase".into(),
+        vec![[1.0; 4], [0.6; 4]],
+    );
     world
         .owners
         .insert(1, bri_world::OwnerRecord::new([1; 32], "Builder".into()));
@@ -1283,20 +1305,31 @@ fn a_bot_is_grabbed_like_a_player() {
     g.s.give_tool(builder, GUN, true).unwrap();
     g.steps(30);
     let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
-    assert!(!g.s.may_move(stranger, ObjectRef::Player(bot)), "not the stranger's");
+    assert!(
+        !g.s.may_move(stranger, ObjectRef::Player(bot)),
+        "not the stranger's"
+    );
     // Aim at it wherever it has wandered.
     let at = g.feet(bot) + Vec3::Y * 1.3 - (g.feet(builder) + Vec3::Y * 2.1);
     let flat = Vec3::new(at.x, 0.0, at.z).length();
     g.look(builder, at.x.atan2(-at.z), at.y.atan2(flat));
     g.steps(2);
     g.package(builder, "gravity-gun", "grab").unwrap();
-    assert_eq!(g.s.held_by(builder), Some(ObjectRef::Player(bot)), "the bot is caught");
+    assert_eq!(
+        g.s.held_by(builder),
+        Some(ObjectRef::Player(bot)),
+        "the bot is caught"
+    );
     assert_eq!(g.beam(builder)[..3], [2.0, bot as f64, 1.0]);
     let before = g.feet(bot);
     g.look(builder, 0.0, 0.5);
     g.steps(120);
     assert!(g.s.held_by(builder).is_some(), "still held");
-    assert!(g.feet(bot).y > before.y + 1.0, "lifted: {before} -> {}", g.feet(bot));
+    assert!(
+        g.feet(bot).y > before.y + 1.0,
+        "lifted: {before} -> {}",
+        g.feet(bot)
+    );
     g.package(builder, "gravity-gun", "release").unwrap();
     g.steps(2);
     assert!(g.s.held_by(builder).is_none());
@@ -1422,7 +1455,10 @@ fn a_bot_jets_over_to_someone_above_it() {
             return;
         }
     }
-    panic!("never flew over to them: nearest {nearest} while up there, bot at {}", g.feet(bot));
+    panic!(
+        "never flew over to them: nearest {nearest} while up there, bot at {}",
+        g.feet(bot)
+    );
 }
 
 /// Max, v0.1.9: a held player spun round in the beam on the holder's
@@ -1473,7 +1509,10 @@ fn a_held_player_turns_only_with_their_tumble() {
             assert!(off.abs() < 0.05, "tick {tick}: body {off} off its tumble");
         }
     }
-    assert!(wrap(heading(&g).unwrap()).abs() > 1.5, "the swing turned the tumble");
+    assert!(
+        wrap(heading(&g).unwrap()).abs() > 1.5,
+        "the swing turned the tumble"
+    );
 }
 
 /// Max, v0.1.9: "they shouldn't always tumble if i move them gently and
@@ -1520,12 +1559,19 @@ fn a_thrown_player_tumbles_only_when_they_hit_something_hard() {
     let put = g.feet(b);
     assert!(!tumbled(&mut g, b, 120), "set down gently");
     let feet = g.feet(b);
-    assert!(feet.y < put.y + 0.05, "fell or stood, never rose: {put} -> {feet}");
+    assert!(
+        feet.y < put.y + 0.05,
+        "fell or stood, never rose: {put} -> {feet}"
+    );
     // Swung hard and let go in the open: they fly, land and slide.
     let (mut g, b) = hold_and_let_go(0.08, false);
     let from = g.feet(b);
     assert!(!tumbled(&mut g, b, 240), "nothing hard to hit");
-    assert!(g.feet(b).distance(from) > 15.0, "thrown far: {from} -> {}", g.feet(b));
+    assert!(
+        g.feet(b).distance(from) > 15.0,
+        "thrown far: {from} -> {}",
+        g.feet(b)
+    );
     // The same throw into a wall.
     let (mut g, b) = hold_and_let_go(0.08, true);
     assert!(tumbled(&mut g, b, 120), "hit the wall hard");
@@ -1809,12 +1855,22 @@ fn the_gun_grabs_through_a_portal_and_reels_it_back_through() {
     g.s.give_tool(host, GUN, true).unwrap();
     // Straight ahead through the portal; nothing on this side.
     let crate_ =
-        g.s.spawn_vehicle_at(0, CRATE, BEYOND + Vec3::new(0.0, 1.0, -14.0), 0.0, Vec3::ZERO)
-            .unwrap();
+        g.s.spawn_vehicle_at(
+            0,
+            CRATE,
+            BEYOND + Vec3::new(0.0, 1.0, -14.0),
+            0.0,
+            Vec3::ZERO,
+        )
+        .unwrap();
     g.steps(60);
     let (start, _) = g.vehicle(crate_).unwrap();
     trigger(&mut g, host, true);
-    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)), "caught through the portal");
+    assert_eq!(
+        g.s.held_by(host),
+        Some(ObjectRef::Vehicle(crate_)),
+        "caught through the portal"
+    );
     g.steps(120);
     let (at, v) = g.vehicle(crate_).unwrap();
     assert!(
@@ -1837,7 +1893,11 @@ fn the_gun_grabs_through_a_portal_and_reels_it_back_through() {
         .unwrap();
         g.steps(120);
     }
-    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)), "still held");
+    assert_eq!(
+        g.s.held_by(host),
+        Some(ObjectRef::Vehicle(crate_)),
+        "still held"
+    );
     let (at, _) = g.vehicle(crate_).unwrap();
     let feet = g.feet(host);
     assert!(
@@ -1884,7 +1944,11 @@ fn a_held_thing_carried_through_a_portal_stays_held() {
     assert!(feet.x > BEYOND.x / 2.0, "the holder went through: {feet}");
     assert!(worst < 0.5, "it jumped {worst} in a tick");
     g.steps(60);
-    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)), "still held");
+    assert_eq!(
+        g.s.held_by(host),
+        Some(ObjectRef::Vehicle(crate_)),
+        "still held"
+    );
     let (at, _) = g.vehicle(crate_).unwrap();
     let ahead = at - g.feet(host);
     assert!(

@@ -336,7 +336,8 @@ impl AvatarPrefs {
         for key in AVATAR_PART_KEYS {
             let name = self.part(key).to_ascii_lowercase();
             let list = if key == "Accent" {
-                data.accents_allowed.get(&self.part("Hat").to_ascii_lowercase())
+                data.accents_allowed
+                    .get(&self.part("Hat").to_ascii_lowercase())
             } else {
                 data.parts.get(&key.to_ascii_lowercase())
             };
@@ -1245,13 +1246,23 @@ pub enum MiniGameSettingValue {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MiniGameSettingKind {
     Bool,
-    Int { min: i64, max: i64 },
+    Int {
+        min: i64,
+        max: i64,
+    },
     /// Choices: value and name.
-    List { items: Vec<(MiniGameSettingValue, String)> },
-    Text { max_length: u32 },
+    List {
+        items: Vec<(MiniGameSettingValue, String)>,
+    },
+    Text {
+        max_length: u32,
+    },
     /// A paint colour from `min` to `max` (-1: none), shown with its
     /// swatch.
-    PaintColor { min: i64, max: i64 },
+    PaintColor {
+        min: i64,
+        max: i64,
+    },
 }
 /// One setting an Add-On declares, for the Add-On Settings window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

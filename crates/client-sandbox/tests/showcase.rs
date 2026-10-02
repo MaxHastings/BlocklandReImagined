@@ -375,7 +375,9 @@ fn the_beam_bends_through_a_portal() {
             .collect()
     };
     let crosses = |draws: &[bri_client_sandbox::host::Draw]| {
-        beams(draws).iter().any(|p| (p[0][0] < 20.0) != (p[1][0] < 20.0))
+        beams(draws)
+            .iter()
+            .any(|p| (p[0][0] < 20.0) != (p[1][0] < 20.0))
     };
     let (_, mut addon) = start("gravity-gun-fx");
     // Holding the crate 8 along the aim: 4 to the opening, 4 beyond.
@@ -383,19 +385,33 @@ fn the_beam_bends_through_a_portal() {
     portal(&mut world);
     let held = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
     let beams_held = beams(&held.draws);
-    assert_eq!(beams_held.len(), 4, "two passes on each side: {beams_held:#?}");
-    assert!(!crosses(&held.draws), "no beam cuts across: {beams_held:#?}");
+    assert_eq!(
+        beams_held.len(),
+        4,
+        "two passes on each side: {beams_held:#?}"
+    );
     assert!(
-        beams_held.iter().any(|p| close(&p[1][..3], &[0.0, 2.1, -4.0])),
+        !crosses(&held.draws),
+        "no beam cuts across: {beams_held:#?}"
+    );
+    assert!(
+        beams_held
+            .iter()
+            .any(|p| close(&p[1][..3], &[0.0, 2.1, -4.0])),
         "into the opening: {beams_held:#?}"
     );
     assert!(
         beams_held
             .iter()
-            .any(|p| close(&p[0][..3], &[40.0, 2.1, -4.0001]) && close(&p[1][..3], &[40.0, 2.1, -8.0])),
+            .any(|p| close(&p[0][..3], &[40.0, 2.1, -4.0001])
+                && close(&p[1][..3], &[40.0, 2.1, -8.0])),
         "and out of its partner to the grip, the crate's middle where the aim meets it: {beams_held:#?}"
     );
-    assert_eq!(held.sounds[0].at, Some([40.0, 2.1, -8.0]), "the grab heard there");
+    assert_eq!(
+        held.sounds[0].at,
+        Some([40.0, 2.1, -8.0]),
+        "the grab heard there"
+    );
     // Reaching with nothing caught: out through it too.
     let (_, mut addon) = start("gravity-gun-fx");
     let mut world = gun_world([0.0, 0.0, 1.0, 8.0], [0.0, 2.0, -25.0]);
@@ -403,7 +419,9 @@ fn the_beam_bends_through_a_portal() {
     let reaching = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
     assert!(!crosses(&reaching.draws));
     assert!(
-        beams(&reaching.draws).iter().any(|p| close(&p[1][..3], &[40.0, 2.1, -8.0])),
+        beams(&reaching.draws)
+            .iter()
+            .any(|p| close(&p[1][..3], &[40.0, 2.1, -8.0])),
         "{:#?}",
         reaching.draws
     );

@@ -109,7 +109,16 @@ fn render(
     casters: &[&GpuScene],
     occluders: &[&GpuScene],
 ) -> Result<Vec<u8>> {
-    render_with_map(device, queue, renderer, target, receivers, casters, occluders, &[])
+    render_with_map(
+        device,
+        queue,
+        renderer,
+        target,
+        receivers,
+        casters,
+        occluders,
+        &[],
+    )
 }
 
 /// `render`, with `map` shading objects from the sun (the map layer).
@@ -230,7 +239,11 @@ fn floor(sun: Vec3, sun_color: f32) -> SceneData {
         srgb: false,
     };
     let mut data = SceneData {
-        images: vec![SceneImage::white(), image("mission", mission), image("parts", parts)],
+        images: vec![
+            SceneImage::white(),
+            image("mission", mission),
+            image("parts", parts),
+        ],
         ..Default::default()
     };
     let mut material = Material::surface("floor", 0, 1);
@@ -293,19 +306,36 @@ fn live_shadows_remove_only_baked_sun() -> Result<()> {
     let mut run = |mode: f32| -> Result<[i32; 4]> {
         camera.ambient[3] = mode;
         renderer.update_camera(&queue, &camera);
-        let pixels = render(&device, &queue, &mut renderer, &target, &[&map, &slab], &[&slab], &[])?;
+        let pixels = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &[&map, &slab],
+            &[&slab],
+            &[],
+        )?;
         Ok(points.map(|p| at(&pixels, p)))
     };
     let [lit_under, lit_open, dark_under, dark_open] = run(2.0)?;
     // Unified: baked shade stays as baked; baked sun under the slab goes
     // down to the static light, the same as the baked shade.
-    assert!((dark_under - dark_open).abs() <= 2, "{dark_under} {dark_open}");
+    assert!(
+        (dark_under - dark_open).abs() <= 2,
+        "{dark_under} {dark_open}"
+    );
     assert!(lit_open > dark_open + 60, "{lit_open} {dark_open}");
-    assert!((lit_under - dark_open).abs() <= 3, "{lit_under} {dark_open}");
+    assert!(
+        (lit_under - dark_open).abs() <= 3,
+        "{lit_under} {dark_open}"
+    );
     // Classic keeps v20's fixed share: it darkens the baked shade again.
     let [_, _, classic_under, classic_open] = run(0.0)?;
     assert_eq!(classic_open, dark_open);
-    assert!(classic_under < classic_open - 10, "{classic_under} {classic_open}");
+    assert!(
+        classic_under < classic_open - 10,
+        "{classic_under} {classic_open}"
+    );
     Ok(())
 }
 
@@ -391,7 +421,15 @@ fn map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality() -> Result<()
         let mut frames = vec![];
         for _ in 0..3 {
             renderer.update_camera(&queue, &camera);
-            let pixels = render(&device, &queue, &mut renderer, &target, &[&floor, &slab], &[&slab], &[])?;
+            let pixels = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &target,
+                &[&floor, &slab],
+                &[&slab],
+                &[],
+            )?;
             frames.push([at(&pixels, shade), at(&pixels, open)]);
         }
         assert!(frames.windows(2).all(|w| w[0] == w[1]), "{frames:?}");
@@ -400,7 +438,10 @@ fn map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality() -> Result<()
     let mut run = |settings: ShadowSettings, mode: f32| -> Result<[i32; 2]> {
         let moving = run_as(settings, mode, false)?;
         let kept = run_as(settings, mode, true)?;
-        assert!((moving[0] - kept[0]).abs() <= 12 && moving[1] == kept[1], "{moving:?} {kept:?}");
+        assert!(
+            (moving[0] - kept[0]).abs() <= 12 && moving[1] == kept[1],
+            "{moving:?} {kept:?}"
+        );
         Ok(kept)
     };
     // Unified at Best: the slab shades the floor the lamp lights.
@@ -416,7 +457,10 @@ fn map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality() -> Result<()
     assert!(low >= low_open, "{low} {low_open}");
     // Classic never draws map lights or lamp shadows.
     let [classic, classic_open] = run(ShadowSettings::BEST, 0.0)?;
-    assert!((classic - classic_open).abs() <= 2, "{classic} {classic_open}");
+    assert!(
+        (classic - classic_open).abs() <= 2,
+        "{classic} {classic_open}"
+    );
     Ok(())
 }
 
@@ -465,7 +509,11 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
         }),
         false,
     )?;
-    let floor = renderer.upload(&device, &queue, &cuboid(Vec3::new(-10.0, -0.3, -10.0), Vec3::new(10.0, 0.0, 10.0)))?;
+    let floor = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-10.0, -0.3, -10.0), Vec3::new(10.0, 0.0, 10.0)),
+    )?;
     // Roof pieces around a 4x4 opening, farther above the floor than live
     // casters reach toward the sun (the map layer reaches past it).
     let wall = |min: Vec3, max: Vec3| {
@@ -504,7 +552,16 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
     let mut frames = vec![];
     for _ in 0..2 {
         renderer.update_camera(&queue, &camera);
-        let pixels = render_with_map(&device, &queue, &mut renderer, &target, &[&floor], &[], &[], &map)?;
+        let pixels = render_with_map(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &[&floor],
+            &[],
+            &[],
+            &map,
+        )?;
         frames.push(points.map(|p| at(&pixels, p)));
     }
     assert_eq!(frames[0], frames[1]);
@@ -534,11 +591,20 @@ fn lamp_shadows_on_the_map_take_only_the_lamps_share() -> Result<()> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (width, height) = (256u32, 256u32);
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
-    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))), false)?;
+    renderer.set_map_lighting(
+        &device,
+        &queue,
+        Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))),
+        false,
+    )?;
     // Static light 0.3 everywhere and no sun colour: the map draws 0.3.
     let sun = Vec3::new(0.0, -1.0, 0.3);
     let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
-    let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)))?;
+    let slab = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)),
+    )?;
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.0; 4];
@@ -554,7 +620,15 @@ fn lamp_shadows_on_the_map_take_only_the_lamps_share() -> Result<()> {
     let shade = Vec3::new(2.6, 0.0, 0.0);
     let open = Vec3::new(6.0, 0.0, -1.0);
     renderer.update_camera(&queue, &camera);
-    let pixels = render(&device, &queue, &mut renderer, &target, &[&map], &[&slab], &[])?;
+    let pixels = render(
+        &device,
+        &queue,
+        &mut renderer,
+        &target,
+        &[&map],
+        &[&slab],
+        &[],
+    )?;
     let (shaded, lit) = (at(&pixels, shade), at(&pixels, open));
     assert!((lit - 77).abs() <= 2, "{lit}");
     // The lamp gives 0.554 of 0.654 fitted there: 0.3 * (1 - 0.554 / 0.654)
@@ -574,10 +648,19 @@ fn an_instanced_model_casts_a_lamp_shadow_on_the_map() -> Result<()> {
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::HIGH));
     // The light 6 above the floor, 12 from the model, as the Bedroom desk
     // lamp's lower light stands to a player on the dresser.
-    renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(-12.0, 6.0, 0.0))), false)?;
+    renderer.set_map_lighting(
+        &device,
+        &queue,
+        Some(&lamp_lighting(Vec3::new(-12.0, 6.0, 0.0))),
+        false,
+    )?;
     let sun = Vec3::new(0.0, -1.0, 0.3);
     let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
-    let body = renderer.upload(&device, &queue, &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.5, 0.3)))?;
+    let body = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.5, 0.3)),
+    )?;
     let mut instances = GpuInstances::new(&device, 1)?;
     instances.update(&queue, &[SceneTransform::default()])?;
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
@@ -600,22 +683,46 @@ fn an_instanced_model_casts_a_lamp_shadow_on_the_map() -> Result<()> {
     let models = [(&body, &instances)];
     renderer.render_shadows(
         &mut encoder,
-        ShadowCasters { scenes: &[], instances: &models },
-        ShadowCasters { scenes: &[], instances: &[] },
+        ShadowCasters {
+            scenes: &[],
+            instances: &models,
+        },
+        ShadowCasters {
+            scenes: &[],
+            instances: &[],
+        },
     );
-    renderer.render_with_instances(&mut encoder, &view, &depth, &[&map], &[], Some(wgpu::Color::BLACK));
+    renderer.render_with_instances(
+        &mut encoder,
+        &view,
+        &depth,
+        &[&map],
+        &[],
+        Some(wgpu::Color::BLACK),
+    );
     encoder.copy_texture_to_buffer(
         target.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
         },
         target.size(),
     );
     queue.submit([encoder.finish()]);
     buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None })?;
-    let pixels = buffer.slice(..).get_mapped_range().map_err(|e| anyhow::anyhow!("{e:?}"))?.to_vec();
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    })?;
+    let pixels = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?
+        .to_vec();
     let at = |point: Vec3| {
         let ndc = view_projection.project_point3(point);
         let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
@@ -655,8 +762,16 @@ fn shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume() -> Result<()>
     wall.images = vec![SceneImage::white()];
     wall.materials[0] = Material::surface("wall", 0, 0);
     let wall = renderer.upload(&device, &queue, &wall)?;
-    let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)))?;
-    let behind = renderer.upload(&device, &queue, &cuboid(Vec3::new(5.0, 2.0, -3.0), Vec3::new(8.0, 2.3, 1.0)))?;
+    let slab = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)),
+    )?;
+    let behind = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(5.0, 2.0, -3.0), Vec3::new(8.0, 2.3, 1.0)),
+    )?;
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.0; 4];
@@ -669,7 +784,11 @@ fn shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume() -> Result<()>
         let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
         i32::from(pixels[(y * width as usize + x) * 4 + 1])
     };
-    let points = [Vec3::new(2.6, 0.0, 0.0), Vec3::new(-6.0, 0.0, -1.0), Vec3::new(6.5, 0.0, -1.0)];
+    let points = [
+        Vec3::new(2.6, 0.0, 0.0),
+        Vec3::new(-6.0, 0.0, -1.0),
+        Vec3::new(6.5, 0.0, -1.0),
+    ];
     let mut frames = vec![];
     for _ in 0..2 {
         renderer.update_camera(&queue, &camera);
@@ -712,19 +831,36 @@ fn patched_lightmaps_draw_without_a_new_upload() -> Result<()> {
     camera.sun_color = [0.0; 4];
     camera.ambient = [0.1, 0.1, 0.1, 0.0];
     let target = color_target(&device, format, width, height);
-    let centre = |pixels: &[u8]| i32::from(pixels[((height / 2 * width + width / 2) * 4 + 1) as usize]);
+    let centre =
+        |pixels: &[u8]| i32::from(pixels[((height / 2 * width + width / 2) * 4 + 1) as usize]);
     for mode in [0.0, 2.0] {
         camera.ambient[3] = mode;
         renderer.update_camera(&queue, &camera);
-        let before = centre(&render(&device, &queue, &mut renderer, &target, &[&map], &[], &[])?);
+        let before = centre(&render(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &[&map],
+            &[],
+            &[],
+        )?);
         assert!((before - 77).abs() <= 2, "{before}");
     }
     // Every texel of the drawn lightmap and its static light down to 30.
     let fixes: Vec<TexelFix> = (0..16 * 16)
         .flat_map(|index| {
             [
-                TexelFix { image: 1, index, rgba: [30, 30, 30, 255] },
-                TexelFix { image: 2, index, rgba: [30, 30, 30, 0] },
+                TexelFix {
+                    image: 1,
+                    index,
+                    rgba: [30, 30, 30, 255],
+                },
+                TexelFix {
+                    image: 2,
+                    index,
+                    rgba: [30, 30, 30, 0],
+                },
             ]
         })
         .collect();
@@ -734,7 +870,15 @@ fn patched_lightmaps_draw_without_a_new_upload() -> Result<()> {
     for mode in [0.0, 2.0] {
         camera.ambient[3] = mode;
         renderer.update_camera(&queue, &camera);
-        let after = centre(&render(&device, &queue, &mut renderer, &target, &[&map], &[], &[])?);
+        let after = centre(&render(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &[&map],
+            &[],
+            &[],
+        )?);
         assert!((after - 30).abs() <= 2, "mode {mode}: {after}");
     }
     Ok(())
@@ -784,15 +928,33 @@ fn placed_and_removed_bricks_change_lamp_shadows_the_same_frame() -> Result<()> 
     for frame in 0..8 {
         let placed = frame % 2 == 0;
         let slab = renderer.upload_chunk(&device, &queue, &slab_data, &palette)?;
-        let scenes: Vec<&GpuScene> = if placed { vec![&floor, &slab] } else { vec![&floor] };
+        let scenes: Vec<&GpuScene> = if placed {
+            vec![&floor, &slab]
+        } else {
+            vec![&floor]
+        };
         let casters: Vec<&GpuScene> = if placed { vec![&slab] } else { vec![] };
         renderer.update_camera(&queue, &camera);
-        let pixels = render(&device, &queue, &mut renderer, &target, &scenes, &casters, &[])?;
+        let pixels = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &scenes,
+            &casters,
+            &[],
+        )?;
         let (shaded, lit) = (at(&pixels, shade), at(&pixels, open));
         if placed {
-            assert!(shaded < lit - 40, "frame {frame}: placed slab casts no shadow yet ({shaded} vs {lit})");
+            assert!(
+                shaded < lit - 40,
+                "frame {frame}: placed slab casts no shadow yet ({shaded} vs {lit})"
+            );
         } else {
-            assert!(shaded >= lit, "frame {frame}: removed slab still shades ({shaded} vs {lit})");
+            assert!(
+                shaded >= lit,
+                "frame {frame}: removed slab still shades ({shaded} vs {lit})"
+            );
         }
     }
     Ok(())
@@ -824,13 +986,30 @@ fn switched_off_and_recoloured_map_lights_leave_the_map_and_objects() -> Result<
     let block_top = Vec3::new(-5.0, 0.5, 0.0);
     for settings in [ShadowSettings::BEST, ShadowSettings::LOW] {
         let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
-        renderer.set_map_lighting(&device, &queue, Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))), false)?;
+        renderer.set_map_lighting(
+            &device,
+            &queue,
+            Some(&lamp_lighting(Vec3::new(0.0, 12.0, 0.0))),
+            false,
+        )?;
         let map = renderer.upload(&device, &queue, &floor(sun, 0.0))?;
-        let block = renderer.upload(&device, &queue, &cuboid(Vec3::new(-6.0, 0.0, -1.0), Vec3::new(-4.0, 0.5, 1.0)))?;
+        let block = renderer.upload(
+            &device,
+            &queue,
+            &cuboid(Vec3::new(-6.0, 0.0, -1.0), Vec3::new(-4.0, 0.5, 1.0)),
+        )?;
         let mut frame = |tint: Vec3| -> Result<Vec<u8>> {
             renderer.set_map_light_tints(&queue, &[tint]);
             renderer.update_camera(&queue, &camera);
-            render(&device, &queue, &mut renderer, &target, &[&map, &block], &[&block], &[])
+            render(
+                &device,
+                &queue,
+                &mut renderer,
+                &target,
+                &[&map, &block],
+                &[&block],
+                &[],
+            )
         };
         let on = frame(Vec3::ONE)?;
         let off = frame(Vec3::ZERO)?;
@@ -842,11 +1021,20 @@ fn switched_off_and_recoloured_map_lights_leave_the_map_and_objects() -> Result<
         assert!((map_on - 77).abs() <= 2, "{settings:?}: {map_on}");
         assert!((map_off - 12).abs() <= 4, "{settings:?}: {map_off}");
         // Red keeps the red share and drops the rest.
-        assert!((at(&red, open, 0) - 77).abs() <= 2 && (at(&red, open, 1) - 12).abs() <= 4, "{settings:?}");
+        assert!(
+            (at(&red, open, 0) - 77).abs() <= 2 && (at(&red, open, 1) - 12).abs() <= 4,
+            "{settings:?}"
+        );
         // The block loses the lamp's light and keeps the ambient.
         let (block_on, block_off) = (at(&on, block_top, 1), at(&off, block_top, 1));
-        assert!(block_off < block_on - 40, "{settings:?}: {block_off} vs {block_on}");
-        assert!(at(&red, block_top, 0) > at(&red, block_top, 1) + 40, "{settings:?}");
+        assert!(
+            block_off < block_on - 40,
+            "{settings:?}: {block_off} vs {block_on}"
+        );
+        assert!(
+            at(&red, block_top, 0) > at(&red, block_top, 1) + 40,
+            "{settings:?}"
+        );
         // Switched back, it draws as before.
         assert_eq!(at(&back, open, 1), map_on, "{settings:?}");
         assert_eq!(at(&back, block_top, 1), block_on, "{settings:?}");
@@ -865,10 +1053,19 @@ fn dynamic_floor(
 ) -> SceneData {
     use bri_render::map_lighting::DynamicSheet;
     let mut data = floor(sun, 0.0);
-    let texels = |f: &dyn Fn(u32) -> [u8; 4]| -> Vec<u8> { (0..16 * 16).flat_map(|i| f(i % 16)).collect() };
+    let texels =
+        |f: &dyn Fn(u32) -> [u8; 4]| -> Vec<u8> { (0..16 * 16).flat_map(|i| f(i % 16)).collect() };
     let visibility = (0..lights.len().div_ceil(4))
         .map(|k| {
-            texels(&|x| std::array::from_fn(|c| if 4 * k + c < lights.len() { bri_render::map_lighting::share_byte(seen(4 * k + c, x)) } else { 0 }))
+            texels(&|x| {
+                std::array::from_fn(|c| {
+                    if 4 * k + c < lights.len() {
+                        bri_render::map_lighting::share_byte(seen(4 * k + c, x))
+                    } else {
+                        0
+                    }
+                })
+            })
         })
         .collect();
     let sheet = DynamicSheet {
@@ -901,7 +1098,12 @@ fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
     let sun = Vec3::new(0.0, -1.0, 0.3);
     // 0.05 left over everywhere, no baked sun; the light reaches the
     // texels in front of the wall (x = 4, texel column 11) and not behind.
-    let floor_data = dynamic_floor(sun, |_| [13, 13, 13, 0], &[0], |_, x| if x <= 10 { 1.0 } else { 0.0 });
+    let floor_data = dynamic_floor(
+        sun,
+        |_| [13, 13, 13, 0],
+        &[0],
+        |_, x| if x <= 10 { 1.0 } else { 0.0 },
+    );
     let mut wall = cuboid(Vec3::new(4.0, 0.0, -10.0), Vec3::new(4.2, 6.0, 10.0));
     wall.images = vec![SceneImage::white()];
     wall.materials[0] = Material::surface("wall", 0, 0);
@@ -951,9 +1153,21 @@ fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
         renderer.set_map_lighting(&device, &queue, Some(&lighting), true)?;
         let floor = renderer.upload(&device, &queue, &floor_data)?;
         let wall = renderer.upload(&device, &queue, &wall)?;
-        let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)))?;
-        let front_block = renderer.upload(&device, &queue, &cuboid(Vec3::new(-7.0, 0.0, 4.0), Vec3::new(-5.0, 0.5, 6.0)))?;
-        let behind_block = renderer.upload(&device, &queue, &cuboid(Vec3::new(5.5, 0.0, 4.0), Vec3::new(7.5, 0.5, 6.0)))?;
+        let slab = renderer.upload(
+            &device,
+            &queue,
+            &cuboid(Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.3, 2.0)),
+        )?;
+        let front_block = renderer.upload(
+            &device,
+            &queue,
+            &cuboid(Vec3::new(-7.0, 0.0, 4.0), Vec3::new(-5.0, 0.5, 6.0)),
+        )?;
+        let behind_block = renderer.upload(
+            &device,
+            &queue,
+            &cuboid(Vec3::new(5.5, 0.0, 4.0), Vec3::new(7.5, 0.5, 6.0)),
+        )?;
         let frame = |renderer: &mut SceneRenderer| -> Result<[i32; 5]> {
             renderer.update_camera(&queue, &camera);
             let pixels = render_with_map(
@@ -969,8 +1183,15 @@ fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
             Ok(points.map(|p| at(&pixels, p)))
         };
         let [front, behind, under, lit_block, hidden_block] = frame(&mut renderer)?;
-        assert_eq!(frame(&mut renderer)?, [front, behind, under, lit_block, hidden_block], "lamps {lamps}");
-        assert!((front - expected(points[0])).abs() <= 3, "lamps {lamps}: front {front}");
+        assert_eq!(
+            frame(&mut renderer)?,
+            [front, behind, under, lit_block, hidden_block],
+            "lamps {lamps}"
+        );
+        assert!(
+            (front - expected(points[0])).abs() <= 3,
+            "lamps {lamps}: front {front}"
+        );
         assert!((behind - 13).abs() <= 2, "lamps {lamps}: behind {behind}");
         if lamps == 0 {
             // No slot, no brick shadow: the texels see only the map.
@@ -979,10 +1200,16 @@ fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
             assert!((under - 13).abs() <= 3, "under the slab {under}");
         }
         assert!(lit_block > 100, "lamps {lamps}: block in front {lit_block}");
-        assert!(hidden_block < 10, "lamps {lamps}: block behind the wall {hidden_block}");
+        assert!(
+            hidden_block < 10,
+            "lamps {lamps}: block behind the wall {hidden_block}"
+        );
         renderer.set_map_light_tints(&queue, &[Vec3::ZERO]);
         let off = frame(&mut renderer)?;
-        assert!(off[..3].iter().all(|v| (v - 13).abs() <= 2), "lamps {lamps}: switched off {off:?}");
+        assert!(
+            off[..3].iter().all(|v| (v - 13).abs() <= 2),
+            "lamps {lamps}: switched off {off:?}"
+        );
         assert!(off[3] < 10, "lamps {lamps}: block switched off {}", off[3]);
     }
     Ok(())
@@ -997,7 +1224,10 @@ fn dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share() -> Result<()
     let (device, queue) = gpu()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (width, height) = (256u32, 256u32);
-    let settings = ShadowSettings { light_cubes: true, ..ShadowSettings::LOW };
+    let settings = ShadowSettings {
+        light_cubes: true,
+        ..ShadowSettings::LOW
+    };
     let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let mut lighting = lamp_lighting(Vec3::new(0.0, 12.0, 0.0));
     lighting.lights.clear();
@@ -1006,9 +1236,18 @@ fn dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share() -> Result<()
     }
     renderer.set_map_lighting(&device, &queue, Some(&lighting), true)?;
     let sun = Vec3::new(0.0, -1.0, 0.0);
-    let floor_data = dynamic_floor(sun, |x| [51, 51, 51, if x < 8 { 255 } else { 0 }], &[], |_, _| 0.0);
+    let floor_data = dynamic_floor(
+        sun,
+        |x| [51, 51, 51, if x < 8 { 255 } else { 0 }],
+        &[],
+        |_, _| 0.0,
+    );
     let floor = renderer.upload(&device, &queue, &floor_data)?;
-    let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-8.0, 4.0, -6.0), Vec3::new(-4.0, 4.3, -2.0)))?;
+    let slab = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-8.0, 4.0, -6.0), Vec3::new(-4.0, 4.3, -2.0)),
+    )?;
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.6, 0.6, 0.6, 0.];
@@ -1023,9 +1262,22 @@ fn dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share() -> Result<()
     };
     // The baked sunlit half, the baked shaded half, and under the slab on
     // the sunlit half.
-    let points = [Vec3::new(-6.0, 0.0, 6.0), Vec3::new(6.0, 0.0, 6.0), Vec3::new(-6.0, 0.0, -4.0)];
+    let points = [
+        Vec3::new(-6.0, 0.0, 6.0),
+        Vec3::new(6.0, 0.0, 6.0),
+        Vec3::new(-6.0, 0.0, -4.0),
+    ];
     renderer.update_camera(&queue, &camera);
-    let pixels = render_with_map(&device, &queue, &mut renderer, &target, &[&floor], &[&slab], &[], &[&floor])?;
+    let pixels = render_with_map(
+        &device,
+        &queue,
+        &mut renderer,
+        &target,
+        &[&floor],
+        &[&slab],
+        &[],
+        &[&floor],
+    )?;
     let [sunlit, shaded, under] = points.map(|p| at(&pixels, p));
     // Leftover 0.2 plus the sun's 0.6 where the map lets it in; 0.2 alone
     // where it does not, and under the brick's shadow.
@@ -1058,7 +1310,8 @@ fn a_switched_off_light_leaves_the_same_light_in_every_live_mode() -> Result<()>
     }];
     let target = color_target(&device, format, width, height);
     for mode in [2.0, 3.0] {
-        let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
+        let mut renderer =
+            SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
         renderer.set_map_lighting(&device, &queue, Some(&lighting), mode == 3.0)?;
         let floor = renderer.upload(&device, &queue, &floor_data)?;
         let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
@@ -1069,7 +1322,9 @@ fn a_switched_off_light_leaves_the_same_light_in_every_live_mode() -> Result<()>
             renderer.set_map_light_tints(&queue, &[tint]);
             renderer.update_camera(&queue, &camera);
             let pixels = render(&device, &queue, &mut renderer, &target, &[&floor], &[], &[])?;
-            Ok(i32::from(pixels[((height / 2) * width + width / 2) as usize * 4 + 1]))
+            Ok(i32::from(
+                pixels[((height / 2) * width + width / 2) as usize * 4 + 1],
+            ))
         };
         let on = frame(Vec3::ONE)?;
         let off = frame(Vec3::ZERO)?;
@@ -1143,7 +1398,10 @@ fn a_changed_environment_relights_the_maps_lightmaps() -> Result<()> {
         ..authored
     };
     let [bright_lit, bright_shade] = run(Some(&bright))?;
-    assert!((bright_shade - shade - 51).abs() <= 3, "{bright_shade} {shade}");
+    assert!(
+        (bright_shade - shade - 51).abs() <= 3,
+        "{bright_shade} {shade}"
+    );
     assert!(bright_lit >= lit + 40, "{bright_lit} {lit}");
     // The sun overhead: the half the bake lit takes it at full strength;
     // the half in the map's own shadow stays shaded.

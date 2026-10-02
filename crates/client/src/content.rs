@@ -7,12 +7,12 @@ use bri_content::{
     effects::Library,
     scene::{Kind, Scene},
 };
+use bri_package::{environment::Environment, packages::PackageSet};
 use bri_ui::{
     api::{BrickInfo, Choice, DatablockMenus, IconRef, MapInfo, PaintDivision},
     pack::Pack,
     schema::{PACK_SCHEMA_VERSION, UiPack},
 };
-use bri_package::{environment::Environment, packages::PackageSet};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Digest;
 use std::{
@@ -264,8 +264,16 @@ impl ContentPaths {
             vehicles: role("vehicles")?,
             events: role("events")?,
             tutorial: role("tutorial")?,
-            weapon_extras: bri_net::content_identity::kind_providers(&root, packages, "weapons.json")?,
-            vehicle_extras: bri_net::content_identity::kind_providers(&root, packages, "vehicles.json")?,
+            weapon_extras: bri_net::content_identity::kind_providers(
+                &root,
+                packages,
+                "weapons.json",
+            )?,
+            vehicle_extras: bri_net::content_identity::kind_providers(
+                &root,
+                packages,
+                "vehicles.json",
+            )?,
             brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
             bot_extras: bri_net::content_identity::kind_providers(&root, packages, "bots.json")?,
             packages: packages.clone(),
@@ -852,7 +860,11 @@ fn install_death_icons(
             let (resource, native) = resource
                 .and_then(|r| Some((r, r.native_file.as_deref()?)))
                 .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
-            let path = file(&bri_weapons::resource_root(root, resource), native, INDEX_LIMIT)?;
+            let path = file(
+                &bri_weapons::resource_root(root, resource),
+                native,
+                INDEX_LIMIT,
+            )?;
             let bytes = fs::read(&path)?;
             ensure!(
                 format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
@@ -878,7 +890,10 @@ fn install_death_icons(
         let owner = resource
             .and_then(|r| {
                 let dir = r.package.as_ref()?;
-                Some(bri_package::library::add_on_label(&bri_weapons::resource_root(root, r), dir))
+                Some(bri_package::library::add_on_label(
+                    &bri_weapons::resource_root(root, r),
+                    dir,
+                ))
             })
             .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
         match (entry, owner) {
@@ -916,9 +931,16 @@ fn install_package_bricks(
     struct Icons {
         icons: BTreeMap<String, bri_ui::schema::ImageEntry>,
     }
-    let catalog: Catalog = read_json(&file(catalog_dir, "stock-catalog.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    let catalog: Catalog = read_json(
+        &file(catalog_dir, "stock-catalog.json", INDEX_LIMIT)?,
+        INDEX_LIMIT,
+    )?;
     let icons = if catalog_dir.join("brick-icons.json").is_file() {
-        read_json::<Icons>(&file(catalog_dir, "brick-icons.json", INDEX_LIMIT)?, INDEX_LIMIT)?.icons
+        read_json::<Icons>(
+            &file(catalog_dir, "brick-icons.json", INDEX_LIMIT)?,
+            INDEX_LIMIT,
+        )?
+        .icons
     } else {
         BTreeMap::new()
     };

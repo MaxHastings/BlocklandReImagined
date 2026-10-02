@@ -416,11 +416,11 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     // GUI files for the text their controls show.
     for f in src.files.values() {
         let lower = f.path.to_ascii_lowercase();
-        if [".cs", ".txt", ".hfl", ".gui"].iter().any(|ext| lower.ends_with(ext)) {
-            bodies.insert(
-                src.member(f).to_ascii_lowercase(),
-                script_text(&f.bytes),
-            );
+        if [".cs", ".txt", ".hfl", ".gui"]
+            .iter()
+            .any(|ext| lower.ends_with(ext))
+        {
+            bodies.insert(src.member(f).to_ascii_lowercase(), script_text(&f.bytes));
         }
     }
     port_datablocks(&mut cx, ports, &code.bodies, &mut scripts);
@@ -458,7 +458,8 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             }
         }
     }
-    code.inherited.extend(linked.iter().map(|(own, _)| own.clone()));
+    code.inherited
+        .extend(linked.iter().map(|(own, _)| own.clone()));
     code.bodies.extend(linked);
     code.reference = cx
         .reference
@@ -1189,9 +1190,7 @@ fn references(cx: &mut Ctx) {
         .files
         .values()
         .filter(|f| f.path.to_ascii_lowercase().ends_with(".cs"))
-        .flat_map(|f| {
-            bri_weapons_import::damage_types(&script_text(&f.bytes)).unwrap_or_default()
-        })
+        .flat_map(|f| bri_weapons_import::damage_types(&script_text(&f.bytes)).unwrap_or_default())
         .map(|t| t.name.to_ascii_lowercase())
         .collect();
     for (owner, path, line, key, value) in checks {
@@ -3289,7 +3288,10 @@ fn handles_key(what: &str) -> Option<String> {
         format!("call:{call}")
     } else if let Some(file) = what.strip_prefix("file ") {
         format!("file:{file}")
-    } else if let Some(class) = what.strip_prefix("new ").and_then(|w| w.strip_suffix(" at load")) {
+    } else if let Some(class) = what
+        .strip_prefix("new ")
+        .and_then(|w| w.strip_suffix(" at load"))
+    {
         format!("new:{class}")
     } else {
         format!("set:{}", what.split_once(" = ")?.0.trim())
@@ -3763,8 +3765,10 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
                     .any(|c| c.to_ascii_lowercase().starts_with(&prefix))
                 {
                     d.status = "consumed".into();
-                    d.notes
-                        .push(format!("port {}: its callbacks are host rules now", port.port));
+                    d.notes.push(format!(
+                        "port {}: its callbacks are host rules now",
+                        port.port
+                    ));
                 }
             }
             // One the port carries out as an engine feature
@@ -3790,7 +3794,9 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
             }
             // One the Add-On makes at run time, which the port declares.
             for d in cx.report.datablocks.iter_mut().filter(|d| {
-                port.replaces.iter().any(|r| r.eq_ignore_ascii_case(&d.name))
+                port.replaces
+                    .iter()
+                    .any(|r| r.eq_ignore_ascii_case(&d.name))
                     && matches!(d.status.as_str(), "recognised_only" | "unsupported")
             }) {
                 d.status = "consumed".into();

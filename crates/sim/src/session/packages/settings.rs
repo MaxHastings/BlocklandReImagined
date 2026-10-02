@@ -93,7 +93,9 @@ pub(in crate::session) struct Registry {
     by_global: BTreeMap<String, usize>,
 }
 impl Registry {
-    pub(in crate::session) fn build(catalog: &bri_package_runtime::package::Catalog) -> Result<Self> {
+    pub(in crate::session) fn build(
+        catalog: &bri_package_runtime::package::Catalog,
+    ) -> Result<Self> {
         let mut out = Self::default();
         for (id, behaviour) in catalog.behaviours() {
             // A companion (an import's host rules) goes by the Add-On that
@@ -363,7 +365,9 @@ impl Session {
             .and_then(|h| h.settings.get(&full))
             .ok_or_else(|| format!("No setting `{full}`"))?;
         Ok(match (s.def.kind, &value) {
-            (SettingType::Bool, SettingValue::Bool(b)) => (if *b { "True" } else { "False" }).into(),
+            (SettingType::Bool, SettingValue::Bool(b)) => {
+                (if *b { "True" } else { "False" }).into()
+            }
             (SettingType::List, v) => s
                 .items
                 .iter()
@@ -387,8 +391,16 @@ impl Session {
     /// How setting `key` (the package's own or `namespace:key`) is
     /// declared, for its rules: title, category, scope, kind, quiet and
     /// resets.
-    pub(in crate::session) fn setting_info(&self, package: &str, key: &str) -> Option<serde_json::Value> {
-        let s = self.packages.as_ref()?.settings.get(&full_key(package, key))?;
+    pub(in crate::session) fn setting_info(
+        &self,
+        package: &str,
+        key: &str,
+    ) -> Option<serde_json::Value> {
+        let s = self
+            .packages
+            .as_ref()?
+            .settings
+            .get(&full_key(package, key))?;
         Some(serde_json::json!({
             "title": s.def.title,
             "category": s.def.category,
@@ -514,11 +526,20 @@ impl Session {
         quiet: bool,
     ) -> Result<()> {
         let host = self.packages.as_ref().context("No Add-Ons are running")?;
-        let g = self.minigames.game(game).ok().context("No such mini-game")?;
+        let g = self
+            .minigames
+            .game(game)
+            .ok()
+            .context("No such mini-game")?;
         // Who may change what: Slayer's permission levels.
         let may = match editor {
             Editor::Player(owner) | Editor::Granted(owner) => {
-                let player = self.peers.get(&owner).context("Unknown player")?.combat.player;
+                let player = self
+                    .peers
+                    .get(&owner)
+                    .context("Unknown player")?
+                    .combat
+                    .player;
                 ensure!(
                     matches!(editor, Editor::Granted(_)) || self.minigames.can_edit(player, game),
                     "Only the mini-game's owner or an admin can change its settings"
@@ -533,7 +554,10 @@ impl Session {
         };
         let check = |edit: &SettingEdit, team: bool| -> Result<(String, SettingScope)> {
             let key = full_key(package, &edit.key);
-            let s = host.settings.get(&key).with_context(|| format!("No setting `{key}`"))?;
+            let s = host
+                .settings
+                .get(&key)
+                .with_context(|| format!("No setting `{key}`"))?;
             let scope = s.def.scope;
             ensure!(
                 scope != SettingScope::Server && (scope == SettingScope::Team) == team,
@@ -546,7 +570,11 @@ impl Session {
                 }
             );
             if let Some(levels) = &may {
-                ensure!(levels.allows(s.def.editor), "You may not change {}", s.def.title);
+                ensure!(
+                    levels.allows(s.def.editor),
+                    "You may not change {}",
+                    s.def.title
+                );
             }
             if let Some(v) = &edit.value {
                 s.check(v).map_err(anyhow::Error::msg)?;
@@ -577,7 +605,10 @@ impl Session {
                     if let Some(id) = t.id {
                         ensure!(g.teams.get(mg::TeamId(id)).is_some(), "No such team");
                     }
-                    ensure!(t.color < 64, "A team's colour is one of the 64 paint colours");
+                    ensure!(
+                        t.color < 64,
+                        "A team's colour is one of the 64 paint colours"
+                    );
                     for edit in &t.settings {
                         team_changes.push((
                             i,
@@ -643,15 +674,28 @@ impl Session {
     fn editor_levels(&self, owner: OwnerId, game: &mg::MiniGame) -> EditorLevels {
         let (super_admin, host) = self.admin.rank(owner);
         let peer = self.peers.get(&owner);
-        let admin = peer.is_some_and(|p| self.minigames.player(p.combat.player).is_ok_and(|p| p.admin));
+        let admin = peer.is_some_and(|p| {
+            self.minigames
+                .player(p.combat.player)
+                .is_ok_and(|p| p.admin)
+        });
         // The host owns a shared or game mode's mini-game.
-        let creator = if game.is_server() || game.shared { None } else { self.owner_of(game.owner) };
+        let creator = if game.is_server() || game.shared {
+            None
+        } else {
+            self.owner_of(game.owner)
+        };
         let trust = match (peer, creator) {
             (_, Some(c)) if c == owner => bri_world::authority::trust::YOU,
             (Some(p), Some(c)) => p.actor.trust_level(c),
             _ => 0,
         };
-        EditorLevels { host, super_admin: super_admin || host, admin: admin || super_admin || host, trust: if host { 3 } else { trust } }
+        EditorLevels {
+            host,
+            super_admin: super_admin || host,
+            admin: admin || super_admin || host,
+            trust: if host { 3 } else { trust },
+        }
     }
 
     /// `set_setting` / `set_team_setting` from `package`'s rules.
@@ -668,10 +712,16 @@ impl Session {
         match team {
             None => self.edit_settings(Editor::Rules(package), game, vec![edit], None, false),
             Some(team) => {
-                let team = u32::try_from(team).ok().map(mg::TeamId).context("No such team")?;
+                let team = u32::try_from(team)
+                    .ok()
+                    .map(mg::TeamId)
+                    .context("No such team")?;
                 let key = full_key(package, &edit.key);
                 let host = self.packages.as_ref().context("No Add-Ons are running")?;
-                let s = host.settings.get(&key).with_context(|| format!("No setting `{key}`"))?;
+                let s = host
+                    .settings
+                    .get(&key)
+                    .with_context(|| format!("No setting `{key}`"))?;
                 ensure!(
                     s.def.scope == SettingScope::Team,
                     "`{key}` is not each team's"

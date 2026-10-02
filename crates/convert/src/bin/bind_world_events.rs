@@ -96,7 +96,10 @@ fn main() -> Result<()> {
                 "worlds": reports,
             }),
         );
-    std::fs::write(output.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
+    std::fs::write(
+        output.join("report.json"),
+        serde_json::to_vec_pretty(&report)?,
+    )?;
     println!(
         "{} worlds, {rows} event rows, {runnable} runnable",
         reports.len()

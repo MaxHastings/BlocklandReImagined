@@ -198,8 +198,7 @@ mod shots {
     use super::*;
     use bri_sim::weapon_query::WeaponQuery;
     use bri_weapons::{
-        ActorId, Filter, Hit, Nearby, Pack, Query, TargetId, WeaponsWorld,
-        Frame as WeaponFrame,
+        ActorId, Filter, Frame as WeaponFrame, Hit, Nearby, Pack, Query, TargetId, WeaponsWorld,
     };
     use std::collections::BTreeMap;
 
@@ -300,7 +299,8 @@ mod shots {
         ticks: usize,
     ) -> (Vec3, Vec3) {
         let mut free = WeaponsWorld::new(pack()).unwrap();
-        free.spawn(definition, SHOOTER, start, velocity, 1.0).unwrap();
+        free.spawn(definition, SHOOTER, start, velocity, 1.0)
+            .unwrap();
         let mut carry = None;
         for _ in 0..ticks {
             let before = free.projectiles().next().unwrap().position;
@@ -312,7 +312,10 @@ mod shots {
         }
         let p = free.projectiles().next().unwrap();
         match carry {
-            Some(c) => (c.transform_point3(p.position), c.transform_vector3(p.velocity)),
+            Some(c) => (
+                c.transform_point3(p.position),
+                c.transform_vector3(p.velocity),
+            ),
             None => (p.position, p.velocity),
         }
     }
@@ -571,7 +574,9 @@ mod vehicles {
                 },
             )
             .unwrap();
-        world.set_velocity(&mut sim.physics, id, velocity.to_array()).unwrap();
+        world
+            .set_velocity(&mut sim.physics, id, velocity.to_array())
+            .unwrap();
         let motion = |world: &VehiclesWorld, sim: &Simulation| {
             let s = world.vehicle_snapshot(&sim.physics, id).unwrap();
             (
@@ -616,9 +621,18 @@ mod vehicles {
             );
         };
         let (_, turn, _) = carry.to_scale_rotation_translation();
-        assert!(after.0.distance(turn * before.0) < 1e-3, "{definition}: {before:?} {after:?}");
-        assert!(after.1.distance(turn * before.1) < 1e-3, "{definition}: {before:?} {after:?}");
-        assert!(after.2.dot(turn * before.2).abs() > 1.0 - 1e-5, "{definition}: turned wrong");
+        assert!(
+            after.0.distance(turn * before.0) < 1e-3,
+            "{definition}: {before:?} {after:?}"
+        );
+        assert!(
+            after.1.distance(turn * before.1) < 1e-3,
+            "{definition}: {before:?} {after:?}"
+        );
+        assert!(
+            after.2.dot(turn * before.2).abs() > 1.0 - 1e-5,
+            "{definition}: turned wrong"
+        );
     }
 
     #[test]
@@ -676,7 +690,11 @@ mod vehicles {
 
     #[test]
     fn the_small_portal_stops_what_does_not_fit() {
-        let cases = [(BALL, 1.26f32, 15.0f32), (JEEP, 1.7, 30.0), (TANK, 2.8, 30.0)];
+        let cases = [
+            (BALL, 1.26f32, 15.0f32),
+            (JEEP, 1.7, 30.0),
+            (TANK, 2.8, 30.0),
+        ];
         for (definition, rest, speed) in cases {
             let at = Vec3::new(-20.0, rest, -4.25 + 3.5);
             let run = run(pack(), definition, at, Vec3::new(0.0, 0.0, -speed), 120);
