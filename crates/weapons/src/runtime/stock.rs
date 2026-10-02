@@ -8,7 +8,7 @@
 //! say what their scripts do in data (`Image::scripts`, `Image::commands`,
 //! `Image::shot`, ...), and a behaviour two images need is a data field,
 //! not another name. See docs/architecture/weapon-scripts.md.
-use super::{HOST_TOOL_IMAGES, Image};
+use super::{HOST_TOOL_IMAGES, Image, ProjectileDef};
 
 /// What an image's `onFire` does instead of launching its projectile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +24,25 @@ pub(super) enum StockFire {
     Key,
     /// Swaps the ball for its shooting image (`basketballImage::onFire`).
     ShootBasketball,
+}
+
+/// What a held sports ball does with the movement keys
+/// ([`super::WeaponsWorld::sport_trigger`], Item_Sports' `onTrigger`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SportKeys {
+    /// Jet pressed on foot: a football's lateral.
+    Lateral,
+    /// Jet pressed pops a soccer ball up; any other key drops it.
+    Pop,
+    /// Jet released on foot: a basketball's pass.
+    Pass,
+}
+
+/// The Item_Sports balls that catches and drops treat differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Ball {
+    Basketball,
+    Football,
 }
 
 /// A stock image's script behaviour.
@@ -49,6 +68,14 @@ pub(super) struct Stock {
     pub spawn_grace_ticks: u64,
     /// Its projectile counts as thrown (a football's, which can be caught).
     pub thrown: bool,
+    /// What the movement keys do while it is held.
+    pub sport_keys: Option<SportKeys>,
+    /// The image its mount puts in the left hand, by v20 datablock name
+    /// (`AkimboGunImage::onMount`), when it declares no `left_image`.
+    pub left_image: Option<&'static str>,
+    /// The sports ball it is, for the catches and drops that treat one
+    /// ball differently (`runtime/sports.rs`).
+    pub ball: Option<Ball>,
 }
 
 impl Stock {
@@ -107,6 +134,46 @@ impl Stock {
             aimed_throw: has("basketball"),
             spawn_grace_ticks: if has("dodgeball") { 120 } else { 0 },
             thrown: has("football"),
+            sport_keys: if has("football") {
+                Some(SportKeys::Lateral)
+            } else if has("soccer") {
+                Some(SportKeys::Pop)
+            } else if has("basketballshoot") {
+                Some(SportKeys::Pass)
+            } else {
+                None
+            },
+            left_image: (name == "akimbogunimage").then_some("LeftHandedGunImage"),
+            ball: if has("basketball") {
+                Some(Ball::Basketball)
+            } else if has("football") {
+                Some(Ball::Football)
+            } else {
+                None
+            },
+        }
+    }
+}
+
+/// v20 stock projectiles whose `onCollision` scripts did more than their
+/// data says, by datablock name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StockProjectile {
+    /// A hit before it bounces knocks the player out (`dodgeballProjectile`).
+    Dodgeball,
+    /// A catch scores the throw's distance, and at rest it is a
+    /// `footballItem` (`footballProjectile`).
+    Football,
+    /// A hit turns the player into a horse (`horseRayProjectile`).
+    HorseRay,
+}
+impl StockProjectile {
+    pub(super) fn of(d: &ProjectileDef) -> Option<Self> {
+        match d.name.to_ascii_lowercase().as_str() {
+            "dodgeballprojectile" => Some(Self::Dodgeball),
+            "footballprojectile" => Some(Self::Football),
+            "horserayprojectile" => Some(Self::HorseRay),
+            _ => None,
         }
     }
 }
@@ -133,8 +200,26 @@ mod tests {
         let football = Stock::named("footballimage");
         assert!(football.thrown);
         assert_eq!(football.throw, (40.0, 0.0));
+        assert_eq!(football.sport_keys, Some(SportKeys::Lateral));
+        assert_eq!(football.ball, Some(Ball::Football));
+        assert_eq!(
+            Stock::named("basketballshootimage").ball,
+            Some(Ball::Basketball)
+        );
+        assert_eq!(
+            Stock::named("soccerballimage").sport_keys,
+            Some(SportKeys::Pop)
+        );
+        assert_eq!(
+            Stock::named("basketballshootimage").sport_keys,
+            Some(SportKeys::Pass)
+        );
         assert_eq!(Stock::named("dodgeballimage").spawn_grace_ticks, 120);
         assert_eq!(Stock::named("gunimage").recoil_arm, Some("shiftAway"));
+        assert_eq!(
+            Stock::named("akimbogunimage").left_image,
+            Some("LeftHandedGunImage")
+        );
         let plain = Stock::named("rocketlauncherimage");
         assert_eq!(plain.fire, StockFire::Projectile);
         assert_eq!(plain.charge_arm, None);
@@ -142,20 +227,34 @@ mod tests {
         assert_eq!(plain.recoil_arm, None);
     }
 
-    /// The state-script callback reads [`Stock`] and never an image's name:
-    /// a v20 compatibility case goes in this table or in image data.
+    /// The weapons runtime reads [`Stock`] and [`StockProjectile`], never
+    /// an image's or projectile's name: a v20 compatibility case goes in
+    /// this file or in pack data.
     #[test]
-    fn the_state_script_callback_never_matches_image_names() {
-        let source = include_str!("../runtime.rs");
-        let start = source.find("    fn callback(").expect("the callback");
-        let end = start + source[start..].find("\n    }\n").expect("its end");
-        let body = &source[start..end];
-        for banned in ["name.contains(", "name ==", "name.as_str()", "image.name"] {
-            assert!(
-                !body.contains(banned),
-                "the state-script callback reads image names (`{banned}`); \
-                 put the case in runtime/stock.rs or in image data"
-            );
+    fn the_runtime_never_matches_datablock_names() {
+        let sources = [
+            ("runtime.rs", include_str!("../runtime.rs")),
+            ("runtime/sports.rs", include_str!("sports.rs")),
+            ("runtime/persistence.rs", include_str!("persistence.rs")),
+        ];
+        let banned = [
+            "name.contains(",
+            "name == \"",
+            "name.as_str()",
+            "image.contains(",
+            "image.to_ascii_lowercase()",
+            "projectile.contains(",
+            "name.eq_ignore_ascii_case(\"",
+            "== native_id(",
+        ];
+        for (file, source) in sources {
+            for pattern in banned {
+                assert!(
+                    !source.contains(pattern),
+                    "{file} matches a datablock name (`{pattern}`); \
+                     put the case in runtime/stock.rs or in pack data"
+                );
+            }
         }
     }
 }

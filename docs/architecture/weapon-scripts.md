@@ -29,19 +29,24 @@ spawning. Those cases live in one table, `runtime/stock.rs`:
 its `StockFire` kind, its throw), by its datablock name. The callback reads
 the `Stock` and never the name.
 
-A unit test (`the_state_script_callback_never_matches_image_names`) fails
-if the callback reads an image's name again.
+The rest of the runtime follows the same rule. The akimbo gun's left
+image (`Stock::left_image`), the sports balls' movement keys
+(`SportKeys`), their catches and drops (`Ball`), and the stock
+projectiles whose `onCollision` did more than their data says (the
+dodgeball, football and horse ray, `StockProjectile`) are all read from
+this file.
+
+A unit test (`the_runtime_never_matches_datablock_names`) fails if
+`runtime.rs`, `runtime/sports.rs` or `runtime/persistence.rs` compares an
+image's or projectile's name again.
 
 ## Adding a compatibility case
 
 - A v20 **stock** image whose script did something new: add it to
-  `Stock` and `Stock::named`, and make the callback act on the field.
+  `Stock` and `Stock::named` (a projectile: `StockProjectile`), and make
+  the runtime act on the field.
 - An **Add-On** image: describe it in data (`Image::scripts`,
   `commands`, `shot`, a new `Image` field when two images would share it).
   Never by name: Add-On datablock names are the author's, and a name check
   would also catch another Add-On's image that shares a word.
 
-## Still to do
-
-`sport_trigger` (a sports ball's jet-key pass, lateral and pop) still names
-its balls; it is the next case to move into `Stock`.

@@ -15,12 +15,14 @@ behaviour change.
   `packages.rs` went from 4,809 to about 3,500 lines.
   Design: [docs/architecture/script-operations.md](../architecture/script-operations.md).
 - **Weapon scripts.** The twenty image-name checks in
-  `WeaponsWorld::callback` are one table, `runtime/stock.rs`. A unit test
-  fails if the callback reads an image name again. Design:
+  `WeaponsWorld::callback`, and the rest in the weapons runtime (akimbo
+  left image, sports-ball keys, catches and drops, the dodgeball, football
+  and horse-ray projectiles), are one table, `runtime/stock.rs`. A unit
+  test fails if the runtime compares a datablock name again. Design:
   [docs/architecture/weapon-scripts.md](../architecture/weapon-scripts.md).
 
 Evidence: `cargo clippy -p bri-sim --tests` and `-p bri-weapons --tests`
 clean; `cargo test -p bri-weapons` and `cargo test -p bri-sim` pass in the
 cloud (content-free; the Gate runs `--include-ignored` with content).
 
-Next: `sport_trigger`'s three ball-name checks move into `Stock` too.
+Next: nothing open on these two boundaries.

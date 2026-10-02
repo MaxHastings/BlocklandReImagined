@@ -1268,14 +1268,12 @@ impl WeaponsWorld {
     /// The image an image brings into the left hand: its `left_image`, or
     /// for v20's akimbo gun the one `AkimboGunImage::onMount` mounts.
     fn left_image(&self, image: &str) -> Option<String> {
-        self.pack
-            .images
-            .get(image)
-            .and_then(|i| i.left_image.clone())
-            .or_else(|| {
-                (image == native_id("image", "AkimboGunImage"))
-                    .then(|| native_id("image", "LeftHandedGunImage"))
-            })
+        let image = self.pack.images.get(image)?;
+        image.left_image.clone().or_else(|| {
+            Stock::of(image)
+                .left_image
+                .map(|left| native_id("image", left))
+        })
     }
     /// The magazine of the gun in the right hand and the key its rounds
     /// are kept under: the tool slot it was drawn from ([`slot_key`]), or
@@ -2047,7 +2045,12 @@ impl WeaponsWorld {
                 paint: None,
                 magazine,
             });
-            if image.to_ascii_lowercase().contains("basketballshoot") {
+            if self
+                .pack
+                .images
+                .get(image)
+                .is_some_and(|i| Stock::of(i).sport_keys == Some(SportKeys::Pass))
+            {
                 self.events.push(Event::SportMovement {
                     actor: id,
                     locked: !a.frame.can_jet,
@@ -2154,25 +2157,26 @@ impl WeaponsWorld {
         ensure!(self.events.len() < 8192, "Command event budget");
         ensure!((2..=4).contains(&trigger), "Invalid sport trigger");
         let a = self.actors.get(&id).context("Unknown actor")?;
-        let name = a.images[0].as_ref().map(|e| e.image.as_str()).unwrap_or("");
-        let action = if name.contains("football") && trigger == 4 && down && !a.frame.can_jet {
-            Some(SportAction::FootballLateral)
-        } else if name.contains("soccer") {
-            Some(if trigger == 4 && down {
+        let stock = a.images[0]
+            .as_ref()
+            .and_then(|e| self.pack.images.get(&e.image))
+            .map(Stock::of);
+        let jet = trigger == 4 && !a.frame.can_jet;
+        let action = match stock.and_then(|s| s.sport_keys) {
+            Some(SportKeys::Lateral) if jet && down => Some(SportAction::FootballLateral),
+            Some(SportKeys::Pop) => Some(if trigger == 4 && down {
                 SportAction::SoccerPop
             } else {
                 SportAction::SoccerDrop
-            })
-        } else if name.contains("basketballshoot") && trigger == 4 && !down && !a.frame.can_jet {
-            Some(SportAction::BasketballPass)
-        } else {
-            None
+            }),
+            Some(SportKeys::Pass) if jet && !down => Some(SportAction::BasketballPass),
+            _ => None,
         };
         if let Some(action) = action {
             self.sport_action(id, action)?;
             return Ok(());
         }
-        if down && name == native_id("image", "basketballImage") {
+        if down && stock.is_some_and(|s| s.fire == StockFire::ShootBasketball) {
             let mut a = self.actors.remove(&id).unwrap();
             self.mount(id, &mut a, &native_id("image", "basketballShootImage"), 0);
             self.actors.insert(id, a);
@@ -3556,7 +3560,7 @@ impl WeaponsWorld {
                     });
                 }
                 if let TargetId::Actor(target) = hit.target {
-                    let dodge = d.name.eq_ignore_ascii_case("dodgeballProjectile");
+                    let dodge = StockProjectile::of(&d) == Some(StockProjectile::Dodgeball);
                     if dodge && !p.bounced && allowed {
                         self.events.push(Event::Damage {
                             source: p.source,
@@ -3572,7 +3576,8 @@ impl WeaponsWorld {
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
                     {
-                        if d.name.eq_ignore_ascii_case("footballProjectile") && !p.bounced {
+                        if StockProjectile::of(&d) == Some(StockProjectile::Football) && !p.bounced
+                        {
                             let catcher = self.actors[&target].frame.position;
                             let delta = catcher - p.origin;
                             self.events.push(Event::FootballCatch {
@@ -3643,7 +3648,7 @@ impl WeaponsWorld {
                 self.children(p, c, set);
             }
             if d.sport_image.is_some() && d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed {
-                let item = if d.name.eq_ignore_ascii_case("footballProjectile") {
+                let item = if StockProjectile::of(&d) == Some(StockProjectile::Football) {
                     "footballItem"
                 } else {
                     "soccerBallItem"
@@ -3760,7 +3765,7 @@ impl WeaponsWorld {
         let (hurt, push) = stop
             .as_ref()
             .map_or((1.0, 1.0), |(_, g)| (g.projectile_damage, g.push));
-        if d.name.eq_ignore_ascii_case("horseRayProjectile") {
+        if StockProjectile::of(d) == Some(StockProjectile::HorseRay) {
             if let TargetId::Actor(actor) = target {
                 self.events.push(Event::HorseTransform {
                     source: p.source,
@@ -4472,7 +4477,7 @@ pub fn key_matches(key: [f32; 3], brick: [f32; 3]) -> bool {
 mod sports;
 mod stock;
 pub use sports::SportAction;
-use stock::{Stock, StockFire};
+use stock::{Ball, SportKeys, Stock, StockFire, StockProjectile};
 
 mod persistence;
 pub use persistence::{SAVE_SCHEMA, WeaponsSave};

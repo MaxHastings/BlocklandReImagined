@@ -122,21 +122,14 @@ impl WeaponsWorld {
         let image = a.images[0].as_ref().context("No ball held")?;
         let dir = a.frame.direction.normalize();
         let forward = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-        let (contains, projectile, velocity, cooldown) = match action {
-            SportAction::BasketballPass => (
-                "basketball",
-                "basketballProjectile",
-                dir * 20.0 + Vec3::Y * 4.0,
-                36,
-            ),
+        let (projectile, velocity, cooldown) = match action {
+            SportAction::BasketballPass => ("basketballProjectile", dir * 20.0 + Vec3::Y * 4.0, 36),
             SportAction::FootballLateral => (
-                "football",
                 "footballProjectile",
                 forward * (-10.0) + Vec3::Y * 5.0 + a.frame.velocity,
                 36,
             ),
             SportAction::SoccerPop => (
-                "soccer",
                 "soccerBallProjectile",
                 forward
                     + a.frame.velocity
@@ -149,16 +142,20 @@ impl WeaponsWorld {
                 240,
             ),
             SportAction::SoccerDrop => (
-                "soccer",
                 "soccerBallProjectile",
                 forward * 2.0 + a.frame.velocity * 2.0 + Vec3::Y * 5.0,
                 240,
             ),
         };
-        ensure!(
-            image.image.contains(contains),
-            "Sport action does not match held ball"
-        );
+        let stock = self.pack.images.get(&image.image).map(Stock::of);
+        let held = match action {
+            SportAction::BasketballPass => stock.and_then(|s| s.ball) == Some(Ball::Basketball),
+            SportAction::FootballLateral => stock.and_then(|s| s.ball) == Some(Ball::Football),
+            SportAction::SoccerPop | SportAction::SoccerDrop => {
+                stock.and_then(|s| s.sport_keys) == Some(SportKeys::Pop)
+            }
+        };
+        ensure!(held, "Sport action does not match held ball");
         let result = self.spawn(
             &native_id("projectile", projectile),
             id,
@@ -211,7 +208,7 @@ impl WeaponsWorld {
         let a = self.actors.get(&target).context("Unknown target actor")?;
         if !a.images[0]
             .as_ref()
-            .is_some_and(|e| e.image.contains("basketball"))
+            .is_some_and(|e| self.ball(&e.image) == Some(Ball::Basketball))
             || !random.is_multiple_of(6)
         {
             return Ok(false);
@@ -277,7 +274,7 @@ impl WeaponsWorld {
         }
         let held = a.images[0]
             .as_ref()
-            .is_some_and(|e| e.image.contains("football"));
+            .is_some_and(|e| self.ball(&e.image) == Some(Ball::Football));
         if held {
             let multiplier = 2.0 + (random % 3) as f32;
             let jitter = Vec3::new(signed_jitter(random >> 8), 1.5, signed_jitter(random >> 24))
@@ -320,6 +317,10 @@ impl WeaponsWorld {
         }
         Ok(held)
     }
+    /// The stock sports ball `image` is ([`Stock::ball`]).
+    fn ball(&self, image: &str) -> Option<Ball> {
+        self.pack.images.get(image).and_then(|i| Stock::of(i).ball)
+    }
     /// Whether the right hand holds a sports ball image.
     pub fn holds_ball(&self, id: ActorId) -> bool {
         self.image_state(id, 0)
@@ -351,7 +352,7 @@ impl WeaponsWorld {
         );
         let velocity = forward * 2.0 + Vec3::Y * 4.0 + inherited;
         let position = a.frame.muzzle[0]
-            + if projectile.contains("football") {
+            + if self.ball(&e.image) == Some(Ball::Football) {
                 forward
             } else {
                 Vec3::ZERO
