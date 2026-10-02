@@ -36,7 +36,7 @@ jobs:
 
       - name: Take the content from the release's Windows zip
         run: |
-          gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-*-windows.zip' --dir "$RUNNER_TEMP/win"
+          gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-windows.zip' --dir "$RUNNER_TEMP/win"
           unzip -q "$RUNNER_TEMP"/win/*.zip -d "$RUNNER_TEMP/win/x"
           python3 - "$RUNNER_TEMP"/win/x/* <<'PY'
           import hashlib, json, pathlib, shutil, sys
@@ -79,7 +79,7 @@ jobs:
       - name: Package
         run: |
           tools/package_mac.sh --version "$BRI_VERSION" --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
-          zip="$(ls dist/BlocklandReImagined-*-macos.zip)"
+          zip=dist/BlocklandReImagined-macos.zip
           tools/package_mac.sh --verify "$zip"
           ls -l "$zip"
           echo "MAC_ZIP=$zip" >> "$GITHUB_ENV"

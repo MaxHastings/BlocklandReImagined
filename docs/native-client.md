@@ -266,9 +266,9 @@ builds the same release: the client and `bri-import-addon`, every pack the
 package list selects, the default Add-Ons turned on (and the Stress Lab ones
 with `--stress-lab`), the tester docs, `launch.sh` and a checksummed
 `MANIFEST.json`, in `dist/BlocklandReImagined-<version>-linux/`,
-plus that folder as a `.zip` (entries keep their executable bits). It checks
-that `bri-client --version` reports the version. Linux has no standalone
-launcher: the zip is the download. `--validate-only` and `--verify <dir>` work
+plus that folder as `dist/BlocklandReImagined-linux.zip` (entries keep their
+executable bits). It checks that `bri-client --version` reports the version.
+The zip is the download, as on Windows and Mac. `--validate-only` and `--verify <dir>` work
 as on Windows.
 
 Verified on 2026-09-27 from Windows: the client compiles for

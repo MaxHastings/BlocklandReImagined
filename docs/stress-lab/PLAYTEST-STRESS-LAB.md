@@ -5,7 +5,7 @@ below comes from those Add-Ons; the engine only provides general seams.
 
 ## Start
 
-1. Run `Launch.cmd` (or `BlocklandReImagined.exe`).
+1. Run `Launch.cmd`.
 2. Open Start Game, press **Game Mode**, pick **Stress Lab** and press
    Select, then launch as Single Player or LAN.
 3. You spawn on generated ground: grass, dirt and stone over bedrock, with

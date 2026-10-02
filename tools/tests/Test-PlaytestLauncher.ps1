@@ -14,8 +14,7 @@ try {
     $source = @'
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    assert_eq!(args, ["--run", ".\\content", ".\\user-state"]);
-    assert!(std::path::Path::new("user-state").is_dir());
+    assert_eq!(args, ["--run", ".\\content"]);
     eprintln!("fixture diagnostic on stderr");
     println!("fixture normal output");
     let exit = std::fs::read_to_string("exit-code.txt").unwrap().parse::<i32>().unwrap();

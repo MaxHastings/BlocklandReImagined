@@ -33,11 +33,15 @@ The full list, with what is still missing, is in
 
 ## Play
 
-Download `BlocklandReImagined.exe` from the Releases page and run it. It
-unpacks the game into `%LOCALAPPDATA%\BlocklandReImagined` on first start.
-The zip release folder works too: extract it somewhere you can write to (not
-Program Files) and run `Launch.cmd`. Nothing else needs installing, and you
-don't need the original Blockland.
+Download the zip for your system from the Releases page
+([Windows](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-windows.zip),
+[Mac](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-macos.zip),
+[Linux](https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-linux.zip)),
+extract it somewhere you can write to (not Program Files) and run `Launch.cmd`
+(the app on Mac, `launch.sh` on Linux). Nothing else needs installing, and you
+don't need the original Blockland. Settings and saves live in your user folder
+(`%LOCALAPPDATA%\BlocklandReImagined` on Windows), so a newer release's folder
+picks them up.
 
 - [Tester guide](docs/TESTER-GUIDE.md): install, playing together, what to
   send when something breaks.

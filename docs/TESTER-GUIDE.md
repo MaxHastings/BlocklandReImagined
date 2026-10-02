@@ -15,14 +15,8 @@ keys are in `PLAYTEST.md`.
 3. Run `Launch.cmd`. A console window opens next to the game; leave it
    open while you play. Nothing else needs installing, and you don't need
    the original Blockland.
-   Or use `BlocklandReImagined.exe` on its own: put it anywhere and run
-   it. It unpacks the game into your user folder
-   (`%LOCALAPPDATA%\BlocklandReImagined`) on first start, which takes a
-   few seconds, and keeps your settings, saves and Add-Ons there. A newer
-   exe updates the game and keeps them.
 4. **"Windows protected your PC"**: the game isn't signed yet. Click **More
-   info**, check the name is `BlocklandReImagined.exe`, `Launch.cmd` or
-   `bri-client.exe`, then **Run
+   info**, check the name is `Launch.cmd` or `bri-client.exe`, then **Run
    anyway**. If Windows blocked the download itself, right-click the zip,
    choose **Properties**, tick **Unblock**, and extract it again.
 
@@ -37,12 +31,12 @@ It also picks Low, Medium or High graphics from your hardware. Change that
 in Options > Graphics. If the game runs slowly, `PLAYTEST.md` has a short
 list of settings to try.
 
-Your settings, saves, screenshots and identity are kept in one folder:
-`%LOCALAPPDATA%\BlocklandReImagined` when you run `BlocklandReImagined.exe`,
-or `user-state` beside the game when you use `Launch.cmd`. The rest of this
-page calls it your state folder. A newer exe keeps it by itself. With
-`Launch.cmd`, extract the newer build to a new folder and copy `user-state`
-across.
+Your settings, saves, screenshots and identity are kept in one folder,
+`%LOCALAPPDATA%\BlocklandReImagined`, apart from the game. The rest of this
+page calls it your state folder. To update, extract the newer zip to a new
+folder and run its `Launch.cmd`: it finds your state folder by itself. Add-Ons
+you dropped in or imported live in the game folder's `content`, so copy
+`content\Add-Ons` and `content\addons` across too.
 
 **Bringing your old Blockland saves.** Open Load Bricks in a game and press
 **Saves Folder**. Copy your old `.bls` saves into that folder, either whole

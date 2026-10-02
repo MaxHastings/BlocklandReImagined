@@ -660,18 +660,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bri-launcher"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bri-crash",
- "serde_json",
- "sha2",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "bri-minigames"
 version = "0.1.0"
 dependencies = [
