@@ -1769,6 +1769,9 @@ impl Session {
             && self.simulation.fits(&world.brick(position, 0))
     }
     /// Remove a brick for good, recording generated voxels as world edits.
+    /// A blast breaks it as `killBrick` does; `remove_brick` deletes it
+    /// silently, as `%brick.delete()` did, so a rule that splits or merges
+    /// bricks (Trench Digging's dirt) swaps them without breaking any.
     fn package_remove_brick(
         &mut self,
         package: &str,
@@ -1816,7 +1819,10 @@ impl Session {
             administrator: true,
             ..Default::default()
         };
-        self.kill_one_brick(&admin, brick, blast)?;
+        match blast {
+            Some(blast) => self.kill_one_brick(&admin, brick, Some(blast))?,
+            None => self.delete_one_brick(&admin, brick)?,
+        }
         self.forget_voxel(brick);
         Ok(())
     }

@@ -88,10 +88,16 @@ impl Session {
         blast: Option<BrickBlast>,
     ) -> Result<()> {
         let cue = self.brick_kill_cue(brick, blast)?;
+        self.delete_one_brick(actor, brick)?;
+        self.emit_brick_kill(cue);
+        Ok(())
+    }
+    /// Torque's `%brick.delete()`: the brick is simply gone, with no
+    /// debris and no break sound, as when a rule swaps bricks for others.
+    pub(super) fn delete_one_brick(&mut self, actor: &Actor, brick: BrickId) -> Result<()> {
         self.simulation.remove(actor, brick)?;
         self.dirty.insert(brick);
         self.events.respawns.remove(&brick);
-        self.emit_brick_kill(cue);
         Ok(())
     }
     /// [`Self::kill_one_brick`] for many bricks, as `killBrick` breaks
