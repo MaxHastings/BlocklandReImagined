@@ -200,5 +200,10 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
         present.len(),
         failures.join("\n")
     );
+    eprintln!(
+        "save corpus coverage: {}/{}",
+        present.len(),
+        corpus.save.len()
+    );
     Ok(())
 }

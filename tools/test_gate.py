@@ -1,0 +1,50 @@
+"""Regression tests for release-gate outcomes; no content or compiler needed."""
+import unittest
+
+import gate
+
+
+class SaveCorpusResult(unittest.TestCase):
+    passed = f"test {gate.SAVE_CORPUS_TEST} ... ok\n"
+
+    def test_skipped_corpus_does_not_claim_verified_saves(self):
+        ok, summary = gate.save_corpus_result(
+            "skipped: no saves folder; set BRI_SAVES\n" + self.passed, 0)
+        self.assertTrue(ok)  # Existing optional-corpus policy stays unchanged.
+        self.assertEqual(summary, "SKIPPED: no saves folder; set BRI_SAVES")
+
+    def test_all_checked_saves_are_reported(self):
+        self.assertEqual(gate.save_corpus_result(
+            "save corpus coverage: 23/23\n" + self.passed, 0),
+            (True, "ok (coverage: 23/23 saves)"))
+
+    def test_missing_saves_are_visible_as_partial_coverage(self):
+        self.assertEqual(gate.save_corpus_result(
+            "missing from the saves folder, not checked: Bedroom/Violin.bls\n"
+            "save corpus coverage: 22/23\n" + self.passed, 0),
+            (True, "ok (partial coverage: 22/23 saves)"))
+
+    def test_error_takes_priority_over_skip_or_coverage(self):
+        for report in ("skipped: no saves folder\n", "save corpus coverage: 23/23\n"):
+            with self.subTest(report=report):
+                self.assertEqual(gate.save_corpus_result(report + self.passed, 1),
+                                 (False, "FAILED"))
+
+    def test_no_named_test_cannot_pass(self):
+        self.assertEqual(gate.save_corpus_result("running 0 tests\n", 0),
+                         (False, "FAILED"))
+
+    def test_inconsistent_coverage_cannot_pass(self):
+        for coverage in ("0/23", "24/23", "0/0"):
+            with self.subTest(coverage=coverage):
+                self.assertEqual(gate.save_corpus_result(
+                    f"save corpus coverage: {coverage}\n" + self.passed, 0),
+                    (False, "FAILED (invalid corpus coverage)"))
+
+    def test_an_unreported_count_is_not_called_complete(self):
+        self.assertEqual(gate.save_corpus_result(self.passed, 0),
+                         (True, "ok (coverage not reported)"))
+
+
+if __name__ == "__main__":
+    unittest.main()

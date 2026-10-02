@@ -41,6 +41,8 @@ jobs:
         run: python tools/gate.py --history-range ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
       - name: Format
         run: cargo fmt --all --check
+      - name: Gate reporting tests
+        run: python tools/test_gate.py
       - name: Build
         run: cargo build --workspace --all-targets --locked
       - name: Clippy
