@@ -172,7 +172,8 @@ impl Cue {
                         bri_weapons::TargetId::Actor(id) => id.0 > 0,
                         bri_weapons::TargetId::Brick(id) | bri_weapons::TargetId::Vehicle(id) =>
                             *id > 0,
-                        bri_weapons::TargetId::Map(_) | bri_weapons::TargetId::Shape(_)
+                        bri_weapons::TargetId::Map(_)
+                        | bri_weapons::TargetId::Shape(_)
                         | bri_weapons::TargetId::Entity(_) => true,
                     }
                     && image.as_ref().is_none_or(|s| !s.is_empty() && text(s))
@@ -228,7 +229,10 @@ impl Cue {
                 "Invalid vehicle effect cue"
             ),
             CueKind::Explosion { radius, source } => ensure!(
-                radius.is_finite() && (0.0..=64.0).contains(radius) && !source.is_empty() && text(source),
+                radius.is_finite()
+                    && (0.0..=64.0).contains(radius)
+                    && !source.is_empty()
+                    && text(source),
                 "Invalid explosion cue"
             ),
             CueKind::Beam {

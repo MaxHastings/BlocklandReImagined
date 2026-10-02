@@ -114,7 +114,9 @@ pub fn disconnect_message(
     now: u64,
 ) -> String {
     match reason {
-        bri_admin::DisconnectReason::Kicked => "You were kicked from the server by an admin.".into(),
+        bri_admin::DisconnectReason::Kicked => {
+            "You were kicked from the server by an admin.".into()
+        }
         bri_admin::DisconnectReason::FailedPasswords => {
             "You were disconnected after too many wrong admin passwords.".into()
         }
@@ -134,7 +136,13 @@ pub fn disconnect_message(
                 }
             };
             let reason: String = ban
-                .map(|b| b.reason.chars().filter(|c| !c.is_control()).take(120).collect())
+                .map(|b| {
+                    b.reason
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(120)
+                        .collect()
+                })
                 .unwrap_or_default();
             let reason = reason.trim();
             if reason.is_empty() {
@@ -243,7 +251,10 @@ impl AdminRuntime {
             .authority
             .host_authority(Origin::Connection(id))
             .unwrap_or(false);
-        (host || self.authority.role(id) == Some(Role::SuperAdmin), host)
+        (
+            host || self.authority.role(id) == Some(Role::SuperAdmin),
+            host,
+        )
     }
 
     pub(super) fn snapshot(&self, owner: OwnerId) -> Result<AdminSnapshot> {
@@ -511,9 +522,8 @@ impl AdminRuntime {
                             _ => None,
                         };
                         if let Some(how) = how {
-                            session.admin_announce(format!(
-                                "\u{E002}{actor_name} has become {how}"
-                            ));
+                            session
+                                .admin_announce(format!("\u{E002}{actor_name} has become {how}"));
                         }
                     }
                     session.set_role(target_owner, role.is_admin())?;
@@ -682,7 +692,9 @@ impl AdminRuntime {
         // reply can fail (a sender who just locked itself out has no
         // snapshot) and must not take the disconnects with it.
         session.admin_disconnects.extend(disconnects);
-        session.admin_disconnect_messages.extend(disconnect_messages);
+        session
+            .admin_disconnect_messages
+            .extend(disconnect_messages);
         let snapshot = self.snapshot(owner)?;
         Ok(AdminCall {
             reply: AdminReply { snapshot, data },
@@ -775,12 +787,21 @@ impl Session {
                 let durable = self.admin.durable();
                 let ban = principal
                     .filter(|_| matches!(error.downcast_ref(), Some(bri_admin::Error::Banned)))
-                    .and_then(|p| durable.bans.iter().find(|b| b.principal == p && b.active(now)));
+                    .and_then(|p| {
+                        durable
+                            .bans
+                            .iter()
+                            .find(|b| b.principal == p && b.active(now))
+                    });
                 match ban {
                     Some(ban) => anyhow::anyhow!(
                         "{}",
-                        disconnect_message(&bri_admin::DisconnectReason::Banned(ban.id), durable, now)
-                            .replacen("You were banned", "You are banned", 1)
+                        disconnect_message(
+                            &bri_admin::DisconnectReason::Banned(ban.id),
+                            durable,
+                            now
+                        )
+                        .replacen("You were banned", "You are banned", 1)
                     ),
                     None => error,
                 }

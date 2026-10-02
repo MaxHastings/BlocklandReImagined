@@ -147,7 +147,12 @@ impl TryFrom<PackageFile> for Package {
 }
 impl From<Package> for PackageFile {
     fn from(package: Package) -> Self {
-        let hat = package.defaults.parts.get("hat").cloned().unwrap_or_default();
+        let hat = package
+            .defaults
+            .parts
+            .get("hat")
+            .cloned()
+            .unwrap_or_default();
         let parts = package
             .defaults
             .parts
@@ -259,8 +264,19 @@ impl Package {
     /// their avatar instead of being refused.
     pub fn repaired(&self, appearance: &Appearance) -> (Appearance, Vec<String>) {
         const COLORS: [&str; 13] = [
-            "head", "torso", "hat", "accent", "pack", "secondpack", "hip", "rarm", "larm",
-            "rhand", "lhand", "rleg", "lleg",
+            "head",
+            "torso",
+            "hat",
+            "accent",
+            "pack",
+            "secondpack",
+            "hip",
+            "rarm",
+            "larm",
+            "rhand",
+            "lhand",
+            "rleg",
+            "lleg",
         ];
         let mut changed = Vec::new();
         let mut fixed = Appearance {
@@ -301,7 +317,9 @@ impl Package {
         }
         for (slot, color) in appearance.colors.iter().take(64) {
             if COLORS.contains(&slot.as_str())
-                && color.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                && color
+                    .iter()
+                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
             {
                 fixed.colors.insert(slot.clone(), *color);
             } else {
@@ -541,8 +559,19 @@ mod tests {
             .map(|(s, v)| (s.to_string(), v.iter().map(|c| c.to_string()).collect()))
             .collect();
         let colors = [
-            "head", "torso", "hat", "accent", "pack", "secondpack", "hip", "rarm", "larm",
-            "rhand", "lhand", "rleg", "lleg",
+            "head",
+            "torso",
+            "hat",
+            "accent",
+            "pack",
+            "secondpack",
+            "hip",
+            "rarm",
+            "larm",
+            "rhand",
+            "lhand",
+            "rleg",
+            "lleg",
         ]
         .iter()
         .map(|s| (s.to_string(), [1.0, 1.0, 0.0, 1.0]))

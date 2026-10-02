@@ -28,15 +28,17 @@ pub fn load_fetched(
     fetched: &[Fetched],
     dropped: &[PackageRef],
 ) -> Result<(Catalog, Vec<PackageRef>)> {
-    let left_out = |id: &str| {
-        fetched.iter().any(|f| f.package.id == id) || dropped.iter().any(|d| d.id == id)
-    };
+    let left_out =
+        |id: &str| fetched.iter().any(|f| f.package.id == id) || dropped.iter().any(|d| d.id == id);
     let mut dirs = Vec::new();
     for entry in &set.packages {
         if entry.role.is_some() || left_out(&entry.id) {
             continue;
         }
-        dirs.push((bri_package::packages::package_dir(root, entry)?, entry.clone()));
+        dirs.push((
+            bri_package::packages::package_dir(root, entry)?,
+            entry.clone(),
+        ));
     }
     for f in fetched {
         let differs = !local.contains(&f.package);
@@ -74,7 +76,10 @@ pub fn load_fetched(
         }
     }
     for id in needs {
-        if dirs.iter().any(|(_, e): &(std::path::PathBuf, PackageEntry)| e.id == id) {
+        if dirs
+            .iter()
+            .any(|(_, e): &(std::path::PathBuf, PackageEntry)| e.id == id)
+        {
             continue;
         }
         dirs.push((
@@ -95,11 +100,8 @@ pub fn load_fetched(
     for problem in &problems {
         bri_console::warn(format!("Add-On left out on this PC: {problem}"));
     }
-    let mut packages: Vec<PackageRef> = local
-        .iter()
-        .filter(|p| !left_out(&p.id))
-        .cloned()
-        .collect();
+    let mut packages: Vec<PackageRef> =
+        local.iter().filter(|p| !left_out(&p.id)).cloned().collect();
     packages.extend(fetched.iter().map(|f| f.package.clone()));
     Ok((catalog, packages))
 }
@@ -223,11 +225,17 @@ mod tests {
     fn different_base_content_is_refused_not_pretended() {
         let root = scratch("base");
         let other_base = package(&root, "v20-bricks", false);
-        let error =
-            load_fetched(&root, &PackageSet {
+        let error = load_fetched(
+            &root,
+            &PackageSet {
                 schema_version: 1,
                 packages: Vec::new(),
-            }, &[], &[other_base], &[]).unwrap_err();
+            },
+            &[],
+            &[other_base],
+            &[],
+        )
+        .unwrap_err();
         assert!(
             format!("{error:#}").contains("base game content"),
             "{error:#}"

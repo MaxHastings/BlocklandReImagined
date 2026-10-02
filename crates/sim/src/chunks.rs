@@ -212,7 +212,10 @@ impl Chunks {
     }
     /// Boxes of collision rebuilt since the last take (old and new shapes).
     pub fn take_changed(&mut self) -> Vec<([f32; 3], [f32; 3])> {
-        self.changed.as_mut().map(std::mem::take).unwrap_or_default()
+        self.changed
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
     /// Chunks waiting for `flush`.
     pub fn is_dirty(&self) -> bool {

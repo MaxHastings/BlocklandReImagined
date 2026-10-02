@@ -68,7 +68,10 @@ fn expand(bytes: &[u8], limit: u64) -> Result<Vec<u8>> {
     let mut decoder = zstd::stream::read::Decoder::new(bytes)?;
     decoder.window_log_max(27)?;
     decoder.take(limit + 1).read_to_end(&mut out)?;
-    ensure!(out.len() as u64 <= limit, "Native build exceeds storage limit");
+    ensure!(
+        out.len() as u64 <= limit,
+        "Native build exceeds storage limit"
+    );
     Ok(out)
 }
 /// The compressed header and bricks of a binary save.
@@ -123,15 +126,25 @@ pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
         let head = head(header)?;
         let body: FileBricks = rmp_serde::from_slice(&expand(body, MAX_BUILD_BYTES)?)?;
         let mut world = head.world;
-        for (id, brick) in body.bricks.unpack(crate::MAX_BRICKS).map_err(anyhow::Error::msg)? {
+        for (id, brick) in body
+            .bricks
+            .unpack(crate::MAX_BRICKS)
+            .map_err(anyhow::Error::msg)?
+        {
             let brick = brick.context("Removal in a native build")?;
             ensure!(
                 world.bricks.insert(id, brick).is_none(),
                 "Repeated brick in a native build"
             );
         }
-        for (_, brick) in body.unloaded.unpack(crate::MAX_BRICKS).map_err(anyhow::Error::msg)? {
-            world.unloaded.push(brick.context("Removal in a native build")?);
+        for (_, brick) in body
+            .unloaded
+            .unpack(crate::MAX_BRICKS)
+            .map_err(anyhow::Error::msg)?
+        {
+            world
+                .unloaded
+                .push(brick.context("Removal in a native build")?);
         }
         ensure!(
             world.bricks.len() as u64 == head.bricks,
@@ -550,7 +563,11 @@ mod minigame_tests {
         let mut world = World::new("games".into(), "map/test".into(), vec![[1.0; 4]]);
         world.bricks.insert(
             1,
-            Brick::new(crate::ContentRef::Resolved("brick/test".into()), [0.0; 3], 0),
+            Brick::new(
+                crate::ContentRef::Resolved("brick/test".into()),
+                [0.0; 3],
+                0,
+            ),
         );
         world.next_brick_id = 2;
         SavedBuild::new(world)

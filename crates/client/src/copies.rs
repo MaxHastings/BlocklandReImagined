@@ -79,7 +79,8 @@ fn save(folder: &Path, name: &str, copy: &SavedCopy, overwrite: bool) -> Result<
     }
     std::fs::create_dir_all(folder)?;
     // The same name in other case is the same copy.
-    let path = find(folder, name, NATIVE).unwrap_or_else(|| folder.join(format!("{name}.{NATIVE}")));
+    let path =
+        find(folder, name, NATIVE).unwrap_or_else(|| folder.join(format!("{name}.{NATIVE}")));
     let partial = path.with_extension("json.partial");
     std::fs::write(&partial, serde_json::to_vec(copy)?)?;
     std::fs::rename(&partial, &path)?;
@@ -121,8 +122,8 @@ fn list(folder: &Path, filter: &str) -> Result<Vec<String>> {
 
 fn load(files: &CopyFiles, name: &str) -> Result<Option<LoadedCopy>> {
     if let Some(path) = find(&files.own, name, NATIVE) {
-        let saved: SavedCopy = serde_json::from_slice(&read(&path)?)
-            .with_context(|| path.display().to_string())?;
+        let saved: SavedCopy =
+            serde_json::from_slice(&read(&path)?).with_context(|| path.display().to_string())?;
         saved.validate()?;
         return Ok(Some(LoadedCopy::Saved(saved)));
     }
@@ -293,8 +294,7 @@ mod tests {
         }
         let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"));
         old.set_converter(crate::old_saves::Converter::bricks_only(
-            serde_json::from_value(serde_json::json!({"schema_version": 1, "bricks": []}))
-                .unwrap(),
+            serde_json::from_value(serde_json::json!({"schema_version": 1, "bricks": []})).unwrap(),
             "a",
         ));
         let files = CopyFiles::new(old);

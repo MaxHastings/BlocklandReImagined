@@ -238,7 +238,9 @@ impl BoxScan {
     }
     /// How far through the box's buckets, in percent.
     pub fn searched(&self) -> usize {
-        (self.next * 100).checked_div(self.keys.len()).unwrap_or(100)
+        (self.next * 100)
+            .checked_div(self.keys.len())
+            .unwrap_or(100)
     }
     /// Look through the box's buckets as far as `budget` allows
     /// ([`work`]); true once the box is done or the limit passed.
@@ -288,9 +290,7 @@ impl BoxScan {
                     continue;
                 }
                 let max = b.max();
-                if self.limited
-                    && !(0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
-                {
+                if self.limited && !(0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a]) {
                     continue;
                 }
                 if !admit(id, &world.bricks[&id]) {

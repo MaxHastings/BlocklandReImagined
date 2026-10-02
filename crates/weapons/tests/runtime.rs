@@ -1424,11 +1424,22 @@ fn a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in() {
     let mut pack = empty();
     pack.images.insert(
         image.into(),
-        Image { id: image.into(), name: "CanImage".into(), paint_tint: true, ..Default::default() },
+        Image {
+            id: image.into(),
+            name: "CanImage".into(),
+            paint_tint: true,
+            ..Default::default()
+        },
     );
     pack.items.insert(
         item.into(),
-        Item { id: item.into(), name: "CanItem".into(), ui_name: "Can".into(), image: image.into(), ..Default::default() },
+        Item {
+            id: item.into(),
+            name: "CanItem".into(),
+            ui_name: "Can".into(),
+            image: image.into(),
+            ..Default::default()
+        },
     );
     let mut w = WeaponsWorld::new(pack).unwrap();
     let actor = ActorId(3);
@@ -1439,8 +1450,5 @@ fn a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in() {
     w.drop_item(actor, slot).unwrap();
     w.drop_item(actor, slot + 1).unwrap();
     let paints: Vec<_> = w.drops().map(|d| (d.item.as_str(), d.paint)).collect();
-    assert_eq!(
-        paints,
-        [(item, Some(4)), (CORE_TOOLS[0], None)]
-    );
+    assert_eq!(paints, [(item, Some(4)), (CORE_TOOLS[0], None)]);
 }

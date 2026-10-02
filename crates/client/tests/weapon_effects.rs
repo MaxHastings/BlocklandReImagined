@@ -159,7 +159,7 @@ fn view() -> WeaponView {
             heading: None,
             bounces: 0,
             spawned: 0,
-id: 1,
+            id: 1,
             definition: "projectile".into(),
             source: ActorId(1),
             position: Vec3::ZERO,
@@ -676,13 +676,26 @@ fn an_add_on_particle_draws_an_interface_picture() -> Result<()> {
     let fx = WeaponEffects::with_textures(base, Arc::new(pack), EffectsLimits::default(), |k| {
         interface.get(k)
     })?;
-    assert!(fx.resolves("kit:emitter/icon"), "{:?}", fx.diagnostics.messages);
     assert!(
-        !fx.diagnostics.messages.iter().any(|m| m.contains("draws nothing")),
+        fx.resolves("kit:emitter/icon"),
         "{:?}",
         fx.diagnostics.messages
     );
-    let texture = fx.world().pack().textures.iter().find(|t| t.id == named).unwrap();
+    assert!(
+        !fx.diagnostics
+            .messages
+            .iter()
+            .any(|m| m.contains("draws nothing")),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    let texture = fx
+        .world()
+        .pack()
+        .textures
+        .iter()
+        .find(|t| t.id == named)
+        .unwrap();
     assert_eq!((texture.width, texture.height), (4, 2));
     Ok(())
 }
@@ -769,7 +782,9 @@ fn a_trail_carried_through_a_portal_does_not_streak_between_the_two() -> Result<
     assert!(particles.iter().any(|p| p.position.x < 0.5));
     assert!(particles.iter().any(|p| p.position.x > 20.5));
     assert!(
-        particles.iter().all(|p| p.position.x < 1.0 || p.position.x > 20.0),
+        particles
+            .iter()
+            .all(|p| p.position.x < 1.0 || p.position.x > 20.0),
         "streaked between the portals"
     );
     Ok(())
@@ -808,7 +823,9 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         ..Default::default()
     };
     let at = Vec3::new(2., 1., 0.);
-    fx.sync_image_lights(&worn(Some(1)), |owner, hand| (owner == 7 && hand == 3).then_some(at))?;
+    fx.sync_image_lights(&worn(Some(1)), |owner, hand| {
+        (owner == 7 && hand == 3).then_some(at)
+    })?;
     fx.advance(0.01, Vec3::ZERO, pose)?;
     let lights = fx.world().snapshot(&camera()).lights;
     let [light] = &lights[..] else {

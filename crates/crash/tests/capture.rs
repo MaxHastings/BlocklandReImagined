@@ -53,7 +53,10 @@ fn a_panic_leaves_a_report_with_backtrace_and_the_session_log() {
     let reports = files(dir.path(), "crash-", ".txt");
     assert_eq!(reports.len(), 1, "{}", String::from_utf8_lossy(&out.stderr));
     let report = fs::read_to_string(&reports[0]).unwrap();
-    assert!(report.contains("message: deliberate test panic"), "{report}");
+    assert!(
+        report.contains("message: deliberate test panic"),
+        "{report}"
+    );
     assert!(report.contains("backtrace:"));
     assert!(report.contains("capture.rs"), "panic location recorded");
     let sessions = files(dir.path(), "session-", ".log");
@@ -75,5 +78,8 @@ fn a_native_crash_leaves_a_minidump_and_a_report() {
     assert!(fs::metadata(&dumps[0]).unwrap().len() > 1024);
     let report = fs::read_to_string(dumps[0].with_extension("txt")).unwrap();
     assert!(report.contains("exception: 0xC0000005"), "{report}");
-    assert!(report.contains("line before the crash"), "session tail included");
+    assert!(
+        report.contains("line before the crash"),
+        "session tail included"
+    );
 }

@@ -80,7 +80,10 @@ fn a_rope_swings_its_player_like_a_pendulum() {
     assert!((anchor.y - length - lowest).abs() < 0.8, "lowest {lowest}");
     // ...about as fast as falling that far (v20's air drag takes a little)...
     let free_fall = (2.0 * tuning.gravity * length).sqrt();
-    assert!(fastest > free_fall * 0.8 && fastest < free_fall * 1.1, "{fastest} vs {free_fall}");
+    assert!(
+        fastest > free_fall * 0.8 && fastest < free_fall * 1.1,
+        "{fastest} vs {free_fall}"
+    );
     // ...and up the other side, most of the way to level.
     assert!(far_side < -length * 0.75, "reached {far_side}");
     assert!(p.state().tether.is_some());
@@ -120,7 +123,11 @@ fn reeling_in_lifts_a_player_off_the_ground_and_reeling_out_lowers_them() {
     let t = p.state().tether.unwrap();
     assert_eq!(t.length, 4.0);
     assert!(!p.state().grounded);
-    assert!(grip(&p).distance(anchor) < 4.5, "{}", grip(&p).distance(anchor));
+    assert!(
+        grip(&p).distance(anchor) < 4.5,
+        "{}",
+        grip(&p).distance(anchor)
+    );
     // Paid out again, the player comes back down to the floor.
     let mut tether = t;
     tether.target = 40.0;
@@ -144,7 +151,11 @@ fn a_rope_is_a_leash_on_the_ground() {
     };
     step(&mut p, &mut world, forward, 600);
     let flat = Vec3::from(p.state().feet) - (anchor - Vec3::Y * anchor.y);
-    assert!(flat.length() < 6.5, "walked {} from the anchor", flat.length());
+    assert!(
+        flat.length() < 6.5,
+        "walked {} from the anchor",
+        flat.length()
+    );
 }
 
 #[test]
@@ -197,7 +208,10 @@ fn a_rope_breaks_when_its_player_is_carried_far_past_it_and_on_teleport() {
     step(&mut p, &mut world, MoveInput::default(), 4);
     assert!(p.state().tether.is_none(), "stretched past breaking");
     assert!(p.set_tether(Some(rope(anchor, 0.2))).is_err());
-    assert!(p.set_tether(Some(rope(Vec3::splat(f32::NAN), 5.0))).is_err());
+    assert!(
+        p.set_tether(Some(rope(Vec3::splat(f32::NAN), 5.0)))
+            .is_err()
+    );
 }
 
 #[test]
@@ -253,7 +267,11 @@ fn the_winch_keys_reel_in_and_out_and_stop_when_let_go() {
     let reeled = length(&p);
     assert!(reeled < 6.0, "jump reels in: {reeled}");
     step(&mut p, &mut world, MoveInput::default(), 120);
-    assert!((length(&p) - reeled).abs() < 0.5, "let go, it stops: {} vs {reeled}", length(&p));
+    assert!(
+        (length(&p) - reeled).abs() < 0.5,
+        "let go, it stops: {} vs {reeled}",
+        length(&p)
+    );
     assert!(stretch(&p).abs() < 0.3, "hanging on it: {}", stretch(&p));
     let crouch = MoveInput {
         crouch: true,
@@ -264,7 +282,11 @@ fn the_winch_keys_reel_in_and_out_and_stop_when_let_go() {
     let paid = length(&p);
     assert!(paid > reeled + 8.0, "crouch lets out: {paid}");
     step(&mut p, &mut world, MoveInput::default(), 120);
-    assert!((length(&p) - paid).abs() < 0.5, "and stops: {} vs {paid}", length(&p));
+    assert!(
+        (length(&p) - paid).abs() < 0.5,
+        "and stops: {} vs {paid}",
+        length(&p)
+    );
     // Held all the way, the keys stop at their ends.
     step(&mut p, &mut world, crouch, 600);
     assert_eq!(length(&p), 30.0);
@@ -283,7 +305,10 @@ fn a_rope_tied_to_something_moving_carries_its_player_along() {
     p.set_tether(Some(tether)).unwrap();
     step(&mut p, &mut world, MoveInput::default(), 360);
     let moved = Vec3::from(p.state().tether.unwrap().anchor);
-    assert!((moved.x - anchor.x - 18.0).abs() < 0.5, "the anchor drifts on: {moved}");
+    assert!(
+        (moved.x - anchor.x - 18.0).abs() < 0.5,
+        "the anchor drifts on: {moved}"
+    );
     assert!(grip(&p).distance(moved) < 5.3, "and the player comes along");
     assert!(p.state().feet[0] > 10.0, "{:?}", p.state().feet);
 }
@@ -312,7 +337,10 @@ fn a_hard_pull_arrives_gently_instead_of_flinging_its_player_on() {
     }
     assert!(fastest > 25.0, "a hard pull: {fastest}");
     assert!(arriving < 15.0, "slowing into the last units: {arriving}");
-    assert!(nearest > 1.0, "never flung past the end of the rope: {nearest}");
+    assert!(
+        nearest > 1.0,
+        "never flung past the end of the rope: {nearest}"
+    );
     assert!((grip(&p).distance(anchor) - 2.0).abs() < 0.5);
 }
 

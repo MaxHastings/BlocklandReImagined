@@ -271,8 +271,10 @@ impl AddOns {
                 .set_bool(n, row.as_ref().is_some_and(|r| r.enabled));
             self.view
                 .set_active(n, row.as_ref().is_some_and(|r| !r.locked));
-            self.view
-                .set_visible(n, row.as_ref().is_some_and(|r| !r.importable && !r.importing));
+            self.view.set_visible(
+                n,
+                row.as_ref().is_some_and(|r| !r.importable && !r.importing),
+            );
         }
         if let Some(n) = self.view.id(IMPORT) {
             self.view
@@ -1151,7 +1153,10 @@ mod tests {
         );
         assert_eq!(ui.top_id(), ScreenId::MainMenu);
         // Like v20, Add-Ons is reached from Start Game, not the main menu.
-        assert!(ui.control_center(ScreenId::MainMenu, "MM_AddOnsButton").is_none());
+        assert!(
+            ui.control_center(ScreenId::MainMenu, "MM_AddOnsButton")
+                .is_none()
+        );
     }
 
     #[test]

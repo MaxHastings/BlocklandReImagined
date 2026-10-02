@@ -25,7 +25,11 @@ pub fn hit_region(player: &Player, point: [f32; 3]) -> &'static str {
 /// [`hit_region`] for a box from `bottom` to `top`.
 pub fn region_in(bottom: f32, top: f32, y: f32) -> &'static str {
     let height = top - bottom;
-    let up = if height > 0.0 { (y - bottom) / height } else { 0.0 };
+    let up = if height > 0.0 {
+        (y - bottom) / height
+    } else {
+        0.0
+    };
     if up > HEAD_FRACTION {
         "head"
     } else if up > TORSO_FRACTION {
@@ -50,6 +54,10 @@ mod region_tests {
         assert_eq!(region_in(bottom, top, 10.0 + 2.65 * 0.54), "legs");
         assert_eq!(region_in(bottom, top, 9.0), "legs", "below the feet");
         assert_eq!(region_in(bottom, top, 20.0), "head", "above the head");
-        assert_eq!(region_in(bottom, bottom, bottom), "legs", "a flat box, as Torque's zero height");
+        assert_eq!(
+            region_in(bottom, bottom, bottom),
+            "legs",
+            "a flat box, as Torque's zero height"
+        );
     }
 }

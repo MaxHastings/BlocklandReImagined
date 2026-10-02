@@ -52,7 +52,12 @@ impl SelectWork {
         package: &str,
         hold: CopyHold,
     ) -> Result<Self> {
-        let actor = s.peers.get(&owner).context("Unknown connection")?.actor.clone();
+        let actor = s
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .actor
+            .clone();
         Ok(Self {
             finding,
             actor,
@@ -107,7 +112,17 @@ impl SelectWork {
             limited: reach.limited,
         };
         let scan = StackScan::new(&s.simulation, brick, reach, limit)?;
-        Self::new(s, owner, Finding::Stack(scan), limit, rule, tool, package, hold).map(Ok)
+        Self::new(
+            s,
+            owner,
+            Finding::Stack(scan),
+            limit,
+            rule,
+            tool,
+            package,
+            hold,
+        )
+        .map(Ok)
     }
 
     /// The bricks in the box `min` to `max` ([`Session::copy_box`]).

@@ -539,29 +539,33 @@ impl Game {
 /// The body animations played on `owner` since the last look, as
 /// `(ticks after the first, thread, sequence)`.
 fn flinches(g: &mut Game, owner: OwnerId) -> Vec<(u64, u8, String)> {
-    let cues: Vec<_> = g
-        .s
-        .take_cues()
-        .into_iter()
-        .filter_map(|c| match c.kind {
-            bri_sim::presentation::CueKind::WeaponAnimation {
-                actor,
-                thread,
-                sequence,
-                image_hand: None,
-            } if actor == owner => Some((c.tick, thread, sequence)),
-            _ => None,
-        })
-        .collect();
+    let cues: Vec<_> =
+        g.s.take_cues()
+            .into_iter()
+            .filter_map(|c| match c.kind {
+                bri_sim::presentation::CueKind::WeaponAnimation {
+                    actor,
+                    thread,
+                    sequence,
+                    image_hand: None,
+                } if actor == owner => Some((c.tick, thread, sequence)),
+                _ => None,
+            })
+            .collect();
     let first = cues.first().map_or(0, |c| c.0);
     cues.into_iter()
         .map(|(tick, thread, sequence)| (tick - first, thread, sequence))
         .collect()
 }
 fn flinch() -> Vec<(u64, u8, String)> {
-    [(0, 0, "jump"), (0, 2, "jump"), (6, 0, "plant"), (6, 2, "plant")]
-        .map(|(t, thread, s)| (t, thread, s.to_string()))
-        .into()
+    [
+        (0, 0, "jump"),
+        (0, 2, "jump"),
+        (6, 0, "plant"),
+        (6, 2, "plant"),
+    ]
+    .map(|(t, thread, s)| (t, thread, s.to_string()))
+    .into()
 }
 
 #[test]
@@ -802,7 +806,11 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     let before = g.feet(b);
     g.shoot_at(a, b, 1.2);
     assert!((g.health(b) - 55.0).abs() < 0.5, "{}", g.health(b));
-    assert!((g.feet(b) - before).length() > 0.1, "{before} {}", g.feet(b));
+    assert!(
+        (g.feet(b) - before).length() > 0.1,
+        "{before} {}",
+        g.feet(b)
+    );
 }
 
 /// Without Emote_Critical installed, ModernWarbattles still turns on (the
@@ -824,7 +832,11 @@ fn without_the_critical_hit_emote_it_runs_with_no_crits() {
     let before = g.feet(b);
     g.shoot_at(a, b, 1.2);
     assert!((g.health(b) - 85.0).abs() < 0.5, "{}", g.health(b));
-    assert!((g.feet(b) - before).length() < 0.01, "{before} {}", g.feet(b));
+    assert!(
+        (g.feet(b) - before).length() < 0.01,
+        "{before} {}",
+        g.feet(b)
+    );
 }
 
 /// With the Critical Hit Emote's stand-in imported and on, the revolver's
@@ -851,20 +863,36 @@ fn crits_play_with_the_critical_hit_emote() {
         "{:?}",
         critical.unsupported
     );
-    assert!(effects["effects"]["emitters"].as_array().is_some_and(|e| e.len() == 1), "{effects}");
+    assert!(
+        effects["effects"]["emitters"]
+            .as_array()
+            .is_some_and(|e| e.len() == 1),
+        "{effects}"
+    );
     let rules: Value = serde_json::from_slice(
         &std::fs::read(dir.0.join(format!("addons/{NS}-rules/package.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(rules["dependencies"], json!({ NS: "=1.0.0" }));
-    assert_eq!(rules["optional_dependencies"], json!({ "emote_critical": "*" }));
+    assert_eq!(
+        rules["optional_dependencies"],
+        json!({ "emote_critical": "*" })
+    );
     assert_eq!(rules["companions"], json!(["emote_critical"]));
     // Turning ModernWarbattles on turns its rules and Emote_Critical on.
     let library = bri_package::library::Library::scan(&dir.0).unwrap();
     let plan = library.plan(NS, true);
     assert!(plan.refused.is_empty(), "{:?}", plan.refused);
-    assert!(plan.also.iter().any(|id| id == "emote_critical"), "{:?}", plan.also);
-    assert!(plan.also.contains(&format!("{NS}-rules")), "{:?}", plan.also);
+    assert!(
+        plan.also.iter().any(|id| id == "emote_critical"),
+        "{:?}",
+        plan.also
+    );
+    assert!(
+        plan.also.contains(&format!("{NS}-rules")),
+        "{:?}",
+        plan.also
+    );
 
     let mut g = Game::new(&dir.0, &out);
     let revolver = format!("{NS}:weapon/revolveritem");
@@ -874,7 +902,12 @@ fn crits_play_with_the_critical_hit_emote() {
     g.s.take_private_notices();
     let before = g.feet(b);
     g.shoot_at(a, b, 1.2);
-    assert!((g.health(b) - 55.0).abs() < 0.5, "{} {:?}", g.health(b), g.s.package_diagnostics());
+    assert!(
+        (g.health(b) - 55.0).abs() < 0.5,
+        "{} {:?}",
+        g.health(b),
+        g.s.package_diagnostics()
+    );
     assert!(g.feet(b).z < before.z - 0.05, "{before} {}", g.feet(b));
     let cues = g.s.take_cues();
     assert!(
@@ -895,7 +928,10 @@ fn crits_play_with_the_critical_hit_emote() {
             .iter()
             .any(|(o, n)| *o == who && matches!(n, Notice::Sound(p) if p == sound))
     };
-    assert!(heard(b, "emote_critical:sound/critrecievesound"), "{notices:?}");
+    assert!(
+        heard(b, "emote_critical:sound/critrecievesound"),
+        "{notices:?}"
+    );
     assert!(heard(a, "emote_critical:sound/crithitsound"), "{notices:?}");
     g.shoot_at(a, b, 1.2);
     g.shoot_at(a, b, 1.2);
@@ -1005,7 +1041,11 @@ fn glass_release_guns_shoot_like_their_scripts() {
     assert_eq!((rested.after_ticks, rested.spread), (48, 0.0001));
     // The reload's arm move, and the moves and sounds it timed by hand.
     let sound = "weapon_adventurepack:sound/standinfiresound";
-    let reload = pistol.states.iter().find(|s| s.script == "onReload").unwrap();
+    let reload = pistol
+        .states
+        .iter()
+        .find(|s| s.script == "onReload")
+        .unwrap();
     assert_eq!(reload.arm, "shiftup");
     assert_eq!(
         reload.cues,
@@ -1036,7 +1076,10 @@ fn glass_release_guns_shoot_like_their_scripts() {
         .iter()
         .find(|s| s.script == "onReloadSingle")
         .unwrap();
-    assert_eq!((load.arm.as_str(), load.sound.as_str()), ("shiftright", sound));
+    assert_eq!(
+        (load.arm.as_str(), load.sound.as_str()),
+        ("shiftright", sound)
+    );
     assert_eq!(
         load.cues,
         [
@@ -1175,15 +1218,14 @@ fn a_grenade_cooks_in_the_hand() {
     g.s.take_private_notices();
     g.cmd(a, Command::WeaponTrigger { down: true });
     g.steps(240);
-    let prints: Vec<String> = g
-        .s
-        .take_private_notices()
-        .into_iter()
-        .filter_map(|(o, n)| match n {
-            Notice::Center { text, .. } if o == a => Some(text),
-            _ => None,
-        })
-        .collect();
+    let prints: Vec<String> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Center { text, .. } if o == a => Some(text),
+                _ => None,
+            })
+            .collect();
     let line = |left: &str| format!("\u{E005}{left}\u{E006} cooking time left.");
     assert_eq!(prints.first(), Some(&line("4 Seconds")), "{prints:?}");
     assert_eq!(prints.get(1), Some(&line("3.9 seconds")), "{prints:?}");
@@ -1208,7 +1250,13 @@ fn a_grenade_cooks_in_the_hand() {
     g.cmd(a, Command::WeaponTrigger { down: true });
     g.steps(485);
     assert!(live(&g, "shrapgrenclusterprojectile") > 0);
-    let held = g.s.snapshot().weapons.images.get(&a).cloned().unwrap_or_default();
+    let held =
+        g.s.snapshot()
+            .weapons
+            .images
+            .get(&a)
+            .cloned()
+            .unwrap_or_default();
     assert!(held.is_empty(), "{held:?}");
     assert!(
         g.s.tool_inventories()[&a]

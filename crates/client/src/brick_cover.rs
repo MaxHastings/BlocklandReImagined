@@ -37,7 +37,11 @@ fn mesh_face(brick: &Brick, (axis, positive): Side) -> usize {
     d[axis] = if positive { 1.0 } else { -1.0 };
     let local = brick.transform().inverse().transform_vector3(d);
     (0..6)
-        .max_by(|a, b| MESH_FACES[*a].dot(local).total_cmp(&MESH_FACES[*b].dot(local)))
+        .max_by(|a, b| {
+            MESH_FACES[*a]
+                .dot(local)
+                .total_cmp(&MESH_FACES[*b].dot(local))
+        })
         .unwrap_or(0)
 }
 pub fn mesh<'a>(brick: &Brick, meshes: &'a BTreeMap<String, BrickMesh>) -> Option<&'a BrickMesh> {

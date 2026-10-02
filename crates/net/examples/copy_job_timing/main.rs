@@ -132,7 +132,10 @@ fn packages(sim: &Path, here: &Path, root: &Path) -> Result<Arc<bri_package_runt
     let tool = sim.join("tests/fixtures/duplicators");
     let _ = std::fs::remove_dir_all(root);
     for (from, to) in [
-        (tool.join("advanced-duplicator-tool"), root.join("advanced-duplicator-tool")),
+        (
+            tool.join("advanced-duplicator-tool"),
+            root.join("advanced-duplicator-tool"),
+        ),
         (here.join("copy-timing"), root.join("copy-timing")),
     ] {
         copy_dir(&from, &to)?;
@@ -197,7 +200,8 @@ fn run(side: usize, sim: &Path, here: &Path, root: &Path) -> Result<()> {
         }
     }
     world.next_brick_id = id;
-    let floor = ColliderBuilder::cuboid(1000.0, 0.5, 1000.0).translation(Vector::new(0.0, -0.5, 0.0));
+    let floor =
+        ColliderBuilder::cuboid(1000.0, 0.5, 1000.0).translation(Vector::new(0.0, -0.5, 0.0));
     let mut s = Session::new(Simulation::new(world, testing::definitions(), vec![floor])?);
     s.set_spawn_points(vec![Vec3::new(-4.0, 0.05, -4.0)])?;
     let tool = sim.join("tests/fixtures/duplicators/advanced-duplicator-tool/assets/weapons.json");

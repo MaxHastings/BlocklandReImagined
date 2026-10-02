@@ -20,7 +20,10 @@ impl TrustInvite {
             return;
         };
         let build = invite.level == 1;
-        for (name, text) in [("TI_Name", invite.name.as_str()), ("TI_BL_ID", invite.bl_id.as_str())] {
+        for (name, text) in [
+            ("TI_Name", invite.name.as_str()),
+            ("TI_BL_ID", invite.bl_id.as_str()),
+        ] {
             if let Some(n) = self.view.id(name) {
                 self.view.set_text(n, text);
             }
@@ -78,7 +81,10 @@ impl Screen for TrustInvite {
             core.pop(self.id());
             return;
         };
-        match command_of(&self.view, ev.node).to_ascii_lowercase().as_str() {
+        match command_of(&self.view, ev.node)
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "trustinvitegui.clickaccept();" => answer(core, from, TrustAnswer::Accept),
             "trustinvitegui.clickreject();" => answer(core, from, TrustAnswer::Reject),
             "trustinvitegui.clickignore();" => core.message_yes_no(

@@ -69,9 +69,7 @@ fn brick_below(simulation: &Simulation, x: f32) -> Option<u64> {
         .cast_ray_and_get_normal(&ray, 10.0, true)?;
     let tag = simulation.physics.colliders[handle].user_data;
     if is_chunk(tag) {
-        simulation
-            .chunks()
-            .part_brick(tag, hit.subshape as usize)
+        simulation.chunks().part_brick(tag, hit.subshape as usize)
     } else {
         u64::try_from(tag).ok()
     }

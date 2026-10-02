@@ -204,14 +204,22 @@ impl NativeScreen {
         let y = super::play::chat_bottom(core);
         let w = self.view.node(bx).ctrl.extent[0];
         let placed = |c: &crate::schema::Control| (c.position, c.extent);
-        let before = (placed(&self.view.node(bx).ctrl), placed(&self.view.node(field).ctrl));
+        let before = (
+            placed(&self.view.node(bx).ctrl),
+            placed(&self.view.node(field).ctrl),
+        );
         let nodes = &mut self.view.nodes;
         nodes[bx].ctrl.position[1] = y;
         nodes[bx].ctrl.extent[1] = h;
         nodes[channel].ctrl.extent[1] = h;
         nodes[field].ctrl.position = [x, 0];
         nodes[field].ctrl.extent = [(w - x - 2).max(1), h];
-        if before != (placed(&self.view.node(bx).ctrl), placed(&self.view.node(field).ctrl)) {
+        if before
+            != (
+                placed(&self.view.node(bx).ctrl),
+                placed(&self.view.node(field).ctrl),
+            )
+        {
             self.view.layout(core.logical.0, core.logical.1);
         }
     }
@@ -226,7 +234,10 @@ impl NativeScreen {
         let Some(field) = self.view.id(name) else {
             return;
         };
-        let (parent, y) = (self.view.node(field).parent, self.view.node(field).ctrl.position[1]);
+        let (parent, y) = (
+            self.view.node(field).parent,
+            self.view.node(field).ctrl.position[1],
+        );
         let labels: Vec<_> = self
             .view
             .walk()
@@ -428,7 +439,11 @@ impl NativeScreen {
                 if let Some(n) = self.view.by_command("JoinServerGui.queryWebMaster();") {
                     self.view.set_text(
                         n,
-                        if selected.is_some_and(|s| s.favorite) { "Unfavorite" } else { "Favorite" },
+                        if selected.is_some_and(|s| s.favorite) {
+                            "Unfavorite"
+                        } else {
+                            "Favorite"
+                        },
                     );
                 }
                 self.visible("JS_queryStatus", core.lan_querying);
@@ -456,7 +471,10 @@ impl NativeScreen {
                 {
                     // Players see the map's name, not its content id.
                     let info = core.maps.iter().find(|m| m.id == *map || m.name == *map);
-                    self.set("LOAD_MapName", info.map_or(map.as_str(), |m| m.name.as_str()));
+                    self.set(
+                        "LOAD_MapName",
+                        info.map_or(map.as_str(), |m| m.name.as_str()),
+                    );
                     self.icon("LOAD_MapPicture", preview);
                     self.set(
                         "LOAD_MapDescription",
@@ -889,10 +907,7 @@ impl Screen for NativeScreen {
             | "canvas.popdialog(newmessagehud);" => self.cancel(core),
             "messagecallback(messageboxokdlg,messageboxokdlg.callback);" => self.cancel(core),
             "" => {}
-            _ => core.message_ok(
-                "Interface under construction",
-                "This isn't available yet.",
-            ),
+            _ => core.message_ok("Interface under construction", "This isn't available yet."),
         }
     }
 }
@@ -957,7 +972,12 @@ impl MessageScreen {
         }
         if let Some([yes, no]) = &message.buttons {
             for n in view.walk().collect::<Vec<_>>() {
-                let answer = view.node(n).ctrl.command.as_deref().and_then(message_answer);
+                let answer = view
+                    .node(n)
+                    .ctrl
+                    .command
+                    .as_deref()
+                    .and_then(message_answer);
                 if let Some(answer) = answer {
                     view.set_text(n, if answer { yes } else { no });
                     widen_to_label(&mut view, &core.pack, n);
@@ -969,7 +989,11 @@ impl MessageScreen {
     }
     fn answer(&self, yes: bool, core: &mut Core) {
         core.pop(ScreenId::MessageBox);
-        match if yes { &self.message.on_yes } else { &self.message.on_no } {
+        match if yes {
+            &self.message.on_yes
+        } else {
+            &self.message.on_no
+        } {
             Callback::None => {}
             Callback::Quit => {
                 core.request(UiAction::Quit);
@@ -1014,7 +1038,10 @@ impl MessageScreen {
                 super::trust::answer(core, *from, crate::api::TrustAnswer::Ignore)
             }
             Callback::AddOn { id, enabled } => {
-                core.request(UiAction::SetAddOnEnabled { id: id.clone(), enabled: *enabled });
+                core.request(UiAction::SetAddOnEnabled {
+                    id: id.clone(),
+                    enabled: *enabled,
+                });
             }
             Callback::DefaultAddOns => {
                 core.request(UiAction::DefaultAddOns);
@@ -1031,19 +1058,34 @@ impl MessageScreen {
             }
             Callback::MiniGame { game, operation } => {
                 let valid = match operation {
-                    MiniGameOperation::AcceptInvite | MiniGameOperation::RejectInvite | MiniGameOperation::IgnoreInvite => core.minigames.invitations.iter().any(|i| i.game == *game),
+                    MiniGameOperation::AcceptInvite
+                    | MiniGameOperation::RejectInvite
+                    | MiniGameOperation::IgnoreInvite => {
+                        core.minigames.invitations.iter().any(|i| i.game == *game)
+                    }
                     // The Add-On Settings window ends or resets the game it
                     // edits, which may be another player's.
-                    MiniGameOperation::Reset | MiniGameOperation::End => core.minigames.active_game == Some(*game) || core.minigames.can_manage(*game),
+                    MiniGameOperation::Reset | MiniGameOperation::End => {
+                        core.minigames.active_game == Some(*game)
+                            || core.minigames.can_manage(*game)
+                    }
                     _ => core.minigames.active_game == Some(*game),
                 };
-                if !valid { return; }
+                if !valid {
+                    return;
+                }
                 let action = match operation {
                     MiniGameOperation::Reset => UiAction::ResetMiniGame { game: *game },
                     MiniGameOperation::End => UiAction::EndMiniGame { game: *game },
                     MiniGameOperation::Leave => UiAction::LeaveMiniGame { game: *game },
-                    MiniGameOperation::RejectInvite => UiAction::RejectMiniGameInvite { game: *game, ignore_owner: false },
-                    MiniGameOperation::IgnoreInvite => UiAction::RejectMiniGameInvite { game: *game, ignore_owner: true },
+                    MiniGameOperation::RejectInvite => UiAction::RejectMiniGameInvite {
+                        game: *game,
+                        ignore_owner: false,
+                    },
+                    MiniGameOperation::IgnoreInvite => UiAction::RejectMiniGameInvite {
+                        game: *game,
+                        ignore_owner: true,
+                    },
                     _ => return,
                 };
                 // CreateMiniGameGui::end closes the editor with the request.

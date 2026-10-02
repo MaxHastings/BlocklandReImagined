@@ -262,10 +262,33 @@ pub fn is_pref_global(name: &str) -> bool {
 /// What a look's setting may hold ([`SettingDef::avatar`]): v20's
 /// `$pref::Avatar::*` names.
 pub const AVATAR_KEYS: [&str; 27] = [
-    "Hat", "Accent", "Pack", "SecondPack", "Chest", "Hip", "LArm", "RArm", "LHand", "RHand",
-    "LLeg", "RLeg", "HatColor", "AccentColor", "PackColor", "SecondPackColor", "HeadColor",
-    "TorsoColor", "HipColor", "LArmColor", "RArmColor", "LHandColor", "RHandColor", "LLegColor",
-    "RLegColor", "FaceName", "DecalName",
+    "Hat",
+    "Accent",
+    "Pack",
+    "SecondPack",
+    "Chest",
+    "Hip",
+    "LArm",
+    "RArm",
+    "LHand",
+    "RHand",
+    "LLeg",
+    "RLeg",
+    "HatColor",
+    "AccentColor",
+    "PackColor",
+    "SecondPackColor",
+    "HeadColor",
+    "TorsoColor",
+    "HipColor",
+    "LArmColor",
+    "RArmColor",
+    "LHandColor",
+    "RHandColor",
+    "LLegColor",
+    "RLegColor",
+    "FaceName",
+    "DecalName",
 ];
 
 /// More items for another Add-On's list setting: a game mode joining
@@ -286,9 +309,7 @@ fn ident(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 fn label(s: &str, max: usize, empty: bool) -> bool {
-    (empty || !s.trim().is_empty())
-        && s.chars().count() <= max
-        && !s.chars().any(char::is_control)
+    (empty || !s.trim().is_empty()) && s.chars().count() <= max && !s.chars().any(char::is_control)
 }
 /// `key` or `namespace:key`.
 pub fn is_setting_ref(s: &str) -> bool {
@@ -321,7 +342,9 @@ impl SettingDef {
             ));
         }
         if !label(&self.title, MAX_TITLE, false) {
-            return Err(format!("setting `{what}`: title is 1 to {MAX_TITLE} characters"));
+            return Err(format!(
+                "setting `{what}`: title is 1 to {MAX_TITLE} characters"
+            ));
         }
         if !label(&self.category, MAX_CATEGORY, true) {
             return Err(format!(
@@ -349,7 +372,9 @@ impl SettingDef {
                 extra("items", !self.items.is_empty())?;
                 extra("max_length", self.max_length.is_some())?;
                 let (Some(min), Some(max)) = (self.min, self.max) else {
-                    return Err(format!("setting `{what}`: a whole number needs `min` and `max`"));
+                    return Err(format!(
+                        "setting `{what}`: a whole number needs `min` and `max`"
+                    ));
                 };
                 if min > max || min.abs() > 1_000_000_000 || max.abs() > 1_000_000_000 {
                     return Err(format!(
@@ -402,10 +427,14 @@ impl SettingDef {
             self.check(&self.default, &[])
                 .map_err(|e| format!("setting `{what}`: default: {e}"))?;
         } else if matches!(self.default, SettingValue::Bool(_)) {
-            return Err(format!("setting `{what}`: a list's default is a number or text"));
+            return Err(format!(
+                "setting `{what}`: a list's default is a number or text"
+            ));
         }
         if self.help.len() > MAX_HELP || self.help.chars().any(|c| c.is_control() && c != '\n') {
-            return Err(format!("setting `{what}`: help is at most {MAX_HELP} bytes"));
+            return Err(format!(
+                "setting `{what}`: help is at most {MAX_HELP} bytes"
+            ));
         }
         if let Some(part) = &self.avatar {
             let fits = match part.as_str() {
@@ -433,7 +462,8 @@ impl SettingDef {
             ));
         }
         if let Some(when) = &self.shown_when {
-            when.validate().map_err(|e| format!("setting `{what}`: {e}"))?;
+            when.validate()
+                .map_err(|e| format!("setting `{what}`: {e}"))?;
         }
         Ok(())
     }
@@ -462,7 +492,10 @@ impl SettingDef {
                 if t.chars().count() <= max && !t.chars().any(char::is_control) {
                     Ok(())
                 } else {
-                    Err(format!("{} is at most {max} characters on one line", self.title))
+                    Err(format!(
+                        "{} is at most {max} characters on one line",
+                        self.title
+                    ))
                 }
             }
             (SettingType::PaintColor, SettingValue::Int(n)) => {
@@ -470,7 +503,10 @@ impl SettingDef {
                 if (min..=max).contains(n) {
                     Ok(())
                 } else {
-                    Err(format!("{} is a paint colour from {min} to {max}", self.title))
+                    Err(format!(
+                        "{} is a paint colour from {min} to {max}",
+                        self.title
+                    ))
                 }
             }
             (SettingType::Item | SettingType::PlayerType, SettingValue::Text(t)) => {
@@ -583,7 +619,11 @@ mod tests {
         equip.validate().unwrap();
         assert!(equip.check(&SettingValue::Text(String::new()), &[]).is_ok());
         assert!(equip.check(&SettingValue::Text("a b".into()), &[]).is_err());
-        assert!(equip.check(&SettingValue::Text("x".repeat(129)), &[]).is_err());
+        assert!(
+            equip
+                .check(&SettingValue::Text("x".repeat(129)), &[])
+                .is_err()
+        );
         assert!(equip.check(&SettingValue::Int(1), &[]).is_err());
         let body = def(
             r#"{ "key": "body", "title": "Playertype", "type": "player_type",

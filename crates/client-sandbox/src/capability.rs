@@ -125,9 +125,7 @@ impl Capability {
             Self::InputFocused => "Read your keys while its panel is selected",
             Self::NetMessage => "Talk to its part running on the server",
             Self::WorldRead => "See where players and vehicles are, as your screen shows them",
-            Self::PhysicsLocal => {
-                "Throw its own objects around with physics on your screen only"
-            }
+            Self::PhysicsLocal => "Throw its own objects around with physics on your screen only",
             Self::AvatarPose => "Change how players' bodies move on your screen only",
             Self::NetHttp => {
                 "Load things from the internet, which shows your IP address to those sites"
@@ -159,12 +157,11 @@ pub fn function_capability(name: &str) -> Result<Option<Capability>, UnknownFunc
         "key_down" => Some(Capability::InputFocused),
         "send" | "recv" => Some(Capability::NetMessage),
         "players" | "vehicles" | "entities" | "vehicle_kind" | "archetype_kind" | "image_kind"
-        | "state_num" | "local_player" | "life" | "held"
-        | "image_mesh" | "sight" => Some(Capability::WorldRead),
-        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_get"
-        | "rigid_find" | "rigid_hold" => {
-            Some(Capability::PhysicsLocal)
+        | "state_num" | "local_player" | "life" | "held" | "image_mesh" | "sight" => {
+            Some(Capability::WorldRead)
         }
+        "rigid_create" | "rigid_joint" | "rigid_remove" | "rigid_push" | "rigid_get"
+        | "rigid_find" | "rigid_hold" => Some(Capability::PhysicsLocal),
         "skeleton" | "skeleton_node" | "skeleton_part" | "pose" => Some(Capability::AvatarPose),
         _ => return Err(UnknownFunction),
     })

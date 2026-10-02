@@ -4,11 +4,11 @@
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
 use bri_content::passage::Passages;
-use bri_package::health::{self, Problem};
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
     SourceTransform, StopMode,
 };
+use bri_package::health::{self, Problem};
 use bri_sim::{
     presentation::{Cue, CueKind, MAX_CUES},
     session::WeaponView,
@@ -444,7 +444,11 @@ impl WeaponEffects {
         let mut desired = BTreeMap::new();
         for (owner, images) in &view.images {
             for m in images {
-                if self.weapons.images.get(&m.image).is_some_and(|i| i.light.is_some())
+                if self
+                    .weapons
+                    .images
+                    .get(&m.image)
+                    .is_some_and(|i| i.light.is_some())
                     && let Some(position) = at(*owner, m.hand).filter(|p| p.is_finite())
                 {
                     desired.insert((*owner, m.hand), (m.image.clone(), m.paint, position));
@@ -477,7 +481,10 @@ impl WeaponEffects {
                     .map(|c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.))),
                 ..Default::default()
             };
-            match self.world.start_light(&image_light(&image), transform, options) {
+            match self
+                .world
+                .start_light(&image_light(&image), transform, options)
+            {
                 Ok(handle) => {
                     self.image_lights.insert(key, (image, paint, handle));
                 }
@@ -554,8 +561,7 @@ impl WeaponEffects {
                 Some(sweep) => {
                     sweep.at_anchor = !sweep.at_anchor;
                     let end = if sweep.at_anchor { r.to } else { r.from };
-                    self.world
-                        .update_source(sweep.handle, place(end))?;
+                    self.world.update_source(sweep.handle, place(end))?;
                     self.world.update_options(sweep.handle, options)?;
                 }
                 None => match self.world.start_emitter(&resource, place(r.from), options) {

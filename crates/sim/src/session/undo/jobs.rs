@@ -3,10 +3,10 @@
 //! settings put back. Cancelled part way, what is undone stays undone and
 //! the rest stays on the undo stack.
 use super::*;
+use crate::id_map::IdSet;
 use crate::session::copy_edits::Look;
 use crate::session::copy_jobs::{CopyWork, Ending, Progress};
 use crate::simulation::{spend, work};
-use crate::id_map::IdSet;
 
 /// A big undo done over several ticks: its Add-On hears it is finished.
 fn report_undone(s: &mut Session, owner: OwnerId, by: Option<&str>, bricks: usize) {
@@ -33,8 +33,19 @@ pub(in crate::session) struct UndoGroup {
     first: Option<BrickId>,
 }
 impl UndoGroup {
-    pub fn new(s: &Session, owner: OwnerId, ids: Vec<BrickId>, group: OwnerId, by: Option<String>) -> Result<Self> {
-        let actor = s.peers.get(&owner).context("Unknown connection")?.actor.clone();
+    pub fn new(
+        s: &Session,
+        owner: OwnerId,
+        ids: Vec<BrickId>,
+        group: OwnerId,
+        by: Option<String>,
+    ) -> Result<Self> {
+        let actor = s
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .actor
+            .clone();
         Ok(Self {
             left: ids.len(),
             copy: IdSet::default(),
@@ -94,7 +105,10 @@ impl UndoGroup {
                     && s.simulation.will_cause_chain_kill(id)?
                 {
                     let name = s.brick_group_name(group);
-                    s.center_print(owner, format!("{name} does not trust you enough to do that."));
+                    s.center_print(
+                        owner,
+                        format!("{name} does not trust you enough to do that."),
+                    );
                     continue;
                 }
                 s.tool_kill_brick(owner, id)?;
@@ -195,7 +209,11 @@ impl UndoCut {
         }
     }
     /// Undoing a supercut: `placed` out, then `removed` back.
-    pub fn replaced(removed: Vec<(BrickId, Brick)>, placed: Vec<BrickId>, by: Option<String>) -> Self {
+    pub fn replaced(
+        removed: Vec<(BrickId, Brick)>,
+        placed: Vec<BrickId>,
+        by: Option<String>,
+    ) -> Self {
         Self {
             pieces: Some(placed),
             ..Self::new(removed, by)
@@ -413,7 +431,12 @@ pub(in crate::session) enum Edits {
 }
 impl UndoEdits {
     pub fn new(s: &Session, owner: OwnerId, edits: Edits, by: Option<String>) -> Result<Self> {
-        let actor = s.peers.get(&owner).context("Unknown connection")?.actor.clone();
+        let actor = s
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .actor
+            .clone();
         Ok(Self {
             edits,
             actor,

@@ -81,7 +81,9 @@ fn write(path: &Path, bytes: &[u8], publish: Publish, private: bool) -> io::Resu
         .map_err(|e| context(path, "writing the temporary file", e));
     drop(file);
     let published = written.and_then(|()| match publish {
-        Publish::Replace => fs::rename(&staging, path).map_err(|e| context(path, "replacing it", e)),
+        Publish::Replace => {
+            fs::rename(&staging, path).map_err(|e| context(path, "replacing it", e))
+        }
         Publish::CreateNew => {
             fs::hard_link(&staging, path).map_err(|e| context(path, "creating it", e))
         }
@@ -204,9 +206,15 @@ mod tests {
         let dir = folder("private");
         let path = dir.join("identity");
         create_new_private(&path, b"secret").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         replace_private(&path, b"secret2").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

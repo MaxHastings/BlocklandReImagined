@@ -121,7 +121,9 @@ impl Kind {
                 _ => Err("expected 1/0, on/off or true/false".into()),
             },
             Kind::Int { min, max } => {
-                let n: i64 = v.parse().map_err(|_| "expected a whole number".to_string())?;
+                let n: i64 = v
+                    .parse()
+                    .map_err(|_| "expected a whole number".to_string())?;
                 if n < min || n > max {
                     return Err(format!("expected {min} to {max}"));
                 }
@@ -182,12 +184,28 @@ impl<C: Store> Registry<C> {
             commands: BTreeMap::new(),
             cvars: BTreeMap::new(),
         };
-        r.insert("help", "[name]", "List commands, or describe one command or cvar.", Handler::Help);
-        r.insert("cvars", "[filter]", "List cvars and their values.", Handler::Cvars);
+        r.insert(
+            "help",
+            "[name]",
+            "List commands, or describe one command or cvar.",
+            Handler::Help,
+        );
+        r.insert(
+            "cvars",
+            "[filter]",
+            "List cvars and their values.",
+            Handler::Cvars,
+        );
         r
     }
 
-    fn insert(&mut self, name: &str, usage: &str, help: &str, handler: Handler<C>) -> &mut Command<C> {
+    fn insert(
+        &mut self,
+        name: &str,
+        usage: &str,
+        help: &str,
+        handler: Handler<C>,
+    ) -> &mut Command<C> {
         let key = name.to_ascii_lowercase();
         self.commands.insert(
             key.clone(),
@@ -252,7 +270,8 @@ impl<C: Store> Registry<C> {
                 match from {
                     Some(n) if tokens.len() > n + 1 => {
                         hidden = true;
-                        let mut shown: Vec<String> = tokens[..=n].iter().map(|t| quote(t)).collect();
+                        let mut shown: Vec<String> =
+                            tokens[..=n].iter().map(|t| quote(t)).collect();
                         shown.push("***".into());
                         shown.join(" ")
                     }
@@ -260,7 +279,11 @@ impl<C: Store> Registry<C> {
                 }
             })
             .collect();
-        if hidden { (parts.join("; "), true) } else { (line.to_string(), false) }
+        if hidden {
+            (parts.join("; "), true)
+        } else {
+            (line.to_string(), false)
+        }
     }
 
     /// Run one input line. Returns the statements of forwarded commands, in
@@ -304,7 +327,15 @@ impl<C: Store> Registry<C> {
         forwarded
     }
 
-    fn assign(&self, ctx: &mut C, name: &str, key: &str, kind: Option<Kind>, args: &[String], out: &mut Output) {
+    fn assign(
+        &self,
+        ctx: &mut C,
+        name: &str,
+        key: &str,
+        kind: Option<Kind>,
+        args: &[String],
+        out: &mut Output,
+    ) {
         let args = match args.first() {
             Some(eq) if eq == "=" => &args[1..],
             _ => args,
@@ -339,7 +370,13 @@ impl<C: Store> Registry<C> {
             out.echo(format!("  {}", c.info.help));
         } else if let Some(v) = self.cvars.get(&lower) {
             let value = ctx.get(&v.key).unwrap_or_default();
-            out.echo(format!("{} = \"{}\" ({}, {})", v.name, value, v.kind.describe(), v.key));
+            out.echo(format!(
+                "{} = \"{}\" ({}, {})",
+                v.name,
+                value,
+                v.kind.describe(),
+                v.key
+            ));
             out.echo(format!("  {}", v.help));
         } else {
             out.error(format!("No command or cvar named {name}."));
@@ -426,7 +463,11 @@ impl<C: Store> Registry<C> {
             _ => {
                 let common = common_prefix(&matches);
                 let line = if common.len() > partial.len() {
-                    let open = if common.contains(char::is_whitespace) { "\"" } else { "" };
+                    let open = if common.contains(char::is_whitespace) {
+                        "\""
+                    } else {
+                        ""
+                    };
                     format!("{prefix}{open}{common}")
                 } else {
                     line.into()
@@ -457,7 +498,11 @@ fn quote(s: &str) -> String {
 }
 
 fn join(tokens: &[String]) -> String {
-    tokens.iter().map(|t| quote(t)).collect::<Vec<_>>().join(" ")
+    tokens
+        .iter()
+        .map(|t| quote(t))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Case-insensitive common prefix, spelled as in the first candidate.
@@ -607,7 +652,10 @@ mod tests {
             self.prefs.insert(key.to_ascii_lowercase(), value.into());
         }
         fn keys(&self) -> Vec<String> {
-            vec!["$pref::Audio::masterVolume".into(), "$pref::Audio::PlayMusic".into()]
+            vec![
+                "$pref::Audio::masterVolume".into(),
+                "$pref::Audio::PlayMusic".into(),
+            ]
         }
     }
 
@@ -619,31 +667,55 @@ mod tests {
         })
         .min_args(1)
         .complete(|c| c.players.clone());
-        r.command("login", "<password>", "Log in.", |_, _, _| Ok(())).secret();
-        r.command("join", "<address> [password]", "Join.", |_, _, _| Ok(())).secret_from(1);
+        r.command("login", "<password>", "Log in.", |_, _, _| Ok(()))
+            .secret();
+        r.command("join", "<address> [password]", "Join.", |_, _, _| Ok(()))
+            .secret_from(1);
         r.command("fail", "", "Always fails.", |_, _, _| Err("nope".into()));
         r.forward(&CommandInfo {
             name: "netstats".into(),
             usage: "".into(),
             help: "Host-side stats.".into(),
         });
-        r.cvar("volume", "$pref::Audio::masterVolume", Kind::Float { min: 0.0, max: 1.0 }, "Master volume.");
-        r.cvar("music", "$pref::Audio::PlayMusic", Kind::Bool, "Play music.");
+        r.cvar(
+            "volume",
+            "$pref::Audio::masterVolume",
+            Kind::Float { min: 0.0, max: 1.0 },
+            "Master volume.",
+        );
+        r.cvar(
+            "music",
+            "$pref::Audio::PlayMusic",
+            Kind::Bool,
+            "Play music.",
+        );
         r
     }
 
     fn text(out: &Output) -> Vec<(Level, &str)> {
-        out.lines.iter().map(|l| (l.level, l.text.as_str())).collect()
+        out.lines
+            .iter()
+            .map(|l| (l.level, l.text.as_str()))
+            .collect()
     }
 
     #[test]
     fn parses_plain_quoted_and_v20_call_syntax() {
-        assert_eq!(tokenize(r#"kick "Blockhead 99" now"#), ["kick", "Blockhead 99", "now"]);
+        assert_eq!(
+            tokenize(r#"kick "Blockhead 99" now"#),
+            ["kick", "Blockhead 99", "now"]
+        );
         assert_eq!(tokenize(r#"say "a \"b\"""#), ["say", r#"a "b""#]);
         assert_eq!(tokenize("quit();"), ["quit"]);
-        assert_eq!(tokenize(r#"echo("hi there", 2)"#), ["echo", "hi there", "2"]);
+        assert_eq!(
+            tokenize(r#"echo("hi there", 2)"#),
+            ["echo", "hi there", "2"]
+        );
         assert_eq!(tokenize("$pref::X=5"), ["$pref::X", "=", "5"]);
-        assert_eq!(split_statements(r#"a; b "c;d" ;; e"#), ["a", r#"b "c;d""#, "e"]);
+        assert_eq!(
+            split_statements(r#"a; b "c;d" ;; e"#),
+            ["a", r#"b "c;d""#, "e"]
+        );
     }
 
     #[test]
@@ -651,14 +723,24 @@ mod tests {
         let r = registry();
         let mut ctx = Ctx::default();
         let mut out = Output::default();
-        let fwd = r.exec(&mut ctx, r#"KICK "Some One"; netstats x; volume 0.5; music = on"#, &mut out);
+        let fwd = r.exec(
+            &mut ctx,
+            r#"KICK "Some One"; netstats x; volume 0.5; music = on"#,
+            &mut out,
+        );
         assert_eq!(ctx.ran, [vec!["Some One".to_string()]]);
         assert_eq!(fwd, ["netstats x"]);
-        assert_eq!(ctx.get("$pref::audio::mastervolume").as_deref(), Some("0.5"));
+        assert_eq!(
+            ctx.get("$pref::audio::mastervolume").as_deref(),
+            Some("0.5")
+        );
         assert_eq!(ctx.get("$pref::Audio::PlayMusic").as_deref(), Some("1"));
         assert_eq!(
             text(&out),
-            [(Level::Normal, "volume = \"0.5\""), (Level::Normal, "music = \"1\"")]
+            [
+                (Level::Normal, "volume = \"0.5\""),
+                (Level::Normal, "music = \"1\"")
+            ]
         );
     }
 
@@ -667,7 +749,11 @@ mod tests {
         let r = registry();
         let mut ctx = Ctx::default();
         let mut out = Output::default();
-        r.exec(&mut ctx, "kick; volume 2; music maybe; fail; bogus", &mut out);
+        r.exec(
+            &mut ctx,
+            "kick; volume 2; music maybe; fail; bogus",
+            &mut out,
+        );
         assert!(ctx.ran.is_empty());
         assert_eq!(ctx.get("$pref::Audio::masterVolume"), None);
         let got = text(&out);
@@ -683,21 +769,44 @@ mod tests {
         let r = registry();
         let mut ctx = Ctx::default();
         let mut out = Output::default();
-        r.exec(&mut ctx, "$pref::Audio::PlayMusic = off; $pref::Other::Thing = hello world", &mut out);
+        r.exec(
+            &mut ctx,
+            "$pref::Audio::PlayMusic = off; $pref::Other::Thing = hello world",
+            &mut out,
+        );
         assert_eq!(ctx.get("$pref::audio::playmusic").as_deref(), Some("0"));
-        assert_eq!(ctx.get("$pref::other::thing").as_deref(), Some("hello world"));
-        r.exec(&mut ctx, "$pref::Audio::PlayMusic banana; $pref::Other::Thing", &mut out);
+        assert_eq!(
+            ctx.get("$pref::other::thing").as_deref(),
+            Some("hello world")
+        );
+        r.exec(
+            &mut ctx,
+            "$pref::Audio::PlayMusic banana; $pref::Other::Thing",
+            &mut out,
+        );
         assert_eq!(ctx.get("$pref::audio::playmusic").as_deref(), Some("0"));
-        assert_eq!(out.lines.last().unwrap().text, "$pref::Other::Thing = \"hello world\"");
+        assert_eq!(
+            out.lines.last().unwrap().text,
+            "$pref::Other::Thing = \"hello world\""
+        );
     }
 
     #[test]
     fn redacts_secret_arguments() {
         let r = registry();
-        assert_eq!(r.redact("login hunter2; kick x"), ("login ***; kick x".to_string(), true));
+        assert_eq!(
+            r.redact("login hunter2; kick x"),
+            ("login ***; kick x".to_string(), true)
+        );
         assert_eq!(r.redact("kick x;"), ("kick x;".to_string(), false));
-        assert_eq!(r.redact("join 1.2.3.4"), ("join 1.2.3.4".to_string(), false));
-        assert_eq!(r.redact("join 1.2.3.4 pw"), ("join 1.2.3.4 ***".to_string(), true));
+        assert_eq!(
+            r.redact("join 1.2.3.4"),
+            ("join 1.2.3.4".to_string(), false)
+        );
+        assert_eq!(
+            r.redact("join 1.2.3.4 pw"),
+            ("join 1.2.3.4 ***".to_string(), true)
+        );
     }
 
     #[test]
@@ -708,7 +817,10 @@ mod tests {
         let mut out = Output::default();
         r.exec(&mut ctx, "help volume; help kick", &mut out);
         let got = text(&out);
-        assert_eq!(got[0].1, "volume = \"0.8\" (float 0..1, $pref::Audio::masterVolume)");
+        assert_eq!(
+            got[0].1,
+            "volume = \"0.8\" (float 0..1, $pref::Audio::masterVolume)"
+        );
         assert_eq!(got[2].1, "kick <player>");
         let mut out = Output::default();
         r.exec(&mut ctx, "help", &mut out);
@@ -729,9 +841,15 @@ mod tests {
         assert_eq!(c.line, "kick Block");
         assert_eq!(c.candidates, ["Block Party", "Blockhead"]);
         assert_eq!(r.complete(&ctx, "kick blockh").line, "kick Blockhead ");
-        assert_eq!(r.complete(&ctx, "kick \"block p").line, "kick \"Block Party\" ");
+        assert_eq!(
+            r.complete(&ctx, "kick \"block p").line,
+            "kick \"Block Party\" "
+        );
         assert_eq!(r.complete(&ctx, "kick Zed now").line, "kick Zed now");
-        assert_eq!(r.complete(&ctx, "$pref::audio::pl").line, "$pref::Audio::PlayMusic ");
+        assert_eq!(
+            r.complete(&ctx, "$pref::audio::pl").line,
+            "$pref::Audio::PlayMusic "
+        );
         let c = r.complete(&ctx, "zzz");
         assert_eq!((c.line.as_str(), c.candidates.len()), ("zzz", 0));
     }

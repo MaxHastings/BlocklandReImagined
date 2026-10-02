@@ -266,7 +266,9 @@ impl Pack {
                 })
             }
             TexKey::Fallback(baseline, c) => {
-                let r = self.fallback_raster(*baseline, *c).context("no font has it")?;
+                let r = self
+                    .fallback_raster(*baseline, *c)
+                    .context("no font has it")?;
                 Ok(Pixels {
                     width: r.width,
                     height: r.height,

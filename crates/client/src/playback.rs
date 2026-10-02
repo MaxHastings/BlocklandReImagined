@@ -200,7 +200,10 @@ mod tests {
         drop(recorder);
         let frames = load(&path).unwrap();
         assert_eq!(frames.len(), 3);
-        assert_eq!(frames[0].events, vec![InputEvent::MouseMove { x: 3.0, y: 4.0 }]);
+        assert_eq!(
+            frames[0].events,
+            vec![InputEvent::MouseMove { x: 3.0, y: 4.0 }]
+        );
         assert!(frames[1].events.is_empty());
         assert_eq!(frames[2].dt_us, 15_000);
 

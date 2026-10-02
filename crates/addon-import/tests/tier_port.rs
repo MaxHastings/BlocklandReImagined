@@ -989,7 +989,8 @@ fn a_restart_preference_hides_the_guns_from_the_next_start() {
     let disable = format!("{NS}-rules:tt_disabletier1");
     let mut g = Game::new(&dir.0, &out);
     let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
-    g.configure(a, &[(disable.as_str(), V::Bool(true))]).unwrap();
+    g.configure(a, &[(disable.as_str(), V::Bool(true))])
+        .unwrap();
     assert_eq!(
         g.s.weapon_settings()["$Pref::Server::TT::DisableTier1"],
         "false",

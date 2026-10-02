@@ -1,7 +1,7 @@
 use crate::EffectsPack;
 use anyhow::{Context, Result, ensure};
-use glam::{Mat4, Quat, Vec3, Vec4};
 use bri_content::passage::Passages;
+use glam::{Mat4, Quat, Vec3, Vec4};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -927,7 +927,8 @@ impl EffectsWorld {
             let (color, radius) = def.sample(s.age as f32);
             // A painted source tints its light (an image light worn in a
             // team's colour).
-            let color = Vec3::from_array(color) * s.options.paint.map_or(Vec3::ONE, Vec3::from_array);
+            let color =
+                Vec3::from_array(color) * s.options.paint.map_or(Vec3::ONE, Vec3::from_array);
             if radius <= 0. || color.max_element() <= 0. {
                 continue;
             }
@@ -1358,7 +1359,12 @@ mod tests {
                     world.set_passages(&passages);
                 }
                 world
-                    .burst("emitter", SourceTransform::default(), SourceOptions::default(), 60)
+                    .burst(
+                        "emitter",
+                        SourceTransform::default(),
+                        SourceOptions::default(),
+                        60,
+                    )
                     .unwrap();
                 for _ in 0..6 {
                     world.advance(0.05, Vec3::ZERO).unwrap();
@@ -1373,14 +1379,29 @@ mod tests {
                 let (position, velocity) = match passages.first(Vec3::ZERO, f.position) {
                     Some(_) => {
                         carried += 1;
-                        (carry.transform_point3(f.position), carry.transform_vector3(f.velocity))
+                        (
+                            carry.transform_point3(f.position),
+                            carry.transform_vector3(f.velocity),
+                        )
                     }
                     None => (f.position, f.velocity),
                 };
-                assert!(t.position.distance(position) < 1e-3, "{} not {position}", t.position);
-                assert!(t.velocity.distance(velocity) < 1e-3, "{} not {velocity}", t.velocity);
+                assert!(
+                    t.position.distance(position) < 1e-3,
+                    "{} not {position}",
+                    t.position
+                );
+                assert!(
+                    t.velocity.distance(velocity) < 1e-3,
+                    "{} not {velocity}",
+                    t.velocity
+                );
             }
-            assert!(carried > 0 && carried < free.len(), "{carried} of {}", free.len());
+            assert!(
+                carried > 0 && carried < free.len(),
+                "{carried} of {}",
+                free.len()
+            );
         }
     }
     #[test]

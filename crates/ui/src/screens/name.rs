@@ -10,7 +10,8 @@ const LAN_NAME: &str = "$pref::Player::LANName";
 
 pub fn should_prompt(core: &Core) -> bool {
     let name = core.settings.avatar.lan_name.trim();
-    !core.prefs.bool_or(PROMPTED, false) && (name.is_empty() || name.eq_ignore_ascii_case("Blockhead"))
+    !core.prefs.bool_or(PROMPTED, false)
+        && (name.is_empty() || name.eq_ignore_ascii_case("Blockhead"))
 }
 
 /// "Blockhead" plus four digits, so a player who just presses OK still
@@ -59,9 +60,7 @@ impl ChooseName {
         Self { view, field }
     }
     fn finish(&mut self, accept: bool, core: &mut Core) {
-        if accept
-            && let Some(n) = self.field
-        {
+        if accept && let Some(n) = self.field {
             let name = self.view.edit_text(n).trim().to_string();
             if !name.is_empty() {
                 core.settings.avatar.lan_name = name.clone();
@@ -118,17 +117,45 @@ mod tests {
     fn fixture() -> Ui {
         let mut pack = UiPack::default();
         let mut root = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-        let mut window = ctrl("GuiWindowCtrl", "GuiDefaultProfile", Rect::new(166, 164, 307, 152));
+        let mut window = ctrl(
+            "GuiWindowCtrl",
+            "GuiDefaultProfile",
+            Rect::new(166, 164, 307, 152),
+        );
         window.text = Some("Register Name".into());
-        window.children.push(text("GuiTextProfile", Rect::new(13, 35, 69, 18), "Current Name:"));
-        window.children.push(text("GuiTextProfile", Rect::new(26, 65, 56, 18), "New Name:"));
-        let mut field = ctrl("GuiTextEditCtrl", "GuiDefaultProfile", Rect::new(92, 65, 191, 18));
+        window.children.push(text(
+            "GuiTextProfile",
+            Rect::new(13, 35, 69, 18),
+            "Current Name:",
+        ));
+        window.children.push(text(
+            "GuiTextProfile",
+            Rect::new(26, 65, 56, 18),
+            "New Name:",
+        ));
+        let mut field = ctrl(
+            "GuiTextEditCtrl",
+            "GuiDefaultProfile",
+            Rect::new(92, 65, 191, 18),
+        );
         field.name = Some("regName_NewName".into());
         window.children.push(field);
         let register = "regNameGui::register();";
-        window.children.push(button("GuiDefaultProfile", Rect::new(178, 98, 91, 38), "", "Register >>", register));
+        window.children.push(button(
+            "GuiDefaultProfile",
+            Rect::new(178, 98, 91, 38),
+            "",
+            "Register >>",
+            register,
+        ));
         let cancel = "canvas.popDialog(regNameGui);";
-        window.children.push(button("GuiDefaultProfile", Rect::new(38, 98, 91, 38), "", "<< Cancel", cancel));
+        window.children.push(button(
+            "GuiDefaultProfile",
+            Rect::new(38, 98, 91, 38),
+            "",
+            "<< Cancel",
+            cancel,
+        ));
         root.children.push(window);
         pack.layouts.insert("regNameGui".into(), root);
         let mut ui = Ui::new(
@@ -154,7 +181,12 @@ mod tests {
         ui.core.settings.avatar.lan_name = "Blockhead".into();
         assert!(should_prompt(&ui.core));
         let mut s = ChooseName::new(&ui.core);
-        let labels: Vec<String> = s.view.walk().filter(|&n| s.view.is_shown(n)).map(|n| s.view.text_of(n)).collect();
+        let labels: Vec<String> = s
+            .view
+            .walk()
+            .filter(|&n| s.view.is_shown(n))
+            .map(|n| s.view.text_of(n))
+            .collect();
         for label in ["Choose Your Name", "Name:", "OK >>", "<< Skip"] {
             assert!(labels.iter().any(|l| l == label), "{labels:?}");
         }

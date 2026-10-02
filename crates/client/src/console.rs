@@ -43,14 +43,24 @@ impl Store for App {
 
 pub fn registry() -> Registry<App> {
     let mut r: Registry<App> = Registry::new();
-    r.command("stats", "", "Frame rate, network and world statistics.", |app, _, out| {
-        stats(app, out);
-        Ok(())
-    });
-    r.command("version", "", "Build and content package identity.", |app, _, out| {
-        version(app, out);
-        Ok(())
-    });
+    r.command(
+        "stats",
+        "",
+        "Frame rate, network and world statistics.",
+        |app, _, out| {
+            stats(app, out);
+            Ok(())
+        },
+    );
+    r.command(
+        "version",
+        "",
+        "Build and content package identity.",
+        |app, _, out| {
+            version(app, out);
+            Ok(())
+        },
+    );
     r
 }
 
@@ -65,9 +75,9 @@ pub fn commands() -> Vec<CommandInfo> {
 
 fn stats(app: &App, out: &mut Output) {
     match app.frame_stats().summary() {
-        Some((fps, avg, worst)) => {
-            out.echo(format!("Frame: {fps:.0} fps, {avg:.1} ms average, {worst:.1} ms worst (last 240 frames)"))
-        }
+        Some((fps, avg, worst)) => out.echo(format!(
+            "Frame: {fps:.0} fps, {avg:.1} ms average, {worst:.1} ms worst (last 240 frames)"
+        )),
         None => out.echo("Frame: no frames yet"),
     }
     match app.network_view() {
@@ -97,14 +107,20 @@ fn stats(app: &App, out: &mut Output) {
         let (_, sources, particles, _) = app.effect_counts();
         (sources, particles)
     };
-    out.echo(format!("Effects: {sources} source(s), {particles} particle(s)"));
+    out.echo(format!(
+        "Effects: {sources} source(s), {particles} particle(s)"
+    ));
 }
 
 fn version(app: &App, out: &mut Output) {
     out.echo(format!(
         "Blockland ReImagined {} ({})",
         crate::updates::version(),
-        if cfg!(debug_assertions) { "debug" } else { "release" }
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
     ));
     out.echo(format!("Protocol {}", bri_net::protocol::VERSION));
     let p = &app.content.paths;
@@ -138,7 +154,9 @@ mod tests {
             s.push(Duration::from_millis(ms));
         }
         let (fps, avg, worst) = s.summary().unwrap();
-        assert!((avg - 20.0).abs() < 1e-9 && (fps - 50.0).abs() < 1e-9 && (worst - 40.0).abs() < 1e-9);
+        assert!(
+            (avg - 20.0).abs() < 1e-9 && (fps - 50.0).abs() < 1e-9 && (worst - 40.0).abs() < 1e-9
+        );
         for _ in 0..FrameStats::WINDOW {
             s.push(Duration::from_millis(5));
         }

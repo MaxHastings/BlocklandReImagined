@@ -228,7 +228,12 @@ impl Session {
                 }
                 ids.pop();
                 // Lit again since, until later.
-                if self.highlights.bricks.get(&id).is_some_and(|lit| lit.until <= tick) {
+                if self
+                    .highlights
+                    .bricks
+                    .get(&id)
+                    .is_some_and(|lit| lit.until <= tick)
+                {
                     self.unlight_one(id)?;
                 }
             }

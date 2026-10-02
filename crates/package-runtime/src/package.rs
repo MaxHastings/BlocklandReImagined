@@ -311,7 +311,8 @@ impl Package {
                 // Decoded by the client that draws it.
                 Kind::Image => {}
                 Kind::Help => {
-                    if let Some(h) = parse::<content::HelpPages>(asset, &id, |h| h.validate(), out) {
+                    if let Some(h) = parse::<content::HelpPages>(asset, &id, |h| h.validate(), out)
+                    {
                         self.help.insert(asset.id.clone(), h);
                     }
                 }
@@ -364,11 +365,16 @@ impl Package {
     }
     /// The lines of data file `id` (`Kind::Data`).
     pub fn data_lines(&self, id: &str) -> Option<Vec<&str>> {
-        let asset = self
-            .assets
-            .iter()
-            .find(|a| a.kind == Kind::Data && (a.id == id || a.id.rsplit('/').next() == Some(id)))?;
-        Some(std::str::from_utf8(&asset.bytes).ok()?.lines().map(str::trim_end).collect())
+        let asset = self.assets.iter().find(|a| {
+            a.kind == Kind::Data && (a.id == id || a.id.rsplit('/').next() == Some(id))
+        })?;
+        Some(
+            std::str::from_utf8(&asset.bytes)
+                .ok()?
+                .lines()
+                .map(str::trim_end)
+                .collect(),
+        )
     }
     pub fn script_source(&self) -> Option<&str> {
         let b = self.behaviour.as_ref()?;
@@ -401,13 +407,17 @@ impl Catalog {
     /// does not turn off the others. Deterministic, so a host and its
     /// clients leave out the same packages from the same files.
     pub fn load_skipping(root: &Path, set: &PackageSet, server: bool) -> (Self, Vec<Diagnostic>) {
-        Self::skipping(set.packages.clone(), |e| e, |packages| {
-            let set = PackageSet {
-                schema_version: set.schema_version,
-                packages: packages.to_vec(),
-            };
-            Self::inspect(root, &set, server)
-        })
+        Self::skipping(
+            set.packages.clone(),
+            |e| e,
+            |packages| {
+                let set = PackageSet {
+                    schema_version: set.schema_version,
+                    packages: packages.to_vec(),
+                };
+                Self::inspect(root, &set, server)
+            },
+        )
     }
     /// [`Self::load_skipping`] for packages loaded from where they are, as
     /// [`Self::load_dirs`] does (a joining client's downloads).
@@ -415,11 +425,15 @@ impl Catalog {
         packages: &[(std::path::PathBuf, PackageEntry)],
         server: bool,
     ) -> (Self, Vec<Diagnostic>) {
-        Self::skipping(packages.to_vec(), |(_, e)| e, |packages| {
-            let listed: BTreeMap<&str, &PackageEntry> =
-                packages.iter().map(|(_, p)| (p.id.as_str(), p)).collect();
-            Self::inspect_dirs(packages, &listed, server)
-        })
+        Self::skipping(
+            packages.to_vec(),
+            |(_, e)| e,
+            |packages| {
+                let listed: BTreeMap<&str, &PackageEntry> =
+                    packages.iter().map(|(_, p)| (p.id.as_str(), p)).collect();
+                Self::inspect_dirs(packages, &listed, server)
+            },
+        )
     }
     /// Inspect `items`, leave out the packages the problems name and try
     /// again until what is left loads cleanly. Problems no package owns

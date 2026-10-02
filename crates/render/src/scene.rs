@@ -711,8 +711,10 @@ impl SceneData {
                 material.kind,
                 MaterialKind::Water | MaterialKind::Terrain | MaterialKind::Metal
             );
-            let decomposed = material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
-            let fog = material.kind == MaterialKind::Sky && material.parameters == Some(FOG_BACKDROP);
+            let decomposed =
+                material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
+            let fog =
+                material.kind == MaterialKind::Sky && material.parameters == Some(FOG_BACKDROP);
             ensure!(
                 (material.parameters.is_some() == wants
                     || (material.temp_brick_flash && !wants)
@@ -846,7 +848,14 @@ impl Camera {
         let projection = perspective(fov_y, aspect, near, far);
         Self {
             view_projection: (projection * view).to_cols_array(),
-            ..Self::perspective(eye, [eye[0], eye[1], eye[2] - 1.0], aspect, fov_y, near, far)
+            ..Self::perspective(
+                eye,
+                [eye[0], eye[1], eye[2] - 1.0],
+                aspect,
+                fov_y,
+                near,
+                far,
+            )
         }
     }
     pub fn apply_environment(&mut self, scene: &SceneData) {
@@ -864,7 +873,11 @@ impl Camera {
     /// Lightmaps are relit only when the sun or ambient light differs from
     /// what they were baked with, so an untouched map costs nothing.
     pub fn apply_atmosphere(&mut self, live: &bri_content::atmosphere::Live) {
-        let baked_direction = [self.sun_direction[0], self.sun_direction[1], self.sun_direction[2]];
+        let baked_direction = [
+            self.sun_direction[0],
+            self.sun_direction[1],
+            self.sun_direction[2],
+        ];
         let baked_color = [self.sun_color[0], self.sun_color[1], self.sun_color[2]];
         let baked_ambient = [self.ambient[0], self.ambient[1], self.ambient[2]];
         let differs = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 1e-4);
@@ -872,7 +885,12 @@ impl Camera {
             || differs(baked_color, live.direct_light)
             || differs(baked_ambient, live.ambient_light)
             || live.shadow_color.is_some();
-        self.baked_sun_direction = [baked_direction[0], baked_direction[1], baked_direction[2], f32::from(u8::from(relit))];
+        self.baked_sun_direction = [
+            baked_direction[0],
+            baked_direction[1],
+            baked_direction[2],
+            f32::from(u8::from(relit)),
+        ];
         self.baked_sun_color = [baked_color[0], baked_color[1], baked_color[2], 0.0];
         self.baked_ambient = [baked_ambient[0], baked_ambient[1], baked_ambient[2], 0.0];
         self.sun_direction[..3].copy_from_slice(&live.sun_direction);
@@ -886,7 +904,12 @@ impl Camera {
         self.atmosphere[0] = live.fog_start;
         self.atmosphere[1] = live.fog_end;
         self.atmosphere[3] = if live.fog_end > 0.0 { 1.0 } else { 0.0 };
-        self.sky = [live.sky_tint[0], live.sky_tint[1], live.sky_tint[2], live.flare.1];
+        self.sky = [
+            live.sky_tint[0],
+            live.sky_tint[1],
+            live.sky_tint[2],
+            live.flare.1,
+        ];
         self.flare = live.flare.0;
     }
 }
@@ -1186,7 +1209,12 @@ impl GpuScene {
     /// map's lightmaps take their leak cleanup this way once the map
     /// lighting bake is done. Masked (alpha-tested) images keep their
     /// coverage-preserving mips only through a full upload.
-    pub fn patch_images(&self, queue: &wgpu::Queue, images: &[SceneImage], changed: &[usize]) -> Result<()> {
+    pub fn patch_images(
+        &self,
+        queue: &wgpu::Queue,
+        images: &[SceneImage],
+        changed: &[usize],
+    ) -> Result<()> {
         for &index in changed {
             let (Some(image), Some(texture)) = (images.get(index), self.textures.get(index)) else {
                 anyhow::bail!("Patched image {index} is not in the scene");
@@ -1196,7 +1224,9 @@ impl GpuScene {
                 "Patched image {index} changed size"
             );
             for (level, (width, height, rgba)) in
-                crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb).iter().enumerate()
+                crate::mipmap::chain(image.width, image.height, &image.rgba, image.srgb)
+                    .iter()
+                    .enumerate()
             {
                 if level as u32 >= texture.mip_level_count() {
                     break;
@@ -1261,7 +1291,12 @@ impl GpuScene {
 fn vertex_extent(vertices: &[SceneVertex]) -> Option<(Vec3, Vec3)> {
     let (min, max) = vertices.iter().fold(
         (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
-        |(min, max), v| (min.min(Vec3::from(v.position)), max.max(Vec3::from(v.position))),
+        |(min, max), v| {
+            (
+                min.min(Vec3::from(v.position)),
+                max.max(Vec3::from(v.position)),
+            )
+        },
     );
     let margin = Vec3::splat(0.2);
     (!vertices.is_empty()).then_some((min - margin, max + margin))
@@ -1317,7 +1352,12 @@ fn local_spans(runs: &[(Range<u32>, u32)], count: u32, range: Range<u32>) -> Vec
 }
 
 /// One part of a split scene: vertices, indices, batches and vertex runs.
-type SplitPart = (Vec<SceneVertex>, Vec<u32>, Vec<MeshBatch>, Vec<(Range<u32>, u32)>);
+type SplitPart = (
+    Vec<SceneVertex>,
+    Vec<u32>,
+    Vec<MeshBatch>,
+    Vec<(Range<u32>, u32)>,
+);
 
 /// Split a scene's batches into two parts with vertices of their own. Each
 /// part keeps its vertices in source order, so one brick's vertices stay
@@ -1486,7 +1526,14 @@ impl Footprints {
         let size = self.resolution as f32;
         let mut union: Option<[f32; 4]> = None;
         for r in &self.rects {
-            union = Some(union.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+            union = Some(union.map_or(*r, |u| {
+                [
+                    u[0].min(r[0]),
+                    u[1].min(r[1]),
+                    u[2].max(r[2]),
+                    u[3].max(r[3]),
+                ]
+            }));
         }
         let [x0, y0, x1, y1] = union?.map(|v| v.clamp(-1.0, 1.0));
         // Clip y points up; texel rows go down.
@@ -1520,7 +1567,13 @@ pub(crate) fn kept_casters_key<'a>(scenes: impl Iterator<Item = &'a GpuScene>) -
     for scene in scenes {
         (std::ptr::from_ref(scene) as usize).hash(&mut hash);
         scene.vertices.hash(&mut hash);
-        (scene.first_index, scene.base_vertex, scene.index_count, scene.vertex_count).hash(&mut hash);
+        (
+            scene.first_index,
+            scene.base_vertex,
+            scene.index_count,
+            scene.vertex_count,
+        )
+            .hash(&mut hash);
     }
     hash.finish()
 }
@@ -1850,7 +1903,8 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// per row and a face's share of a layer; face resolution and world texel
 /// per unit of distance; and each light's six face matrices.
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
-const MAP_LIGHT_CUBES: usize = 48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
+const MAP_LIGHT_CUBES: usize =
+    48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
 impl MapLightBinding {
     /// `every_light`: shade every recovered light (the Dynamic mode, where
     /// light cubes stand in for visibility channels), not only those with a
@@ -1921,7 +1975,12 @@ impl MapLightBinding {
             // Dynamic mode); the rest follow, for map surfaces' per-texel
             // shares alone.
             let on_objects = |l: &crate::map_lighting::MapLight| every_light || l.channel.is_some();
-            let mut lights: Vec<_> = lighting.lights.iter().enumerate().take(crate::map_lighting::MAX_LIGHTS).collect();
+            let mut lights: Vec<_> = lighting
+                .lights
+                .iter()
+                .enumerate()
+                .take(crate::map_lighting::MAX_LIGHTS)
+                .collect();
             lights.sort_by_key(|(_, l)| !on_objects(l));
             let count = lights.iter().filter(|(_, l)| on_objects(l)).count();
             words.extend([
@@ -1987,7 +2046,11 @@ impl MapLightBinding {
             // Each light is 48 bytes after the 48-byte header; its tint is
             // the last three words.
             let offset = 48 + slot * 48 + 36;
-            queue.write_buffer(&self.lights, offset as u64, bytemuck::cast_slice(&t.to_array()));
+            queue.write_buffer(
+                &self.lights,
+                offset as u64,
+                bytemuck::cast_slice(&t.to_array()),
+            );
         }
         let any = u32::from(tints.iter().any(|t| *t != Vec3::ONE));
         queue.write_buffer(&self.lights, 36, bytemuck::bytes_of(&any));
@@ -2019,10 +2082,18 @@ impl MapLightBinding {
                 0.0,
             ];
         }
-        queue.write_buffer(&self.lights, MAP_LIGHT_CUBES as u64, bytemuck::cast_slice(&header));
+        queue.write_buffer(
+            &self.lights,
+            MAP_LIGHT_CUBES as u64,
+            bytemuck::cast_slice(&header),
+        );
         for &(light, face, matrix) in drawn {
             let offset = MAP_LIGHT_CUBES + 32 + (light * 6 + face) * 64;
-            queue.write_buffer(&self.lights, offset as u64, bytemuck::cast_slice(&matrix.to_cols_array()));
+            queue.write_buffer(
+                &self.lights,
+                offset as u64,
+                bytemuck::cast_slice(&matrix.to_cols_array()),
+            );
         }
     }
     /// Per shaded light, the share of the cells around `eye` (a 3x3x3 block)
@@ -2477,7 +2548,10 @@ impl SceneRenderer {
         }
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
-            contents: &vec![0u8; LIGHT_HEADER + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()],
+            contents: &vec![
+                0u8;
+                LIGHT_HEADER + MAX_POINT_LIGHTS * std::mem::size_of::<PointLight>()
+            ],
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let light_grid = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2513,7 +2587,9 @@ impl SceneRenderer {
             stats: Default::default(),
             timer: Default::default(),
             kept: Default::default(),
-            keep_brick_shadows: std::cell::Cell::new(std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0")),
+            keep_brick_shadows: std::cell::Cell::new(
+                std::env::var("BRI_KEPT_SHADOWS").map_or(true, |v| v != "0"),
+            ),
             keep_from: std::cell::Cell::new(crate::kept_shadows::KEEP_TRIANGLES),
             pool: Default::default(),
             translucent_pool: Default::default(),
@@ -2593,7 +2669,8 @@ impl SceneRenderer {
                 totals[usize::from(clear)][1] += count;
             }
         }
-        self.pool.reserve(&self.device, totals[0][0], totals[0][1])?;
+        self.pool
+            .reserve(&self.device, totals[0][0], totals[0][1])?;
         self.translucent_pool
             .reserve(&self.device, totals[1][0], totals[1][1])
     }
@@ -3071,7 +3148,11 @@ impl SceneRenderer {
                     && v.cell > 0.0
                     && v.origin.iter().all(|x| x.is_finite())
                     && l.lights.iter().all(|l| {
-                        l.position.iter().chain(&l.color).chain([&l.inner, &l.outer]).all(|x| x.is_finite())
+                        l.position
+                            .iter()
+                            .chain(&l.color)
+                            .chain([&l.inner, &l.outer])
+                            .all(|x| x.is_finite())
                             && l.outer > l.inner
                     }),
                 "Invalid map lighting"
@@ -3189,7 +3270,11 @@ impl SceneRenderer {
     pub fn time_passes(&self, device: &wgpu::Device, queue: &wgpu::Queue, on: bool) {
         let mut timer = self.timer.borrow_mut();
         if on != timer.is_some() {
-            *timer = if on { crate::timing::GpuTimer::new(device, queue) } else { None };
+            *timer = if on {
+                crate::timing::GpuTimer::new(device, queue)
+            } else {
+                None
+            };
         }
     }
     pub fn begin_timing(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -3212,7 +3297,10 @@ impl SceneRenderer {
     pub fn pass_times(
         &self,
         device: &wgpu::Device,
-    ) -> Option<(std::time::Duration, Vec<(&'static str, std::time::Duration)>)> {
+    ) -> Option<(
+        std::time::Duration,
+        Vec<(&'static str, std::time::Duration)>,
+    )> {
         self.timer.borrow_mut().as_mut()?.collect(device).cloned()
     }
     /// Render sun shadow casters (bricks, players, vehicles, items; never map
@@ -3252,10 +3340,18 @@ impl SceneRenderer {
         // (which read their cascade's caster layer), then lamp faces.
         // Lamp faces: bricks (static chunks, which have bounds) into kept
         // faces, redrawn only when stale; everything else every frame.
-        let static_scenes: Vec<&GpuScene> =
-            casters.scenes.iter().copied().filter(|s| s.bounds.is_some()).collect();
-        let moving_scenes: Vec<&GpuScene> =
-            casters.scenes.iter().copied().filter(|s| s.bounds.is_none()).collect();
+        let static_scenes: Vec<&GpuScene> = casters
+            .scenes
+            .iter()
+            .copied()
+            .filter(|s| s.bounds.is_some())
+            .collect();
+        let moving_scenes: Vec<&GpuScene> = casters
+            .scenes
+            .iter()
+            .copied()
+            .filter(|s| s.bounds.is_none())
+            .collect();
         // Layer, tile, matrix, casters, bind group, pipelines, caster offset,
         // whether the tile (not its layer) is cleared first, and whether
         // only map surfaces draw.
@@ -3282,28 +3378,38 @@ impl SceneRenderer {
         } else if self.kept.borrow().is_none()
             && let Some(settings) = self.shadows.settings
         {
-            *self.kept.borrow_mut() =
-                crate::kept_shadows::KeptShadows::new(&self.device, settings.cascades, settings.resolution);
+            *self.kept.borrow_mut() = crate::kept_shadows::KeptShadows::new(
+                &self.device,
+                settings.cascades,
+                settings.resolution,
+            );
         }
         let kept = self.kept.borrow();
         if let Some(kept) = kept.as_ref() {
             kept.keep_from.set(self.keep_from.get());
         }
-        let uses: Vec<crate::kept_shadows::Use<'_>> = match (kept.as_ref(), self.queue.borrow().as_ref()) {
-            (Some(kept), Some(queue)) if !static_scenes.is_empty() => kept.plan(
-                queue,
-                cascades,
-                self.shadows.sun,
-                self.views[0].eye,
-                &static_scenes,
-                |cascade, matrix| self.shadows.set_kept_matrix(queue, cascade, matrix),
-            ),
-            _ => Vec::new(),
-        };
+        let uses: Vec<crate::kept_shadows::Use<'_>> =
+            match (kept.as_ref(), self.queue.borrow().as_ref()) {
+                (Some(kept), Some(queue)) if !static_scenes.is_empty() => kept.plan(
+                    queue,
+                    cascades,
+                    self.shadows.sun,
+                    self.views[0].eye,
+                    &static_scenes,
+                    |cascade, matrix| self.shadows.set_kept_matrix(queue, cascade, matrix),
+                ),
+                _ => Vec::new(),
+            };
         let mut kept_cascades = 0;
         let mut kept_redraws = 0;
         for (index, used) in uses.iter().enumerate() {
-            if let (crate::kept_shadows::Use::Kept { redraw: Some(redraw) }, Some(kept)) = (used, kept.as_ref()) {
+            if let (
+                crate::kept_shadows::Use::Kept {
+                    redraw: Some(redraw),
+                },
+                Some(kept),
+            ) = (used, kept.as_ref())
+            {
                 kept_redraws += 1;
                 targets.push((
                     kept.view(index),
@@ -3328,12 +3434,16 @@ impl SceneRenderer {
         let sun_casters = casters;
         for (group, casters) in [casters, occluders].iter().enumerate() {
             for (index, cascade) in cascades.iter().enumerate() {
-                let from_kept =
-                    group == 0 && matches!(uses.get(index), Some(crate::kept_shadows::Use::Kept { .. }));
+                let from_kept = group == 0
+                    && matches!(uses.get(index), Some(crate::kept_shadows::Use::Kept { .. }));
                 kept_cascades += u32::from(from_kept);
                 extras.push(TargetExtra {
                     footprint: if group == 1 {
-                        Footprints::of(cascade.view_projection, sun_casters, self.shadows.resolution())
+                        Footprints::of(
+                            cascade.view_projection,
+                            sun_casters,
+                            self.shadows.resolution(),
+                        )
                     } else {
                         None
                     },
@@ -3412,12 +3522,15 @@ impl SceneRenderer {
             .zip(&self.map_lights.channels)
             .map(|(l, channel)| channel.is_none().then_some((l.position, l.outer)))
             .collect();
-        let (stale_cubes, cubes_ready) = self.shadows.stale_cube_faces(&map_key, &cube_lights, CUBE_FACES_PER_FRAME);
+        let (stale_cubes, cubes_ready) =
+            self.shadows
+                .stale_cube_faces(&map_key, &cube_lights, CUBE_FACES_PER_FRAME);
         if let Some(queue) = self.queue.borrow().as_ref() {
             for &(light, face, matrix) in &stale_cubes {
                 self.shadows.set_cube_matrix(queue, light, face, matrix);
             }
-            self.map_lights.set_cubes(queue, self.shadows.settings, cubes_ready, &stale_cubes);
+            self.map_lights
+                .set_cubes(queue, self.shadows.settings, cubes_ready, &stale_cubes);
         }
         // Per lamp slot, the static chunks within its reach: what its kept
         // faces draw, and how they tell a build changed there.
@@ -3459,7 +3572,9 @@ impl SceneRenderer {
             }
             for &index in &stale_map {
                 let (slot, face) = (index / 6, index % 6);
-                let Some(lamp) = &self.shadows.lamps[slot] else { continue };
+                let Some(lamp) = &self.shadows.lamps[slot] else {
+                    continue;
+                };
                 let (layer, tile) = settings.lamp_map_tile(index);
                 targets.push((
                     &self.shadows.layer_views[layer as usize],
@@ -3526,8 +3641,10 @@ impl SceneRenderer {
         {
             // A layer of lamp tiles clears once, before its first tile.
             let mut cleared: Vec<*const wgpu::TextureView> = Vec::new();
-            for (target, (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only)) in
-                targets.into_iter().enumerate()
+            for (
+                target,
+                (view, tile, matrix, casters, bind_group, pipelines, offset, clear_tile, map_only),
+            ) in targets.into_iter().enumerate()
             {
                 total_targets = target + 1;
                 if target == sun_targets {
@@ -3544,12 +3661,13 @@ impl SceneRenderer {
                 let footprint = extra.and_then(|e| e.footprint.as_ref());
                 // Kept faces share layers with other kept faces: never clear
                 // a whole layer under them.
-                let load = if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
-                    wgpu::LoadOp::Load
-                } else {
-                    cleared.push(view as *const _);
-                    wgpu::LoadOp::Clear(1.0)
-                };
+                let load =
+                    if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
+                        wgpu::LoadOp::Load
+                    } else {
+                        cleared.push(view as *const _);
+                        wgpu::LoadOp::Clear(1.0)
+                    };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("shadow map"),
                     color_attachments: &[],
@@ -3615,8 +3733,11 @@ impl SceneRenderer {
                 let mut draws = 0;
                 // Opaque runs of pooled chunks, drawn per block with one
                 // indirect multi-draw after the rest.
-                let mut pooled: Vec<(&wgpu::Buffer, &wgpu::Buffer, wgpu::util::DrawIndexedIndirectArgs)> =
-                    Vec::new();
+                let mut pooled: Vec<(
+                    &wgpu::Buffer,
+                    &wgpu::Buffer,
+                    wgpu::util::DrawIndexedIndirectArgs,
+                )> = Vec::new();
                 for (scene, buffer, range, cut) in items {
                     // A pose can hide every object (the spear's `fire`
                     // sequence while it is thrown); wgpu panics on slicing
@@ -3650,11 +3771,20 @@ impl SceneRenderer {
                                         },
                                     ));
                                 } else {
-                                    bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
+                                    bound.geometry(
+                                        &mut pass,
+                                        &scene.vertices,
+                                        buffer,
+                                        &scene.indices,
+                                    );
                                     bound.pipeline(&mut pass, &pipelines[if cut { 2 } else { 0 }]);
                                     triangles += u64::from(indices.end - indices.start) / 3
                                         * u64::from(range.end - range.start);
-                                    pass.draw_indexed(scene.index_range(&indices), scene.base_vertex, range.clone());
+                                    pass.draw_indexed(
+                                        scene.index_range(&indices),
+                                        scene.base_vertex,
+                                        range.clone(),
+                                    );
                                     draws += 1;
                                 }
                             }
@@ -3670,7 +3800,8 @@ impl SceneRenderer {
                         // bake and visibility volume treat as walls: no
                         // water, sky or vertex-lit models.
                         if map_only
-                            && scene.material_descriptors[batch.material].kind != MaterialKind::Surface
+                            && scene.material_descriptors[batch.material].kind
+                                != MaterialKind::Surface
                         {
                             flush!();
                             continue;
@@ -3682,7 +3813,11 @@ impl SceneRenderer {
                             bound.material(&mut pass, &scene.materials[batch.material]);
                             triangles += u64::from(batch.indices.end - batch.indices.start) / 3
                                 * u64::from(range.end - range.start);
-                            pass.draw_indexed(scene.index_range(&batch.indices), scene.base_vertex, range.clone());
+                            pass.draw_indexed(
+                                scene.index_range(&batch.indices),
+                                scene.base_vertex,
+                                range.clone(),
+                            );
                             draws += 1;
                         } else if let Some(indices) =
                             run.as_mut().filter(|r| r.end == batch.indices.start)
@@ -3697,7 +3832,10 @@ impl SceneRenderer {
                 }
                 let mut batched = 0;
                 if !pooled.is_empty() {
-                    triangles += pooled.iter().map(|(_, _, a)| u64::from(a.index_count) / 3).sum::<u64>();
+                    triangles += pooled
+                        .iter()
+                        .map(|(_, _, a)| u64::from(a.index_count) / 3)
+                        .sum::<u64>();
                     pooled.sort_by(|a, b| a.0.cmp(b.0));
                     let args: Vec<_> = pooled.iter().map(|(_, _, a)| *a).collect();
                     let uploaded = self.upload_indirect(&args);

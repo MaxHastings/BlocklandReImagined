@@ -345,7 +345,12 @@ struct Drive {
     current: bri_vehicles::Transform,
 }
 impl Drive {
-    fn step(&mut self, mirror: &mut CollisionMirror, input: &MoveInput, last: Option<&MoveInput>) -> Result<()> {
+    fn step(
+        &mut self,
+        mirror: &mut CollisionMirror,
+        input: &MoveInput,
+        last: Option<&MoveInput>,
+    ) -> Result<()> {
         let last = last.map_or((input.yaw, input.pitch), |l| (l.yaw, l.pitch));
         let controls = match self.actor {
             Some(horse) => crate::session::actor_controls(input, false, horse),
@@ -606,7 +611,10 @@ impl Predictor {
         let id = spawn.id;
         let actor = world
             .definition(&spawn.definition)
-            .map(|d| d.is_actor().then_some(d.family == bri_vehicles::Family::Horse))
+            .map(|d| {
+                d.is_actor()
+                    .then_some(d.family == bri_vehicles::Family::Horse)
+            })
             .ok_or_else(|| anyhow::anyhow!("Unknown vehicle {}", spawn.definition))?;
         world.spawn(&mut self.world.physics, spawn)?;
         // The predicted body rides, sized as the host sizes it.

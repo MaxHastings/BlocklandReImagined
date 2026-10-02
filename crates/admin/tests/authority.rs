@@ -441,7 +441,10 @@ fn auto_roles_need_a_super_admin_and_do_not_demote_online_clients() {
         panic!("{effects:?}")
     };
     let names: Vec<_> = rows.iter().map(|r| (r.name.as_str(), r.role)).collect();
-    assert_eq!(names, [("Player 2", Role::Admin), ("Player 3", Role::SuperAdmin)]);
+    assert_eq!(
+        names,
+        [("Player 2", Role::Admin), ("Player 3", Role::SuperAdmin)]
+    );
     run(
         &mut s,
         1,
@@ -626,7 +629,10 @@ fn super_admins_grant_and_revoke_ranks_that_return_on_rejoin() {
         .iter()
         .find(|a| a.principal == principal(4))
         .unwrap();
-    assert_eq!((saved.role, saved.name.as_str()), (Role::SuperAdmin, "Player 4"));
+    assert_eq!(
+        (saved.role, saved.name.as_str()),
+        (Role::SuperAdmin, "Player 4")
+    );
     // The saved rank follows the key back in, whatever name it now uses.
     s.disconnect(id(4));
     let mut back = connection(9);
@@ -648,7 +654,12 @@ fn super_admins_grant_and_revoke_ranks_that_return_on_rejoin() {
     )
     .unwrap();
     assert_eq!(s.role(id(9)), Some(Role::Player));
-    assert!(s.durable().auto_roles.iter().all(|a| a.principal != principal(4)));
+    assert!(
+        s.durable()
+            .auto_roles
+            .iter()
+            .all(|a| a.principal != principal(4))
+    );
     assert!(matches!(
         run(
             &mut s,
@@ -674,7 +685,13 @@ fn super_admins_grant_and_revoke_ranks_that_return_on_rejoin() {
         },
     )
     .unwrap();
-    assert_eq!(effects, vec![Effect::RoleChanged { target: id(11), role: Role::Admin }]);
+    assert_eq!(
+        effects,
+        vec![Effect::RoleChanged {
+            target: id(11),
+            role: Role::Admin
+        }]
+    );
     assert_eq!(s.durable().auto_roles.len(), before);
 }
 #[test]

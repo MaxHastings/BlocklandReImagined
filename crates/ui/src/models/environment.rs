@@ -83,7 +83,10 @@ impl NumberField {
             Self::TimeOfDay => (0.0, 24.0),
             Self::SunAzimuth => (0.0, 360.0),
             Self::SunElevation => (-90.0, 90.0),
-            Self::FlareSize => (*atmosphere::FLARE_SIZE.start(), *atmosphere::FLARE_SIZE.end()),
+            Self::FlareSize => (
+                *atmosphere::FLARE_SIZE.start(),
+                *atmosphere::FLARE_SIZE.end(),
+            ),
             Self::VisibleDistance => (atmosphere::MIN_VISIBLE_DISTANCE, atmosphere::MAX_DISTANCE),
             Self::FogDistance => (0.0, atmosphere::MAX_DISTANCE),
         }
@@ -93,7 +96,9 @@ impl NumberField {
         match self {
             Self::DayLength => 10.0,
             Self::TimeOfDay => 0.25,
-            Self::SunAzimuth | Self::SunElevation | Self::VisibleDistance | Self::FogDistance => 1.0,
+            Self::SunAzimuth | Self::SunElevation | Self::VisibleDistance | Self::FogDistance => {
+                1.0
+            }
             Self::FlareSize => 0.05,
         }
     }
@@ -138,7 +143,12 @@ impl EnvironmentModel {
     /// Start editing from what the host has now.
     pub fn begin(&mut self) {
         self.revision += 1;
-        self.draft = Some(self.view.as_ref().map(|v| v.settings.clone()).unwrap_or_default());
+        self.draft = Some(
+            self.view
+                .as_ref()
+                .map(|v| v.settings.clone())
+                .unwrap_or_default(),
+        );
         self.picking = None;
     }
     pub fn end(&mut self) {
@@ -204,7 +214,13 @@ impl EnvironmentModel {
     }
     pub fn set_color(&mut self, field: ColorField, c: [f32; 4]) {
         self.revision += 1;
-        let c = c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+        let c = c.map(|v| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        });
         let rgb = [c[0], c[1], c[2]];
         let s = self.draft.get_or_insert_with(Settings::default);
         match field {
@@ -227,7 +243,14 @@ impl EnvironmentModel {
     pub fn number(&self, field: NumberField) -> f32 {
         let s = self.settings();
         let a = self.authored();
-        let live = atmosphere::resolve(&a, &Settings { day_cycle: None, ..s.clone() }, 0.0);
+        let live = atmosphere::resolve(
+            &a,
+            &Settings {
+                day_cycle: None,
+                ..s.clone()
+            },
+            0.0,
+        );
         let (azimuth, elevation) = atmosphere::angles(a.sun_direction);
         match field {
             NumberField::DayLength => s
@@ -338,7 +361,9 @@ impl EnvironmentModel {
             day_cycle: None,
             ..self.settings()
         };
-        atmosphere::presets().iter().position(|(_, look)| *look == s)
+        atmosphere::presets()
+            .iter()
+            .position(|(_, look)| *look == s)
     }
     /// Every setting back to the map's own (on Apply).
     pub fn reset(&mut self) {
@@ -470,7 +495,10 @@ mod tests {
             tick: 1560,
             ..view()
         });
-        assert!(!m.changed(), "the window still says the cycle is not applied");
+        assert!(
+            !m.changed(),
+            "the window still says the cycle is not applied"
+        );
         // Applying another change sends the running cycle untouched.
         m.set_number(NumberField::SunAzimuth, 200.0);
         assert_eq!(m.settings().day_cycle, host.day_cycle);
@@ -482,9 +510,17 @@ mod tests {
 
     #[test]
     fn hsv_round_trips() {
-        for c in [[0.2, 0.4, 0.9], [1.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.9, 0.8, 0.1]] {
+        for c in [
+            [0.2, 0.4, 0.9],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [0.9, 0.8, 0.1],
+        ] {
             let back = rgb(hsv(c));
-            assert!((0..3).all(|i| (back[i] - c[i]).abs() < 1e-5), "{c:?} {back:?}");
+            assert!(
+                (0..3).all(|i| (back[i] - c[i]).abs() < 1e-5),
+                "{c:?} {back:?}"
+            );
         }
     }
 }

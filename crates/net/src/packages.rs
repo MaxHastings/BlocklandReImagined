@@ -188,14 +188,7 @@ pub async fn fetch_missing(
     cache: &Cache,
     progress: &Progress,
 ) -> Result<Vec<Fetched>> {
-    fetch_missing_pinned(
-        address,
-        &HostPin::from(certificate),
-        cache,
-        progress,
-        &[],
-    )
-    .await
+    fetch_missing_pinned(address, &HostPin::from(certificate), cache, progress, &[]).await
 }
 
 /// [`fetch_missing`] from the host `pin` names (a saved certificate, an

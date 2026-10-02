@@ -41,7 +41,9 @@ pub enum ClientEvent {
     /// The host changed maps and its bricks are streaming in (progress is
     /// reported separately). `MapChanged` follows once the replica holds the
     /// whole new world.
-    MapChanging { map: String },
+    MapChanging {
+        map: String,
+    },
     /// The replica now holds a new map.
     MapChanged,
 }
@@ -768,7 +770,11 @@ impl Client {
     }
     /// Swap in the new map once every announced brick has arrived.
     fn finish_map_change(&mut self) -> Result<Option<ClientEvent>> {
-        if !self.changing_map.as_ref().is_some_and(WorldAssembly::complete) {
+        if !self
+            .changing_map
+            .as_ref()
+            .is_some_and(WorldAssembly::complete)
+        {
             return Ok(None);
         }
         let Some(world) = self.changing_map.take() else {
@@ -1022,13 +1028,12 @@ pub(crate) async fn connect_quic(
     };
     let mut endpoint = quinn::Endpoint::client(SocketAddr::new(ip, 0))?;
     endpoint.set_default_client_config(config);
-    let connection = match tokio::time::timeout(wait, endpoint.connect(address, "blockland.local")?)
-        .await
-    {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(error)) => return Err(JoinError::from_connection(address, error).into()),
-        Err(_) => return Err(JoinError::NoAnswer(address).into()),
-    };
+    let connection =
+        match tokio::time::timeout(wait, endpoint.connect(address, "blockland.local")?).await {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(error)) => return Err(JoinError::from_connection(address, error).into()),
+            Err(_) => return Err(JoinError::NoAnswer(address).into()),
+        };
     let certificate = connection
         .peer_identity()
         .and_then(|identity| {
@@ -1108,7 +1113,9 @@ impl quinn::rustls::client::danger::ServerCertVerifier for Pinned {
         )
     }
     fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 

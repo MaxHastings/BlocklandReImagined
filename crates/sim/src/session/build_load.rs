@@ -183,8 +183,9 @@ impl Session {
             .iter()
             .filter_map(|id| world.bricks.remove(id))
             .collect();
-        let (extra, still): (Vec<Brick>, Vec<Brick>) =
-            std::mem::take(&mut world.unloaded).into_iter().partition(|b| placeable(b));
+        let (extra, still): (Vec<Brick>, Vec<Brick>) = std::mem::take(&mut world.unloaded)
+            .into_iter()
+            .partition(|b| placeable(b));
         unloaded.extend(still);
         let bricks = Queue {
             left: world.bricks.len() + extra.len(),
@@ -233,7 +234,11 @@ impl Session {
             return Ok(());
         }
         let mut published = 0;
-        while self.loading.as_deref().is_some_and(|l| !l.bricks.is_empty()) {
+        while self
+            .loading
+            .as_deref()
+            .is_some_and(|l| !l.bricks.is_empty())
+        {
             let slice = match self.load_pace {
                 LoadPace::Budget => SLICE,
                 LoadPace::Bricks(count) => (count - published).min(SLICE),

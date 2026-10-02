@@ -11,6 +11,7 @@ use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
 };
+use bri_minigames::SettingValue as Value;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
 use bri_sim::{
@@ -24,7 +25,6 @@ use bri_sim::{
 use bri_world::{BrickId, EventRow, EventTarget, EventValue, OwnerId, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
-use bri_minigames::SettingValue as Value;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -212,13 +212,22 @@ fn definitions() -> Definitions {
 /// v20's avatar lists, in their order: Slayer's custom uniform names parts
 /// by their place in them.
 fn avatars() -> bri_content::avatar::Package {
-    let texture = |file: &str| {
-        serde_json::json!({ "file": file, "sha256": "", "source": "", "width": 1, "height": 1 })
-    };
+    let texture = |file: &str| serde_json::json!({ "file": file, "sha256": "", "source": "", "width": 1, "height": 1 });
     let color = |c: f32| serde_json::json!([c, c, c, 1.0]);
     let slots = [
-        "head", "torso", "hat", "accent", "pack", "secondpack", "hip", "rarm", "larm", "rhand",
-        "lhand", "rleg", "lleg",
+        "head",
+        "torso",
+        "hat",
+        "accent",
+        "pack",
+        "secondpack",
+        "hip",
+        "rarm",
+        "larm",
+        "rhand",
+        "lhand",
+        "rleg",
+        "lleg",
     ];
     let plumes = serde_json::json!(["none", "plume", "triplume", "septplume"]);
     serde_json::from_value(serde_json::json!({
@@ -594,15 +603,17 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     let mut g = Game::new("capture");
     let (red, blue) = two_teams(&mut g);
     let owner = g.s.minigame_views()[0].owner;
-    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
+    g.set(
+        owner,
+        &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))],
+    );
     // Its brick events are in builders' wrench.
-    let inputs: Vec<_> = g
-        .s
-        .package_brick_inputs()
-        .into_iter()
-        .filter(|i| i.source != "probe")
-        .map(|i| i.name)
-        .collect();
+    let inputs: Vec<_> =
+        g.s.package_brick_inputs()
+            .into_iter()
+            .filter(|i| i.source != "probe")
+            .map(|i| i.name)
+            .collect();
     assert!(inputs.ends_with(&[
         "onFlagPickedUp".to_string(),
         "onFlagDropped".into(),
@@ -614,16 +625,18 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
     // Their builder hears whose they are.
-    let prints: Vec<String> = g
-        .s
-        .take_private_notices()
-        .into_iter()
-        .filter_map(|(_, n)| match n {
-            Notice::Bottom { text, .. } => Some(readable(&text)),
-            _ => None,
-        })
-        .collect();
-    assert!(prints.iter().any(|t| t.ends_with("set for Red.")), "{prints:?}");
+    let prints: Vec<String> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(_, n)| match n {
+                Notice::Bottom { text, .. } => Some(readable(&text)),
+                _ => None,
+            })
+            .collect();
+    assert!(
+        prints.iter().any(|t| t.ends_with("set for Red.")),
+        "{prints:?}"
+    );
     // Each Flag Spawn holds its flag, in the brick's colour.
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
     assert_eq!(g.flag_on(blue_flag), Some(Some(BLUE)));
@@ -675,7 +688,12 @@ fn flags_follow_the_mode_and_stay_on_their_stands_and_backs() {
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
 
     // The stand's item taken: the flag is back on the next check.
-    g.run(owner, "probe", "unstock", vec![PackageArg::Int(red_flag as i64)]);
+    g.run(
+        owner,
+        "probe",
+        "unstock",
+        vec![PackageArg::Int(red_flag as i64)],
+    );
     g.steps(31);
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
 
@@ -683,7 +701,12 @@ fn flags_follow_the_mode_and_stay_on_their_stands_and_backs() {
     g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
     g.settle();
     assert_eq!(g.carried(blue), Some(Some(RED)));
-    g.run(blue, "probe", "strip", vec![PackageArg::Int(i64::from(FLAG_SLOT))]);
+    g.run(
+        blue,
+        "probe",
+        "strip",
+        vec![PackageArg::Int(i64::from(FLAG_SLOT))],
+    );
     g.steps(1);
     assert_eq!(g.carried(blue), Some(Some(RED)), "still on Blue's back");
 
@@ -706,7 +729,10 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
     let mut g = Game::new("drop");
     let (red, blue) = two_teams(&mut g);
     let owner = g.s.minigame_views()[0].owner;
-    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
+    g.set(
+        owner,
+        &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))],
+    );
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
@@ -776,7 +802,10 @@ fn key(rules: &str, key: &str) -> String {
 
 /// Two teams playing Capture the Flag, with a flag each: (red, blue, red
 /// flag, blue flag).
-fn capture_the_flag(g: &mut Game, settings: &[(&str, Value)]) -> (OwnerId, OwnerId, BrickId, BrickId) {
+fn capture_the_flag(
+    g: &mut Game,
+    settings: &[(&str, Value)],
+) -> (OwnerId, OwnerId, BrickId, BrickId) {
     let (red, blue) = two_teams(g);
     let owner = g.s.minigame_views()[0].owner;
     let mode = key(SLAYER, "mode");
@@ -811,7 +840,10 @@ fn enough_captures_win_the_round_and_slayer_resets_it() {
     for p in [red, blue] {
         assert_eq!(g.s.control(p), Some(watching(p)));
         assert!(g.cmd(p, Command::WeaponTrigger { down: true }).is_err());
-        assert!(g.cmd(p, Command::ControlPlayer).is_err(), "no clicking out of it");
+        assert!(
+            g.cmd(p, Command::ControlPlayer).is_err(),
+            "no clicking out of it"
+        );
     }
     // No more captures until the reset.
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
@@ -829,8 +861,10 @@ fn the_points_to_win_end_a_round_too() {
     let mut g = Game::new("ctf-points");
     let to_win = key(CTF, "flag_returns_to_win");
     let points = key(SLAYER, "points");
-    let (_, blue, _, _) =
-        capture_the_flag(&mut g, &[(&to_win, Value::Int(0)), (&points, Value::Int(20))]);
+    let (_, blue, _, _) = capture_the_flag(
+        &mut g,
+        &[(&to_win, Value::Int(0)), (&points, Value::Int(20))],
+    );
     g.s.take_private_notices();
     capture(&mut g, blue);
     g.steps(13);
@@ -866,10 +900,20 @@ fn a_team_out_of_lives_loses_and_the_next_round_counts_down() {
     assert!(g.s.vitals()[&red].alive);
     assert!(!g.round_over());
     // Frozen (`PlayerFrozenArmor`): no moving, no tools, the camera behind.
-    let frozen = g.s.archetypes().resolve(g.s.archetypes().find(FROZEN).unwrap()).clone();
+    let frozen =
+        g.s.archetypes()
+            .resolve(g.s.archetypes().find(FROZEN).unwrap())
+            .clone();
     assert_eq!(g.body(red), FROZEN);
     assert!(!frozen.uses_items && frozen.look.third_person_only);
-    assert_eq!((frozen.movement.forward, frozen.movement.jump_speed, frozen.movement.can_jet), (0.0, 0.0, false));
+    assert_eq!(
+        (
+            frozen.movement.forward,
+            frozen.movement.jump_speed,
+            frozen.movement.can_jet
+        ),
+        (0.0, 0.0, false)
+    );
     let refused = |g: &mut Game| match g.cmd(red, Command::EquipTool { slot: Some(0) }) {
         Err(e) => e.to_string().contains("cannot use items"),
         Ok(_) => false,
@@ -882,15 +926,14 @@ fn a_team_out_of_lives_loses_and_the_next_round_counts_down() {
     }
     assert!(!refused(&mut g), "tools come back at GO");
     // A voice for each second, then the buzzer, for each player.
-    let sounds: Vec<_> = g
-        .s
-        .take_private_notices()
-        .into_iter()
-        .filter_map(|(p, n)| match n {
-            Notice::Sound(s) if p == red => Some(s),
-            _ => None,
-        })
-        .collect();
+    let sounds: Vec<_> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(p, n)| match n {
+                Notice::Sound(s) if p == red => Some(s),
+                _ => None,
+            })
+            .collect();
     assert_eq!(
         sounds,
         [
@@ -956,7 +999,10 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
     g.steps(2);
     // The menu lists Slayer's settings under the Add-On players know.
     let menu = g.s.addon_settings();
-    let mode = menu.iter().find(|s| s.key() == key(SLAYER, "mode")).unwrap();
+    let mode = menu
+        .iter()
+        .find(|s| s.key() == key(SLAYER, "mode"))
+        .unwrap();
     assert_eq!(mode.package_name, "Stand-in Slayer");
     assert_eq!(mode.items.len(), 3, "Capture the Flag joins the modes");
     let lives = key(SLAYER, "team_lives");
@@ -998,7 +1044,10 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
     g.steps(13);
     let view = g.s.minigame_views()[0].clone();
     assert_eq!(view.teams.len(), 2);
-    assert_eq!(view.teams[0].addon_settings.get(&lives), Some(&Value::Int(3)));
+    assert_eq!(
+        view.teams[0].addon_settings.get(&lives),
+        Some(&Value::Int(3))
+    );
     // Slayer sorted both players, one a side.
     let (ca, cb) = (g.colour(a), g.colour(b));
     assert!(ca.is_some() && cb.is_some() && ca != cb, "{ca:?} {cb:?}");
@@ -1050,7 +1099,9 @@ fn standing_on_a_capture_point_fills_its_bar_and_captures_it() {
     g.steps(CP_TICK * 2 + 1);
     let shown = bars(&mut g);
     assert!(
-        shown.iter().any(|b| b.matches('_').count() == 3 && b.matches("<color:").count() == 2),
+        shown
+            .iter()
+            .any(|b| b.matches('_').count() == 3 && b.matches("<color:").count() == 2),
         "a part-filled bar: {shown:?}"
     );
     g.steps(CP_TICK * 3);
@@ -1076,7 +1127,8 @@ fn standing_on_a_capture_point_fills_its_bar_and_captures_it() {
     assert_eq!(g.score(red), CP_POINTS);
 
     // A reset gives it back to the colour it was built in.
-    g.cmd(owner, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Reset))
+        .unwrap();
     g.steps(2);
     assert_eq!(colour(&g), neutral);
 
@@ -1145,10 +1197,14 @@ fn a_player_out_of_lives_spectates_and_changes_cameras() {
     g.steps(13);
     assert!(g.s.vitals()[&a].respawn_held);
     // Keys in the first moments after death do nothing.
-    g.cmd(a, Command::ObserverButton(ObserverButton::Jump)).unwrap();
+    g.cmd(a, Command::ObserverButton(ObserverButton::Jump))
+        .unwrap();
     assert_eq!(g.s.control(a), Some(ControlObject::Corpse));
     // A living player can't send a spectator's keys.
-    assert!(g.cmd(b, Command::ObserverButton(ObserverButton::Fire)).is_err());
+    assert!(
+        g.cmd(b, Command::ObserverButton(ObserverButton::Fire))
+            .is_err()
+    );
 
     // Three seconds on: orbiting the first living player, then fire steps
     // to the next and jet back.
@@ -1170,13 +1226,22 @@ fn a_player_out_of_lives_spectates_and_changes_cameras() {
     g.s.take_private_notices();
     press(&mut g, ObserverButton::Jump);
     assert_eq!(g.s.control(a), Some(ControlObject::Path));
-    let glide = g.s.vitals()[&a].camera_path.clone().expect("the glide replicates");
+    let glide = g.s.vitals()[&a]
+        .camera_path
+        .clone()
+        .expect("the glide replicates");
     assert_eq!(glide.knots.len(), 2);
     let [from, to] = [glide.knots[0].view.eye(), glide.knots[1].view.eye()];
     let target = g.feet(c);
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
-    assert!((flat(from - target).length() - 4.0).abs() < 0.01, "{from} {target}");
-    assert!((flat(to - target).length() - 1.0).abs() < 0.01, "{to} {target}");
+    assert!(
+        (flat(from - target).length() - 4.0).abs() < 0.01,
+        "{from} {target}"
+    );
+    assert!(
+        (flat(to - target).length() - 1.0).abs() < 0.01,
+        "{to} {target}"
+    );
     assert!(
         g.s.take_private_notices()
             .iter()
@@ -1204,7 +1269,12 @@ fn a_player_out_of_lives_spectates_and_changes_cameras() {
     assert!(g.s.vitals()[&a].camera_path.is_none());
 
     // A new round brings them back to their body.
-    g.run(a, SLAYER, "slayer", vec![PackageArg::String("reset".into())]);
+    g.run(
+        a,
+        SLAYER,
+        "slayer",
+        vec![PackageArg::String("reset".into())],
+    );
     g.steps(3);
     assert!(g.s.vitals()[&a].alive);
     assert_eq!(g.s.control(a), Some(ControlObject::Player));
@@ -1245,12 +1315,21 @@ fn the_fly_through_camera_flies_everyone_before_the_round() {
     assert_eq!(path.knots.len(), 3);
     // Ten units at twenty a second (half a second, give or take where the
     // body settled), then the jump cuts to the last knot.
-    assert!((60..=61).contains(&path.duration_ticks()), "{}", path.duration_ticks());
+    assert!(
+        (60..=61).contains(&path.duration_ticks()),
+        "{}",
+        path.duration_ticks()
+    );
     g.steps(64);
     assert_eq!(g.s.control(a), Some(ControlObject::Player));
 
     // A reset flies every member first; the countdown waits for it.
-    g.run(a, SLAYER, "slayer", vec![PackageArg::String("reset".into())]);
+    g.run(
+        a,
+        SLAYER,
+        "slayer",
+        vec![PackageArg::String("reset".into())],
+    );
     g.steps(3);
     for p in [a, b] {
         assert_eq!(g.s.control(p), Some(ControlObject::Path));
@@ -1266,7 +1345,12 @@ fn the_fly_through_camera_flies_everyone_before_the_round() {
     g.run(a, SLAYER, "deleteflycam", vec![]);
     // Past the engine's five seconds between resets.
     g.steps(5 * 120 + 13);
-    g.run(a, SLAYER, "slayer", vec![PackageArg::String("reset".into())]);
+    g.run(
+        a,
+        SLAYER,
+        "slayer",
+        vec![PackageArg::String("reset".into())],
+    );
     g.steps(3);
     assert_eq!(g.s.control(b), Some(ControlObject::Player));
     assert_eq!(g.body(b), FROZEN);
@@ -1347,10 +1431,30 @@ fn slayers_wrench_events_check_teams_hold_bricks_and_win_rounds() {
     // rows its range "1 2" names; Blue is not, so onTeamCheckFalse.
     let checker = g.plant(owner, TEAM_SPAWN, 10.0, 0.0, 2);
     let rows = vec![
-        event("onPoke", "SelfBrick", "checkTeam", vec![EventValue::Int(0), text("Red"), text("1 2")]),
-        event("onTeamCheckTrue", "Client", "addKills", vec![EventValue::Int(3)]),
-        event("onTeamCheckFalse", "Client", "addDeaths", vec![EventValue::Int(4)]),
-        event("onTeamCheckTrue", "Client", "addDeaths", vec![EventValue::Int(5)]),
+        event(
+            "onPoke",
+            "SelfBrick",
+            "checkTeam",
+            vec![EventValue::Int(0), text("Red"), text("1 2")],
+        ),
+        event(
+            "onTeamCheckTrue",
+            "Client",
+            "addKills",
+            vec![EventValue::Int(3)],
+        ),
+        event(
+            "onTeamCheckFalse",
+            "Client",
+            "addDeaths",
+            vec![EventValue::Int(4)],
+        ),
+        event(
+            "onTeamCheckTrue",
+            "Client",
+            "addDeaths",
+            vec![EventValue::Int(5)],
+        ),
     ];
     g.s.edit_brick(owner, checker, Edit::Events(rows)).unwrap();
     poke(&mut g, red, checker);
@@ -1363,7 +1467,12 @@ fn slayers_wrench_events_check_teams_hold_bricks_and_win_rounds() {
     // `setTeamControl`: a Red team spawn turned over to Blue spawns Blue.
     let at = Vec3::new(-15.5, 0.2, 0.25);
     let spawn = g.plant(owner, TEAM_SPAWN, at.x, 0.0, RED);
-    let rows = vec![event("onPoke", "SelfBrick", "setTeamControl", vec![EventValue::Color(BLUE)])];
+    let rows = vec![event(
+        "onPoke",
+        "SelfBrick",
+        "setTeamControl",
+        vec![EventValue::Color(BLUE)],
+    )];
     g.s.edit_brick(owner, spawn, Edit::Events(rows)).unwrap();
     poke(&mut g, blue, spawn);
     g.cmd(blue, Command::Suicide).unwrap();
@@ -1382,7 +1491,11 @@ fn slayers_wrench_events_check_teams_hold_bricks_and_win_rounds() {
         "onPoke",
         "SelfBrick",
         "setTeamControlLocked",
-        vec![EventValue::Int(1), EventValue::Color(BLUE), EventValue::Bool(true)],
+        vec![
+            EventValue::Int(1),
+            EventValue::Color(BLUE),
+            EventValue::Bool(true),
+        ],
     )];
     g.s.edit_brick(owner, cp, Edit::Events(rows)).unwrap();
     poke(&mut g, blue, cp);
@@ -1391,16 +1504,32 @@ fn slayers_wrench_events_check_teams_hold_bricks_and_win_rounds() {
     g.steps(CP_TICK * 8);
     let notices = g.s.take_private_notices();
     assert!(
-        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains("Locked for now."))),
+        notices.iter().any(
+            |(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains("Locked for now."))
+        ),
         "{notices:?}"
     );
-    assert_eq!(g.s.simulation().state().bricks[&cp].color, 2, "not captured");
+    assert_eq!(
+        g.s.simulation().state().bricks[&cp].color,
+        2,
+        "not captured"
+    );
 
     // `incTimeRemaining` and `Win`, on the mini-game.
     let game = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, 2);
     let rows = vec![
-        event("onPoke", "MiniGame", "incTimeRemaining", vec![EventValue::Int(2), EventValue::Bool(true)]),
-        event("onPoke", "MiniGame", "Win", vec![EventValue::Int(4), text("The Builders")]),
+        event(
+            "onPoke",
+            "MiniGame",
+            "incTimeRemaining",
+            vec![EventValue::Int(2), EventValue::Bool(true)],
+        ),
+        event(
+            "onPoke",
+            "MiniGame",
+            "Win",
+            vec![EventValue::Int(4), text("The Builders")],
+        ),
     ];
     g.s.edit_brick(owner, game, Edit::Events(rows)).unwrap();
     g.s.take_private_notices();
@@ -1421,7 +1550,12 @@ fn the_drop_flag_event_drops_the_flag_and_fires_its_input() {
     let rows = vec![event("onPoke", "Player", "DropFlag", vec![])];
     g.s.edit_brick(owner, poker, Edit::Events(rows)).unwrap();
     // The flag's own brick hears it was dropped, and counts it on Blue.
-    let rows = vec![event("onFlagDropped", "Client", "addKills", vec![EventValue::Int(1)])];
+    let rows = vec![event(
+        "onFlagDropped",
+        "Client",
+        "addKills",
+        vec![EventValue::Int(1)],
+    )];
     g.s.edit_brick(owner, red_flag, Edit::Events(rows)).unwrap();
     g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
     g.settle();
@@ -1485,15 +1619,26 @@ fn the_end_of_round_report_shows_teams_and_players_with_flag_columns() {
     assert_eq!(won.banner.as_deref(), Some("VICTORY"));
     assert_eq!(lost.banner.as_deref(), Some("DEFEAT"));
     let titles: Vec<&str> = won.columns.iter().map(|c| c.title.as_str()).collect();
-    assert_eq!(titles, ["Score", "Flag Pick-ups", "Flag Returns", "Rounds Won"]);
+    assert_eq!(
+        titles,
+        ["Score", "Flag Pick-ups", "Flag Returns", "Rounds Won"]
+    );
     assert_eq!(won.sections[0].title, "Teams:");
     assert_eq!(won.sections[1].title, "Players:");
-    let teams: Vec<&str> = won.sections[0].rows.iter().map(|r| r.name.as_str()).collect();
+    let teams: Vec<&str> = won.sections[0]
+        .rows
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
     assert_eq!(teams, ["Blue", "Red"], "highest score first");
     let blue_team = &won.sections[0].rows[0];
     assert_eq!(blue_team.color, Some(BLUE));
     assert_eq!(cell(blue_team, "score"), CAPTURE_POINTS.to_string());
-    assert_eq!(cell(blue_team, "kills"), "1", "one flag taken from its stand");
+    assert_eq!(
+        cell(blue_team, "kills"),
+        "1",
+        "one flag taken from its stand"
+    );
     assert_eq!(cell(blue_team, "deaths"), "1", "one flag returned");
     assert_eq!(cell(blue_team, "wins"), "1");
     assert_eq!(cell(&won.sections[0].rows[1], "kills"), "", "none is blank");
@@ -1507,13 +1652,22 @@ fn the_end_of_round_report_shows_teams_and_players_with_flag_columns() {
     g.steps(BETWEEN_ROUNDS * 120);
     let closed = reports(&mut g);
     for p in [red, blue] {
-        assert!(closed.iter().any(|(o, r)| *o == p && r.is_none()), "{closed:?}");
+        assert!(
+            closed.iter().any(|(o, r)| *o == p && r.is_none()),
+            "{closed:?}"
+        );
     }
     // Without Victory/Defeat or Team Scores: one plain list.
     let owner = g.s.minigame_views()[0].owner;
     let victory = key(SLAYER, "eorr_display_victory");
     let team_scores = key(SLAYER, "eorr_display_team_scores");
-    g.set(owner, &[(&victory, Value::Bool(false)), (&team_scores, Value::Bool(false))]);
+    g.set(
+        owner,
+        &[
+            (&victory, Value::Bool(false)),
+            (&team_scores, Value::Bool(false)),
+        ],
+    );
     g.steps(31);
     g.s.take_private_notices();
     capture(&mut g, blue);
@@ -1524,7 +1678,10 @@ fn the_end_of_round_report_shows_teams_and_players_with_flag_columns() {
     assert_eq!(report.banner, None);
     assert_eq!(report.sections.len(), 1);
     assert_eq!(report.sections[0].title, "");
-    assert_eq!(cell(row(report, 0, &format!("player:{blue}")), "kills"), "1");
+    assert_eq!(
+        cell(row(report, 0, &format!("player:{blue}")), "kills"),
+        "1"
+    );
     // With the report off, nobody is shown one.
     let enable = key(SLAYER, "eorr_enable");
     g.steps(BETWEEN_ROUNDS * 120);
@@ -1554,11 +1711,16 @@ fn a_locked_flag_cannot_be_taken_nor_a_flag_returned_to_a_locked_stand() {
             "onPoke",
             "SelfBrick",
             "setTeamControlLocked",
-            vec![EventValue::Int(mode), EventValue::Color(color), EventValue::Bool(on)],
+            vec![
+                EventValue::Int(mode),
+                EventValue::Color(color),
+                EventValue::Bool(on),
+            ],
         )]
     };
     // Slayer's setTeamControlLocked on the red flag, for Blue's colour.
-    g.s.edit_brick(owner, red_flag, Edit::Events(lock(1, BLUE, true))).unwrap();
+    g.s.edit_brick(owner, red_flag, Edit::Events(lock(1, BLUE, true)))
+        .unwrap();
     poke(&mut g, blue, red_flag);
     g.s.take_private_notices();
     g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
@@ -1570,14 +1732,16 @@ fn a_locked_flag_cannot_be_taken_nor_a_flag_returned_to_a_locked_stand() {
     // Unlocked, Blue takes it.
     g.goto(blue, Vec3::new(0.0, 0.25, 0.0));
     g.steps(4);
-    g.s.edit_brick(owner, red_flag, Edit::Events(lock(1, BLUE, false))).unwrap();
+    g.s.edit_brick(owner, red_flag, Edit::Events(lock(1, BLUE, false)))
+        .unwrap();
     poke(&mut g, blue, red_flag);
     g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
     g.settle();
     assert!(g.carried(blue).is_some());
 
     // Blue locks their own flag for their team (mode 0): no capture there.
-    g.s.edit_brick(owner, blue_flag, Edit::Events(lock(0, 0, true))).unwrap();
+    g.s.edit_brick(owner, blue_flag, Edit::Events(lock(0, 0, true)))
+        .unwrap();
     poke(&mut g, blue, blue_flag);
     g.s.take_private_notices();
     g.goto(blue, Vec3::new(8.5, 0.25, 0.25));
@@ -1596,7 +1760,10 @@ fn the_drop_tool_key_with_tools_put_away_drops_a_carried_flag() {
     g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
     g.settle();
     assert!(g.carried(blue).is_some());
-    assert!(bottom_printed(&mut g, "Drop Tool"), "the pickup says how to drop it");
+    assert!(
+        bottom_printed(&mut g, "Drop Tool"),
+        "the pickup says how to drop it"
+    );
     // Enable Manual Flag Dropping off: the key does nothing.
     let owner = g.s.minigame_views()[0].owner;
     let manual = key(CTF, "manual_flag_drop");
@@ -1644,12 +1811,21 @@ fn team_events_message_respawn_and_score_a_whole_team() {
     // their name; `Team(Brick)`: the teams of the brick's colour.
     let board = g.plant(owner, TEAM_SPAWN, 10.0, 0.0, RED);
     let rows = vec![
-        team_event("onPoke", "Team(Client)", "ChatMsgAll", vec![text("%1 rallies the team")]),
+        team_event(
+            "onPoke",
+            "Team(Client)",
+            "ChatMsgAll",
+            vec![text("%1 rallies the team")],
+        ),
         team_event(
             "onPoke",
             "Team(Brick)",
             "BottomPrintAll",
-            vec![text("Red holds the board"), EventValue::Int(3), EventValue::Bool(true)],
+            vec![
+                text("Red holds the board"),
+                EventValue::Int(3),
+                EventValue::Bool(true),
+            ],
         ),
     ];
     g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
@@ -1658,7 +1834,8 @@ fn team_events_message_respawn_and_score_a_whole_team() {
     let notices = g.s.take_private_notices();
     let blue_name = g.s.names()[&blue].clone();
     let chat = format!("{blue_name} rallies the team");
-    let heard = |who: OwnerId, f: &dyn Fn(&Notice) -> bool| notices.iter().any(|(o, n)| *o == who && f(n));
+    let heard =
+        |who: OwnerId, f: &dyn Fn(&Notice) -> bool| notices.iter().any(|(o, n)| *o == who && f(n));
     let rallied = |n: &Notice| matches!(n, Notice::Chat(t) if *t == chat);
     let board_print = |n: &Notice| {
         matches!(n, Notice::Bottom { text, seconds, hide_bar }
@@ -1672,7 +1849,8 @@ fn team_events_message_respawn_and_score_a_whole_team() {
     // `RespawnAll`: Blue's team comes back, wherever it was.
     let blue_board = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, BLUE);
     let rows = vec![team_event("onPoke", "Team(Brick)", "RespawnAll", vec![])];
-    g.s.edit_brick(owner, blue_board, Edit::Events(rows)).unwrap();
+    g.s.edit_brick(owner, blue_board, Edit::Events(rows))
+        .unwrap();
     g.cmd(blue, Command::Suicide).unwrap();
     g.steps(2);
     assert!(!g.s.vitals()[&blue].alive);
@@ -1680,7 +1858,12 @@ fn team_events_message_respawn_and_score_a_whole_team() {
     assert!(g.s.vitals()[&blue].alive, "respawned");
 
     // `IncScore`: the team's own points count toward the points to win.
-    let rows = vec![team_event("onPoke", "Team(Client)", "IncScore", vec![EventValue::Int(4)])];
+    let rows = vec![team_event(
+        "onPoke",
+        "Team(Client)",
+        "IncScore",
+        vec![EventValue::Int(4)],
+    )];
     g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
     g.s.take_private_notices();
     poke(&mut g, blue, board);
@@ -1701,16 +1884,34 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
     let owner = g.s.minigame_views()[0].owner;
     let catalog = g.s.event_catalog().unwrap();
     let death = &catalog.input("onMinigameDeath").unwrap().targets;
-    assert!(death.contains(&("Client(Killer)".into(), "GameConnection".into())), "{death:?}");
+    assert!(
+        death.contains(&("Client(Killer)".into(), "GameConnection".into())),
+        "{death:?}"
+    );
 
     // `onActivate(Team1)` for Red, the game's first team, and
     // `onActivate(Team2)` for Blue.
     let board = g.plant(owner, TEAM_SPAWN, 10.0, 0.0, 2);
     let rounds = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, 2);
     let rows = vec![
-        event("onActivate(Team1)", "Client", "addKills", vec![EventValue::Int(1)]),
-        event("onActivate(Team2)", "Client", "addKills", vec![EventValue::Int(2)]),
-        event("onMinigameDeath", "Client", "addKills", vec![EventValue::Int(3)]),
+        event(
+            "onActivate(Team1)",
+            "Client",
+            "addKills",
+            vec![EventValue::Int(1)],
+        ),
+        event(
+            "onActivate(Team2)",
+            "Client",
+            "addKills",
+            vec![EventValue::Int(2)],
+        ),
+        event(
+            "onMinigameDeath",
+            "Client",
+            "addKills",
+            vec![EventValue::Int(3)],
+        ),
     ];
     g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
     for p in [red, blue] {
@@ -1726,9 +1927,24 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
 
     // `onMinigameRoundEnd` and `onMinigameRoundStart`, on the mini-game.
     let rows = vec![
-        event("onMinigameRoundEnd", "MiniGame", "incTimeRemaining", vec![EventValue::Int(1), EventValue::Bool(true)]),
-        event("onMinigameRoundStart", "MiniGame", "setTimeRemaining", vec![EventValue::Int(3), EventValue::Bool(true)]),
-        event("onPoke", "MiniGame", "Win", vec![EventValue::Int(4), EventValue::Text("The Builders".into())]),
+        event(
+            "onMinigameRoundEnd",
+            "MiniGame",
+            "incTimeRemaining",
+            vec![EventValue::Int(1), EventValue::Bool(true)],
+        ),
+        event(
+            "onMinigameRoundStart",
+            "MiniGame",
+            "setTimeRemaining",
+            vec![EventValue::Int(3), EventValue::Bool(true)],
+        ),
+        event(
+            "onPoke",
+            "MiniGame",
+            "Win",
+            vec![EventValue::Int(4), EventValue::Text("The Builders".into())],
+        ),
     ];
     g.s.edit_brick(owner, rounds, Edit::Events(rows)).unwrap();
     g.s.take_private_notices();
@@ -1742,21 +1958,49 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
 
     // Restrict Output Events: rows only those who may edit the game add,
     // and the stand-in's `BottomPrintAll` (level 2) only an admin.
-    let win = || event("onPoke", "MiniGame", "Win", vec![EventValue::Int(4), EventValue::Text("Me".into())]);
-    let time = || event("onPoke", "MiniGame", "incTimeRemaining", vec![EventValue::Int(1), EventValue::Bool(true)]);
+    let win = || {
+        event(
+            "onPoke",
+            "MiniGame",
+            "Win",
+            vec![EventValue::Int(4), EventValue::Text("Me".into())],
+        )
+    };
+    let time = || {
+        event(
+            "onPoke",
+            "MiniGame",
+            "incTimeRemaining",
+            vec![EventValue::Int(1), EventValue::Bool(true)],
+        )
+    };
     let print = || {
-        event("onPoke", "MiniGame", "BottomPrintAll", vec![EventValue::Text("Hi".into()), EventValue::Int(3), EventValue::Bool(false)])
+        event(
+            "onPoke",
+            "MiniGame",
+            "BottomPrintAll",
+            vec![
+                EventValue::Text("Hi".into()),
+                EventValue::Int(3),
+                EventValue::Bool(false),
+            ],
+        )
     };
     let other = if owner == red { blue } else { red };
     let mut rows = vec![win(), time()];
-    assert!(g.s.review_event_rows(other, rounds, &mut rows).is_empty(), "off by default here");
+    assert!(
+        g.s.review_event_rows(other, rounds, &mut rows).is_empty(),
+        "off by default here"
+    );
     assert_eq!(rows.len(), 2);
     // Only the host may switch it (Slayer's Host permission level), even
     // in a game someone else runs.
     let restrict_key = key(SLAYER, "restrict_output_events");
     let restrict = [(restrict_key.as_str(), Value::Bool(true))];
     assert!(g.try_set(owner, &restrict).is_err());
-    let host = g.s.join("Host".into(), Vec3::new(6.0, 0.05, 20.0), true).unwrap();
+    let host =
+        g.s.join("Host".into(), Vec3::new(6.0, 0.05, 20.0), true)
+            .unwrap();
     g.set(host, &restrict);
     let refused = g.s.review_event_rows(other, rounds, &mut rows);
     assert!(rows.is_empty(), "{rows:?}");
@@ -1770,30 +2014,48 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
     let mut rows = vec![win(), time(), print()];
     let refused = g.s.review_event_rows(owner, rounds, &mut rows);
     assert_eq!(rows, [win(), time()]);
-    assert_eq!(refused, ["You do not have permission to use the [MiniGame, BottomPrintAll] event."]);
+    assert_eq!(
+        refused,
+        ["You do not have permission to use the [MiniGame, BottomPrintAll] event."]
+    );
     // Capture the Flag's DropFlag is the game's editors' (its
     // `RestrictedEvent__["Player", "DropFlag"]`).
     let drop = || event("onPoke", "Player", "DropFlag", vec![]);
     let mut rows = vec![drop()];
     let refused = g.s.review_event_rows(other, rounds, &mut rows);
     assert!(rows.is_empty());
-    assert_eq!(refused, ["You do not have permission to use the [Player, DropFlag] event."]);
+    assert_eq!(
+        refused,
+        ["You do not have permission to use the [Player, DropFlag] event."]
+    );
     let mut rows = vec![drop()];
     assert!(g.s.review_event_rows(owner, rounds, &mut rows).is_empty());
     assert_eq!(rows.len(), 1);
 
     // `onMinigameLeave` and `onMinigameJoin`, for whoever leaves or joins.
     let rows = vec![
-        event("onMinigameLeave", "Client", "addDeaths", vec![EventValue::Int(4)]),
-        event("onMinigameJoin", "Client", "addDeaths", vec![EventValue::Int(5)]),
+        event(
+            "onMinigameLeave",
+            "Client",
+            "addDeaths",
+            vec![EventValue::Int(4)],
+        ),
+        event(
+            "onMinigameJoin",
+            "Client",
+            "addDeaths",
+            vec![EventValue::Int(5)],
+        ),
     ];
     g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
     let deaths = stat(&g, other, "deaths");
-    g.cmd(other, Command::MiniGame(MiniGameRequest::Leave)).unwrap();
+    g.cmd(other, Command::MiniGame(MiniGameRequest::Leave))
+        .unwrap();
     g.steps(2);
     assert_eq!(stat(&g, other, "deaths"), deaths + 4);
     let game = g.s.minigame_views()[0].id;
-    g.cmd(other, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    g.cmd(other, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
     g.steps(2);
     assert_eq!(stat(&g, other, "deaths"), deaths + 4 + 5);
     g.quiet();
@@ -1813,7 +2075,9 @@ const STANDARD: &str = "v20.player.playerstandardarmor";
 fn teams_dress_their_members_and_give_them_their_kit() {
     let mut g = Game::new("uniforms");
     let own = {
-        let a = g.s.join("Solo".into(), Vec3::new(0.0, 0.05, 25.0), false).unwrap();
+        let a =
+            g.s.join("Solo".into(), Vec3::new(0.0, 0.05, 25.0), false)
+                .unwrap();
         g.s.avatars()[&a].clone()
     };
     let (red, blue) = two_teams(&mut g);
@@ -1826,7 +2090,11 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     let look = g.s.avatars()[&red].clone();
     let part = |slot: &str| look.parts.get(slot).map(String::as_str);
     assert_eq!(part("hat"), Some("helmet"));
-    assert_eq!(part("accent"), Some("visor"), "a helmet's accent is its visor");
+    assert_eq!(
+        part("accent"),
+        Some("visor"),
+        "a helmet's accent is its visor"
+    );
     assert_eq!(part("chest"), Some("femchest"));
     assert_eq!(part("pack"), Some("bucket"));
     assert_eq!(part("secondpack"), Some("epaulets"));
@@ -1840,10 +2108,16 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     assert_eq!(look.colors["head"], [0.5, 0.25, 0.0, 1.0]);
     assert_eq!(look.colors["hip"], [0.0, 0.0, 1.0, 1.0]);
     assert_eq!(look.colors["secondpack"], [1.0, 1.0, 0.0, 1.0]);
-    assert_eq!((look.face.as_str(), look.decal.as_str()), ("smileyEvil1", "Alyx"));
+    assert_eq!(
+        (look.face.as_str(), look.decal.as_str()),
+        ("smileyEvil1", "Alyx")
+    );
     assert_eq!(g.s.avatars()[&blue].colors["torso"], blue_rgb);
     // Allow Custom Face Decals keeps players' own faces.
-    g.set(owner, &[(&key(SLAYER, "allow_custom_faces"), Value::Bool(true))]);
+    g.set(
+        owner,
+        &[(&key(SLAYER, "allow_custom_faces"), Value::Bool(true))],
+    );
     assert_eq!(g.s.avatars()[&red].face, own.face);
     assert_eq!(g.s.avatars()[&red].decal, "Alyx");
 
@@ -1862,14 +2136,24 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     let skin = look.colors["head"];
     assert!(SKINS.contains(&skin), "{skin:?}");
     assert_eq!((look.colors["lhand"], look.colors["rhand"]), (skin, skin));
-    assert_eq!((look.face.as_str(), look.decal.as_str()), (own.face.as_str(), own.decal.as_str()));
-    assert_eq!(g.s.avatars()[&blue].parts["hat"], "helmet", "Blue's own uniform");
+    assert_eq!(
+        (look.face.as_str(), look.decal.as_str()),
+        (own.face.as_str(), own.decal.as_str())
+    );
+    assert_eq!(
+        g.s.avatars()[&blue].parts["hat"],
+        "helmet",
+        "Blue's own uniform"
+    );
 
     // Shirt Only: their own avatar, the torso and pack in the team's colour.
     g.set_team(owner, RED, &[(&key(SLAYER, "team_uniform"), Value::Int(1))]);
     let look = g.s.avatars()[&red].clone();
     assert_eq!(look.parts, own.parts);
-    assert_eq!((look.colors["torso"], look.colors["pack"]), (red_rgb, red_rgb));
+    assert_eq!(
+        (look.colors["torso"], look.colors["pack"]),
+        (red_rgb, red_rgb)
+    );
     assert_eq!(look.colors["hip"], own.colors["hip"]);
 
     // None: their own avatar.
@@ -1881,7 +2165,11 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     let tools = g.tools(red);
     assert_eq!(
         &tools[..3],
-        ["v20.weapon.hammeritem", "v20.weapon.wrenchitem", "v20.weapon.printgun"]
+        [
+            "v20.weapon.hammeritem",
+            "v20.weapon.wrenchitem",
+            "v20.weapon.printgun"
+        ]
     );
     assert!(tools[3..].iter().all(String::is_empty), "{tools:?}");
     assert_eq!(g.body(red), STANDARD);
@@ -1893,14 +2181,21 @@ fn teams_dress_their_members_and_give_them_their_kit() {
         RED,
         &[
             (&key(SLAYER, "team_equip_1"), Value::Text(String::new())),
-            (&key(SLAYER, "team_equip_3"), Value::Text("v20.weapon.wanditem".into())),
+            (
+                &key(SLAYER, "team_equip_3"),
+                Value::Text("v20.weapon.wanditem".into()),
+            ),
             (&key(SLAYER, "team_scale"), Value::Int(2)),
         ],
     );
     let tools = g.tools(red);
     assert_eq!(tools[1], "");
     assert_eq!(tools[3], "v20.weapon.wanditem");
-    g.set_team(owner, RED, &[(&key(SLAYER, "team_player_type"), Value::Text(FROZEN.into()))]);
+    g.set_team(
+        owner,
+        RED,
+        &[(&key(SLAYER, "team_player_type"), Value::Text(FROZEN.into()))],
+    );
     assert_eq!(g.body(red), FROZEN);
     assert_eq!(g.scale(red), 2.0);
     assert_eq!(g.body(blue), STANDARD, "Blue keeps its own");
@@ -1931,7 +2226,11 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     assert!(g.cmd(owner, Command::MiniGame(bad)).is_err());
 
     // Synced with the mini-game's loadout, a team spawns with the game's.
-    g.set_team(owner, RED, &[(&key(SLAYER, "team_sync_loadout"), Value::Bool(true))]);
+    g.set_team(
+        owner,
+        RED,
+        &[(&key(SLAYER, "team_sync_loadout"), Value::Bool(true))],
+    );
     assert_eq!(g.body(red), STANDARD);
     g.cmd(red, Command::Suicide).unwrap();
     g.steps(125);
@@ -1941,7 +2240,11 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     assert_eq!(g.scale(red), 2.0, "the scale is the team's still");
 
     // The team's respawn time, at least a second.
-    g.set_team(owner, RED, &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))]);
+    g.set_team(
+        owner,
+        RED,
+        &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))],
+    );
     g.cmd(red, Command::Suicide).unwrap();
     g.steps(125);
     assert!(g.cmd(red, Command::Respawn).is_err(), "three seconds");
@@ -1952,7 +2255,8 @@ fn teams_dress_their_members_and_give_them_their_kit() {
     // Out of the game, their own avatar and body again.
     g.set_team(owner, RED, &[(&key(SLAYER, "team_uniform"), Value::Int(3))]);
     assert_ne!(g.s.avatars()[&red], own);
-    g.cmd(red, Command::MiniGame(MiniGameRequest::Leave)).unwrap();
+    g.cmd(red, Command::MiniGame(MiniGameRequest::Leave))
+        .unwrap();
     g.steps(2);
     assert_eq!(g.s.avatars()[&red], own);
     assert_eq!(g.scale(red), 1.0);
@@ -2025,7 +2329,13 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     let names = g.s.names();
     for (o, _) in g.s.vitals() {
         if g.s.is_bot(o) {
-            assert!(["Quill", "Marrow", "Tansy", "Orrin", "Willet"].iter().any(|n| names[&o].starts_with(&format!("Bot {n}"))), "{}", names[&o]);
+            assert!(
+                ["Quill", "Marrow", "Tansy", "Orrin", "Willet"]
+                    .iter()
+                    .any(|n| names[&o].starts_with(&format!("Bot {n}"))),
+                "{}",
+                names[&o]
+            );
             assert!(g.s.vitals()[&o].alive);
         }
     }
@@ -2062,7 +2372,13 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     assert_eq!(bots_by_team(&g), (1, 1, 0));
 
     // A mode without teams has no bots.
-    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text("Slayer_Deathmatch".into()))]);
+    g.set(
+        owner,
+        &[(
+            &key(SLAYER, "mode"),
+            Value::Text("Slayer_Deathmatch".into()),
+        )],
+    );
     g.steps(4);
     assert_eq!(bots_by_team(&g), (0, 0, 0));
     g.quiet();
@@ -2078,10 +2394,20 @@ fn a_saved_build_keeps_its_mini_game_and_fly_through_path() {
     let mut settings = g.s.minigame_views()[0].settings.clone();
     settings.title = "Trench CTF".into();
     settings.points_kill_player = 4;
-    g.cmd(owner, Command::MiniGame(MiniGameRequest::Configure { settings }))
-        .unwrap();
-    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
-    g.set_team(owner, BLUE, &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))]);
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::Configure { settings }),
+    )
+    .unwrap();
+    g.set(
+        owner,
+        &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))],
+    );
+    g.set_team(
+        owner,
+        BLUE,
+        &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))],
+    );
     // A fly-through path of two knots and a jump.
     g.run(owner, SLAYER, "createflycam", vec![]);
     g.steps(13);
@@ -2092,14 +2418,29 @@ fn a_saved_build_keeps_its_mini_game_and_fly_through_path() {
     ] {
         g.goto(owner, at);
         g.steps(2);
-        let line = if command == "setknot" { "20 Normal Linear" } else { "" };
-        g.run(owner, SLAYER, command, vec![PackageArg::String(line.into())]);
+        let line = if command == "setknot" {
+            "20 Normal Linear"
+        } else {
+            ""
+        };
+        g.run(
+            owner,
+            SLAYER,
+            command,
+            vec![PackageArg::String(line.into())],
+        );
         g.steps(13);
     }
     let before = g.s.minigame_views()[0].clone();
 
     let build = match g
-        .cmd(owner, Command::SaveBuild { events: true, ownership: false })
+        .cmd(
+            owner,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        )
         .unwrap()
     {
         Reply::Saved(build) => build,
@@ -2111,11 +2452,18 @@ fn a_saved_build_keeps_its_mini_game_and_fly_through_path() {
 
     // The game ends, its path with it; loading the build brings both back
     // as a new game of the loader's.
-    g.cmd(owner, Command::MiniGame(MiniGameRequest::End)).unwrap();
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::End))
+        .unwrap();
     g.steps(5 * 120);
     assert!(g.s.minigame_views().is_empty());
-    g.cmd(owner, Command::LoadBuild { build: Box::new(build), ownership: false })
-        .unwrap();
+    g.cmd(
+        owner,
+        Command::LoadBuild {
+            build: Box::new(build),
+            ownership: false,
+        },
+    )
+    .unwrap();
     while g.s.build_loading() {
         g.steps(1);
     }
@@ -2183,21 +2531,37 @@ fn slayer_chat_shows_teams_and_keeps_the_dead_to_the_dead() {
     g.cmd(red, Command::Chat("hello there".into())).unwrap();
     let heard = lines(&mut g);
     for p in [red, blue] {
-        assert!(heard.contains(&(p, "[Red] Alpha: hello there".into())) || heard.contains(&(p, "[Red] Bravo: hello there".into())), "{heard:?}");
+        assert!(
+            heard.contains(&(p, "[Red] Alpha: hello there".into()))
+                || heard.contains(&(p, "[Red] Bravo: hello there".into())),
+            "{heard:?}"
+        );
     }
     // Its Enable Team Chat is off.
     g.cmd(red, Command::TeamChat("psst".into())).unwrap();
     let heard = lines(&mut g);
-    assert!(heard.iter().any(|(p, t)| *p == red && t == "Team chat disabled."), "{heard:?}");
+    assert!(
+        heard
+            .iter()
+            .any(|(p, t)| *p == red && t == "Team chat disabled."),
+        "{heard:?}"
+    );
     assert!(!heard.iter().any(|(_, t)| t.contains("psst")));
     // Color Name puts the name in the team's colour; team chat on (the
     // game's and each team's) reaches only the team.
-    g.set(owner, &[
-        (&key(SLAYER, "team_display_mode"), Value::Int(2)),
-        (&key(SLAYER, "enable_team_chat"), Value::Bool(true)),
-    ]);
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "team_display_mode"), Value::Int(2)),
+            (&key(SLAYER, "enable_team_chat"), Value::Bool(true)),
+        ],
+    );
     for color in [RED, BLUE] {
-        g.set_team(owner, color, &[(&key(SLAYER, "team_chat"), Value::Bool(true))]);
+        g.set_team(
+            owner,
+            color,
+            &[(&key(SLAYER, "team_chat"), Value::Bool(true))],
+        );
     }
     lines(&mut g);
     g.cmd(red, Command::Chat("hi".into())).unwrap();
@@ -2206,18 +2570,29 @@ fn slayer_chat_shows_teams_and_keeps_the_dead_to_the_dead() {
     assert!(line.ends_with(": hi") && !line.contains('['), "{line}");
     g.cmd(red, Command::TeamChat("psst".into())).unwrap();
     let heard = lines(&mut g);
-    assert!(heard.iter().any(|(p, t)| *p == red && t.ends_with(": psst")), "{heard:?}");
+    assert!(
+        heard
+            .iter()
+            .any(|(p, t)| *p == red && t.ends_with(": psst")),
+        "{heard:?}"
+    );
     assert!(!heard.iter().any(|(p, _)| *p == blue), "{heard:?}");
 
     // Allow Dead Talking Disabled: a player out of lives talks to the dead.
-    let charlie = g.s.join("Charlie".into(), Vec3::new(0.0, 0.05, 20.0), false).unwrap();
+    let charlie =
+        g.s.join("Charlie".into(), Vec3::new(0.0, 0.05, 20.0), false)
+            .unwrap();
     let game = g.s.minigame_views()[0].id;
-    g.cmd(charlie, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    g.cmd(charlie, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
     g.steps(2);
-    g.set(owner, &[
-        (&key(SLAYER, "dead_chat_mode"), Value::Int(0)),
-        (&key(SLAYER, "lives"), Value::Int(1)),
-    ]);
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "dead_chat_mode"), Value::Int(0)),
+            (&key(SLAYER, "lives"), Value::Int(1)),
+        ],
+    );
     let mates: Vec<OwnerId> = [red, blue]
         .into_iter()
         .filter(|p| g.colour(*p) == g.colour(charlie))
@@ -2227,8 +2602,16 @@ fn slayer_chat_shows_teams_and_keeps_the_dead_to_the_dead() {
     lines(&mut g);
     g.cmd(charlie, Command::Chat("boo".into())).unwrap();
     let heard = lines(&mut g);
-    assert!(heard.iter().any(|(p, t)| *p == charlie && t.contains("[DEAD]") && t.ends_with(": boo")), "{heard:?}");
-    assert!(!heard.iter().any(|(p, _)| *p != charlie), "only the dead hear it: {heard:?} {mates:?}");
+    assert!(
+        heard
+            .iter()
+            .any(|(p, t)| *p == charlie && t.contains("[DEAD]") && t.ends_with(": boo")),
+        "{heard:?}"
+    );
+    assert!(
+        !heard.iter().any(|(p, _)| *p != charlie),
+        "only the dead hear it: {heard:?} {mates:?}"
+    );
     g.quiet();
 }
 
@@ -2272,7 +2655,13 @@ fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
     // A punished teamkill: Friendly Fire points (the stand-in's -3) instead
     // of a kill, no kill or death counted, and the killer warned.
     // Unregulated joins: onto a team as big as their own.
-    g.set(owner, &[(&key(SLAYER, "friendly_fire"), Value::Bool(true)), (&key(SLAYER, "swap_mode"), Value::Int(1))]);
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "friendly_fire"), Value::Bool(true)),
+            (&key(SLAYER, "swap_mode"), Value::Int(1)),
+        ],
+    );
     let mover = owner;
     let other = if mover == red { blue } else { red };
     let theirs = g.s.minigame_views()[0]
@@ -2285,15 +2674,27 @@ fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
     lines(&mut g);
     g.teams(mover, &format!("join {theirs}"));
     assert_eq!(g.colour(mover), g.colour(other));
-    let (score, kills, deaths) = (g.score(mover), stat(&g, mover, "kills"), stat(&g, other, "deaths"));
+    let (score, kills, deaths) = (
+        g.score(mover),
+        stat(&g, mover, "kills"),
+        stat(&g, other, "deaths"),
+    );
     g.s.take_private_notices();
     kill(&mut g, mover, other);
     let notices = g.s.take_private_notices();
-    assert!(notices.iter().any(|(_, n)| matches!(n, Notice::Chat(t) if readable(t).contains("(Teamkill)"))), "{notices:?}");
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::Chat(t) if readable(t).contains("(Teamkill)"))),
+        "{notices:?}"
+    );
     assert!(notices.iter().any(|(p, n)| *p == mover
         && matches!(n, Notice::Center { text, .. } if readable(text).contains("You just killed a team-mate!"))));
     assert_eq!(g.score(mover), score - 3);
-    assert_eq!((stat(&g, mover, "kills"), stat(&g, other, "deaths")), (kills, deaths));
+    assert_eq!(
+        (stat(&g, mover, "kills"), stat(&g, other, "deaths")),
+        (kills, deaths)
+    );
 
     // Death Message Mode Do Not Display: no line at all.
     respawn(&mut g, other);
@@ -2301,7 +2702,12 @@ fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
     lines(&mut g);
     kill(&mut g, other, mover);
     let heard = lines(&mut g);
-    assert!(!heard.iter().any(|(_, t)| t.contains("Alpha") || t.contains("Bravo")), "{heard:?}");
+    assert!(
+        !heard
+            .iter()
+            .any(|(_, t)| t.contains("Alpha") || t.contains("Bravo")),
+        "{heard:?}"
+    );
     g.quiet();
 }
 
@@ -2313,45 +2719,90 @@ fn slayers_rights_decide_who_invites_creates_and_suicides() {
     let other = if owner == red { blue } else { red };
     // Not an editor (the stand-in's Edit Rights are Creator): invites come
     // back as Slayer's message box.
-    let carol = g.s.join("Carol".into(), Vec3::new(0.0, 0.05, 24.0), false).unwrap();
+    let carol =
+        g.s.join("Carol".into(), Vec3::new(0.0, 0.05, 24.0), false)
+            .unwrap();
     g.s.take_private_notices();
-    g.cmd(other, Command::MiniGame(MiniGameRequest::Invite { target: carol })).unwrap();
+    g.cmd(
+        other,
+        Command::MiniGame(MiniGameRequest::Invite { target: carol }),
+    )
+    .unwrap();
     let notices = g.s.take_private_notices();
-    assert!(notices.iter().any(|(p, n)| *p == other && matches!(n,
+    assert!(
+        notices.iter().any(|(p, n)| *p == other
+            && matches!(n,
         Notice::MessageBox { title, text } if title == "Mini-Game Invite Error"
-            && text == "You do not have permission to send invites.")), "{notices:?}");
+            && text == "You do not have permission to send invites.")),
+        "{notices:?}"
+    );
     // The owner's second invite while the first waits.
-    g.cmd(owner, Command::MiniGame(MiniGameRequest::Invite { target: carol })).unwrap();
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::Invite { target: carol }),
+    )
+    .unwrap();
     g.s.take_private_notices();
-    g.cmd(owner, Command::MiniGame(MiniGameRequest::Invite { target: carol })).unwrap();
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::Invite { target: carol }),
+    )
+    .unwrap();
     let notices = g.s.take_private_notices();
     assert!(notices.iter().any(|(_, n)| matches!(n,
         Notice::MessageBox { text, .. } if text == "This person hasn't responded to your first invite yet.")), "{notices:?}");
     // Kicking tells the game who did it.
-    g.cmd(owner, Command::MiniGame(MiniGameRequest::Kick { target: other })).unwrap();
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::Kick { target: other }),
+    )
+    .unwrap();
     g.steps(2);
     let heard = lines(&mut g);
-    assert!(heard.iter().any(|(p, t)| *p == other && t.ends_with("kicked you from the minigame")), "{heard:?}");
+    assert!(
+        heard
+            .iter()
+            .any(|(p, t)| *p == other && t.ends_with("kicked you from the minigame")),
+        "{heard:?}"
+    );
 
     // Enable Suicide off refuses /suicide with Slayer's words.
-    g.set(owner, &[(&key(SLAYER, "enable_suicide"), Value::Bool(false))]);
+    g.set(
+        owner,
+        &[(&key(SLAYER, "enable_suicide"), Value::Bool(false))],
+    );
     let e = g.cmd(owner, Command::Suicide).unwrap_err();
-    assert_eq!(readable(&e.to_string()), "Suicide is disabled in this minigame.");
+    assert_eq!(
+        readable(&e.to_string()),
+        "Suicide is disabled in this minigame."
+    );
 
     // Create Minigame Rights at Host (a server setting, set in the host's
     // Admin menu): only the host may start a game.
     let mut settings = g.s.server_settings().clone();
-    settings.addon_settings.insert(key(SLAYER, "create_rights"), Value::Int(0));
+    settings
+        .addon_settings
+        .insert(key(SLAYER, "create_rights"), Value::Int(0));
     g.s.set_server_settings(settings).unwrap();
     lines(&mut g);
-    g.cmd(other, Command::MiniGame(MiniGameRequest::Create {
-        color: 1,
-        settings: bri_minigames::Settings { loadout: Default::default(), ..Default::default() },
-    }))
+    g.cmd(
+        other,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 1,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
     .unwrap();
     g.steps(2);
     assert_eq!(g.s.minigame_views().len(), 1);
-    assert!(lines(&mut g).iter().any(|(p, t)| *p == other && t == "You don't have permission to do that."));
+    assert!(
+        lines(&mut g)
+            .iter()
+            .any(|(p, t)| *p == other && t == "You don't have permission to do that.")
+    );
     g.quiet();
 }
 
@@ -2364,12 +2815,15 @@ fn slayers_game_settings_reach_the_engine_and_late_joiners_wait() {
     lines(&mut g);
     // One edit of several settings: who updated the game and each change
     // that is not quiet, every line heard.
-    g.set(owner, &[
-        (&key(SLAYER, "default_minigame"), Value::Bool(true)),
-        (&key(SLAYER, "color"), Value::Int(3)),
-        (&key(SLAYER, "name_distance"), Value::Int(50)),
-        (&key(SLAYER, "late_join_time"), Value::Int(0)),
-    ]);
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "default_minigame"), Value::Bool(true)),
+            (&key(SLAYER, "color"), Value::Int(3)),
+            (&key(SLAYER, "name_distance"), Value::Int(50)),
+            (&key(SLAYER, "late_join_time"), Value::Int(0)),
+        ],
+    );
     g.steps(2);
     let heard = lines(&mut g);
     let other = if owner == red { blue } else { red };
@@ -2379,10 +2833,18 @@ fn slayers_game_settings_reach_the_engine_and_late_joiners_wait() {
         " + [Player|Name Distance] is now 50",
         " + [Minigame|Late Join Time] is now 0",
     ] {
-        assert!(heard.iter().any(|(p, t)| *p == other && t.starts_with(line)), "{line}: {heard:?}");
+        assert!(
+            heard
+                .iter()
+                .any(|(p, t)| *p == other && t.starts_with(line)),
+            "{line}: {heard:?}"
+        );
     }
     // Color is quiet.
-    assert!(!heard.iter().any(|(_, t)| t.contains("|Color]")), "{heard:?}");
+    assert!(
+        !heard.iter().any(|(_, t)| t.contains("|Color]")),
+        "{heard:?}"
+    );
     let view = g.s.minigame_views()[0].clone();
     assert!(view.default);
     assert_eq!(view.paint_color, Some(3));
@@ -2392,10 +2854,16 @@ fn slayers_game_settings_reach_the_engine_and_late_joiners_wait() {
     // Time 0 has them watch until the next round: their body gone, not
     // killed, and nobody scores it.
     let scores = (g.score(red), g.score(blue));
-    let carol = g.s.join("Carol".into(), Vec3::new(0.0, 0.05, 24.0), false).unwrap();
+    let carol =
+        g.s.join("Carol".into(), Vec3::new(0.0, 0.05, 24.0), false)
+            .unwrap();
     g.steps(4);
     assert!(g.s.minigame_views()[0].members.contains(&carol));
-    assert!(lines(&mut g).iter().any(|(p, t)| *p == carol && t == "You will spawn when the next round starts."));
+    assert!(
+        lines(&mut g)
+            .iter()
+            .any(|(p, t)| *p == carol && t == "You will spawn when the next round starts.")
+    );
     assert!(!g.s.vitals()[&carol].alive);
     assert_eq!((g.score(red), g.score(blue)), scores);
     assert!(g.cmd(carol, Command::Respawn).is_err());

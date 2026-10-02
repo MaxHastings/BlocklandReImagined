@@ -2276,8 +2276,7 @@ fn the_etard_filter_holds_back_chat_and_says_why() {
     .unwrap();
     // (A different line: the same one again would be "Do not repeat
     // yourself.")
-    g.s.command(a, 2, Command::Chat("r u here".into()))
-        .unwrap();
+    g.s.command(a, 2, Command::Chat("r u here".into())).unwrap();
     assert!(g.s.take_private_notices().is_empty());
 }
 

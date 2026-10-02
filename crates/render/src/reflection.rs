@@ -77,7 +77,11 @@ impl Mirror {
         let normal = (b - a).cross(c - b).try_normalize()?;
         let plane = normal.extend(-normal.dot(a));
         (self.corners.iter().all(|p| p.is_finite())
-            && self.tint.iter().chain(&self.fallback).all(|t| t.is_finite())
+            && self
+                .tint
+                .iter()
+                .chain(&self.fallback)
+                .all(|t| t.is_finite())
             && self.strength.is_finite()
             && self.strength > 0.0
             && self.recess.is_finite()
@@ -85,7 +89,7 @@ impl Mirror {
                 Looks::Through(m) => m.is_finite() && m.determinant().abs() > 1e-4,
                 _ => true,
             })
-            .then_some(plane)
+        .then_some(plane)
     }
 }
 
@@ -276,13 +280,23 @@ fn screen_rect(corners: &[Vec3], view_projection: Mat4) -> Option<[f32; 4]> {
             kept.push(a + (b - a) * t);
         }
     }
-    let mut rect = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    let mut rect = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
     for c in kept {
         if c.w <= 1e-6 {
             continue;
         }
         let (x, y) = (c.x / c.w, c.y / c.w);
-        rect = [rect[0].min(x), rect[1].min(y), rect[2].max(x), rect[3].max(y)];
+        rect = [
+            rect[0].min(x),
+            rect[1].min(y),
+            rect[2].max(x),
+            rect[3].max(y),
+        ];
     }
     let rect = [
         rect[0].max(-1.0),
@@ -398,7 +412,12 @@ fn seen(
         for shape in shapes {
             if let Some(r) = screen_rect(&shape, view.view_projection) {
                 rect = Some(rect.map_or(r, |a| {
-                    [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]
+                    [
+                        a[0].min(r[0]),
+                        a[1].min(r[1]),
+                        a[2].max(r[2]),
+                        a[3].max(r[3]),
+                    ]
                 }));
             }
         }
@@ -454,7 +473,10 @@ pub fn plan(
     for &i in &out.drawn {
         let mirror = &mirrors[i];
         let plane = mirror.plane().expect("drawn mirrors have planes");
-        let key = (plane.xyz() * 1e4).round().as_ivec3().extend((plane.w * 200.0).round() as i32);
+        let key = (plane.xyz() * 1e4)
+            .round()
+            .as_ivec3()
+            .extend((plane.w * 200.0).round() as i32);
         let looks: Vec<i64> = match mirror.looks {
             Looks::Reflect => vec![0],
             Looks::Plain => vec![1],
@@ -464,13 +486,15 @@ pub fn plan(
                 .map(|v| (v * 200.0).round() as i64)
                 .collect(),
         };
-        let group = *by_plane.entry((key.to_array(), looks.clone())).or_insert_with(|| {
-            out.group_keys.push((key.to_array(), looks));
-            planes.push(plane);
-            transfers.push(mirror.transfer(plane));
-            out.groups.push(Vec::new());
-            planes.len() - 1
-        });
+        let group = *by_plane
+            .entry((key.to_array(), looks.clone()))
+            .or_insert_with(|| {
+                out.group_keys.push((key.to_array(), looks));
+                planes.push(plane);
+                transfers.push(mirror.transfer(plane));
+                out.groups.push(Vec::new());
+                planes.len() - 1
+            });
         out.groups[group].push(i);
     }
     out.group_planes = planes.clone();
@@ -582,7 +606,12 @@ fn surface_triangles(mirror: &Mirror) -> Vec<[Vec3; 3]> {
     let [ba, bb, bc, bd] = back;
     let mut out = quad(back).to_vec();
     // Each wall faces into the box, toward the opening.
-    for (p, q, bp, bq) in [(a, b, ba, bb), (b, c, bb, bc), (c, d, bc, bd), (d, a, bd, ba)] {
+    for (p, q, bp, bq) in [
+        (a, b, ba, bb),
+        (b, c, bb, bc),
+        (c, d, bc, bd),
+        (d, a, bd, ba),
+    ] {
         out.extend(quad([p, q, bq, bp]));
     }
     out
@@ -606,7 +635,12 @@ struct FrameUniform {
     /// Target width and height in pixels.
     screen: [f32; 4],
 }
-fn frame_uniform(camera: &Camera, view_projection: Mat4, eye: Vec3, size: (u32, u32)) -> FrameUniform {
+fn frame_uniform(
+    camera: &Camera,
+    view_projection: Mat4,
+    eye: Vec3,
+    size: (u32, u32),
+) -> FrameUniform {
     FrameUniform {
         view_projection: view_projection.to_cols_array(),
         eye: eye.extend(1.0).to_array(),
@@ -784,7 +818,10 @@ impl Reflections {
                 cache: None,
             })
         };
-        let pipelines = [pipeline(None), pipeline(Some(wgpu::BlendState::ALPHA_BLENDING))];
+        let pipelines = [
+            pipeline(None),
+            pipeline(Some(wgpu::BlendState::ALPHA_BLENDING)),
+        ];
         let silver = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("silver mirror"),
@@ -878,7 +915,10 @@ impl Reflections {
         self.held = (0..self.targets.len())
             .map(|i| {
                 let plane = self.plan.planes.get(i)?;
-                Some((self.plan.group_keys[plane.group].clone(), *self.echoes.get(i)?))
+                Some((
+                    self.plan.group_keys[plane.group].clone(),
+                    *self.echoes.get(i)?,
+                ))
             })
             .collect();
         let eye = Vec4::from(camera.eye).truncate();
@@ -943,7 +983,11 @@ impl Reflections {
                 None => (SlotUniform::silver(), SlotUniform::silver()),
             };
             queue.write_buffer(&self.slots[i].buffer, 0, bytemuck::bytes_of(&live));
-            queue.write_buffer(&self.slots[kept + 1 + i].buffer, 0, bytemuck::bytes_of(&echo));
+            queue.write_buffer(
+                &self.slots[kept + 1 + i].buffer,
+                0,
+                bytemuck::bytes_of(&echo),
+            );
             if i < self.plan.planes.len() {
                 self.echoes.push(echo);
             }
@@ -951,7 +995,11 @@ impl Reflections {
                 Some(Some((_, held))) => *held,
                 _ => SlotUniform::silver(),
             };
-            queue.write_buffer(&self.slots[2 * kept + 1 + i].buffer, 0, bytemuck::bytes_of(&last));
+            queue.write_buffer(
+                &self.slots[2 * kept + 1 + i].buffer,
+                0,
+                bytemuck::bytes_of(&last),
+            );
         }
         renderer.set_view_count(device, 1 + live);
         self.grow_frames(device, 1 + live);
@@ -994,8 +1042,18 @@ impl Reflections {
                     if usize::from(mirror.strength < 1.0) != p {
                         continue;
                     }
-                    let tint = [mirror.tint[0], mirror.tint[1], mirror.tint[2], mirror.strength];
-                    let fallback = [mirror.fallback[0], mirror.fallback[1], mirror.fallback[2], 1.0];
+                    let tint = [
+                        mirror.tint[0],
+                        mirror.tint[1],
+                        mirror.tint[2],
+                        mirror.strength,
+                    ];
+                    let fallback = [
+                        mirror.fallback[0],
+                        mirror.fallback[1],
+                        mirror.fallback[2],
+                        1.0,
+                    ];
                     for [a, b, c] in surface_triangles(mirror) {
                         for position in [a, b, c] {
                             vertices.push(MirrorVertex {
@@ -1016,11 +1074,13 @@ impl Reflections {
                 .as_ref()
                 .is_none_or(|b| b.size() < bytes.len() as u64)
             {
-                self.vertices = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mirror surfaces"),
-                    contents: &vec![0; bytes.len().next_power_of_two()],
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }));
+                self.vertices = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("mirror surfaces"),
+                        contents: &vec![0; bytes.len().next_power_of_two()],
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ));
             }
             if let Some(buffer) = &self.vertices {
                 queue.write_buffer(buffer, 0, bytes);
@@ -1062,13 +1122,23 @@ impl Reflections {
         );
         Target {
             color: (self.samples > 1).then(|| {
-                view(&make("mirror reflection samples", self.samples, self.format, attachment))
+                view(&make(
+                    "mirror reflection samples",
+                    self.samples,
+                    self.format,
+                    attachment,
+                ))
             }),
             picture: view(&picture),
             picture_texture: picture,
             previous: view(&previous),
             previous_texture: previous,
-            depth: view(&make("mirror reflection depth", self.samples, DEPTH_FORMAT, attachment)),
+            depth: view(&make(
+                "mirror reflection depth",
+                self.samples,
+                DEPTH_FORMAT,
+                attachment,
+            )),
         }
     }
     fn bound_slot(&self, device: &wgpu::Device, picture: &wgpu::TextureView) -> Bound {
@@ -1276,10 +1346,17 @@ mod tests {
         let seen = main.project_point3(image);
         let hit = plane.view_projection.project_point3(head);
         let [x, y, w, h] = plane.viewport;
-        let texel = Vec3::new((hit.x + 1.0) * 0.5 * w + x, (1.0 - hit.y) * 0.5 * h + y, 0.0);
+        let texel = Vec3::new(
+            (hit.x + 1.0) * 0.5 * w + x,
+            (1.0 - hit.y) * 0.5 * h + y,
+            0.0,
+        );
         let screen_u = (seen.x + 1.0) * 0.5;
         let sampled_u = plane.mirror_u - screen_u;
-        assert!((texel.x / 960.0 - sampled_u).abs() < 1e-3, "{texel} {sampled_u}");
+        assert!(
+            (texel.x / 960.0 - sampled_u).abs() < 1e-3,
+            "{texel} {sampled_u}"
+        );
         assert!((texel.y / 540.0 - (1.0 - seen.y) * 0.5).abs() < 1e-3);
         // Behind the mirror clips at its near plane; in front stays in.
         assert!(hit.z > 0.0 && hit.z < 1.0);
@@ -1330,8 +1407,15 @@ mod tests {
         let seen = main.project_point3(head - Vec3::new(10.0, 0.0, 0.0));
         let hit = plane.view_projection.project_point3(head);
         let [x, y, w, h] = plane.viewport;
-        let texel = Vec3::new((hit.x + 1.0) * 0.5 * w + x, (1.0 - hit.y) * 0.5 * h + y, 0.0);
-        assert!((texel.x / 960.0 - (seen.x + 1.0) * 0.5).abs() < 1e-3, "{texel} {seen}");
+        let texel = Vec3::new(
+            (hit.x + 1.0) * 0.5 * w + x,
+            (1.0 - hit.y) * 0.5 * h + y,
+            0.0,
+        );
+        assert!(
+            (texel.x / 960.0 - (seen.x + 1.0) * 0.5).abs() < 1e-3,
+            "{texel} {seen}"
+        );
         assert!((texel.y / 540.0 - (1.0 - seen.y) * 0.5).abs() < 1e-3);
         assert!(hit.z > 0.0 && hit.z < 1.0);
         // What stands in front of the partner is not seen through it.
@@ -1351,7 +1435,13 @@ mod tests {
             looks: Looks::Through(Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0))),
             ..wall(2.0)
         };
-        let p = super::plan(&[window, other], main, eye, &ReflectionSettings::HIGH, (960, 540));
+        let p = super::plan(
+            &[window, other],
+            main,
+            eye,
+            &ReflectionSettings::HIGH,
+            (960, 540),
+        );
         assert_eq!(p.groups.len(), 2);
     }
 
@@ -1466,7 +1556,10 @@ mod tests {
         for [a, b, c] in &triangles {
             let normal = (b - a).cross(c - b);
             let centre = (*a + *b + *c) / 3.0;
-            assert!(normal.dot(Vec3::new(0.0, 0.0, 1.0) - centre) > 0.0, "{a} {b} {c}");
+            assert!(
+                normal.dot(Vec3::new(0.0, 0.0, 1.0) - centre) > 0.0,
+                "{a} {b} {c}"
+            );
             assert!(a.z <= 0.0 && b.z <= 0.0 && c.z <= 0.0);
         }
         assert_eq!(surface_triangles(&wall(0.0)).len(), 2);
@@ -1500,19 +1593,35 @@ mod tests {
             distance: 3.0,
             ..ReflectionSettings::MEDIUM
         };
-        assert!(plan(&mirrors, main, eye, &far, (960, 540)).planes.is_empty());
-        let behind = Vec3::new(0.0, 0.0, -6.0);
-        let back = camera(behind, Vec3::new(0.0, 0.0, -20.0));
         assert!(
-            plan(&mirrors, back, behind, &ReflectionSettings::MEDIUM, (960, 540))
+            plan(&mirrors, main, eye, &far, (960, 540))
                 .planes
                 .is_empty()
         );
+        let behind = Vec3::new(0.0, 0.0, -6.0);
+        let back = camera(behind, Vec3::new(0.0, 0.0, -20.0));
+        assert!(
+            plan(
+                &mirrors,
+                back,
+                behind,
+                &ReflectionSettings::MEDIUM,
+                (960, 540)
+            )
+            .planes
+            .is_empty()
+        );
         let facing = camera(behind, Vec3::ZERO);
         assert!(
-            plan(&mirrors[..3], facing, behind, &ReflectionSettings::MEDIUM, (960, 540))
-                .planes
-                .is_empty()
+            plan(
+                &mirrors[..3],
+                facing,
+                behind,
+                &ReflectionSettings::MEDIUM,
+                (960, 540)
+            )
+            .planes
+            .is_empty()
         );
     }
 
@@ -1528,7 +1637,10 @@ mod tests {
         let p = plan(&mirrors, main, eye, &ReflectionSettings::MEDIUM, (960, 540));
         assert_eq!(p.planes.len(), 2);
         let (first, second) = (p.planes[0], p.planes[1]);
-        assert_eq!((first.parent, first.group, second.parent, second.group), (0, 0, 1, 1));
+        assert_eq!(
+            (first.parent, first.group, second.parent, second.group),
+            (0, 0, 1, 1)
+        );
         // Twice reflected: the eye behind the far mirror, as far as the
         // light travelled.
         assert!(second.eye.abs_diff_eq(Vec3::new(0.3, 0.2, 16.0), 1e-4));
@@ -1557,7 +1669,11 @@ mod tests {
         assert!((y - (1.0 - seen.y) * 0.5 * 540.0).abs() < 0.5);
         // Billboards in the second view face its eye.
         assert!(second.reflect_direction(Vec3::Z).abs_diff_eq(Vec3::Z, 1e-5));
-        assert!(first.reflect_direction(Vec3::Z).abs_diff_eq(Vec3::NEG_Z, 1e-5));
+        assert!(
+            first
+                .reflect_direction(Vec3::Z)
+                .abs_diff_eq(Vec3::NEG_Z, 1e-5)
+        );
         // With one pass the back mirror stays silver.
         let low = plan(&mirrors, main, eye, &ReflectionSettings::LOW, (960, 540));
         assert_eq!(low.planes.len(), 1);
@@ -1568,7 +1684,10 @@ mod tests {
         let mut low = low;
         low.last = vec![(low.group_keys[1].clone(), 0)];
         assert_eq!(low.slots(1), vec![None, Some(Shows::Last(0))]);
-        assert_eq!(low.slots(0), vec![Some(Shows::Live(0)), Some(Shows::Last(0))]);
+        assert_eq!(
+            low.slots(0),
+            vec![Some(Shows::Live(0)), Some(Shows::Last(0))]
+        );
     }
 
     #[test]
@@ -1576,7 +1695,13 @@ mod tests {
         let eye = Vec3::new(0.0, 0.0, 3.0);
         // Looking along the wall's right half at an angle: around a corner.
         let main = camera(eye, Vec3::new(-3.0, 0.0, 0.0));
-        let plan = plan(&[wall(-2.0)], main, eye, &ReflectionSettings::MEDIUM, (960, 540));
+        let plan = plan(
+            &[wall(-2.0)],
+            main,
+            eye,
+            &ReflectionSettings::MEDIUM,
+            (960, 540),
+        );
         let [x, _, w, _] = plan.planes[0].viewport;
         assert!(w < 960.0 && x + w <= 960.0);
         assert!(plan.planes[0].view_projection.is_finite());

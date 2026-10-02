@@ -589,7 +589,8 @@ impl BrickDebris {
         }
         self.load_surroundings(building, steps as f32 * STEP)?;
         for step in 1..=steps {
-            self.pushers.drive(&mut self.world, step as f32 / steps as f32);
+            self.pushers
+                .drive(&mut self.world, step as f32 / steps as f32);
             self.world.step();
             self.age(STEP);
         }
@@ -721,7 +722,12 @@ impl BrickDebris {
                 &g.look,
                 SceneTransform {
                     transform: Mat4::from_rotation_translation(g.rotation, g.position),
-                    tint: [1.0, 1.0, 1.0, g.fade * (g.left / GHOST_SECONDS).clamp(0.0, 1.0)],
+                    tint: [
+                        1.0,
+                        1.0,
+                        1.0,
+                        g.fade * (g.left / GHOST_SECONDS).clamp(0.0, 1.0),
+                    ],
                 },
             )
         });
@@ -847,7 +853,12 @@ impl DebrisModels {
             }
             // Room for this look's bodies, grown in steps as the limit allows.
             let wanted = model.transforms.len();
-            if wanted > 0 && model.instances.as_ref().is_none_or(|i| i.capacity() < wanted) {
+            if wanted > 0
+                && model
+                    .instances
+                    .as_ref()
+                    .is_none_or(|i| i.capacity() < wanted)
+            {
                 let capacity = wanted.next_power_of_two().clamp(64, MAX_INSTANCES);
                 model.instances = Some(GpuInstances::new(device, capacity)?);
             }
@@ -1394,7 +1405,11 @@ pub(crate) mod tests {
     fn blast(n: u64, first: u64, radius: f32) -> Vec<Cue> {
         (0..n)
             .map(|i| {
-                let p = [(i % 10) as f32 * 1.05, 0.3 + (i / 100) as f32 * 0.6, -((i / 10 % 10) as f32)];
+                let p = [
+                    (i % 10) as f32 * 1.05,
+                    0.3 + (i / 100) as f32 * 0.6,
+                    -((i / 10 % 10) as f32),
+                ];
                 kill(first + i, first + i, p, [4.5, 0.0, -4.5], 40.0, radius)
             })
             .collect()
@@ -1495,11 +1510,22 @@ pub(crate) mod tests {
     fn one_blast_shoves_older_debris_once_not_once_per_brick() {
         let (building, _) = building(&[]);
         let mut debris = BrickDebris::new();
-        debris.cues(&[lying(1, [3.0, 0.3, 0.0])], &building).unwrap();
+        debris
+            .cues(&[lying(1, [3.0, 0.3, 0.0])], &building)
+            .unwrap();
         run(&mut debris, &building, 0.5);
         // 40 bricks killed by one weak blast next to the lying brick.
         let cues: Vec<_> = (0..40)
-            .map(|i| kill(10 + i, 10 + i, [-(i as f32), 0.3, 5.0], [2.0, 0.3, 0.0], 4.0, 4.0))
+            .map(|i| {
+                kill(
+                    10 + i,
+                    10 + i,
+                    [-(i as f32), 0.3, 5.0],
+                    [2.0, 0.3, 0.0],
+                    4.0,
+                    4.0,
+                )
+            })
             .collect();
         debris.cues(&cues, &building).unwrap();
         let rb = &debris.world.bodies[debris.bodies[&1].handle];

@@ -133,7 +133,9 @@ pub fn decompose_sheet(
     sun: Option<BakeSun>,
 ) -> SceneImage {
     let (w, h) = (base.width, base.height);
-    let source = mission.filter(|m| m.width == w && m.height == h).unwrap_or(base);
+    let source = mission
+        .filter(|m| m.width == w && m.height == h)
+        .unwrap_or(base);
     let mut rgba = source.rgba.clone();
     for p in rgba.chunks_exact_mut(4) {
         p[3] = 0;
@@ -168,7 +170,11 @@ pub fn decompose_sheet(
                 claimed[i] = rank;
                 let b = texel(base, i);
                 let m = texel(source, i);
-                let ambient = if surface.outside { sun.ambient } else { Vec3::ZERO };
+                let ambient = if surface.outside {
+                    sun.ambient
+                } else {
+                    Vec3::ZERO
+                };
                 let fixed = (b + ambient).min(Vec3::ONE);
                 // The sun share: from the least saturated channel the sun lit.
                 let mut visibility = 0.0f32;
@@ -229,7 +235,9 @@ pub const CHANNELS: usize = 7;
 const SAMPLES: usize = 12_000;
 /// Inner falloff radii and falloff spans the fit tries for each position.
 const INNER: [f32; 7] = [0.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0];
-const SPAN: [f32; 10] = [5.0, 10.0, 20.0, 40.0, 60.0, 90.0, 130.0, 180.0, 250.0, 350.0];
+const SPAN: [f32; 10] = [
+    5.0, 10.0, 20.0, 40.0, 60.0, 90.0, 130.0, 180.0, 250.0, 350.0,
+];
 /// A light must remove this share of what is left to be kept.
 const MIN_GAIN: f64 = 0.002;
 /// Offset off a surface before casting toward a light.
@@ -290,9 +298,16 @@ pub fn fixture_owners<T: Copy>(lights: &[MapLight], shapes: &[(T, Vec3)]) -> Vec
         .iter()
         .map(|light| {
             let at = Vec3::from(light.position);
-            let nearest = shapes.iter().map(|(_, c)| c.distance(at)).fold(f32::INFINITY, f32::min);
+            let nearest = shapes
+                .iter()
+                .map(|(_, c)| c.distance(at))
+                .fold(f32::INFINITY, f32::min);
             let limit = FIXTURE_REACH.min(nearest * FIXTURE_SHARE);
-            shapes.iter().copied().filter(|(_, c)| c.distance(at) <= limit).collect()
+            shapes
+                .iter()
+                .copied()
+                .filter(|(_, c)| c.distance(at) <= limit)
+                .collect()
         })
         .collect()
 }
@@ -471,9 +486,11 @@ impl DynamicSheet {
                         && material.parameters == Some(DECOMPOSED_LIGHTMAP)
                 })
                 .collect();
-            let fits = scene.images.get(sheet.parts_image as usize).is_some_and(|p| {
-                p.width == sheet.width && p.height == sheet.height
-            }) && sheet.left.len() == (sheet.width * sheet.height * 4) as usize
+            let fits = scene
+                .images
+                .get(sheet.parts_image as usize)
+                .is_some_and(|p| p.width == sheet.width && p.height == sheet.height)
+                && sheet.left.len() == (sheet.width * sheet.height * 4) as usize
                 && sheet.lights.len() <= DYNAMIC_CHANNELS
                 && sheet.visibility.len() == sheet.lights.len().div_ceil(4)
                 && sheet.visibility.iter().all(|v| v.len() == sheet.left.len());
@@ -482,10 +499,14 @@ impl DynamicSheet {
             }
             let label = scene.images[sheet.parts_image as usize].label.clone();
             let left = scene.images.len();
-            scene.images.push(image(format!("{label} dynamic"), &sheet.left));
+            scene
+                .images
+                .push(image(format!("{label} dynamic"), &sheet.left));
             let first = scene.images.len();
             for (k, v) in sheet.visibility.iter().enumerate() {
-                scene.images.push(image(format!("{label} dynamic visibility {k}"), v));
+                scene
+                    .images
+                    .push(image(format!("{label} dynamic visibility {k}"), v));
             }
             let parameters = pack_channels(&sheet.lights);
             for m in users {
@@ -525,8 +546,13 @@ impl TexelFix {
     pub fn apply(fixes: &[TexelFix], images: &mut [SceneImage]) -> Vec<usize> {
         let mut changed = std::collections::BTreeSet::new();
         for fix in fixes {
-            let Some(image) = images.get_mut(fix.image as usize) else { continue };
-            let Some(texel) = image.rgba.get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4) else {
+            let Some(image) = images.get_mut(fix.image as usize) else {
+                continue;
+            };
+            let Some(texel) = image
+                .rgba
+                .get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4)
+            else {
                 continue;
             };
             texel.copy_from_slice(&fix.rgba);
@@ -570,7 +596,10 @@ impl Bake {
                 continue;
             }
             let lit = material.parameters == Some(DECOMPOSED_LIGHTMAP);
-            debug_assert!(!crate::scene::decomposed_lightmap(material.parameters) || lit, "bake before equipping");
+            debug_assert!(
+                !crate::scene::decomposed_lightmap(material.parameters) || lit,
+                "bake before equipping"
+            );
             let image = material.images[8];
             let sheet = match (lit, bases.get(&image)) {
                 (true, Some(base)) => Some(*sheet_of.entry(image).or_insert_with(|| {
@@ -644,7 +673,9 @@ impl Bake {
         // Rim texels a surface covers are its own; the rest go to the first
         // surface that reaches them.
         let mut rimmed = claimed.clone();
-        rims.retain(|r: &Lexel| !std::mem::replace(&mut rimmed[r.sheet as usize][r.index as usize], true));
+        rims.retain(|r: &Lexel| {
+            !std::mem::replace(&mut rimmed[r.sheet as usize][r.index as usize], true)
+        });
         let sun_direction = Vec3::from(scene.sun_direction).normalize_or_zero();
         let key = {
             use sha2::{Digest, Sha256};
@@ -665,7 +696,12 @@ impl Bake {
                 hash.update(l.sheet.to_le_bytes());
                 hash.update(l.index.to_le_bytes());
             }
-            for b in base_images.iter().map(|b| &**b).chain(&drawn).chain(decomposed.iter().map(|d| &d.1)) {
+            for b in base_images
+                .iter()
+                .map(|b| &**b)
+                .chain(&drawn)
+                .chain(decomposed.iter().map(|d| &d.1))
+            {
                 hash.update(b.width.to_le_bytes());
                 hash.update(&b.rgba);
             }
@@ -702,7 +738,13 @@ impl Bake {
     /// `min_cell`/`max_cells` bound the residual volume like the classic
     /// one; the visibility volume uses cells of `vis_cell` units or more,
     /// at most `vis_cells`.
-    pub fn bake(self, min_cell: f32, max_cells: usize, vis_cell: f32, vis_cells: usize) -> MapLighting {
+    pub fn bake(
+        self,
+        min_cell: f32,
+        max_cells: usize,
+        vis_cell: f32,
+        vis_cells: usize,
+    ) -> MapLighting {
         let (mut lighting, rest) = self.bake_staged(min_cell, max_cells, vis_cell, vis_cells);
         if let Some(rest) = rest {
             lighting.residual_all = rest.bake(min_cell, max_cells);
@@ -742,7 +784,10 @@ impl Bake {
             let d = (all.min(Vec3::ONE) - l.base) * 255.0;
             err += d.abs().element_sum() as f64 / 3.0;
             err2 += d.length_squared() as f64 / 3.0;
-            ch_err += ((channel.min(Vec3::ONE) - l.base) * 255.0).abs().element_sum() as f64 / 3.0;
+            ch_err += ((channel.min(Vec3::ONE) - l.base) * 255.0)
+                .abs()
+                .element_sum() as f64
+                / 3.0;
             if l.base.max_element() > 2.0 / 255.0 {
                 lit += 1;
                 lit_err += d.abs().element_sum() as f64 / 3.0;
@@ -773,7 +818,9 @@ impl Bake {
                 texel.copy_from_slice(&[byte(left.x), byte(left.y), byte(left.z)]);
             }
         }
-        let replaced = |images: Vec<SceneImage>, what: &str| -> std::collections::BTreeMap<usize, SceneImage> {
+        let replaced = |images: Vec<SceneImage>,
+                        what: &str|
+         -> std::collections::BTreeMap<usize, SceneImage> {
             self.sheets
                 .iter()
                 .zip(images)
@@ -784,9 +831,16 @@ impl Bake {
                 .collect()
         };
         let rest = (!every_light_live).then(|| {
-            ResidualBake(self.residual_input.clone().replace(&replaced(residual_all, "residual without lights")))
+            ResidualBake(
+                self.residual_input
+                    .clone()
+                    .replace(&replaced(residual_all, "residual without lights")),
+            )
         });
-        let residual = self.residual_input.replace(&replaced(residual, "residual")).bake(min_cell, max_cells);
+        let residual = self
+            .residual_input
+            .replace(&replaced(residual, "residual"))
+            .bake(min_cell, max_cells);
         report.seconds = started.elapsed().as_secs_f32();
         let lighting = MapLighting {
             lights,
@@ -806,36 +860,37 @@ impl Bake {
     #[allow(clippy::type_complexity)]
     fn rays(&self, lights: &[MapLight]) -> (Vec<(Vec3, Vec3, Vec3)>, Vec<u32>) {
         crate::light_volume::parallel(self.lexels.len(), |i| {
-                let l = &self.lexels[i];
-                let mut all = Vec3::ZERO;
-                let mut channel = Vec3::ZERO;
-                let mut open = Vec3::ZERO;
-                let mut seen = 0u32;
-                for (k, light) in lights.iter().enumerate() {
-                    let shade = light.shade(l.position, l.normal);
-                    if shade.max_element() <= 0.0 {
-                        continue;
-                    }
-                    open += shade;
-                    if !self.sees(l.position, l.normal, light.position.into()) {
-                        continue;
-                    }
-                    seen |= 1 << k;
-                    all += shade;
-                    if light.channel.is_some() {
-                        channel += shade;
-                    }
+            let l = &self.lexels[i];
+            let mut all = Vec3::ZERO;
+            let mut channel = Vec3::ZERO;
+            let mut open = Vec3::ZERO;
+            let mut seen = 0u32;
+            for (k, light) in lights.iter().enumerate() {
+                let shade = light.shade(l.position, l.normal);
+                if shade.max_element() <= 0.0 {
+                    continue;
                 }
-                ((all, channel, open), seen)
-            })
-            .into_iter()
-            .unzip()
+                open += shade;
+                if !self.sees(l.position, l.normal, light.position.into()) {
+                    continue;
+                }
+                seen |= 1 << k;
+                all += shade;
+                if light.channel.is_some() {
+                    channel += shade;
+                }
+            }
+            ((all, channel, open), seen)
+        })
+        .into_iter()
+        .unzip()
     }
 
     /// For the lighting probe: whether the sun, shining along `direction`,
     /// reaches a surface at `at` facing `normal` past the interiors.
     pub fn sun_reaches(&self, at: Vec3, normal: Vec3, direction: Vec3) -> bool {
-        normal.dot(-direction) > 0.0 && self.sees(at, normal, at - direction.normalize_or_zero() * 10_000.0)
+        normal.dot(-direction) > 0.0
+            && self.sees(at, normal, at - direction.normalize_or_zero() * 10_000.0)
     }
 
     /// For the lighting probe: how `dynamic_sheets` splits each of these
@@ -865,7 +920,12 @@ impl Bake {
     /// ambient never go to a light. Switching a light off then takes away
     /// exactly the light it baked: its baked shadows vanish with it instead
     /// of turning darker than the room, and nothing it lit stays lit.
-    fn dynamic_sheets(&self, lights: &[MapLight], seen: &[u32], leaks: &[TexelFix]) -> Vec<DynamicSheet> {
+    fn dynamic_sheets(
+        &self,
+        lights: &[MapLight],
+        seen: &[u32],
+        leaks: &[TexelFix],
+    ) -> Vec<DynamicSheet> {
         self.dynamic_sheets_traced(lights, seen, leaks, &[], &mut Vec::new())
     }
 
@@ -889,7 +949,12 @@ impl Bake {
         let floor = self.authored_floor(seen);
         let lights = &lights[..lights.len().min(DYNAMIC_CHANNELS)];
         let mut by_sheet: Vec<Vec<(&Lexel, u32)>> = vec![Vec::new(); self.decomposed.len()];
-        for (l, mask) in self.lexels.iter().zip(seen.iter().copied()).chain(self.rims.iter().zip(rim_seen)) {
+        for (l, mask) in self
+            .lexels
+            .iter()
+            .zip(seen.iter().copied())
+            .chain(self.rims.iter().zip(rim_seen))
+        {
             if let Some(sheet) = by_sheet.get_mut(l.sheet as usize) {
                 sheet.push((l, mask));
             }
@@ -907,12 +972,18 @@ impl Bake {
         for (sheet, (parts_image, parts)) in self.decomposed.iter().enumerate() {
             let mut parts = parts.clone();
             for fix in leaks.iter().filter(|f| f.image as usize == *parts_image) {
-                if let Some(t) = parts.rgba.get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4) {
+                if let Some(t) = parts
+                    .rgba
+                    .get_mut(fix.index as usize * 4..fix.index as usize * 4 + 4)
+                {
                     t.copy_from_slice(&fix.rgba);
                 }
             }
             let texel_of = |i: usize| {
-                parts.rgba.get(i * 4..i * 4 + 3).map(|t| Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0)
+                parts
+                    .rgba
+                    .get(i * 4..i * 4 + 3)
+                    .map(|t| Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0)
             };
             // Per texel: the lights its rays see take its authored light
             // first, as far as it holds them; what is left over (`rest`) can
@@ -935,7 +1006,8 @@ impl Bake {
             let (w, h) = (parts.width as i64, parts.height as i64);
             let same_surface = |a: &Lexel, b: &Lexel| {
                 let apart = b.position - a.position;
-                b.normal.dot(a.normal) > 0.95 && apart.dot(a.normal).abs() <= 0.1 * apart.length() + 1e-3
+                b.normal.dot(a.normal) > 0.95
+                    && apart.dot(a.normal).abs() <= 0.1 * apart.length() + 1e-3
             };
             let mut lexel_at: Vec<Option<(&Lexel, u32)>> = vec![None; (w * h).max(0) as usize];
             for &(l, mask) in &by_sheet[sheet] {
@@ -956,14 +1028,19 @@ impl Bake {
                     if nx < 0 || ny < 0 || nx >= w || ny >= h {
                         return 0;
                     }
-                    lexel_at[(ny * w + nx) as usize].filter(|(n, _)| same_surface(l, n)).map_or(0, |(_, m)| m)
+                    lexel_at[(ny * w + nx) as usize]
+                        .filter(|(n, _)| same_surface(l, n))
+                        .map_or(0, |(_, m)| m)
                 };
                 [(1, 0), (0, 1), (1, 1), (1, -1)]
                     .iter()
-                    .fold(mask, |m, &(dx, dy)| m | (neighbour(dx, dy) & neighbour(-dx, -dy)))
+                    .fold(mask, |m, &(dx, dy)| {
+                        m | (neighbour(dx, dy) & neighbour(-dx, -dy))
+                    })
             };
             let mut splits: Vec<Split> = Vec::new();
-            let mut split_at: Vec<Option<usize>> = vec![None; (parts.width * parts.height) as usize];
+            let mut split_at: Vec<Option<usize>> =
+                vec![None; (parts.width * parts.height) as usize];
             for &(l, raw_mask) in &by_sheet[sheet] {
                 let mask = closed(l, raw_mask);
                 let i = l.index as usize;
@@ -986,9 +1063,18 @@ impl Bake {
                     .collect();
                 let in_reach = |k: usize| given_by[k].max_element() > 0.0;
                 let faces = |k: usize| lights[k].shade(l.position, l.normal).max_element() > 0.0;
-                let seen = (0..lights.len()).filter(|&k| mask & (1 << k) != 0 && faces(k)).fold(0u32, |m, k| m | 1 << k);
-                let hidden = (0..lights.len()).filter(|&k| seen & (1 << k) == 0 && in_reach(k)).fold(0u32, |m, k| m | 1 << k);
-                let light_of = |set: u32| (0..lights.len()).filter(|&k| set & (1 << k) != 0).map(|k| given_by[k]).sum::<Vec3>();
+                let seen = (0..lights.len())
+                    .filter(|&k| mask & (1 << k) != 0 && faces(k))
+                    .fold(0u32, |m, k| m | 1 << k);
+                let hidden = (0..lights.len())
+                    .filter(|&k| seen & (1 << k) == 0 && in_reach(k))
+                    .fold(0u32, |m, k| m | 1 << k);
+                let light_of = |set: u32| {
+                    (0..lights.len())
+                        .filter(|&k| set & (1 << k) != 0)
+                        .map(|k| given_by[k])
+                        .sum::<Vec3>()
+                };
                 let seen_light = light_of(seen);
                 let s = share(held, seen_light);
                 let mut shares = vec![0.0f32; lights.len()];
@@ -997,14 +1083,22 @@ impl Bake {
                 }
                 let given = seen_light * s;
                 let rest = (held - given).max(Vec3::ZERO);
-                let hidden_given: Vec<(usize, Vec3)> =
-                    (0..lights.len()).filter(|&k| hidden & (1 << k) != 0).map(|k| (k, given_by[k])).collect();
+                let hidden_given: Vec<(usize, Vec3)> = (0..lights.len())
+                    .filter(|&k| hidden & (1 << k) != 0)
+                    .map(|k| (k, given_by[k]))
+                    .collect();
                 if traced.contains(&(*parts_image as u32, i as u32)) {
                     let alpha = parts.rgba.get(i * 4 + 3).copied().unwrap_or(0);
                     let per_light: Vec<String> = (0..lights.len())
                         .filter(|&k| in_reach(k))
                         .map(|k| {
-                            let ray = if raw_mask & (1 << k) != 0 { "ray" } else if mask & (1 << k) != 0 { "closed" } else { "hidden" };
+                            let ray = if raw_mask & (1 << k) != 0 {
+                                "ray"
+                            } else if mask & (1 << k) != 0 {
+                                "closed"
+                            } else {
+                                "hidden"
+                            };
                             let side = if faces(k) { "faces" } else { "away" };
                             format!("{k}:{:.0} {side} {ray}", luminance(given_by[k]) * 255.0)
                         })
@@ -1047,20 +1141,27 @@ impl Bake {
             // see within two texels of it there: where a light's patch ends.
             let on_surface = |t: &Split, n: &Split| {
                 let apart = n.position - t.position;
-                n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3
+                n.normal.dot(t.normal) > 0.95
+                    && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3
             };
             let around = |t: &Split| -> Vec<usize> {
                 let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
                 (-1..=1)
                     .flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
-                    .filter(|&(nx, ny)| nx >= 0 && ny >= 0 && nx < w && ny < h && (nx, ny) != (x, y))
+                    .filter(|&(nx, ny)| {
+                        nx >= 0 && ny >= 0 && nx < w && ny < h && (nx, ny) != (x, y)
+                    })
                     .filter_map(|(nx, ny)| split_at[(ny * w + nx) as usize])
                     .filter(|&k| on_surface(t, &splits[k]))
                     .collect()
             };
             let neighbours: Vec<Vec<usize>> = splits.iter().map(around).collect();
             let spread = |near: &[u32]| -> Vec<u32> {
-                neighbours.iter().enumerate().map(|(i, n)| n.iter().fold(near[i], |m, &k| m | near[k])).collect()
+                neighbours
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| n.iter().fold(near[i], |m, &k| m | near[k]))
+                    .collect()
             };
             let seen_near = spread(&spread(&splits.iter().map(|t| t.seen).collect::<Vec<_>>()));
             // The light each texel's remainder most likely is: the brightest
@@ -1102,9 +1203,15 @@ impl Bake {
             // them unevenly, a blotch when they go out.
             let held_around = |i: usize| {
                 let t = &splits[i];
-                let (seen, held_by) = neighbours[i].iter().fold((0u32, 0u32), |(seen, held_by), &k| {
-                    (seen | (splits[k].seen & t.hidden_set), held_by | (held[k] & t.hidden_set))
-                });
+                let (seen, held_by) =
+                    neighbours[i]
+                        .iter()
+                        .fold((0u32, 0u32), |(seen, held_by), &k| {
+                            (
+                                seen | (splits[k].seen & t.hidden_set),
+                                held_by | (held[k] & t.hidden_set),
+                            )
+                        });
                 if seen != 0 { seen } else { held_by }
             };
             // Per texel: its index, its leftover light and each light's share.
@@ -1151,7 +1258,12 @@ impl Bake {
                     })
                     .collect();
                 let surest = weights.iter().copied().fold(0.0f32, f32::max);
-                let weighed: f32 = t.hidden.iter().zip(&weights).map(|((_, g), w)| luminance(*g) * w).sum();
+                let weighed: f32 = t
+                    .hidden
+                    .iter()
+                    .zip(&weights)
+                    .map(|((_, g), w)| luminance(*g) * w)
+                    .sum();
                 if surest > 0.0 && weighed > 1e-6 {
                     for (&(k, g), &weight) in t.hidden.iter().zip(&weights) {
                         let taken = rest * surest * (luminance(g) * weight / weighed);
@@ -1168,7 +1280,10 @@ impl Bake {
                 // too, up to `SHARE_MAX`: the patch's light takes back only
                 // what it gives there.
                 let over = (t.texel - given - floor).max(Vec3::ZERO);
-                let taken = (0..lights.len()).filter(|&k| t.seen & (1 << k) != 0).map(|k| shares[k]).fold(0.0, f32::max);
+                let taken = (0..lights.len())
+                    .filter(|&k| t.seen & (1 << k) != 0)
+                    .map(|k| shares[k])
+                    .fold(0.0, f32::max);
                 let room = t.seen_light * (SHARE_MAX - taken).max(0.0);
                 if around != 0 && luminance(over) > 0.0 && luminance(room) > 1e-6 {
                     let extra = luminance(over).min(luminance(room)) / luminance(t.seen_light);
@@ -1183,8 +1298,12 @@ impl Bake {
                     }
                 }
                 if traced.contains(&(*parts_image as u32, t.index as u32)) {
-                    let hidden: Vec<String> =
-                        t.hidden.iter().zip(&weights).map(|((k, _), w)| format!("{k}:{w:.2}")).collect();
+                    let hidden: Vec<String> = t
+                        .hidden
+                        .iter()
+                        .zip(&weights)
+                        .map(|((k, _), w)| format!("{k}:{w:.2}"))
+                        .collect();
                     let taken: Vec<String> = shares
                         .iter()
                         .enumerate()
@@ -1201,7 +1320,9 @@ impl Bake {
                 }
                 shared.push((t.index, (t.texel - given).max(Vec3::ZERO), shares));
             }
-            let channels: Vec<u8> = (0..lights.len() as u8).filter(|&k| reach & (1 << k) != 0).collect();
+            let channels: Vec<u8> = (0..lights.len() as u8)
+                .filter(|&k| reach & (1 << k) != 0)
+                .collect();
             let texels = (parts.width * parts.height) as usize;
             let mut visibility = vec![vec![0u8; texels * 4]; channels.len().div_ceil(4)];
             let mut left = parts.rgba.clone();
@@ -1230,7 +1351,13 @@ impl Bake {
     /// the rays hit, but mostly ones behind furniture and walls that only
     /// the ambient reaches. With too few of them to tell, none.
     fn authored_floor(&self, seen: &[u32]) -> Vec3 {
-        let dark: Vec<Vec3> = self.lexels.iter().zip(seen).filter(|(_, s)| **s == 0).map(|(l, _)| l.base).collect();
+        let dark: Vec<Vec3> = self
+            .lexels
+            .iter()
+            .zip(seen)
+            .filter(|(_, s)| **s == 0)
+            .map(|(l, _)| l.base)
+            .collect();
         let mut floor = Vec3::ZERO;
         if dark.len() < 64.max(self.lexels.len() / 200) {
             return floor;
@@ -1276,7 +1403,13 @@ impl Bake {
         // Saturated samples only bound the light from below; leave them out.
         let usable: Vec<f32> = samples
             .iter()
-            .map(|s| if s.base.max_element() >= 254.5 / 255.0 { 0.0 } else { 1.0 })
+            .map(|s| {
+                if s.base.max_element() >= 254.5 / 255.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
             .collect();
         let target: Vec<Vec3> = samples.iter().map(|s| s.base).collect();
         let energy = |residual: &[Vec3]| -> f64 {
@@ -1300,8 +1433,9 @@ impl Bake {
             // dimmer than the white lights around it, but just as clearly
             // one light.
             let bright = |i: usize| residual[i].element_sum() * usable[i];
-            let chroma =
-                |i: usize| (residual[i].max_element() - residual[i].min_element().max(0.0)) * usable[i] - 0.1;
+            let chroma = |i: usize| {
+                (residual[i].max_element() - residual[i].min_element().max(0.0)) * usable[i] - 0.1
+            };
             let mut best: Option<Candidate> = None;
             for weight in [&bright as &dyn Fn(usize) -> f32, &chroma] {
                 let mut order: Vec<usize> = (0..samples.len()).collect();
@@ -1362,7 +1496,13 @@ impl Bake {
         lights
     }
 
-    fn candidate(&self, at: Vec3, samples: &[Lexel], residual: &[Vec3], usable: &[f32]) -> Candidate {
+    fn candidate(
+        &self,
+        at: Vec3,
+        samples: &[Lexel],
+        residual: &[Vec3],
+        usable: &[f32],
+    ) -> Candidate {
         let geometry: Vec<(f32, f32)> = crate::light_volume::parallel(samples.len(), |i| {
             let s = &samples[i];
             let delta = at - s.position;
@@ -1382,7 +1522,10 @@ impl Bake {
             outer: 1.0,
             shape: vec![],
         };
-        let (mut bb, mut br) = ([[0f64; SPAN.len()]; INNER.len()], [[[0f64; 3]; SPAN.len()]; INNER.len()]);
+        let (mut bb, mut br) = (
+            [[0f64; SPAN.len()]; INNER.len()],
+            [[[0f64; 3]; SPAN.len()]; INNER.len()],
+        );
         for ((facing, distance), r) in geometry.iter().zip(residual) {
             if *facing <= 0.0 {
                 continue;
@@ -1424,11 +1567,24 @@ impl Bake {
         best
     }
 
-    fn refine(&self, mut best: Candidate, samples: &[Lexel], residual: &[Vec3], usable: &[f32]) -> Candidate {
+    fn refine(
+        &self,
+        mut best: Candidate,
+        samples: &[Lexel],
+        residual: &[Vec3],
+        usable: &[f32],
+    ) -> Candidate {
         let mut step = 8.0f32;
         while step >= 0.5 {
             let mut improved = false;
-            for axis in [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z] {
+            for axis in [
+                Vec3::X,
+                Vec3::NEG_X,
+                Vec3::Y,
+                Vec3::NEG_Y,
+                Vec3::Z,
+                Vec3::NEG_Z,
+            ] {
                 let c = self.candidate(best.position + axis * step, samples, residual, usable);
                 if c.gain > best.gain * (1.0 + 1e-4) {
                     best = c;
@@ -1474,108 +1630,121 @@ impl Bake {
             .bounds_of_all()
             .map_or(1.0, |(min, max)| (max - min).length() * 2.0 + 100.0);
         let toward_sun = -self.sun_direction;
-        let fixes: Vec<Option<[TexelFix; 2]>> = crate::light_volume::parallel(self.lexels.len(), |i| {
-            let l = &self.lexels[i];
-            let sheet = l.sheet as usize;
-            let (image, w, h) = self.sheets[sheet];
-            let (drawn, (parts_image, parts)) = (&self.drawn[sheet], &self.decomposed[sheet]);
-            if drawn.width != w || drawn.height != h || parts.width != w || parts.height != h {
-                return None;
-            }
-            let (x, y) = ((l.index % w) as i64, (l.index / w) as i64);
-            let texel = |image: &SceneImage, i: usize| {
-                let t = &image.rgba[i * 4..i * 4 + 4];
-                (Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0, t[3] as f32 / 255.0)
-            };
-            // The two neighbours along each axis, when both lie on this
-            // surface with this one midway between them.
-            let neighbour = |dx: i64, dy: i64| -> Option<usize> {
-                let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+        let fixes: Vec<Option<[TexelFix; 2]>> =
+            crate::light_volume::parallel(self.lexels.len(), |i| {
+                let l = &self.lexels[i];
+                let sheet = l.sheet as usize;
+                let (image, w, h) = self.sheets[sheet];
+                let (drawn, (parts_image, parts)) = (&self.drawn[sheet], &self.decomposed[sheet]);
+                if drawn.width != w || drawn.height != h || parts.width != w || parts.height != h {
                     return None;
                 }
-                let n = lookup[sheet][(ny * w as i64 + nx) as usize];
-                (n != u32::MAX && self.lexels[n as usize].normal.dot(l.normal) > 0.99).then_some(n as usize)
-            };
-            let mut best: Option<(f32, usize, usize)> = None;
-            let mut best_sun: Option<(f32, usize, usize)> = None;
-            for (dx, dy) in [(LEAK_STEP, 0), (0, LEAK_STEP)] {
-                let (Some(a), Some(c)) = (neighbour(-dx, -dy), neighbour(dx, dy)) else { continue };
-                let (pa, pc) = (self.lexels[a].position, self.lexels[c].position);
-                if (l.position - (pa + pc) * 0.5).length() > 0.25 * pa.distance(pc) {
-                    continue;
+                let (x, y) = ((l.index % w) as i64, (l.index / w) as i64);
+                let texel = |image: &SceneImage, i: usize| {
+                    let t = &image.rgba[i * 4..i * 4 + 4];
+                    (
+                        Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0,
+                        t[3] as f32 / 255.0,
+                    )
+                };
+                // The two neighbours along each axis, when both lie on this
+                // surface with this one midway between them.
+                let neighbour = |dx: i64, dy: i64| -> Option<usize> {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                        return None;
+                    }
+                    let n = lookup[sheet][(ny * w as i64 + nx) as usize];
+                    (n != u32::MAX && self.lexels[n as usize].normal.dot(l.normal) > 0.99)
+                        .then_some(n as usize)
+                };
+                let mut best: Option<(f32, usize, usize)> = None;
+                let mut best_sun: Option<(f32, usize, usize)> = None;
+                for (dx, dy) in [(LEAK_STEP, 0), (0, LEAK_STEP)] {
+                    let (Some(a), Some(c)) = (neighbour(-dx, -dy), neighbour(dx, dy)) else {
+                        continue;
+                    };
+                    let (pa, pc) = (self.lexels[a].position, self.lexels[c].position);
+                    if (l.position - (pa + pc) * 0.5).length() > 0.25 * pa.distance(pc) {
+                        continue;
+                    }
+                    // A leak is a thin ridge the lights past the walls leave
+                    // unexplained, between neighbours they explain. Inside a lit
+                    // patch or glow the fit misplaces (the sun patch through a
+                    // window, a stove's panels), the neighbours are unexplained
+                    // too, and nothing changes.
+                    // And the ridge must outshine its surroundings' own light: a
+                    // leak is light where there is (nearly) none, never detail in
+                    // a lit patch the fit happens to explain.
+                    let unexplained = |n: usize| luminance(self.lexels[n].base - per_lexel[n].0);
+                    let bright = |n: usize| luminance(self.lexels[n].base);
+                    let side = bright(a).max(bright(c));
+                    let ridge = bright(i) - side;
+                    if unexplained(a).max(unexplained(c)) < LEAK_LEVELS
+                        && unexplained(i) >= 0.75 * ridge
+                        && side < ridge
+                        && ridge > best.map_or(LEAK_LEVELS, |b| b.0)
+                    {
+                        best = Some((ridge, a, c));
+                    }
+                    // Baked sun: a thin ridge between neighbours the bake left
+                    // (nearly) unlit.
+                    let sun = |n: usize| texel(parts, self.lexels[n].index as usize).1;
+                    let side = sun(a).max(sun(c));
+                    let ridge = sun(i) - side;
+                    if side < 0.5 * LEAK_SUN && ridge > best_sun.map_or(LEAK_SUN, |b| b.0) {
+                        best_sun = Some((ridge, a, c));
+                    }
                 }
-                // A leak is a thin ridge the lights past the walls leave
-                // unexplained, between neighbours they explain. Inside a lit
-                // patch or glow the fit misplaces (the sun patch through a
-                // window, a stove's panels), the neighbours are unexplained
-                // too, and nothing changes.
-                // And the ridge must outshine its surroundings' own light: a
-                // leak is light where there is (nearly) none, never detail in
-                // a lit patch the fit happens to explain.
-                let unexplained = |n: usize| luminance(self.lexels[n].base - per_lexel[n].0);
-                let bright = |n: usize| luminance(self.lexels[n].base);
-                let side = bright(a).max(bright(c));
-                let ridge = bright(i) - side;
-                if unexplained(a).max(unexplained(c)) < LEAK_LEVELS
-                    && unexplained(i) >= 0.75 * ridge
-                    && side < ridge
-                    && ridge > best.map_or(LEAK_LEVELS, |b| b.0)
-                {
-                    best = Some((ridge, a, c));
+                // Authored light: the walls must hide at least most of the extra.
+                let (visible, _, open) = per_lexel[i];
+                let delta = best
+                    .filter(|(ridge, _, _)| luminance(open - visible) >= 0.75 * ridge)
+                    .map_or(Vec3::ZERO, |(_, a, c)| {
+                        (l.base - (self.lexels[a].base + self.lexels[c].base) * 0.5).max(Vec3::ZERO)
+                    });
+                // Baked sun: the walls hide the sun from this texel.
+                let (fixed, share) = texel(parts, l.index as usize);
+                let sun_blocked = |n: usize| {
+                    let l = &self.lexels[n];
+                    toward_sun.length_squared() > 0.5
+                        && l.normal.dot(toward_sun) > 0.01
+                        && self
+                            .bvh
+                            .blocked(l.position + l.normal * LIFT, toward_sun, reach)
+                };
+                // The walls hide the sun from it and from both neighbours.
+                let new_share = best_sun
+                    .filter(|&(_, a, c)| sun_blocked(i) && sun_blocked(a) && sun_blocked(c))
+                    .map_or(share, |(_, a, c)| {
+                        (texel(parts, self.lexels[a].index as usize).1
+                            + texel(parts, self.lexels[c].index as usize).1)
+                            * 0.5
+                    });
+                if delta.max_element() < 0.5 / 255.0 && share - new_share < 0.5 / 255.0 {
+                    return None;
                 }
-                // Baked sun: a thin ridge between neighbours the bake left
-                // (nearly) unlit.
-                let sun = |n: usize| texel(parts, self.lexels[n].index as usize).1;
-                let side = sun(a).max(sun(c));
-                let ridge = sun(i) - side;
-                if side < 0.5 * LEAK_SUN && ridge > best_sun.map_or(LEAK_SUN, |b| b.0) {
-                    best_sun = Some((ridge, a, c));
-                }
-            }
-            // Authored light: the walls must hide at least most of the extra.
-            let (visible, _, open) = per_lexel[i];
-            let delta = best
-                .filter(|(ridge, _, _)| luminance(open - visible) >= 0.75 * ridge)
-                .map_or(Vec3::ZERO, |(_, a, c)| {
-                    (l.base - (self.lexels[a].base + self.lexels[c].base) * 0.5).max(Vec3::ZERO)
-                });
-            // Baked sun: the walls hide the sun from this texel.
-            let (fixed, share) = texel(parts, l.index as usize);
-            let sun_blocked = |n: usize| {
-                let l = &self.lexels[n];
-                toward_sun.length_squared() > 0.5
-                    && l.normal.dot(toward_sun) > 0.01
-                    && self.bvh.blocked(l.position + l.normal * LIFT, toward_sun, reach)
-            };
-            // The walls hide the sun from it and from both neighbours.
-            let new_share = best_sun.filter(|&(_, a, c)| sun_blocked(i) && sun_blocked(a) && sun_blocked(c)).map_or(share, |(_, a, c)| {
-                (texel(parts, self.lexels[a].index as usize).1 + texel(parts, self.lexels[c].index as usize).1) * 0.5
+                let (mission, _) = texel(drawn, l.index as usize);
+                // The drawn lightmap is the static light plus the baked sun.
+                let sun_part = (mission - fixed).max(Vec3::ZERO);
+                let kept = if share > 0.0 { new_share / share } else { 1.0 };
+                let mission = (mission - delta - sun_part * (1.0 - kept)).max(Vec3::ZERO);
+                let fixed = (fixed - delta).max(Vec3::ZERO);
+                let rgba = |c: Vec3, a: u8| [byte(c.x), byte(c.y), byte(c.z), a];
+                let drawn_alpha = drawn.rgba[l.index as usize * 4 + 3];
+                Some([
+                    TexelFix {
+                        image: image as u32,
+                        index: l.index,
+                        rgba: rgba(mission, drawn_alpha),
+                    },
+                    TexelFix {
+                        image: *parts_image as u32,
+                        index: l.index,
+                        rgba: rgba(fixed, byte(new_share)),
+                    },
+                ])
             });
-            if delta.max_element() < 0.5 / 255.0 && share - new_share < 0.5 / 255.0 {
-                return None;
-            }
-            let (mission, _) = texel(drawn, l.index as usize);
-            // The drawn lightmap is the static light plus the baked sun.
-            let sun_part = (mission - fixed).max(Vec3::ZERO);
-            let kept = if share > 0.0 { new_share / share } else { 1.0 };
-            let mission = (mission - delta - sun_part * (1.0 - kept)).max(Vec3::ZERO);
-            let fixed = (fixed - delta).max(Vec3::ZERO);
-            let rgba = |c: Vec3, a: u8| [byte(c.x), byte(c.y), byte(c.z), a];
-            let drawn_alpha = drawn.rgba[l.index as usize * 4 + 3];
-            Some([
-                TexelFix {
-                    image: image as u32,
-                    index: l.index,
-                    rgba: rgba(mission, drawn_alpha),
-                },
-                TexelFix {
-                    image: *parts_image as u32,
-                    index: l.index,
-                    rgba: rgba(fixed, byte(new_share)),
-                },
-            ])
-        });
         fixes.into_iter().flatten().flatten().collect()
     }
 
@@ -1597,8 +1766,8 @@ impl Bake {
             let y = index as u32 / dims.x % dims.y;
             let z = index as u32 / (dims.x * dims.y);
             let centre = origin + (glam::UVec3::new(x, y, z).as_vec3() + 0.5) * cell;
-            let sun = toward_sun.length_squared() > 0.5
-                && !self.bvh.blocked(centre, toward_sun, reach);
+            let sun =
+                toward_sun.length_squared() > 0.5 && !self.bvh.blocked(centre, toward_sun, reach);
             let mut texel = [u8::from(sun) * 255, 0, 0, 0, 0, 0, 0, 0];
             for c in 0..CHANNELS {
                 // Channels may be shared by lights whose ranges never meet.
@@ -1666,7 +1835,10 @@ fn refit_colors(lights: &mut [MapLight], shapes: &[Vec<f32>], target: &[Vec3], u
                 if a[p * k + p] <= 1e-12 {
                     continue;
                 }
-                let others: f64 = (0..k).filter(|&q| q != p).map(|q| a[p * k + q] * x[q]).sum();
+                let others: f64 = (0..k)
+                    .filter(|&q| q != p)
+                    .map(|q| a[p * k + q] * x[q])
+                    .sum();
                 x[p] = ((b[p][c] - others) / a[p * k + p]).max(0.0);
             }
         }
@@ -1731,13 +1903,17 @@ impl MapLighting {
 
     /// None unless `bytes` is a bake `to_bytes` wrote for `key`.
     pub fn from_bytes(bytes: &[u8], key: [u8; 32]) -> Option<Self> {
-        let rest = bytes.strip_prefix(FORMAT.as_slice())?.strip_prefix(key.as_slice())?;
+        let rest = bytes
+            .strip_prefix(FORMAT.as_slice())?
+            .strip_prefix(key.as_slice())?;
         let (len, rest) = rest.split_at_checked(4)?;
         let len = u32::from_le_bytes(len.try_into().ok()?) as usize;
         let (header, rest) = rest.split_at_checked(len)?;
         let header: serde_json::Value = serde_json::from_slice(header).ok()?;
         let dims: [u32; 3] = serde_json::from_value(header["dims"].clone()).ok()?;
-        let count = dims.iter().try_fold(1usize, |n, d| n.checked_mul(*d as usize))?;
+        let count = dims
+            .iter()
+            .try_fold(1usize, |n, d| n.checked_mul(*d as usize))?;
         let (texels, rest) = rest.split_at_checked(count.checked_mul(8)?)?;
         let lights: Vec<MapLight> = serde_json::from_value(header["lights"].clone()).ok()?;
         let cell: f32 = serde_json::from_value(header["cell"].clone()).ok()?;
@@ -1760,14 +1936,18 @@ impl MapLighting {
             if layout.lights.len() > DYNAMIC_CHANNELS {
                 return None;
             }
-            let len = (layout.width as usize).checked_mul(layout.height as usize)?.checked_mul(4)?;
+            let len = (layout.width as usize)
+                .checked_mul(layout.height as usize)?
+                .checked_mul(4)?;
             let mut image = || -> Option<Vec<u8>> {
                 let (rgba, tail) = rest.split_at_checked(len)?;
                 rest = tail;
                 Some(rgba.to_vec())
             };
             let left = image()?;
-            let visibility = (0..layout.lights.len().div_ceil(4)).map(|_| image()).collect::<Option<Vec<_>>>()?;
+            let visibility = (0..layout.lights.len().div_ceil(4))
+                .map(|_| image())
+                .collect::<Option<Vec<_>>>()?;
             dynamic.push(DynamicSheet {
                 parts_image: layout.parts_image,
                 width: layout.width,
@@ -1787,7 +1967,10 @@ impl MapLighting {
                 origin: serde_json::from_value(header["origin"].clone()).ok()?,
                 cell,
                 dims,
-                texels: texels.chunks_exact(8).map(|t| t.try_into().expect("8 bytes")).collect(),
+                texels: texels
+                    .chunks_exact(8)
+                    .map(|t| t.try_into().expect("8 bytes"))
+                    .collect(),
             },
             residual,
             residual_all,
@@ -1803,7 +1986,12 @@ mod tests {
 
     /// A quad of `scene` with its own 32x32 lightmap (decomposed, no sun)
     /// holding `light` at each texel.
-    fn lit_quad(scene: &mut crate::scene::SceneData, corner: impl Fn(f32, f32) -> Vec3, normal: Vec3, light: impl Fn(Vec3) -> Vec3) {
+    fn lit_quad(
+        scene: &mut crate::scene::SceneData,
+        corner: impl Fn(f32, f32) -> Vec3,
+        normal: Vec3,
+        light: impl Fn(Vec3) -> Vec3,
+    ) {
         use crate::scene::{DECOMPOSED_LIGHTMAP, Material, MeshBatch, SceneVertex};
         const SIZE: u32 = 32;
         let at = |t: u32| (t as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
@@ -1816,7 +2004,9 @@ mod tests {
         let mut parts = base.clone();
         parts.rgba.chunks_exact_mut(4).for_each(|t| t[3] = 0);
         scene.images.push(parts);
-        scene.lightmap_bases.push((index, std::sync::Arc::new(base)));
+        scene
+            .lightmap_bases
+            .push((index, std::sync::Arc::new(base)));
         let mut material = Material::surface("quad", 0, index);
         material.images[9] = index + 1;
         material.parameters = Some(DECOMPOSED_LIGHTMAP);
@@ -1876,20 +2066,41 @@ mod tests {
         ];
         let error = Vec3::splat(15.0 / 255.0);
         let given = |p: Vec3| {
-            lights[..2].iter().map(|l| Vec3::from(l.color) * falloff(Vec3::from(l.position).distance(p), l.inner, l.outer)).sum::<Vec3>()
+            lights[..2]
+                .iter()
+                .map(|l| {
+                    Vec3::from(l.color)
+                        * falloff(Vec3::from(l.position).distance(p), l.inner, l.outer)
+                })
+                .sum::<Vec3>()
                 + error
         };
         let mut scene = crate::scene::SceneData {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
         };
-        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, given);
-        lit_quad(&mut scene, |a, b| Vec3::new(500.0 * a, -500.0, 500.0 * b), Vec3::Y, |_| Vec3::ZERO);
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0),
+            Vec3::Z,
+            given,
+        );
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(500.0 * a, -500.0, 500.0 * b),
+            Vec3::Y,
+            |_| Vec3::ZERO,
+        );
         // The rod: a strip 0.06 wide across the wall, 4 units out.
         let first = scene.vertices.len() as u32;
         let across = Vec3::new(1.0, 0.8, 0.0).normalize();
         let side = Vec3::new(-across.y, across.x, 0.0) * 0.03;
-        for p in [-across * 20.0 - side, across * 20.0 - side, across * 20.0 + side, -across * 20.0 + side] {
+        for p in [
+            -across * 20.0 - side,
+            across * 20.0 - side,
+            across * 20.0 + side,
+            -across * 20.0 + side,
+        ] {
             scene.vertices.push(crate::scene::SceneVertex {
                 position: (p + Vec3::new(0.0, 0.0, 4.0)).to_array(),
                 normal: [0.0, 0.0, 1.0],
@@ -1906,7 +2117,9 @@ mod tests {
             material: scene.materials.len(),
             center: [0.0; 3],
         });
-        scene.materials.push(crate::scene::Material::surface("rod", 0, 0));
+        scene
+            .materials
+            .push(crate::scene::Material::surface("rod", 0, 0));
         let bake = Bake::new(&scene).expect("lightmapped wall");
         let seen: Vec<u32> = bake
             .lexels
@@ -1919,7 +2132,10 @@ mod tests {
                 })
             })
             .collect();
-        assert!(seen.iter().any(|&m| m & 3 != 3), "the rod hides the lights from some texels");
+        assert!(
+            seen.iter().any(|&m| m & 3 != 3),
+            "the rod hides the lights from some texels"
+        );
         let sheets = bake.dynamic_sheets(&lights, &seen, &[]);
         let wall = &sheets[0];
         // Inside the wall's chart, away from its rim, the leftover changes
@@ -1928,13 +2144,20 @@ mod tests {
         let mut worst = (0.0f32, 0, 0);
         for y in 2..30 {
             for x in 2..30 {
-                let around = (left(x - 1, y) + left(x + 1, y) + left(x, y - 1) + left(x, y + 1)) / 4.0;
+                let around =
+                    (left(x - 1, y) + left(x + 1, y) + left(x, y - 1) + left(x, y + 1)) / 4.0;
                 if (left(x, y) - around).abs() > worst.0 {
                     worst = ((left(x, y) - around).abs(), x, y);
                 }
             }
         }
-        assert!(worst.0 <= 2.0, "texel ({}, {}) stands {} levels out of the leftover around it", worst.1, worst.2, worst.0);
+        assert!(
+            worst.0 <= 2.0,
+            "texel ({}, {}) stands {} levels out of the leftover around it",
+            worst.1,
+            worst.2,
+            worst.0
+        );
     }
 
     /// A thin strip of wall the map compiler lit through a gap (between the
@@ -1973,9 +2196,18 @@ mod tests {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
         };
-        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, |p| {
-            if strip(p) { Vec3::from(lights[0].color) } else { Vec3::ZERO }
-        });
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0),
+            Vec3::Z,
+            |p| {
+                if strip(p) {
+                    Vec3::from(lights[0].color)
+                } else {
+                    Vec3::ZERO
+                }
+            },
+        );
         // The plate the rays from the light hit, 4 units out.
         let first = scene.vertices.len() as u32;
         for (x, y) in [(-20.0, -20.0), (20.0, -20.0), (20.0, 20.0), (-20.0, 20.0)] {
@@ -1995,7 +2227,9 @@ mod tests {
             material: scene.materials.len(),
             center: [0.0; 3],
         });
-        scene.materials.push(crate::scene::Material::surface("plate", 0, 0));
+        scene
+            .materials
+            .push(crate::scene::Material::surface("plate", 0, 0));
         let bake = Bake::new(&scene).expect("lightmapped wall");
         let seen: Vec<u32> = bake
             .lexels
@@ -2008,21 +2242,39 @@ mod tests {
                 })
             })
             .collect();
-        assert!(seen.iter().all(|&m| m == 0), "the rays find every light hidden");
+        assert!(
+            seen.iter().all(|&m| m == 0),
+            "the rays find every light hidden"
+        );
         let wall = &bake.dynamic_sheets(&lights, &seen, &[])[0];
         let mut lit = 0;
-        for l in bake.lexels.iter().filter(|l| l.sheet == 0 && strip(l.position)) {
+        for l in bake
+            .lexels
+            .iter()
+            .filter(|l| l.sheet == 0 && strip(l.position))
+        {
             let left = wall.left[l.index as usize * 4];
             lit += 1;
-            assert!(left <= 2, "the strip keeps {left} levels at texel {} with its light off", l.index);
+            assert!(
+                left <= 2,
+                "the strip keeps {left} levels at texel {} with its light off",
+                l.index
+            );
         }
         assert!(lit > 0);
         // The probe's account of a strip texel: what the rays saw, then the
         // shares and what is left.
-        let texel = bake.lexels.iter().find(|l| l.sheet == 0 && strip(l.position)).expect("a strip texel");
+        let texel = bake
+            .lexels
+            .iter()
+            .find(|l| l.sheet == 0 && strip(l.position))
+            .expect("a strip texel");
         let lines = bake.explain(&lights, &[(wall.parts_image, texel.index)]);
         assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(lines[0].contains("0:20 faces hidden") && lines[1].contains("shares [0:0.9"), "{lines:?}");
+        assert!(
+            lines[0].contains("0:20 faces hidden") && lines[1].contains("shares [0:0.9"),
+            "{lines:?}"
+        );
     }
 
     /// The edge of a light's patch on a wall, where the map compiler's
@@ -2074,13 +2326,31 @@ mod tests {
                 channel: Some(1),
             },
         ];
-        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
-        let spot = |p: Vec3| if p.truncate().length() < 4.0 { 1.6 } else { 1.0 };
+        let given = |light: &MapLight, p: Vec3| {
+            Vec3::from(light.color)
+                * falloff(
+                    Vec3::from(light.position).distance(p),
+                    light.inner,
+                    light.outer,
+                )
+        };
+        let spot = |p: Vec3| {
+            if p.truncate().length() < 4.0 {
+                1.6
+            } else {
+                1.0
+            }
+        };
         let mut scene = crate::scene::SceneData {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
         };
-        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, |p| given(&lights[0], p) * spot(p));
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0),
+            Vec3::Z,
+            |p| given(&lights[0], p) * spot(p),
+        );
         let bake = Bake::new(&scene).expect("lightmapped ceiling");
         let seen: Vec<u32> = bake
             .lexels
@@ -2103,8 +2373,14 @@ mod tests {
             whole = whole.max((left + lit(0) + lit(1) - authored).abs());
             out = out.max(left + lit(1));
         }
-        assert!(whole <= 2.0, "the sheet draws the authored light {whole:.0} levels off");
-        assert!(out <= 2.0, "the ceiling keeps {out:.0} levels with the lamp out");
+        assert!(
+            whole <= 2.0,
+            "the sheet draws the authored light {whole:.0} levels off"
+        );
+        assert!(
+            out <= 2.0,
+            "the ceiling keeps {out:.0} levels with the lamp out"
+        );
     }
 
     /// A lamp's bright spot where one of its lights' patches ends (the
@@ -2132,15 +2408,34 @@ mod tests {
                 channel: Some(1),
             },
         ];
-        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
+        let given = |light: &MapLight, p: Vec3| {
+            Vec3::from(light.color)
+                * falloff(
+                    Vec3::from(light.position).distance(p),
+                    light.inner,
+                    light.outer,
+                )
+        };
         // The plate's shadow of light 1 by rays starts at x = 2; the
         // compiler lit up to x = 2.6, and light 0 at 1.5 times its fit.
-        let authored = |p: Vec3| given(&lights[0], p) * 1.5 + if p.x < 2.6 { given(&lights[1], p) } else { Vec3::ZERO };
+        let authored = |p: Vec3| {
+            given(&lights[0], p) * 1.5
+                + if p.x < 2.6 {
+                    given(&lights[1], p)
+                } else {
+                    Vec3::ZERO
+                }
+        };
         let mut scene = crate::scene::SceneData {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
         };
-        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, authored);
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0),
+            Vec3::Z,
+            authored,
+        );
         let first = scene.vertices.len() as u32;
         for (x, y) in [(1.0, -20.0), (20.0, -20.0), (20.0, 20.0), (1.0, 20.0)] {
             scene.vertices.push(crate::scene::SceneVertex {
@@ -2159,7 +2454,9 @@ mod tests {
             material: scene.materials.len(),
             center: [0.0; 3],
         });
-        scene.materials.push(crate::scene::Material::surface("plate", 0, 0));
+        scene
+            .materials
+            .push(crate::scene::Material::surface("plate", 0, 0));
         let bake = Bake::new(&scene).expect("lightmapped wall");
         let seen: Vec<u32> = bake
             .lexels
@@ -2178,7 +2475,11 @@ mod tests {
             let i = l.index as usize;
             edge += usize::from(l.position.x < 2.6 && mask & 2 == 0);
             let left = f32::from(wall.left[i * 4]);
-            assert!(left <= 2.0, "texel {i} at {:.2?} keeps {left:.0} levels with the lamp out", l.position);
+            assert!(
+                left <= 2.0,
+                "texel {i} at {:.2?} keeps {left:.0} levels with the lamp out",
+                l.position
+            );
         }
         assert!(edge > 0, "some lit texels the rays hide from light 1");
     }
@@ -2187,7 +2488,10 @@ mod tests {
     #[test]
     fn the_shader_decodes_shares_as_stored() {
         let line = format!("const SHARE_SCALE:f32=255.0/{SHARE_ONE:.1};");
-        assert!(include_str!("scene.wgsl").contains(&line), "scene.wgsl lacks {line}");
+        assert!(
+            include_str!("scene.wgsl").contains(&line),
+            "scene.wgsl lacks {line}"
+        );
     }
 
     fn patch_edge_goes_dark(lit_to: f32, behind: f32) {
@@ -2221,10 +2525,22 @@ mod tests {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
         };
-        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
-        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, |p| {
-            if lit(p) { given(&patch, p) } else { Vec3::ZERO }
-        });
+        let given = |light: &MapLight, p: Vec3| {
+            Vec3::from(light.color)
+                * falloff(
+                    Vec3::from(light.position).distance(p),
+                    light.inner,
+                    light.outer,
+                )
+        };
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0),
+            Vec3::Z,
+            |p| {
+                if lit(p) { given(&patch, p) } else { Vec3::ZERO }
+            },
+        );
         let first = scene.vertices.len() as u32;
         for (x, y) in [(1.0, -20.0), (20.0, -20.0), (20.0, 20.0), (1.0, 20.0)] {
             scene.vertices.push(crate::scene::SceneVertex {
@@ -2243,7 +2559,9 @@ mod tests {
             material: scene.materials.len(),
             center: [0.0; 3],
         });
-        scene.materials.push(crate::scene::Material::surface("plate", 0, 0));
+        scene
+            .materials
+            .push(crate::scene::Material::surface("plate", 0, 0));
         let bake = Bake::new(&scene).expect("lightmapped wall");
         let seen: Vec<u32> = bake
             .lexels
@@ -2269,7 +2587,11 @@ mod tests {
                 }
             }
             edge += usize::from(lit(l.position) && mask & 1 == 0);
-            assert!(drawn <= 2.0, "texel {i} at {:.2?} draws {drawn:.0} levels with the patch's light off", l.position);
+            assert!(
+                drawn <= 2.0,
+                "texel {i} at {:.2?} draws {drawn:.0} levels with the patch's light off",
+                l.position
+            );
         }
         assert!(edge > 0, "some lit texels the rays call hidden");
     }
@@ -2288,7 +2610,8 @@ mod tests {
             outer: 25.0,
             channel: Some(0),
         };
-        let given = |p: Vec3| Vec3::from(light.color) * falloff(p.length(), light.inner, light.outer);
+        let given =
+            |p: Vec3| Vec3::from(light.color) * falloff(p.length(), light.inner, light.outer);
         let mut scene = crate::scene::SceneData {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
@@ -2305,18 +2628,36 @@ mod tests {
             lit_quad(&mut scene, corner, out, given);
         }
         // A dark floor far below, out of reach: the compiler's ambient, none.
-        lit_quad(&mut scene, |a, b| Vec3::new(40.0 * a, -40.0, 40.0 * b), Vec3::Y, |_| Vec3::ZERO);
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(40.0 * a, -40.0, 40.0 * b),
+            Vec3::Y,
+            |_| Vec3::ZERO,
+        );
         let bake = Bake::new(&scene).expect("lightmapped shade");
         let lights = [light];
         let seen: Vec<u32> = bake
             .lexels
             .iter()
-            .map(|l| u32::from(light.shade(l.position, l.normal).max_element() > 0.0 && bake.sees(l.position, l.normal, light.position.into())))
+            .map(|l| {
+                u32::from(
+                    light.shade(l.position, l.normal).max_element() > 0.0
+                        && bake.sees(l.position, l.normal, light.position.into()),
+                )
+            })
             .collect();
         let sheets = bake.dynamic_sheets(&lights, &seen, &[]);
         for sheet in &sheets[..4] {
-            let worst = sheet.left.chunks_exact(4).map(|t| t[..3].iter().copied().max().unwrap_or(0)).max().unwrap_or(0);
-            assert!(worst <= 2, "a side of the shade keeps {worst} levels with its light off");
+            let worst = sheet
+                .left
+                .chunks_exact(4)
+                .map(|t| t[..3].iter().copied().max().unwrap_or(0))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                worst <= 2,
+                "a side of the shade keeps {worst} levels with its light off"
+            );
         }
     }
 
@@ -2347,7 +2688,14 @@ mod tests {
                 channel: Some(2),
             },
         ];
-        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
+        let given = |light: &MapLight, p: Vec3| {
+            Vec3::from(light.color)
+                * falloff(
+                    Vec3::from(light.position).distance(p),
+                    light.inner,
+                    light.outer,
+                )
+        };
         let mut scene = crate::scene::SceneData {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
@@ -2362,22 +2710,36 @@ mod tests {
                 p[2 - axis] = 1.5 * a;
                 p
             };
-            lit_quad(&mut scene, corner, out, |p| lights.iter().map(|l| given(l, p)).sum());
+            lit_quad(&mut scene, corner, out, |p| {
+                lights.iter().map(|l| given(l, p)).sum()
+            });
             panels.push(corner);
         }
-        lit_quad(&mut scene, |a, b| Vec3::new(40.0 * a, -40.0, 40.0 * b), Vec3::Y, |_| Vec3::ZERO);
+        lit_quad(
+            &mut scene,
+            |a, b| Vec3::new(40.0 * a, -40.0, 40.0 * b),
+            Vec3::Y,
+            |_| Vec3::ZERO,
+        );
         let bake = Bake::new(&scene).expect("lightmapped shade");
         let seen: Vec<u32> = bake
             .lexels
             .iter()
             .map(|l| {
                 lights.iter().enumerate().fold(0u32, |m, (k, light)| {
-                    let lit = light.shade(l.position, l.normal).max_element() > 0.0 && bake.sees(l.position, l.normal, light.position.into());
+                    let lit = light.shade(l.position, l.normal).max_element() > 0.0
+                        && bake.sees(l.position, l.normal, light.position.into());
                     m | (u32::from(lit) << k)
                 })
             })
             .collect();
-        assert!(bake.lexels.iter().zip(&seen).all(|(l, &s)| l.normal != Vec3::Y && s == 0 || l.normal == Vec3::Y), "no ray lights the shade");
+        assert!(
+            bake.lexels
+                .iter()
+                .zip(&seen)
+                .all(|(l, &s)| l.normal != Vec3::Y && s == 0 || l.normal == Vec3::Y),
+            "no ray lights the shade"
+        );
         let sheets = bake.dynamic_sheets(&lights, &seen, &[]);
         let at = |t: u32| (t as f32 + 0.5) / 32.0 * 2.0 - 1.0;
         for (sheet, corner) in sheets[..4].iter().zip(&panels) {
@@ -2385,12 +2747,19 @@ mod tests {
             for i in 0..(sheet.width * sheet.height) as usize {
                 let p = corner(at(i as u32 % sheet.width), at(i as u32 / sheet.width));
                 let share = |k: u8| sheet.share(k, i);
-                let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32) / 255.0;
+                let left = Vec3::new(
+                    sheet.left[i * 4] as f32,
+                    sheet.left[i * 4 + 1] as f32,
+                    sheet.left[i * 4 + 2] as f32,
+                ) / 255.0;
                 // The lamp's lights out, the room light on.
                 let drawn = left + given(&lights[2], p) * share(2);
                 worst = worst.max((drawn - given(&lights[2], p)).abs().max_element() * 255.0);
             }
-            assert!(worst <= 3.0, "a side of the shade is {worst:.0} levels off the room light with the lamp out");
+            assert!(
+                worst <= 3.0,
+                "a side of the shade is {worst:.0} levels off the room light with the lamp out"
+            );
         }
     }
 
@@ -2447,8 +2816,16 @@ mod tests {
         });
         let surface = SheetSurface {
             triangles: vec![
-                [([0.0; 3], [0.0, 0.0]), ([0.0; 3], [1.0, 0.0]), ([0.0; 3], [1.0, 1.0])],
-                [([0.0; 3], [0.0, 0.0]), ([0.0; 3], [1.0, 1.0]), ([0.0; 3], [0.0, 1.0])],
+                [
+                    ([0.0; 3], [0.0, 0.0]),
+                    ([0.0; 3], [1.0, 0.0]),
+                    ([0.0; 3], [1.0, 1.0]),
+                ],
+                [
+                    ([0.0; 3], [0.0, 0.0]),
+                    ([0.0; 3], [1.0, 1.0]),
+                    ([0.0; 3], [0.0, 1.0]),
+                ],
             ],
             normal,
             outside: true,

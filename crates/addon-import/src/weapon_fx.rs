@@ -220,7 +220,13 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 Some(id)
             }
             Err(error) if error.downcast_ref::<NeverLoaded>().is_some() => {
-                cx.mark(name, "emitter", "consumed", vec![], Some(format!("{error}")));
+                cx.mark(
+                    name,
+                    "emitter",
+                    "consumed",
+                    vec![],
+                    Some(format!("{error}")),
+                );
                 None
             }
             Err(error) => {
@@ -337,7 +343,8 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
             // Its emitters, burst, light, sound and debris all have their
             // native parts.
             e.status = "converted".into();
-            e.notes.retain(|n| !n.starts_with("debris and particle parts"));
+            e.notes
+                .retain(|n| !n.starts_with("debris and particle parts"));
         }
         let (start, end) = (
             number("lightstartradius", 0.0).max(0.0),

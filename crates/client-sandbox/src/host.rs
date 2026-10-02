@@ -1623,7 +1623,9 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
             let center = glam::Vec3::from(body.position);
             let surface = center + (hit - center).clamp_length_max(body.radius);
             let local = glam::Quat::from_array(body.rotation).inverse() * (surface - center);
-            let record = [distance, hit.x, hit.y, hit.z, local.x, local.y, local.z, 0.0];
+            let record = [
+                distance, hit.x, hit.y, hit.z, local.x, local.y, local.z, 0.0,
+            ];
             let bytes: Vec<u8> = record.iter().flat_map(|v| v.to_le_bytes()).collect();
             write(&mut caller, ptr, &bytes)?;
             Ok(id as i32)

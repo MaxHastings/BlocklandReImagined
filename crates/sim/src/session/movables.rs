@@ -181,8 +181,8 @@ const TETHER_SWING: f32 = 7.0;
 /// length and a little slack for the tick it takes to arrive.
 const TETHER_REACH: f32 = 4.0;
 const _: () = {
-    use bri_package_runtime::ops as limits;
     use crate::player as motor;
+    use bri_package_runtime::ops as limits;
     assert!(limits::MAX_TETHER_LENGTH == motor::MAX_TETHER_LENGTH);
     assert!(limits::MIN_TETHER_LENGTH == motor::MIN_TETHER_LENGTH);
     assert!(limits::MAX_TETHER_REEL == motor::MAX_TETHER_REEL);
@@ -295,7 +295,11 @@ impl Session {
     /// a rope tied there sees it (`Tie::object`).
     fn tie_point(&self, target: ObjectRef, at: Vec3, in_body: bool) -> Option<(Vec3, Vec3)> {
         if in_body {
-            let b = self.simulation.physics.bodies.get(self.held_body(target)?)?;
+            let b = self
+                .simulation
+                .physics
+                .bodies
+                .get(self.held_body(target)?)?;
             let arm = b.position().rotation * at;
             return Some((b.center_of_mass() + arm, b.linvel() + b.angvel().cross(arm)));
         }
@@ -308,8 +312,12 @@ impl Session {
     /// or object went, or that the motor broke, are gone; ropes tied to
     /// something moving follow it.
     fn step_tethers(&mut self) {
-        let tethered: Vec<(OwnerId, Tie)> =
-            self.movables.tethers.iter().map(|(p, t)| (*p, *t)).collect();
+        let tethered: Vec<(OwnerId, Tie)> = self
+            .movables
+            .tethers
+            .iter()
+            .map(|(p, t)| (*p, *t))
+            .collect();
         for (player, tie) in tethered {
             let brick = tie.brick;
             let moved = match tie.object {
@@ -319,8 +327,7 @@ impl Session {
                 .then(|| self.tie_point(target, at, in_body))
                 .flatten()
                 .filter(|(point, velocity)| {
-                    point.is_finite()
-                        && velocity.length() <= crate::player::MAX_TETHER_DRIFT
+                    point.is_finite() && velocity.length() <= crate::player::MAX_TETHER_DRIFT
                 })
                 .map(Some),
             };
@@ -468,7 +475,9 @@ impl Session {
         // rules decide for them as for everyone.
         let trusted = |owner: OwnerId| {
             peer.actor.administrator
-                || peer.actor.trusted(owner, bri_world::authority::trust::BUILD)
+                || peer
+                    .actor
+                    .trusted(owner, bri_world::authority::trust::BUILD)
         };
         // A bot trusts no one itself: outside minigames it is its spawn
         // brick owner's, like the vehicles such a brick spawns.
@@ -529,9 +538,7 @@ impl Session {
                 };
                 match self.vehicle_damage_decision(mover, v) {
                     Some(allowed) => allowed,
-                    None => {
-                        owner == 0 || owner == mover || trusted(owner)
-                    }
+                    None => owner == 0 || owner == mover || trusted(owner),
                 }
             }
             ObjectRef::Entity(e) => self
@@ -628,7 +635,8 @@ impl Session {
             .passages()
             .cast(eye, direction, reach, |leg| -> Result<_> {
                 let mut hit = if leg.length > 0.0 {
-                    self.simulation.target(leg.from, leg.direction, leg.length)?
+                    self.simulation
+                        .target(leg.from, leg.direction, leg.length)?
                 } else {
                     None
                 };
@@ -661,7 +669,11 @@ impl Session {
         };
         self.simulation
             .passages()
-            .sight(eye, look.normalize_or_zero(), MAX_HOLD_DISTANCE + HOLD_BREAK)
+            .sight(
+                eye,
+                look.normalize_or_zero(),
+                MAX_HOLD_DISTANCE + HOLD_BREAK,
+            )
             .into_iter()
             .min_by(|a, b| a.off(point).total_cmp(&b.off(point)))
             .map_or(Affine3A::IDENTITY, |leg| leg.carry)
@@ -824,8 +836,12 @@ impl Session {
     /// they may move that is where they look now, before any brick, as
     /// their grab would have.
     fn step_reaching(&mut self) {
-        let reaching: Vec<(OwnerId, Reach)> =
-            self.movables.reaching.iter().map(|(p, r)| (*p, *r)).collect();
+        let reaching: Vec<(OwnerId, Reach)> = self
+            .movables
+            .reaching
+            .iter()
+            .map(|(p, r)| (*p, *r))
+            .collect();
         for (player, reach) in reaching {
             let Some((eye, look)) = self
                 .peers
@@ -851,7 +867,14 @@ impl Session {
             }
             let distance = met.clamp(reach.near, reach.distance);
             if self
-                .start_hold(player, target, distance, Some(at.to_array()), reach.force, reach.turn)
+                .start_hold(
+                    player,
+                    target,
+                    distance,
+                    Some(at.to_array()),
+                    reach.force,
+                    reach.turn,
+                )
                 .is_ok()
             {
                 self.movables.reaching.remove(&player);
@@ -1010,7 +1033,11 @@ impl Session {
         let tick = self.simulation.state().tick;
         let thrown: Vec<_> = self.movables.thrown.iter().map(|(p, t)| (*p, *t)).collect();
         for (p, (last, until)) in thrown {
-            let flying = self.peers.get(&p).filter(|v| v.combat.alive).map(|v| v.player.state());
+            let flying = self
+                .peers
+                .get(&p)
+                .filter(|v| v.combat.alive)
+                .map(|v| v.player.state());
             let (Some(state), true, false) = (
                 flying,
                 tick <= until,
@@ -1149,8 +1176,7 @@ impl Session {
             let closing = (gap * HOLD_GAIN)
                 .min((1.6 * accel * gap).sqrt())
                 .min(HOLD_SPEED);
-            let wanted =
-                (lead + offset.normalize_or_zero() * closing).clamp_length_max(HOLD_CARRY);
+            let wanted = (lead + offset.normalize_or_zero() * closing).clamp_length_max(HOLD_CARRY);
             let current = self.object_velocity(hold.target).unwrap_or_default();
             let change = (wanted - current + Vec3::Y * GRAVITY * DT).clamp_length_max(accel * DT);
             let _ = self.push_object(hold.target, change);

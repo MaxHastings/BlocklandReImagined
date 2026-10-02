@@ -66,14 +66,25 @@ impl MinigamesWorld {
     }
     /// Give `game` a paint palette colour, or its v20 colour again with
     /// `None`. No two games share one.
-    pub fn set_paint_color(&mut self, game: GameId, paint: Option<u8>) -> Result<Vec<Effect>, Error> {
+    pub fn set_paint_color(
+        &mut self,
+        game: GameId,
+        paint: Option<u8>,
+    ) -> Result<Vec<Effect>, Error> {
         self.game(game)?;
         if let Some(c) = paint
-            && (c >= 64 || self.games.values().any(|g| g.id != game && g.paint_color == Some(c)))
+            && (c >= 64
+                || self
+                    .games
+                    .values()
+                    .any(|g| g.id != game && g.paint_color == Some(c)))
         {
             return Err(Error::ColorUnavailable);
         }
-        self.games.get_mut(&game).expect("validated game").paint_color = paint;
+        self.games
+            .get_mut(&game)
+            .expect("validated game")
+            .paint_color = paint;
         Ok(vec![Effect::Configured { game }])
     }
     /// Bound `game` to a box: bricks outside it are not the game's.
@@ -86,7 +97,10 @@ impl MinigamesWorld {
     }
     /// Whether scores carry over `game`'s resets.
     pub fn set_keep_scores(&mut self, game: GameId, keep: bool) -> Result<(), Error> {
-        self.games.get_mut(&game).ok_or(Error::StaleGame)?.keep_scores = keep;
+        self.games
+            .get_mut(&game)
+            .ok_or(Error::StaleGame)?
+            .keep_scores = keep;
         Ok(())
     }
     pub fn set_cleanup(&mut self, game: GameId, cleanup: CleanupRules) -> Result<(), Error> {
@@ -97,16 +111,26 @@ impl MinigamesWorld {
         if distance.is_some_and(|d| d > crate::model::MAX_NAME_DISTANCE) {
             return Err(Error::InvalidSettings);
         }
-        self.games.get_mut(&game).ok_or(Error::StaleGame)?.name_distance = distance;
+        self.games
+            .get_mut(&game)
+            .ok_or(Error::StaleGame)?
+            .name_distance = distance;
         Ok(())
     }
     pub fn set_claims_bricks(&mut self, game: GameId, claims: bool) -> Result<(), Error> {
-        self.games.get_mut(&game).ok_or(Error::StaleGame)?.claims_bricks = claims;
+        self.games
+            .get_mut(&game)
+            .ok_or(Error::StaleGame)?
+            .claims_bricks = claims;
         Ok(())
     }
     /// Change `game`'s own settings for the host's rules, whoever owns it
     /// (a config loaded into it, Slayer's `setPref` on a v20 setting).
-    pub fn host_configure(&mut self, game: GameId, settings: Settings) -> Result<Vec<Effect>, Error> {
+    pub fn host_configure(
+        &mut self,
+        game: GameId,
+        settings: Settings,
+    ) -> Result<Vec<Effect>, Error> {
         self.game(game)?;
         let mut out = Vec::new();
         self.configure(game, settings, &mut out)?;

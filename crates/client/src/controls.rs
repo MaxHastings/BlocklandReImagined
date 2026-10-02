@@ -530,7 +530,11 @@ impl Controls {
     /// a floor or ceiling: [`Self::portal_tilt`] puts them there. The roll
     /// and tilt then ease out (see [`Self::ease_roll`]).
     pub fn carry_look(&mut self, carry: &glam::Affine3A) {
-        let look = (wrap(self.yaw + self.free_yaw), self.pitch, self.portal_roll());
+        let look = (
+            wrap(self.yaw + self.free_yaw),
+            self.pitch,
+            self.portal_roll(),
+        );
         let (yaw, pitch, roll) = crate::portal_view::carried_look(look, carry);
         let turn = glam::Quat::from_mat3a(&carry.matrix3).normalize();
         let before = self.yaw;
@@ -885,7 +889,10 @@ impl Controls {
     /// mount, so the view turns with the mount as drawn, never ahead of it.
     pub fn mount_look(&self, mount: glam::Quat) -> (f32, f32) {
         let forward = mount * glam::Vec3::NEG_Z;
-        (wrap(forward.x.atan2(-forward.z) + self.free_yaw), self.pitch)
+        (
+            wrap(forward.x.atan2(-forward.z) + self.free_yaw),
+            self.pitch,
+        )
     }
     /// Where the rendered camera looks: the observer's own angles while a
     /// camera has control.
@@ -904,9 +911,12 @@ impl Controls {
     /// The field of view the host sets, or `None` for the player's own. It
     /// glides like any other FOV change.
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
-        self.server_fov = fov
-            .filter(|f| f.is_finite())
-            .map(|f| f.clamp(*bri_package_runtime::ops::FOV_RANGE.start(), *bri_package_runtime::ops::FOV_RANGE.end()));
+        self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
+            f.clamp(
+                *bri_package_runtime::ops::FOV_RANGE.start(),
+                *bri_package_runtime::ops::FOV_RANGE.end(),
+            )
+        });
     }
     /// Ramp the shown FOV toward the zoom FOV while Zoom is held, else the
     /// normal FOV. Wheel steps and the options slider ride the same ramp.
@@ -1362,7 +1372,11 @@ mod tests {
             closed: vec![],
         };
         let mut c = Controls::default();
-        c.follow(ControlObject::Camera, 1, Some(glam::Vec3::new(0.0, 1.0, 0.5)));
+        c.follow(
+            ControlObject::Camera,
+            1,
+            Some(glam::Vec3::new(0.0, 1.0, 0.5)),
+        );
         held(&mut c, HeldControl::Forward, true);
         let before = c.observer().unwrap();
         let forward = glam::Vec3::new(before.yaw.sin(), 0.0, -before.yaw.cos());
@@ -1372,7 +1386,10 @@ mod tests {
         assert!(at.abs_diff_eq(carry.transform_point3(moved), 1e-3), "{at}");
         let after = c.observer().unwrap();
         let turned = glam::Vec3::new(after.yaw.sin(), 0.0, -after.yaw.cos());
-        assert!(turned.abs_diff_eq(carry.transform_vector3(forward), 1e-4), "{turned}");
+        assert!(
+            turned.abs_diff_eq(carry.transform_vector3(forward), 1e-4),
+            "{turned}"
+        );
     }
     /// v20's fly mode: 40 units/s, doubled while fire is held, quartered
     /// while crouching, walk scaling each axis by 0.4, no vertical keys.
@@ -1657,7 +1674,10 @@ mod tests {
         assert!(close(c.movement().head_yaw, 0.0));
         assert!(close(c.view_angles().1, 0.4));
         c.advance_head(1.0);
-        assert!(close(c.view_angles().1, 0.4), "the pitch never springs back");
+        assert!(
+            close(c.view_angles().1, 0.4),
+            "the pitch never springs back"
+        );
         assert!(close(c.passenger_turn(), 0.5), "nor does the body turn");
         // A full turn round the seat.
         for _ in 0..8 {
@@ -1671,15 +1691,24 @@ mod tests {
         assert!(close(c.movement().head_yaw, MAX_FREELOOK));
         assert!(close(c.view_angles().1, 0.6));
         c.advance_head(1.0);
-        assert!(close(c.movement().head_yaw, MAX_FREELOOK), "held while Free Look is");
+        assert!(
+            close(c.movement().head_yaw, MAX_FREELOOK),
+            "held while Free Look is"
+        );
         held(&mut c, HeldControl::FreeLook, false);
         c.advance_head(0.032);
-        assert!(close(c.movement().head_yaw, MAX_FREELOOK / 2.0), "halved a tick");
+        assert!(
+            close(c.movement().head_yaw, MAX_FREELOOK / 2.0),
+            "halved a tick"
+        );
         third_person(&mut c);
         c.advance_head(0.032);
         assert!(close(c.movement().head_yaw, MAX_FREELOOK / 4.0));
         assert!(close(c.view_angles().1, 0.6));
-        assert!(close(c.passenger_turn(), 0.5), "Free Look turned only the head");
+        assert!(
+            close(c.passenger_turn(), 0.5),
+            "Free Look turned only the head"
+        );
         assert_eq!(c.driver_head_yaw(), None);
     }
     /// The Jeep's or Tank's driver: the strafe keys steer, so the move goes
@@ -1720,7 +1749,10 @@ mod tests {
         mouse(&mut c, 0.0, 0.2);
         held(&mut c, HeldControl::FreeLook, false);
         c.advance_head(0.032);
-        assert!(close(c.body_pitch(), 0.4), "no pitch return in third person");
+        assert!(
+            close(c.body_pitch(), 0.4),
+            "no pitch return in third person"
+        );
         assert!(close(c.movement().head_yaw, 0.15), "nor a turn return");
     }
     /// Max, v0.1.7: pulling the Stunt Plane up in first person, the view
@@ -1744,7 +1776,10 @@ mod tests {
                 }
                 c.advance_head(frame);
                 let view = c.ride_view().unwrap();
-                assert!(view.angle_between(glam::Quat::IDENTITY) < 1e-6, "{third} {i}");
+                assert!(
+                    view.angle_between(glam::Quat::IDENTITY) < 1e-6,
+                    "{third} {i}"
+                );
                 assert_eq!(c.body_pitch(), 0.0, "the pilot never nods");
             }
             assert_ne!(c.movement().pitch, 0.0, "yet it steered");
@@ -1777,7 +1812,10 @@ mod tests {
     #[test]
     fn free_look_in_a_mouse_steered_vehicle_leaves_the_steering_alone() {
         let mut c = Controls::default();
-        c.set_ride(Some(Ride::Seat(glam::Quat::IDENTITY, SeatLook::MouseDriver)));
+        c.set_ride(Some(Ride::Seat(
+            glam::Quat::IDENTITY,
+            SeatLook::MouseDriver,
+        )));
         c.set_vehicle_view(Some((0.0, 0.0)));
         c.action(&GameAction::Look {
             yaw: 0.2,

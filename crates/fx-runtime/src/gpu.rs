@@ -324,7 +324,8 @@ impl EffectsRenderer {
             self.views.push(empty);
         }
         if view == self.views.len() {
-            self.views.push(Self::view(device, &self.camera_layout, needed));
+            self.views
+                .push(Self::view(device, &self.camera_layout, needed));
         } else if self.views[view].capacity < frame.particles.len() {
             self.views[view] = Self::view(device, &self.camera_layout, needed);
         }

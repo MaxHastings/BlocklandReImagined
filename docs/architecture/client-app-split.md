@@ -1,7 +1,7 @@
 # Splitting the client `App`
 
-Status: design, 2026-10-01. Ships in v0.1.11; the move lands last, on the
-final main, so no lane merges against it.
+Status: the move is done on `claude/code-health-audit-eui8bq` and lands last
+in v0.1.11, after the Tier and Adventure lanes, so no lane merges against it.
 
 ## Why
 
@@ -102,24 +102,71 @@ Render reads only the snapshots taken at step 28.
 The move must not change behaviour, so it keeps these orders. Each one is
 then fixed in its own commit with a test that drives the real path.
 
-- **Steps 7 then 10.** Fire is cleared before it is read. Fix: `follow`
-  clears Fire only when the control target changes. The Gravity Gun lane
-  has a fix (`ab3c814`). After the move it becomes a `ViewSystem` rule.
-- **Step 15.** The turret aim is sent, then overwritten by the seat reset.
-  Fix: `SeatView` is settled first and the turret aim applied last. This
-  belongs to the turret work.
-- **Step 4.** Captions are filtered against a listener that is always
-  `None`, because `attempt` is taken out. Fix: `NetFrame` carries the cues,
-  and they are captioned after the session is back in place.
+- **Steps 7 then 10.** Fire was cleared before it was read. This is fixed on
+  main: `follow` clears Fire only when the player comes back from a
+  camera (`ab3c8140`).
+- **Step 15.** The turret aim was overwritten by the seat reset. This is
+  fixed on main by the turret lane (`7ec124a5`).
+- **Step 4.** Captions were filtered against a listener that was always
+  `None`, because `attempt` is taken out. This is fixed: the presentation
+  events take the listener from the attempt that `poll_network` holds.
 - **Steps 4 and 25.** A session reset can drop cues queued in the same frame.
 - **Step 26.** Add-On poses lag one frame (they are set in render and
   applied in the next tick).
 - Render reads the live `controls` for the Add-On frame instead of the
   snapshot.
-- `disconnect` does not reset `seated_on`, `mount_heading`, `tumble`,
-  `rider_eye`, `rider_rotations`, `observer_eye`, `liquid_cache`,
-  `drawn_controls`, `crosshair_hidden` or `tool_wheel`. Per-system `reset()`
-  makes this impossible to miss.
+- `disconnect` did not reset `seated_on`, `mount_heading`, `tumble`,
+  `rider_eye`, `rider_rotations`, `observer_eye`, `liquid_cache` or
+  `drawn_controls`. This is fixed on main: `disconnect` clears them
+  (`9360b544`). `crosshair_hidden` and `tool_wheel` are
+  mirrors of what the UI was told, and `update_held_weapon` settles them
+  every frame, so they are left alone.
+
+## Where it stands
+
+Done on the branch:
+
+1. `app.rs` is now `app/`. Every `impl App` method moved by name into
+   the module of the system that owns it, and the code inside did not
+   change. `PlatformApp`'s `tick`, `pump` and `render_scene` call
+   `frame`, `dispatch` and `render_frame`.
+2. Most of App's fields are now 13 system structs: `SessionState`
+   (`net`), `SceneState`, `GpuState`, `Lighting`, `ViewState`, `Mounts`,
+   `Effects` (`fx`), `Avatars` (`avatar`), `AddOns`, `Saves` (`files`),
+   `Lobby`, `Perf` and `BuildState` (`build`). App keeps one field per
+   system plus the state several systems share: `ui`, `controls`,
+   `content`, `audio`, `motion`, `vehicles`, `world_items` and others.
+3. The two hazard fixes (`disconnect` resets the seat and the game's
+   eyes; captions get the real listener) landed on main first
+   (`9360b544`).
+
+4. The giant functions are broken into steps, with no code changed inside
+   them:
+   - `frame` calls `advance_local_game` (schedule steps 12-19),
+     `poll_background_jobs` (22) and `advance_world_presentation` (26).
+   - `dispatch` runs each action through `intercept_action` (spectator,
+     dead player, admin, macro and building input) and `dispatch_action`.
+   - `poll_network` calls `drain_events`, `take_prepared_scene`,
+     `enter_when_ready` and `present_session`. The early returns that drop
+     the attempt stay in `poll_network`.
+   - `render_frame`'s pre-draw work is `prepare_render`.
+
+Steps 1 and 2 were scripts, run on main `39a1cbbe` and then deleted
+(see the branch history for `tools/app_split/`).
+
+Still open:
+- `render_frame` (1,130 lines) holds the renderer, view and camera borrows
+  across its whole body, so it splits only once those live in a per-frame
+  context struct. `dispatch_action` (770, one arm per action),
+  `advance_world_presentation` (650) and `advance_local_game` (485) split
+  further the same way.
+- Moving behaviour onto the systems, so that writes go through their
+  owners.
+- A session reset that drops cues queued in the same frame.
+- Add-On poses lagging one frame.
+- Render reading the live `controls`.
+- Three vehicle camera implementations.
+- Looping weapon sounds that the client's `is_looping` drops.
 
 ## How it lands
 

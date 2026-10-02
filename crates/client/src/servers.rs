@@ -68,14 +68,15 @@ impl SavedServers {
         Ok(())
     }
     pub fn find(&self, address: &str) -> Option<&SavedServer> {
-        self.servers
-            .iter()
-            .find(|s| s.address.eq_ignore_ascii_case(address) || s.target().eq_ignore_ascii_case(address))
+        self.servers.iter().find(|s| {
+            s.address.eq_ignore_ascii_case(address) || s.target().eq_ignore_ascii_case(address)
+        })
     }
     /// Record a successful join.
     pub fn joined(&mut self, address: &str, invite: Option<String>, name: &str, now: u64) {
         let favorite = self.find(address).is_some_and(|s| s.favorite);
-        self.servers.retain(|s| !s.address.eq_ignore_ascii_case(address));
+        self.servers
+            .retain(|s| !s.address.eq_ignore_ascii_case(address));
         self.servers.insert(
             0,
             SavedServer {
@@ -143,10 +144,18 @@ mod tests {
         for i in 15..30u64 {
             saved.joined(&format!("host{i}.example.com:28000"), None, "Server", i);
         }
-        assert_eq!(saved.servers[0].address, "host5.example.com:28000", "favourite first");
+        assert_eq!(
+            saved.servers[0].address, "host5.example.com:28000",
+            "favourite first"
+        );
         assert_eq!(saved.servers.len(), RECENT + 1);
         // Joining a favourite keeps its star; unstarring lets it age out.
-        saved.joined("HOST5.example.com:28000", Some("bri://x/y".into()), "Renamed", 40);
+        saved.joined(
+            "HOST5.example.com:28000",
+            Some("bri://x/y".into()),
+            "Renamed",
+            40,
+        );
         let five = saved.find("host5.example.com:28000").unwrap();
         assert!(five.favorite && five.name == "Renamed" && five.target() == "bri://x/y");
         assert!(saved.find("bri://x/y").is_some(), "found by invite too");
@@ -169,7 +178,10 @@ mod tests {
             (HostPin::Certificate(spoofed.clone()), false)
         );
         let key = bri_net::invite::host_key(b"invite");
-        assert_eq!(join_pin(Some(key), Some(saved), None), (HostPin::Key(key), false));
+        assert_eq!(
+            join_pin(Some(key), Some(saved), None),
+            (HostPin::Key(key), false)
+        );
         assert_eq!(join_pin(None, None, None), (HostPin::FirstUse, false));
     }
 
@@ -181,6 +193,9 @@ mod tests {
         saved.toggle_favorite("play.example.com:28000", None, "Play");
         saved.save(&path).unwrap();
         assert_eq!(SavedServers::load(&path), saved);
-        assert_eq!(SavedServers::load(&dir.path().join("missing.json")), SavedServers::default());
+        assert_eq!(
+            SavedServers::load(&dir.path().join("missing.json")),
+            SavedServers::default()
+        );
     }
 }

@@ -21,7 +21,11 @@ fn pages(core: &Core) -> Vec<(String, String)> {
         .help
         .iter()
         .map(|p| (p.name.clone(), p.text.clone()))
-        .chain(core.addon_help.iter().map(|p| (p.name.clone(), p.text.clone())))
+        .chain(
+            core.addon_help
+                .iter()
+                .map(|p| (p.name.clone(), p.text.clone())),
+        )
         .collect()
 }
 
@@ -52,7 +56,11 @@ impl Help {
                 pages
                     .iter()
                     .position(|(name, _)| name.to_ascii_lowercase() == want)
-                    .or_else(|| pages.iter().position(|(name, _)| topic(name) == topic(&want)))
+                    .or_else(|| {
+                        pages
+                            .iter()
+                            .position(|(name, _)| topic(name) == topic(&want))
+                    })
             });
             view.select(n, (!pages.is_empty()).then(|| wanted.unwrap_or(0) as i64));
         }
@@ -116,7 +124,13 @@ impl Screen for Help {
             // A link to a place on the page; others render but open
             // nothing.
             EventKind::Click if self.view.node(ev.node).ctrl.name.as_deref() == Some(TEXT) => {
-                if let Some(tag) = self.view.link.clone().as_deref().and_then(|l| l.strip_prefix('#')) {
+                if let Some(tag) = self
+                    .view
+                    .link
+                    .clone()
+                    .as_deref()
+                    .and_then(|l| l.strip_prefix('#'))
+                {
                     let pack = core.pack.clone();
                     self.view.scroll_to_tag(&pack, ev.node, tag);
                 }

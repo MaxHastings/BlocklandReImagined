@@ -38,18 +38,18 @@ mod highlight;
 mod inventory;
 mod map_change;
 mod map_lights;
-mod world_shapes;
 mod special;
 mod trust;
 mod tutorial;
+mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod riding;
 pub use riding::{Ride, shape_mount_points};
 mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{
-    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
-    carry_through_openings, driver_controls, rider,
+    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls, carry_through_openings,
+    driver_controls, rider,
 };
 mod items;
 mod weapon_settings;
@@ -82,8 +82,9 @@ pub use combat::{
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
-    AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit, ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
-    PackageSave, PackageStateView, PackageStats, WorldSave, AddOnData, MemoryAddOnData,
+    AddOnData, AddOnSetting, ENTITY_TAG, EntityInfo, MAX_ADDON_SETTINGS, MemoryAddOnData,
+    NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand, PackageSave, PackageStateView,
+    PackageStats, SettingEdit, TeamEdit, WorldSave,
 };
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
 /// `/confusion`) and v20's built-in `/bsd`, `/sit` and `/hug` (`/zombie` is
@@ -186,10 +187,10 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
-pub use world_shapes::{MAX_SHAPE_SETS, check_world_shapes};
 pub use tools::{FX_CAN_IMAGES, InspectMode, SPRAY_CAN_IMAGE, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
+pub use world_shapes::{MAX_SHAPE_SETS, check_world_shapes};
 
 /// Queued inputs above which the server simulates extra ticks to catch up.
 const INPUT_TARGET: usize = 6;
@@ -722,10 +723,18 @@ impl UniformParts {
                 avatar.parts.insert(slot.clone(), found);
             }
         }
-        if let Some(face) = self.face.as_deref().and_then(|f| pick(pack.map(|p| &p.faces), f)) {
+        if let Some(face) = self
+            .face
+            .as_deref()
+            .and_then(|f| pick(pack.map(|p| &p.faces), f))
+        {
             avatar.face = face;
         }
-        if let Some(decal) = self.decal.as_deref().and_then(|d| pick(pack.map(|p| &p.decals), d)) {
+        if let Some(decal) = self
+            .decal
+            .as_deref()
+            .and_then(|d| pick(pack.map(|p| &p.decals), d))
+        {
             avatar.decal = decal;
         }
         if let Some(pack) = pack {
@@ -1229,8 +1238,7 @@ impl Session {
         }
         peer.clan = clan.clone();
         // Surrounding spaces go quietly, as in v20; anything else is told.
-        if clan.prefix != wanted.prefix.trim() || clan.suffix != wanted.suffix.trim()
-        {
+        if clan.prefix != wanted.prefix.trim() || clan.suffix != wanted.suffix.trim() {
             eprintln!(
                 "Player {owner}: clan tags {} {} taken as {:?} {:?}",
                 logged_name(&wanted.prefix),
@@ -1761,7 +1769,13 @@ impl Session {
     }
     /// `%player.schedule(ms, "playThread", thread, sequence)`: plays at
     /// `due`, after any schedule already due by then.
-    fn schedule_thread(&mut self, owner: OwnerId, due: u64, thread: u8, sequence: &str) -> Result<()> {
+    fn schedule_thread(
+        &mut self,
+        owner: OwnerId,
+        due: u64,
+        thread: u8,
+        sequence: &str,
+    ) -> Result<()> {
         let peer = self.peers.get_mut(&owner).context("No such player")?;
         ensure!(
             peer.thread_timers.len() < MAX_THREAD_TIMERS,
@@ -1782,8 +1796,14 @@ impl Session {
     fn fire_thread_timers(&mut self, tick: u64) {
         let mut due = Vec::new();
         for (&owner, peer) in &mut self.peers {
-            let ready = peer.thread_timers.partition_point(|timer| timer.due <= tick);
-            due.extend(peer.thread_timers.drain(..ready).map(|timer| (owner, timer)));
+            let ready = peer
+                .thread_timers
+                .partition_point(|timer| timer.due <= tick);
+            due.extend(
+                peer.thread_timers
+                    .drain(..ready)
+                    .map(|timer| (owner, timer)),
+            );
         }
         for (owner, timer) in due {
             self.play_thread(tick, owner, timer.thread, &timer.sequence);
@@ -1898,7 +1918,11 @@ impl Session {
             );
             self.validate_event_rows(rows)?;
         }
-        if let Command::Tool(ToolAction::SetEvents { brick, events: rows }) = &mut command {
+        if let Command::Tool(ToolAction::SetEvents {
+            brick,
+            events: rows,
+        }) = &mut command
+        {
             let refused = self.review_event_rows(owner, *brick, rows);
             for reason in refused {
                 self.notify(owner, Notice::Chat(reason));
@@ -1958,7 +1982,9 @@ impl Session {
         // takes out a tool.
         if matches!(
             command,
-            Command::WeaponTrigger { down: true } | Command::Activate | Command::EquipTool { slot: Some(_) }
+            Command::WeaponTrigger { down: true }
+                | Command::Activate
+                | Command::EquipTool { slot: Some(_) }
         ) {
             let archetype = peer.player.state().archetype;
             ensure!(
@@ -2305,7 +2331,10 @@ impl Session {
                 if !changed.is_empty() {
                     let shown: Vec<String> =
                         changed.iter().take(8).map(|c| logged_name(c)).collect();
-                    eprintln!("Player {owner}: avatar choices defaulted: {}", shown.join(", "));
+                    eprintln!(
+                        "Player {owner}: avatar choices defaulted: {}",
+                        shown.join(", ")
+                    );
                     self.private_chat(
                         owner,
                         "Some avatar choices are not on this server, so the default is shown for them."
@@ -2505,7 +2534,10 @@ impl Session {
                 let name = peer.name.clone();
                 let clan = peer.clan.clone();
                 if repeated {
-                    self.notify(owner, Notice::Chat("\u{E005}Do not repeat yourself.".into()));
+                    self.notify(
+                        owner,
+                        Notice::Chat("\u{E005}Do not repeat yourself.".into()),
+                    );
                 }
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
@@ -2696,17 +2728,13 @@ impl Session {
                     }
                 };
                 let before = Vec3::from(peer.player.state().feet);
-                let motion =
-                    match self
-                        .simulation
-                        .step_body(&mut peer.player, input, &liquids)
-                    {
-                        Ok(motion) => motion,
-                        Err(error) => {
-                            contain("movement", Err(error));
-                            continue;
-                        }
-                    };
+                let motion = match self.simulation.step_body(&mut peer.player, input, &liquids) {
+                    Ok(motion) => motion,
+                    Err(error) => {
+                        contain("movement", Err(error));
+                        continue;
+                    }
+                };
                 if let Some(carry) = motion.passed {
                     crossed.push((owner, carry));
                 }

@@ -696,7 +696,10 @@ async fn a_join_downloads_exactly_the_servers_add_ons_without_asking() -> Result
     // An older copy of `creeper`, already in this client's cache too.
     let stale_root = tempfile::tempdir()?;
     std::fs::create_dir_all(stale_root.path().join("creeper"))?;
-    std::fs::write(stale_root.path().join("creeper/package.json"), br#"{"id":"creeper"}"#)?;
+    std::fs::write(
+        stale_root.path().join("creeper/package.json"),
+        br#"{"id":"creeper"}"#,
+    )?;
     std::fs::write(stale_root.path().join("creeper/old.glb"), [1; 64])?;
     let (hash, size) = hash_dir(&stale_root.path().join("creeper"))?;
     let creeper = expected.iter().find(|p| p.id == "creeper").unwrap();
@@ -794,7 +797,14 @@ async fn a_join_goes_ahead_without_content_the_host_cannot_send() -> Result<()> 
             ..fixture::options()
         },
     )?;
-    let by_id = |id: &str| environment.packages.iter().find(|p| p.id == id).unwrap().clone();
+    let by_id = |id: &str| {
+        environment
+            .packages
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .clone()
+    };
     // The joiner's own base game, imported from their own v20 copy.
     let theirs = bri_package::environment::PackageRef {
         hash: "cd".repeat(32),
@@ -866,7 +876,10 @@ async fn a_join_goes_ahead_without_content_the_host_cannot_send() -> Result<()> 
     assert!(dropped.is_empty());
     assert_eq!(fetched.len(), 1);
     assert!(ran.contains(&by_id("gravity-gun")));
-    assert_eq!(client.unavailable, [by_id("native-addon"), by_id("v20-bricks")]);
+    assert_eq!(
+        client.unavailable,
+        [by_id("native-addon"), by_id("v20-bricks")]
+    );
     // ...and is told, by name, what it joined without.
     let notice = tokio::time::timeout(Duration::from_secs(5), async {
         loop {

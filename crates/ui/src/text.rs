@@ -106,7 +106,14 @@ impl<'a> Font<'a> {
     /// The cache's glyph for a Windows-1252 character; anything else from
     /// a system font ([`crate::fallback`]), or `?` when no font has it.
     fn placed(&self, c: char) -> Option<Placed> {
-        let cached = |b: u8| self.entry.glyphs.get(b as usize).copied().flatten().map(Placed::Cache);
+        let cached = |b: u8| {
+            self.entry
+                .glyphs
+                .get(b as usize)
+                .copied()
+                .flatten()
+                .map(Placed::Cache)
+        };
         if let Some(b) = to_cp1252(c) {
             return cached(b);
         }
@@ -168,7 +175,9 @@ impl<'a> Font<'a> {
                 continue;
             }
             let (tex, g, color) = match self.placed(c) {
-                Some(Placed::Cache(g)) => (TexKey::FontSheet(self.id.to_string(), g.sheet), g, false),
+                Some(Placed::Cache(g)) => {
+                    (TexKey::FontSheet(self.id.to_string(), g.sheet), g, false)
+                }
                 Some(Placed::Fallback { glyph, color }) => {
                     (TexKey::Fallback(self.entry.baseline, c), glyph, color)
                 }
@@ -292,16 +301,31 @@ mod tests {
         // no font has is the cache's `?`.
         assert_eq!(font.width("AЖ😀\u{2FFFF}"), 6 + 7 + 12 + 6);
         let mut dl = DrawList::default();
-        font.draw_outlined(&mut dl, 0.0, 0.0, "AЖ😀\u{2FFFF}", [255, 0, 0, 200], Some([0, 0, 0, 255]), &[]);
+        font.draw_outlined(
+            &mut dl,
+            0.0,
+            0.0,
+            "AЖ😀\u{2FFFF}",
+            [255, 0, 0, 200],
+            Some([0, 0, 0, 255]),
+            &[],
+        );
         let drawn: Vec<(TexKey, [f32; 4], Rgba)> = dl
             .cmds
             .iter()
             .filter_map(|c| match c {
-                crate::draw::DrawCmd::Image { tex, src, tint, .. } => Some((tex.clone(), *src, *tint)),
+                crate::draw::DrawCmd::Image { tex, src, tint, .. } => {
+                    Some((tex.clone(), *src, *tint))
+                }
                 _ => None,
             })
             .collect();
-        let fell_back = |c: char| drawn.iter().filter(|(t, ..)| *t == TexKey::Fallback(11, c)).collect::<Vec<_>>();
+        let fell_back = |c: char| {
+            drawn
+                .iter()
+                .filter(|(t, ..)| *t == TexKey::Fallback(11, c))
+                .collect::<Vec<_>>()
+        };
         // Outline glyphs are tinted and outlined like cache glyphs: four
         // outline passes and the text.
         let zhe = fell_back('Ж');
@@ -312,10 +336,16 @@ mod tests {
         let smile = fell_back('😀');
         assert_eq!(smile.len(), 1);
         assert_eq!(smile[0].2, [255, 255, 255, 200]);
-        let question = drawn.iter().filter(|(_, src, _)| src[0] == b'?' as f32).count();
+        let question = drawn
+            .iter()
+            .filter(|(_, src, _)| src[0] == b'?' as f32)
+            .count();
         assert_eq!(question, 5);
         let pixels = pack.pixels(&TexKey::Fallback(11, 'Ж')).unwrap();
-        assert_eq!((pixels.width, pixels.height, pixels.rgba.len()), (4, 11, 4 * 11 * 4));
+        assert_eq!(
+            (pixels.width, pixels.height, pixels.rgba.len()),
+            (4, 11, 4 * 11 * 4)
+        );
         assert!(pack.pixels(&TexKey::Fallback(11, '\u{2FFFF}')).is_none());
     }
 

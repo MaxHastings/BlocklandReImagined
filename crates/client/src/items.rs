@@ -243,19 +243,26 @@ impl ItemMesh {
             unassigned_material: bindings.len(),
             colors: &colors,
         };
-        let before = crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, &pose)?
-            .then(|| {
-                (
-                    self.data.vertices.len(),
-                    self.data.indices.clone(),
-                    self.data
-                        .batches
-                        .iter()
-                        .map(|b| (b.indices.clone(), b.material))
-                        .collect::<Vec<_>>(),
-                )
-            });
-        crate::avatar_mesh::Layout::pose(&mut self.layout, &mut self.data, &binding, &pose, transform)?;
+        let before =
+            crate::avatar_mesh::Layout::restructures(&self.layout, &self.data, &binding, &pose)?
+                .then(|| {
+                    (
+                        self.data.vertices.len(),
+                        self.data.indices.clone(),
+                        self.data
+                            .batches
+                            .iter()
+                            .map(|b| (b.indices.clone(), b.material))
+                            .collect::<Vec<_>>(),
+                    )
+                });
+        crate::avatar_mesh::Layout::pose(
+            &mut self.layout,
+            &mut self.data,
+            &binding,
+            &pose,
+            transform,
+        )?;
         Ok(before.is_some_and(|(vertices, indices, batches)| {
             vertices != self.data.vertices.len()
                 || indices != self.data.indices
@@ -298,7 +305,8 @@ fn visible_detail(shape: &Shape, first_person: bool) -> Option<usize> {
 /// does not, the image draws exactly its rest pose, and every holder can
 /// share one posed copy.
 pub fn moves_visible_detail(shape: &Shape, clip: &Animation, first_person: bool) -> bool {
-    let Some(detail) = visible_detail(shape, first_person).and_then(|d| shape.details.get(d)) else {
+    let Some(detail) = visible_detail(shape, first_person).and_then(|d| shape.details.get(d))
+    else {
         return false;
     };
     let objects = detail.object_start..detail.object_start + detail.object_count;
@@ -310,19 +318,21 @@ pub fn moves_visible_detail(shape: &Shape, clip: &Animation, first_person: bool)
             .iter()
             .any(|t| t.node.eq_ignore_ascii_case(&shape.nodes[node].name))
     };
-    objects.filter_map(|i| shape.objects.get(i)?.node).any(|mut node| {
-        // The node and every ancestor.
-        for _ in 0..shape.nodes.len() {
-            if animated(node) {
-                return true;
+    objects
+        .filter_map(|i| shape.objects.get(i)?.node)
+        .any(|mut node| {
+            // The node and every ancestor.
+            for _ in 0..shape.nodes.len() {
+                if animated(node) {
+                    return true;
+                }
+                match shape.nodes[node].parent {
+                    Some(parent) => node = parent,
+                    None => return false,
+                }
             }
-            match shape.nodes[node].parent {
-                Some(parent) => node = parent,
-                None => return false,
-            }
-        }
-        true
-    })
+            true
+        })
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -377,133 +387,137 @@ pub fn native_shape_scene(
         "Unbound native model material: {model}"
     );
 
-        let mut scene = SceneData {
-            id: model.into(),
-            name: model.into(),
-            ..Default::default()
-        };
-        if shape
-            .meshes
-            .iter()
-            .flatten()
-            .any(|m| m.billboard || m.billboard_y)
-        {
-            scene.omissions.push(format!("{model}: authored billboard flag retained; current generic posed geometry does not face the camera automatically"));
-        }
-        let mut bindings = Vec::new();
-        let mut image_bindings = BTreeMap::new();
-        for (source, texture) in shape.materials.iter().zip(textures) {
-            if let Some(metal) = &source.metal {
-                // Bare metal: its texture tints the reflectance (colour),
-                // its detail material's texture is data (linear).
-                let mut bind = |image: &SceneImage, srgb: bool| {
-                    *image_bindings
-                        .entry((image.label.clone(), !srgb))
-                        .or_insert_with(|| {
-                            let mut image = image.clone();
-                            image.srgb = srgb;
-                            scene.images.push(image);
-                            scene.images.len() - 1
-                        })
-                };
-                let tint = bind(texture, true);
-                let detail = match metal.detail {
-                    Some(d) => bind(textures[d], false),
-                    None => bind(&flat_detail(), false),
-                };
-                let mut material =
-                    Material::vertex_lit(format!("item/{model}/{}", source.name), tint);
-                material.kind = MaterialKind::Metal;
-                material.images[1] = detail;
-                material.parameters = Some([
-                    [metal.roughness, metal.detail_scale, metal.detail_strength, 0.0],
-                    [metal.color[0], metal.color[1], metal.color[2], 0.0],
-                    [0.0; 4],
-                    [0.0; 4],
-                ]);
-                bindings.push(scene.materials.len());
-                scene.materials.push(material);
-                continue;
-            }
-            // v20 lays a colour-shifted model's texture over its shift colour
-            // (`GL_DECAL`) only when the texture has a translucent texel; a
-            // texture with none is the texture times the light, untinted.
-            let decal = translucent_texel(texture);
-            let overlay =
-                decal && (source.blend == "opaque" || (node_color && source.blend == "alpha"));
-            let key = (texture.label.clone(), overlay);
-            let image = *image_bindings.entry(key).or_insert_with(|| {
-                let mut image = (*texture).clone();
-                image.srgb = !overlay;
-                let index = scene.images.len();
-                scene.images.push(image);
-                index
-            });
-            let mut material = if overlay {
-                Material::brick_overlay(format!("item/{model}/{}", source.name), image)
-            } else {
-                Material::vertex_lit(format!("item/{model}/{}", source.name), image)
+    let mut scene = SceneData {
+        id: model.into(),
+        name: model.into(),
+        ..Default::default()
+    };
+    if shape
+        .meshes
+        .iter()
+        .flatten()
+        .any(|m| m.billboard || m.billboard_y)
+    {
+        scene.omissions.push(format!("{model}: authored billboard flag retained; current generic posed geometry does not face the camera automatically"));
+    }
+    let mut bindings = Vec::new();
+    let mut image_bindings = BTreeMap::new();
+    for (source, texture) in shape.materials.iter().zip(textures) {
+        if let Some(metal) = &source.metal {
+            // Bare metal: its texture tints the reflectance (colour),
+            // its detail material's texture is data (linear).
+            let mut bind = |image: &SceneImage, srgb: bool| {
+                *image_bindings
+                    .entry((image.label.clone(), !srgb))
+                    .or_insert_with(|| {
+                        let mut image = image.clone();
+                        image.srgb = srgb;
+                        scene.images.push(image);
+                        scene.images.len() - 1
+                    })
             };
-            material.untinted = !decal && source.blend == "opaque";
-            if source.unlit {
-                material.kind = if overlay {
-                    MaterialKind::UnlitOverlay
-                } else {
-                    MaterialKind::Unlit
-                };
-            }
-            material.alpha = match source.blend.as_str() {
-                "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
-                "opaque" | "alpha" => AlphaMode::Blend,
-                "additive" => AlphaMode::Additive,
-                other => anyhow::bail!("Unsupported item blend {other}"),
+            let tint = bind(texture, true);
+            let detail = match metal.detail {
+                Some(d) => bind(textures[d], false),
+                None => bind(&flat_detail(), false),
             };
-            if source.environment || source.bump_map.is_some() || source.detail_map.is_some() {
-                scene.omissions.push(format!(
-                    "{model}/{}: environment/bump/detail maps are not composed",
-                    source.name
-                ));
-            }
-            if !source.wrap_u || !source.wrap_v {
-                scene.omissions.push(format!(
-                    "{model}/{}: shared scene sampler repeats both axes",
-                    source.name
-                ));
-            }
+            let mut material = Material::vertex_lit(format!("item/{model}/{}", source.name), tint);
+            material.kind = MaterialKind::Metal;
+            material.images[1] = detail;
+            material.parameters = Some([
+                [
+                    metal.roughness,
+                    metal.detail_scale,
+                    metal.detail_strength,
+                    0.0,
+                ],
+                [metal.color[0], metal.color[1], metal.color[2], 0.0],
+                [0.0; 4],
+                [0.0; 4],
+            ]);
             bindings.push(scene.materials.len());
             scene.materials.push(material);
+            continue;
         }
-        let fallback = scene.materials.len();
-        scene
-            .materials
-            .push(Material::vertex_lit("Unassigned original model face", 0));
-        if let Some(detail) = shape
-            .details
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| !d.collision)
-            .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
-            .map(|(i, _)| i)
-        {
-            scene.append_shape(
-                ShapeInstance {
-                    shape,
-                    pose,
-                    detail,
-                    transform,
-                    materials: &bindings,
-                    translucent_materials: None,
-                    unassigned_material: fallback,
-                },
-                |_| Some(tint),
-            )?;
+        // v20 lays a colour-shifted model's texture over its shift colour
+        // (`GL_DECAL`) only when the texture has a translucent texel; a
+        // texture with none is the texture times the light, untinted.
+        let decal = translucent_texel(texture);
+        let overlay =
+            decal && (source.blend == "opaque" || (node_color && source.blend == "alpha"));
+        let key = (texture.label.clone(), overlay);
+        let image = *image_bindings.entry(key).or_insert_with(|| {
+            let mut image = (*texture).clone();
+            image.srgb = !overlay;
+            let index = scene.images.len();
+            scene.images.push(image);
+            index
+        });
+        let mut material = if overlay {
+            Material::brick_overlay(format!("item/{model}/{}", source.name), image)
         } else {
+            Material::vertex_lit(format!("item/{model}/{}", source.name), image)
+        };
+        material.untinted = !decal && source.blend == "opaque";
+        if source.unlit {
+            material.kind = if overlay {
+                MaterialKind::UnlitOverlay
+            } else {
+                MaterialKind::Unlit
+            };
+        }
+        material.alpha = match source.blend.as_str() {
+            "opaque" if node_color || tint[3] >= 1. => AlphaMode::Opaque,
+            "opaque" | "alpha" => AlphaMode::Blend,
+            "additive" => AlphaMode::Additive,
+            other => anyhow::bail!("Unsupported item blend {other}"),
+        };
+        if source.environment || source.bump_map.is_some() || source.detail_map.is_some() {
             scene.omissions.push(format!(
-                "{model}: authored native shape has no visible detail"
+                "{model}/{}: environment/bump/detail maps are not composed",
+                source.name
             ));
         }
-        scene.validate()?;
-        Ok(scene)
+        if !source.wrap_u || !source.wrap_v {
+            scene.omissions.push(format!(
+                "{model}/{}: shared scene sampler repeats both axes",
+                source.name
+            ));
+        }
+        bindings.push(scene.materials.len());
+        scene.materials.push(material);
+    }
+    let fallback = scene.materials.len();
+    scene
+        .materials
+        .push(Material::vertex_lit("Unassigned original model face", 0));
+    if let Some(detail) = shape
+        .details
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| !d.collision)
+        .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
+        .map(|(i, _)| i)
+    {
+        scene.append_shape(
+            ShapeInstance {
+                shape,
+                pose,
+                detail,
+                transform,
+                materials: &bindings,
+                translucent_materials: None,
+                unassigned_material: fallback,
+            },
+            |_| Some(tint),
+        )?;
+    } else {
+        scene.omissions.push(format!(
+            "{model}: authored native shape has no visible detail"
+        ));
+    }
+    scene.validate()?;
+    Ok(scene)
 }
 
 /// Whether v20 counts `image` as having a translucent texel, as its texture
@@ -738,10 +752,30 @@ impl ItemAssets {
                 &mut added,
                 &mut faults,
             );
-            scope_overlays(dir, &abs, &part_pack, &mut manifest, &mut added, &mut faults);
-            read_looks(dir, &abs, &part_pack, &mut manifest, &mut skins, &mut faults);
+            scope_overlays(
+                dir,
+                &abs,
+                &part_pack,
+                &mut manifest,
+                &mut added,
+                &mut faults,
+            );
+            read_looks(
+                dir,
+                &abs,
+                &part_pack,
+                &mut manifest,
+                &mut skins,
+                &mut faults,
+            );
         }
-        let file_root = |kind: &str, id: &str| added.origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
+        let file_root = |kind: &str, id: &str| {
+            added
+                .origin
+                .get(&format!("{kind}:{id}"))
+                .unwrap_or(&root)
+                .clone()
+        };
         let mut textures = BTreeMap::new();
         // Add-On textures replaced by a blank: models keep drawing, icons
         // fall back to the item's letter.
@@ -758,7 +792,12 @@ impl ItemAssets {
                     pixels + u64::from(t.width) * u64::from(t.height) * 4 <= 256 * 1024 * 1024,
                     "Item aggregate image budget exceeded"
                 );
-                let bytes = checked_read(&file_root("texture", id), &t.file, &t.sha256, 16 * 1024 * 1024)?;
+                let bytes = checked_read(
+                    &file_root("texture", id),
+                    &t.file,
+                    &t.sha256,
+                    16 * 1024 * 1024,
+                )?;
                 ensure!(
                     input_bytes + bytes.len() <= 256 * 1024 * 1024,
                     "Item aggregate input budget exceeded"
@@ -799,7 +838,12 @@ impl ItemAssets {
         let mut vertex_budget = 0usize;
         for (id, m) in &manifest.models {
             let mut load = || -> Result<Shape> {
-                let bytes = checked_read(&file_root("model", id), &m.file, &m.sha256, 32 * 1024 * 1024)?;
+                let bytes = checked_read(
+                    &file_root("model", id),
+                    &m.file,
+                    &m.sha256,
+                    32 * 1024 * 1024,
+                )?;
                 ensure!(
                     input_bytes + bytes.len() <= 256 * 1024 * 1024,
                     "Item aggregate input budget exceeded"
@@ -812,7 +856,10 @@ impl ItemAssets {
                     .flatten()
                     .map(|m| m.positions.len())
                     .sum::<usize>();
-                ensure!(vertex_budget + vertices <= 2_000_000, "Item geometry budget exceeded");
+                ensure!(
+                    vertex_budget + vertices <= 2_000_000,
+                    "Item geometry budget exceeded"
+                );
                 ensure!(
                     m.textures.len() == shape.materials.len()
                         && m.textures.iter().all(|id| textures.contains_key(id)),
@@ -826,11 +873,13 @@ impl ItemAssets {
                 Ok(shape) => {
                     shapes.insert(id.clone(), shape);
                 }
-                Err(error) if added.models.contains(id) => faults.push(crate::cosmetic::add_on_fault(
-                    &added.owner(&format!("model:{id}")),
-                    &m.file,
-                    format!("{error:#}"),
-                )),
+                Err(error) if added.models.contains(id) => {
+                    faults.push(crate::cosmetic::add_on_fault(
+                        &added.owner(&format!("model:{id}")),
+                        &m.file,
+                        format!("{error:#}"),
+                    ))
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -838,14 +887,21 @@ impl ItemAssets {
         // What Add-Ons present is repaired rather than refused: an unknown
         // model draws nothing, an invalid colour draws white, a missing icon
         // shows the item's letter (`crate::item_ui`).
-        for (id, item) in manifest.items.iter_mut().filter(|(id, _)| added.items.contains(*id)) {
+        for (id, item) in manifest
+            .items
+            .iter_mut()
+            .filter(|(id, _)| added.items.contains(*id))
+        {
             let owner = added.owner(&format!("item:{id}"));
             if !item.model.is_empty() && !shapes.contains_key(&item.model) {
                 if !added.models.contains(&item.model) {
                     faults.push(crate::cosmetic::add_on_fault(
                         &owner,
                         "presentation.json",
-                        format!("item {id} names model {}, which it does not list", item.model),
+                        format!(
+                            "item {id} names model {}, which it does not list",
+                            item.model
+                        ),
                     ));
                 }
                 item.model.clear();
@@ -854,7 +910,11 @@ impl ItemAssets {
             if !valid_tint(item.tint) {
                 item.tint = [1.; 4];
             }
-            if let Some(icon) = item.icon.clone().filter(|i| !textures.contains_key(i) || blanks.contains(i)) {
+            if let Some(icon) = item
+                .icon
+                .clone()
+                .filter(|i| !textures.contains_key(i) || blanks.contains(i))
+            {
                 if !blanks.contains(&icon) {
                     faults.push(crate::cosmetic::add_on_fault(
                         &owner,
@@ -865,7 +925,11 @@ impl ItemAssets {
                 item.icon = None;
             }
         }
-        for (_, image) in manifest.images.iter_mut().filter(|(id, _)| added.images.contains(*id)) {
+        for (_, image) in manifest
+            .images
+            .iter_mut()
+            .filter(|(id, _)| added.images.contains(*id))
+        {
             if !shapes.contains_key(&image.model) {
                 image.model.clear();
             }
@@ -893,7 +957,11 @@ impl ItemAssets {
                 }
             }
         }
-        for (_, p) in manifest.projectiles.iter_mut().filter(|(id, _)| added.projectiles.contains(*id)) {
+        for (_, p) in manifest
+            .projectiles
+            .iter_mut()
+            .filter(|(id, _)| added.projectiles.contains(*id))
+        {
             if p.model.as_ref().is_some_and(|m| !shapes.contains_key(m)) {
                 p.model = None;
             }
@@ -966,11 +1034,16 @@ impl ItemAssets {
         use crate::item_icon_render::{Axes, Mesh, Request};
         let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
             ensure!(!model.is_empty(), "no model");
-            let mut mesh = Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?);
+            let mut mesh =
+                Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?);
             // Pointing from where it is held to its muzzle, level (the
             // muzzle sits above the grip), when it has both.
             let pose = assets.pose(model, None, 0.)?;
-            let node = |name| assets.node_transform(model, &pose, Mat4::IDENTITY, name).ok();
+            let node = |name| {
+                assets
+                    .node_transform(model, &pose, Mat4::IDENTITY, name)
+                    .ok()
+            };
             if let (Some(mount), Some(muzzle)) = (node("mountPoint"), node("muzzlePoint")) {
                 let up = Axes::default().up;
                 let along = muzzle.w_axis.truncate() - mount.w_axis.truncate();
@@ -984,8 +1057,14 @@ impl ItemAssets {
         // Drawn as the item looks in play (`Self::item_appearance`): its
         // model, its colour and its skin's colour, unless the request
         // names its own.
-        let look = self.item_appearance(item).context("the item has no model")?;
-        let veins = look.skin.as_deref().and_then(|image| self.skin(image)).map(|(skin, _)| skin.color);
+        let look = self
+            .item_appearance(item)
+            .context("the item has no model")?;
+        let veins = look
+            .skin
+            .as_deref()
+            .and_then(|image| self.skin(image))
+            .map(|(skin, _)| skin.color);
         let [r, g, b, _] = look.tint;
         let spec = spec.with_defaults([r, g, b], veins);
         let model = mesh(self, &look.model).context("the item has no model")?;
@@ -1001,8 +1080,15 @@ impl ItemAssets {
             .and_then(|i| self.textures.get(i))
             .with_context(|| format!("{} has no icon", spec.pose_like))?
             .clone();
-        let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
-        Ok(Request { spec, mesh: model, reference, icon, label: format!("{dir}/{item}.render").to_ascii_lowercase() })
+        let reference =
+            mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+        Ok(Request {
+            spec,
+            mesh: model,
+            reference,
+            icon,
+            label: format!("{dir}/{item}.render").to_ascii_lowercase(),
+        })
     }
     /// Draw the icons Add-Ons ask to have drawn from their models. One kept
     /// in `cache` from an earlier drawing of the same request is shown at
@@ -1022,7 +1108,10 @@ impl ItemAssets {
                 draws.kept += 1;
                 continue;
             }
-            groups.entry(request.spec.pose_like.clone()).or_default().push((item, dir, file, request, slot));
+            groups
+                .entry(request.spec.pose_like.clone())
+                .or_default()
+                .push((item, dir, file, request, slot));
         }
         for (pose_like, group) in groups {
             let cache = cache.map(Path::to_path_buf);
@@ -1050,10 +1139,15 @@ impl ItemAssets {
             });
             match thread {
                 Ok(thread) => {
-                    self.drawing.lock().unwrap_or_else(|e| e.into_inner()).push(thread);
+                    self.drawing
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(thread);
                     draws.drawing += count;
                 }
-                Err(error) => bri_console::warn(format!("Item icons: no thread to draw one: {error}")),
+                Err(error) => {
+                    bri_console::warn(format!("Item icons: no thread to draw one: {error}"))
+                }
             }
         }
         draws
@@ -1200,7 +1294,14 @@ impl ItemAssets {
                 .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
                 .map_or(Mat4::IDENTITY, |i| bind.nodes[i].inverse()))
         };
-        place_image(image, first_person, eye, correction, host_mount, mount_action)
+        place_image(
+            image,
+            first_person,
+            eye,
+            correction,
+            host_mount,
+            mount_action,
+        )
     }
     pub fn node_transform(
         &self,
@@ -1271,7 +1372,12 @@ fn read_part(
     for (id, image) in &mut part.images {
         image.follow_arm |= pack.images.get(id).is_some_and(|i| i.follow_arm);
     }
-    let physics = checked_read(abs, "item-physics.json", &part.item_physics_sha256, 1024 * 1024)?;
+    let physics = checked_read(
+        abs,
+        "item-physics.json",
+        &part.item_physics_sha256,
+        1024 * 1024,
+    )?;
     let physics: ItemPhysicsCatalog = serde_json::from_slice(&physics)?;
     ensure!(physics.schema_version == 1, "unknown item physics schema");
     Ok((part, physics))
@@ -1293,16 +1399,24 @@ fn merge_part(
 ) {
     for (key, model) in part.models {
         if let std::collections::btree_map::Entry::Vacant(e) = manifest.models.entry(key) {
-            added.origin.insert(format!("model:{}", e.key()), abs.to_path_buf());
-            added.owners.insert(format!("model:{}", e.key()), dir.to_string());
+            added
+                .origin
+                .insert(format!("model:{}", e.key()), abs.to_path_buf());
+            added
+                .owners
+                .insert(format!("model:{}", e.key()), dir.to_string());
             added.models.insert(e.key().clone());
             e.insert(model);
         }
     }
     for (key, texture) in part.textures {
         if let std::collections::btree_map::Entry::Vacant(e) = manifest.textures.entry(key) {
-            added.origin.insert(format!("texture:{}", e.key()), abs.to_path_buf());
-            added.owners.insert(format!("texture:{}", e.key()), dir.to_string());
+            added
+                .origin
+                .insert(format!("texture:{}", e.key()), abs.to_path_buf());
+            added
+                .owners
+                .insert(format!("texture:{}", e.key()), dir.to_string());
             added.textures.insert(e.key().clone());
             e.insert(texture);
         }
@@ -1396,7 +1510,11 @@ fn present_gaps(
         String::new()
     };
     let mut images = BTreeMap::new();
-    for (id, image) in pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)) {
+    for (id, image) in pack
+        .images
+        .iter()
+        .filter(|(id, _)| !manifest.images.contains_key(*id))
+    {
         images.insert(
             id.clone(),
             ImagePresentation {
@@ -1408,7 +1526,11 @@ fn present_gaps(
                 eye_rotation_degrees: image.eye_rotation,
                 // As the stock importer does: the colour shows only when
                 // the image shifts it (`doColorShift`).
-                tint: if image.color_shift { image.color } else { [1.0; 4] },
+                tint: if image.color_shift {
+                    image.color
+                } else {
+                    [1.0; 4]
+                },
                 evidence: evidence(),
                 follow_arm: image.follow_arm,
                 overlay: None,
@@ -1448,13 +1570,20 @@ fn present_gaps(
             own_icon(dir, abs, &item.icon, manifest, added, faults)
         };
         if let Some(request) = icon_render(dir, abs, &item.icon, faults) {
-            added.icon_renders.push((id.clone(), dir.to_string(), request.0, request.1));
+            added
+                .icon_renders
+                .push((id.clone(), dir.to_string(), request.0, request.1));
         }
-        if icon.is_none() && !item.icon.is_empty() && !added.icon_renders.iter().any(|r| r.0 == *id) {
+        if icon.is_none() && !item.icon.is_empty() && !added.icon_renders.iter().any(|r| r.0 == *id)
+        {
             faults.push(crate::cosmetic::add_on_fault(
                 dir,
                 "weapons.json",
-                format!("icon {} of {} is not provided, so it shows its first letter", item.icon, item.ui_name.trim()),
+                format!(
+                    "icon {} of {} is not provided, so it shows its first letter",
+                    item.icon,
+                    item.ui_name.trim()
+                ),
             ));
         }
         added.items.insert(id.clone());
@@ -1493,25 +1622,24 @@ pub(crate) fn place_image(
             Vec3::from(image.offset),
         ) * correction()?)
     };
-    let transform = if first_person
-        && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3])
-    {
-        let eye_local = Mat4::from_rotation_translation(
-            source_euler(image.eye_rotation_degrees),
-            Vec3::from(image.eye_offset),
-        );
-        match mount_action(image.mount_point).filter(|_| image.follow_arm) {
-            Some(action) => {
-                let hand = in_hand()?;
-                eye * eye_local * hand.inverse() * action * hand
+    let transform =
+        if first_person && (image.eye_offset != [0.; 3] || image.eye_rotation_degrees != [0.; 3]) {
+            let eye_local = Mat4::from_rotation_translation(
+                source_euler(image.eye_rotation_degrees),
+                Vec3::from(image.eye_offset),
+            );
+            match mount_action(image.mount_point).filter(|_| image.follow_arm) {
+                Some(action) => {
+                    let hand = in_hand()?;
+                    eye * eye_local * hand.inverse() * action * hand
+                }
+                None => eye * eye_local,
             }
-            None => eye * eye_local,
-        }
-    } else {
-        let mount = host_mount(image.mount_point)
-            .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
-        mount * in_hand()?
-    };
+        } else {
+            let mount = host_mount(image.mount_point)
+                .with_context(|| format!("Missing authored host mount{}", image.mount_point))?;
+            mount * in_hand()?
+        };
     ensure!(
         transform.is_finite() && transform.determinant() > 1e-8,
         "Invalid image mount transform"
@@ -1538,11 +1666,19 @@ fn read_looks(
     let looks = match looks {
         Ok(looks) if looks.schema_version == 1 => looks,
         Ok(looks) => {
-            faults.push(crate::cosmetic::add_on_fault(dir, "looks.json", format!("unknown schema {}", looks.schema_version)));
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "looks.json",
+                format!("unknown schema {}", looks.schema_version),
+            ));
             return;
         }
         Err(error) => {
-            faults.push(crate::cosmetic::add_on_fault(dir, "looks.json", format!("{error:#}")));
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "looks.json",
+                format!("{error:#}"),
+            ));
             return;
         }
     };
@@ -1551,19 +1687,26 @@ fn read_looks(
             continue;
         };
         let read = || -> Result<SkinShader> {
-            ensure!(pack.images.contains_key(&id), "{id} is not one of this Add-On's images");
             ensure!(
-                skin.color.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+                pack.images.contains_key(&id),
+                "{id} is not one of this Add-On's images"
+            );
+            ensure!(
+                skin.color
+                    .iter()
+                    .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
                 "skin colours must be 0 to 1"
             );
             ensure!(skin.energy_states.len() <= 16, "at most 16 energy states");
             ensure!(
-                bri_content::brick_materials::safe_relative(&skin.shader) && skin.shader.ends_with(".wgsl"),
+                bri_content::brick_materials::safe_relative(&skin.shader)
+                    && skin.shader.ends_with(".wgsl"),
                 "the skin's shader must be a .wgsl file in the Add-On"
             );
             let bytes = crate::materials::read_resource(abs, &skin.shader, 64 * 1024)?;
             let source = String::from_utf8(bytes).context("the skin's shader is not text")?;
-            bri_client_sandbox::shader::compile(&skin.shader, &source).map_err(|e| anyhow::anyhow!("{e}"))?;
+            bri_client_sandbox::shader::compile(&skin.shader, &source)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(SkinShader {
                 name: format!("{dir}/{}", skin.shader),
                 source,
@@ -1577,7 +1720,11 @@ fn read_looks(
                 }
                 skins.insert(id, (skin, shader));
             }
-            Err(error) => faults.push(crate::cosmetic::add_on_fault(dir, "looks.json", format!("{error:#}"))),
+            Err(error) => faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "looks.json",
+                format!("{error:#}"),
+            )),
         }
     }
 }
@@ -1598,12 +1745,20 @@ fn icon_render(
         return None;
     }
     let read = || -> Result<crate::item_icon_render::Spec> {
-        crate::item_icon_render::Spec::parse(&crate::materials::read_resource(abs, &file, 64 * 1024)?)
+        crate::item_icon_render::Spec::parse(&crate::materials::read_resource(
+            abs,
+            &file,
+            64 * 1024,
+        )?)
     };
     match read() {
         Ok(spec) => Some((file, spec)),
         Err(error) => {
-            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                &file,
+                format!("{error:#}"),
+            ));
             None
         }
     }
@@ -1620,7 +1775,15 @@ fn own_icon(
     added: &mut Added,
     faults: &mut Vec<String>,
 ) -> Option<String> {
-    own_picture(dir, abs, name, ("icon", ICON_BYTES, ICON_SIDE), manifest, added, faults)
+    own_picture(
+        dir,
+        abs,
+        name,
+        ("icon", ICON_BYTES, ICON_SIDE),
+        manifest,
+        added,
+        faults,
+    )
 }
 /// Each of this Add-On's images with a scope picture (`Zoom::overlay`)
 /// gets it as a texture of its own; one that does not read is logged and
@@ -1640,12 +1803,22 @@ fn scope_overlays(
         if !added.images.contains(id) {
             continue;
         }
-        let key = own_picture(dir, abs, name, ("scope overlay", OVERLAY_BYTES, OVERLAY_SIDE), manifest, added, faults);
+        let key = own_picture(
+            dir,
+            abs,
+            name,
+            ("scope overlay", OVERLAY_BYTES, OVERLAY_SIDE),
+            manifest,
+            added,
+            faults,
+        );
         if key.is_none() && !abs.join(format!("{name}.png")).is_file() {
             faults.push(crate::cosmetic::add_on_fault(
                 dir,
                 "weapons.json",
-                format!("scope overlay {name}.png of {id} is not in the Add-On, so it aims without one"),
+                format!(
+                    "scope overlay {name}.png of {id} is not in the Add-On, so it aims without one"
+                ),
             ));
         }
         if let Some(presented) = manifest.images.get_mut(id) {
@@ -1693,14 +1866,22 @@ fn own_picture(
     match read() {
         Ok(texture) => {
             let key = format!("{dir}/{file}").to_ascii_lowercase();
-            added.origin.insert(format!("texture:{key}"), abs.to_path_buf());
-            added.owners.insert(format!("texture:{key}"), dir.to_string());
+            added
+                .origin
+                .insert(format!("texture:{key}"), abs.to_path_buf());
+            added
+                .owners
+                .insert(format!("texture:{key}"), dir.to_string());
             added.textures.insert(key.clone());
             manifest.textures.insert(key.clone(), texture);
             Some(key)
         }
         Err(error) => {
-            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                &file,
+                format!("{error:#}"),
+            ));
             None
         }
     }
@@ -1778,19 +1959,29 @@ fn own_model(
     match read() {
         Ok(model) => {
             for (texture_key, texture) in textures {
-                added.origin.insert(format!("texture:{texture_key}"), abs.to_path_buf());
-                added.owners.insert(format!("texture:{texture_key}"), dir.to_string());
+                added
+                    .origin
+                    .insert(format!("texture:{texture_key}"), abs.to_path_buf());
+                added
+                    .owners
+                    .insert(format!("texture:{texture_key}"), dir.to_string());
                 added.textures.insert(texture_key.clone());
                 manifest.textures.entry(texture_key).or_insert(texture);
             }
-            added.origin.insert(format!("model:{key}"), abs.to_path_buf());
+            added
+                .origin
+                .insert(format!("model:{key}"), abs.to_path_buf());
             added.owners.insert(format!("model:{key}"), dir.to_string());
             added.models.insert(key.clone());
             manifest.models.insert(key.clone(), model);
             Some(key)
         }
         Err(error) => {
-            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                &file,
+                format!("{error:#}"),
+            ));
             None
         }
     }
@@ -1865,24 +2056,64 @@ mod add_on_icon_tests {
         let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
         let mut manifest = empty();
         let (mut added, mut faults) = (Added::default(), Vec::new());
-        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
-        present_gaps("Gravity Gun Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
-        let key = manifest.items["gravity-gun-tool:weapon/gravitygun"].icon.clone().unwrap();
+        let mut physics = ItemPhysicsCatalog {
+            schema_version: 1,
+            items: BTreeMap::new(),
+        };
+        present_gaps(
+            "Gravity Gun Tool",
+            &abs,
+            &weapons,
+            &pack,
+            &mut manifest,
+            &mut physics,
+            &mut added,
+            &mut faults,
+        );
+        let key = manifest.items["gravity-gun-tool:weapon/gravitygun"]
+            .icon
+            .clone()
+            .unwrap();
         assert_eq!(key, "gravity gun tool/icons/gravity_gun.png");
         let texture = &manifest.textures[&key];
         assert_eq!((texture.width, texture.height), (128, 128));
-        assert!(checked_read(&added.origin[&format!("texture:{key}")], &texture.file, &texture.sha256, ICON_BYTES).is_ok());
+        assert!(
+            checked_read(
+                &added.origin[&format!("texture:{key}")],
+                &texture.file,
+                &texture.sha256,
+                ICON_BYTES
+            )
+            .is_ok()
+        );
         assert!(!faults.iter().any(|f| f.contains("icon")), "{faults:?}");
         // Nothing there, or a path out of the Add-On: the letter, as before.
         for name in ["icons/missing", "../assets/icons/gravity_gun", ""] {
-            assert!(own_icon("x", &abs, name, &mut empty(), &mut Added::default(), &mut Vec::new()).is_none(), "{name}");
+            assert!(
+                own_icon(
+                    "x",
+                    &abs,
+                    name,
+                    &mut empty(),
+                    &mut Added::default(),
+                    &mut Vec::new()
+                )
+                .is_none(),
+                "{name}"
+            );
         }
         // And it asks for its icon to be drawn from its model like the
         // Printer's, keeping the PNG for when that cannot be done.
         let [(item, _, file, spec)] = &added.icon_renders[..] else {
             panic!("one render request: {:?}", added.icon_renders);
         };
-        assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
+        assert_eq!(
+            (item.as_str(), file.as_str()),
+            (
+                "gravity-gun-tool:weapon/gravitygun",
+                "icons/gravity_gun.render.json"
+            )
+        );
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
     }
     /// A stand-in tool Add-On with a model of its own: a wooden handle and
@@ -1904,9 +2135,12 @@ mod add_on_icon_tests {
         let mut normals = Vec::new();
         let mut uv = Vec::new();
         let mut primitives = Vec::new();
-        for (material, (lo, hi)) in [([-0.05f32, -0.3, -0.05], [0.05f32, 0.8, 0.05]), ([-0.06, 0.7, -0.5], [0.06, 0.85, 0.4])]
-            .into_iter()
-            .enumerate()
+        for (material, (lo, hi)) in [
+            ([-0.05f32, -0.3, -0.05], [0.05f32, 0.8, 0.05]),
+            ([-0.06, 0.7, -0.5], [0.06, 0.85, 0.4]),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
             let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
@@ -1933,9 +2167,7 @@ mod add_on_icon_tests {
             "frame_vertices": positions.len(), "positions": positions, "normals": normals, "uv": uv,
             "primitives": primitives, "skin": null, "billboard": false, "billboard_y": false,
         });
-        let node = |name: &str, parent: Option<usize>| {
-            json!({ "name": name, "parent": parent, "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0] })
-        };
+        let node = |name: &str, parent: Option<usize>| json!({ "name": name, "parent": parent, "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0] });
         let material = |name: &str| {
             json!({ "name": name, "wrap_u": true, "wrap_v": true, "blend": "opaque", "unlit": false,
                 "environment": false, "mipmaps": true, "detail_map": null, "bump_map": null,
@@ -1964,10 +2196,21 @@ mod add_on_icon_tests {
                 "objects": [], "ground_translations": [], "ground_rotations": [], "triggers": [],
             }],
         });
-        std::fs::write(assets.join("models/tool.shape.json"), serde_json::to_vec(&shape)?)?;
+        std::fs::write(
+            assets.join("models/tool.shape.json"),
+            serde_json::to_vec(&shape)?,
+        )?;
         for (name, rgb) in [("handle", [150u8, 100, 55]), ("head", [110, 112, 116])] {
-            let pixels: Vec<u8> = (0..16).flat_map(|_| [rgb[0], rgb[1], rgb[2], 255]).collect();
-            image::save_buffer(assets.join(format!("models/{name}.png")), &pixels, 4, 4, image::ColorType::Rgba8)?;
+            let pixels: Vec<u8> = (0..16)
+                .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
+                .collect();
+            image::save_buffer(
+                assets.join(format!("models/{name}.png")),
+                &pixels,
+                4,
+                4,
+                image::ColorType::Rgba8,
+            )?;
         }
         let weapons = json!({
             "schema_version": 3, "id": "tool",
@@ -1977,7 +2220,10 @@ mod add_on_icon_tests {
                 "melee": true, "arm_ready": true, "color": [1.0, 1.0, 1.0, 1.0],
                 "states": [{ "name": "Ready" }] } },
         });
-        std::fs::write(assets.join("weapons.json"), serde_json::to_vec_pretty(&weapons)?)?;
+        std::fs::write(
+            assets.join("weapons.json"),
+            serde_json::to_vec_pretty(&weapons)?,
+        )?;
         Ok(assets)
     }
     /// Max, v0.1.10: "my gravity gun looks different on the item spawn
@@ -1994,43 +2240,89 @@ mod add_on_icon_tests {
         let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
         let mut manifest = empty();
         let (mut added, mut faults, mut skins) = (Added::default(), Vec::new(), BTreeMap::new());
-        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
-        present_gaps("Gravity Gun Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        let mut physics = ItemPhysicsCatalog {
+            schema_version: 1,
+            items: BTreeMap::new(),
+        };
+        present_gaps(
+            "Gravity Gun Tool",
+            &abs,
+            &weapons,
+            &pack,
+            &mut manifest,
+            &mut physics,
+            &mut added,
+            &mut faults,
+        );
         // Without the base game here the Printer it borrows is a stand-in.
-        assert!(faults.iter().all(|f| f.contains("printGun.dts")), "{faults:?}");
+        assert!(
+            faults.iter().all(|f| f.contains("printGun.dts")),
+            "{faults:?}"
+        );
         faults.clear();
-        read_looks("Gravity Gun Tool", &abs, &pack, &mut manifest, &mut skins, &mut faults);
+        read_looks(
+            "Gravity Gun Tool",
+            &abs,
+            &pack,
+            &mut manifest,
+            &mut skins,
+            &mut faults,
+        );
         assert!(faults.is_empty(), "{faults:?}");
-        let (gun, image) = ("gravity-gun-tool:weapon/gravitygun", "gravity-gun-tool:image/gravitygun");
-        for printer in [&mut manifest.images.get_mut(image).unwrap().model, &mut manifest.items.get_mut(gun).unwrap().model] {
+        let (gun, image) = (
+            "gravity-gun-tool:weapon/gravitygun",
+            "gravity-gun-tool:image/gravitygun",
+        );
+        for printer in [
+            &mut manifest.images.get_mut(image).unwrap().model,
+            &mut manifest.items.get_mut(gun).unwrap().model,
+        ] {
             if printer.is_empty() {
                 *printer = "base/data/shapes/printgun.dts".into();
             }
         }
         let held = manifest.image_appearance(image).expect("held");
-        assert_eq!(manifest.item_appearance(gun), Some(held.clone()), "on a spawn brick or dropped, as in the hand");
+        assert_eq!(
+            manifest.item_appearance(gun),
+            Some(held.clone()),
+            "on a spawn brick or dropped, as in the hand"
+        );
         assert_eq!(held.tint, [0.35, 1.0, 0.8, 1.0], "the image's colour shift");
-        assert_eq!(held.skin.as_deref(), Some(image), "its alien skin, wherever it is");
+        assert_eq!(
+            held.skin.as_deref(),
+            Some(image),
+            "its alien skin, wherever it is"
+        );
         let (skin, shader) = &skins[image];
-        assert_eq!((skin.color, &skin.energy_states[..]), ([0.3, 0.95, 1.0], &["Grab".to_string()][..]));
+        assert_eq!(
+            (skin.color, &skin.energy_states[..]),
+            ([0.3, 0.95, 1.0], &["Grab".to_string()][..])
+        );
         assert!(shader.source.contains("fn fs_main"));
         // An item whose own model and colour differ from its image's (the
         // stock packs record both) still looks like what is held.
         let mut manifest = empty();
-        let evidence = bri_weapons::Evidence { path: String::new(), sha256: String::new(), line: 0 };
-        manifest.images.insert("image".into(), ImagePresentation {
-            model: "held.dts".into(),
-            mount_point: 0,
-            offset: [0.; 3],
-            eye_offset: [0.; 3],
-            source_rotation_degrees: [0.; 3],
-            eye_rotation_degrees: [0.; 3],
-            tint: [0.2, 0.4, 0.6, 1.],
-            evidence: evidence.clone(),
-            follow_arm: false,
-            overlay: None,
-            skin: None,
-        });
+        let evidence = bri_weapons::Evidence {
+            path: String::new(),
+            sha256: String::new(),
+            line: 0,
+        };
+        manifest.images.insert(
+            "image".into(),
+            ImagePresentation {
+                model: "held.dts".into(),
+                mount_point: 0,
+                offset: [0.; 3],
+                eye_offset: [0.; 3],
+                source_rotation_degrees: [0.; 3],
+                eye_rotation_degrees: [0.; 3],
+                tint: [0.2, 0.4, 0.6, 1.],
+                evidence: evidence.clone(),
+                follow_arm: false,
+                overlay: None,
+                skin: None,
+            },
+        );
         let item = |image: &str| ItemPresentation {
             model: "lying.dts".into(),
             image: image.into(),
@@ -2042,32 +2334,73 @@ mod add_on_icon_tests {
         manifest.items.insert("loose".into(), item(""));
         let look = manifest.item_appearance("item").unwrap();
         assert_eq!(Some(look.clone()), manifest.image_appearance("image"));
-        assert_eq!((look.model.as_str(), look.tint, look.skin), ("held.dts", [0.2, 0.4, 0.6, 1.], None));
+        assert_eq!(
+            (look.model.as_str(), look.tint, look.skin),
+            ("held.dts", [0.2, 0.4, 0.6, 1.], None)
+        );
         // Nothing to hold: its own model.
-        assert_eq!(manifest.item_appearance("loose").unwrap().model, "lying.dts");
+        assert_eq!(
+            manifest.item_appearance("loose").unwrap().model,
+            "lying.dts"
+        );
     }
     /// A `looks.json` that names another Add-On's image, a colour out of
     /// range, a shader outside the Add-On or one that does not compile is
     /// a fault, and the item draws without a skin.
     #[test]
     fn a_look_is_checked() {
-        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/gravity-gun-tool/assets");
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/gravity-gun-tool/assets");
         let weapons = std::fs::read(assets.join("weapons.json")).unwrap();
         let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
         let image = "gravity-gun-tool:image/gravitygun";
         let shader = std::fs::read_to_string(assets.join("skins/alien.wgsl")).unwrap();
         let look = |image: &str, shader: &str, color: &str| {
-            format!(r#"{{"schema_version": 1, "images": {{"{image}": {{"skin": {{"shader": "{shader}", "color": {color}}}}}}}}}"#)
+            format!(
+                r#"{{"schema_version": 1, "images": {{"{image}": {{"skin": {{"shader": "{shader}", "color": {color}}}}}}}}}"#
+            )
         };
         let cases = [
-            ("good", look(image, "skins/alien.wgsl", "[0.3, 0.95, 1]"), true),
-            ("not its own image", look("v20.image.hammer", "skins/alien.wgsl", "[1, 1, 1]"), false),
-            ("colour out of range", look(image, "skins/alien.wgsl", "[2, 1, 1]"), false),
-            ("outside the Add-On", look(image, "../alien.wgsl", "[1, 1, 1]"), false),
-            ("not WGSL", look(image, "skins/broken.wgsl", "[1, 1, 1]"), false),
-            ("missing", look(image, "skins/missing.wgsl", "[1, 1, 1]"), false),
-            ("unknown field", r#"{"schema_version": 1, "images": {}, "extra": 1}"#.to_string(), false),
-            ("unknown schema", r#"{"schema_version": 2, "images": {}}"#.to_string(), false),
+            (
+                "good",
+                look(image, "skins/alien.wgsl", "[0.3, 0.95, 1]"),
+                true,
+            ),
+            (
+                "not its own image",
+                look("v20.image.hammer", "skins/alien.wgsl", "[1, 1, 1]"),
+                false,
+            ),
+            (
+                "colour out of range",
+                look(image, "skins/alien.wgsl", "[2, 1, 1]"),
+                false,
+            ),
+            (
+                "outside the Add-On",
+                look(image, "../alien.wgsl", "[1, 1, 1]"),
+                false,
+            ),
+            (
+                "not WGSL",
+                look(image, "skins/broken.wgsl", "[1, 1, 1]"),
+                false,
+            ),
+            (
+                "missing",
+                look(image, "skins/missing.wgsl", "[1, 1, 1]"),
+                false,
+            ),
+            (
+                "unknown field",
+                r#"{"schema_version": 1, "images": {}, "extra": 1}"#.to_string(),
+                false,
+            ),
+            (
+                "unknown schema",
+                r#"{"schema_version": 2, "images": {}}"#.to_string(),
+                false,
+            ),
         ];
         for (what, json, good) in cases {
             let dir = tempfile::tempdir().unwrap();
@@ -2076,13 +2409,37 @@ mod add_on_icon_tests {
             std::fs::write(dir.path().join("skins/broken.wgsl"), "fn fs_main( {").unwrap();
             std::fs::write(dir.path().join("looks.json"), json).unwrap();
             let mut manifest = empty();
-            let (mut added, mut faults, mut skins) = (Added::default(), Vec::new(), BTreeMap::new());
-            let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
-            present_gaps("Test", &assets.canonicalize().unwrap(), &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+            let (mut added, mut faults, mut skins) =
+                (Added::default(), Vec::new(), BTreeMap::new());
+            let mut physics = ItemPhysicsCatalog {
+                schema_version: 1,
+                items: BTreeMap::new(),
+            };
+            present_gaps(
+                "Test",
+                &assets.canonicalize().unwrap(),
+                &weapons,
+                &pack,
+                &mut manifest,
+                &mut physics,
+                &mut added,
+                &mut faults,
+            );
             faults.clear();
-            read_looks("Test", dir.path(), &pack, &mut manifest, &mut skins, &mut faults);
+            read_looks(
+                "Test",
+                dir.path(),
+                &pack,
+                &mut manifest,
+                &mut skins,
+                &mut faults,
+            );
             let skinned = manifest.images[image].skin.is_some();
-            assert_eq!((skinned, skins.contains_key(image), faults.is_empty()), (good, good, good), "{what}: {faults:?}");
+            assert_eq!(
+                (skinned, skins.contains_key(image), faults.is_empty()),
+                (good, good, good),
+                "{what}: {faults:?}"
+            );
         }
     }
     /// For the record: every stock item whose own model or colour differs
@@ -2092,7 +2449,10 @@ mod add_on_icon_tests {
     #[ignore = "requires the converted item and weapons packs"]
     fn stock_items_that_looked_different_in_the_world() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let assets = ItemAssets::load(&root.join("item-presentation-pack-010"), &root.join("weapons-pack-009"))?;
+        let assets = ItemAssets::load(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+        )?;
         let presentation = &assets.presentation;
         let mut differed = 0;
         for (id, item) in &presentation.items {
@@ -2101,12 +2461,18 @@ mod add_on_icon_tests {
             };
             if item.model != image.model || item.tint != image.tint {
                 differed += 1;
-                println!("{id}: lying {} {:?}, held {} {:?}", item.model, item.tint, image.model, image.tint);
+                println!(
+                    "{id}: lying {} {:?}, held {} {:?}",
+                    item.model, item.tint, image.model, image.tint
+                );
             }
             let look = presentation.item_appearance(id);
             assert_eq!(look, presentation.image_appearance(&item.image), "{id}");
         }
-        println!("{differed} of {} stock items differed", presentation.items.len());
+        println!(
+            "{differed} of {} stock items differed",
+            presentation.items.len()
+        );
         Ok(())
     }
     /// An Add-On's item may be a model of its own, not a borrowed one: a
@@ -2124,8 +2490,20 @@ mod add_on_icon_tests {
         let pack = bri_weapons::Pack::from_json(&weapons)?;
         let mut manifest = empty();
         let (mut added, mut faults) = (Added::default(), Vec::new());
-        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
-        present_gaps("Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        let mut physics = ItemPhysicsCatalog {
+            schema_version: 1,
+            items: BTreeMap::new(),
+        };
+        present_gaps(
+            "Tool",
+            &abs,
+            &weapons,
+            &pack,
+            &mut manifest,
+            &mut physics,
+            &mut added,
+            &mut faults,
+        );
         assert!(faults.is_empty(), "{faults:?}");
         let key = "tool/models/tool.shape.json";
         let (item, image) = ("tool:weapon/pick", "tool:image/pick");
@@ -2133,7 +2511,10 @@ mod add_on_icon_tests {
         let [(drawn, _, file, spec)] = &added.icon_renders[..] else {
             panic!("one render request: {:?}", added.icon_renders);
         };
-        assert_eq!((drawn.as_str(), file.as_str()), (item, "icons/pick.render.json"));
+        assert_eq!(
+            (drawn.as_str(), file.as_str()),
+            (item, "icons/pick.render.json")
+        );
         assert_eq!(spec.pose_like, "v20.weapon.hammeritem");
         assert_eq!(manifest.items[item].model, key);
         assert_eq!(manifest.images[image].model, key);
@@ -2142,48 +2523,119 @@ mod add_on_icon_tests {
         assert_eq!(physics.items[item].max, resource.bounds_max);
         let tall = resource.bounds_max[1] - resource.bounds_min[1];
         let long = resource.bounds_max[2] - resource.bounds_min[2];
-        assert!(tall > 1.0 && long > 0.8, "a handle and a head across it: {resource:?}");
+        assert!(
+            tall > 1.0 && long > 0.8,
+            "a handle and a head across it: {resource:?}"
+        );
         let origin = &added.origin[&format!("model:{key}")];
-        let shape: Shape = serde_json::from_slice(&checked_read(origin, &resource.file, &resource.sha256, OWN_MODEL_BYTES)?)?;
+        let shape: Shape = serde_json::from_slice(&checked_read(
+            origin,
+            &resource.file,
+            &resource.sha256,
+            OWN_MODEL_BYTES,
+        )?)?;
         shape.validate()?;
-        assert!(shape.nodes.iter().any(|n| n.name == "mountPoint"), "held at its grip");
+        assert!(
+            shape.nodes.iter().any(|n| n.name == "mountPoint"),
+            "held at its grip"
+        );
         let mut images = Vec::new();
         for texture in &resource.textures {
             let t = &manifest.textures[texture];
-            let bytes = checked_read(&added.origin[&format!("texture:{texture}")], &t.file, &t.sha256, OWN_TEXTURE_BYTES)?;
+            let bytes = checked_read(
+                &added.origin[&format!("texture:{texture}")],
+                &t.file,
+                &t.sha256,
+                OWN_TEXTURE_BYTES,
+            )?;
             let rgba = image::load_from_memory(&bytes)?.to_rgba8();
-            images.push(SceneImage { label: texture.clone(), width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw(), srgb: false });
+            images.push(SceneImage {
+                label: texture.clone(),
+                width: rgba.width(),
+                height: rgba.height(),
+                rgba: rgba.into_raw(),
+                srgb: false,
+            });
         }
         assert_eq!(images.len(), 2, "wood and iron");
         let refs: Vec<&SceneImage> = images.iter().collect();
-        let scene = native_shape_scene(key, &shape, &refs, [1.0; 4], true, Mat4::IDENTITY, &sample(&shape, None, 0.0)?)?;
+        let scene = native_shape_scene(
+            key,
+            &shape,
+            &refs,
+            [1.0; 4],
+            true,
+            Mat4::IDENTITY,
+            &sample(&shape, None, 0.0)?,
+        )?;
         scene.validate()?;
         // Drawn side on, head up and to the right like the stock icons.
         let pose = Pose {
-            rotation: Quat::from_rotation_z(-0.75) * Quat::from_rotation_x(0.25) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+            rotation: Quat::from_rotation_z(-0.75)
+                * Quat::from_rotation_x(0.25)
+                * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
             scale: 80.0,
             centre: glam::Vec2::new(58.0, 76.0),
             size: [128, 128],
         };
-        let look = Look { base: None, textured: true, skin: None };
+        let look = Look {
+            base: None,
+            textured: true,
+            skin: None,
+        };
         let icon = render(&Mesh::from_scene(&scene), &pose, &look, "pick");
         if std::env::var_os("BRI_ICON_SHOT").is_some() {
-            let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/own-model-preview.png");
-            image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+            let out =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/own-model-preview.png");
+            image::save_buffer(
+                &out,
+                &icon.rgba,
+                icon.width,
+                icon.height,
+                image::ColorType::Rgba8,
+            )?;
         }
         let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
-        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
-        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
-        assert!(wood > 150 && iron > 150, "wood {wood} and iron {iron} of {} pixels", solid.len());
+        let wood = solid
+            .iter()
+            .filter(|p| p[0] as i32 - p[2] as i32 > 40)
+            .count();
+        let iron = solid
+            .iter()
+            .filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40)
+            .count();
+        assert!(
+            wood > 150 && iron > 150,
+            "wood {wood} and iron {iron} of {} pixels",
+            solid.len()
+        );
         assert_eq!(icon.rgba[3], 0, "a clear background");
         // The swing moves what the holder sees, never what others see.
-        let fire = shape.animations.iter().find(|a| a.name == "fire").expect("a swing");
+        let fire = shape
+            .animations
+            .iter()
+            .find(|a| a.name == "fire")
+            .expect("a swing");
         assert!(moves_visible_detail(&shape, fire, true));
         assert!(!moves_visible_detail(&shape, fire, false));
         // A model that is not there, or outside the Add-On: no model, logged.
-        for name in ["models/missing.shape.json", "../assets/models/tool.shape.json"] {
+        for name in [
+            "models/missing.shape.json",
+            "../assets/models/tool.shape.json",
+        ] {
             let mut faults = Vec::new();
-            assert!(own_model("x", &abs, name, &mut empty(), &mut Added::default(), &mut faults).is_none(), "{name}");
+            assert!(
+                own_model(
+                    "x",
+                    &abs,
+                    name,
+                    &mut empty(),
+                    &mut Added::default(),
+                    &mut faults
+                )
+                .is_none(),
+                "{name}"
+            );
             assert_eq!(faults.len(), 1, "{faults:?}");
         }
         Ok(())
@@ -2202,9 +2654,7 @@ mod add_on_icon_tests {
             "addons/gravity-gun-tool/assets".to_string(),
             manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
         )];
-        let load = || {
-            ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras)
-        };
+        let load = || ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras);
         let cache = tempfile::tempdir()?;
         let gun = "gravity-gun-tool:weapon/gravitygun";
         // First run: nothing kept, so it is drawn on a thread of its own and
@@ -2212,61 +2662,115 @@ mod add_on_icon_tests {
         let started = std::time::Instant::now();
         let mut assets = load()?;
         let loaded = started.elapsed();
-        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        assert!(
+            !assets.faults.iter().any(|f| f.contains("icon")),
+            "{:?}",
+            assets.faults
+        );
         let started = std::time::Instant::now();
-        assert_eq!(assets.draw_icons(Some(cache.path())), IconDraws { kept: 0, drawing: 1 });
+        assert_eq!(
+            assets.draw_icons(Some(cache.path())),
+            IconDraws {
+                kept: 0,
+                drawing: 1
+            }
+        );
         let started_drawing = started.elapsed();
         assets.finish_icons();
         let drawn = started.elapsed();
         // Next run: the same icon, read back from disk, ready at once.
         let started = std::time::Instant::now();
         let mut again = load()?;
-        assert_eq!(again.draw_icons(Some(cache.path())), IconDraws { kept: 1, drawing: 0 });
+        assert_eq!(
+            again.draw_icons(Some(cache.path())),
+            IconDraws {
+                kept: 1,
+                drawing: 0
+            }
+        );
         let reloaded = started.elapsed();
-        assert_eq!(again.icon(gun)?.unwrap().rgba, assets.icon(gun)?.unwrap().rgba);
+        assert_eq!(
+            again.icon(gun)?.unwrap().rgba,
+            assets.icon(gun)?.unwrap().rgba
+        );
         println!(
             "item load without the icon {loaded:?}; starting its drawing {started_drawing:?}; drawing it {drawn:?}; \
              next load with it kept {reloaded:?}"
         );
         let slot = assets.drawn_icon(gun).expect("drawn");
         let icon = slot.get().expect("drawn");
-        assert!(std::ptr::eq(assets.icon(gun)?.unwrap(), icon), "the drawn icon is shown");
+        assert!(
+            std::ptr::eq(assets.icon(gun)?.unwrap(), icon),
+            "the drawn icon is shown"
+        );
         let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
-        assert_eq!((icon.width, icon.height), (printer.width, printer.height), "framed like the Printer's");
+        assert_eq!(
+            (icon.width, icon.height),
+            (printer.width, printer.height),
+            "framed like the Printer's"
+        );
         // Framed like the Printer: a clear border on every side, and the
         // drawing as wide or as tall as the Printer's (the models differ in
         // shape, so not both).
-        let (gun_border, printer_border) = (crate::item_icon_render::clear_border(icon), crate::item_icon_render::clear_border(printer));
+        let (gun_border, printer_border) = (
+            crate::item_icon_render::clear_border(icon),
+            crate::item_icon_render::clear_border(printer),
+        );
         let min = (icon.width.min(icon.height) as f32 * 0.05) as usize;
-        assert!(gun_border.iter().all(|b| *b >= min), "clear border (top, right, bottom, left) {gun_border:?}");
-        let span = |b: [usize; 4], w: u32, h: u32| (w as i32 - (b[1] + b[3]) as i32, h as i32 - (b[0] + b[2]) as i32);
+        assert!(
+            gun_border.iter().all(|b| *b >= min),
+            "clear border (top, right, bottom, left) {gun_border:?}"
+        );
+        let span = |b: [usize; 4], w: u32, h: u32| {
+            (
+                w as i32 - (b[1] + b[3]) as i32,
+                h as i32 - (b[0] + b[2]) as i32,
+            )
+        };
         let (gw, gh) = span(gun_border, icon.width, icon.height);
         let (pw, ph) = span(printer_border, printer.width, printer.height);
         let near = |a: i32, b: i32| (a - b).abs() as f32 <= 0.12 * b as f32;
-        assert!(near(gw, pw.min(icon.width as i32 * 88 / 100)) || near(gh, ph.min(icon.height as i32 * 88 / 100)),
-            "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}");
+        assert!(
+            near(gw, pw.min(icon.width as i32 * 88 / 100))
+                || near(gh, ph.min(icon.height as i32 * 88 / 100)),
+            "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}"
+        );
         assert_eq!(icon.rgba[3], 0, "a clear background");
         // Seen in the Printer icon's profile: the gun's own forward and up
         // point the same ways in the picture as the Printer's, up is up and
         // forward is across (Max, v0.1.10: "wrong perspective angle").
-        let spec = crate::item_icon_render::Spec::parse(&std::fs::read(
-            manifest.join("../../packages/showcase/gravity-gun-tool/assets/icons/gravity_gun.render.json"),
-        )?)?;
+        let spec = crate::item_icon_render::Spec::parse(&std::fs::read(manifest.join(
+            "../../packages/showcase/gravity-gun-tool/assets/icons/gravity_gun.render.json",
+        ))?)?;
         let request = assets.icon_request(gun, "check", spec)?;
         // Coloured as the gun is in play: its image's tint, its skin's veins.
         let look = &request.spec.look;
         assert_eq!(look.base, Some([0.35, 1.0, 0.8]));
-        assert_eq!(look.skin.as_ref().and_then(|s| s.veins), Some([0.3, 0.95, 1.0]));
-        let (_, profile, overlap) = crate::item_icon_render::fit_pose(&request.reference, &request.icon).unwrap();
+        assert_eq!(
+            look.skin.as_ref().and_then(|s| s.veins),
+            Some([0.3, 0.95, 1.0])
+        );
+        let (_, profile, overlap) =
+            crate::item_icon_render::fit_pose(&request.reference, &request.icon).unwrap();
         let on_screen = |axes: crate::item_icon_render::Axes, axis: glam::Vec3| {
-            (profile.rotation(axes) * axis).truncate().normalize_or_zero()
+            (profile.rotation(axes) * axis)
+                .truncate()
+                .normalize_or_zero()
         };
         let (g, p) = (request.mesh.axes, request.reference.axes);
-        println!("Printer profile {profile:?}, outline overlap {overlap}, gun axes {g:?}, Printer axes {p:?}");
-        for (ours, theirs) in [(on_screen(g, g.forward), on_screen(p, p.forward)), (on_screen(g, g.up), on_screen(p, p.up))] {
+        println!(
+            "Printer profile {profile:?}, outline overlap {overlap}, gun axes {g:?}, Printer axes {p:?}"
+        );
+        for (ours, theirs) in [
+            (on_screen(g, g.forward), on_screen(p, p.forward)),
+            (on_screen(g, g.up), on_screen(p, p.up)),
+        ] {
             assert!(ours.dot(theirs) > 0.97, "gun {ours}, Printer {theirs}");
         }
-        assert!(on_screen(g, g.up).y > 0.5 && on_screen(g, g.forward).x.abs() > 0.5, "side on");
+        assert!(
+            on_screen(g, g.up).y > 0.5 && on_screen(g, g.forward).x.abs() > 0.5,
+            "side on"
+        );
         // Side by side with the Printer's icon on a dark and a light slot,
         // for a look; target/ is never committed (the Printer is v20's).
         let (w, h) = (icon.width as usize, icon.height as usize);
@@ -2285,9 +2789,21 @@ mod add_on_icon_tests {
             }
         }
         let side = manifest.join("../../target/gravity-gun-icon-vs-printer.png");
-        image::save_buffer(&side, &sheet, (w * shots.len()) as u32, h as u32, image::ColorType::Rgba8)?;
+        image::save_buffer(
+            &side,
+            &sheet,
+            (w * shots.len()) as u32,
+            h as u32,
+            image::ColorType::Rgba8,
+        )?;
         let out = manifest.join("../../target/gravity-gun-icon.png");
-        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        image::save_buffer(
+            &out,
+            &icon.rgba,
+            icon.width,
+            icon.height,
+            image::ColorType::Rgba8,
+        )?;
         println!("saved {} and {}", out.display(), side.display());
         Ok(())
     }
@@ -2305,27 +2821,54 @@ mod own_model_icon_tests {
     fn an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers(fx: &Items) -> Result<()> {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let dir = tempfile::tempdir()?;
-        let extras = vec![("addons/tool/assets".to_string(), add_on_icon_tests::own_model_tool(dir.path())?)];
+        let extras = vec![(
+            "addons/tool/assets".to_string(),
+            add_on_icon_tests::own_model_tool(dir.path())?,
+        )];
         let mut assets = ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras)?;
         assert!(assets.faults.is_empty(), "{:?}", assets.faults);
         let pick = "tool:weapon/pick";
         // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
-        assert_eq!(assets.draw_icons(None), IconDraws { kept: 0, drawing: 1 });
+        assert_eq!(
+            assets.draw_icons(None),
+            IconDraws {
+                kept: 0,
+                drawing: 1
+            }
+        );
         assets.finish_icons();
-        let slot = assets.drawn_icon(pick).expect("an icon drawn from its model");
+        let slot = assets
+            .drawn_icon(pick)
+            .expect("an icon drawn from its model");
         let icon = slot.get().expect("drawn");
-        assert!(std::ptr::eq(assets.icon(pick)?.unwrap(), icon), "the drawn icon is shown");
+        assert!(
+            std::ptr::eq(assets.icon(pick)?.unwrap(), icon),
+            "the drawn icon is shown"
+        );
         let hammer = assets.icon(&fx.hammer_item)?.unwrap();
-        assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
+        assert_eq!(
+            (icon.width, icon.height),
+            (hammer.width, hammer.height),
+            "framed like the Hammer's"
+        );
         assert_eq!(icon.rgba[3], 0, "a clear background");
         // Two materials show: the wooden handle and the iron head.
         let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
-        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
-        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        let wood = solid
+            .iter()
+            .filter(|p| p[0] as i32 - p[2] as i32 > 40)
+            .count();
+        let iron = solid
+            .iter()
+            .filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40)
+            .count();
         assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
         // Held like the Hammer: at the grip, in the right hand.
         let image = &assets.presentation.images["tool:image/pick"];
-        assert_eq!(image.mount_point, assets.presentation.images[&fx.hammer_image].mount_point);
+        assert_eq!(
+            image.mount_point,
+            assets.presentation.images[&fx.hammer_image].mount_point
+        );
         // Modelled as the Hammer is held: handle up out of the fist (+y)
         // and the head across its top, front to back (z), about as big.
         // Each model's box, seen from its grip.
@@ -2345,13 +2888,25 @@ mod own_model_icon_tests {
         println!("from the grip, hammer {hammer:?}, tool {ours:?}");
         for (name, (lo, hi)) in [("hammer", hammer), ("tool", ours)] {
             let size = hi - lo;
-            assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
+            assert!(
+                size.y > size.x && hi.y > -lo.y * 2.0,
+                "{name}: the handle stands up out of the fist"
+            );
             assert!(size.z > size.x, "{name}: the head runs front to back");
         }
         let ratio = (ours.1.y - ours.0.y) / (hammer.1.y - hammer.0.y);
-        assert!((0.7..1.6).contains(&ratio), "about the Hammer's size: {ratio}");
+        assert!(
+            (0.7..1.6).contains(&ratio),
+            "about the Hammer's size: {ratio}"
+        );
         let out = manifest.join("../../target/own-model-icon.png");
-        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        image::save_buffer(
+            &out,
+            &icon.rgba,
+            icon.width,
+            icon.height,
+            image::ColorType::Rgba8,
+        )?;
         Ok(())
     }
 }

@@ -261,7 +261,11 @@ unsafe fn write_minidump(
             GetCurrentProcessId(),
             file,
             MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory,
-            if info.is_null() { std::ptr::null() } else { &exception },
+            if info.is_null() {
+                std::ptr::null()
+            } else {
+                &exception
+            },
             std::ptr::null(),
             std::ptr::null(),
         )

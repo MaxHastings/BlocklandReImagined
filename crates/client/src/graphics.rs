@@ -75,7 +75,10 @@ impl Graphics {
             } else {
                 1
             },
-            shadows: shadows.map(|s| ShadowSettings { light_cubes: lighting == 3, ..s }),
+            shadows: shadows.map(|s| ShadowSettings {
+                light_cubes: lighting == 3,
+                ..s
+            }),
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
             lighting,
@@ -108,16 +111,28 @@ mod tests {
         assert_eq!(graphics(&[("$pref::ShadowQuality", "4")]).shadows, None);
         // Dynamic lighting keeps a light cube per map light.
         let dynamic = graphics(&[(LIGHTING, "3")]);
-        assert_eq!((dynamic.lighting, dynamic.shadows.map(|s| s.light_cubes)), (3, Some(true)));
+        assert_eq!(
+            (dynamic.lighting, dynamic.shadows.map(|s| s.light_cubes)),
+            (3, Some(true))
+        );
         assert_eq!(graphics(&[]).shadows.map(|s| s.light_cubes), Some(false));
-        assert_eq!(graphics(&[(LIGHTING, "3"), ("$pref::ShadowQuality", "4")]).lighting, 2);
+        assert_eq!(
+            graphics(&[(LIGHTING, "3"), ("$pref::ShadowQuality", "4")]).lighting,
+            2
+        );
         // The old Unified without highlights is Unified.
         assert_eq!(graphics(&[(LIGHTING, "1")]).lighting, 2);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);
-        assert_eq!(graphics(&[(REFLECTIONS, "0")]).reflections, ReflectionSettings::OFF);
-        assert_eq!(graphics(&[(REFLECTIONS, "7")]).reflections, ReflectionSettings::HIGH);
+        assert_eq!(
+            graphics(&[(REFLECTIONS, "0")]).reflections,
+            ReflectionSettings::OFF
+        );
+        assert_eq!(
+            graphics(&[(REFLECTIONS, "7")]).reflections,
+            ReflectionSettings::HIGH
+        );
         let chosen = graphics(&[
             ("$pref::OpenGL::textureTrilinear", "0"),
             ("$pref::OpenGL::useGLNearest", "1"),

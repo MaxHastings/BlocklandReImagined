@@ -39,7 +39,7 @@ const TICKS: f32 = 120.0;
 
 /// One player at the keyboard and mouse of a real App.
 struct Player {
-    app: App,
+    app: Box<App>,
     last: Instant,
     /// Input for the next frame.
     input: Vec<InputEvent>,

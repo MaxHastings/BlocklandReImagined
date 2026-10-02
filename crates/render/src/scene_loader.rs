@@ -655,7 +655,15 @@ fn load_interior(
         });
         let base = decode(&lm.png, &format!("{id}/base-lightmap-{slot}"), false)?;
         let lightmap = match replacement {
-            Some(record) => texture(root, record["file"].as_str().context("Baked interior lightmap filename missing")?, false, out, cache)?,
+            Some(record) => texture(
+                root,
+                record["file"]
+                    .as_str()
+                    .context("Baked interior lightmap filename missing")?,
+                false,
+                out,
+                cache,
+            )?,
             None => {
                 out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));
                 let index = out.images.len();
@@ -663,13 +671,27 @@ fn load_interior(
                 index
             }
         };
-        sheets.push((base, replacement.is_some().then_some(lightmap), lightmap, Vec::<crate::map_lighting::SheetSurface>::new()));
+        sheets.push((
+            base,
+            replacement.is_some().then_some(lightmap),
+            lightmap,
+            Vec::<crate::map_lighting::SheetSurface>::new(),
+        ));
     }
     for surface in &detail.surfaces {
-        let Some(slot) = surface.lightmap else { continue };
-        let Some(first) = surface.vertices.first() else { continue };
+        let Some(slot) = surface.lightmap else {
+            continue;
+        };
+        let Some(first) = surface.vertices.first() else {
+            continue;
+        };
         let world = |v: &bri_content::interior::Vertex| {
-            (placement.transform_point3(Vec3::from(v.position)).to_array(), v.lightmap_uv)
+            (
+                placement
+                    .transform_point3(Vec3::from(v.position))
+                    .to_array(),
+                v.lightmap_uv,
+            )
         };
         sheets[slot].3.push(crate::map_lighting::SheetSurface {
             triangles: surface

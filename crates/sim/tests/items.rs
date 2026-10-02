@@ -2,13 +2,13 @@ use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
 };
+use bri_sim::player::PlayerTuning;
 use bri_sim::{
     definitions::{Definition, Definitions},
     item_spawners::{ContactIndex, ItemSpawners, facing, placement},
     session::{Command, Session},
     simulation::Simulation,
 };
-use bri_sim::player::PlayerTuning;
 use bri_weapons::{CORE_TOOLS, ItemBounds};
 use bri_world::{Brick, ContentRef, World};
 use glam::Vec3;
@@ -294,11 +294,7 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
     let edit = bri_world::authority::Edit::Properties(properties.clone());
     assert!(spawners.validate_edit(&world, 1, &edit).is_ok());
     assert!(spawners.validate_edit(&world, 5000, &edit).is_err());
-    assert!(
-        spawners
-            .validate_append(&world, [&brick()])
-            .is_err()
-    );
+    assert!(spawners.validate_append(&world, [&brick()]).is_err());
     let mut unknown = properties;
     unknown.item_spawn.item = Some(ContentRef::Resolved("v20.weapon.missing".into()));
     assert!(
@@ -308,11 +304,7 @@ fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
     );
     let mut empty = brick();
     empty.item_spawn.item = None;
-    assert!(
-        spawners
-            .validate_append(&world, [&empty])
-            .is_ok()
-    );
+    assert!(spawners.validate_append(&world, [&empty]).is_ok());
     assert_eq!(world.bricks.len(), bri_sim::item_spawners::MAX_STATIC_ITEMS);
 }
 #[test]

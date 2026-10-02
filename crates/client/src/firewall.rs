@@ -115,7 +115,10 @@ pub fn decide(profiles: &[&str], disabled: &[&str], rules: &[&str]) -> Status {
             "DomainAuthenticated" => "Domain",
             other => other,
         };
-        if disabled.iter().any(|d| d.trim().eq_ignore_ascii_case(profile)) {
+        if disabled
+            .iter()
+            .any(|d| d.trim().eq_ignore_ascii_case(profile))
+        {
             continue;
         }
         let covers = |rule_profiles: &str| {
@@ -257,15 +260,32 @@ mod windows {
         };
         // Old rules for this program, including the block rules a cancelled
         // Windows prompt leaves; failing because none exist is fine.
-        let _ = netsh(&["advfirewall", "firewall", "delete", "rule", "name=all", "dir=in", &program]);
+        let _ = netsh(&[
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            "name=all",
+            "dir=in",
+            &program,
+        ]);
         // Our rule from an earlier build or port, replaced rather than
         // duplicated.
         let name = format!("name={RULE_NAME}");
         let _ = netsh(&["advfirewall", "firewall", "delete", "rule", &name, "dir=in"]);
         let ports = format!("localport={}", ports(port));
         let added = netsh(&[
-            "advfirewall", "firewall", "add", "rule", &name, "dir=in", "action=allow",
-            "protocol=udp", &ports, "profile=any", "enable=yes",
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            &name,
+            "dir=in",
+            "action=allow",
+            "protocol=udp",
+            &ports,
+            "profile=any",
+            "enable=yes",
         ])?;
         if !added.success() {
             bail!("netsh could not add the firewall rule");
@@ -288,14 +308,26 @@ mod tests {
         assert_eq!(decide(&["Private"], &[], &prompt), Allowed);
         assert_eq!(decide(&["Public"], &[], &prompt), Blocked);
         // Cancel leaves block rules; block wins over allow.
-        assert_eq!(decide(&["Private"], &[], &["Block|Any", "Allow|Any"]), Blocked);
-        assert_eq!(decide(&["Public"], &[], &["Allow|Private, Public"]), Allowed);
-        assert_eq!(decide(&["DomainAuthenticated"], &[], &["Allow|Domain"]), Allowed);
+        assert_eq!(
+            decide(&["Private"], &[], &["Block|Any", "Allow|Any"]),
+            Blocked
+        );
+        assert_eq!(
+            decide(&["Public"], &[], &["Allow|Private, Public"]),
+            Allowed
+        );
+        assert_eq!(
+            decide(&["DomainAuthenticated"], &[], &["Allow|Domain"]),
+            Allowed
+        );
         assert_eq!(decide(&["Public"], &[], &[]), NotAllowed);
         // A switched-off firewall blocks nothing.
         assert_eq!(decide(&["Public"], &["Public"], &["Block|Any"]), Allowed);
         // Two networks at once: each must pass.
-        assert_eq!(decide(&["Private", "Public"], &[], &["Allow|Private"]), NotAllowed);
+        assert_eq!(
+            decide(&["Private", "Public"], &[], &["Allow|Private"]),
+            NotAllowed
+        );
         assert_eq!(decide(&[], &[], &["Allow|Any"]), Unknown);
         assert_eq!(decide(&["Public"], &[], &["garbage"]), Unknown);
     }

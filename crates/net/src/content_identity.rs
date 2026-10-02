@@ -192,7 +192,7 @@ impl WeaponContent {
                 load_order.entry(id.clone()).or_insert(rank);
             }
         }
-                // What the Add-Ons name of their effects, for the wrench.
+        // What the Add-Ons name of their effects, for the wrench.
         let named = |list: Vec<(&str, &str)>| -> Vec<(String, String)> {
             list.into_iter()
                 .filter(|(_, name)| !name.trim().is_empty())
@@ -251,7 +251,11 @@ impl WeaponContent {
         for (choices, kept) in [
             (
                 &mut emitter_choices,
-                pack.effects.emitters.iter().map(|e| &e.id).collect::<std::collections::BTreeSet<_>>(),
+                pack.effects
+                    .emitters
+                    .iter()
+                    .map(|e| &e.id)
+                    .collect::<std::collections::BTreeSet<_>>(),
             ),
             (
                 &mut light_choices,
@@ -263,10 +267,15 @@ impl WeaponContent {
                 kept.contains(id)
                     && name.len() <= 128
                     && !name.chars().any(char::is_control)
-                    && bri_world::ContentRef::Resolved(id.clone()).validate().is_ok()
+                    && bri_world::ContentRef::Resolved(id.clone())
+                        .validate()
+                        .is_ok()
                     && names.insert(name.to_ascii_lowercase())
             });
-            ensure!(choices.len() <= 1024, "Add-On effect choice budget exceeded");
+            ensure!(
+                choices.len() <= 1024,
+                "Add-On effect choice budget exceeded"
+            );
             choices.sort_by(|a, b| {
                 a.1.to_ascii_lowercase()
                     .cmp(&b.1.to_ascii_lowercase())
@@ -945,7 +954,10 @@ mod tests {
             [("crit:light/glow".to_string(), "Glow".to_string())]
         );
         assert!(
-            WeaponContent::load(&root).unwrap().emitter_choices.is_empty(),
+            WeaponContent::load(&root)
+                .unwrap()
+                .emitter_choices
+                .is_empty(),
             "the base pack's own are the native library's"
         );
     }

@@ -454,7 +454,9 @@ mod tests {
             "%2 shot %1 (kai)"
         );
         assert!(
-            notes.iter().any(|n| n.to_string().contains("replaces mwb's")),
+            notes
+                .iter()
+                .any(|n| n.to_string().contains("replaces mwb's")),
             "{notes:?}"
         );
 

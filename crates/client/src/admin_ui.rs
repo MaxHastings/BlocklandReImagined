@@ -46,23 +46,23 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
             .iter()
             .filter_map(|capability| {
                 Some(match capability {
-                Capability::Login => ui::AdminFeature::Login,
-                Capability::Kick => ui::AdminFeature::Kick,
-                Capability::Ban => ui::AdminFeature::Ban,
-                Capability::Unban => ui::AdminFeature::Unban,
-                Capability::ClearBricks => ui::AdminFeature::ClearBricks,
-                Capability::AdminPassword => ui::AdminFeature::AdminPassword,
-                Capability::HighlightBricks => ui::AdminFeature::HighlightBricks,
-                Capability::WorldCommands => ui::AdminFeature::ClearBricks,
-                Capability::DestructoWand => ui::AdminFeature::Wand,
-                Capability::Spy => ui::AdminFeature::Spy,
-                Capability::ChangeMap => ui::AdminFeature::Maps,
-                Capability::HostOptions => ui::AdminFeature::HostOptions,
-                Capability::Environment => ui::AdminFeature::Environment,
-                // Chat commands only; the Admin menu has no buttons for them.
-                Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
-                    return None;
-                }
+                    Capability::Login => ui::AdminFeature::Login,
+                    Capability::Kick => ui::AdminFeature::Kick,
+                    Capability::Ban => ui::AdminFeature::Ban,
+                    Capability::Unban => ui::AdminFeature::Unban,
+                    Capability::ClearBricks => ui::AdminFeature::ClearBricks,
+                    Capability::AdminPassword => ui::AdminFeature::AdminPassword,
+                    Capability::HighlightBricks => ui::AdminFeature::HighlightBricks,
+                    Capability::WorldCommands => ui::AdminFeature::ClearBricks,
+                    Capability::DestructoWand => ui::AdminFeature::Wand,
+                    Capability::Spy => ui::AdminFeature::Spy,
+                    Capability::ChangeMap => ui::AdminFeature::Maps,
+                    Capability::HostOptions => ui::AdminFeature::HostOptions,
+                    Capability::Environment => ui::AdminFeature::Environment,
+                    // Chat commands only; the Admin menu has no buttons for them.
+                    Capability::Teleport | Capability::Vehicles | Capability::TimeScale => {
+                        return None;
+                    }
                 })
             })
             // The host and Super Admins hand out ranks.
@@ -171,7 +171,10 @@ pub fn host_settings(
 }
 /// The Server Settings dialog's values over the host's current settings
 /// (keeping those the dialog does not show).
-fn settings(o: &ui::AdminOptions, current: &bri_admin::ServerSettings) -> bri_admin::ServerSettings {
+fn settings(
+    o: &ui::AdminOptions,
+    current: &bri_admin::ServerSettings,
+) -> bri_admin::ServerSettings {
     bri_admin::ServerSettings {
         name: o.name.clone(),
         port: o.port,
@@ -264,9 +267,10 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
         ),
         ui::AdminAction::Wand => (Capability::DestructoWand, Action::DestructoWand),
         ui::AdminAction::RequestMaps => (Capability::ChangeMap, Action::RequestMaps),
-        ui::AdminAction::ChangeMap { map } => {
-            (Capability::ChangeMap, Action::ChangeMap { map: map.clone() })
-        }
+        ui::AdminAction::ChangeMap { map } => (
+            Capability::ChangeMap,
+            Action::ChangeMap { map: map.clone() },
+        ),
         ui::AdminAction::SetPassword {
             slot: ui::AdminPasswordSlot::Admin,
             password,
@@ -314,7 +318,11 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
 
 /// Make `target` Admin or Super Admin, or a plain player again. The host
 /// checks the rank again; this only keeps players from asking in vain.
-fn set_role(snapshot: &AdminSnapshot, target: ConnectionId, rank: ui::AdminRole) -> Result<Command> {
+fn set_role(
+    snapshot: &AdminSnapshot,
+    target: ConnectionId,
+    rank: ui::AdminRole,
+) -> Result<Command> {
     ensure!(
         snapshot.local_host || snapshot.role == Role::SuperAdmin,
         "Only a Super Admin can change ranks"
@@ -389,8 +397,18 @@ pub fn chat_command(
         return set_role(snapshot, find_player(snapshot, joined.trim())?, rank).map(Some);
     }
     let (capability, action) = match name.to_ascii_lowercase().as_str() {
-        "fetch" => (Capability::Teleport, Action::Fetch { target: find_player(snapshot, &joined)? }),
-        "find" => (Capability::Teleport, Action::Find { target: find_player(snapshot, &joined)? }),
+        "fetch" => (
+            Capability::Teleport,
+            Action::Fetch {
+                target: find_player(snapshot, &joined)?,
+            },
+        ),
+        "find" => (
+            Capability::Teleport,
+            Action::Find {
+                target: find_player(snapshot, &joined)?,
+            },
+        ),
         "warp" => (Capability::Teleport, Action::Warp),
         // `serverCmdSpy`: watch a player through a corpse camera; `/ret`
         // returns (any player may return to their own body).
@@ -721,13 +739,7 @@ mod tests {
                 role: Role::Player
             }
         );
-        assert!(
-            command(
-                &ui::AdminAction::ForgetRank { key: "zz".into() },
-                &s
-            )
-            .is_err()
-        );
+        assert!(command(&ui::AdminAction::ForgetRank { key: "zz".into() }, &s).is_err());
         assert!(command(&ui::AdminAction::RequestRanks, &snapshot(Role::Admin)).is_err());
         // A rank change is answered with no data, and that is success.
         let done = AdminReply {

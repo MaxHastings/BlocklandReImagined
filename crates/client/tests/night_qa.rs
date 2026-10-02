@@ -55,8 +55,8 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 }
 
 pub struct Pair {
-    pub host: App,
-    pub guest: App,
+    pub host: Box<App>,
+    pub guest: Box<App>,
     previous: Instant,
 }
 
@@ -636,7 +636,7 @@ fn leave(pair: &mut Pair) {
     }
 }
 
-fn load(content: &Path, out: &Path, name: &str) -> Result<App> {
+fn load(content: &Path, out: &Path, name: &str) -> Result<Box<App>> {
     let state = out.join(format!("state-{name}"));
     let _ = std::fs::remove_dir_all(&state);
     std::fs::create_dir_all(&state)?;
@@ -1179,17 +1179,26 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
         run_for(&mut app, 50)?;
     }
     aim(&mut app, 0.0, DOWN)?;
-    request(&mut app, UiAction::InstantUseBrick { brick: BRICK.into() })?;
+    request(
+        &mut app,
+        UiAction::InstantUseBrick {
+            brick: BRICK.into(),
+        },
+    )?;
     let holds = |a: &App| {
         a.network_view().is_some_and(|v| {
             v.weapons.images.get(&v.owner).is_some_and(|i| {
-                i.iter().any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+                i.iter()
+                    .any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
             })
         })
     };
     let start = Instant::now();
     while !holds(&app) {
-        ensure!(start.elapsed() < Duration::from_secs(10), "brick never in hand");
+        ensure!(
+            start.elapsed() < Duration::from_secs(10),
+            "brick never in hand"
+        );
         run_for(&mut app, 16)?;
     }
     // The host steps on the wall clock: give it real time, frame by frame.
@@ -1208,18 +1217,31 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
                 UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
             )?;
         }
-        ensure!(app.controls.third_person_view() == third, "view never switched");
-        let view = if third { "third person" } else { "first person" };
+        ensure!(
+            app.controls.third_person_view() == third,
+            "view never switched"
+        );
+        let view = if third {
+            "third person"
+        } else {
+            "first person"
+        };
         live(&mut app, 600)?;
         let before = app.weapon_effect_diagnostics().clone();
         request(
             &mut app,
-            UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }),
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: true,
+            }),
         )?;
         live(&mut app, 16)?;
         request(
             &mut app,
-            UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }),
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: false,
+            }),
         )?;
         let mut most = (0, 0);
         let mut last = String::new();
@@ -1270,7 +1292,10 @@ fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
     }
     let _ = request(&mut app, UiAction::Disconnect);
     let _ = std::fs::remove_dir_all(&state);
-    ensure!(failures.is_empty(), "Brick deploy effects missing in {failures:?}");
+    ensure!(
+        failures.is_empty(),
+        "Brick deploy effects missing in {failures:?}"
+    );
     Ok(())
 }
 
@@ -1330,7 +1355,10 @@ fn imported_v20_add_ons_play() -> Result<()> {
         let view = bri_client::add_ons::set_enabled(&root, id, true)?;
         println!("enable {id}: {:?}", view.notice);
     }
-    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root)).join("\n"))?;
+    std::fs::write(
+        out.join("rows.txt"),
+        rows(&bri_client::add_ons::view(&root)).join("\n"),
+    )?;
 
     let mut app = App::load(&root, &out.join("state"), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
@@ -1673,7 +1701,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         .to_vec();
     let mut apps = Vec::new();
     for name in &names {
-        apps.push(load(&content, &out, name)?);
+        apps.push(*load(&content, &out, name)?);
     }
     std::fs::write(out.join("pid.txt"), std::process::id().to_string())?;
     let host_state = out.join("state-SoakHost");

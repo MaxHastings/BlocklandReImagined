@@ -449,10 +449,18 @@ fn hit_region_names_the_part_of_the_body_at_a_point() {
     let b = g.join(Vec3::new(0.0, 0.05, 10.0));
     g.steps(2);
     for (y, region) in [(0.4, "legs"), (1.6, "torso"), (2.4, "head")] {
-        g.run(a, "region", vec![PackageArg::Int(b as i64), PackageArg::Float(y)]);
+        g.run(
+            a,
+            "region",
+            vec![PackageArg::Int(b as i64), PackageArg::Float(y)],
+        );
         assert_eq!(g.text("region"), region, "{y}");
     }
-    g.run(a, "region", vec![PackageArg::Int(999), PackageArg::Float(1.0)]);
+    g.run(
+        a,
+        "region",
+        vec![PackageArg::Int(999), PackageArg::Float(1.0)],
+    );
     assert_eq!(g.text("region"), "none");
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
@@ -470,7 +478,9 @@ fn a_call_casts_at_most_its_share_of_rays() {
         }),
     );
     assert!(
-        g.diagnostics().iter().any(|d| d.contains("more than 64 rays")),
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("more than 64 rays")),
         "{:?}",
         g.diagnostics()
     );
@@ -487,14 +497,31 @@ fn damage_follows_the_rules_scripts_ask_about_and_takes_a_type() {
     assert_eq!(g.text("can"), "false|false");
     // Past spawn protection, typed and untyped damage both land.
     g.steps(301);
-    g.run(a, "hurt", vec![PackageArg::Int(b as i64), PackageArg::String("ProbeShot".into())]);
-    g.run(a, "hurt", vec![PackageArg::Int(b as i64), PackageArg::String(String::new())]);
+    g.run(
+        a,
+        "hurt",
+        vec![
+            PackageArg::Int(b as i64),
+            PackageArg::String("ProbeShot".into()),
+        ],
+    );
+    g.run(
+        a,
+        "hurt",
+        vec![PackageArg::Int(b as i64), PackageArg::String(String::new())],
+    );
     assert!((g.s.vitals()[&b].health - 40.0).abs() < 0.01);
     // An unknown damage type is refused and hurts nobody.
-    g.run(a, "hurt", vec![PackageArg::Int(b as i64), PackageArg::String("Nope".into())]);
+    g.run(
+        a,
+        "hurt",
+        vec![PackageArg::Int(b as i64), PackageArg::String("Nope".into())],
+    );
     assert!((g.s.vitals()[&b].health - 40.0).abs() < 0.01);
     assert!(
-        g.diagnostics().iter().any(|d| d.contains("No damage type `Nope`")),
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("No damage type `Nope`")),
         "{:?}",
         g.diagnostics()
     );
@@ -509,7 +536,10 @@ fn scripts_see_and_swap_what_a_player_holds() {
     g.run(a, "facts", vec![]);
     assert_eq!(g.text("facts"), "3|probe:image/gun|Ready|false|1.0");
     let center = g.value("center").as_f64().unwrap();
-    assert!((1.2..1.4).contains(&center), "half the standing body: {center}");
+    assert!(
+        (1.2..1.4).contains(&center),
+        "half the standing body: {center}"
+    );
     // Slot 3: the default hammer, wrench and printer come first.
     // Without ammo the gun's Ready state goes to Empty, and back with it.
     g.run(a, "ammo", vec![PackageArg::Bool(false)]);
@@ -521,7 +551,11 @@ fn scripts_see_and_swap_what_a_player_holds() {
     g.run(a, "facts", vec![]);
     assert_eq!(g.text("facts"), "3|probe:image/gun|Ready|false|1.0");
     // A scope swaps in and keeps the tool slot; `()` puts the gun back.
-    g.run(a, "scope", vec![PackageArg::String("probe:image/scope".into())]);
+    g.run(
+        a,
+        "scope",
+        vec![PackageArg::String("probe:image/scope".into())],
+    );
     g.steps(1);
     g.run(a, "facts", vec![]);
     assert_eq!(g.text("facts"), "3|probe:image/scope|Scoped|false|1.0");
@@ -530,12 +564,18 @@ fn scripts_see_and_swap_what_a_player_holds() {
     g.run(a, "facts", vec![]);
     assert_eq!(g.text("facts"), "3|probe:image/gun|Ready|false|1.0");
     // Another package's image is refused.
-    g.run(a, "scope", vec![PackageArg::String("other:image/scope".into())]);
+    g.run(
+        a,
+        "scope",
+        vec![PackageArg::String("other:image/scope".into())],
+    );
     g.steps(1);
     g.run(a, "facts", vec![]);
     assert_eq!(g.text("facts"), "3|probe:image/gun|Ready|false|1.0");
     assert!(
-        g.diagnostics().iter().any(|d| d.contains("is not an image of `probe`")),
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("is not an image of `probe`")),
         "{:?}",
         g.diagnostics()
     );
@@ -547,7 +587,10 @@ fn the_held_image_takes_the_light_key_for_its_command() {
     let a = g.join(Vec3::new(0.0, 0.05, 0.0));
     g.send(a, Command::ToggleLight).unwrap();
     assert_eq!(g.value("reloads"), json!(0));
-    assert!(g.s.vitals()[&a].light, "with nothing in hand the light toggles");
+    assert!(
+        g.s.vitals()[&a].light,
+        "with nothing in hand the light toggles"
+    );
     g.send(a, Command::ToggleLight).unwrap();
     g.run(a, "arm", vec![]);
     g.steps(20);
@@ -563,15 +606,14 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
     g.s.take_private_notices();
     g.run(a, "fov", vec![PackageArg::Float(30.0)]);
     g.run(a, "fov", vec![PackageArg::Float(-1.0)]);
-    let fovs: Vec<Option<f32>> = g
-        .s
-        .take_private_notices()
-        .into_iter()
-        .filter_map(|(owner, n)| match n {
-            Notice::Fov(fov) if owner == a => Some(fov),
-            _ => None,
-        })
-        .collect();
+    let fovs: Vec<Option<f32>> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(owner, n)| match n {
+                Notice::Fov(fov) if owner == a => Some(fov),
+                _ => None,
+            })
+            .collect();
     assert_eq!(fovs, [Some(30.0), None]);
     g.s.take_cues();
     g.run(a, "show", vec![]);
@@ -597,30 +639,88 @@ fn scripts_switch_dim_and_recolour_map_lights_for_everyone() {
     let mut g = Game::new();
     let a = g.join(Vec3::new(0.0, 0.05, 0.0));
     assert!(g.s.map_light_rules().is_empty());
-    g.run(a, "lamp", vec![PackageArg::Float(4.0), PackageArg::Float(3.0), PackageArg::Bool(true)]);
-    g.run(a, "lamp", vec![PackageArg::Float(-4.0), PackageArg::Float(3.0), PackageArg::Bool(false)]);
+    g.run(
+        a,
+        "lamp",
+        vec![
+            PackageArg::Float(4.0),
+            PackageArg::Float(3.0),
+            PackageArg::Bool(true),
+        ],
+    );
+    g.run(
+        a,
+        "lamp",
+        vec![
+            PackageArg::Float(-4.0),
+            PackageArg::Float(3.0),
+            PackageArg::Bool(false),
+        ],
+    );
     let rules = g.s.map_light_rules();
     assert_eq!(
         rules,
         [
-            MapLightRule { position: [4.0, 2.0, 0.0], radius: 3.0, tint: [2.0, 1.0, 0.5] },
-            MapLightRule { position: [-4.0, 2.0, 0.0], radius: 3.0, tint: [0.0; 3] },
+            MapLightRule {
+                position: [4.0, 2.0, 0.0],
+                radius: 3.0,
+                tint: [2.0, 1.0, 0.5]
+            },
+            MapLightRule {
+                position: [-4.0, 2.0, 0.0],
+                radius: 3.0,
+                tint: [0.0; 3]
+            },
         ]
     );
     // What a light inside, outside or between the spheres takes.
-    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(4.0, 3.0, 0.0)), Vec3::new(2.0, 1.0, 0.5));
-    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(-5.0, 2.0, 0.0)), Vec3::ZERO);
-    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(0.0, 2.0, 0.0)), Vec3::ONE);
+    assert_eq!(
+        MapLightRule::tint_at(&rules, Vec3::new(4.0, 3.0, 0.0)),
+        Vec3::new(2.0, 1.0, 0.5)
+    );
+    assert_eq!(
+        MapLightRule::tint_at(&rules, Vec3::new(-5.0, 2.0, 0.0)),
+        Vec3::ZERO
+    );
+    assert_eq!(
+        MapLightRule::tint_at(&rules, Vec3::new(0.0, 2.0, 0.0)),
+        Vec3::ONE
+    );
     // The same sphere again replaces its rule (so repeated calls never
     // pile up), and an empty map puts the lights back as the map was lit.
-    g.run(a, "lamp_reset", vec![PackageArg::Float(4.0), PackageArg::Float(3.0)]);
+    g.run(
+        a,
+        "lamp_reset",
+        vec![PackageArg::Float(4.0), PackageArg::Float(3.0)],
+    );
     let rules = g.s.map_light_rules();
     assert_eq!(rules.len(), 2);
-    assert_eq!(rules[1], MapLightRule { position: [4.0, 2.0, 0.0], radius: 3.0, tint: [1.0; 3] });
-    assert_eq!(MapLightRule::tint_at(&rules, Vec3::new(4.0, 2.0, 0.0)), Vec3::ONE);
+    assert_eq!(
+        rules[1],
+        MapLightRule {
+            position: [4.0, 2.0, 0.0],
+            radius: 3.0,
+            tint: [1.0; 3]
+        }
+    );
+    assert_eq!(
+        MapLightRule::tint_at(&rules, Vec3::new(4.0, 2.0, 0.0)),
+        Vec3::ONE
+    );
     // A later, wider sphere wins where it overlaps.
-    g.run(a, "lamp", vec![PackageArg::Float(0.0), PackageArg::Float(10.0), PackageArg::Bool(false)]);
-    assert_eq!(MapLightRule::tint_at(&g.s.map_light_rules(), Vec3::new(4.0, 2.0, 0.0)), Vec3::ZERO);
+    g.run(
+        a,
+        "lamp",
+        vec![
+            PackageArg::Float(0.0),
+            PackageArg::Float(10.0),
+            PackageArg::Bool(false),
+        ],
+    );
+    assert_eq!(
+        MapLightRule::tint_at(&g.s.map_light_rules(), Vec3::new(4.0, 2.0, 0.0)),
+        Vec3::ZERO
+    );
 }
 
 #[test]
@@ -629,12 +729,31 @@ fn scripts_draw_world_shapes_for_everyone() {
     let mut g = Game::new();
     let a = g.join(Vec3::new(0.0, 0.05, 0.0));
     let b = g.join(Vec3::new(4.0, 0.05, 0.0));
-    g.run(a, "frame", vec![PackageArg::Bool(true), PackageArg::Float(2.0)]);
-    g.run(b, "frame", vec![PackageArg::Bool(true), PackageArg::Float(1.0)]);
-    g.run(a, "frame", vec![PackageArg::Bool(false), PackageArg::Float(3.0)]);
+    g.run(
+        a,
+        "frame",
+        vec![PackageArg::Bool(true), PackageArg::Float(2.0)],
+    );
+    g.run(
+        b,
+        "frame",
+        vec![PackageArg::Bool(true), PackageArg::Float(1.0)],
+    );
+    g.run(
+        a,
+        "frame",
+        vec![PackageArg::Bool(false), PackageArg::Float(3.0)],
+    );
     let sets = g.s.world_shapes();
     let keys: Vec<_> = sets.keys().cloned().collect();
-    assert_eq!(keys, [format!("probe/{a}/frame"), format!("probe/{b}/frame"), "probe/frame".into()]);
+    assert_eq!(
+        keys,
+        [
+            format!("probe/{a}/frame"),
+            format!("probe/{b}/frame"),
+            "probe/frame".into()
+        ]
+    );
     assert_eq!(
         *sets[&format!("probe/{a}/frame")],
         [
@@ -658,16 +777,30 @@ fn scripts_draw_world_shapes_for_everyone() {
     );
     // The same set again changes nothing; another replaces it.
     let revision = g.s.world_shapes_revision();
-    g.run(a, "frame", vec![PackageArg::Bool(true), PackageArg::Float(2.0)]);
+    g.run(
+        a,
+        "frame",
+        vec![PackageArg::Bool(true), PackageArg::Float(2.0)],
+    );
     assert_eq!(g.s.world_shapes_revision(), revision);
-    g.run(a, "frame", vec![PackageArg::Bool(true), PackageArg::Float(5.0)]);
+    g.run(
+        a,
+        "frame",
+        vec![PackageArg::Bool(true), PackageArg::Float(5.0)],
+    );
     assert_ne!(g.s.world_shapes_revision(), revision);
-    assert_eq!(g.s.world_shapes()[&format!("probe/{a}/frame")][0].max, [5.0; 3]);
+    assert_eq!(
+        g.s.world_shapes()[&format!("probe/{a}/frame")][0].max,
+        [5.0; 3]
+    );
     // A player's own sets go when they leave; hiding takes one away.
     g.s.disconnect(b).unwrap();
     assert!(!g.s.world_shapes().contains_key(&format!("probe/{b}/frame")));
     g.run(a, "unframe", vec![PackageArg::Bool(true)]);
-    assert_eq!(g.s.world_shapes().keys().collect::<Vec<_>>(), ["probe/frame"]);
+    assert_eq!(
+        g.s.world_shapes().keys().collect::<Vec<_>>(),
+        ["probe/frame"]
+    );
     // A box past the longest side is refused.
     let refused = g.send(
         a,
@@ -693,10 +826,19 @@ fn scripts_change_the_environment_for_everyone() {
     let e = g.s.environment();
     assert_eq!(e.sun_azimuth, Some(90.0));
     assert_eq!(e.fog_color, Some([0.2, 0.3, 0.4]));
-    assert_eq!(e.sun_flare, Some(SunFlare { size: 2.0, ..SunFlare::default() }));
+    assert_eq!(
+        e.sun_flare,
+        Some(SunFlare {
+            size: 2.0,
+            ..SunFlare::default()
+        })
+    );
     // The cycle starts at the time of day set, from the tick it was set.
     let cycle = e.day_cycle.unwrap();
-    assert_eq!((cycle.length_seconds, cycle.time, cycle.anchor_tick), (60.0, 0.25, tick));
+    assert_eq!(
+        (cycle.length_seconds, cycle.time, cycle.anchor_tick),
+        (60.0, 0.25, tick)
+    );
     g.run(a, "env_read", vec![]);
     assert_eq!(g.text("env"), "90.0|60.0|2.0|true|false");
     // `()` puts one setting back to the map's; the rest stay.
@@ -909,7 +1051,11 @@ fn an_add_on_explosion_looks_and_sounds_like_its_own() {
         &c.kind,
         CueKind::WeaponSound { profile } if profile == "probeBoomSound"
     )));
-    assert!(!cues.iter().any(|c| matches!(c.kind, CueKind::Explosion { .. })));
+    assert!(
+        !cues
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::Explosion { .. }))
+    );
     for cue in &cues {
         cue.validate().unwrap();
     }
@@ -943,8 +1089,11 @@ fn a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere() {
         loadout: Default::default(),
         ..Settings::default()
     };
-    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
-        .unwrap();
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
     let game = g.s.minigame_views()[0].id;
     g.send(b, Command::MiniGame(MiniGameRequest::Join { game }))
         .unwrap();
@@ -955,7 +1104,10 @@ fn a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere() {
     g.steps(600);
     assert!(g.s.vitals()[&b].respawn_held);
     let refused = g.send(b, Command::Respawn).unwrap_err();
-    assert!(format!("{refused:#}").contains("RespawnHeld"), "{refused:#}");
+    assert!(
+        format!("{refused:#}").contains("RespawnHeld"),
+        "{refused:#}"
+    );
     // Let go: the click works again.
     g.run(b, "hold", vec![PackageArg::Bool(false)]);
     assert!(!g.s.vitals()[&b].respawn_held);
@@ -965,7 +1117,8 @@ fn a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere() {
     // A reset frees a held player.
     g.send(b, Command::Suicide).unwrap();
     g.run(b, "hold", vec![PackageArg::Bool(true)]);
-    g.send(a, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    g.send(a, Command::MiniGame(MiniGameRequest::Reset))
+        .unwrap();
     assert!(g.s.vitals()[&b].alive && !g.s.vitals()[&b].respawn_held);
 
     // Watching another player: the frozen orbit camera around them at the
@@ -995,7 +1148,8 @@ fn a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere() {
     g.run(b, "watch", vec![PackageArg::Int(a as i64)]);
     g.send(b, Command::Suicide).unwrap();
     g.steps(600);
-    g.send(a, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    g.send(a, Command::MiniGame(MiniGameRequest::Reset))
+        .unwrap();
     assert_eq!(g.s.control(b), Some(ControlObject::Player));
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
@@ -1169,7 +1323,10 @@ fn an_orbit_camera_either_lets_the_body_act_or_freezes_it() {
         g.send(a, Command::ObserverButton(button)).unwrap();
     }
     assert_eq!(g.text("heard"), "activate fire jet ", "not activated again");
-    assert!(g.send(a, Command::ControlPlayer).is_err(), "the rules' to end");
+    assert!(
+        g.send(a, Command::ControlPlayer).is_err(),
+        "the rules' to end"
+    );
     // An acting orbit's `orbit_camera(p, ())` leaves it alone, and an
     // acting orbit is not laid over it.
     g.run(a, "orbit_back", vec![]);
@@ -1233,12 +1390,7 @@ fn a_kept_worn_image_is_only_its_add_ons_to_change() {
         g.s.weapon_view()
             .images
             .get(&a)
-            .map(|images| {
-                images
-                    .iter()
-                    .map(|i| (i.image.clone(), i.paint))
-                    .collect()
-            })
+            .map(|images| images.iter().map(|i| (i.image.clone(), i.paint)).collect())
             .unwrap_or_default()
     };
     let rival = |g: &mut Game, image: &str| {
@@ -1256,7 +1408,12 @@ fn a_kept_worn_image_is_only_its_add_ons_to_change() {
     g.run(a, "keep", vec![PackageArg::String(gun.into())]);
     assert_eq!(worn(&g), [(gun.to_string(), Some(2))]);
     // The rival's tries are refused, each with a diagnostic.
-    let refusals = |g: &Game| g.diagnostics().iter().filter(|d| d.contains("keeps")).count();
+    let refusals = |g: &Game| {
+        g.diagnostics()
+            .iter()
+            .filter(|d| d.contains("keeps"))
+            .count()
+    };
     rival(&mut g, scope).unwrap();
     rival(&mut g, "").unwrap();
     assert_eq!(worn(&g), [(gun.to_string(), Some(2))], "still worn");
@@ -1290,14 +1447,18 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     )
     .unwrap();
     // A map's drop point, where it comes in.
-    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 8.0)]).unwrap();
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 8.0)])
+        .unwrap();
     let a = g.join(Vec3::new(0.0, 0.05, 0.0));
     let settings = Settings {
         loadout: Default::default(),
         ..Settings::default()
     };
-    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
-        .unwrap();
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
     let game = g.s.minigame_views()[0].id;
 
     // A bot of the kind an Add-On provides joins the game, its spawner
@@ -1305,7 +1466,12 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     g.run(a, "bot", vec![PackageArg::String("Bot Probe".into())]);
     g.steps(2);
     assert_eq!(g.text("kinds"), "bot.blockhead true 16");
-    let bots: Vec<OwnerId> = g.s.vitals().keys().copied().filter(|o| g.s.is_bot(*o)).collect();
+    let bots: Vec<OwnerId> =
+        g.s.vitals()
+            .keys()
+            .copied()
+            .filter(|o| g.s.is_bot(*o))
+            .collect();
     assert_eq!(bots.len(), 1, "{:?}", g.diagnostics());
     let bot = bots[0];
     assert_eq!(g.s.vitals()[&bot].minigame, Some(game));
@@ -1361,7 +1527,11 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     .unwrap();
     g.steps(2);
     assert!(g.s.is_bot(bot));
-    assert!(g.diagnostics().iter().any(|d| d.contains("not one `rival` added")));
+    assert!(
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("not one `rival` added"))
+    );
     g.run(a, "unbot", vec![bot_arg()]);
     g.steps(2);
     assert!(!g.s.is_bot(bot));
@@ -1375,7 +1545,11 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     g.steps(2);
     let count = |g: &Game| g.s.vitals().keys().filter(|o| g.s.is_bot(**o)).count();
     assert_eq!(count(&g), 16);
-    assert!(g.diagnostics().iter().any(|d| d.contains("limited to 16 bots")));
+    assert!(
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("limited to 16 bots"))
+    );
     // They leave with their game.
     g.send(a, Command::MiniGame(MiniGameRequest::End)).unwrap();
     g.steps(2);
@@ -1402,13 +1576,26 @@ fn a_saved_build_brings_back_its_mini_game_and_the_add_on_state_kept_per_game() 
         loadout: Default::default(),
         ..Settings::default()
     };
-    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 2, settings: settings.clone() }))
-        .unwrap();
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 2,
+            settings: settings.clone(),
+        }),
+    )
+    .unwrap();
     let game = g.s.minigame_views()[0].id;
     g.run(a, "keep_game", vec![PackageArg::String("path".into())]);
     let save = |g: &mut Game, who: OwnerId| {
         g.seq += 1;
-        match g.s.command(who, g.seq, Command::SaveBuild { events: true, ownership: false }) {
+        match g.s.command(
+            who,
+            g.seq,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        ) {
             Ok(Reply::Saved(build)) => build,
             other => panic!("{other:?}"),
         }
@@ -1420,18 +1607,32 @@ fn a_saved_build_brings_back_its_mini_game_and_the_add_on_state_kept_per_game() 
     // A brick of a kind this test's server lacks: it is kept, not placed.
     build.world.bricks.insert(
         1,
-        bri_world::Brick::new(bri_world::ContentRef::Resolved("brick/none".into()), [0.0; 3], 0),
+        bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("brick/none".into()),
+            [0.0; 3],
+            0,
+        ),
     );
     build.world.next_brick_id = 2;
 
     // Changed since, then the build loads into the game its loader runs.
     let mut changed = settings.clone();
     changed.title = "Changed".into();
-    g.send(a, Command::MiniGame(MiniGameRequest::Configure { settings: changed }))
-        .unwrap();
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Configure { settings: changed }),
+    )
+    .unwrap();
     g.run(a, "keep_game", vec![PackageArg::String("other".into())]);
     g.steps(5 * 120);
-    g.send(a, Command::LoadBuild { build, ownership: false }).unwrap();
+    g.send(
+        a,
+        Command::LoadBuild {
+            build,
+            ownership: false,
+        },
+    )
+    .unwrap();
     while g.s.build_loading() {
         g.steps(1);
     }

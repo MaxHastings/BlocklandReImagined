@@ -226,10 +226,8 @@ pub const USE_AUTO_RETURN_STEERING: &str = "$pref::Input::UseAutoReturnSteering"
 /// `client/defaults.cs` (both steering prefs 1). The designated reference
 /// install (`base/client/defaults.cs`) and Maxwell's own v20 prefs ship
 /// both 0: a Jeep's driver steers with the mouse, as Maxwell expects.
-pub const NATIVE_DEFAULTS: &[(&str, &str)] = &[
-    (USE_STRAFE_STEERING, "0"),
-    (USE_AUTO_RETURN_STEERING, "0"),
-];
+pub const NATIVE_DEFAULTS: &[(&str, &str)] =
+    &[(USE_STRAFE_STEERING, "0"), (USE_AUTO_RETURN_STEERING, "0")];
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
@@ -437,7 +435,11 @@ fn readout(slider: &str, value: f32) -> String {
 /// A volume pref as a gain in 0..=1 (full when unset or unreadable).
 pub fn volume(p: &Prefs, pref: &str) -> f32 {
     let v = p.f32_or(pref, 1.0);
-    if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
 }
 
 /// The frame-rate cap `$pref::Video::MaxFps` asks for, `None` for none.
@@ -728,13 +730,9 @@ fn audio_rows(v: &mut View) {
         return;
     };
     let label_of = |v: &View, slider: NodeId| {
-        v.node(parent)
-            .children
-            .iter()
-            .copied()
-            .find(|&k| {
-                v.node(k).ctrl.class == "GuiTextCtrl" && labels(&v.node(k).ctrl, &v.node(slider).ctrl)
-            })
+        v.node(parent).children.iter().copied().find(|&k| {
+            v.node(k).ctrl.class == "GuiTextCtrl" && labels(&v.node(k).ctrl, &v.node(slider).ctrl)
+        })
     };
     for (slider, from, to) in [(shell, "Shell", "Interface"), (sim, "Sim", "Effects")] {
         if let Some(l) = label_of(v, slider) {
@@ -757,14 +755,22 @@ fn audio_rows(v: &mut View) {
     if let Some(l) = label_of(v, sim) {
         let mut label = v.node(l).ctrl.clone();
         let text = v.text_of(l).replace("Effects", "Music");
-        label.text = Some(if text.contains("Music") { text } else { "Music:".into() });
+        label.text = Some(if text.contains("Music") {
+            text
+        } else {
+            "Music:".into()
+        });
         label.position[1] += step;
         widen_label(&mut label);
         v.add(parent, label);
     }
     v.add(parent, music);
     let x = label_of(v, sim).map_or(sim_ctrl.position[0], |l| v.node(l).ctrl.position[0]);
-    let mut mute = ctrl("GuiCheckBoxCtrl", "GuiCheckBoxProfile", Rect::new(x, y + step, 220, 20));
+    let mut mute = ctrl(
+        "GuiCheckBoxCtrl",
+        "GuiCheckBoxProfile",
+        Rect::new(x, y + step, 220, 20),
+    );
     // Look like the pane's own checkboxes.
     if let Some(style) = v
         .walk()
@@ -1067,7 +1073,11 @@ impl Options {
         };
         s.slider(
             "SliderGraphicsAnisotropy",
-            if anisotropy.is_finite() { anisotropy.clamp(0.0, 1.0) } else { 0.0 },
+            if anisotropy.is_finite() {
+                anisotropy.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
         );
         s.slider(FOV_SLIDER, default_fov(&core.prefs));
         s.slider(DISTANCE_SLIDER, visible_distance_max(&core.prefs));
@@ -1086,7 +1096,11 @@ impl Options {
             .copied()
             .chain((!MAX_FPS_CHOICES.contains(&fps)).then_some(fps))
             .map(|f| {
-                let label = if f == 0 { "Unlimited".into() } else { f.to_string() };
+                let label = if f == 0 {
+                    "Unlimited".into()
+                } else {
+                    f.to_string()
+                };
                 (label, i64::from(f))
             })
             .collect();
@@ -1096,17 +1110,33 @@ impl Options {
             .enumerate()
             .map(|(i, t)| (t.to_string(), i as i64))
             .collect();
-        s.menu(COLOR_VISION_MENU, vision, i64::from(color_vision(&core.prefs)));
+        s.menu(
+            COLOR_VISION_MENU,
+            vision,
+            i64::from(color_vision(&core.prefs)),
+        );
         let scale = core.prefs.i64_or(crate::ui::UI_SCALE, 0).max(0);
         let scale_items = UI_SCALE_CHOICES
             .iter()
             .copied()
             .chain((!UI_SCALE_CHOICES.contains(&scale)).then_some(scale))
-            .map(|p| (if p == 0 { "Auto".into() } else { format!("{p}%") }, p))
+            .map(|p| {
+                (
+                    if p == 0 {
+                        "Auto".into()
+                    } else {
+                        format!("{p}%")
+                    },
+                    p,
+                )
+            })
             .collect();
         s.menu(UI_SCALE_MENU, scale_items, scale);
         s.set_reflections(reflections(&core.prefs));
-        let items = LIGHTING_CHOICES.iter().map(|&(t, mode)| (t.to_string(), mode)).collect();
+        let items = LIGHTING_CHOICES
+            .iter()
+            .map(|&(t, mode)| (t.to_string(), mode))
+            .collect();
         s.menu(LIGHTING_MENU, items, lighting(&core.prefs));
         s.refresh_quality();
         s.refresh_readouts();
@@ -1161,7 +1191,10 @@ impl Options {
                 .copied()
                 .filter(|&k| v.node(k).state.visible && v.node(k).ctrl.class == "GuiCheckBoxCtrl")
                 .collect();
-            let last = checks.iter().copied().max_by_key(|&k| v.node(k).ctrl.position[1]);
+            let last = checks
+                .iter()
+                .copied()
+                .max_by_key(|&k| v.node(k).ctrl.position[1]);
             let bottom = v
                 .node(section)
                 .children
@@ -1172,9 +1205,21 @@ impl Options {
                 // Slayer's client preference "Disable End of Round Report"
                 // before it: score reports a game opens stay closed.
                 for (name, variable, text) in [
-                    ("OptHideReportsToggle", HIDE_REPORTS, "Hide end of round reports"),
-                    ("OptWelcomeAlwaysToggle", WELCOME_ALWAYS, "Show Add-On welcome pages every time"),
-                    ("OptCheckForUpdatesToggle", CHECK_FOR_UPDATES, "Check for new versions"),
+                    (
+                        "OptHideReportsToggle",
+                        HIDE_REPORTS,
+                        "Hide end of round reports",
+                    ),
+                    (
+                        "OptWelcomeAlwaysToggle",
+                        WELCOME_ALWAYS,
+                        "Show Add-On welcome pages every time",
+                    ),
+                    (
+                        "OptCheckForUpdatesToggle",
+                        CHECK_FOR_UPDATES,
+                        "Check for new versions",
+                    ),
                 ] {
                     let mut c = v.node(last).ctrl.clone();
                     c.name = Some(name.into());
@@ -1237,8 +1282,12 @@ impl Options {
             c.variable = Some(ANTI_ALIASING.into());
             c.text = Some("Anti-Aliasing".into());
             // Under the resolution menu, left of Apply.
-            let menu = v.id("OptGraphicsResolutionMenu").map(|m| v.node(m).ctrl.clone());
-            let (x, y) = menu.as_ref().map_or((60, 85), |m| (m.position[0] - 40, m.position[1] + m.extent[1] + 4));
+            let menu = v
+                .id("OptGraphicsResolutionMenu")
+                .map(|m| v.node(m).ctrl.clone());
+            let (x, y) = menu.as_ref().map_or((60, 85), |m| {
+                (m.position[0] - 40, m.position[1] + m.extent[1] + 4)
+            });
             c.position = [x, y];
             c.extent = [110, 23];
             c.command = None;
@@ -1347,7 +1396,12 @@ impl Options {
             };
             let c = &mut v.nodes[n].ctrl;
             c.extent[0] = (c.extent[0] - 44).max(40);
-            let r = Rect::new(c.position[0] + c.extent[0] + 4, c.position[1], 40, c.extent[1]);
+            let r = Rect::new(
+                c.position[0] + c.extent[0] + 4,
+                c.position[1],
+                40,
+                c.extent[1],
+            );
             let mut t = ctrl("GuiTextCtrl", "GuiTextProfile", r);
             t.name = Some(format!("{name}Value"));
             v.add(parent, t);
@@ -1381,7 +1435,8 @@ impl Options {
     }
     fn refresh_readouts(&mut self) {
         for &name in READOUTS {
-            if let (Some(n), Some(t)) = (self.view.id(name), self.view.id(&format!("{name}Value"))) {
+            if let (Some(n), Some(t)) = (self.view.id(name), self.view.id(&format!("{name}Value")))
+            {
                 self.view.state(t).text = Some(readout(name, self.view.num(n)));
             }
         }
@@ -1393,7 +1448,9 @@ impl Options {
             .filter(|&n| {
                 let c = &self.view.node(n).ctrl;
                 c.class == "GuiCheckBoxCtrl"
-                    && c.variable.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(var))
+                    && c.variable
+                        .as_deref()
+                        .is_some_and(|v| v.eq_ignore_ascii_case(var))
             })
             .collect()
     }
@@ -1406,9 +1463,10 @@ impl Options {
     /// The preset the dialog's current values match, else Custom.
     fn quality(&self) -> i64 {
         let on = |var: &str| {
-            self.checkboxes(var)
-                .first()
-                .map_or_else(|| self.draft.bool_or(var, false), |&n| self.view.bool_value(n))
+            self.checkboxes(var).first().map_or_else(
+                || self.draft.bool_or(var, false),
+                |&n| self.view.bool_value(n),
+            )
         };
         let anisotropy = self
             .view
@@ -1499,7 +1557,10 @@ impl Options {
         let mut n = find_section(v, title)?;
         loop {
             let name = v.node(n).ctrl.name.as_deref().unwrap_or_default();
-            if let Some(pane) = name.strip_prefix("Opt").and_then(|p| p.strip_suffix("Pane")) {
+            if let Some(pane) = name
+                .strip_prefix("Opt")
+                .and_then(|p| p.strip_suffix("Pane"))
+            {
                 return Some(pane.to_owned());
             }
             n = v.node(n).parent?;
@@ -1622,7 +1683,11 @@ impl Options {
             .id(LIGHTING_MENU)
             .and_then(|n| self.view.selected(n))
         {
-            let mode = LIGHTING_CHOICES.iter().map(|&(_, m)| m).find(|&m| m == mode).unwrap_or(2);
+            let mode = LIGHTING_CHOICES
+                .iter()
+                .map(|&(_, m)| m)
+                .find(|&m| m == mode)
+                .unwrap_or(2);
             self.draft.set(LIGHTING, mode.to_string());
         }
         if let Some(scale) = self
@@ -1832,7 +1897,13 @@ impl Screen for Options {
             return;
         }
         if ev.kind == EventKind::Changed {
-            let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+            let name = self
+                .view
+                .node(ev.node)
+                .ctrl
+                .name
+                .clone()
+                .unwrap_or_default();
             if let Some(&(_, _, channel)) = VOLUMES.iter().find(|(n, _, _)| *n == name) {
                 let value = self.view.num(ev.node);
                 if value.is_finite() {
@@ -1844,7 +1915,11 @@ impl Screen for Options {
                 }
             }
             if name == QUALITY_MENU {
-                if let Some(i) = self.view.selected(ev.node).and_then(|i| usize::try_from(i).ok()) {
+                if let Some(i) = self
+                    .view
+                    .selected(ev.node)
+                    .and_then(|i| usize::try_from(i).ok())
+                {
                     self.apply_preset(i);
                 }
                 self.refresh_quality();
@@ -2404,14 +2479,24 @@ mod tests {
         let mut audio = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 400));
         audio.name = Some("OptAudioPane".into());
         audio.visible = false;
-        let mut section = ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(0, 0, 300, 60));
-        section
-            .children
-            .push(ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(2, 2, 296, 14)));
+        let mut section = ctrl(
+            "GuiSwatchCtrl",
+            "GuiDefaultProfile",
+            Rect::new(0, 0, 300, 60),
+        );
+        section.children.push(ctrl(
+            "GuiSwatchCtrl",
+            "GuiDefaultProfile",
+            Rect::new(2, 2, 296, 14),
+        ));
         let mut title = ctrl("GuiTextCtrl", "GuiDefaultProfile", Rect::new(4, 0, 100, 14));
         title.text = Some(ADDON_SECTION.into());
         section.children.push(title);
-        let mut tips = ctrl("GuiCheckBoxCtrl", "GuiDefaultProfile", Rect::new(10, 20, 120, 18));
+        let mut tips = ctrl(
+            "GuiCheckBoxCtrl",
+            "GuiDefaultProfile",
+            Rect::new(10, 20, 120, 18),
+        );
         tips.variable = Some("$pref::HUD::showToolTips".into());
         tips.text = Some("Show Tooltips".into());
         section.children.push(tips);
@@ -2445,10 +2530,16 @@ mod tests {
         let options = ui.screen(ScreenId::Options).expect("the key opens Options");
         let v = options.view();
         let pane = |name: &str| v.node(v.id(name).unwrap()).state.visible;
-        assert!(pane("OptAudioPane") && !pane("OptGraphicsPane"), "on the Add-On preferences' pane");
+        assert!(
+            pane("OptAudioPane") && !pane("OptGraphicsPane"),
+            "on the Add-On preferences' pane"
+        );
         let welcome = v.id("OptWelcomeAlwaysToggle").expect("added");
         assert!(!v.bool_value(welcome), "off: a welcome page opens once");
-        assert_eq!(v.node(welcome).ctrl.variable.as_deref(), Some(WELCOME_ALWAYS));
+        assert_eq!(
+            v.node(welcome).ctrl.variable.as_deref(),
+            Some(WELCOME_ALWAYS)
+        );
 
         // Once per Add-On, unless the toggle is on.
         ui.core.addon_help = vec![crate::api::AddOnHelpPage {
@@ -2471,19 +2562,33 @@ mod tests {
     fn gui_options_end_with_hide_reports_and_check_for_new_versions_toggles() {
         let mut data = UiPack::default();
         let mut layout = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-        let mut section = ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(0, 0, 300, 60));
-        section
-            .children
-            .push(ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(2, 2, 296, 14)));
+        let mut section = ctrl(
+            "GuiSwatchCtrl",
+            "GuiDefaultProfile",
+            Rect::new(0, 0, 300, 60),
+        );
+        section.children.push(ctrl(
+            "GuiSwatchCtrl",
+            "GuiDefaultProfile",
+            Rect::new(2, 2, 296, 14),
+        ));
         let mut title = ctrl("GuiTextCtrl", "GuiDefaultProfile", Rect::new(4, 0, 100, 14));
         title.text = Some("Gui Options".into());
         section.children.push(title);
-        let mut tips = ctrl("GuiCheckBoxCtrl", "GuiDefaultProfile", Rect::new(10, 20, 120, 18));
+        let mut tips = ctrl(
+            "GuiCheckBoxCtrl",
+            "GuiDefaultProfile",
+            Rect::new(10, 20, 120, 18),
+        );
         tips.variable = Some("$pref::HUD::showToolTips".into());
         tips.text = Some("Show Tooltips".into());
         section.children.push(tips);
         layout.children.push(section);
-        let mut done = ctrl("GuiButtonCtrl", "GuiDefaultProfile", Rect::new(0, 400, 100, 20));
+        let mut done = ctrl(
+            "GuiButtonCtrl",
+            "GuiDefaultProfile",
+            Rect::new(0, 400, 100, 20),
+        );
         done.name = Some("done".into());
         done.command = Some("Canvas.popDialog(optionsDlg);".into());
         layout.children.push(done);
@@ -2510,13 +2615,22 @@ mod tests {
                 &options.view.node(hide).ctrl,
                 &options.view.node(toggle).ctrl,
             );
-            assert!(h.position[1] >= t.position[1] + t.extent[1], "below the last row");
+            assert!(
+                h.position[1] >= t.position[1] + t.extent[1],
+                "below the last row"
+            );
             assert!(c.position[1] >= h.position[1] + h.extent[1], "updates last");
         }
         assert!(!options.view.bool_value(hide), "reports show unless hidden");
         toggle_audio(&mut options, &mut ui, HIDE_REPORTS, true);
-        let (t, c) = (&options.view.node(tips).ctrl, &options.view.node(toggle).ctrl);
-        assert!(c.position[1] >= t.position[1] + t.extent[1], "below the last row");
+        let (t, c) = (
+            &options.view.node(tips).ctrl,
+            &options.view.node(toggle).ctrl,
+        );
+        assert!(
+            c.position[1] >= t.position[1] + t.extent[1],
+            "below the last row"
+        );
         assert_eq!(c.position[0], t.position[0]);
         assert!(options.view.node(toggle).state.visible);
         assert!(options.view.bool_value(toggle), "on unless turned off");
@@ -2628,7 +2742,9 @@ mod tests {
         // must keep the real window size and VSync on for the next launch.
         let mut data = fixture().core.pack.data.clone();
         data.data.prefs.insert(NO_VSYNC.into(), "1".into());
-        data.data.prefs.insert(RESOLUTION.into(), "800 600 32".into());
+        data.data
+            .prefs
+            .insert(RESOLUTION.into(), "800 600 32".into());
         let mut ui = Ui::new(
             Rc::new(Pack::from_parts(data, Default::default())),
             UiConfig {
@@ -2657,12 +2773,26 @@ mod tests {
         let mut s = Options::new(&ui.core);
         let menu = s.view.id(LIGHTING_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified"));
-        let items: Vec<&str> = s.view.node(menu).state.items.iter().map(|(t, _)| t.as_str()).collect();
+        let items: Vec<&str> = s
+            .view
+            .node(menu)
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect();
         assert_eq!(items, ["Classic", "Unified", "Dynamic"]);
         // The row fits inside its section, below Mirrors.
-        let parent = s.view.walk().find(|&n| s.view.node(n).children.contains(&menu)).unwrap();
+        let parent = s
+            .view
+            .walk()
+            .find(|&n| s.view.node(n).children.contains(&menu))
+            .unwrap();
         let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
-        assert!(row.position[1] + row.extent[1] <= section.extent[1], "{row:?} in {section:?}");
+        assert!(
+            row.position[1] + row.extent[1] <= section.extent[1],
+            "{row:?} in {section:?}"
+        );
         let mirrors = &s.view.node(s.view.id(REFLECTIONS_MENU).unwrap()).ctrl;
         assert!(row.position[1] >= mirrors.position[1] + mirrors.extent[1]);
         s.view.select(menu, Some(0));
@@ -2691,7 +2821,11 @@ mod tests {
             ui.core.prefs.set(LIGHTING, old);
             let s = Options::new(&ui.core);
             let menu = s.view.id(LIGHTING_MENU).unwrap();
-            assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified"), "saved {old}");
+            assert_eq!(
+                s.view.selected_text(menu).as_deref(),
+                Some("Unified"),
+                "saved {old}"
+            );
             assert_eq!(lighting(&ui.core.prefs), 2, "saved {old}");
         }
     }
@@ -2702,7 +2836,14 @@ mod tests {
         let mut s = Options::new(&ui.core);
         let menu = s.view.id(QUALITY_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("High"));
-        assert!(!s.view.node(menu).state.items.iter().any(|(t, _)| t == "Custom"));
+        assert!(
+            !s.view
+                .node(menu)
+                .state
+                .items
+                .iter()
+                .any(|(t, _)| t == "Custom")
+        );
         // Low turns off everything costly.
         s.view.select(menu, Some(0));
         change(&mut s, &mut ui, menu);
@@ -2721,7 +2862,14 @@ mod tests {
         // Ultra, then Done, stores every preset option explicitly.
         s.view.select(menu, Some(3));
         change(&mut s, &mut ui, menu);
-        assert!(!s.view.node(menu).state.items.iter().any(|(t, _)| t == "Custom"));
+        assert!(
+            !s.view
+                .node(menu)
+                .state
+                .items
+                .iter()
+                .any(|(t, _)| t == "Custom")
+        );
         click(&mut s, "done", &mut ui);
         let saved = saved_prefs(&mut ui);
         assert_eq!(saved.get(SHADOW_QUALITY), Some("0"));
@@ -2796,7 +2944,8 @@ mod tests {
         let mut ui = fixture();
         let mut s = Options::new(&ui.core);
         let music = s.view.id(MUSIC_SLIDER).unwrap();
-        let text = |s: &Options, name: &str| s.view.text_of(s.view.id(&format!("{name}Value")).unwrap());
+        let text =
+            |s: &Options, name: &str| s.view.text_of(s.view.id(&format!("{name}Value")).unwrap());
         assert_eq!(text(&s, MUSIC_SLIDER), "100%");
         assert_eq!(text(&s, "SliderGraphicsAnisotropy"), "8x");
         // Dragging previews the volume at once.
@@ -2881,9 +3030,15 @@ mod tests {
         // The pack carries stock v20's defaults: invert on, both steering
         // prefs on, which the native defaults turn off.
         let mut data = fixture().core.pack.data.clone();
-        data.data.prefs.insert(VEHICLE_MOUSE_INVERT.into(), "1".into());
-        data.data.prefs.insert(USE_STRAFE_STEERING.into(), "1".into());
-        data.data.prefs.insert(USE_AUTO_RETURN_STEERING.into(), "1".into());
+        data.data
+            .prefs
+            .insert(VEHICLE_MOUSE_INVERT.into(), "1".into());
+        data.data
+            .prefs
+            .insert(USE_STRAFE_STEERING.into(), "1".into());
+        data.data
+            .prefs
+            .insert(USE_AUTO_RETURN_STEERING.into(), "1".into());
         let mut ui = Ui::new(
             Rc::new(Pack::from_parts(data, Default::default())),
             UiConfig {
@@ -3032,7 +3187,10 @@ mod tests {
         );
         for pref in ["$pref::OpenGL::textureTrilinear", ANTI_ALIASING] {
             let n = audio_node(&s, pref);
-            assert!(s.view.node(n).state.visible && s.view.bool_value(n), "{pref}");
+            assert!(
+                s.view.node(n).state.visible && s.view.bool_value(n),
+                "{pref}"
+            );
         }
         let sharp = audio_node(&s, "$pref::OpenGL::useGLNearest");
         assert!(s.view.node(sharp).state.visible && !s.view.bool_value(sharp));
@@ -3059,9 +3217,17 @@ mod tests {
         // A player who never chose: High, as v20's default.
         assert_eq!(debris_limit(&ui.core.prefs), PHYSICS_LIMITS[1] as usize);
         let mut s = Options::new(&ui.core);
-        let radio = |s: &Options, q: usize| s.view.bool_value(s.view.id(&format!("{PHYSICS_RADIO}{q}")).unwrap());
+        let radio = |s: &Options, q: usize| {
+            s.view
+                .bool_value(s.view.id(&format!("{PHYSICS_RADIO}{q}")).unwrap())
+        };
         assert!(radio(&s, 1) && !radio(&s, 0));
-        assert!(s.view.node(s.view.id("OPT_PhysicsQuality0").unwrap()).state.visible);
+        assert!(
+            s.view
+                .node(s.view.id("OPT_PhysicsQuality0").unwrap())
+                .state
+                .visible
+        );
         click(&mut s, "OPT_PhysicsQuality0", &mut ui);
         assert!(radio(&s, 0) && !radio(&s, 1));
         assert!(!ui.core.prefs.is_set(MAX_BRICKS), "only Done saves");
@@ -3076,7 +3242,11 @@ mod tests {
         // A console value matches no radio, and reopening Options keeps it.
         ui.core.prefs.set(MAX_BRICKS, "300");
         let mut s = Options::new(&ui.core);
-        assert!((0..5).all(|q| s.view.id(&format!("{PHYSICS_RADIO}{q}")).is_none_or(|n| !s.view.bool_value(n))));
+        assert!((0..5).all(|q| {
+            s.view
+                .id(&format!("{PHYSICS_RADIO}{q}"))
+                .is_none_or(|n| !s.view.bool_value(n))
+        }));
         click(&mut s, "done", &mut ui);
         assert_eq!(debris_limit(&ui.core.prefs), 300);
         ui.core.prefs.set(MAX_BRICKS, "100000");

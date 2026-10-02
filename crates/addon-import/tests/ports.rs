@@ -628,18 +628,27 @@ fn crlf_copy(from: &Path, to: &Path) {
 fn a_copy_and_ports_with_windows_line_endings_import_as_with_unix_ones() {
     let dir = fresh("crlf");
     let ports_dir = dir.join("ports");
-    crlf_copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("ports"), &ports_dir);
+    crlf_copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("ports"),
+        &ports_dir,
+    );
     let crlf_ports = Ports::from_dir(&ports_dir).unwrap();
     let copy = dir.join("Gamemode_Slayer");
     crlf_copy(&fixture("ports/Gamemode_Slayer"), &copy);
     let lf = dir.join("lf/gamemode_slayer");
     let crlf = dir.join("crlf/gamemode_slayer");
-    let report = import_with(&options(fixture("ports/Gamemode_Slayer"), lf.clone()), &Ports::builtin()).unwrap();
+    let report = import_with(
+        &options(fixture("ports/Gamemode_Slayer"), lf.clone()),
+        &Ports::builtin(),
+    )
+    .unwrap();
     assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
     let report = import_with(&options(copy, crlf.clone()), &crlf_ports).unwrap();
     assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
     for file in ["slayer.rhai", "behaviour.json"] {
-        let read = |out: &Path| std::fs::read_to_string(out.with_file_name("gamemode_slayer-rules").join(file)).unwrap();
+        let read = |out: &Path| {
+            std::fs::read_to_string(out.with_file_name("gamemode_slayer-rules").join(file)).unwrap()
+        };
         let (lf, crlf) = (read(&lf), read(&crlf));
         assert!(!crlf.contains('\r'), "{file} keeps Windows line endings");
         assert_eq!(lf, crlf, "{file}");
@@ -657,13 +666,18 @@ fn slayer_ports_apply_with_their_rules() {
         ("Gamemode_Slayer_CTF", "gamemode_slayer_ctf"),
     ] {
         let out = root.join("addons").join(ns);
-        let report = import_with(&options(fixture(&format!("ports/{addon}")), out), &ports).unwrap();
+        let report =
+            import_with(&options(fixture(&format!("ports/{addon}")), out), &ports).unwrap();
         let applied = &report.ports[0];
         assert!(applied.applied, "{addon}: {:?}", applied.reason);
         assert_eq!(applied.status, "partial");
         if ns == "gamemode_slayer" {
             // The capture point trigger's callbacks are the rules' zone.
-            let trigger = report.datablocks.iter().find(|d| d.name == "Slayer_CPTriggerData").unwrap();
+            let trigger = report
+                .datablocks
+                .iter()
+                .find(|d| d.name == "Slayer_CPTriggerData")
+                .unwrap();
             assert_eq!(trigger.status, "consumed", "{trigger:?}");
             // So are the path cameras': the fly-through and the spectators'
             // auto camera are `follow_path` in the rules.
@@ -673,30 +687,45 @@ fn slayer_ports_apply_with_their_rules() {
             }
             // The loop's `slayerSound`, renamed at run time, is what the
             // port's datablocks.cs declares.
-            let voices = report.datablocks.iter().find(|d| d.name == "slayerSound").unwrap();
+            let voices = report
+                .datablocks
+                .iter()
+                .find(|d| d.name == "slayerSound")
+                .unwrap();
             assert_eq!(voices.status, "consumed", "{voices:?}");
         }
         ids.push(ns.to_owned());
         ids.push(applied.rules.as_ref().expect("rules").id.clone());
     }
-    let slayer = std::fs::read_to_string(root.join("addons/gamemode_slayer-rules/slayer.rhai")).unwrap();
+    let slayer =
+        std::fs::read_to_string(root.join("addons/gamemode_slayer-rules/slayer.rhai")).unwrap();
     // Its countdown voices and buzzer, made at run time in the original,
     // are declared by the port and play by id; a voice whose file this copy
     // lacks stays out.
-    let sounds = Pack::from_json(&std::fs::read(root.join("addons/gamemode_slayer/assets/weapons.json")).unwrap())
-        .unwrap()
-        .sounds;
+    let sounds = Pack::from_json(
+        &std::fs::read(root.join("addons/gamemode_slayer/assets/weapons.json")).unwrap(),
+    )
+    .unwrap()
+    .sounds;
     for id in ["slayer_begin_sound", "slayer_1_seconds_sound"] {
-        assert!(sounds.contains_key(&format!("gamemode_slayer:sound/{id}")), "{id}: {:?}", sounds.keys());
+        assert!(
+            sounds.contains_key(&format!("gamemode_slayer:sound/{id}")),
+            "{id}: {:?}",
+            sounds.keys()
+        );
     }
     assert!(!sounds.contains_key("gamemode_slayer:sound/slayer_2_seconds_sound"));
     assert!(slayer.contains("`gamemode_slayer:sound/slayer_${left}_seconds_sound`"));
     assert!(slayer.contains("\"gamemode_slayer:brick/brickslyrspawnpointdata\""));
     // Capture points: the bricks convert, their bars are this copy's
     // lengths, and their trigger is a zone ticking at its preference.
-    let content = std::fs::read_to_string(root.join("addons/gamemode_slayer/assets/content.json")).unwrap();
+    let content =
+        std::fs::read_to_string(root.join("addons/gamemode_slayer/assets/content.json")).unwrap();
     for brick in ["brickslyrcpdata", "brickslyrlrgcpdata"] {
-        assert!(content.contains(&format!("gamemode_slayer:brick/{brick}")), "no {brick}");
+        assert!(
+            content.contains(&format!("gamemode_slayer:brick/{brick}")),
+            "no {brick}"
+        );
     }
     assert!(slayer.contains("{\n        3\n    }") && slayer.contains("{\n        5\n    }"));
     let rules: serde_json::Value = serde_json::from_slice(
@@ -704,7 +733,10 @@ fn slayer_ports_apply_with_their_rules() {
     )
     .unwrap();
     let zone = &rules["zones"][0];
-    assert_eq!((zone["period_ms"].as_u64(), zone["ticks"].as_bool()), (Some(100), Some(true)));
+    assert_eq!(
+        (zone["period_ms"].as_u64(), zone["ticks"].as_bool()),
+        (Some(100), Some(true))
+    );
     // Settings at this copy's defaults, its game modes in the mode list.
     let read = |path: &str| -> serde_json::Value {
         serde_json::from_slice(&std::fs::read(root.join(path)).unwrap()).unwrap()
@@ -722,7 +754,10 @@ fn slayer_ports_apply_with_their_rules() {
     assert_eq!(setting(&behaviour, "time_between_rounds")["default"], 6);
     // The fly-through and spectating, at this copy's numbers.
     assert_eq!(setting(&behaviour, "fly_play_on_reset")["default"], true);
-    assert_eq!(setting(&behaviour, "fly_during_countdown")["default"], false);
+    assert_eq!(
+        setting(&behaviour, "fly_during_countdown")["default"],
+        false
+    );
     assert_eq!(setting(&behaviour, "spectate_auto_cam")["default"], true);
     assert_eq!(setting(&behaviour, "team_only_dead_cam")["default"], false);
     for line in [
@@ -780,7 +815,12 @@ fn slayer_ports_apply_with_their_rules() {
     // brick of the game, and Restrict Output Events at this copy's levels.
     let inputs = behaviour["brick_inputs"].as_array().unwrap();
     assert_eq!(inputs.len(), 10 + 12 + 5);
-    let input = |name: &str| inputs.iter().find(|i| i["name"] == name).unwrap_or_else(|| panic!("no {name}"));
+    let input = |name: &str| {
+        inputs
+            .iter()
+            .find(|i| i["name"] == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
     assert_eq!(input("onActivate(Team6)")["follows"], "onActivate");
     assert_eq!(input("onPlayerTouch(Team1)")["follows"], "onPlayerTouch");
     assert_eq!(
@@ -788,7 +828,10 @@ fn slayer_ports_apply_with_their_rules() {
         serde_json::json!(["Client", "Player(Killer)", "Client(Killer)", "MiniGame"])
     );
     assert_eq!(behaviour["on_event_row"], true);
-    assert_eq!(setting(&behaviour, "restrict_output_events")["default"], false);
+    assert_eq!(
+        setting(&behaviour, "restrict_output_events")["default"],
+        false
+    );
     for line in [
         "\"minigame:bottomprintall\": 2,",
         "\"minigame:win\": -1,",
@@ -804,11 +847,20 @@ fn slayer_ports_apply_with_their_rules() {
     assert_eq!(setting(&behaviour, "team_lives")["default"], -1);
     // The team kit and uniform, from the copy's team preferences.
     assert_eq!(setting(&behaviour, "team_uniform")["default"], 3);
-    assert_eq!(setting(&behaviour, "team_equip_0")["default"], "v20.weapon.hammeritem");
+    assert_eq!(
+        setting(&behaviour, "team_equip_0")["default"],
+        "v20.weapon.hammeritem"
+    );
     assert_eq!(setting(&behaviour, "team_equip_3")["default"], "");
-    assert_eq!(setting(&behaviour, "team_player_type")["default"], "v20.player.playerstandardarmor");
+    assert_eq!(
+        setting(&behaviour, "team_player_type")["default"],
+        "v20.player.playerstandardarmor"
+    );
     assert_eq!(setting(&behaviour, "uni_hat")["default"], 1);
-    assert_eq!(setting(&behaviour, "uni_head_color")["default"], "0.5 0.25 0 1");
+    assert_eq!(
+        setting(&behaviour, "uni_head_color")["default"],
+        "0.5 0.25 0 1"
+    );
     assert_eq!(setting(&behaviour, "allow_custom_faces")["default"], false);
     assert!(slayer.contains(r#"let skins = ["0.9 0.8 0.6 1", "0.9 0.8 0.6 1", "0.4 0.3 0.2 1""#));
     let mode = setting(&behaviour, "mode");
@@ -823,7 +875,8 @@ fn slayer_ports_apply_with_their_rules() {
 
     // This copy's numbers, read from its scripts.
     let ctf = root.join("addons/gamemode_slayer_ctf");
-    let rules = std::fs::read_to_string(root.join("addons/gamemode_slayer_ctf-rules/ctf.rhai")).unwrap();
+    let rules =
+        std::fs::read_to_string(root.join("addons/gamemode_slayer_ctf-rules/ctf.rhai")).unwrap();
     for line in [
         "fn flag_slot() { 2 }",
         "fn pickup_guard_ticks() { (250 * 120 + 999) / 1000 }",
@@ -860,7 +913,10 @@ fn slayer_ports_apply_with_their_rules() {
     // takes the carrier's team colour as the flag does.
     assert_eq!(
         image.light,
-        Some(bri_weapons::ImageLight { radius: 12.0, color: [1.0; 3] })
+        Some(bri_weapons::ImageLight {
+            radius: 12.0,
+            color: [1.0; 3]
+        })
     );
     let item = &pack.items["gamemode_slayer_ctf:weapon/slyrctf_flagitem"];
     assert_eq!(item.ui_name, "Stand-in Flag");
@@ -894,19 +950,36 @@ fn slayer_ports_apply_with_their_rules() {
     // The player's side: Slayer's keys open screens, its help pages come
     // from the copy's own `.hfl` (the stand-in's), the first one welcoming,
     // and its holiday splash shows its pictures, each an image of the copy.
-    let client = bri_package_runtime::Catalog::load(&root, &set, false).unwrap_or_else(|e| panic!("{e:#?}"));
+    let client =
+        bri_package_runtime::Catalog::load(&root, &set, false).unwrap_or_else(|e| panic!("{e:#?}"));
     let slayer = &client.packages["gamemode_slayer"];
     let binds: Vec<_> = slayer.binds.values().flat_map(|b| &b.binds).collect();
     let screens: Vec<_> = binds.iter().filter_map(|b| b.screen.as_deref()).collect();
     assert_eq!(screens, ["minigame_addons", "options"]);
     let pages: Vec<_> = slayer.help.values().flat_map(|h| &h.pages).collect();
-    assert_eq!(pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Slayer", "Slayer Guide"]);
+    assert_eq!(
+        pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+        ["Slayer", "Slayer Guide"]
+    );
     assert!(pages[0].welcome && !pages[1].welcome);
-    assert!(pages[1].text.contains("<font:arial bold:24>Stand-in Guide"), "{}", pages[1].text);
+    assert!(
+        pages[1].text.contains("<font:arial bold:24>Stand-in Guide"),
+        "{}",
+        pages[1].text
+    );
     let splash = slayer.splashes.values().next().expect("splash");
     assert_eq!((splash.from, splash.to), ([12, 20], [12, 31]));
-    for file in splash.layers.iter().map(|l| &l.image).chain(&splash.falling.as_ref().unwrap().images) {
-        let asset = slayer.assets.iter().find(|a| &a.file == file).unwrap_or_else(|| panic!("no {file}"));
+    for file in splash
+        .layers
+        .iter()
+        .map(|l| &l.image)
+        .chain(&splash.falling.as_ref().unwrap().images)
+    {
+        let asset = slayer
+            .assets
+            .iter()
+            .find(|a| &a.file == file)
+            .unwrap_or_else(|| panic!("no {file}"));
         assert_eq!(asset.kind, bri_package_runtime::content::Kind::Image);
         assert!(!asset.bytes.is_empty(), "{file}");
     }
@@ -1356,9 +1429,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     );
     pad.color = RED;
     pad.vehicle = Some(Box::new(bri_world::VehicleSpawn {
-        vehicle: bri_world::ContentRef::Resolved(
-            "test_plane:vehicle/standinplane".into(),
-        ),
+        vehicle: bri_world::ContentRef::Resolved("test_plane:vehicle/standinplane".into()),
         recolor: true,
     }));
     world.bricks.insert(1, pad);
@@ -1554,7 +1625,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     spray_at(&mut s, admin, at);
     assert_ne!(paint(&s), Some([r, g, b, 1.0]));
     assert_eq!(s.snapshot().world.bricks[&1].color, BLUE);
-   std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Kaje's Sniper Rifle: `onFire` kicks the arm with `shiftAway` (read from
@@ -1737,9 +1808,13 @@ fn trench_digging_port_writes_its_rules() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(rules_dir.join("package.json")).unwrap()).unwrap();
     assert!(
-        manifest["provides"].as_array().unwrap().iter().any(|p| p["kind"] == "archetype"
-            && p["id"] == "gamemode_trenchdigging-rules:archetype/playernojet"
-            && p["file"] == "archetypes/playernojet.json"),
+        manifest["provides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "archetype"
+                && p["id"] == "gamemode_trenchdigging-rules:archetype/playernojet"
+                && p["file"] == "archetypes/playernojet.json"),
         "{manifest}"
     );
     let adjust: serde_json::Value = serde_json::from_slice(
@@ -1926,7 +2001,12 @@ fn duplicator_game(
     name: &str,
     fixture_name: &str,
     id: &str,
-) -> (PathBuf, bri_sim::session::Session, u64, bri_addon_import::report::Report) {
+) -> (
+    PathBuf,
+    bri_sim::session::Session,
+    u64,
+    bri_addon_import::report::Report,
+) {
     use bri_package::packages::{PackageEntry, PackageSet, Side};
     use bri_sim::session::Session;
     use rapier3d::prelude::*;
@@ -1934,7 +2014,11 @@ fn duplicator_game(
     let dir = fresh(name);
     let root = dir.join("content");
     let out = root.join(format!("addons/{id}"));
-    let report = import(&options(fixture(&format!("ports/{fixture_name}")), out.clone())).unwrap();
+    let report = import(&options(
+        fixture(&format!("ports/{fixture_name}")),
+        out.clone(),
+    ))
+    .unwrap();
     let applied = &report.ports[0];
     assert!(applied.applied, "{:?}", applied.reason);
     let rules = applied.rules.as_ref().expect("the port has host rules");
@@ -2012,11 +2096,14 @@ fn duplicator_game(
             entry(&format!("{id}-rules"), Side::Server),
         ],
     };
-    let catalog = bri_package_runtime::Catalog::load(&root, &set, true)
-        .unwrap_or_else(|e| panic!("{e:#?}"));
-    s.install_packages(std::sync::Arc::new(catalog), None).unwrap();
+    let catalog =
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    s.install_packages(std::sync::Arc::new(catalog), None)
+        .unwrap();
 
-    let host = s.join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true)
+        .unwrap();
     (dir, s, host, report)
 }
 
@@ -2035,20 +2122,23 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
         seq += 1;
         s.command(host, seq, command)
     };
-    let plant = |s: &mut Session, position: [f32; 3], cmd: &mut dyn FnMut(&mut Session, Command) -> anyhow::Result<Reply>| {
-        match cmd(
-            s,
-            Command::Plant {
-                definition: "plate".into(),
-                position,
-                quarter_turns: 0,
-                color: 1,
-            },
-        ) {
-            Ok(Reply::Planted(id)) => id,
-            other => panic!("plant at {position:?}: {other:?}"),
-        }
-    };
+    let plant =
+        |s: &mut Session,
+         position: [f32; 3],
+         cmd: &mut dyn FnMut(&mut Session, Command) -> anyhow::Result<Reply>| {
+            match cmd(
+                s,
+                Command::Plant {
+                    definition: "plate".into(),
+                    position,
+                    quarter_turns: 0,
+                    color: 1,
+                },
+            ) {
+                Ok(Reply::Planted(id)) => id,
+                other => panic!("plant at {position:?}: {other:?}"),
+            }
+        };
     // A plate with one half-on top, and a plate beside them, not joined.
     let base = plant(&mut s, [0.5, 0.1, 0.25], &mut cmd);
     plant(&mut s, [1.0, 0.3, 0.25], &mut cmd);
@@ -2099,7 +2189,10 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
     // The copy keeps the bricks' own colour; the bricks glow cyan for now.
     assert!(copy.bricks.iter().all(|b| b.color == 1));
     let world = s.snapshot().world;
-    assert_eq!((world.bricks[&base].color, world.bricks[&base].color_effect), (2, 3));
+    assert_eq!(
+        (world.bricks[&base].color, world.bricks[&base].color_effect),
+        (2, 3)
+    );
     let prints: Vec<String> = private
         .into_iter()
         .filter_map(|(_, n)| match n {
@@ -2108,7 +2201,9 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
         })
         .collect();
     assert!(
-        prints.iter().any(|t| t.contains("Duplication") && t.contains("2 bricks selected")),
+        prints
+            .iter()
+            .any(|t| t.contains("Duplication") && t.contains("2 bricks selected")),
         "{prints:?}"
     );
     // Two seconds later they have their own colour back.
@@ -2116,7 +2211,10 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
         s.step().unwrap();
     }
     let world = s.snapshot().world;
-    assert_eq!((world.bricks[&base].color, world.bricks[&base].color_effect), (1, 0));
+    assert_eq!(
+        (world.bricks[&base].color, world.bricks[&base].color_effect),
+        (1, 0)
+    );
 
     // Planted over the lone plate: the bottom plate would overlap it and is
     // skipped, the top one sits on it and plants, and the player hears how
@@ -2142,11 +2240,17 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
         })
         .collect();
     assert!(
-        prints.iter().any(|t| t.contains("1") && t.contains("/") && t.contains("duplicated successfully")),
+        prints
+            .iter()
+            .any(|t| t.contains("1") && t.contains("/") && t.contains("duplicated successfully")),
         "{prints:?}"
     );
     // One undo takes the planted copy back.
-    cmd(&mut s, Command::Tool(bri_sim::session::ToolAction::UndoBrick)).unwrap();
+    cmd(
+        &mut s,
+        Command::Tool(bri_sim::session::ToolAction::UndoBrick),
+    )
+    .unwrap();
     assert_eq!(s.snapshot().world.bricks.len(), before);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -2227,7 +2331,9 @@ fn duplorcator_port_saves_and_loads_duplications() {
 
     let prints = typed(&mut s, "savedup", Some("My Tower"));
     assert!(
-        prints.iter().any(|t| t.contains("successfully saved as") && t.contains("My Tower")),
+        prints
+            .iter()
+            .any(|t| t.contains("successfully saved as") && t.contains("My Tower")),
         "{prints:?}"
     );
     let saved = store.saved("my tower").expect("the copy was kept");
@@ -2237,7 +2343,9 @@ fn duplorcator_port_saves_and_loads_duplications() {
     // A name nobody saved; then, a second on, the saved one.
     let prints = typed(&mut s, "loaddup", Some("Nothing"));
     assert!(
-        prints.iter().any(|t| t.contains("Nothing") && t.contains("does not exist")),
+        prints
+            .iter()
+            .any(|t| t.contains("Nothing") && t.contains("does not exist")),
         "{prints:?}"
     );
     for _ in 0..130 {
@@ -2246,7 +2354,9 @@ fn duplorcator_port_saves_and_loads_duplications() {
     s.take_private_notices();
     let prints = typed(&mut s, "loaddup", Some("my tower"));
     assert!(
-        prints.iter().any(|t| t.contains("Loaded duplication") && t.contains("2<color:99AAAA>/\\c42")),
+        prints
+            .iter()
+            .any(|t| t.contains("Loaded duplication") && t.contains("2<color:99AAAA>/\\c42")),
         "{prints:?}"
     );
     assert_eq!(s.blueprint(host).unwrap().bricks, saved.copy.bricks);
@@ -2256,11 +2366,8 @@ fn duplorcator_port_saves_and_loads_duplications() {
     let mut palette = vec![[0.5, 0.5, 0.5, 1.0]; 64];
     palette[5] = [0.0, 1.0, 1.0, 1.0];
     let loose = |position: [f32; 3]| {
-        let mut b = bri_world::Brick::new(
-            bri_world::ContentRef::Resolved("plate".into()),
-            position,
-            0,
-        );
+        let mut b =
+            bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), position, 0);
         b.color = 5;
         b
     };
@@ -2310,14 +2417,21 @@ fn duplorcator_port_saves_and_loads_duplications() {
     for _ in 0..3 {
         s.step().unwrap();
     }
-    let asked = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
-        Notice::Question {
-            package, command, ..
-        } => Some((package, command)),
-        _ => None,
-    });
+    let asked = s
+        .take_private_notices()
+        .into_iter()
+        .find_map(|(_, n)| match n {
+            Notice::Question {
+                package, command, ..
+            } => Some((package, command)),
+            _ => None,
+        });
     let (package, command) = asked.expect("the load asked first");
-    assert_eq!(s.blueprint(host).unwrap().bricks.len(), 2, "nothing loaded yet");
+    assert_eq!(
+        s.blueprint(host).unwrap().bricks.len(),
+        2,
+        "nothing loaded yet"
+    );
     let prints = {
         cmd(
             &mut s,
@@ -2366,7 +2480,10 @@ fn duplorcator_port_waits_after_big_plants_and_cancels() {
         for _ in 0..3 {
             s.step().unwrap();
         }
-        s.take_private_notices().into_iter().map(|(_, n)| n).collect()
+        s.take_private_notices()
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect()
     };
     let typed = |s: &mut Session, command: &str, arg: Option<&str>| {
         let reply = cmd(
@@ -2389,7 +2506,10 @@ fn duplorcator_port_waits_after_big_plants_and_cancels() {
     typed(&mut s, "dup", None);
     let drawn = notices(&mut s);
     assert!(
-        drawn.iter().filter_map(text).any(|t| t.contains("Normal") && t.contains("No bricks selected")),
+        drawn
+            .iter()
+            .filter_map(text)
+            .any(|t| t.contains("Normal") && t.contains("No bricks selected")),
         "{drawn:?}"
     );
 
@@ -2427,18 +2547,28 @@ fn duplorcator_port_waits_after_big_plants_and_cancels() {
     let refused = notices(&mut s);
     assert_eq!(s.snapshot().world.bricks.len(), bricks, "too soon");
     assert!(
-        refused.iter().any(|n| matches!(n, Notice::PlantError(PlantFailure::Limit))),
+        refused
+            .iter()
+            .any(|n| matches!(n, Notice::PlantError(PlantFailure::Limit))),
         "the flood error: {refused:?}"
     );
     assert!(
-        refused.iter().filter_map(text).any(|t| t.contains("You must wait") && t.contains("1") && t.contains("before planting again")),
+        refused
+            .iter()
+            .filter_map(text)
+            .any(|t| t.contains("You must wait")
+                && t.contains("1")
+                && t.contains("before planting again")),
         "{refused:?}"
     );
     for _ in 0..120 {
         s.step().unwrap();
     }
     let reply = place(&mut s, 6.0);
-    assert!(matches!(reply, Ok(Reply::Planted(_))), "a second on: {reply:?}");
+    assert!(
+        matches!(reply, Ok(Reply::Planted(_))),
+        "a second on: {reply:?}"
+    );
     assert_eq!(s.snapshot().world.bricks.len(), bricks + 60);
 
     // The cancel key lets the selection go.
@@ -2446,14 +2576,20 @@ fn duplorcator_port_waits_after_big_plants_and_cancels() {
     let canceled = notices(&mut s);
     assert!(s.blueprint(host).is_none(), "the selection is gone");
     assert!(
-        canceled.iter().filter_map(text).any(|t| t.contains("Normal") && t.contains("No bricks selected")),
+        canceled
+            .iter()
+            .filter_map(text)
+            .any(|t| t.contains("Normal") && t.contains("No bricks selected")),
         "{canceled:?}"
     );
 
     typed(&mut s, "reloaddup", None);
     let reloaded = notices(&mut s);
     assert!(
-        reloaded.iter().filter_map(text).any(|t| t == "You have no cached duplication"),
+        reloaded
+            .iter()
+            .filter_map(text)
+            .any(|t| t == "You have no cached duplication"),
         "{reloaded:?}"
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -2520,9 +2656,14 @@ fn nd_shapes(
 /// The corners of `owner`'s selection box, from its outer faces (0.01
 /// outside it).
 fn nd_box(s: &bri_sim::session::Session, owner: u64) -> Option<([f32; 3], [f32; 3])> {
-    let outer = nd_shapes(s, owner, "box").into_iter().find(|x| x.color == [0, 0, 0, 89])?;
+    let outer = nd_shapes(s, owner, "box")
+        .into_iter()
+        .find(|x| x.color == [0, 0, 0, 89])?;
     let snap = |v: f32| (v * 1e4).round() / 1e4;
-    Some((outer.min.map(|v| snap(v + 0.01)), outer.max.map(|v| snap(v - 0.01))))
+    Some((
+        outer.min.map(|v| snap(v + 0.01)),
+        outer.max.map(|v| snap(v - 0.01)),
+    ))
 }
 
 /// The stand-in New Duplicator hosted, with a plate, a half-on plate on it
@@ -2555,11 +2696,17 @@ fn new_duplicator_game(
     assert_eq!(pack.items["tool_newduplicator:weapon/nd_item"].idle, "spin");
     for image in ["nd_image", "nd_image_box", "nd_image_blue"] {
         let image = &pack.images[&format!("tool_newduplicator:image/{image}")];
-        assert_eq!(image.command.as_deref(), Some("tool_newduplicator-rules:fire"));
+        assert_eq!(
+            image.command.as_deref(),
+            Some("tool_newduplicator-rules:fire")
+        );
         // Unloaded while a job runs, it spins (`stateSpinThread`).
         let ready = &image.states[1];
         let spin = ready.not_loaded.map(|i| &image.states[i]).unwrap();
-        assert_eq!((ready.spin, spin.spin), (bri_weapons::Spin::Stop, bri_weapons::Spin::FullSpeed));
+        assert_eq!(
+            (ready.spin, spin.spin),
+            (bri_weapons::Spin::Stop, bri_weapons::Spin::FullSpeed)
+        );
         assert_eq!(spin.loaded, Some(1));
         assert_eq!(
             image.commands.unmount.as_deref(),
@@ -2658,7 +2805,9 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     );
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains("Selection Mode") && t.contains("Select stack up")),
+        prints
+            .iter()
+            .any(|t| t.contains("Selection Mode") && t.contains("Select stack up")),
         "taking it out starts stack mode: {prints:?}"
     );
     // Ctrl+V means nothing in stack mode (`NewDuplicatorMode::onPaste`).
@@ -2666,7 +2815,9 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     s.step().unwrap();
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains("Paste can not be used in your current duplicator mode.")),
+        prints
+            .iter()
+            .any(|t| t.contains("Paste can not be used in your current duplicator mode.")),
         "{prints:?}"
     );
 
@@ -2689,13 +2840,17 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     );
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Selected \c32\c6 Bricks!")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Selected \c32\c6 Bricks!")),
         "{prints:?}"
     );
     assert!(
-        prints.iter().any(|t| t.contains(r"Selection Mode (\c32\c6 Bricks)")
-            && t.contains("<just:right>")
-            && t.contains("[Plant Brick]: Duplicate")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Selection Mode (\c32\c6 Bricks)")
+                && t.contains("<just:right>")
+                && t.contains("[Plant Brick]: Duplicate")),
         "{prints:?}"
     );
 
@@ -2774,13 +2929,17 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Planted \c31\c6 / \c32\c6 Brick!")
-            && t.contains(r"\c31\c6 blocked.")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Planted \c31\c6 / \c32\c6 Brick!")
+                && t.contains(r"\c31\c6 blocked.")),
         "{prints:?}"
     );
     assert!(
-        prints.iter().any(|t| t.contains(r"Plant Mode (\c32\c6 Bricks)")
-            && t.contains(r"Size: \c33\c6 x \c31\c6 x \c32\c6 Plates")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Plant Mode (\c32\c6 Bricks)")
+                && t.contains(r"Size: \c33\c6 x \c31\c6 x \c32\c6 Plates")),
         "{prints:?}"
     );
     send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
@@ -2792,7 +2951,9 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     assert!(s.blueprint(host).is_none());
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains("Click Brick: Select stack up")),
+        prints
+            .iter()
+            .any(|t| t.contains("Click Brick: Select stack up")),
         "{prints:?}"
     );
 
@@ -2811,9 +2972,9 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     assert_eq!(shapes.len(), 17, "{shapes:#?}");
     let name = s.names()[&host].clone();
     assert!(
-        shapes
-            .iter()
-            .any(|x| x.label.starts_with(&name) && x.label.ends_with(" Selection Box") && x.color[..3] == [255, 214, 0]),
+        shapes.iter().any(|x| x.label.starts_with(&name)
+            && x.label.ends_with(" Selection Box")
+            && x.color[..3] == [255, 214, 0]),
         "{shapes:#?}"
     );
     assert!(shapes.iter().any(|x| x.inside == [0, 0, 0, 153]));
@@ -2847,14 +3008,20 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(1));
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains("Press [Cancel Brick] to adjust the box.")),
+        prints
+            .iter()
+            .any(|t| t.contains("Press [Cancel Brick] to adjust the box.")),
         "{prints:?}"
     );
     // Cancel lets the selection go and keeps the box.
     send(&mut s, host, &seq, Command::CancelBrick).unwrap();
     s.step().unwrap();
     assert!(s.blueprint(host).is_none());
-    assert!(told(&mut s).iter().any(|t| t.contains("Selection canceled!")));
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains("Selection canceled!"))
+    );
     // [Prev Seat]: not limited, the box takes what reaches into it too.
     send(&mut s, host, &seq, Command::SwitchSeat(-1)).unwrap();
     s.step().unwrap();
@@ -2916,7 +3083,10 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
         prints.iter().any(|t| t.contains(r"Cut \c32\c6 Bricks!")),
         "{prints:?}"
     );
-    assert!(prints.iter().any(|t| t.contains("Plant Mode")), "{prints:?}");
+    assert!(
+        prints.iter().any(|t| t.contains("Plant Mode")),
+        "{prints:?}"
+    );
     send(&mut s, host, &seq, typed("mx", &[])).unwrap();
     send(&mut s, host, &seq, typed("mz", &[])).unwrap();
     s.step().unwrap();
@@ -2978,7 +3148,10 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
         prints.iter().any(|t| t.contains(r"got \c32\c6 Bricks!")),
         "{prints:?}"
     );
-    assert!(prints.iter().any(|t| t.contains("Plant Mode")), "{prints:?}");
+    assert!(
+        prints.iter().any(|t| t.contains("Plant Mode")),
+        "{prints:?}"
+    );
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
@@ -2989,23 +3162,35 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
 /// sends `/NdMultiSelect` as Ctrl goes down and again as it comes up.
 fn swing_multi(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>) {
     use bri_sim::session::PackageArg;
-    send(s, host, seq, nd_key("ndmultiselect", vec![PackageArg::Bool(true)])).unwrap();
+    send(
+        s,
+        host,
+        seq,
+        nd_key("ndmultiselect", vec![PackageArg::Bool(true)]),
+    )
+    .unwrap();
     swing(s, host, seq);
-    send(s, host, seq, nd_key("ndmultiselect", vec![PackageArg::Bool(false)])).unwrap();
+    send(
+        s,
+        host,
+        seq,
+        nd_key("ndmultiselect", vec![PackageArg::Bool(false)]),
+    )
+    .unwrap();
 }
 
 /// The answer to the New Duplicator's question, as the player's OK sends it.
-fn answer(
-    s: &mut bri_sim::session::Session,
-    host: u64,
-    seq: &std::cell::Cell<u64>,
-    asked: &str,
-) {
+fn answer(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>, asked: &str) {
     use bri_sim::session::Notice;
-    let question = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
-        Notice::Question { package, command, .. } => Some((package, command)),
-        _ => None,
-    });
+    let question = s
+        .take_private_notices()
+        .into_iter()
+        .find_map(|(_, n)| match n {
+            Notice::Question {
+                package, command, ..
+            } => Some((package, command)),
+            _ => None,
+        });
     let (package, command) = question.expect("the port asked first");
     assert_eq!(command, asked);
     send(
@@ -3049,7 +3234,11 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     swing_multi(&mut s, host, &seq);
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
     swing(&mut s, host, &seq);
-    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(1), "without Ctrl it is replaced");
+    assert_eq!(
+        s.blueprint(host).map(|b| b.bricks.len()),
+        Some(1),
+        "without Ctrl it is replaced"
+    );
     send(&mut s, host, &seq, Command::SwitchSeat(1)).unwrap();
     swing(&mut s, host, &seq);
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
@@ -3075,7 +3264,11 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
         (2, 0),
         "painted, and no longer glowing"
     );
-    assert!(told(&mut s).iter().any(|t| t.contains(r"Painted \c32\c6 Bricks!")));
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains(r"Painted \c32\c6 Bricks!"))
+    );
     send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
     assert_eq!(s.snapshot().world.bricks[&base].color, 1);
     // An FX can: the Undulo shape effect.
@@ -3122,7 +3315,11 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     let world = s.snapshot().world;
     assert_eq!(world.bricks[&base].name.as_deref(), Some("tower"));
     assert!(!world.bricks[&base].raycast);
-    assert!(told(&mut s).iter().any(|t| t.contains(r"Applied changes to \c32\c6 Bricks!")));
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains(r"Applied changes to \c32\c6 Bricks!"))
+    );
     send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
     assert_eq!(s.snapshot().world.bricks[&base].name, None);
 
@@ -3153,7 +3350,11 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     assert_eq!(s.snapshot().world.bricks.len(), before);
     send(&mut s, host, &seq, typed("tfp", &[])).unwrap();
     s.step().unwrap();
-    assert!(told(&mut s).iter().any(|t| t.contains("Force Plant has been enabled")));
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains("Force Plant has been enabled"))
+    );
 
     // Back to selecting, the stack again, then box mode boxes it.
     send(&mut s, host, &seq, Command::CancelBrick).unwrap();
@@ -3172,7 +3373,11 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     s.step().unwrap();
     answer(&mut s, host, &seq, "ndconfirmsupercut");
     assert_eq!(s.snapshot().world.bricks.len(), before - 2);
-    assert!(told(&mut s).iter().any(|t| t.contains(r"Deleted \c32\c6 Bricks!")));
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains(r"Deleted \c32\c6 Bricks!"))
+    );
     send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
     assert_eq!(s.snapshot().world.bricks.len(), before);
     // /FillBricks: a supercut, then the box filled with plain plates.
@@ -3183,13 +3388,24 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
         s.step().unwrap();
     }
     let prints = told(&mut s);
-    assert!(prints.iter().any(|t| t.contains(r"Filled in \c32\c6 bricks")), "{prints:?}");
+    assert!(
+        prints
+            .iter()
+            .any(|t| t.contains(r"Filled in \c32\c6 bricks")),
+        "{prints:?}"
+    );
     // The box is 3 studs by 2 plates: two 2x1 plates fill it, the stud
     // left over takes no plate this catalog has.
     assert_eq!(s.snapshot().world.bricks.len(), before - 2 + 2);
     // Ctrl held, the brick keys move the whole box.
     told(&mut s);
-    send(&mut s, host, &seq, nd_key("ndmultiselect", vec![PackageArg::Bool(true)])).unwrap();
+    send(
+        &mut s,
+        host,
+        &seq,
+        nd_key("ndmultiselect", vec![PackageArg::Bool(true)]),
+    )
+    .unwrap();
     for _ in 0..5 {
         look(&mut s, host);
     }
@@ -3210,7 +3426,10 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     .unwrap();
     s.step().unwrap();
     let moved = nd_box(&s, host).expect("the box moved");
-    assert!((moved.0[1] - 0.2).abs() < 1e-4 && (moved.1[1] - 0.6).abs() < 1e-4, "{moved:?}");
+    assert!(
+        (moved.0[1] - 0.2).abs() < 1e-4 && (moved.1[1] - 0.6).abs() < 1e-4,
+        "{moved:?}"
+    );
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
@@ -3230,7 +3449,9 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-plant-as");
     let store = Arc::new(MemoryCopies::default());
     s.set_copy_store(store.clone());
-    let guest = s.join("Guest".into(), Vec3::new(4.0, 0.05, 4.0), false).unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 0.05, 4.0), false)
+        .unwrap();
     // A third plate on the top one: the stack up from the bottom is 3.
     let reply = send(
         &mut s,
@@ -3250,7 +3471,9 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     s.step().unwrap();
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Pivot: \c3Whole Selection\c6 [Prev Seat]")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Pivot: \c3Whole Selection\c6 [Prev Seat]")),
         "{prints:?}"
     );
 
@@ -3275,14 +3498,18 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     s.step().unwrap();
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r#"No brick group was found for "\c3Nobody\c6""#)),
+        prints
+            .iter()
+            .any(|t| t.contains(r#"No brick group was found for "\c3Nobody\c6""#)),
         "{prints:?}"
     );
     send(&mut s, host, &seq, typed("pa", &["gue"])).unwrap();
     s.step().unwrap();
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"planted in \c3Guest\c6's group!")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"planted in \c3Guest\c6's group!")),
         "{prints:?}"
     );
     assert!(
@@ -3304,16 +3531,25 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
     let world = s.snapshot().world;
     assert_eq!(world.bricks.len(), before + 3);
-    assert_eq!(world.bricks.values().filter(|b| b.owner == guest).count(), 3);
+    assert_eq!(
+        world.bricks.values().filter(|b| b.owner == guest).count(),
+        3
+    );
     for _ in 0..3 {
         s.step().unwrap();
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Planted \c33\c6 / \c33\c6 Bricks!")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Planted \c33\c6 / \c33\c6 Bricks!")),
         "{prints:?}"
     );
-    assert!(!prints.iter().any(|t| t.contains("probably mirrored incorrectly")));
+    assert!(
+        !prints
+            .iter()
+            .any(|t| t.contains("probably mirrored incorrectly"))
+    );
     // A plain plate mirrors exactly.
     send(&mut s, host, &seq, typed("me", &[])).unwrap();
     s.step().unwrap();
@@ -3328,7 +3564,10 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     assert_eq!(s.snapshot().world.bricks.len(), before + 3);
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Next undo will affect \c33\c6 bricks. Press undo again to continue.")),
+        prints
+            .iter()
+            .any(|t| t
+                .contains(r"Next undo will affect \c33\c6 bricks. Press undo again to continue.")),
         "{prints:?}"
     );
     send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
@@ -3351,7 +3590,8 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r#"Save "\c3Tower\c6" already exists. Repeat the command to overwrite."#)),
+        prints.iter().any(|t| t
+            .contains(r#"Save "\c3Tower\c6" already exists. Repeat the command to overwrite."#)),
         "{prints:?}"
     );
     send(&mut s, host, &seq, typed("sd", &["Tower"])).unwrap();
@@ -3360,7 +3600,9 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Finished saving selection, wrote \c33\c6 Bricks!")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Finished saving selection, wrote \c33\c6 Bricks!")),
         "{prints:?}"
     );
     assert_eq!(store.saved("tower").expect("kept").copy.bricks.len(), 3);
@@ -3372,17 +3614,24 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"\c31\c6 saved duplication is available:")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"\c31\c6 saved duplication is available:")),
         "{prints:?}"
     );
-    assert!(prints.iter().any(|t| t.contains(r" - \c3Tower")), "{prints:?}");
+    assert!(
+        prints.iter().any(|t| t.contains(r" - \c3Tower")),
+        "{prints:?}"
+    );
     send(&mut s, host, &seq, typed("alldups", &["zzz"])).unwrap();
     for _ in 0..3 {
         s.step().unwrap();
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r#"No saved duplications are available for filter "\c3zzz\c6"."#)),
+        prints
+            .iter()
+            .any(|t| t.contains(r#"No saved duplications are available for filter "\c3zzz\c6"."#)),
         "{prints:?}"
     );
     send(&mut s, host, &seq, typed("ad", &["a/b"])).unwrap();
@@ -3419,7 +3668,9 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
     assert_eq!(s.snapshot().world.bricks.len(), before + 3);
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"You need to wait\c3 2\c6 seconds before planting again!")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"You need to wait\c3 2\c6 seconds before planting again!")),
         "{prints:?}"
     );
     for _ in 0..(2 * bri_world::TICKS_PER_SECOND) {
@@ -3458,7 +3709,12 @@ fn new_duplicator_port_keys_and_admin_commands() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|b| (b["command"].as_str().unwrap(), b["key"].as_str().unwrap_or("")))
+        .map(|b| {
+            (
+                b["command"].as_str().unwrap(),
+                b["key"].as_str().unwrap_or(""),
+            )
+        })
         .collect();
     assert!(keys.contains(&("ndcopy", "ctrl c")), "{keys:?}");
     assert!(keys.contains(&("ndmultiselect", "lcontrol")), "{keys:?}");
@@ -3478,9 +3734,15 @@ fn new_duplicator_port_keys_and_admin_commands() {
     send(&mut s, host, &seq, nd_key("ndcopy", vec![])).unwrap();
     s.step().unwrap();
     let notices = s.take_private_notices();
-    assert!(notices.iter().any(|(_, n)| matches!(n, Notice::Blueprint(Some(_)))));
     assert!(
-        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains("Plant Mode"))),
+        notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::Blueprint(Some(_))))
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains("Plant Mode"))),
         "{notices:?}"
     );
     // Ctrl V plants it.
@@ -3508,18 +3770,27 @@ fn new_duplicator_port_keys_and_admin_commands() {
     send(&mut s, host, &seq, typed("dv", &[])).unwrap();
     s.step().unwrap();
     let prints = told(&mut s);
-    assert!(prints.iter().any(|t| t.contains("Blockland version: ")), "{prints:?}");
     assert!(
-        prints.iter().any(|t| t.contains(r"New duplicator version: \c39.9.1")),
+        prints.iter().any(|t| t.contains("Blockland version: ")),
         "{prints:?}"
     );
-    let guest = s.join("Guest".into(), Vec3::new(4.0, 0.05, 4.0), false).unwrap();
+    assert!(
+        prints
+            .iter()
+            .any(|t| t.contains(r"New duplicator version: \c39.9.1")),
+        "{prints:?}"
+    );
+    let guest = s
+        .join("Guest".into(), Vec3::new(4.0, 0.05, 4.0), false)
+        .unwrap();
     send(&mut s, host, &seq, typed("dupclients", &[])).unwrap();
     s.step().unwrap();
     let prints = told(&mut s);
     for name in ["Host", "Guest"] {
         assert!(
-            prints.iter().any(|t| t.contains(&format!(r"\c3{name}\c6 has \c39.9.1"))),
+            prints
+                .iter()
+                .any(|t| t.contains(&format!(r"\c3{name}\c6 has \c39.9.1"))),
             "{prints:?}"
         );
     }
@@ -3539,7 +3810,6 @@ fn new_duplicator_port_keys_and_admin_commands() {
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
 }
-
 
 /// A plant bigger than a tick's copy work goes on over the next ticks
 /// behind the original's progress line (`NDM_PlantCopyProgress`), and
@@ -3580,8 +3850,10 @@ fn new_duplicator_port_shows_progress_and_cancels_a_big_plant() {
     assert!(!s.copy_working(host));
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Planting... (\c350%\c6, \c30\c6 failed)")
-            && t.contains("[Cancel Brick]: Cancel planting")),
+        prints
+            .iter()
+            .any(|t| t.contains(r"Planting... (\c350%\c6, \c30\c6 failed)")
+                && t.contains("[Cancel Brick]: Cancel planting")),
         "{prints:?}"
     );
     assert!(
@@ -3649,7 +3921,12 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     send(&mut s, host, &seq, typed("sc", &[])).unwrap();
     s.step().unwrap();
     answer(&mut s, host, &seq, "ndconfirmsupercut");
-    assert!(s.copy_working(host), "{:?} {}", told(&mut s), s.snapshot().world.bricks.len());
+    assert!(
+        s.copy_working(host),
+        "{:?} {}",
+        told(&mut s),
+        s.snapshot().world.bricks.len()
+    );
     // While it works the duplicator spins (`setImageLoaded(0, false)`).
     let held = |s: &bri_sim::session::Session| s.weapon_view().images[&host][0].state.clone();
     let mut spun = false;
@@ -3663,15 +3940,26 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     while held(&s) != "Ready" {
         s.step().unwrap();
         ticks += 1;
-        assert!(ticks < 10, "it stops spinning when the job ends: {}", held(&s));
+        assert!(
+            ticks < 10,
+            "it stops spinning when the job ends: {}",
+            held(&s)
+        );
     }
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains("Supercut in progress... (")
-            && t.contains("[Cancel Brick]: Cancel supercut")),
+        prints
+            .iter()
+            .any(|t| t.contains("Supercut in progress... (")
+                && t.contains("[Cancel Brick]: Cancel supercut")),
         "{prints:?}"
     );
-    assert!(prints.iter().any(|t| t.contains(r"Deleted \c310\c6 Bricks!")), "{prints:?}");
+    assert!(
+        prints
+            .iter()
+            .any(|t| t.contains(r"Deleted \c310\c6 Bricks!")),
+        "{prints:?}"
+    );
     assert_eq!(s.snapshot().world.bricks.len(), before - 10);
     // Its undo (asked twice, over the stand-in's 2) puts them all back,
     // over ticks.
@@ -3692,7 +3980,11 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     send(&mut s, host, &seq, Command::CancelBrick).unwrap();
     s.step().unwrap();
     assert!(!s.copy_working(host));
-    assert!(told(&mut s).iter().any(|t| t.contains("Supercut canceled!")));
+    assert!(
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains("Supercut canceled!"))
+    );
     let left = s.snapshot().world.bricks.len();
     assert!(left < before && left > before - 10, "{left} of {before}");
     undo(&mut s);
@@ -3708,9 +4000,17 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     assert!(s.copy_working(host));
     finish(&mut s);
     let prints = told(&mut s);
-    assert!(prints.iter().any(|t| t.contains("Filling in bricks... (")), "{prints:?}");
+    assert!(
+        prints.iter().any(|t| t.contains("Filling in bricks... (")),
+        "{prints:?}"
+    );
     // Ten plates fill the box the ten were cut from.
-    assert!(prints.iter().any(|t| t.contains(r"Filled in \c310\c6 bricks")), "{prints:?}");
+    assert!(
+        prints
+            .iter()
+            .any(|t| t.contains(r"Filled in \c310\c6 bricks")),
+        "{prints:?}"
+    );
     assert_eq!(s.snapshot().world.bricks.len(), before);
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
@@ -3768,7 +4068,10 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
             quarter_turns: 0,
             color: 1,
         };
-        assert!(matches!(send(&mut s, host, &seq, plant), Ok(Reply::Planted(_))));
+        assert!(matches!(
+            send(&mut s, host, &seq, plant),
+            Ok(Reply::Planted(_))
+        ));
     }
     s.set_copy_work(32);
     for _ in 0..3 {
@@ -3784,7 +4087,8 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
     let (prints, sounds) = heard(&mut s, host);
     assert!(sounds.iter().any(|x| x == "uploadStartSound"), "{sounds:?}");
     assert!(
-        prints.iter().any(|t| t.contains("Selecting... (") && t.contains(r"\c6 in Queue)")
+        prints.iter().any(|t| t.contains("Selecting... (")
+            && t.contains(r"\c6 in Queue)")
             && t.contains("[Cancel Brick]: Cancel selection")),
         "{prints:?}"
     );
@@ -3792,7 +4096,10 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
     s.step().unwrap();
     assert!(!s.copy_working(host));
     let (prints, _) = heard(&mut s, host);
-    assert!(prints.iter().any(|t| t.contains("Selection canceled!")), "{prints:?}");
+    assert!(
+        prints.iter().any(|t| t.contains("Selection canceled!")),
+        "{prints:?}"
+    );
     assert!(s.blueprint(host).is_none());
 
     // Selected whole: the end sound, and a glow that lasts.
@@ -3805,14 +4112,21 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
     }
     s.step().unwrap();
     let (prints, sounds) = heard(&mut s, host);
-    assert!(sounds.iter().any(|x| x == "uploadEndSound"), "{sounds:?} {prints:?}");
+    assert!(
+        sounds.iter().any(|x| x == "uploadEndSound"),
+        "{sounds:?} {prints:?}"
+    );
     assert_eq!(s.blueprint(host).unwrap().bricks.len(), 14);
     // The bottom plate, by where it is (an undone cut puts it back as a
     // new brick).
     let at = s.snapshot().world.bricks[&base].position;
     let glow = |s: &bri_sim::session::Session| {
         let world = s.snapshot().world;
-        let brick = world.bricks.values().find(|b| b.position == at).expect("the bottom plate");
+        let brick = world
+            .bricks
+            .values()
+            .find(|b| b.position == at)
+            .expect("the bottom plate");
         (brick.color, brick.color_effect)
     };
     assert_eq!(glow(&s), (1, 3));
@@ -3838,7 +4152,13 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
     assert!(s.blueprint(host).is_none());
     let left = s.snapshot().world.bricks.len();
     assert!(left < before, "{left} of {before}");
-    send(&mut s, host, &seq, Command::Tool(bri_sim::session::ToolAction::UndoBrick)).unwrap();
+    send(
+        &mut s,
+        host,
+        &seq,
+        Command::Tool(bri_sim::session::ToolAction::UndoBrick),
+    )
+    .unwrap();
     while s.copy_working(host) {
         s.step().unwrap();
     }
@@ -3874,7 +4194,9 @@ fn new_duplicator_port_refuses_a_box_corner_without_trust() {
 
     let (dir, mut s, _host, _seq, _) = new_duplicator_game("new-duplicator-box-trust");
     // Standing on the host's lone plate, looking straight down at it.
-    let guest = s.join("Guest".into(), Vec3::new(2.5, 0.25, 0.25), false).unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(2.5, 0.25, 0.25), false)
+        .unwrap();
     let gseq = std::cell::Cell::new(0u64);
     send(&mut s, guest, &gseq, typed("d", &[])).unwrap();
     let down = |s: &mut bri_sim::session::Session, n: u64| {
@@ -3898,7 +4220,13 @@ fn new_duplicator_port_refuses_a_box_corner_without_trust() {
     }
     heard(&mut s, guest);
     for pressed in [true, false] {
-        send(&mut s, guest, &gseq, Command::WeaponTrigger { down: pressed }).unwrap();
+        send(
+            &mut s,
+            guest,
+            &gseq,
+            Command::WeaponTrigger { down: pressed },
+        )
+        .unwrap();
         down(&mut s, 0);
     }
     for n in 0..5 {
@@ -3906,7 +4234,9 @@ fn new_duplicator_port_refuses_a_box_corner_without_trust() {
     }
     let (prints, sounds) = heard(&mut s, guest);
     assert!(
-        prints.iter().any(|t| t.contains("You don't have enough trust to do that!")),
+        prints
+            .iter()
+            .any(|t| t.contains("You don't have enough trust to do that!")),
         "{prints:?}"
     );
     assert!(sounds.iter().any(|x| x == "errorSound"), "{sounds:?}");
@@ -3939,7 +4269,8 @@ fn new_duplicator_port_mirrors_a_ghost_brick() {
     s.step().unwrap();
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains("The mirror command can only be used in plant mode or with a ghost brick.")),
+        prints.iter().any(|t| t
+            .contains("The mirror command can only be used in plant mode or with a ghost brick.")),
         "{prints:?}"
     );
     send(&mut s, host, &seq, hand(true)).unwrap();
@@ -3962,7 +4293,9 @@ fn new_duplicator_port_mirrors_a_ghost_brick() {
         .map(|(_, n)| n)
         .collect();
     assert!(
-        notices.iter().any(|n| matches!(n, Notice::MirrorGhost { definition, .. } if definition == "plate")),
+        notices
+            .iter()
+            .any(|n| matches!(n, Notice::MirrorGhost { definition, .. } if definition == "plate")),
         "{notices:?}"
     );
     let diagnostics = s.package_diagnostics();
@@ -3986,8 +4319,13 @@ fn new_duplicator_port_follows_the_hosts_server_settings() {
         .filter(|a| a.package.starts_with("tool_newduplicator"))
         .collect();
     assert_eq!(listed.len(), 19);
-    assert!(listed.iter().all(|a| a.def.scope == SettingScope::Server
-        && a.def.global.as_deref().is_some_and(|g| g.starts_with("$Pref::Server::ND::"))));
+    assert!(listed.iter().all(|a| {
+        a.def.scope == SettingScope::Server
+            && a.def
+                .global
+                .as_deref()
+                .is_some_and(|g| g.starts_with("$Pref::Server::ND::"))
+    }));
     let default = |key: &str| {
         let found = listed.iter().find(|a| a.def.key == key).unwrap();
         (found.key(), found.def.default.clone())
@@ -4010,7 +4348,11 @@ fn new_duplicator_port_follows_the_hosts_server_settings() {
     let mut settings = s.server_settings().clone();
     settings.addon_settings.insert(sounds_key, V::Bool(false));
     s.set_server_settings(settings).unwrap();
-    assert_eq!(light(&mut s), Vec::<String>::new(), "the host turned menu sounds off");
+    assert_eq!(
+        light(&mut s),
+        Vec::<String>::new(),
+        "the host turned menu sounds off"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

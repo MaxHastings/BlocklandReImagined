@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 pub use bri_package::setting::SettingValue;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCHEMA_VERSION: u32 = 1;

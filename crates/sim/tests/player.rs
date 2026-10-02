@@ -66,7 +66,10 @@ fn native_water_buoyancy_drag_and_exit_share_the_player_motor() {
         player.state().feet[1] > 1.0,
         "Submerged player did not rise"
     );
-    assert!(player.state().crouched, "v20 crouches fully submerged players");
+    assert!(
+        player.state().crouched,
+        "v20 crouches fully submerged players"
+    );
     // v20 swim push 0.5 per 32 ms tick, then drag 0.1 * viscosity 40 takes
     // 12.8% of the speed: 0.5 * 0.872 / 0.128 = 3.41.
     assert!(
@@ -185,7 +188,11 @@ fn walking_speed_jump_edge_and_landing() {
         120,
     );
     // v20 applies drag after the run force: 7 * (1 - 0.1 * 0.032) per tick.
-    assert!((p.state().velocity[2] + 6.9776).abs() < 0.001, "{:?}", p.state());
+    assert!(
+        (p.state().velocity[2] + 6.9776).abs() < 0.001,
+        "{:?}",
+        p.state()
+    );
     assert!(p.state().feet[2] < -6.0);
     step(&mut p, &mut world, MoveInput::default(), 30);
     assert!(Vec3::from(p.state().velocity).length() < 0.01);
@@ -561,7 +568,11 @@ fn v20_steps_need_only_player_height_beneath_ceilings() {
     let mut p = spawn(&mut w);
     low_room(&mut w, 0.2, 2.8);
     walk_forward(&mut p, &mut w, 150);
-    assert!(p.state().feet[2] > -1.0 && p.state().feet[1] < 0.011, "{:?}", p.state());
+    assert!(
+        p.state().feet[2] > -1.0 && p.state().feet[1] < 0.011,
+        "{:?}",
+        p.state()
+    );
 }
 #[test]
 fn jumping_under_a_v20_lintel_bumps_the_head_and_keeps_walking() {
@@ -714,15 +725,21 @@ fn v_lane() -> PhysicsWorld {
 fn a_wedged_rider_gains_lane_speed_on_v20_ticks() {
     let lane_speed = |torque_tick: Option<f32>| {
         let mut w = v_lane();
-        let mut p =
-            Player::spawn(&mut w, 1, Vec3::new(0.0, 1.5, -150.0), PlayerTuning::default()).unwrap();
+        let mut p = Player::spawn(
+            &mut w,
+            1,
+            Vec3::new(0.0, 1.5, -150.0),
+            PlayerTuning::default(),
+        )
+        .unwrap();
         p.set_motion(Vec3::new(0.0, 0.0, 2.0), false);
         let mut speeds = vec![];
         for second in 0..30 {
             match torque_tick {
                 Some(dt) => {
                     for _ in 0..(1.0 / dt).round() as usize {
-                        p.torque_tick(&mut w, MoveInput::default(), &[], dt).unwrap();
+                        p.torque_tick(&mut w, MoveInput::default(), &[], dt)
+                            .unwrap();
                     }
                 }
                 None => step(&mut p, &mut w, MoveInput::default(), 120),
@@ -730,7 +747,10 @@ fn a_wedged_rider_gains_lane_speed_on_v20_ticks() {
             let v = Vec3::from(p.state().velocity);
             let feet = Vec3::from(p.state().feet);
             // Still wedged in the lane, moving along it.
-            assert!(feet.x.abs() < 0.01 && (1.3..1.45).contains(&feet.y), "{second}: {feet}");
+            assert!(
+                feet.x.abs() < 0.01 && (1.3..1.45).contains(&feet.y),
+                "{second}: {feet}"
+            );
             speeds.push(v.z);
         }
         speeds
@@ -744,7 +764,11 @@ fn a_wedged_rider_gains_lane_speed_on_v20_ticks() {
     let ticks = lane_speed(Some(0.032));
     assert!((ticks[29] - settled).abs() < 0.2, "{ticks:?}");
     let fast = lane_speed(Some(1.0 / 120.0));
-    assert!((fast[29] - 3.248).abs() < 0.05, "120 Hz ticks settle at {}", fast[29]);
+    assert!(
+        (fast[29] - 3.248).abs() < 0.05,
+        "120 Hz ticks settle at {}",
+        fast[29]
+    );
 }
 
 #[test]
@@ -825,10 +849,7 @@ fn jump_off_steep_cone(yaw: f32) -> (Vec3, Vec3) {
     for _ in 0..8 {
         if tick(&mut p, &mut w, jump).jumped {
             let state = p.state();
-            return (
-                Vec3::from(state.velocity),
-                Vec3::from(state.jump.normal),
-            );
+            return (Vec3::from(state.velocity), Vec3::from(state.jump.normal));
         }
     }
     panic!("no jump off the cone: {:?}", p.state())
@@ -845,12 +866,18 @@ fn jumping_away_from_a_steep_face_launches_along_the_move() {
     // The box's corner may rest on a neighbouring face; the push follows
     // whichever face it jumped off, on top of the tick's run force.
     let push = 12.0 * normal.x;
-    assert!(push > 7.0 && away.x > push && away.x < push + 2.0, "{away} {normal}");
+    assert!(
+        push > 7.0 && away.x > push && away.x < push + 2.0,
+        "{away} {normal}"
+    );
     assert!(away.x > 9.0, "{away}");
     let (into, normal) = jump_off_steep_cone(-std::f32::consts::FRAC_PI_2);
     // Only the tick's run force moves it toward the face; no push.
     assert!(into.x < 0.0 && into.x > -2.0, "{into} {normal}");
-    assert!(into.y > 0.0 && into.y < 12.0 * normal.y + 0.5, "{into} {normal}");
+    assert!(
+        into.y > 0.0 && into.y < 12.0 * normal.y + 0.5,
+        "{into} {normal}"
+    );
 }
 #[test]
 fn a_held_bunny_hop_carries_speed_from_hop_to_hop() {
@@ -908,7 +935,11 @@ fn walking_into_a_stacked_brick_wall_keeps_the_jump() {
         w.detect_collisions(&(), &());
         let mut p = spawn(&mut w);
         walk_forward(&mut p, &mut w, 120);
-        assert!(p.state().feet[2] > -2.6, "went through the wall: {:?}", p.state());
+        assert!(
+            p.state().feet[2] > -2.6,
+            "went through the wall: {:?}",
+            p.state()
+        );
         assert!(!p.state().jump.ceiling, "seam {seam}: {:?}", p.state().jump);
         let back = MoveInput {
             forward: -1.0,
@@ -917,7 +948,11 @@ fn walking_into_a_stacked_brick_wall_keeps_the_jump() {
         step(&mut p, &mut w, back, 60);
         step(&mut p, &mut w, MoveInput::default(), 60);
         assert!(p.state().grounded, "{:?}", p.state());
-        assert!(tick(&mut p, &mut w, jump).jumped, "seam {seam}: {:?}", p.state().jump);
+        assert!(
+            tick(&mut p, &mut w, jump).jumped,
+            "seam {seam}: {:?}",
+            p.state().jump
+        );
     }
 
     let mut w = scene();
@@ -958,8 +993,11 @@ fn ramp_roof(w: &mut PhysicsWorld) {
             w.insert_collider(ColliderBuilder::convex_hull(&points).unwrap(), None);
             if y > 0.0 {
                 w.insert_collider(
-                    ColliderBuilder::cuboid(0.5, y * 0.5, 0.5)
-                        .translation(Vector::new(x + 0.5, y * 0.5, z - 0.5)),
+                    ColliderBuilder::cuboid(0.5, y * 0.5, 0.5).translation(Vector::new(
+                        x + 0.5,
+                        y * 0.5,
+                        z - 0.5,
+                    )),
                     None,
                 );
             }
@@ -1018,7 +1056,8 @@ fn crouching_into_a_brick_corner_keeps_the_jump() {
         let half = (max - min) * 0.5;
         let at = min + half;
         w.insert_collider(
-            ColliderBuilder::cuboid(half.x, half.y, half.z).translation(Vector::new(at.x, at.y, at.z)),
+            ColliderBuilder::cuboid(half.x, half.y, half.z)
+                .translation(Vector::new(at.x, at.y, at.z)),
             None,
         );
     };
@@ -1031,20 +1070,37 @@ fn crouching_into_a_brick_corner_keeps_the_jump() {
     let mut tried = 0;
     for trial in 0..400 {
         let mut w = scene();
-        cube(&mut w, Vec3::new(-6.0, 0.0, -3.0), Vec3::new(6.0, 4.8, -2.0));
+        cube(
+            &mut w,
+            Vec3::new(-6.0, 0.0, -3.0),
+            Vec3::new(6.0, 4.8, -2.0),
+        );
         if pick(2) == 0 {
-            cube(&mut w, Vec3::new(-3.0, 0.0, -2.0), Vec3::new(-2.0, 4.8, 6.0));
+            cube(
+                &mut w,
+                Vec3::new(-3.0, 0.0, -2.0),
+                Vec3::new(-2.0, 4.8, 6.0),
+            );
         }
         for _ in 0..1 + pick(4) {
-            let at = Vec3::new(-2.0 + pick(6) as f32 * 0.5, 0.0, -2.0 + pick(6) as f32 * 0.5);
+            let at = Vec3::new(
+                -2.0 + pick(6) as f32 * 0.5,
+                0.0,
+                -2.0 + pick(6) as f32 * 0.5,
+            );
             let size = Vec3::new(0.5 * (1 + pick(4)) as f32, 0.0, 0.5 * (1 + pick(4)) as f32);
             let y = [0.0, 0.0, 0.4, 1.2, 0.8][pick(5) as usize];
             let h = [0.4, 1.2, 1.2, 2.4][pick(4) as usize];
             cube(&mut w, at + Vec3::Y * y, at + size + Vec3::Y * (y + h));
         }
         w.detect_collisions(&(), &());
-        let mut p =
-            Player::spawn(&mut w, 1, Vec3::new(4.5, 0.05, 4.5), PlayerTuning::default()).unwrap();
+        let mut p = Player::spawn(
+            &mut w,
+            1,
+            Vec3::new(4.5, 0.05, 4.5),
+            PlayerTuning::default(),
+        )
+        .unwrap();
         step(&mut p, &mut w, MoveInput::default(), 30);
         let yaw = -std::f32::consts::FRAC_PI_4 + (pick(1000) as f32 / 1000.0 - 0.5) * 1.2;
         let crouch = pick(3) != 0;

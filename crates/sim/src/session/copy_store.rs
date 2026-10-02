@@ -100,7 +100,9 @@ impl CopyStore for MemoryCopies {
             Saved::Exists
         } else {
             // The same name in other case is the same copy, kept as first named.
-            let shown = copies.get(&key).map_or_else(|| name.to_string(), |(n, _)| n.clone());
+            let shown = copies
+                .get(&key)
+                .map_or_else(|| name.to_string(), |(n, _)| n.clone());
             copies.insert(key, (shown, LoadedCopySource::Saved(copy)));
             Saved::Written
         };
@@ -133,7 +135,9 @@ impl CopyStore for MemoryCopies {
 }
 
 enum Want {
-    Save { bricks: usize },
+    Save {
+        bricks: usize,
+    },
     List,
     Load {
         limit: usize,
@@ -219,7 +223,11 @@ impl CopyOutcome {
 }
 impl From<blueprints::Copied> for CopyOutcome {
     fn from(copied: blueprints::Copied) -> Self {
-        Self::selected(copied.selection.bricks.len(), &copied.selection, copied.error)
+        Self::selected(
+            copied.selection.bricks.len(),
+            &copied.selection,
+            copied.error,
+        )
     }
 }
 impl CopyOutcome {
@@ -400,7 +408,11 @@ impl Session {
                     names: Vec::new(),
                     action: "save",
                     name: Some(request.name.clone()),
-                    bricks: if matches!(result, Ok(Saved::Written)) { bricks } else { 0 },
+                    bricks: if matches!(result, Ok(Saved::Written)) {
+                        bricks
+                    } else {
+                        0
+                    },
                     total: bricks,
                     placed: 0,
                     limit_reached: false,
@@ -547,7 +559,11 @@ struct LoadWork {
     limit_reached: bool,
 }
 impl LoadWork {
-    fn new(s: &Session, load: Load, found: LoadedCopy) -> std::result::Result<Self, Box<CopyOutcome>> {
+    fn new(
+        s: &Session,
+        load: Load,
+        found: LoadedCopy,
+    ) -> std::result::Result<Self, Box<CopyOutcome>> {
         let mut outcome = CopyOutcome::about("load", Some(load.name.clone()), None);
         let (source, palette, total) = match found {
             LoadedCopy::Saved(saved) => {
@@ -696,7 +712,11 @@ impl super::copy_jobs::CopyWork for LoadWork {
                 Source::Loose { bricks, shift } => {
                     let mut brick = bricks[i].clone();
                     brick.recolor(|c| self.colors[usize::from(c)]);
-                    if self.builder.push_moved(&brick, *shift, definitions).is_err() {
+                    if self
+                        .builder
+                        .push_moved(&brick, *shift, definitions)
+                        .is_err()
+                    {
                         self.left_out += 1;
                     }
                 }
@@ -719,7 +739,10 @@ impl super::copy_jobs::CopyWork for LoadWork {
             Ending::Failed(error) => CopyOutcome::about(
                 "load",
                 Some(self.load.name.clone()),
-                Some(("invalid", format!("Could not load '{}': {error:#}", self.load.name))),
+                Some((
+                    "invalid",
+                    format!("Could not load '{}': {error:#}", self.load.name),
+                )),
             ),
         };
         s.report_copy(&package, owner, outcome);

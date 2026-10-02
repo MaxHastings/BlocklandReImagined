@@ -487,7 +487,9 @@ impl WeaponDebris {
                 .used_by(format!("image {image} casing"))
             };
             if !has_model(&model) {
-                notes.push(problem("is not loaded, so it throws the stock shell".into()));
+                notes.push(problem(
+                    "is not loaded, so it throws the stock shell".into(),
+                ));
                 continue;
             }
             if self.casings.len() == MAX_CASINGS {

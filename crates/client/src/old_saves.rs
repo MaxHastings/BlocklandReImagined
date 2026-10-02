@@ -111,7 +111,10 @@ impl Converter {
         }
         // Its bricks' lights, emitters, items and events, as a save's.
         self.bind(&mut world)?;
-        Ok((world.bricks.into_iter().map(|(_, b)| b).collect(), world.palette))
+        Ok((
+            world.bricks.into_iter().map(|(_, b)| b).collect(),
+            world.palette,
+        ))
     }
     fn bind(&self, world: &mut World) -> Result<()> {
         if let Some(b) = &self.bindings {
@@ -222,8 +225,9 @@ impl OldSaves {
             .name("old-saves".into())
             .spawn(move || {
                 while this.again.swap(false, Ordering::SeqCst) {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.sync()))
-                        .unwrap_or_else(|_| Err(anyhow::anyhow!("converter failed")));
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.sync()))
+                            .unwrap_or_else(|_| Err(anyhow::anyhow!("converter failed")));
                     if let Err(error) = result {
                         bri_console::warn(format!("Old saves: {error:#}"));
                     }
@@ -275,9 +279,8 @@ impl OldSaves {
     /// folders (not the game's own `map-` folders), as v20's Load Bricks
     /// read its own `saves` folder.
     fn sources(&self) -> Vec<(PathBuf, String)> {
-        let bls = |p: &Path| {
-            p.extension().is_some_and(|e| e.eq_ignore_ascii_case("bls")) && p.is_file()
-        };
+        let bls =
+            |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("bls")) && p.is_file();
         let entries = |dir: &Path| -> Vec<PathBuf> {
             let mut v: Vec<_> = std::fs::read_dir(dir)
                 .into_iter()
@@ -294,7 +297,11 @@ impl OldSaves {
             .map(|p| (p, LOOSE_FOLDER.to_string()))
             .collect();
         for dir in entries(&self.saves) {
-            let name = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let name = dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             if !dir.is_dir() || name.starts_with("map-") || name.starts_with('.') {
                 continue;
             }
@@ -324,7 +331,13 @@ impl OldSaves {
                     .and_then(|b| serde_json::from_slice(&b).ok())
                     .filter(|i: &Index| i.schema_version == 1)
                     .unwrap_or_default();
-                *index = Some(saved.saves.into_iter().map(|c| (c.source.clone(), c)).collect());
+                *index = Some(
+                    saved
+                        .saves
+                        .into_iter()
+                        .map(|c| (c.source.clone(), c))
+                        .collect(),
+                );
                 self.changed.store(true, Ordering::SeqCst);
             }
         }
@@ -354,7 +367,12 @@ impl OldSaves {
                 continue;
             }
             let record = self.convert(&converter, path, folder, meta.len(), modified_ns);
-            if let Some(index) = self.index.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            if let Some(index) = self
+                .index
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+            {
                 index.insert(path.clone(), record);
             }
             // Load Bricks shows each save as soon as it is ready.
@@ -373,7 +391,9 @@ impl OldSaves {
         // Native copies nothing refers to any more are ours to remove.
         for entry in std::fs::read_dir(&self.cache)?.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".world.json") && !saves.iter().any(|c| c.file.as_ref() == Some(&name)) {
+            if name.ends_with(".world.json")
+                && !saves.iter().any(|c| c.file.as_ref() == Some(&name))
+            {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -441,10 +461,9 @@ impl OldSaves {
                 record.description = world.description;
                 record.bricks = world.bricks.len() as u32;
             }
-            Err(error) => bri_console::warn(format!(
-                "Skipped old save {}: {error:#}",
-                path.display()
-            )),
+            Err(error) => {
+                bri_console::warn(format!("Skipped old save {}: {error:#}", path.display()))
+            }
         }
         record
     }
@@ -510,8 +529,14 @@ mod tests {
             // The game's own save folders are not v20 map folders.
             (saves.join("map-0123/Ignored.bls"), bls("", &["2x2 Brick"])),
             (saves.join("Slate/Notes.txt"), b"not a save".to_vec()),
-            (old.join("Slate/House.bls"), bls("Older house", &["2x2 Brick"])),
-            (old.join("Kitchen/Table.bls"), bls("A table", &["1x1 Plate"])),
+            (
+                old.join("Slate/House.bls"),
+                bls("Older house", &["2x2 Brick"]),
+            ),
+            (
+                old.join("Kitchen/Table.bls"),
+                bls("A table", &["1x1 Plate"]),
+            ),
         ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, bytes).unwrap();
@@ -598,12 +623,13 @@ mod tests {
         // Other content: everything converts against it.
         o.set_converter(Converter::bricks_only(catalog(), "b"));
         o.sync().unwrap();
-        assert!(o.list().iter().all(|l| l
-            .path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("-000000000000000b.world.json")));
+        assert!(o.list().iter().all(|l| {
+            l.path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("-000000000000000b.world.json")
+        }));
         assert_eq!(native_copies(&f.cache), 2);
 
         // A new session reads the index instead of converting again.
@@ -656,9 +682,20 @@ mod tests {
                 row("afghanistan DM (2).world.json", "Lower"),
             ]
         );
-        assert_eq!(store.load("Slate", "Afghanistan DM.world.json")?.world.bricks.len(), 1);
         assert_eq!(
-            store.load("Slate", "afghanistan DM (2).world.json")?.world.bricks.len(),
+            store
+                .load("Slate", "Afghanistan DM.world.json")?
+                .world
+                .bricks
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .load("Slate", "afghanistan DM (2).world.json")?
+                .world
+                .bricks
+                .len(),
             3
         );
         Ok(())

@@ -51,7 +51,7 @@ fn in_game(app: &App) -> bool {
     app.network_view().is_some_and(|v| v.poses.contains_key(&v.owner))
 }
 
-fn load(root: &Path, name: &str) -> Result<App> {
+fn load(root: &Path, name: &str) -> Result<Box<App>> {
     let state = std::env::temp_dir().join(format!("bri-release-smoke-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
     let mut app = App::load(&root.join("content"), &state, SIZE)?;

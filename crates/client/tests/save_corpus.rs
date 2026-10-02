@@ -36,10 +36,12 @@ struct Save {
 }
 
 fn saves_folder() -> Option<PathBuf> {
-    std::env::var_os("BRI_SAVES").map(PathBuf::from).or_else(|| {
-        std::env::var_os("LOCALAPPDATA")
-            .map(|d| PathBuf::from(d).join("BlocklandReImagined").join("saves"))
-    })
+    std::env::var_os("BRI_SAVES")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA")
+                .map(|d| PathBuf::from(d).join("BlocklandReImagined").join("saves"))
+        })
 }
 
 fn content_root() -> PathBuf {
@@ -59,7 +61,10 @@ fn the_fixed_save_corpus_hosts_like_the_game() -> Result<()> {
         return Ok(());
     };
     if !root.is_dir() {
-        eprintln!("skipped: no generated content at {}; set BRI_CONTENT", root.display());
+        eprintln!(
+            "skipped: no generated content at {}; set BRI_CONTENT",
+            root.display()
+        );
         return Ok(());
     }
     let state = std::env::temp_dir().join(format!("bri-save-corpus-{}", std::process::id()));
@@ -96,7 +101,11 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
     while old.busy() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    eprintln!("converted {} saves in {:.0?}", present.len(), started.elapsed());
+    eprintln!(
+        "converted {} saves in {:.0?}",
+        present.len(),
+        started.elapsed()
+    );
     let store = Store::new(state, &content, Some(old.clone()));
     let entries = store.list()?;
     drop(content);
@@ -114,7 +123,10 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
                 .is_some_and(|s| s == source)
         });
         let Some(entry) = entry else {
-            return Some(format!("{}: the game did not list it after converting", save.path));
+            return Some(format!(
+                "{}: the game did not list it after converting",
+                save.path
+            ));
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.host(entry)))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("panicked")));
@@ -164,11 +176,17 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
             handles.push(handle);
         }
         for handle in handles {
-            handle.join().map_err(|_| anyhow::anyhow!("a corpus worker panicked"))??;
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("a corpus worker panicked"))??;
         }
         Ok(())
     })?;
-    eprintln!("hosted {} saves in {:.0?}", present.len(), started.elapsed());
+    eprintln!(
+        "hosted {} saves in {:.0?}",
+        present.len(),
+        started.elapsed()
+    );
     let failures: Vec<String> = results
         .into_inner()
         .unwrap_or_else(|e| e.into_inner())

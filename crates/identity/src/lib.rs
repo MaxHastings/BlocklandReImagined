@@ -7,7 +7,10 @@
 //! identity.
 
 use anyhow::{Context, Result, ensure};
-use ring::{rand::SystemRandom, signature::{Ed25519KeyPair, KeyPair}};
+use ring::{
+    rand::SystemRandom,
+    signature::{Ed25519KeyPair, KeyPair},
+};
 use std::{
     fmt,
     fs::{self, OpenOptions},
@@ -43,17 +46,29 @@ impl ClientIdentity {
 
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
-                ensure!(metadata.file_type().is_file(), "Identity path is not a regular file");
-                ensure!(metadata.len() <= MAX_IDENTITY_FILE, "Identity file exceeds limit");
+                ensure!(
+                    metadata.file_type().is_file(),
+                    "Identity path is not a regular file"
+                );
+                ensure!(
+                    metadata.len() <= MAX_IDENTITY_FILE,
+                    "Identity file exceeds limit"
+                );
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    ensure!(metadata.permissions().mode() & 0o077 == 0, "Identity file permissions are not private");
+                    ensure!(
+                        metadata.permissions().mode() & 0o077 == 0,
+                        "Identity file permissions are not private"
+                    );
                 }
                 let file = OpenOptions::new().read(true).open(path)?;
                 let mut stored = Vec::with_capacity(metadata.len() as usize);
                 file.take(MAX_IDENTITY_FILE + 1).read_to_end(&mut stored)?;
-                ensure!(stored.len() as u64 <= MAX_IDENTITY_FILE, "Identity file exceeds limit");
+                ensure!(
+                    stored.len() as u64 <= MAX_IDENTITY_FILE,
+                    "Identity file exceeds limit"
+                );
                 Self::decode_stored(&stored)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -96,7 +111,10 @@ impl ClientIdentity {
     }
 
     fn from_pkcs8(pkcs8: Vec<u8>) -> Result<Self> {
-        ensure!(!pkcs8.is_empty() && pkcs8.len() <= 1024, "Invalid identity key length");
+        ensure!(
+            !pkcs8.is_empty() && pkcs8.len() <= 1024,
+            "Invalid identity key length"
+        );
         let pair = Ed25519KeyPair::from_pkcs8(&pkcs8)
             .map_err(|_| anyhow::anyhow!("Stored client identity is invalid"))?;
         let public_key: [u8; 32] = pair
@@ -144,7 +162,10 @@ impl ClientIdentity {
         {
             let mut stored = WINDOWS_MAGIC.to_vec();
             stored.extend_from_slice(&dpapi_protect(pkcs8)?);
-            ensure!(stored.len() as u64 <= MAX_IDENTITY_FILE, "Protected identity exceeds limit");
+            ensure!(
+                stored.len() as u64 <= MAX_IDENTITY_FILE,
+                "Protected identity exceeds limit"
+            );
             Ok(stored)
         }
         #[cfg(not(any(unix, windows)))]
@@ -155,14 +176,11 @@ impl ClientIdentity {
     }
 }
 
-
 #[cfg(windows)]
 fn dpapi_protect(input: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
-        Security::Cryptography::{
-            CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB, CryptProtectData,
-        },
+        Security::Cryptography::{CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData},
     };
     let source = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(input.len())?,
@@ -181,8 +199,12 @@ fn dpapi_protect(input: &[u8]) -> Result<Vec<u8>> {
             &mut output,
         )
     };
-    ensure!(ok != 0 && !output.pbData.is_null(), "Windows user data protection failed");
-    let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    ensure!(
+        ok != 0 && !output.pbData.is_null(),
+        "Windows user data protection failed"
+    );
+    let bytes =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
     unsafe { LocalFree(output.pbData.cast()) };
     Ok(bytes)
 }
@@ -192,7 +214,7 @@ fn dpapi_unprotect(input: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
         Security::Cryptography::{
-            CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB, CryptUnprotectData,
+            CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
         },
     };
     ensure!(!input.is_empty(), "Protected identity payload is empty");
@@ -212,8 +234,12 @@ fn dpapi_unprotect(input: &[u8]) -> Result<Vec<u8>> {
             &mut output,
         )
     };
-    ensure!(ok != 0 && !output.pbData.is_null(), "Windows user data unprotection failed");
-    let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    ensure!(
+        ok != 0 && !output.pbData.is_null(),
+        "Windows user data unprotection failed"
+    );
+    let bytes =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
     unsafe { LocalFree(output.pbData.cast()) };
     Ok(bytes)
 }
@@ -234,7 +260,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 

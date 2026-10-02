@@ -268,12 +268,18 @@ fn addon_settings_live_on_games_and_teams_and_only_owners_or_admins_edit() {
     );
     // Setting the same value again changes nothing.
     let same = w
-        .set_addon_settings(game, vec![change(None, "slayer:lives", Some(SettingValue::Int(3)))])
+        .set_addon_settings(
+            game,
+            vec![change(None, "slayer:lives", Some(SettingValue::Int(3)))],
+        )
         .unwrap();
     assert!(same.is_empty());
     let g = w.game(game).unwrap();
     assert_eq!(g.addon_settings["slayer:lives"], SettingValue::Int(3));
-    assert_eq!(g.teams.get(red).unwrap().addon_settings["slayer:lives"], SettingValue::Int(5));
+    assert_eq!(
+        g.teams.get(red).unwrap().addon_settings["slayer:lives"],
+        SettingValue::Int(5)
+    );
     // A kept team keeps its settings through a team list change.
     let specs = vec![TeamSpec {
         id: Some(red),
@@ -282,7 +288,10 @@ fn addon_settings_live_on_games_and_teams_and_only_owners_or_admins_edit() {
     }];
     w.set_teams(game, specs, false, false).unwrap();
     let g = w.game(game).unwrap();
-    assert_eq!(g.teams.get(red).unwrap().addon_settings["slayer:lives"], SettingValue::Int(5));
+    assert_eq!(
+        g.teams.get(red).unwrap().addon_settings["slayer:lives"],
+        SettingValue::Int(5)
+    );
     assert_eq!(
         w.set_addon_settings(game, vec![change(Some(blue), "slayer:lives", None)]),
         Err(Error::StaleTeam)
@@ -314,7 +323,10 @@ fn a_held_respawn_waits_for_a_reset() {
             authority: EventAuthority::System,
         })
         .unwrap();
-    assert!(out.iter().any(|e| matches!(e, Effect::Spawn { player, .. } if *player == b)));
+    assert!(
+        out.iter()
+            .any(|e| matches!(e, Effect::Spawn { player, .. } if *player == b))
+    );
     assert!(!w.player(b).unwrap().respawn_held, "a reset lifts the hold");
 }
 
@@ -342,8 +354,14 @@ fn a_round_ends_once_until_a_reset() {
     .unwrap();
     assert!(!w.game(game).unwrap().round_over);
     // Winners belong to the game.
-    assert_eq!(w.end_round(game, vec![TeamId(99)], vec![]), Err(Error::StaleTeam));
+    assert_eq!(
+        w.end_round(game, vec![TeamId(99)], vec![]),
+        Err(Error::StaleTeam)
+    );
     let outsider = connect(&mut w, 9);
-    assert_eq!(w.end_round(game, vec![], vec![outsider]), Err(Error::NotMember));
+    assert_eq!(
+        w.end_round(game, vec![], vec![outsider]),
+        Err(Error::NotMember)
+    );
     assert!(w.end_round(game, vec![], vec![]).is_ok(), "nobody won");
 }

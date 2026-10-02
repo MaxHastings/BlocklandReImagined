@@ -1,7 +1,7 @@
 //! Contact-driven host pickups. No remote position or Pickup command exists.
+use super::packages::Pickup;
 use super::*;
 use bri_weapons::{ActorId, ItemBounds};
-use super::packages::Pickup;
 /// `MsgItemPickup`'s client `ItemPickup` sound, heard on picking up and on
 /// dropping a tool; loadouts fill slots silently.
 const ITEM_SOUND: &str = "ItemPickup";
@@ -178,12 +178,7 @@ impl Session {
                     continue;
                 }
                 let item = item.item.clone();
-                let sport = self
-                    .weapons
-                    .pack
-                    .items
-                    .get(&item)
-                    .is_some_and(|d| d.sport);
+                let sport = self.weapons.pack.items.get(&item).is_some_and(|d| d.sport);
                 // An Add-On's own item: its rules may leave it or use it up.
                 let decision = if sport {
                     Pickup::Take

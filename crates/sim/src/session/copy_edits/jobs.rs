@@ -259,7 +259,11 @@ impl PaintWork {
             "The bricks this copy was taken from are gone"
         );
         if !self.before.is_empty() {
-            s.push_copy_undo(owner, undo::UndoEntry::Looks(self.before), Some(self.package));
+            s.push_copy_undo(
+                owner,
+                undo::UndoEntry::Looks(self.before),
+                Some(self.package),
+            );
         }
         Ok((self.painted, self.refused))
     }
@@ -267,7 +271,11 @@ impl PaintWork {
 impl CopyWork for PaintWork {
     fn progress(&self) -> Progress {
         let total = self.ids.len();
-        let done = if self.each { self.next } else { (self.check.next + self.next) / 2 };
+        let done = if self.each {
+            self.next
+        } else {
+            (self.check.next + self.next) / 2
+        };
         Progress {
             action: "paint",
             done,
@@ -446,8 +454,7 @@ impl CopyWork for WrenchWork {
             }
             let edit = Edit::Properties(wrench_properties(&next));
             if s.tool_catalog.validate_edit(brick, &edit).is_err()
-                || s
-                    .item_spawners
+                || s.item_spawners
                     .validate_edit(s.simulation.state(), id, &edit)
                     .is_err()
             {

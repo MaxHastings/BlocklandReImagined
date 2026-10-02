@@ -50,7 +50,10 @@ impl Session {
 
     /// Refuses the host's new server settings when they would take a
     /// weapon's field out of its range.
-    pub(super) fn check_weapon_settings(&self, stored: &BTreeMap<String, SettingValue>) -> Result<()> {
+    pub(super) fn check_weapon_settings(
+        &self,
+        stored: &BTreeMap<String, SettingValue>,
+    ) -> Result<()> {
         let values = self.bound_values(stored);
         self.authored_weapons
             .with_settings(|name| values.get(name).cloned())

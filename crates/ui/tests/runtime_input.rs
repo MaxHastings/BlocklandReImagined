@@ -65,7 +65,12 @@ fn fixture() -> Rc<Pack> {
                     "Canvas.pushDialog(\"manualJoin\");",
                 ),
                 node("GuiTextListCtrl", "JS_serverList", 45, ""),
-                node("GuiButtonCtrl", "internet", 80, "JoinServerGui.queryWebMaster();"),
+                node(
+                    "GuiButtonCtrl",
+                    "internet",
+                    80,
+                    "JoinServerGui.queryWebMaster();",
+                ),
             ],
         ),
         (
@@ -389,15 +394,34 @@ fn favorite_button_stars_the_selected_server() {
         favorite,
     };
     u.apply(UiUpdate::LanServers {
-        servers: vec![server("bri://203.0.113.10:28000/key", true), server("192.168.1.20:28000", false)],
+        servers: vec![
+            server("bri://203.0.113.10:28000/key", true),
+            server("192.168.1.20:28000", false),
+        ],
         querying: false,
     });
     // Nothing selected: the button does nothing.
-    click(&mut u, ScreenId::JoinServer, "JoinServerGui.queryWebMaster();");
+    click(
+        &mut u,
+        ScreenId::JoinServer,
+        "JoinServerGui.queryWebMaster();",
+    );
     assert!(actions(&mut u).is_empty());
-    let list = u.screen(ScreenId::JoinServer).unwrap().view().id("JS_serverList").unwrap();
-    u.screen_mut(ScreenId::JoinServer).unwrap().view_mut().select(list, Some(1));
-    click(&mut u, ScreenId::JoinServer, "JoinServerGui.queryWebMaster();");
+    let list = u
+        .screen(ScreenId::JoinServer)
+        .unwrap()
+        .view()
+        .id("JS_serverList")
+        .unwrap();
+    u.screen_mut(ScreenId::JoinServer)
+        .unwrap()
+        .view_mut()
+        .select(list, Some(1));
+    click(
+        &mut u,
+        ScreenId::JoinServer,
+        "JoinServerGui.queryWebMaster();",
+    );
     assert_eq!(
         actions(&mut u),
         vec![UiAction::ToggleFavorite {
@@ -418,7 +442,10 @@ fn platform_questions_send_their_action_only_on_yes() {
     assert!(actions(&mut u).is_empty());
     u.apply(ask());
     down(&mut u, Key::Return);
-    assert_eq!(actions(&mut u), vec![UiAction::AllowFirewall { port: 28000 }]);
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::AllowFirewall { port: 28000 }]
+    );
 }
 #[test]
 fn confirmation_is_modal_and_escape_declines_without_underlying_action() {
@@ -594,7 +621,10 @@ fn keyboard_turn_looks_at_the_preferred_rate_while_held() {
     let Some(UiAction::Game(GameAction::Look { yaw, pitch })) = actions(&mut u).pop() else {
         panic!("no look action");
     };
-    assert!((yaw + step).abs() < 1e-5 && (pitch + step).abs() < 1e-5, "{yaw} {pitch}");
+    assert!(
+        (yaw + step).abs() < 1e-5 && (pitch + step).abs() < 1e-5,
+        "{yaw} {pitch}"
+    );
     up(&mut u, Key::Left);
     up(&mut u, Key::PageUp);
     u.update(50);
@@ -626,9 +656,10 @@ fn super_shift_toggle_shows_the_hud_icon_on_the_bottom_edge() {
 #[test]
 fn crosshair_shows_only_in_first_person_and_hides_with_names() {
     let mut u = ui();
-    u.core
-        .binds
-        .bind(BindInput::Key(Chord::plain(Key::F(5))), "ToggleShapeNameHud");
+    u.core.binds.bind(
+        BindInput::Key(Chord::plain(Key::F(5))),
+        "ToggleShapeNameHud",
+    );
     play(&mut u);
     let shown = |u: &Ui| {
         let v = u.screen(ScreenId::Play).unwrap().view();
@@ -730,7 +761,9 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
 fn wheel_goes_to_the_held_tool_while_it_takes_the_wheel() {
     let mut u = ui();
     u.core.binds.bind(BindInput::Wheel, "scrollInventory");
-    u.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+    u.core
+        .binds
+        .bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
     play(&mut u);
     let press = |u: &mut Ui, down: bool| {
         let (x, y) = (640.0, 480.0);
@@ -1037,7 +1070,10 @@ fn toggle_crouch_flips_on_each_press_and_ignores_release() {
     u.core.run_command("crouch", false);
     assert_eq!(
         actions(&mut u),
-        vec![held(HeldControl::Crouch, true), held(HeldControl::Crouch, false)]
+        vec![
+            held(HeldControl::Crouch, true),
+            held(HeldControl::Crouch, false)
+        ]
     );
 }
 #[test]
@@ -1075,7 +1111,10 @@ fn first_run_offers_the_tutorial_then_asks_for_a_name_once() {
     u.core.name_asked = false;
     u.core.name_prompt();
     u.update(0);
-    assert!(!u.is_open(ScreenId::ChooseName), "not on the next run either");
+    assert!(
+        !u.is_open(ScreenId::ChooseName),
+        "not on the next run either"
+    );
     // Playing it starts the Tutorial and keeps the name for later.
     let mut u = ui();
     u.core.first_run_welcome();
@@ -1083,14 +1122,20 @@ fn first_run_offers_the_tutorial_then_asks_for_a_name_once() {
     actions(&mut u);
     down(&mut u, Key::Return);
     assert_eq!(actions(&mut u).last(), Some(&UiAction::StartTutorial));
-    assert_eq!(u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""), "after_tutorial");
+    assert_eq!(
+        u.core.prefs.str_or(bri_ui::ui::NAME_PROMPT, ""),
+        "after_tutorial"
+    );
     u.core.name_prompt();
     u.update(0);
     assert_eq!(u.top_id(), ScreenId::ChooseName);
     u.core.name_prompt();
     u.update(0);
     assert_eq!(
-        u.stack().iter().filter(|s| **s == ScreenId::ChooseName).count(),
+        u.stack()
+            .iter()
+            .filter(|s| **s == ScreenId::ChooseName)
+            .count(),
         1,
         "one question even when asked for twice"
     );
@@ -1121,15 +1166,24 @@ fn open_bsd_with_building_disabled_only_says_so() {
     u.apply(UiUpdate::BuildingAllowed(false));
     u.core.cmds.clear();
     assert!(u.core.run_command("openBSD", true));
-    assert!(!u.core.cmds.contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector)));
-    assert!(u
-        .core
-        .center_print
-        .as_ref()
-        .is_some_and(|(t, _)| t.contains("Building is currently disabled.")));
+    assert!(
+        !u.core
+            .cmds
+            .contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector))
+    );
+    assert!(
+        u.core
+            .center_print
+            .as_ref()
+            .is_some_and(|(t, _)| t.contains("Building is currently disabled."))
+    );
     u.apply(UiUpdate::BuildingAllowed(true));
     assert!(u.core.run_command("openBSD", true));
-    assert!(u.core.cmds.contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector)));
+    assert!(
+        u.core
+            .cmds
+            .contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector))
+    );
 }
 
 /// Playtest (v0.1.12): holding fire with a bow when the game ended showed

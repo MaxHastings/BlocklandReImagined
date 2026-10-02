@@ -94,7 +94,7 @@ impl World for ScriptWorld<'_> {
     fn lan(&self) -> bool {
         self.session.lan_host
     }
-        fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
+    fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
         self.session.region_of(player, Vec3::from(point))
     }
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool {
@@ -103,7 +103,9 @@ impl World for ScriptWorld<'_> {
             ObjectRef::Player(player) => session.can_damage_player(by, player, false),
             ObjectRef::Vehicle(vehicle) => session.damage_policy().vehicle(
                 by,
-                session.vehicle_owner_and_mass(vehicle).map(|(owner, _)| owner),
+                session
+                    .vehicle_owner_and_mass(vehicle)
+                    .map(|(owner, _)| owner),
             ),
             // As shots: a player never hurts the creature they drive.
             ObjectRef::Entity(entity) => {
@@ -212,7 +214,10 @@ impl World for ScriptWorld<'_> {
     }
     fn may_copy(&self, player: u64, brick: u64, rule: bri_package_runtime::ops::CopyRule) -> bool {
         let sim = &self.session.simulation;
-        match (self.session.peers.get(&player), sim.state().bricks.get(&brick)) {
+        match (
+            self.session.peers.get(&player),
+            sim.state().bricks.get(&brick),
+        ) {
             (Some(peer), Some(b)) => blueprints::admits(&peer.actor, rule, sim, brick, b),
             _ => false,
         }

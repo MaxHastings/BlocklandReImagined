@@ -89,7 +89,9 @@ impl OrbitPoint {
     pub const DISTANCES: std::ops::RangeInclusive<f32> = 0.5..=100.0;
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.at.iter().all(|x| x.is_finite() && x.abs() < 1_000_000.0)
+            self.at
+                .iter()
+                .all(|x| x.is_finite() && x.abs() < 1_000_000.0)
                 && Self::DISTANCES.contains(&self.distance),
             "Invalid orbit point"
         );
@@ -150,7 +152,9 @@ impl SeatSince {
 impl CameraView {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.eye.iter().all(|x| x.is_finite() && x.abs() < 1_000_000.0)
+            self.eye
+                .iter()
+                .all(|x| x.is_finite() && x.abs() < 1_000_000.0)
                 && self.yaw.is_finite()
                 && self.pitch.is_finite()
                 && self.pitch.abs() <= std::f32::consts::FRAC_PI_2,
@@ -228,10 +232,7 @@ impl Session {
                 .camera
                 .map(|c| c.eye)
                 .or(Some(peer.player.state().feet)),
-            ControlObject::Point => peer
-                .orbit
-                .map(|o| o.at)
-                .or(Some(peer.player.state().feet)),
+            ControlObject::Point => peer.orbit.map(|o| o.at).or(Some(peer.player.state().feet)),
             ControlObject::Spy(target) | ControlObject::Orbit { target, .. } => {
                 Some(self.peers.get(&target)?.player.state().feet)
             }
@@ -312,7 +313,8 @@ impl Session {
     /// actions.
     pub(super) fn watching(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| {
-            p.combat.alive && (p.control.rules_camera() || matches!(p.control, ControlObject::Spy(_)))
+            p.combat.alive
+                && (p.control.rules_camera() || matches!(p.control, ControlObject::Spy(_)))
         })
     }
     /// An Add-On's `orbit_camera` (and a rule's `watch`, its frozen kind):

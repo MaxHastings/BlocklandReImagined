@@ -5,8 +5,8 @@
 //! without effect, as in v20. Undoing a plant is a `killBrick`, so the brick
 //! breaks with the hammer's sound and debris.
 use super::*;
-use bri_world::authority::trust as level;
 use crate::simulation::{spend, work};
+use bri_world::authority::trust as level;
 mod jobs;
 
 /// game.cs: `%client.undoStack = New_QueueSO(512)`. `QueueSO` keeps one slot
@@ -267,7 +267,10 @@ impl Session {
     pub(super) fn undo_brick(&mut self, owner: OwnerId) -> Result<Reply> {
         // One undo at a time, as the New Duplicator (`ndUndoInProgress`).
         if self.copy_working(owner) {
-            self.center_print(owner, "Your duplicator is still working. Cancel it first.".into());
+            self.center_print(
+                owner,
+                "Your duplicator is still working. Cancel it first.".into(),
+            );
             return Ok(Reply::Undone(None));
         }
         let Some(step) = self
@@ -495,7 +498,12 @@ impl Session {
 
     /// Undo painting or a fill wrench: each brick still standing that the
     /// undoer may change gets its old paint or settings back.
-    fn undo_edits(&mut self, owner: OwnerId, edits: jobs::Edits, by: Option<String>) -> Result<Reply> {
+    fn undo_edits(
+        &mut self,
+        owner: OwnerId,
+        edits: jobs::Edits,
+        by: Option<String>,
+    ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
         self.play_thread(tick, owner, 3, "undo");
         let work = jobs::UndoEdits::new(self, owner, edits, by.clone())?;

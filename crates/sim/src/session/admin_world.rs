@@ -36,7 +36,12 @@ impl Session {
     /// seconds. Nothing happens when they have none.
     pub(super) fn clear_own_bricks(&mut self, owner: OwnerId) -> Result<()> {
         let tick = self.simulation.state().tick;
-        let name = self.peers.get(&owner).context("Unknown connection")?.name.clone();
+        let name = self
+            .peers
+            .get(&owner)
+            .context("Unknown connection")?
+            .name
+            .clone();
         if self
             .cleared_bricks_at
             .get(&owner)
@@ -118,7 +123,10 @@ impl Session {
     }
     /// `/cancelAllEvents`: drop every scheduled event row.
     pub(super) fn admin_cancel_all_events(&mut self, admin: OwnerId) {
-        let name = self.peers.get(&admin).map_or_else(String::new, |p| p.name.clone());
+        let name = self
+            .peers
+            .get(&admin)
+            .map_or_else(String::new, |p| p.name.clone());
         self.system_chat(format!("\u{E003}{name}\u{E000} canceled all events."));
         self.cancel_all_events();
     }
@@ -135,7 +143,10 @@ impl Session {
         for mount in &mounts {
             self.clear_mount(*mount)?;
         }
-        let name = self.peers.get(&admin).map_or_else(String::new, |p| p.name.clone());
+        let name = self
+            .peers
+            .get(&admin)
+            .map_or_else(String::new, |p| p.name.clone());
         self.system_chat(format!(
             "\u{E003}{name}\u{E000} cleared all bots ({}).",
             bricks.len() + mounts.len()

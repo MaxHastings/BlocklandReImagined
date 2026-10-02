@@ -75,7 +75,10 @@ fn validate_entities(entities: &[bri_sim::session::EntityInfo]) -> Result<()> {
     Ok(())
 }
 fn validate_map_lights(rules: &[bri_sim::session::MapLightRule]) -> Result<()> {
-    ensure!(rules.len() <= bri_sim::session::MAX_MAP_LIGHT_RULES, "Too many map light rules");
+    ensure!(
+        rules.len() <= bri_sim::session::MAX_MAP_LIGHT_RULES,
+        "Too many map light rules"
+    );
     for rule in rules {
         rule.validate()?;
     }
@@ -84,7 +87,10 @@ fn validate_map_lights(rules: &[bri_sim::session::MapLightRule]) -> Result<()> {
 fn validate_world_shapes(
     sets: &BTreeMap<String, Vec<bri_package_runtime::ops::WorldShape>>,
 ) -> Result<()> {
-    ensure!(sets.len() <= bri_sim::session::MAX_SHAPE_SETS, "Too many world shape sets");
+    ensure!(
+        sets.len() <= bri_sim::session::MAX_SHAPE_SETS,
+        "Too many world shape sets"
+    );
     for (key, shapes) in sets {
         bri_sim::session::check_world_shapes(key, shapes)?;
     }
@@ -182,9 +188,7 @@ fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
 fn validate_weapon_settings(values: &BTreeMap<String, String>) -> Result<()> {
     ensure!(
         values.len() <= bri_sim::session::MAX_ADDON_SETTINGS
-            && values
-                .iter()
-                .all(|(k, v)| k.len() <= 128 && v.len() <= 256),
+            && values.iter().all(|(k, v)| k.len() <= 128 && v.len() <= 256),
         "Invalid weapon settings"
     );
     Ok(())
@@ -232,9 +236,10 @@ impl Replica {
         validate_minigames(&checkpoint.minigames)?;
         validate_addon_settings(&checkpoint.addon_settings)?;
         ensure!(
-            checkpoint.addon_teams_shown_when.as_ref().is_none_or(|w| {
-                w.validate().is_ok()
-            }),
+            checkpoint
+                .addon_teams_shown_when
+                .as_ref()
+                .is_none_or(|w| { w.validate().is_ok() }),
             "Invalid Add-On team list rule"
         );
         // The wrench checks each input fully when it adds them.
@@ -536,10 +541,7 @@ impl Replica {
         Ok(())
     }
     pub fn orb(&mut self, orb: Orb) -> Result<()> {
-        ensure!(
-            orb.eye.iter().all(|n| n.is_finite()),
-            "Invalid camera orb"
-        );
+        ensure!(orb.eye.iter().all(|n| n.is_finite()), "Invalid camera orb");
         if self.names.contains_key(&orb.owner)
             && self
                 .orbs

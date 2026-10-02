@@ -645,7 +645,9 @@ impl EventWorld {
             if !row.enabled || compiled.input != input.id {
                 continue;
             }
-            if t.rows.is_some_and(|(first, last)| !(first..=last).contains(&(idx as u16))) {
+            if t.rows
+                .is_some_and(|(first, last)| !(first..=last).contains(&(idx as u16)))
+            {
                 continue;
             }
             let action = &*compiled.action;

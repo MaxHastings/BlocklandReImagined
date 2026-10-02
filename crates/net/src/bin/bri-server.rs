@@ -50,7 +50,9 @@ async fn main() -> Result<()> {
         None
     };
     // Session log and crash reports beside the server binary (or in its state).
-    if let Err(error) = bri_crash::install("bri-server", &bri_crash::default_directories(&state_dir)) {
+    if let Err(error) =
+        bri_crash::install("bri-server", &bri_crash::default_directories(&state_dir))
+    {
         eprintln!("Crash capture unavailable: {error}");
     }
     let bind = args[3]

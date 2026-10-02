@@ -37,7 +37,10 @@ impl Session {
     /// A player planted or edited `brick` by hand.
     pub(in crate::session) fn note_brick_actor(&mut self, owner: OwnerId, brick: BrickId) {
         if let Some(host) = self.packages.as_mut()
-            && host.catalog.behaviours().any(|(_, b)| !b.on_brick.is_empty())
+            && host
+                .catalog
+                .behaviours()
+                .any(|(_, b)| !b.on_brick.is_empty())
         {
             host.brick_watch.actors.insert(brick, owner);
         }
@@ -57,7 +60,11 @@ impl Session {
         let Some(host) = self.packages.as_ref() else {
             return;
         };
-        if !host.catalog.behaviours().any(|(_, b)| !b.on_brick.is_empty()) {
+        if !host
+            .catalog
+            .behaviours()
+            .any(|(_, b)| !b.on_brick.is_empty())
+        {
             return;
         }
         let ids: Vec<BrickId> = if host.brick_watch.started {

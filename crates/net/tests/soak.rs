@@ -35,7 +35,10 @@ fn session() -> Result<Session> {
 }
 
 fn env(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 /// One simulated player: sends a tick's input every 1/120 s with redundancy,
@@ -73,8 +76,7 @@ impl Player {
     /// Handle everything that has already arrived.
     async fn drain(&mut self) -> Result<()> {
         // A zero timeout still polls once: take what is ready, never wait.
-        while let Ok(event) = tokio::time::timeout(Duration::ZERO, self.client.receive()).await
-        {
+        while let Ok(event) = tokio::time::timeout(Duration::ZERO, self.client.receive()).await {
             if let ClientEvent::Reply { sequence, result } = event? {
                 result.map_err(anyhow::Error::msg)?;
                 let index = self
@@ -116,9 +118,14 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
     let link = ImpairedLink::start(server.address, Impairment::BAD_WIFI, seed).await?;
     let mut players = Vec::new();
     for name in ["Alpha", "Bravo"] {
-        let client =
-            Client::connect(link.address, &server.certificate, name.into(), Vec::new(), None)
-                .await?;
+        let client = Client::connect(
+            link.address,
+            &server.certificate,
+            name.into(),
+            Vec::new(),
+            None,
+        )
+        .await?;
         players.push(Player {
             client,
             sequence: 0,
@@ -153,12 +160,17 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
         tokio::time::sleep(Duration::from_millis(4)).await;
     }
     let expected = seconds * 120;
-    ensure!(tick + 12 >= expected, "Soak loop ran {tick} of {expected} ticks");
+    ensure!(
+        tick + 12 >= expected,
+        "Soak loop ran {tick} of {expected} ticks"
+    );
     // Let the last replies and replication arrive.
     let settle = Instant::now();
     let all_chat = |p: &Player| p.client.replica.chat.len() as u64 >= 2 * chats.min(50);
     while settle.elapsed() < Duration::from_secs(10)
-        && players.iter().any(|p| !p.pending.is_empty() || !all_chat(p))
+        && players
+            .iter()
+            .any(|p| !p.pending.is_empty() || !all_chat(p))
     {
         for player in &mut players {
             player.drain().await?;
@@ -178,7 +190,10 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
         // Redundant inputs absorb the loss: acknowledgement trails what was
         // sent by at most the link's delay, never by lost inputs piling up.
         let behind = player.sequence - player.acknowledged();
-        ensure!(behind < 120, "Movement acknowledgement fell {behind} inputs behind");
+        ensure!(
+            behind < 120,
+            "Movement acknowledgement fell {behind} inputs behind"
+        );
         // Random loss is not congestion: with BBR a reply costs about one
         // retransmission (Cubic took 3-8 s on this link, collapsing its window).
         ensure!(
@@ -199,10 +214,16 @@ async fn two_players_stay_consistent_through_a_lossy_jittery_link() -> Result<()
     // what both have fully received: the whole chat history.
     let (a, b) = (&players[0].client.replica, &players[1].client.replica);
     ensure!(
-        a.chat.iter().map(|c| &c.text).eq(b.chat.iter().map(|c| &c.text)),
+        a.chat
+            .iter()
+            .map(|c| &c.text)
+            .eq(b.chat.iter().map(|c| &c.text)),
         "Replicas disagree on chat"
     );
-    ensure!(a.cursor.abs_diff(b.cursor) <= 40, "One replica fell far behind");
+    ensure!(
+        a.cursor.abs_diff(b.cursor) <= 40,
+        "One replica fell far behind"
+    );
     let dropped = link.stats.dropped.load(Ordering::Relaxed);
     let forwarded = link.stats.forwarded.load(Ordering::Relaxed);
     eprintln!("link: {forwarded} forwarded, {dropped} dropped, seed {seed:#x}");

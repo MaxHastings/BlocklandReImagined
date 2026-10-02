@@ -36,7 +36,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Move players, respawn them, change their body, hand them an
         // entity to drive, give them an item or ammo, change what they hold
         // or how wide they see.
-        "player" => "move and respawn players, change their bodies and view, and give them items and ammo",
+        "player" => {
+            "move and respawn players, change their bodies and view, and give them items and ammo"
+        }
         // Copy a build for a player to place under the plant rules.
         "build" => "copy builds for players to place again",
         // Push, hold and throw players, vehicles and entities (within the

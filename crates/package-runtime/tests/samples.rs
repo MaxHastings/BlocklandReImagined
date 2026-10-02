@@ -186,20 +186,34 @@ fn add_ons_that_clash_are_left_out_one_by_one_and_never_empty_the_set() {
     )
     .unwrap();
     let set = with(&[("zz-clash-hud", Side::Client), ("needy", Side::Shared)]);
-    assert!(Catalog::load(dir.path(), &set, true).is_err(), "strict load");
+    assert!(
+        Catalog::load(dir.path(), &set, true).is_err(),
+        "strict load"
+    );
     let kept = [
         "sample-bubble-blaster",
         "sample-points-hud",
         "sample-survival-points",
     ];
     let check = |catalog: &Catalog, problems: &[bri_package::diag::Diagnostic]| {
-        assert_eq!(catalog.packages.keys().collect::<Vec<_>>(), kept, "{problems:#?}");
+        assert_eq!(
+            catalog.packages.keys().collect::<Vec<_>>(),
+            kept,
+            "{problems:#?}"
+        );
         let named = |id: &str, code: &str| {
             problems.iter().any(|p| {
-                p.code == code && p.location.as_deref().unwrap_or("").starts_with(&format!("{id}/"))
+                p.code == code
+                    && p.location
+                        .as_deref()
+                        .unwrap_or("")
+                        .starts_with(&format!("{id}/"))
             })
         };
-        assert!(named("zz-clash-hud", "set.hud.key.conflict"), "{problems:#?}");
+        assert!(
+            named("zz-clash-hud", "set.hud.key.conflict"),
+            "{problems:#?}"
+        );
         assert!(named("needy", "set.dependency.missing"), "{problems:#?}");
     };
     let (catalog, problems) = Catalog::load_skipping(dir.path(), &set, true);
@@ -249,16 +263,28 @@ fn the_commando_sample_loads_as_one_game_mode() {
     };
     let server = Catalog::load(&root(), &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
     Runtime::compile(&server).unwrap_or_else(|e| panic!("{e:#?}"));
-    let rules = server.packages["sample-commando"].behaviour.as_ref().unwrap();
+    let rules = server.packages["sample-commando"]
+        .behaviour
+        .as_ref()
+        .unwrap();
     assert!(rules.on_entity_death && rules.on_damage && rules.on_spawn);
     // The client gets the rifle, the look (models and code) and the panel,
     // never the rules.
     let client = Catalog::load(&root(), &set, false).unwrap_or_else(|e| panic!("{e:#?}"));
     assert_eq!(
         client.packages.keys().collect::<Vec<_>>(),
-        ["sample-commando-hud", "sample-commando-look", "sample-commando-rifle"]
+        [
+            "sample-commando-hud",
+            "sample-commando-look",
+            "sample-commando-rifle"
+        ]
     );
-    assert!(client.packages["sample-commando-look"].manifest.client.is_some());
+    assert!(
+        client.packages["sample-commando-look"]
+            .manifest
+            .client
+            .is_some()
+    );
     let (_, panel) = client.huds().next().unwrap();
     for row in &panel.rows {
         let b = Binding::parse(&row.bind).unwrap();

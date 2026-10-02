@@ -283,9 +283,10 @@ impl Simulation {
             kinds,
             stacks: Default::default(),
         };
-        simulation
-            .links
-            .reset(&simulation.authority.state().bricks, &simulation.definitions);
+        simulation.links.reset(
+            &simulation.authority.state().bricks,
+            &simulation.definitions,
+        );
         simulation.detect_collisions();
         Ok(simulation)
     }
@@ -511,10 +512,9 @@ impl Simulation {
                 overlap = batch.any(bounds, |i| {
                     let (other, ob) = &kept[i as usize];
                     match self.definitions.get(other) {
-                        Ok(definition) => grid::overlaps(
-                            (&brick, mesh, bounds),
-                            (other, &definition.mesh, *ob),
-                        ),
+                        Ok(definition) => {
+                            grid::overlaps((&brick, mesh, bounds), (other, &definition.mesh, *ob))
+                        }
                         Err(e) => {
                             error = Some(e);
                             true
@@ -1136,7 +1136,11 @@ impl Simulation {
     }
     /// `mutate` for many bricks, refreshing collisions once at the end: each
     /// chunk they share is rebuilt once, not once per brick.
-    pub fn mutate_many(&mut self, ids: &[BrickId], mut change: impl FnMut(&mut Brick)) -> Result<()> {
+    pub fn mutate_many(
+        &mut self,
+        ids: &[BrickId],
+        mut change: impl FnMut(&mut Brick),
+    ) -> Result<()> {
         let mut changed = false;
         for &id in ids {
             self.authority.mutate(id, &mut change)?;
@@ -1300,9 +1304,7 @@ impl Simulation {
                 .collect()
         };
         let source = (self.waters.as_ptr() as usize, self.waters.len());
-        let (address, count, liquids) = self
-            .liquids
-            .get_or_init(|| (source.0, source.1, build()));
+        let (address, count, liquids) = self.liquids.get_or_init(|| (source.0, source.1, build()));
         if (*address, *count) == source {
             liquids.clone()
         } else {
@@ -1344,12 +1346,24 @@ impl Simulation {
         self.kinds.get(definition).into_iter().flatten().copied()
     }
     fn note_kind(&mut self, id: BrickId) {
-        if let Some(key) = self.authority.state().bricks.get(&id).and_then(definition_key) {
+        if let Some(key) = self
+            .authority
+            .state()
+            .bricks
+            .get(&id)
+            .and_then(definition_key)
+        {
             self.kinds.entry(key.to_string()).or_default().insert(id);
         }
     }
     fn forget_kind(&mut self, id: BrickId) {
-        let Some(key) = self.authority.state().bricks.get(&id).and_then(definition_key) else {
+        let Some(key) = self
+            .authority
+            .state()
+            .bricks
+            .get(&id)
+            .and_then(definition_key)
+        else {
             return;
         };
         if let Some(set) = self.kinds.get_mut(key) {

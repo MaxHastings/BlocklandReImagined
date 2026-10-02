@@ -426,7 +426,12 @@ impl View {
     /// wires it ([`message_answer`]).
     pub fn answer_button(&self, yes: bool) -> Option<NodeId> {
         self.walk().find(|&n| {
-            self.nodes[n].ctrl.command.as_deref().and_then(message_answer) == Some(yes)
+            self.nodes[n]
+                .ctrl
+                .command
+                .as_deref()
+                .and_then(message_answer)
+                == Some(yes)
         })
     }
     /// Find a control by displayed/authored text within a class.
@@ -674,12 +679,20 @@ impl View {
     /// its `<tag:id>` is at the top. False when it has no such tag.
     pub fn scroll_to_tag(&mut self, pack: &Pack, id: NodeId, tag: &str) -> bool {
         let text = self.text_of(id);
-        let Some(y) = Self::ml_layout(pack, &self.nodes[id].ctrl.style, None, 0, &text, self.nodes[id].rect.w)
-            .and_then(|l| l.anchor_y(tag))
-        else {
+        let Some(y) = Self::ml_layout(
+            pack,
+            &self.nodes[id].ctrl.style,
+            None,
+            0,
+            &text,
+            self.nodes[id].rect.w,
+        )
+        .and_then(|l| l.anchor_y(tag)) else {
             return false;
         };
-        let Some(scroll) = self.nodes[id].parent.filter(|&p| self.nodes[p].ctrl.class == "GuiScrollCtrl")
+        let Some(scroll) = self.nodes[id]
+            .parent
+            .filter(|&p| self.nodes[p].ctrl.class == "GuiScrollCtrl")
         else {
             return false;
         };
@@ -898,14 +911,7 @@ impl View {
         } else {
             std::borrow::Cow::Borrowed(text)
         };
-        let Some(layout) = Self::ml_layout(
-            pack,
-            &n.ctrl.style,
-            n.state.tint,
-            0,
-            &text,
-            r.w,
-        ) else {
+        let Some(layout) = Self::ml_layout(pack, &n.ctrl.style, n.state.tint, 0, &text, r.w) else {
             return;
         };
         ml::draw(pack, dl, &layout, (r.x, r.y), style.font_outline);

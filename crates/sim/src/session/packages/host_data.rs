@@ -55,12 +55,15 @@ impl Session {
         let Some(host) = self.packages.as_mut() else {
             return;
         };
-        let ids: Vec<String> = host.catalog.behaviours().map(|(id, _)| id.clone()).collect();
+        let ids: Vec<String> = host
+            .catalog
+            .behaviours()
+            .map(|(id, _)| id.clone())
+            .collect();
         for id in ids {
             let mut data = store.load(&id);
             data.retain(|k, v| {
-                rules_key(k)
-                    && serde_json::to_vec(v).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
+                rules_key(k) && serde_json::to_vec(v).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
             });
             while data.len() > MAX_HOST_KEYS {
                 data.pop_last();
@@ -70,7 +73,11 @@ impl Session {
     }
 
     /// What `package` keeps as `key`.
-    pub(in crate::session) fn host_data(&self, package: &str, key: &str) -> Option<&serde_json::Value> {
+    pub(in crate::session) fn host_data(
+        &self,
+        package: &str,
+        key: &str,
+    ) -> Option<&serde_json::Value> {
         self.packages.as_ref()?.host_data.get(package)?.get(key)
     }
 

@@ -284,13 +284,12 @@ impl ToolUi {
     }
     fn merge_events(&mut self) {
         self.events = self.base_events.as_ref().map(|base| {
-            base.extended(&self.package_events)
-                .unwrap_or_else(|error| {
-                    bri_console::warn(format!(
-                        "The server's Add-On events are left out: {error:#}"
-                    ));
-                    base.clone()
-                })
+            base.extended(&self.package_events).unwrap_or_else(|error| {
+                bri_console::warn(format!(
+                    "The server's Add-On events are left out: {error:#}"
+                ));
+                base.clone()
+            })
         });
     }
     pub fn catalog_updates(&self) -> Vec<UiUpdate> {
@@ -547,7 +546,9 @@ impl ToolUi {
 
     pub fn action_command(&mut self, action: &UiAction) -> Result<Option<Command>> {
         if let UiAction::SendFillWrench { data, fields } = action {
-            return self.fill_wrench(data, fields).map(|fill| Some(Command::WrenchCopy(fill)));
+            return self
+                .fill_wrench(data, fields)
+                .map(|fill| Some(Command::WrenchCopy(fill)));
         }
         let tool = match action {
             UiAction::CancelWrench { brick } => {
@@ -987,19 +988,31 @@ mod tests {
         );
         ui.install_effects(
             vec![
-                ("crit:emitter/critemitter".into(), "Emote - Critical Hit".into()),
+                (
+                    "crit:emitter/critemitter".into(),
+                    "Emote - Critical Hit".into(),
+                ),
                 ("other:emitter/smoke".into(), "smoke".into()),
             ],
             vec![("crit:light/glow".into(), "Glow".into())],
         )
         .unwrap();
         let names = |class: &str| -> Vec<String> {
-            ui.datablocks[class].iter().map(|c| c.name.clone()).collect()
+            ui.datablocks[class]
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
         };
-        assert_eq!(names("ParticleEmitterData"), ["Smoke", "Emote - Critical Hit"]);
+        assert_eq!(
+            names("ParticleEmitterData"),
+            ["Smoke", "Emote - Critical Hit"]
+        );
         assert_eq!(names("FxLightData"), ["Glow"]);
         assert!(ui.catalog.emitters.contains("crit:emitter/critemitter"));
-        assert!(ui.catalog.emitters.contains("emitter/smoke"), "the base game's stay");
+        assert!(
+            ui.catalog.emitters.contains("emitter/smoke"),
+            "the base game's stay"
+        );
         assert!(ui.catalog.lights.contains("crit:light/glow"));
         assert!(
             ui.install_effects(vec![("bad\nid".into(), "Bad".into())], vec![])
@@ -1025,7 +1038,10 @@ mod tests {
             panic!("the lists change");
         };
         assert!(lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
-        assert!(ui.offer_events(&inputs(vec![flag.clone()])).is_none(), "no change");
+        assert!(
+            ui.offer_events(&inputs(vec![flag.clone()])).is_none(),
+            "no change"
+        );
         // A server without them takes them away again.
         let Some(UiUpdate::Events(lists)) = ui.offer_events(&Default::default()) else {
             panic!("the lists change");
@@ -1039,7 +1055,14 @@ mod tests {
         let Some(UiUpdate::Events(lists)) = ui.offer_events(&inputs(vec![clash])) else {
             panic!("the lists change");
         };
-        assert_eq!(lists.inputs.iter().filter(|i| i.name == "onActivate").count(), 1);
+        assert_eq!(
+            lists
+                .inputs
+                .iter()
+                .filter(|i| i.name == "onActivate")
+                .count(),
+            1
+        );
         // Outputs join the target's class, with their parameters, and an
         // Add-On's target joins every input with its base slot.
         let output = |class: &str, name: &str, params| bri_events::OutputDef {
@@ -1090,7 +1113,11 @@ mod tests {
             .expect("listed");
         assert_eq!(listed.class, "fxDTSBrick");
         assert_eq!(listed.params.len(), 1);
-        let activate = lists.inputs.iter().find(|i| i.name == "onActivate").unwrap();
+        let activate = lists
+            .inputs
+            .iter()
+            .find(|i| i.name == "onActivate")
+            .unwrap();
         assert!(
             activate
                 .targets
@@ -1639,10 +1666,8 @@ mod tests {
         .unwrap();
         let portal_package = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../packages/brick_portal/assets/brick-catalog");
-        let catalog = bri_sim::definitions::catalog_with(
-            &base,
-            &[("brick_portal".into(), portal_package)],
-        );
+        let catalog =
+            bri_sim::definitions::catalog_with(&base, &[("brick_portal".into(), portal_package)]);
         std::fs::remove_dir_all(&base).unwrap();
         let mut ui = fixture();
         ui.variants = wrench_variants(&catalog.unwrap());

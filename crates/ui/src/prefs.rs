@@ -108,7 +108,13 @@ mod tests {
         assert_eq!(p.overrides().len(), 1);
         assert_eq!(p.f32_or("$missing", 0.5), 0.5);
         p.set("$pref::Other::Thing", "x");
-        assert_eq!(p.keys(), ["$pref::HUD::HideBrickBox", "$pref::Other::Thing"]);
-        assert_eq!(p.canonical("$PREF::hud::hidebrickbox"), Some("$pref::HUD::HideBrickBox"));
+        assert_eq!(
+            p.keys(),
+            ["$pref::HUD::HideBrickBox", "$pref::Other::Thing"]
+        );
+        assert_eq!(
+            p.canonical("$PREF::hud::hidebrickbox"),
+            Some("$pref::HUD::HideBrickBox")
+        );
     }
 }

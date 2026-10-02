@@ -15,7 +15,7 @@ use bri_sim::{
 };
 use bri_world::{OwnerId, World};
 use glam::Vec3;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
 
 struct Root(PathBuf);

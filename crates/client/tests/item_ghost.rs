@@ -658,7 +658,7 @@ fn ghost_cycle(
 
 /// An app on `f`'s content with a fresh state folder, which it keeps
 /// until dropped.
-fn load(f: &ContentRoot, name: &str) -> Result<(App, bri_client::testing::ScratchDir)> {
+fn load(f: &ContentRoot, name: &str) -> Result<(Box<App>, bri_client::testing::ScratchDir)> {
     let state = f.state()?;
     let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
@@ -744,8 +744,18 @@ fn lan_host_and_guest_both_see_each_others_pickup_ghosts(f: &ContentRoot) -> Res
     )?;
     // The joined guest's pickup, seen by the host; then the host's own,
     // seen by the guest.
-    let guest_report = ghost_cycle(&mut [&mut guest, &mut host_app], &mut camera, "lan-guest", &f.brick)?;
-    let host_report = ghost_cycle(&mut [&mut host_app, &mut guest], &mut camera, "lan-host", &f.brick)?;
+    let guest_report = ghost_cycle(
+        &mut [&mut guest, &mut host_app],
+        &mut camera,
+        "lan-guest",
+        &f.brick,
+    )?;
+    let host_report = ghost_cycle(
+        &mut [&mut host_app, &mut guest],
+        &mut camera,
+        "lan-host",
+        &f.brick,
+    )?;
     let report = serde_json::json!({"guest_pickup": guest_report, "host_pickup": host_report});
     std::fs::write(
         artifact.join("lan.json"),

@@ -201,7 +201,10 @@ impl Wrench {
             let title = match open.and_then(|o| o.fill) {
                 Some(1) => "Fill Wrench - 1 Brick".to_string(),
                 Some(count) => format!("Fill Wrench - {count} Bricks"),
-                None => format!("Wrench - {}", open.map(|o| o.owner.as_str()).unwrap_or_default()),
+                None => format!(
+                    "Wrench - {}",
+                    open.map(|o| o.owner.as_str()).unwrap_or_default()
+                ),
             };
             self.view.set_text(n, title);
         }

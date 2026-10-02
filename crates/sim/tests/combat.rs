@@ -16,7 +16,9 @@ fn session() -> Session {
         Simulation::new(
             World::new("Combat".into(), "test".into(), vec![[1.0; 4]]),
             Definitions::default(),
-            vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
+            vec![
+                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
         )
         .unwrap(),
     );
@@ -32,8 +34,12 @@ fn steps(s: &mut Session, n: usize) {
 #[test]
 fn suicide_death_message_score_and_click_respawn() {
     let mut s = session();
-    let a = s.join("Alpha".into(), Vec3::new(-3.0, 0.05, 0.0), false).unwrap();
-    let b = s.join("Bravo".into(), Vec3::new(3.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Alpha".into(), Vec3::new(-3.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("Bravo".into(), Vec3::new(3.0, 0.05, 0.0), false)
+        .unwrap();
     s.command(
         a,
         1,
@@ -44,7 +50,8 @@ fn suicide_death_message_score_and_click_respawn() {
     )
     .unwrap();
     let game = s.minigame_views()[0].id;
-    s.command(b, 1, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    s.command(b, 1, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
     assert_eq!(s.minigame_views()[0].members.len(), 2);
     assert_eq!(s.vitals()[&b].minigame, Some(game));
     // The owner hears about the new member; the joiner does not.
@@ -86,7 +93,9 @@ fn suicide_death_message_score_and_click_respawn() {
 #[test]
 fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     let mut s = session();
-    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     // Outside a minigame, a long fall is harmless (sandbox falling damage off).
     s.set_spawn_points(vec![Vec3::new(0.0, 80.0, 0.0)]).unwrap();
     s.command(
@@ -109,7 +118,10 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     }
     assert!(!s.is_alive(a), "an 80 unit fall kills inside a minigame");
     let chat = s.take_private_notices();
-    assert!(chat.iter().any(|(_, n)| matches!(n, Notice::Chat(t) if t == "Alpha")));
+    assert!(
+        chat.iter()
+            .any(|(_, n)| matches!(n, Notice::Chat(t) if t == "Alpha"))
+    );
 
     // Outside a mini-game the host's Falling Damage decides; with it off,
     // leaving the minigame (after respawning) makes the same fall harmless.
@@ -121,10 +133,12 @@ fn players_outside_minigames_cannot_be_hurt_and_falls_follow_rules() {
     steps(&mut s, 130);
     s.command(a, 2, Command::Respawn).unwrap();
     s.take_private_notices();
-    s.command(a, 3, Command::MiniGame(MiniGameRequest::End)).unwrap();
+    s.command(a, 3, Command::MiniGame(MiniGameRequest::End))
+        .unwrap();
     assert!(s.minigame_views().is_empty());
-    assert!(s.take_private_notices().iter().any(|(o, n)| *o == a
-        && matches!(n, Notice::Chat(t) if t.ends_with("The mini-game ended."))));
+    assert!(s.take_private_notices().iter().any(
+        |(o, n)| *o == a && matches!(n, Notice::Chat(t) if t.ends_with("The mini-game ended."))
+    ));
     let mut sequence = 1000;
     for _ in 0..600 {
         sequence += 1;
@@ -161,14 +175,20 @@ fn horses_take_no_falling_damage_below_their_min_impact_speed() {
     // HorseArmor's `minImpactSpeed` is 250, so the engine never raises
     // `onImpact` for a fall that kills a Standard Player.
     let mut s = session();
-    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     s.set_spawn_points(vec![Vec3::new(0.0, 80.0, 0.0)]).unwrap();
     let settings = Settings {
         player_type: bri_sim::player_types::PlayerType::Horse.id().into(),
         ..Settings::default()
     };
-    s.command(a, 1, Command::MiniGame(MiniGameRequest::Create { color: 3, settings }))
-        .unwrap();
+    s.command(
+        a,
+        1,
+        Command::MiniGame(MiniGameRequest::Create { color: 3, settings }),
+    )
+    .unwrap();
     for sequence in 1..=600 {
         s.movement(a, sequence, MoveInput::default()).unwrap();
         s.step().unwrap();
@@ -180,29 +200,46 @@ fn horses_take_no_falling_damage_below_their_min_impact_speed() {
 #[test]
 fn minigame_owner_controls_and_invitations() {
     let mut s = session();
-    let a = s.join("Alpha".into(), Vec3::new(-3.0, 0.05, 0.0), false).unwrap();
-    let b = s.join("Bravo".into(), Vec3::new(3.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Alpha".into(), Vec3::new(-3.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("Bravo".into(), Vec3::new(3.0, 0.05, 0.0), false)
+        .unwrap();
     let settings = Settings {
         invite_only: true,
         ..Settings::default()
     };
-    s.command(a, 1, Command::MiniGame(MiniGameRequest::Create { color: 1, settings }))
-        .unwrap();
+    s.command(
+        a,
+        1,
+        Command::MiniGame(MiniGameRequest::Create { color: 1, settings }),
+    )
+    .unwrap();
     let game = s.minigame_views()[0].id;
     let err = s
         .command(b, 1, Command::MiniGame(MiniGameRequest::Join { game }))
         .unwrap_err();
     assert!(err.to_string().contains("invite only"));
-    s.command(a, 2, Command::MiniGame(MiniGameRequest::Invite { target: b }))
-        .unwrap();
+    s.command(
+        a,
+        2,
+        Command::MiniGame(MiniGameRequest::Invite { target: b }),
+    )
+    .unwrap();
     assert_eq!(s.vitals()[&b].invite, Some(game));
-    assert!(s.take_private_notices().iter().any(|(o, n)| *o == b
-        && matches!(n, Notice::Invite { owner_name, .. } if owner_name == "Alpha")));
+    assert!(
+        s.take_private_notices().iter().any(|(o, n)| *o == b
+            && matches!(n, Notice::Invite { owner_name, .. } if owner_name == "Alpha"))
+    );
     s.command(b, 2, Command::MiniGame(MiniGameRequest::Accept { game }))
         .unwrap();
     assert_eq!(s.minigame_views()[0].members.len(), 2);
     // Only the owner can reset; the member cannot.
-    assert!(s.command(b, 3, Command::MiniGame(MiniGameRequest::Reset)).is_err());
+    assert!(
+        s.command(b, 3, Command::MiniGame(MiniGameRequest::Reset))
+            .is_err()
+    );
     s.command(a, 3, Command::MiniGame(MiniGameRequest::Kick { target: b }))
         .unwrap();
     assert_eq!(s.vitals()[&b].minigame, None);
@@ -247,14 +284,20 @@ fn quick_emotes_past_five_are_dropped_until_ten_quiet_seconds() {
 #[test]
 fn minigame_loadout_may_repeat_an_item_like_v20() {
     let mut s = session();
-    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     let hammer = Some("v20.weapon.hammeritem".to_string());
     let settings = Settings {
         loadout: [hammer.clone(), hammer.clone(), None, None, None],
         ..Settings::default()
     };
-    s.command(a, 1, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
-        .unwrap();
+    s.command(
+        a,
+        1,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
     s.command(a, 2, Command::Suicide).unwrap();
     steps(&mut s, 200);
     s.command(a, 3, Command::Respawn).unwrap();
@@ -298,14 +341,17 @@ fn add_on_blasts_obey_the_minigame_like_weapon_blasts() {
         .unwrap();
     assert_eq!(s.vitals()[&b].health, 100.0);
     // A blast nobody set off still hurts.
-    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, "test", None).unwrap();
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, "test", None)
+        .unwrap();
     assert!(s.vitals()[&b].health < 100.0);
 }
 
 #[test]
 fn admin_drop_at_camera_costs_a_point_and_respawns_at_once_in_minigames() {
     let mut s = session();
-    let a = s.join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+    let a = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
     s.command(
         a,
         1,
@@ -317,7 +363,11 @@ fn admin_drop_at_camera_costs_a_point_and_respawns_at_once_in_minigames() {
     .unwrap();
     steps(&mut s, 10);
     s.command(a, 2, Command::DropPlayerAtCamera(None)).unwrap();
-    assert_eq!(s.vitals()[&a].score, -1, "serverCmdDropPlayerAtCamera: incScore(-1)");
+    assert_eq!(
+        s.vitals()[&a].score,
+        -1,
+        "serverCmdDropPlayerAtCamera: incScore(-1)"
+    );
     s.command(a, 3, Command::Suicide).unwrap();
     assert!(!s.is_alive(a));
     // `spawnPlayer` directly: no waiting out the minigame respawn time, and
@@ -355,7 +405,9 @@ fn anyone_may_ask_for_the_brick_count() {
 #[test]
 fn a_respawned_body_starts_without_its_light() {
     let mut s = session();
-    let a = s.join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     s.command(a, 1, Command::ToggleLight).unwrap();
     assert!(s.vitals()[&a].light);
     s.command(a, 2, Command::Suicide).unwrap();

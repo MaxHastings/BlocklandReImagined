@@ -2,8 +2,8 @@
 //! Player Count): which bot kinds the enabled Add-Ons provide, and adding,
 //! resting and removing the package's own bots. Their brain is the
 //! engine's; which kind plays, on which team, is the rules'.
-use crate::ops;
 use super::*;
+use crate::ops;
 use crate::ops::{MAX_BOT_NAME_CHARS, MAX_BOTS};
 
 /// A bot kind an enabled Add-On provides, as scripts see it

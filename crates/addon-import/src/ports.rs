@@ -252,13 +252,14 @@ impl Rules {
     }
 }
 
-
 /// Whether `name` may name a rules data file.
 pub(crate) fn valid_data_id(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 48
         && name.starts_with(|c: char| c.is_ascii_lowercase())
-        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -462,7 +463,8 @@ impl Ports {
             );
         }
         ensure!(
-            port.replaces.is_empty() || self.files.contains_key(&format!("{}/{DATABLOCKS}", e.port)),
+            port.replaces.is_empty()
+                || self.files.contains_key(&format!("{}/{DATABLOCKS}", e.port)),
             "replaces datablocks without a {DATABLOCKS} to declare them"
         );
         let files = self.added_files(&e.port);
@@ -478,7 +480,9 @@ impl Ports {
             );
         }
         ensure!(
-            port.welcome.as_ref().is_none_or(|w| port.help.contains_key(w)),
+            port.welcome
+                .as_ref()
+                .is_none_or(|w| port.help.contains_key(w)),
             "welcome names a page that is not in help"
         );
         for (title, path) in &port.help {
@@ -983,7 +987,11 @@ fn try_apply(
         let text = std::str::from_utf8(bytes)
             .with_context(|| format!("files/{file} is not UTF-8 text"))?;
         let text = fill_text(text, &values).with_context(|| format!("files/{file}"))?;
-        let stem = file.rsplit('/').next().unwrap_or(&file).trim_end_matches(".json");
+        let stem = file
+            .rsplit('/')
+            .next()
+            .unwrap_or(&file)
+            .trim_end_matches(".json");
         provided.push(serde_json::json!({
             "kind": kind,
             "id": crate::content_id(import.namespace, kind, stem),
@@ -998,7 +1006,10 @@ fn try_apply(
             .pictures
             .get(&path.to_ascii_lowercase())
             .with_context(|| format!("image {file}: the Add-On has no {path}"))?;
-        ensure!(!out.join(file).exists(), "{file} would replace an imported file");
+        ensure!(
+            !out.join(file).exists(),
+            "{file} would replace an imported file"
+        );
         provided.push(serde_json::json!({
             "kind": "image",
             "id": crate::content_id(import.namespace, "image", file.rsplit('/').next().unwrap_or(file).split('.').next().unwrap_or(file)),
@@ -1021,7 +1032,10 @@ fn try_apply(
         .collect();
     if !pages.is_empty() {
         let file = "help.json".to_owned();
-        ensure!(!out.join(&file).exists(), "{file} would replace an imported file");
+        ensure!(
+            !out.join(&file).exists(),
+            "{file} would replace an imported file"
+        );
         let doc = serde_json::json!({ "schema_version": 1, "pages": pages });
         let help: bri_package_runtime::content::HelpPages =
             serde_json::from_value(doc.clone()).context("help.json")?;
@@ -1038,7 +1052,8 @@ fn try_apply(
         let at = writes.iter().position(|(f, _)| f == "package.json");
         let bytes = match at {
             Some(i) => writes[i].1.clone(),
-            None => std::fs::read(out.join("package.json")).context("the import wrote no package.json")?,
+            None => std::fs::read(out.join("package.json"))
+                .context("the import wrote no package.json")?,
         };
         let mut manifest: Value = serde_json::from_slice(&bytes).context("package.json")?;
         manifest["provides"]
@@ -1190,7 +1205,8 @@ fn rules_package(
             crate::ports::valid_data_id(name),
             "data `{name}` is not an id: lower-case letters, digits and _"
         );
-        let text = fill.bodies
+        let text = fill
+            .bodies
             .get(&path.to_ascii_lowercase())
             .with_context(|| format!("data `{name}`: the Add-On has no {path}"))?;
         let file = format!("data/{name}.txt");
@@ -1326,7 +1342,9 @@ fn port_text(bytes: &[u8]) -> Result<String> {
 }
 
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower|\|text)?\}\}")?;
+    let re = regex::Regex::new(
+        r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower|\|text)?\}\}",
+    )?;
     let mut problem = None;
     let filled = re.replace_all(text, |c: &regex::Captures| {
         let Some(v) = values.get(&c[1]) else {
@@ -1393,7 +1411,9 @@ pub(crate) fn torque_text(source: &str) -> String {
                 }
             }
             Some('x') => {
-                let hex: String = (0..2).filter_map(|_| chars.next_if(char::is_ascii_hexdigit)).collect();
+                let hex: String = (0..2)
+                    .filter_map(|_| chars.next_if(char::is_ascii_hexdigit))
+                    .collect();
                 match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
                     Some(c) => out.push(c),
                     None => out.push('x'),
@@ -1465,10 +1485,18 @@ fn event_params(source: &str) -> Result<String> {
                 "default": number(w.get(1), "paintColor default")? as u8,
             }),
             "list" => {
-                ensure!(w.len() >= 3 && w.len() % 2 == 1, "list `{field}` is not name value pairs");
+                ensure!(
+                    w.len() >= 3 && w.len() % 2 == 1,
+                    "list `{field}` is not name value pairs"
+                );
                 let items = w[1..]
                     .chunks(2)
-                    .map(|p| Ok(serde_json::json!([p[0], number(p.get(1), "list value")? as i64])))
+                    .map(|p| {
+                        Ok(serde_json::json!([
+                            p[0],
+                            number(p.get(1), "list value")? as i64
+                        ]))
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 serde_json::json!({ "type": "list", "items": items })
             }
@@ -1720,7 +1748,10 @@ mod tests {
 
     #[test]
     fn torque_strings_become_quoted_text() {
-        let values = BTreeMap::from([("line".to_owned(), r#"\c3(Spree | %1)\n\"hi\" \cpx\x41\q"#.to_owned())]);
+        let values = BTreeMap::from([(
+            "line".to_owned(),
+            r#"\c3(Spree | %1)\n\"hi\" \cpx\x41\q"#.to_owned(),
+        )]);
         assert_eq!(
             fill_text("let s = {{line|text}};", &values).unwrap(),
             "let s = \"\u{e003}(Spree | %1)\\n\\\"hi\\\" \u{e00b}xAq\";"

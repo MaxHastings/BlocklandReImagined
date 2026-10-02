@@ -37,10 +37,8 @@ impl Drop for Root {
 }
 
 fn add_ons(name: &str, inputs: serde_json::Value) -> (Root, Arc<Catalog>) {
-    let root = Root(std::env::temp_dir().join(format!(
-        "bri-brick-inputs-{}-{name}",
-        std::process::id()
-    )));
+    let root =
+        Root(std::env::temp_dir().join(format!("bri-brick-inputs-{}-{name}", std::process::id())));
     let dir = root.0.join("probe");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = json!({
@@ -175,12 +173,18 @@ fn rows_on_an_add_ons_input_run_when_its_rules_fire_it() {
         let input = s.event_catalog().unwrap().input("onPing").expect("listed");
         assert_eq!(input.id, "probe:onPing");
         assert_eq!(
-            input.targets.iter().map(|(slot, _)| slot.as_str()).collect::<Vec<_>>(),
+            input
+                .targets
+                .iter()
+                .map(|(slot, _)| slot.as_str())
+                .collect::<Vec<_>>(),
             ["Self", "Player", "Client", "MiniGame"]
         );
         assert_eq!(s.package_brick_inputs().len(), 1, "sent to players");
 
-        let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+        let builder = s
+            .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false)
+            .unwrap();
         steps(&mut s, &[builder], 10);
         let Reply::Planted(brick) = s
             .command(
@@ -206,10 +210,15 @@ fn rows_on_an_add_ons_input_run_when_its_rules_fire_it() {
             output: "setColor".into(),
             params: vec![EventValue::Color(1)],
         };
-        s.edit_brick(builder, brick, Edit::Events(vec![row])).unwrap();
+        s.edit_brick(builder, brick, Edit::Events(vec![row]))
+            .unwrap();
         run(&mut s, builder, 2, "ping", brick).unwrap();
         steps(&mut s, &[builder], 2);
-        assert_eq!(s.simulation().state().bricks[&brick].color, 1, "the row ran");
+        assert_eq!(
+            s.simulation().state().bricks[&brick].color,
+            1,
+            "the row ran"
+        );
         assert!(
             s.package_diagnostics().is_empty(),
             "{:?}",
@@ -291,21 +300,38 @@ fn an_input_that_follows_the_engines_runs_when_the_rules_answer_it() {
     s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
         .unwrap();
     s.install_packages(add_ons, None).unwrap();
-    let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+    let builder = s
+        .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false)
+        .unwrap();
     steps(&mut s, &[builder], 10);
     let left = plant(&mut s, builder, 1, 5.0);
     let right = plant(&mut s, builder, 2, 7.0);
-    s.edit_brick(builder, left, Edit::Events(vec![paint("onActivate(Left)", bri_events::Slot::SelfBrick)]))
-        .unwrap();
-    s.edit_brick(builder, right, Edit::Events(vec![paint("onActivate(Right)", bri_events::Slot::SelfBrick)]))
-        .unwrap();
+    s.edit_brick(
+        builder,
+        left,
+        Edit::Events(vec![paint("onActivate(Left)", bri_events::Slot::SelfBrick)]),
+    )
+    .unwrap();
+    s.edit_brick(
+        builder,
+        right,
+        Edit::Events(vec![paint(
+            "onActivate(Right)",
+            bri_events::Slot::SelfBrick,
+        )]),
+    )
+    .unwrap();
     for brick in [left, right] {
         s.fire_brick_input(brick, "onActivate", Some(builder));
     }
     steps(&mut s, &[builder], 2);
     let colors = |s: &Session| [left, right].map(|b| s.simulation().state().bricks[&b].color);
     assert_eq!(colors(&s), [1, 0], "only the answered input ran");
-    assert!(s.package_diagnostics().is_empty(), "{:?}", s.package_diagnostics());
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:?}",
+        s.package_diagnostics()
+    );
 }
 
 /// An input fired on every brick of a mini-game (v20 Slayer's
@@ -325,9 +351,15 @@ fn a_game_input_runs_on_the_games_bricks_with_the_killer() {
     s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
         .unwrap();
     s.install_packages(add_ons, None).unwrap();
-    let host = s.join("Host".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
-    let rival = s.join("Rival".into(), Vec3::new(-5.0, 0.05, 0.0), false).unwrap();
-    let stranger = s.join("Stranger".into(), Vec3::new(0.0, 0.05, 5.0), false).unwrap();
+    let host = s
+        .join("Host".into(), Vec3::new(5.0, 0.05, 0.0), false)
+        .unwrap();
+    let rival = s
+        .join("Rival".into(), Vec3::new(-5.0, 0.05, 0.0), false)
+        .unwrap();
+    let stranger = s
+        .join("Stranger".into(), Vec3::new(0.0, 0.05, 5.0), false)
+        .unwrap();
     steps(&mut s, &[host, rival, stranger], 10);
     s.command(
         host,
@@ -371,5 +403,9 @@ fn a_game_input_runs_on_the_games_bricks_with_the_killer() {
     let vitals = s.vitals();
     assert!(!vitals[&rival].alive, "the row aimed at the killer ran");
     assert!(vitals[&host].alive);
-    assert!(s.package_diagnostics().is_empty(), "{:?}", s.package_diagnostics());
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:?}",
+        s.package_diagnostics()
+    );
 }

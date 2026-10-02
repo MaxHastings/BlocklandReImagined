@@ -138,11 +138,7 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
-        Self::with(World::new(
-            "Carry".into(),
-            "carry".into(),
-            vec![[1.0; 4]],
-        ))
+        Self::with(World::new("Carry".into(), "carry".into(), vec![[1.0; 4]]))
     }
     fn with(world: World) -> Self {
         Self::with_add_ons(world, add_ons())
@@ -553,11 +549,8 @@ fn on_trigger(who, trigger, down) {
 fn allow_equip(who) { !player(who).mounted }"#,
         ),
     );
-    g.s.set_vehicle_pack(
-        bri_vehicles::testing::pack(),
-        Vec::new(),
-    )
-    .unwrap();
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
+        .unwrap();
     g.s.spawn_vehicle_at(
         0,
         bri_vehicles::testing::HORSE,

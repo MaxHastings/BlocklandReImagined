@@ -615,8 +615,12 @@ fn a_states_cues_play_at_their_times_after_it_begins() {
             match e {
                 Event::Animation {
                     thread, sequence, ..
-                } if thread != 2 || sequence == "plant" => seen.push((tick, format!("{thread} {sequence}"))),
-                Event::Sound { profile, position, .. } if profile == "kit:sound/tap" => {
+                } if thread != 2 || sequence == "plant" => {
+                    seen.push((tick, format!("{thread} {sequence}")))
+                }
+                Event::Sound {
+                    profile, position, ..
+                } if profile == "kit:sound/tap" => {
                     assert_eq!(position, Vec3::new(1.0, 0.0, 0.0));
                     seen.push((tick, profile));
                 }
@@ -643,8 +647,14 @@ fn a_states_cues_play_at_their_times_after_it_begins() {
     w.respawned(A).unwrap();
     let later: Vec<Event> = (0..40).flat_map(|_| w.step(&mut Open)).collect();
     assert!(
-        !later.iter().any(|e| matches!(e, Event::Animation { sequence, .. } if sequence == "plant")),
+        !later
+            .iter()
+            .any(|e| matches!(e, Event::Animation { sequence, .. } if sequence == "plant")),
         "{later:?}"
     );
-    assert!(later.iter().any(|e| matches!(e, Event::Sound { profile, .. } if profile == "kit:sound/tap")));
+    assert!(
+        later
+            .iter()
+            .any(|e| matches!(e, Event::Sound { profile, .. } if profile == "kit:sound/tap"))
+    );
 }

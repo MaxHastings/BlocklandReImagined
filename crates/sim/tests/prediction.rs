@@ -45,7 +45,9 @@ fn input(tick: u64) -> MoveInput {
 #[test]
 fn prediction_matches_server_under_delay_loss_and_redundancy() {
     let mut session = server();
-    let owner = session.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let owner = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     let (initial, _) = session.motion_states().remove(0);
     let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
     let mut prediction = Predictor::new(mirror, initial, Default::default()).unwrap();
@@ -141,7 +143,9 @@ fn prediction_bumps_into_other_players_like_the_host() {
 #[test]
 fn server_input_queue_ignores_duplicates_and_bounds_rate() {
     let mut session = server();
-    let owner = session.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+    let owner = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
     for sequence in 1..=10 {
         session.movement(owner, sequence, input(sequence)).unwrap();
         // Redundant resend of the same input is ignored, not an error.
@@ -153,7 +157,9 @@ fn server_input_queue_ignores_duplicates_and_bounds_rate() {
     // The token bucket rejects sustained floods.
     let mut rejected = false;
     for sequence in 11..200 {
-        rejected |= session.movement(owner, sequence, MoveInput::default()).is_err();
+        rejected |= session
+            .movement(owner, sequence, MoveInput::default())
+            .is_err();
     }
     assert!(rejected);
 }
@@ -162,7 +168,8 @@ fn server_input_queue_ignores_duplicates_and_bounds_rate() {
 fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
     let session = {
         let mut s = server();
-        s.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+        s.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
         s
     };
     let (initial, _) = session.motion_states().remove(0);
@@ -180,7 +187,12 @@ fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
             .reconcile(10, prediction.sequence() + 1, initial.clone())
             .is_err()
     );
-    assert!(prediction.reconcile(10, 5, initial.clone()).unwrap().is_some());
+    assert!(
+        prediction
+            .reconcile(10, 5, initial.clone())
+            .unwrap()
+            .is_some()
+    );
     // Older server ticks never rewind an applied correction.
     assert!(prediction.reconcile(9, 6, initial).unwrap().is_none());
 }
@@ -193,7 +205,8 @@ fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
 fn a_correction_within_noise_still_takes_the_hosts_rope() {
     let session = {
         let mut s = server();
-        s.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+        s.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
         s
     };
     let (initial, _) = session.motion_states().remove(0);
@@ -381,5 +394,8 @@ fn a_tool_that_takes_jet_is_predicted_without_jetting() {
     for _ in 0..60 {
         prediction.step(jet).unwrap();
     }
-    assert!(prediction.state().feet[1] > ground + 0.1, "without it, jet jets");
+    assert!(
+        prediction.state().feet[1] > ground + 0.1,
+        "without it, jet jets"
+    );
 }

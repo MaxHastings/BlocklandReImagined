@@ -390,10 +390,7 @@ impl WorldItems {
                 && self.last_seconds.is_none_or(|t| frame.seconds >= t),
             "Invalid/backward item render clock; reset on session change"
         );
-        ensure!(
-            view.images.keys().all(|id| *id > 0),
-            "Invalid item owners"
-        );
+        ensure!(view.images.keys().all(|id| *id > 0), "Invalid item owners");
         let names = view.images.keys().map(|id| (*id, String::new())).collect();
         view.validate(&names)?;
         self.last_seconds = Some(frame.seconds);
@@ -811,12 +808,20 @@ impl WorldItems {
     /// A lying item's pose: its `idle` sequence (`bri_weapons::Item::idle`)
     /// on the world clock, so every copy of a model shares one pose.
     fn idle_pose(&mut self, item: &str, model: &str, seconds: f64) -> PoseKey {
-        let Some(idle) = self.weapons.items.get(item).map(|i| &i.idle).filter(|s| !s.is_empty())
+        let Some(idle) = self
+            .weapons
+            .items
+            .get(item)
+            .map(|i| &i.idle)
+            .filter(|s| !s.is_empty())
         else {
             return PoseKey::default();
         };
         let clip = self.assets.shape(model).ok().and_then(|shape| {
-            shape.animations.iter().find(|a| a.name.eq_ignore_ascii_case(idle))
+            shape
+                .animations
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(idle))
         });
         match clip {
             Some(clip) => normalized_pose(clip, seconds),
@@ -861,9 +866,7 @@ impl WorldItems {
                 .iter()
                 .find(|a| a.name.eq_ignore_ascii_case(sequence))
                 // An unknown sequence poses as it did.
-                .is_none_or(|clip| {
-                    crate::items::moves_visible_detail(shape, clip, first_person)
-                })
+                .is_none_or(|clip| crate::items::moves_visible_detail(shape, clip, first_person))
         });
         self.moves_drawn.insert(key, moves);
         moves
@@ -1265,9 +1268,7 @@ impl WorldItems {
     /// The model of every weapon image someone holds now as an Add-On
     /// mesh (position, normal, uv at rest, in the image's own space), by
     /// image id. Each model is built once.
-    pub fn held_image_meshes(
-        &mut self,
-    ) -> BTreeMap<String, Arc<bri_client_sandbox::host::Mesh>> {
+    pub fn held_image_meshes(&mut self) -> BTreeMap<String, Arc<bri_client_sandbox::host::Mesh>> {
         let held: Vec<_> = self
             .mounted
             .values()
@@ -1440,7 +1441,10 @@ mod tests {
     #[test]
     fn a_cyclic_idle_loops_and_a_one_shot_holds_its_end() {
         let looped = clip(true);
-        assert_ne!(normalized_pose(&looped, 1.0), normalized_pose(&looped, 1.05));
+        assert_ne!(
+            normalized_pose(&looped, 1.0),
+            normalized_pose(&looped, 1.05)
+        );
         assert_eq!(
             f32::from_bits(normalized_pose(&looped, 1.2).seconds),
             (1.2f64.rem_euclid(0.5)) as f32

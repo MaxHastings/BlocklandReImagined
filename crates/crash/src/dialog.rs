@@ -67,7 +67,10 @@ mod imp {
     pub(super) fn alert(title: &str, text: &str, logs: Option<&Path>) -> bool {
         let (body, buttons) = match logs {
             Some(dir) => (
-                format!("{text}\n\nThe logs are in:\n{}\n\nOpen that folder now?", dir.display()),
+                format!(
+                    "{text}\n\nThe logs are in:\n{}\n\nOpen that folder now?",
+                    dir.display()
+                ),
                 MB_YESNO,
             ),
             None => (text.to_string(), MB_OK),

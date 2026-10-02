@@ -217,7 +217,9 @@ pub fn emitter(d: &Declaration, nodes: &BTreeMap<String, f32>) -> Result<(Emitte
         ));
     }
     if period != authored_period {
-        corrected.push(format!("ejectionPeriodMS {authored_period} raised to {period}"));
+        corrected.push(format!(
+            "ejectionPeriodMS {authored_period} raised to {period}"
+        ));
     }
     if variance != authored_variance {
         corrected.push(format!(
@@ -457,7 +459,10 @@ mod tests {
             assert_eq!(Fields::new(&node(v)).ratio("timemultiple", 1.0).unwrap(), n);
         }
         for bad in ["1/0", "0", "a/b", "1/2/3"] {
-            assert!(Fields::new(&node(bad)).ratio("timemultiple", 1.0).is_err(), "{bad}");
+            assert!(
+                Fields::new(&node(bad)).ratio("timemultiple", 1.0).is_err(),
+                "{bad}"
+            );
         }
     }
 
@@ -479,7 +484,11 @@ mod tests {
             assert_eq!(e.period, period);
             assert_eq!(e.period_variance, variance);
             assert_eq!(e.theta_degrees, theta);
-            assert_eq!(notes.iter().any(|n| n.contains("onAdd")), entry != 3, "{notes:?}");
+            assert_eq!(
+                notes.iter().any(|n| n.contains("onAdd")),
+                entry != 3,
+                "{notes:?}"
+            );
             emitters.push(e);
         }
         // Every corrected emitter is one the effects library accepts.

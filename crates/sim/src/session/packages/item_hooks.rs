@@ -207,7 +207,10 @@ impl Session {
     /// A projectile struck something: packages owning it hear of it next
     /// tick.
     pub(in crate::session) fn package_hit(&mut self, impact: &ProjectileContact) {
-        if self.hooked(|b| b.on_projectile_hit, &impact.definition).is_empty() {
+        if self
+            .hooked(|b| b.on_projectile_hit, &impact.definition)
+            .is_empty()
+        {
             return;
         }
         let host = self.packages.as_mut().expect("hooked packages run");
@@ -313,7 +316,10 @@ impl Session {
         data: Option<serde_json::Value>,
         seconds: Option<u32>,
     ) -> Result<()> {
-        ensure!(self.weapons.contains_item(item), "`{item}` is not an item of this server");
+        ensure!(
+            self.weapons.contains_item(item),
+            "`{item}` is not an item of this server"
+        );
         let host = self.packages.as_ref().context("No packages are enabled")?;
         let lying = host
             .item_hooks
@@ -374,10 +380,8 @@ impl Session {
             host.item_hooks.package_drops.get(&drop).map(String::as_str) == Some(package),
             "Item {drop} is not one `{package}` put in the world"
         );
-        self.weapons.set_drop_name(
-            drop,
-            text.map(|text| bri_weapons::DropName { text, color }),
-        )
+        self.weapons
+            .set_drop_name(drop, text.map(|text| bri_weapons::DropName { text, color }))
     }
 
     /// The items `package` put in the world that still lie there.
@@ -390,7 +394,9 @@ impl Session {
         };
         self.weapons
             .drops()
-            .filter(|d| host.item_hooks.package_drops.get(&d.id).map(String::as_str) == Some(package))
+            .filter(|d| {
+                host.item_hooks.package_drops.get(&d.id).map(String::as_str) == Some(package)
+            })
             .map(|d| bri_package_runtime::script::DropView {
                 id: d.id,
                 item: d.item.clone(),

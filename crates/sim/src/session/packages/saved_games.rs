@@ -49,7 +49,10 @@ impl Session {
 
     /// `game` as a build saves it: its settings, Add-On settings, teams
     /// and per-game Add-On state (rules' presets: `minigame_snapshot`).
-    pub(in crate::session) fn minigame_snapshot(&self, game: mg::GameId) -> Option<serde_json::Value> {
+    pub(in crate::session) fn minigame_snapshot(
+        &self,
+        game: mg::GameId,
+    ) -> Option<serde_json::Value> {
         let g = self.minigames.game(game).ok()?;
         let mut packages: BTreeMap<String, BTreeMap<String, serde_json::Value>> = BTreeMap::new();
         if let Some(host) = self.packages.as_ref() {
@@ -113,7 +116,12 @@ impl Session {
     fn try_restore_minigame(&mut self, owner: OwnerId, saved: serde_json::Value) -> Result<()> {
         let saved: SavedMiniGame =
             serde_json::from_value(saved).context("this server cannot read it")?;
-        let player = self.peers.get(&owner).context("Unknown player")?.combat.player;
+        let player = self
+            .peers
+            .get(&owner)
+            .context("Unknown player")?
+            .combat
+            .player;
         let game = match self.minigames.player(player).ok().and_then(|p| p.game) {
             Some(game) => {
                 ensure!(
@@ -123,7 +131,11 @@ impl Session {
                 // A game mode's game keeps the mode's own settings; a
                 // player's game takes the build's (its owner may change
                 // them).
-                let g = self.minigames.game(game).ok().context("No such mini-game")?;
+                let g = self
+                    .minigames
+                    .game(game)
+                    .ok()
+                    .context("No such mini-game")?;
                 if !g.is_server() && g.owner == player {
                     self.minigame_act(
                         owner,
@@ -214,7 +226,11 @@ impl Session {
                 })
                 .collect()
         };
-        let current = self.minigames.game(game).ok().context("No such mini-game")?;
+        let current = self
+            .minigames
+            .game(game)
+            .ok()
+            .context("No such mini-game")?;
         let mut settings = edits(&saved.addon_settings, SettingScope::Minigame);
         // What the build left at its default goes back to it.
         settings.extend(

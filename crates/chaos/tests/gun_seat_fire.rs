@@ -3,11 +3,11 @@
 //! must not leave the gun "held": it would ignore the next press, or fire
 //! by itself in another vehicle's gun seat.
 use bri_chaos::fixture;
-use bri_vehicles::testing::TANK;
 use bri_sim::{
     player::MoveInput,
     session::{Command, Session},
 };
+use bri_vehicles::testing::TANK;
 use bri_world::{Brick, ContentRef, VehicleSpawn};
 use glam::Vec3;
 
@@ -95,7 +95,11 @@ fn a_release_in_another_seat_ends_the_gun_seat_hold() {
     // Back into the gun seat: nothing is held there now,
     // so it waits for a press, and a press fires it.
     s.switch_seat(owner, 1).unwrap();
-    assert_eq!(s.mounted(owner).map(|m| m.1), Some(GUN), "the gun seat again");
+    assert_eq!(
+        s.mounted(owner).map(|m| m.1),
+        Some(GUN),
+        "the gun seat again"
+    );
     p.feed(&mut s, MoveInput::default(), 40);
     assert_eq!(shots(&s), before, "the gun fires on its own");
     p.command(&mut s, Command::WeaponTrigger { down: true });

@@ -75,20 +75,29 @@ fn puff() -> f32 {
 impl Spec {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let spec: Self = serde_json::from_slice(bytes)?;
-        ensure!(spec.schema_version == 1, "unknown icon render schema {}", spec.schema_version);
-        ensure!(!spec.pose_like.is_empty(), "pose_like names no item");
-        let colours = spec
-            .look
-            .base
-            .iter()
-            .flatten()
-            .chain(spec.look.skin.iter().flat_map(|s| s.shell.iter().chain(s.veins.iter().flatten())));
         ensure!(
-            colours.into_iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+            spec.schema_version == 1,
+            "unknown icon render schema {}",
+            spec.schema_version
+        );
+        ensure!(!spec.pose_like.is_empty(), "pose_like names no item");
+        let colours = spec.look.base.iter().flatten().chain(
+            spec.look
+                .skin
+                .iter()
+                .flat_map(|s| s.shell.iter().chain(s.veins.iter().flatten())),
+        );
+        ensure!(
+            colours
+                .into_iter()
+                .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
             "icon render colours must be 0 to 1"
         );
         ensure!(
-            spec.look.skin.as_ref().is_none_or(|s| s.puff.is_finite() && (0.0..=0.1).contains(&s.puff)),
+            spec.look
+                .skin
+                .as_ref()
+                .is_none_or(|s| s.puff.is_finite() && (0.0..=0.1).contains(&s.puff)),
             "skin puff must be 0 to 0.1"
         );
         Ok(spec)
@@ -135,7 +144,10 @@ pub struct Axes {
 
 impl Default for Axes {
     fn default() -> Self {
-        Self { forward: Vec3::Y, up: Vec3::Z }
+        Self {
+            forward: Vec3::Y,
+            up: Vec3::Z,
+        }
     }
 }
 
@@ -180,7 +192,10 @@ impl Mesh {
         let mut triangle_images = vec![None; scene.indices.len() / 3];
         for batch in &scene.batches {
             let image = scene.materials.get(batch.material).map(|m| {
-                let overlay = matches!(m.kind, MaterialKind::BrickOverlay | MaterialKind::UnlitOverlay);
+                let overlay = matches!(
+                    m.kind,
+                    MaterialKind::BrickOverlay | MaterialKind::UnlitOverlay
+                );
                 (m.images[0], overlay)
             });
             let image = image.filter(|(i, _)| *i < scene.images.len());
@@ -189,7 +204,11 @@ impl Mesh {
             triangle_images[start..end].fill(image);
         }
         Self {
-            positions: scene.vertices.iter().map(|v| Vec3::from(v.position)).collect(),
+            positions: scene
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.position))
+                .collect(),
             normals: scene
                 .vertices
                 .iter()
@@ -209,10 +228,15 @@ impl Mesh {
     }
     /// Each whole triangle, with its number.
     fn triangles(&self) -> impl Iterator<Item = (usize, [usize; 3])> + '_ {
-        self.indices.chunks_exact(3).enumerate().filter_map(|(n, t)| {
-            let t = [t[0] as usize, t[1] as usize, t[2] as usize];
-            t.iter().all(|&i| i < self.positions.len()).then_some((n, t))
-        })
+        self.indices
+            .chunks_exact(3)
+            .enumerate()
+            .filter_map(|(n, t)| {
+                let t = [t[0] as usize, t[1] as usize, t[2] as usize];
+                t.iter()
+                    .all(|&i| i < self.positions.len())
+                    .then_some((n, t))
+            })
     }
     /// The surface's own colour at barycentric `bary` of triangle `n`: its
     /// texture (nearest texel, repeating) over or times its vertex colours,
@@ -239,7 +263,11 @@ impl Mesh {
         let y = ((uv.y.rem_euclid(1.0) * h as f32) as usize).min(h - 1);
         let texel = &image.rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
         let colour = Vec3::new(texel[0] as f32, texel[1] as f32, texel[2] as f32) / 255.0;
-        if overlay { tint.lerp(colour, texel[3] as f32 / 255.0) } else { tint * colour }
+        if overlay {
+            tint.lerp(colour, texel[3] as f32 / 255.0)
+        } else {
+            tint * colour
+        }
     }
 }
 
@@ -257,7 +285,11 @@ pub struct Pose {
 impl Pose {
     fn project(&self, p: Vec3) -> Vec3 {
         let q = self.rotation * p;
-        Vec3::new(self.centre.x + q.x * self.scale, self.centre.y - q.y * self.scale, q.z)
+        Vec3::new(
+            self.centre.x + q.x * self.scale,
+            self.centre.y - q.y * self.scale,
+            q.z,
+        )
     }
 }
 
@@ -293,7 +325,10 @@ impl Profile {
         let model = glam::Mat3::from_cols(axes.forward, axes.up, right);
         let view = glam::Mat3::from_cols(Vec3::X * self.side, Vec3::Y, Vec3::Z * self.side);
         let side_on = Quat::from_mat3(&(view * model.transpose()));
-        Quat::from_rotation_z(self.roll) * Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch) * side_on
+        Quat::from_rotation_z(self.roll)
+            * Quat::from_rotation_y(self.yaw)
+            * Quat::from_rotation_x(self.pitch)
+            * side_on
     }
     fn clamped(self) -> Self {
         Self {
@@ -378,12 +413,22 @@ fn bounds(mask: &[bool], w: usize) -> Option<(Vec2, Vec2)> {
 fn overlap(a: &[bool], b: &[bool]) -> f32 {
     let both = a.iter().zip(b).filter(|(a, b)| **a && **b).count();
     let either = a.iter().zip(b).filter(|(a, b)| **a || **b).count();
-    if either == 0 { 0.0 } else { both as f32 / either as f32 }
+    if either == 0 {
+        0.0
+    } else {
+        both as f32 / either as f32
+    }
 }
 
 /// Scale and place the model turned by `rotation` so its outline's box
 /// fills the icon's.
-fn framed(mesh: &Mesh, rotation: Quat, target: (Vec2, Vec2), grid: usize, size: [u32; 2]) -> Option<Pose> {
+fn framed(
+    mesh: &Mesh,
+    rotation: Quat,
+    target: (Vec2, Vec2),
+    grid: usize,
+    size: [u32; 2],
+) -> Option<Pose> {
     let mut lo = Vec2::splat(f32::MAX);
     let mut hi = Vec2::splat(f32::MIN);
     for p in &mesh.positions {
@@ -402,7 +447,12 @@ fn framed(mesh: &Mesh, rotation: Quat, target: (Vec2, Vec2), grid: usize, size: 
     let want = thi - tlo;
     let scale = ((want.x / extent.x) * (want.y / extent.y)).sqrt();
     let centre = (tlo + thi) * 0.5 - (lo + hi) * 0.5 * scale;
-    Some(Pose { rotation, scale, centre, size })
+    Some(Pose {
+        rotation,
+        scale,
+        centre,
+        size,
+    })
 }
 
 /// The pose that draws `mesh` over `icon`'s silhouette, and the profile
@@ -413,7 +463,10 @@ fn framed(mesh: &Mesh, rotation: Quat, target: (Vec2, Vec2), grid: usize, size: 
 /// matches well (a model and icon that are not the same thing).
 pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, Profile, f32)> {
     const GRID: usize = 48;
-    if icon.width == 0 || icon.height == 0 || icon.rgba.len() < (icon.width * icon.height * 4) as usize {
+    if icon.width == 0
+        || icon.height == 0
+        || icon.rgba.len() < (icon.width * icon.height * 4) as usize
+    {
         return None;
     }
     let size = [icon.width, icon.height];
@@ -421,15 +474,27 @@ pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, Profile, f32)> 
     let target = bounds(&target_mask, GRID)?;
     let score = |profile: Profile| -> Option<(Pose, f32)> {
         let pose = framed(mesh, profile.rotation(mesh.axes), target, GRID, size)?;
-        Some((pose, overlap(&silhouette(mesh, &pose, GRID, GRID), &target_mask)))
+        Some((
+            pose,
+            overlap(&silhouette(mesh, &pose, GRID, GRID), &target_mask),
+        ))
     };
     // The coarse search at a quarter of the pixels.
     const COARSE: usize = GRID / 2;
     let coarse_mask = icon_mask(icon, COARSE, COARSE);
     let coarse_target = bounds(&coarse_mask, COARSE)?;
     let rough = |profile: Profile| -> Option<f32> {
-        let pose = framed(mesh, profile.rotation(mesh.axes), coarse_target, COARSE, size)?;
-        Some(overlap(&silhouette(mesh, &pose, COARSE, COARSE), &coarse_mask))
+        let pose = framed(
+            mesh,
+            profile.rotation(mesh.axes),
+            coarse_target,
+            COARSE,
+            size,
+        )?;
+        Some(overlap(
+            &silhouette(mesh, &pose, COARSE, COARSE),
+            &coarse_mask,
+        ))
     };
     // The best few coarse profiles, each refined: an outline can look
     // alike from two far-apart turns, and only refining tells them apart.
@@ -439,7 +504,12 @@ pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, Profile, f32)> 
         for roll in steps(MOST_ROLL, 8) {
             for yaw in steps(MOST_TURN, 3) {
                 for pitch in steps(MOST_TURN, 3) {
-                    let profile = Profile { side, roll, yaw, pitch };
+                    let profile = Profile {
+                        side,
+                        roll,
+                        yaw,
+                        pitch,
+                    };
                     if let Some(s) = rough(profile) {
                         coarse.push((profile, s));
                     }
@@ -548,7 +618,12 @@ fn creases(mesh: &Mesh) -> Vec<(Vec3, Vec3)> {
     let cos = CREASE_DEGREES.to_radians().cos();
     faces
         .into_values()
-        .filter(|(_, _, normals)| normals.len() == 1 || normals.iter().any(|n| normals.iter().any(|m| n.dot(*m) < cos)))
+        .filter(|(_, _, normals)| {
+            normals.len() == 1
+                || normals
+                    .iter()
+                    .any(|n| normals.iter().any(|m| n.dot(*m) < cos))
+        })
         .map(|(p, q, _)| (p, q))
         .collect()
 }
@@ -556,7 +631,13 @@ fn creases(mesh: &Mesh) -> Vec<(Vec3, Vec3)> {
 /// A pose turned by `rotation` whose drawing (with the skin's `puff`)
 /// fills `target` (a box in icon pixels) as far as it can without
 /// leaving it, centred in it.
-pub fn frame(mesh: &Mesh, rotation: Quat, puff: f32, target: (Vec2, Vec2), size: [u32; 2]) -> Option<Pose> {
+pub fn frame(
+    mesh: &Mesh,
+    rotation: Quat,
+    puff: f32,
+    target: (Vec2, Vec2),
+    size: [u32; 2],
+) -> Option<Pose> {
     let mut lo = Vec2::splat(f32::MAX);
     let mut hi = Vec2::splat(f32::MIN);
     for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
@@ -572,7 +653,12 @@ pub fn frame(mesh: &Mesh, rotation: Quat, puff: f32, target: (Vec2, Vec2), size:
     }
     let scale = (room.x / extent.x).min(room.y / extent.y);
     let centre = (target.0 + target.1) * 0.5 - (lo + hi) * 0.5 * scale;
-    Some(Pose { rotation, scale, centre, size })
+    Some(Pose {
+        rotation,
+        scale,
+        centre,
+        size,
+    })
 }
 
 /// The box a stock icon's drawing fills, in its pixels, kept at least
@@ -619,22 +705,39 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
         let projected: Vec<Vec3> = positions.iter().map(|p| fine.project(*p)).collect();
         for (n, t) in mesh.triangles() {
             let [a, b, c] = t.map(|i| projected[i]);
-            raster(a.truncate(), b.truncate(), c.truncate(), sw, sh, |x, y, bary| {
-                let z = a.z * bary.x + b.z * bary.y + c.z * bary.z;
-                let i = y * sw + x;
-                if z > depth[i] {
-                    depth[i] = z;
-                    let local = positions[t[0]] * bary.x + positions[t[1]] * bary.y + positions[t[2]] * bary.z;
-                    let normal = (mesh.normals[t[0]] * bary.x + mesh.normals[t[1]] * bary.y + mesh.normals[t[2]] * bary.z)
-                        .normalize_or_zero();
-                    let surface = if look.textured { mesh.surface(n, t, bary) } else { Vec3::ONE };
-                    colour[i] = Some(shade(local, pose.rotation * normal, surface));
-                }
-            });
+            raster(
+                a.truncate(),
+                b.truncate(),
+                c.truncate(),
+                sw,
+                sh,
+                |x, y, bary| {
+                    let z = a.z * bary.x + b.z * bary.y + c.z * bary.z;
+                    let i = y * sw + x;
+                    if z > depth[i] {
+                        depth[i] = z;
+                        let local = positions[t[0]] * bary.x
+                            + positions[t[1]] * bary.y
+                            + positions[t[2]] * bary.z;
+                        let normal = (mesh.normals[t[0]] * bary.x
+                            + mesh.normals[t[1]] * bary.y
+                            + mesh.normals[t[2]] * bary.z)
+                            .normalize_or_zero();
+                        let surface = if look.textured {
+                            mesh.surface(n, t, bary)
+                        } else {
+                            Vec3::ONE
+                        };
+                        colour[i] = Some(shade(local, pose.rotation * normal, surface));
+                    }
+                },
+            );
         }
     };
     let base = Vec3::from(look.base.unwrap_or([1.0; 3]));
-    draw(&mesh.positions, &|_, n, surface| base * surface * (0.45 + 0.6 * n.dot(light).max(0.0)));
+    draw(&mesh.positions, &|_, n, surface| {
+        base * surface * (0.45 + 0.6 * n.dot(light).max(0.0))
+    });
     if let Some(skin) = &look.skin {
         // Puffed along its normals, as the in-game skin is drawn over the
         // model: at hard edges the model's own colour shows through.
@@ -647,7 +750,9 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
         let shell = Vec3::from(skin.shell);
         let veins = Vec3::from(skin.veins.unwrap_or([1.0; 3]));
         let pixel = 1.0 / pose.scale.max(1e-3);
-        draw(&puffed, &|local, n, _| veined(local, n, light, shell, veins, pixel));
+        draw(&puffed, &|local, n, _| {
+            veined(local, n, light, shell, veins, pixel)
+        });
     }
     if look.skin.is_some() {
         // The in-game skin is puffed along split normals, so the model's
@@ -660,14 +765,23 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
             let steps = (a.truncate().distance(b.truncate()) / 0.5).ceil().max(1.0) as usize;
             for k in 0..=steps {
                 let p = a.lerp(b, k as f32 / steps as f32);
-                let (x0, x1) = ((p.x - radius).floor().max(0.0) as usize, ((p.x + radius).ceil() as usize).min(sw));
-                let (y0, y1) = ((p.y - radius).floor().max(0.0) as usize, ((p.y + radius).ceil() as usize).min(sh));
+                let (x0, x1) = (
+                    (p.x - radius).floor().max(0.0) as usize,
+                    ((p.x + radius).ceil() as usize).min(sw),
+                );
+                let (y0, y1) = (
+                    (p.y - radius).floor().max(0.0) as usize,
+                    ((p.y + radius).ceil() as usize).min(sh),
+                );
                 for y in y0..y1 {
                     for x in x0..x1 {
                         let i = y * sw + x;
                         let centre = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
                         // Only where the edge is the surface seen there.
-                        if centre.distance(p.truncate()) <= radius && colour[i].is_some() && p.z >= depth[i] - EDGE_DEPTH {
+                        if centre.distance(p.truncate()) <= radius
+                            && colour[i].is_some()
+                            && p.z >= depth[i] - EDGE_DEPTH
+                        {
                             colour[i] = Some(edge);
                         }
                     }
@@ -687,7 +801,11 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
                     }
                 }
             }
-            let c = if covered > 0 { sum / covered as f32 } else { Vec3::ZERO };
+            let c = if covered > 0 {
+                sum / covered as f32
+            } else {
+                Vec3::ZERO
+            };
             let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
             rgba.extend([byte(c.x), byte(c.y), byte(c.z)]);
             rgba.push(((covered * 255) as f32 / (SAMPLES * SAMPLES) as f32).round() as u8);
@@ -713,8 +831,10 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32
     let lit = shell * (Vec3::splat(0.55) * 1.2 + Vec3::ONE * n.dot(light).max(0.0)) * EXPOSURE;
     let edge = 1.0 - n.dot(view).abs();
     let hue = edge * 1.3 + local.dot(Vec3::new(0.6, 0.9, 0.4));
-    let film = (Vec3::splat(hue) + Vec3::new(0.0, 0.33, 0.67)).map(|v| 0.5 + 0.5 * (std::f32::consts::TAU * v).cos());
-    let cold = Vec3::new(0.25, 0.1, 0.55).lerp(Vec3::new(0.1, 0.75, 0.8), film.y) * (0.6 + 0.4 * film.z);
+    let film = (Vec3::splat(hue) + Vec3::new(0.0, 0.33, 0.67))
+        .map(|v| 0.5 + 0.5 * (std::f32::consts::TAU * v).cos());
+    let cold =
+        Vec3::new(0.25, 0.1, 0.55).lerp(Vec3::new(0.1, 0.75, 0.8), film.y) * (0.6 + 0.4 * film.z);
     let sheen = cold * edge.powi(3) * 0.4;
     let reflected = (-light) - 2.0 * (-light).dot(n) * n;
     let spec = reflected.dot(view).max(0.0).powf(48.0) * 0.8;
@@ -732,7 +852,12 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32
 
 /// Render the icon `spec` asks for: `mesh` posed like `reference` (the
 /// stock item's model and its icon).
-pub fn render_like(spec: &Spec, mesh: &Mesh, reference: (&Mesh, &SceneImage), label: &str) -> Result<SceneImage> {
+pub fn render_like(
+    spec: &Spec,
+    mesh: &Mesh,
+    reference: (&Mesh, &SceneImage),
+    label: &str,
+) -> Result<SceneImage> {
     let (pose, profile, _) = fit_pose(reference.0, reference.1)
         .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
     render_posed(spec, mesh, &(pose, profile), reference.1, label)
@@ -743,7 +868,13 @@ pub type Fitted = (Pose, Profile);
 
 /// [`render_like`] from the stock item's pose, already fitted to its
 /// `icon` (a pose is fitted once for every icon posed like that item).
-pub fn render_posed(spec: &Spec, mesh: &Mesh, fitted: &Fitted, icon: &SceneImage, label: &str) -> Result<SceneImage> {
+pub fn render_posed(
+    spec: &Spec,
+    mesh: &Mesh,
+    fitted: &Fitted,
+    icon: &SceneImage,
+    label: &str,
+) -> Result<SceneImage> {
     ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
     // The stock icon's profile, applied to this model's own axes, so it
     // points the way the stock item does; the framing is this model's own,
@@ -751,7 +882,8 @@ pub fn render_posed(spec: &Spec, mesh: &Mesh, fitted: &Fitted, icon: &SceneImage
     let (fitted, profile) = fitted;
     let target = filled_box(icon).context("the stock icon is empty")?;
     let puff = spec.look.skin.as_ref().map_or(0.0, |s| s.puff);
-    let pose = frame(mesh, profile.rotation(mesh.axes), puff, target, fitted.size).context("the model has no size")?;
+    let pose = frame(mesh, profile.rotation(mesh.axes), puff, target, fitted.size)
+        .context("the model has no size")?;
     Ok(render(mesh, &pose, &spec.look, label))
 }
 
@@ -790,7 +922,13 @@ impl Request {
             for i in &mesh.indices {
                 hash.update(i.to_le_bytes());
             }
-            for c in mesh.axes.forward.to_array().into_iter().chain(mesh.axes.up.to_array()) {
+            for c in mesh
+                .axes
+                .forward
+                .to_array()
+                .into_iter()
+                .chain(mesh.axes.up.to_array())
+            {
                 hash.update(c.to_le_bytes());
             }
             // What colours its surface: a texture or colour change redraws it.
@@ -831,7 +969,9 @@ impl Request {
     /// that reads and is the stock icon's size.
     pub fn cached(&self, cache: &Path) -> Option<SceneImage> {
         let bytes = std::fs::read(self.file(cache)).ok()?;
-        let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.into_rgba8();
+        let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .ok()?
+            .into_rgba8();
         (image.dimensions() == (self.icon.width, self.icon.height)).then(|| SceneImage {
             label: self.label.clone(),
             width: image.width(),
@@ -843,7 +983,9 @@ impl Request {
     /// Draw the icon, and keep it in `cache` for next time. A lost write
     /// only means drawing it again.
     pub fn draw(&self, cache: Option<&Path>) -> Result<SceneImage> {
-        let fitted = self.fit().with_context(|| format!("{}'s model does not match its icon", self.spec.pose_like))?;
+        let fitted = self
+            .fit()
+            .with_context(|| format!("{}'s model does not match its icon", self.spec.pose_like))?;
         self.draw_fitted(&fitted, cache)
     }
     /// The stock item's pose, fitted to its icon: the same for every
@@ -897,7 +1039,8 @@ mod tests {
                     mesh.positions.push(c + (n + u * a + v * b) * h);
                     mesh.normals.push(n);
                 }
-                mesh.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+                mesh.indices
+                    .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
             }
         };
         add_box(Vec3::new(0.0, 0.2, 0.0), Vec3::new(0.9, 0.25, 0.2));
@@ -915,7 +1058,16 @@ mod tests {
     }
 
     fn picture(mesh: &Mesh, pose: &Pose) -> SceneImage {
-        render(mesh, pose, &Look { base: None, textured: false, skin: None }, "reference")
+        render(
+            mesh,
+            pose,
+            &Look {
+                base: None,
+                textured: false,
+                skin: None,
+            },
+            "reference",
+        )
     }
 
     /// The pose of a stock icon is recovered from its picture alone, so a
@@ -923,18 +1075,36 @@ mod tests {
     #[test]
     fn a_models_pose_is_recovered_from_its_icon() {
         let mesh = gun();
-        let shown = Profile { side: 1.0, roll: 0.35, yaw: 0.3, pitch: -0.25 };
-        let truth = Pose { rotation: shown.rotation(mesh.axes), scale: 24.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
+        let shown = Profile {
+            side: 1.0,
+            roll: 0.35,
+            yaw: 0.3,
+            pitch: -0.25,
+        };
+        let truth = Pose {
+            rotation: shown.rotation(mesh.axes),
+            scale: 24.0,
+            centre: Vec2::new(34.0, 30.0),
+            size: [64, 64],
+        };
         let icon = picture(&mesh, &truth);
         let (pose, profile, score) = fit_pose(&mesh, &icon).expect("fits");
         assert!(score > 0.9, "outline overlap {score}");
         assert_eq!(profile.side, 1.0, "{profile:?}");
         for axis in [mesh.axes.forward, mesh.axes.up] {
-            let (a, b) = (on_screen(pose.rotation, axis), on_screen(truth.rotation, axis));
+            let (a, b) = (
+                on_screen(pose.rotation, axis),
+                on_screen(truth.rotation, axis),
+            );
             assert!(a.dot(b) > 0.97, "{axis}: fitted {a}, drawn {b}");
         }
         let redrawn = picture(&mesh, &pose);
-        let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
+        let covered = |img: &SceneImage| {
+            img.rgba
+                .chunks_exact(4)
+                .map(|p| p[3] >= 128)
+                .collect::<Vec<_>>()
+        };
         let agree = overlap(&covered(&redrawn), &covered(&icon));
         assert!(agree > 0.9, "redrawn icon overlaps the stock one {agree}");
         assert_eq!([redrawn.width, redrawn.height], [64, 64]);
@@ -948,8 +1118,18 @@ mod tests {
     #[test]
     fn an_item_drawn_like_a_stock_one_points_the_same_way() {
         let stock = gun();
-        let shown = Profile { side: -1.0, roll: -0.3, yaw: 0.2, pitch: 0.15 };
-        let truth = Pose { rotation: shown.rotation(stock.axes), scale: 24.0, centre: Vec2::new(32.0, 32.0), size: [64, 64] };
+        let shown = Profile {
+            side: -1.0,
+            roll: -0.3,
+            yaw: 0.2,
+            pitch: 0.15,
+        };
+        let truth = Pose {
+            rotation: shown.rotation(stock.axes),
+            scale: 24.0,
+            centre: Vec2::new(32.0, 32.0),
+            size: [64, 64],
+        };
         let icon = picture(&stock, &truth);
         // The same gun built lying another way: forward +Y, up +Z.
         let turn = Quat::from_mat3(&glam::Mat3::from_cols(Vec3::Y, Vec3::Z, Vec3::X));
@@ -958,19 +1138,38 @@ mod tests {
             *v = turn * *v;
         }
         item.axes = Axes::default();
-        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: None, skin: None, textured: false } };
+        let spec = Spec {
+            schema_version: 1,
+            pose_like: "stock".into(),
+            look: Look {
+                base: None,
+                skin: None,
+                textured: false,
+            },
+        };
         let (_, profile, _) = fit_pose(&stock, &icon).expect("fits");
         let rotation = profile.rotation(item.axes);
-        for (theirs, ours) in [(stock.axes.forward, item.axes.forward), (stock.axes.up, item.axes.up)] {
+        for (theirs, ours) in [
+            (stock.axes.forward, item.axes.forward),
+            (stock.axes.up, item.axes.up),
+        ] {
             let (a, b) = (on_screen(truth.rotation, theirs), on_screen(rotation, ours));
             assert!(a.dot(b) > 0.97, "stock {a}, item {b}");
         }
         // Seen side on: up points up the picture, forward across it.
         assert!(on_screen(rotation, item.axes.up).y > 0.5);
-        assert!(on_screen(rotation, item.axes.forward).x < -0.5, "nose to the left, as the stock one");
+        assert!(
+            on_screen(rotation, item.axes.forward).x < -0.5,
+            "nose to the left, as the stock one"
+        );
         // And drawn so: the item's own drawing matches the stock outline.
         let drawn = render_like(&spec, &item, (&stock, &icon), "item").unwrap();
-        let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
+        let covered = |img: &SceneImage| {
+            img.rgba
+                .chunks_exact(4)
+                .map(|p| p[3] >= 128)
+                .collect::<Vec<_>>()
+        };
         assert!(overlap(&covered(&drawn), &covered(&icon)) > 0.7);
     }
 
@@ -979,8 +1178,18 @@ mod tests {
     #[test]
     fn a_textured_item_is_seen_side_on_in_its_own_colours() {
         let stock = gun();
-        let shown = Profile { side: 1.0, roll: 0.4, yaw: -0.2, pitch: 0.1 };
-        let truth = Pose { rotation: shown.rotation(stock.axes), scale: 24.0, centre: Vec2::new(32.0, 32.0), size: [64, 64] };
+        let shown = Profile {
+            side: 1.0,
+            roll: 0.4,
+            yaw: -0.2,
+            pitch: 0.1,
+        };
+        let truth = Pose {
+            rotation: shown.rotation(stock.axes),
+            scale: 24.0,
+            centre: Vec2::new(32.0, 32.0),
+            size: [64, 64],
+        };
         let icon = picture(&stock, &truth);
         // Built lying another way (forward +Y, up +Z), all of wood.
         let turn = Quat::from_mat3(&glam::Mat3::from_cols(Vec3::Y, Vec3::Z, Vec3::X));
@@ -992,25 +1201,66 @@ mod tests {
         item.uvs = vec![Vec2::ZERO; item.positions.len()];
         item.colors = vec![Vec3::ONE; item.positions.len()];
         item.triangle_images = vec![Some((0, false)); item.indices.len() / 3];
-        item.images = vec![SceneImage { label: "wood".into(), width: 1, height: 1, rgba: vec![150, 90, 40, 255], srgb: false }];
-        let spec = Spec { schema_version: 1, pose_like: "stock".into(), look: Look { base: None, skin: None, textured: true } };
+        item.images = vec![SceneImage {
+            label: "wood".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![150, 90, 40, 255],
+            srgb: false,
+        }];
+        let spec = Spec {
+            schema_version: 1,
+            pose_like: "stock".into(),
+            look: Look {
+                base: None,
+                skin: None,
+                textured: true,
+            },
+        };
         let (_, profile, _) = fit_pose(&stock, &icon).expect("fits");
         let rotation = profile.rotation(item.axes);
-        assert!(on_screen(rotation, item.axes.up).dot(on_screen(truth.rotation, stock.axes.up)) > 0.97);
-        assert!(on_screen(rotation, item.axes.forward).dot(on_screen(truth.rotation, stock.axes.forward)) > 0.97);
+        assert!(
+            on_screen(rotation, item.axes.up).dot(on_screen(truth.rotation, stock.axes.up)) > 0.97
+        );
+        assert!(
+            on_screen(rotation, item.axes.forward)
+                .dot(on_screen(truth.rotation, stock.axes.forward))
+                > 0.97
+        );
         let drawn = render_like(&spec, &item, (&stock, &icon), "item").unwrap();
-        let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
-        assert!(overlap(&covered(&drawn), &covered(&icon)) > 0.7, "the stock outline");
+        let covered = |img: &SceneImage| {
+            img.rgba
+                .chunks_exact(4)
+                .map(|p| p[3] >= 128)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            overlap(&covered(&drawn), &covered(&icon)) > 0.7,
+            "the stock outline"
+        );
         let solid: Vec<_> = drawn.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
-        let wood = solid.iter().filter(|p| p[0] > p[1] && p[1] > p[2] && p[0] > 40).count();
-        assert!(wood * 2 > solid.len(), "drawn in its wood: {wood} of {}", solid.len());
+        let wood = solid
+            .iter()
+            .filter(|p| p[0] > p[1] && p[1] > p[2] && p[0] > 40)
+            .count();
+        assert!(
+            wood * 2 > solid.len(),
+            "drawn in its wood: {wood} of {}",
+            solid.len()
+        );
     }
 
     /// Something else entirely does not pass for the stock item.
     #[test]
     fn a_model_that_is_not_the_icon_does_not_fit() {
         let mesh = gun();
-        let mut icon = SceneImage { label: "ring".into(), width: 64, height: 64, rgba: vec![0; 64 * 64 * 4], srgb: false };
+        let mut icon = SceneImage {
+            label: "ring".into(),
+            width: 64,
+            height: 64,
+            rgba: vec![0; 64 * 64 * 4],
+            srgb: false,
+        };
         for y in 0..64 {
             for x in 0..64 {
                 let r = ((x as f32 - 31.5).powi(2) + (y as f32 - 31.5).powi(2)).sqrt();
@@ -1027,19 +1277,38 @@ mod tests {
     #[test]
     fn the_veined_skin_draws_a_dark_shell_on_a_clear_background() {
         let mesh = gun();
-        let pose = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 30.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
+        let pose = Pose {
+            rotation: euler(0.7, 0.35, 0.5),
+            scale: 30.0,
+            centre: Vec2::new(34.0, 30.0),
+            size: [64, 64],
+        };
         let look = Look {
             base: Some([0.35, 1.0, 0.8]),
             textured: false,
-            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: Some([0.3, 0.95, 1.0]), puff: 0.012 }),
+            skin: Some(Skin {
+                shell: [0.035, 0.025, 0.05],
+                veins: Some([0.3, 0.95, 1.0]),
+                puff: 0.012,
+            }),
         };
         let image = render(&mesh, &pose, &look, "gun");
         assert_eq!(image.rgba[3], 0, "the corner is clear");
         let solid: Vec<_> = image.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
         assert!(solid.len() > 300, "{} solid pixels", solid.len());
-        let dark = solid.iter().filter(|p| p[0] < 60 && p[1] < 60 && p[2] < 70).count();
-        assert!(dark * 2 > solid.len(), "mostly the dark shell: {dark} of {}", solid.len());
-        assert!(solid.iter().any(|p| p[1] > 60 && p[2] > 60 && p[0] < p[1]), "teal veins show");
+        let dark = solid
+            .iter()
+            .filter(|p| p[0] < 60 && p[1] < 60 && p[2] < 70)
+            .count();
+        assert!(
+            dark * 2 > solid.len(),
+            "mostly the dark shell: {dark} of {}",
+            solid.len()
+        );
+        assert!(
+            solid.iter().any(|p| p[1] > 60 && p[2] > 60 && p[0] < p[1]),
+            "teal veins show"
+        );
         assert_eq!(render(&mesh, &pose, &look, "gun").rgba, image.rgba);
     }
 
@@ -1048,7 +1317,13 @@ mod tests {
     #[test]
     fn the_icon_keeps_a_clear_margin_on_every_side() {
         let mesh = gun();
-        let mut stock = SceneImage { label: "stock".into(), width: 96, height: 96, rgba: vec![0; 96 * 96 * 4], srgb: false };
+        let mut stock = SceneImage {
+            label: "stock".into(),
+            width: 96,
+            height: 96,
+            rgba: vec![0; 96 * 96 * 4],
+            srgb: false,
+        };
         for y in 0..96 {
             for x in 0..96 {
                 // A band corner to corner, touching all four edges.
@@ -1061,13 +1336,20 @@ mod tests {
         let look = Look {
             base: Some([0.35, 1.0, 0.8]),
             textured: false,
-            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: Some([0.3, 0.95, 1.0]), puff: 0.012 }),
+            skin: Some(Skin {
+                shell: [0.035, 0.025, 0.05],
+                veins: Some([0.3, 0.95, 1.0]),
+                puff: 0.012,
+            }),
         };
         for rotation in [euler(0.7, 0.35, 0.5), euler(-1.2, 0.9, 2.4), Quat::IDENTITY] {
             let pose = frame(&mesh, rotation, 0.012, target, [96, 96]).expect("frames");
             let image = render(&mesh, &pose, &look, "gun");
             let border = clear_border(&image);
-            assert!(border.iter().all(|b| *b >= 5), "clear rows and columns (top, right, bottom, left): {border:?}");
+            assert!(
+                border.iter().all(|b| *b >= 5),
+                "clear rows and columns (top, right, bottom, left): {border:?}"
+            );
             // It fills the box one way or the other: no shrunken drawing.
             let [top, right, bottom, left] = border.map(|b| b as i32);
             let (w, h) = (96 - left - right, 96 - top - bottom);
@@ -1080,19 +1362,37 @@ mod tests {
     #[test]
     fn a_drawn_icon_is_kept_for_the_same_request() {
         let mesh = gun();
-        let truth = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 24.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
+        let truth = Pose {
+            rotation: euler(0.7, 0.35, 0.5),
+            scale: 24.0,
+            centre: Vec2::new(34.0, 30.0),
+            size: [64, 64],
+        };
         let spec = Spec::parse(
             br#"{"schema_version": 1, "pose_like": "stock",
                 "look": {"base": [0.35, 1, 0.8], "skin": {"shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1]}}}"#,
         )
         .unwrap();
-        let request = Request { spec, mesh: mesh.clone(), reference: mesh.clone(), icon: picture(&mesh, &truth), label: "gun".into() };
+        let request = Request {
+            spec,
+            mesh: mesh.clone(),
+            reference: mesh.clone(),
+            icon: picture(&mesh, &truth),
+            label: "gun".into(),
+        };
         let cache = tempfile::tempdir().unwrap();
         assert!(request.cached(cache.path()).is_none(), "nothing kept yet");
         let drawn = request.draw(Some(cache.path())).unwrap();
         let kept = request.cached(cache.path()).expect("kept on disk");
-        assert_eq!((kept.width, kept.height, &kept.rgba, &kept.label), (drawn.width, drawn.height, &drawn.rgba, &drawn.label));
-        assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 1, "one file, no partial left");
+        assert_eq!(
+            (kept.width, kept.height, &kept.rgba, &kept.label),
+            (drawn.width, drawn.height, &drawn.rgba, &drawn.label)
+        );
+        assert_eq!(
+            std::fs::read_dir(cache.path()).unwrap().count(),
+            1,
+            "one file, no partial left"
+        );
         let mut other = request.clone();
         other.spec.look.base = Some([1.0, 0.0, 0.0]);
         assert!(other.cached(cache.path()).is_none(), "a changed look");
@@ -1104,14 +1404,23 @@ mod tests {
         assert!(other.cached(cache.path()).is_none(), "a changed stock icon");
         let mut other = request.clone();
         other.mesh.axes = Axes::new(Vec3::Y, Vec3::Z);
-        assert!(other.cached(cache.path()).is_none(), "a model pointing another way");
+        assert!(
+            other.cached(cache.path()).is_none(),
+            "a model pointing another way"
+        );
         // What colours the surface: its texture coordinates, colours,
         // textures and which triangles use them.
         let textured = |mesh: &mut Mesh| {
             mesh.uvs = vec![Vec2::ZERO; mesh.positions.len()];
             mesh.colors = vec![Vec3::ONE; mesh.positions.len()];
             mesh.triangle_images = vec![Some((0, false)); mesh.indices.len() / 3];
-            mesh.images = vec![SceneImage { label: "wood".into(), width: 1, height: 1, rgba: vec![120, 80, 40, 255], srgb: true }];
+            mesh.images = vec![SceneImage {
+                label: "wood".into(),
+                width: 1,
+                height: 1,
+                rgba: vec![120, 80, 40, 255],
+                srgb: true,
+            }];
         };
         let mut base = request.clone();
         textured(&mut base.mesh);
@@ -1142,7 +1451,11 @@ mod tests {
             br#"{"schema_version": 1, "pose_like": "x", "look": {"base": [2, 0, 0]}}"#,
             br#"{"schema_version": 1, "pose_like": "x", "extra": 1}"#,
         ] {
-            assert!(Spec::parse(bad).is_err(), "{}", String::from_utf8_lossy(bad));
+            assert!(
+                Spec::parse(bad).is_err(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
         }
     }
 }

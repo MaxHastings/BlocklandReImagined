@@ -59,8 +59,10 @@ fn shape(id: &str) -> Value {
 }
 fn png() -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 40, 40, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)?;
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 40, 40, 255])).write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )?;
     Ok(bytes)
 }
 fn model_entry(file: &str, sha: &str) -> Value {
@@ -211,8 +213,18 @@ fn server_add_ons(root: &Path) -> Result<PackageSet> {
         root,
         "stock-art",
         &[
-            ("wand", "Stock Wand", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun"),
-            ("mystery", "Mystery Box", "Add-Ons/Nope/box.dts", "Add-Ons/Nope/icon_box"),
+            (
+                "wand",
+                "Stock Wand",
+                "Add-Ons/Weapon_Gun/pistol.dts",
+                "Add-Ons/Weapon_Gun/icon_gun",
+            ),
+            (
+                "mystery",
+                "Mystery Box",
+                "Add-Ons/Nope/box.dts",
+                "Add-Ons/Nope/icon_box",
+            ),
         ],
         None,
     )?;
@@ -220,7 +232,12 @@ fn server_add_ons(root: &Path) -> Result<PackageSet> {
     add_on(
         root,
         "missing-icon",
-        &[("sparkle", "Sparkle Gun", "Add-Ons/Weapon_Gun/pistol.dts", "icons/sparkle")],
+        &[(
+            "sparkle",
+            "Sparkle Gun",
+            "Add-Ons/Weapon_Gun/pistol.dts",
+            "icons/sparkle",
+        )],
         Some((
             &[("sparkle", PISTOL, "icons/sparkle.png")],
             json!({}),
@@ -243,8 +260,18 @@ fn server_add_ons(root: &Path) -> Result<PackageSet> {
         root,
         "extra-weapon",
         &[
-            ("kept", "Presented Gun", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun"),
-            ("spare", "Spare Blaster", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun"),
+            (
+                "kept",
+                "Presented Gun",
+                "Add-Ons/Weapon_Gun/pistol.dts",
+                "Add-Ons/Weapon_Gun/icon_gun",
+            ),
+            (
+                "spare",
+                "Spare Blaster",
+                "Add-Ons/Weapon_Gun/pistol.dts",
+                "Add-Ons/Weapon_Gun/icon_gun",
+            ),
         ],
         Some((&[("kept", PISTOL, GUN_ICON)], json!({}), json!({}))),
     )?;
@@ -308,7 +335,9 @@ fn session() -> bri_sim::session::Session {
         bri_sim::simulation::Simulation::new(
             bri_world::World::new("Fallbacks".into(), "fixture".into(), vec![[1.0; 4]]),
             definitions,
-            vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+            vec![
+                ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
         )
         .unwrap(),
     );
@@ -420,7 +449,11 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
     let ui = ItemUi::new(&assets, &weapons.item_choices, &letters()?)?;
     let catalog = ui.catalog();
     assert_eq!(weapons.item_choices.len(), 7);
-    assert_eq!(catalog.len(), weapons.item_choices.len(), "a HUD row per weapon");
+    assert_eq!(
+        catalog.len(),
+        weapons.item_choices.len(),
+        "a HUD row per weapon"
+    );
     for (id, _) in &weapons.item_choices {
         assert!(assets.presentation.items.contains_key(id), "{id} presented");
     }
@@ -451,9 +484,15 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
     // Each stand-in is logged naming its Add-On.
     let faults = assets.faults.join("\n");
     for add_on in ["stock-art", "missing-icon", "bad-model"] {
-        assert!(faults.contains(&format!("Add-On {add_on}:")), "{add_on} not named in:\n{faults}");
+        assert!(
+            faults.contains(&format!("Add-On {add_on}:")),
+            "{add_on} not named in:\n{faults}"
+        );
     }
-    assert!(!faults.contains("extra-weapon"), "borrowing stock art is no fault:\n{faults}");
+    assert!(
+        !faults.contains("extra-weapon"),
+        "borrowing stock art is no fault:\n{faults}"
+    );
 
     // A player with an older copy of one of the server's Add-Ons, and an
     // Add-On of their own the server does not run, joins the same way: the
@@ -464,21 +503,38 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
     add_on(
         stale_root.path(),
         "stock-art",
-        &[("wand", "Stock Wand", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun")],
+        &[(
+            "wand",
+            "Stock Wand",
+            "Add-Ons/Weapon_Gun/pistol.dts",
+            "Add-Ons/Weapon_Gun/icon_gun",
+        )],
         None,
     )?;
     add_on(
         stale_root.path(),
         "mine-only",
-        &[("toy", "Toy Gun", "Add-Ons/Weapon_Gun/pistol.dts", "Add-Ons/Weapon_Gun/icon_gun")],
+        &[(
+            "toy",
+            "Toy Gun",
+            "Add-Ons/Weapon_Gun/pistol.dts",
+            "Add-Ons/Weapon_Gun/icon_gun",
+        )],
         None,
     )?;
-    let mine = PackageSet::parse(&serde_json::to_vec(&json!({ "schema_version": 1, "packages": [
+    let mine = PackageSet::parse(&serde_json::to_vec(
+        &json!({ "schema_version": 1, "packages": [
         { "id": "stock-art", "version": "1.0.0", "side": "shared", "dir": "addons/stock-art" },
         { "id": "mine-only", "version": "1.0.0", "side": "shared", "dir": "addons/mine-only" },
-    ] }))?)?;
-    let local = bri_package::environment::Environment::load(stale_root.path(), &mine)?.client_packages();
-    let server_copy = environment.packages.iter().find(|p| p.id == "stock-art").unwrap();
+    ] }),
+    )?)?;
+    let local =
+        bri_package::environment::Environment::load(stale_root.path(), &mine)?.client_packages();
+    let server_copy = environment
+        .packages
+        .iter()
+        .find(|p| p.id == "stock-art")
+        .unwrap();
     assert!(!local.contains(server_copy), "the local copy is stale");
     let cache = bri_package::sync::Cache::open(&stale_root.path().join(".downloads"))?;
     let (client, fetched, dropped) = bri_net::client::Client::connect_fetching(
@@ -491,26 +547,56 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
         &cache,
         bri_progress::Progress::default(),
         |fetched, dropped| {
-            Ok(bri_client::mods::load_fetched(stale_root.path(), &mine, &local, fetched, dropped)?.1)
+            Ok(
+                bri_client::mods::load_fetched(stale_root.path(), &mine, &local, fetched, dropped)?
+                    .1,
+            )
         },
     )
     .await?;
     assert!(client.owner > 0, "the stale player joined");
     drop(client);
-    assert_eq!(dropped.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["mine-only"]);
+    assert_eq!(
+        dropped.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        ["mine-only"]
+    );
     let joined = bri_client::mods::joined_set(stale_root.path(), &mine, &fetched, &dropped)?;
     let mut ids: Vec<_> = joined.packages.iter().map(|p| p.id.clone()).collect();
     ids.sort();
-    assert_eq!(ids, ["bad-model", "extra-weapon", "missing-icon", "stock-art"]);
-    let stock = joined.packages.iter().find(|p| p.id == "stock-art").unwrap();
-    assert!(stock.dir.starts_with(".downloads/"), "the server's copy: {}", stock.dir);
+    assert_eq!(
+        ids,
+        ["bad-model", "extra-weapon", "missing-icon", "stock-art"]
+    );
+    let stock = joined
+        .packages
+        .iter()
+        .find(|p| p.id == "stock-art")
+        .unwrap();
+    assert!(
+        stock.dir.starts_with(".downloads/"),
+        "the server's copy: {}",
+        stock.dir
+    );
     let dir = bri_package::packages::package_dir(stale_root.path(), stock)?;
-    assert_eq!(bri_package::environment::hash_dir(&dir)?.0, server_copy.hash);
+    assert_eq!(
+        bri_package::environment::hash_dir(&dir)?.0,
+        server_copy.hash
+    );
     let extras = kind_providers(stale_root.path(), &joined, "weapons.json")?;
     let weapons = WeaponContent::load_with(&stale_base.weapons, &extras)?;
-    let names: Vec<_> = weapons.item_choices.iter().map(|(_, n)| n.as_str()).collect();
-    assert!(names.contains(&"Mystery Box"), "the server's version: {names:?}");
-    assert!(!names.contains(&"Toy Gun"), "their own Add-On sits out: {names:?}");
+    let names: Vec<_> = weapons
+        .item_choices
+        .iter()
+        .map(|(_, n)| n.as_str())
+        .collect();
+    assert!(
+        names.contains(&"Mystery Box"),
+        "the server's version: {names:?}"
+    );
+    assert!(
+        !names.contains(&"Toy Gun"),
+        "their own Add-On sits out: {names:?}"
+    );
     let assets = ItemAssets::load_with(&stale_base.items, &stale_base.weapons, &extras)?;
     let ui = ItemUi::new(&assets, &weapons.item_choices, &letters()?)?;
     assert_eq!(ui.catalog().len(), weapons.item_choices.len());

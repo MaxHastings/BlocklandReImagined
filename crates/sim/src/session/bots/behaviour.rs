@@ -109,14 +109,57 @@ mod tests {
             ..enemy(3.0)
         };
         assert_eq!(choose(Wander, &all), Carry);
-        assert_eq!(choose(Wander, &Situation { holding: false, ..all }), Fly);
-        let seen = Situation { fly: false, holding: false, ..all };
+        assert_eq!(
+            choose(
+                Wander,
+                &Situation {
+                    holding: false,
+                    ..all
+                }
+            ),
+            Fly
+        );
+        let seen = Situation {
+            fly: false,
+            holding: false,
+            ..all
+        };
         assert_eq!(choose(Wander, &seen), Fight);
-        assert_eq!(choose(Wander, &Situation { enemy: Some((20.0, 0.0)), ..seen }), Chase);
-        let lost = Situation { enemy: None, ..seen };
+        assert_eq!(
+            choose(
+                Wander,
+                &Situation {
+                    enemy: Some((20.0, 0.0)),
+                    ..seen
+                }
+            ),
+            Chase
+        );
+        let lost = Situation {
+            enemy: None,
+            ..seen
+        };
         assert_eq!(choose(Fight, &lost), Search);
-        assert_eq!(choose(Search, &Situation { remembers: false, ..lost }), Return);
-        assert_eq!(choose(Return, &Situation { home: true, ..Default::default() }), Wander);
+        assert_eq!(
+            choose(
+                Search,
+                &Situation {
+                    remembers: false,
+                    ..lost
+                }
+            ),
+            Return
+        );
+        assert_eq!(
+            choose(
+                Return,
+                &Situation {
+                    home: true,
+                    ..Default::default()
+                }
+            ),
+            Wander
+        );
     }
 
     #[test]

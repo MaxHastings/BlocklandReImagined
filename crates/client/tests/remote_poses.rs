@@ -112,7 +112,7 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them(
 ) -> Result<()> {
     let gpu = support::gpu::turn().context("offscreen adapter")?;
     let port = use_test_ports();
-    let load = |name: &str, state: &Path| -> Result<App> {
+    let load = |name: &str, state: &Path| -> Result<Box<App>> {
         let mut app = App::load(&f.root, state, SIZE)?;
         app.ui.core.pop(ScreenId::DefaultControls);
         app.ui.core.settings.avatar.lan_name = name.into();

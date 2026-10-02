@@ -238,11 +238,23 @@ fn a_refresh_neither_moves_bodies_nor_drops_kinematic_targets() {
     w.bodies[falling].set_angvel(Vector::new(0.2, 0.3, 0.4), true);
     w.bodies[mount].set_next_kinematic_translation(Vector::new(5.0, 1.0, 0.0));
     let before: Vec<_> = [falling, resting]
-        .map(|b| (*w.bodies[b].position(), w.bodies[b].linvel(), w.bodies[b].angvel()))
+        .map(|b| {
+            (
+                *w.bodies[b].position(),
+                w.bodies[b].linvel(),
+                w.bodies[b].angvel(),
+            )
+        })
         .into();
     detect(&mut w);
     let after: Vec<_> = [falling, resting]
-        .map(|b| (*w.bodies[b].position(), w.bodies[b].linvel(), w.bodies[b].angvel()))
+        .map(|b| {
+            (
+                *w.bodies[b].position(),
+                w.bodies[b].linvel(),
+                w.bodies[b].angvel(),
+            )
+        })
         .into();
     assert_eq!(before, after, "pose and velocities are bit-identical");
     assert_eq!(w.bodies[mount].translation().x, 4.0);

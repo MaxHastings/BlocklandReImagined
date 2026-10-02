@@ -221,11 +221,18 @@ impl Store {
             // beside "house.bls"; v20 kept names ending in a space) stays
             // listed: this one gets the next free "(2)" name. The stock save
             // it shadows is replaced.
-            if files.get(&key(&name)).is_some_and(|e| other_file(e, &save.source)) {
+            if files
+                .get(&key(&name))
+                .is_some_and(|e| other_file(e, &save.source))
+            {
                 let stem = name.trim_end_matches(".world.json").to_string();
                 name = (2..)
                     .map(|n| format!("{stem} ({n}).world.json"))
-                    .find(|n| files.get(&key(n)).is_none_or(|e| !other_file(e, &save.source)))
+                    .find(|n| {
+                        files
+                            .get(&key(n))
+                            .is_none_or(|e| !other_file(e, &save.source))
+                    })
                     .context("no free save name")?;
             }
             files.insert(
@@ -235,8 +242,10 @@ impl Store {
                         name,
                         map,
                         modified: modified_date(save.modified_s),
-                        description: save.description.join("
-"),
+                        description: save.description.join(
+                            "
+",
+                        ),
                         brick_count: Some(save.bricks),
                         damaged: false,
                     },
@@ -617,7 +626,11 @@ mod tests {
             [0.666, 0.0, 0.0, 0.7],
         ];
         let saved_form = |c: &[f32; 4]| {
-            c.map(|v| format!("{:.6}", (v * 255.0).floor() / 255.0).parse::<f32>().unwrap())
+            c.map(|v| {
+                format!("{:.6}", (v * 255.0).floor() / 255.0)
+                    .parse::<f32>()
+                    .unwrap()
+            })
         };
         let mut palette: Vec<[f32; 4]> = world.iter().map(saved_form).collect();
         assert_eq!(palette[0], [0.898039, 0.0, 0.0, 1.0]);
@@ -642,8 +655,14 @@ mod tests {
     }
     #[test]
     fn v20_names_ending_in_a_space_or_dot_are_listed_trimmed() {
-        assert_eq!(v20_save_name("Afghanistan DM ").as_deref(), Some("Afghanistan DM.world.json"));
-        assert_eq!(v20_save_name("A.T.C. Fort").as_deref(), Some("A.T.C. Fort.world.json"));
+        assert_eq!(
+            v20_save_name("Afghanistan DM ").as_deref(),
+            Some("Afghanistan DM.world.json")
+        );
+        assert_eq!(
+            v20_save_name("A.T.C. Fort").as_deref(),
+            Some("A.T.C. Fort.world.json")
+        );
         assert_eq!(v20_save_name("Wow..."), Some("Wow.world.json".into()));
         assert_eq!(v20_save_name(" . "), None);
         assert_eq!(v20_save_name("CON"), None);
