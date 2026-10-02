@@ -409,7 +409,10 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
 fn the_base_effects_pack_draws_the_plane_contrails() -> Result<()> {
     // The contrail particle uses base/data/particles/cloud, which the base
     // game's effects pack carries; merging adds the Add-On's emitter.
-    let effects = EffectsPack::load(root().join("content/effects-runtime-pack-005"))?;
+    let effects = EffectsPack::load(bri_package::testing::pack_dir(
+        &root().join("content"),
+        "effects_runtime",
+    ))?;
     let (merged, notes) = with_vehicle_effects(effects, &plane_pack())?;
     assert!(notes.is_empty(), "{notes:?}");
     assert!(merged.emitter_ids().any(|id| id == EMITTER));

@@ -8,22 +8,23 @@ use bri_audio::{BankOptions, SoundBank};
 use bri_client::weapon_effects::WeaponEffects;
 use std::{path::Path, sync::Arc};
 
-fn content(dir: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content")
-        .join(dir)
+fn content(role: &str) -> std::path::PathBuf {
+    bri_package::testing::pack_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        role,
+    )
 }
 
 #[test]
 #[ignore = "requires the converted weapons, effects, audio and vehicle packs"]
 fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
     let weapons = Arc::new(bri_weapons::Pack::from_json(&std::fs::read(
-        content("weapons-pack-009").join("weapons.json"),
+        content("weapons").join("weapons.json"),
     )?)?);
-    let effects = bri_fx_runtime::EffectsPack::load(content("effects-runtime-pack-005"))?;
+    let effects = bri_fx_runtime::EffectsPack::load(content("effects_runtime"))?;
     let mut fx = WeaponEffects::new(effects, weapons.clone(), Default::default())?;
     fx.set_palette(&[[1.0, 0.0, 0.0, 1.0]]);
-    let bank = SoundBank::load(content("audio-pack-002"), &BankOptions::default())?;
+    let bank = SoundBank::load(content("audio"), &BankOptions::default())?;
     let mut gaps = Vec::new();
     let mut sound = |owner: &str, name: &str| {
         if !name.is_empty() && bank.resolve(name).is_err() {
@@ -41,7 +42,7 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
     for e in weapons.explosions.values() {
         sound(&e.name, &e.sound);
     }
-    let vehicles = bri_vehicles::Pack::load(content("vehicles-pack-012").join("vehicles.json"))?;
+    let vehicles = bri_vehicles::Pack::load(content("vehicles").join("vehicles.json"))?;
     for d in &vehicles.definitions {
         if let Some(w) = &d.weapon {
             sound(&d.id, &w.sound);
@@ -113,7 +114,7 @@ fn cue_sounds_keep_their_v20_descriptions() -> Result<()> {
     // Profile, then its AudioDescription: 3D reference and max distance
     // (None is 2D) and volume. The brick sounds are client profiles on
     // AudioClientClose3d (allClientScripts.cs:143).
-    let bank = SoundBank::load(content("audio-pack-002"), &BankOptions::default())?;
+    let bank = SoundBank::load(content("audio"), &BankOptions::default())?;
     for (profile, spatial, gain) in [
         ("BrickBreak", Some((10.0, 60.0)), 1.0),
         ("BrickPlant", Some((10.0, 60.0)), 1.0),

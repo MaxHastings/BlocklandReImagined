@@ -249,7 +249,10 @@ fn every_screen_fits_a_short_wide_window_720p_and_1440p_synthetic() -> anyhow::R
 #[ignore = "requires generated v20 content"]
 fn every_screen_fits_a_short_wide_window_720p_and_1440p() -> anyhow::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004"))?);
+    let pack = Rc::new(Pack::load(&bri_package::testing::pack_dir(
+        &root.join("content"),
+        "ui_pack",
+    ))?);
     let out = std::env::var_os("BRI_SWEEP_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/screen-sweep"));

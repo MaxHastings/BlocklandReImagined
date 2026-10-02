@@ -56,7 +56,7 @@ fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize, water: Option<f32
 #[ignore = "requires generated v20 content"]
 fn native_catalog_assets_and_authored_values() {
     let p = common::content_pack();
-    p.verify_assets(common::CONTENT).unwrap();
+    p.verify_assets(common::content_dir()).unwrap();
     assert_eq!(p.definitions.len(), 11);
     assert_eq!(p.animation_aliases.len(), 39);
     let jeep = p

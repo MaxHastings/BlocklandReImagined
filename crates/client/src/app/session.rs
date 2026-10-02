@@ -686,6 +686,10 @@ impl App {
     }
     pub(super) fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
         ensure!(
+            self.addons.reload.is_none(),
+            "Add-On loading is still in progress"
+        );
+        ensure!(
             password.is_empty(),
             "Password authentication is not connected yet"
         );

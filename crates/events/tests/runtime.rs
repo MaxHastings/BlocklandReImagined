@@ -536,8 +536,11 @@ fn source_math_keeps_health_projectile_and_relay_semantics() {
 /// The converted vanilla catalog (`content/events-pack-002`).
 fn content_catalog() -> Catalog {
     Catalog::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/events-pack-002/catalog.json"),
+        bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "events",
+        )
+        .join("catalog.json"),
     )
     .unwrap()
 }

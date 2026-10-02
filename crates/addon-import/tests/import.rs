@@ -363,8 +363,11 @@ fn real_community_samples() {
         assert!(ok, "{line}");
     }
     // Merged with the base game's pack, when this checkout has generated content.
-    let vanilla =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009/weapons.json");
+    let vanilla = bri_package::testing::pack_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "weapons",
+    )
+    .join("weapons.json");
     if vanilla.is_file() {
         let base = Pack::from_json(&std::fs::read(&vanilla).unwrap()).unwrap();
         let shotgun =

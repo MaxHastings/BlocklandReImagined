@@ -197,12 +197,43 @@ impl App {
 
     /// Runs one UI action and answers it, or queues the platform command
     /// it asks for.
-    fn dispatch_action(
+    pub(super) fn dispatch_action(
         &mut self,
         id: RequestId,
         action: UiAction,
         platform: &mut Vec<PlatformCommand>,
     ) -> Result<()> {
+        let session = matches!(
+            action,
+            UiAction::HostGame { .. }
+                | UiAction::JoinServer { .. }
+                | UiAction::TrustNewServerIdentity { .. }
+                | UiAction::StartTutorial
+        );
+        let host_needs_content =
+            matches!(action, UiAction::HostGame { .. } | UiAction::StartTutorial)
+                && !self.addons.packages_from_tools;
+        if session && (host_needs_content || self.addons.reload.is_some()) {
+            if self.ui.session_request() != Some(id) {
+                return Ok(());
+            }
+            self.disconnect();
+            let result = bri_package::packages::PackageSet::load_root(&self.content.paths.root)
+                .and_then(|set| {
+                    self.queue_package_reload(
+                        set,
+                        None,
+                        Some(addons::ReloadResume::Action {
+                            id,
+                            action: Box::new(action),
+                        }),
+                    )
+                });
+            if let Err(error) = result {
+                self.answer(id, Err(error));
+            }
+            return Ok(());
+        }
         let result = match action {
             UiAction::LoadBricksColors(choice) => {
                 self.choose_color_load(choice);
@@ -876,9 +907,13 @@ impl App {
                 Ok(())
             }
             UiAction::ApplyAddOns => {
-                bri_package::packages::PackageSet::load_root(&self.content.paths.root)
-                    .and_then(|set| self.apply_packages(&set))
-                    .context("Your Add-On changes could not be loaded")
+                let result = bri_package::packages::PackageSet::load_root(&self.content.paths.root)
+                    .and_then(|set| self.queue_package_reload(set, Some(id), None))
+                    .context("Your Add-On changes could not be loaded");
+                if let Err(error) = result {
+                    self.answer(id, Err(error));
+                }
+                return Ok(());
             }
             UiAction::ImportAddOn { id: ref row } => {
                 let root = self.content.paths.root.clone();

@@ -37,8 +37,14 @@ impl Fixture {
             ("HorseArmor", None),
         ];
         Ok(Self {
-            pack: bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?,
-            effects: EffectsPack::load(root.join("content/effects-runtime-pack-005"))?,
+            pack: bri_vehicles::Pack::load(
+                bri_package::testing::pack_dir(&root.join("content"), "vehicles")
+                    .join("vehicles.json"),
+            )?,
+            effects: EffectsPack::load(bri_package::testing::pack_dir(
+                &root.join("content"),
+                "effects_runtime",
+            ))?,
             expected: expected
                 .map(|(n, e)| (n.to_string(), e.map(String::from)))
                 .into(),

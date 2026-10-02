@@ -73,13 +73,15 @@ impl Fixture {
     }
 }
 
-pub const CONTENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../content/vehicles-pack-012"
-);
+pub fn content_dir() -> std::path::PathBuf {
+    bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "vehicles",
+    )
+}
 
 pub fn content_pack() -> Pack {
-    Pack::load(format!("{CONTENT}/vehicles.json")).unwrap()
+    Pack::load(content_dir().join("vehicles.json")).unwrap()
 }
 
 /// A physics world with a flat floor `half` units each way around the origin.

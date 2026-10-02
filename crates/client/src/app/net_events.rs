@@ -25,7 +25,7 @@ impl App {
         if failed.is_none() && a.worker.events.is_closed() {
             failed = Some("Connection worker stopped".into());
         }
-        if let Some(mut reason) = failed {
+        if let Some(reason) = failed {
             // A joined remote game whose network dropped is rejoined
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
@@ -47,28 +47,15 @@ impl App {
             let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
             if let Some(set) = add_ons {
                 self.disconnect();
-                let applied = self.apply_packages(&set);
-                // The next game this player hosts runs their own list again.
-                self.addons.packages_from_tools = false;
-                // Add-Ons that do not load here are joined without: the
-                // player is told which, in chat, once in the game.
-                if let Err(error) = applied {
-                    let text = format!(
-                        "Some of this server's Add-Ons could not be loaded on this computer, so you joined without them: {error:#}"
-                    );
-                    bri_console::warn(&text);
-                    self.net.join_notices.push(text);
-                    self.addons.skip_add_on_reload = true;
-                }
-                match self.join(id, a.name.clone(), String::new()) {
-                    Ok(()) => return Ok(()),
-                    Err(error) => {
-                        self.net.join_notices.clear();
-                        reason =
-                            format!("Could not join again with the server's Add-Ons: {error:#}");
-                        bri_console::warn(&reason);
-                    }
-                }
+                self.queue_package_reload(
+                    set,
+                    None,
+                    Some(addons::ReloadResume::Downloaded {
+                        id,
+                        address: a.name.clone(),
+                    }),
+                )?;
+                return Ok(());
             }
             if a.identity_changed
                 .load(std::sync::atomic::Ordering::Relaxed)

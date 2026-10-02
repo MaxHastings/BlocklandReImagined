@@ -1448,8 +1448,11 @@ mod tests {
             })
         }
         fn content() -> anyhow::Result<Self> {
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-009/weapons.json");
+            let root = bri_package::testing::pack_dir(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                "weapons",
+            )
+            .join("weapons.json");
             let pack: serde_json::Value = serde_json::from_slice(&std::fs::read(root)?)?;
             assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
             Ok(Self {

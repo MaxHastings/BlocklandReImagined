@@ -1026,7 +1026,7 @@ mod tests {
         let path = if definition.starts_with("test_plane:") {
             root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json")
         } else {
-            root.join("content/vehicles-pack-012/vehicles.json")
+            bri_package::testing::pack_dir(&root.join("content"), "vehicles").join("vehicles.json")
         };
         bri_vehicles::Pack::load(path).ok()
     }

@@ -31,11 +31,14 @@ impl BrickFixture {
     pub fn content() -> Result<Self> {
         let root = repo_root();
         let definitions = Definitions::load(
-            &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-008"),
+            &bri_package::testing::pack_dir(&root.join("content"), "brick_catalog"),
+            &bri_package::testing::pack_dir(&root.join("content"), "geometry"),
         )?;
         Ok(Self {
-            materials: BrickMaterials::load(&root.join("content/brick-materials-002"))?,
+            materials: BrickMaterials::load(&bri_package::testing::pack_dir(
+                &root.join("content"),
+                "brick_materials",
+            ))?,
             meshes: definitions
                 .entries
                 .into_iter()

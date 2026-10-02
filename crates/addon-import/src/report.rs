@@ -156,7 +156,9 @@ pub struct Dependency {
     /// v20 shipped, whose content is the game's own `package`), `missing`,
     /// `unused` (missing, with none of its content named), `self`, or
     /// `if_present` (required only inside an `isFile` check for it, which
-    /// reads as absent, so the Add-On's own branch runs).
+    /// reads as absent, so the Add-On's own branch runs), or `ported` (a
+    /// successfully applied native port replaces the source framework and
+    /// explicitly removes its runtime requirement).
     pub status: String,
     /// The package that provides it, when known (`v20-weapons`).
     pub package: Option<String>,

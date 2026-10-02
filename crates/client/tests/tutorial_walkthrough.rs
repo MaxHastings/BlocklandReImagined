@@ -573,12 +573,16 @@ fn bricks(p: &mut Player) -> Result<()> {
     p.until("the brick selector", 5.0, |p| {
         p.app.ui.top_id() == ScreenId::BrickSelector
     })?;
-    // A double click puts the 2x2 brick in the cart; B buys the cart.
+    // Add-Ons can extend the first section beyond the viewport. Search
+    // through the real field so the desired tile is visible before clicking.
+    p.click(ScreenId::BrickSelector, "BSD_Search")?;
+    p.type_text("2x2")?;
     let brick = p.brick_index("2x2")?;
-    let icon = format!("BSD_ClickIcon({brick});");
+    let icon = format!("BSD_Result{brick}");
+    // A double click puts it in the cart; the Buy button purchases it.
     p.click(ScreenId::BrickSelector, &icon)?;
     p.click(ScreenId::BrickSelector, &icon)?;
-    p.press("openBSD")?;
+    p.click(ScreenId::BrickSelector, "BSD_BuyBricks();")?;
     p.until("the brick selector to close", 5.0, |p| {
         !p.app.ui.is_open(ScreenId::BrickSelector)
     })?;

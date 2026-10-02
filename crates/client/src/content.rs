@@ -81,9 +81,9 @@ pub struct WorldEntry {
 
 pub use bri_net::map_content::LoadedMap;
 
-pub struct ClientContent {
+pub struct ClientContent<P = Rc<Pack>> {
     pub paths: ContentPaths,
-    pub ui_pack: Rc<Pack>,
+    pub ui_pack: P,
     pub maps: Vec<MapInfo>,
     pub bricks: Vec<BrickInfo>,
     /// Every brick's catalog entry, the base game's then each Add-On's
@@ -105,6 +105,50 @@ pub struct ClientContent {
     pub events: bri_events::Catalog,
     pub event_sounds: Vec<(String, String)>,
     pub warnings: Vec<String>,
+}
+
+impl<P> ClientContent<P> {
+    /// Move content between a worker's owned UI schema and the UI thread's cache.
+    pub(crate) fn map_ui<Q>(self, convert: impl FnOnce(P) -> Q) -> ClientContent<Q> {
+        let Self {
+            paths,
+            ui_pack,
+            maps,
+            bricks,
+            catalog,
+            selectable,
+            paint,
+            datablocks,
+            worlds,
+            effects,
+            weapons,
+            item_physics,
+            vehicles,
+            music,
+            events,
+            event_sounds,
+            warnings,
+        } = self;
+        ClientContent {
+            paths,
+            ui_pack: convert(ui_pack),
+            maps,
+            bricks,
+            catalog,
+            selectable,
+            paint,
+            datablocks,
+            worlds,
+            effects,
+            weapons,
+            item_physics,
+            vehicles,
+            music,
+            events,
+            event_sounds,
+            warnings,
+        }
+    }
 }
 
 #[derive(Deserialize)]

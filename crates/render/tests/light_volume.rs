@@ -560,7 +560,7 @@ fn fixture_lamps_light_their_surroundings() -> Result<()> {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn stock_map_lamps_light_their_surroundings() -> Result<()> {
-    let bundle = content().join("map-bundle-017");
+    let bundle = bri_package::testing::pack_dir(&content(), "map_bundle");
     // Around the Bedroom bulb (a player on the shade's bars stands just
     // above it) and under the Kitchen ceiling lights.
     let under = [Vec3::new(0.0, -4.0, 0.0), Vec3::new(0.0, -8.0, 0.0)];
@@ -749,7 +749,7 @@ fn fixture_lamp_render() -> Result<()> {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn bedroom_dark_lamp_render() -> Result<()> {
-    let bundle = content().join("map-bundle-017");
+    let bundle = bri_package::testing::pack_dir(&content(), "map_bundle");
     let id = "v20/add-ons/map_bedroomdark/bedroomdark.mis";
     let map = load_map_bundle(&bundle, id)?;
     let bulb = shape_centres(&bundle, &map, id, "lightBulbA")?[0];

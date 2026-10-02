@@ -11,6 +11,80 @@ use std::{
     sync::Arc,
 };
 
+/// Decoded pack sounds can be prepared without the audio device.
+pub(crate) struct PreparedSounds {
+    bank: Arc<SoundBank>,
+    sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    warnings: BTreeSet<String>,
+}
+
+pub trait SoundLookup {
+    fn has_sound(&self, profile: &str) -> bool;
+}
+impl SoundLookup for ClientAudio {
+    fn has_sound(&self, profile: &str) -> bool {
+        ClientAudio::has_sound(self, profile)
+    }
+}
+impl SoundLookup for PreparedSounds {
+    fn has_sound(&self, profile: &str) -> bool {
+        self.sounds.contains_key(&profile.to_ascii_lowercase())
+            || self.bank.resolve(profile).is_ok()
+    }
+}
+impl PreparedSounds {
+    pub(crate) fn load(bank: Arc<SoundBank>, pack: &bri_weapons::Pack, root: &Path) -> Self {
+        let mut prepared = Self {
+            bank: bank.clone(),
+            sounds: BTreeMap::new(),
+            warnings: BTreeSet::new(),
+        };
+        for (profile, def) in &pack.sounds {
+            let (near, far) = PACK_SOUND_RANGE;
+            // The game's own file, played from the bank's copy.
+            let stock = def.stock.then(|| {
+                bank.clip_at(&def.file)
+                    .map(|clip| SoundAsset::world(profile, clip.clone(), near, far))
+                    .ok_or_else(|| format!("the game has no sound {}", def.file))
+            });
+            let dir = bri_weapons::sound_root(root, def);
+            let loaded = stock.unwrap_or_else(|| {
+                bri_package::path::inside(&dir, &def.file).and_then(|path| {
+                    use std::io::Read;
+                    let mut bytes = Vec::new();
+                    std::fs::File::open(&path)
+                        .and_then(|f| {
+                            f.take(bri_audio::bank::MAX_DECODED_CLIP_BYTES as u64 + 1)
+                                .read_to_end(&mut bytes)
+                        })
+                        .map_err(|e| e.to_string())?;
+                    let extension = Path::new(&def.file)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or_default();
+                    SoundAsset::decoded(profile, &bytes, extension, near, far)
+                })
+            });
+            match loaded {
+                Ok(mut asset) => {
+                    asset.playback.looping = def.looping;
+                    prepared
+                        .sounds
+                        .insert(profile.clone(), (Arc::new(asset), def.volume));
+                }
+                Err(error) => {
+                    if prepared.warnings.len() < 64 {
+                        prepared
+                            .warnings
+                            .insert(format!("Weapon sound {profile}: {error}"));
+                    }
+                }
+            }
+        }
+        prepared
+    }
+}
+
 pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement)>,
@@ -354,49 +428,19 @@ impl ClientAudio {
     /// folder). A sound that fails to load is a warning, never an error:
     /// its weapon plays silently.
     pub fn set_pack_sounds(&mut self, pack: &bri_weapons::Pack, root: &Path) {
-        self.pack_sounds.clear();
-        for (profile, def) in &pack.sounds {
-            let (near, far) = PACK_SOUND_RANGE;
-            // The game's own file, played from the bank's copy.
-            let stock = def.stock.then(|| {
-                self.runtime
-                    .bank()
-                    .clip_at(&def.file)
-                    .map(|clip| SoundAsset::world(profile, clip.clone(), near, far))
-                    .ok_or_else(|| format!("the game has no sound {}", def.file))
-            });
-            let dir = bri_weapons::sound_root(root, def);
-            let loaded = stock.unwrap_or_else(|| {
-                bri_package::path::inside(&dir, &def.file).and_then(|path| {
-                    use std::io::Read;
-                    let mut bytes = Vec::new();
-                    std::fs::File::open(&path)
-                        .and_then(|f| {
-                            f.take(bri_audio::bank::MAX_DECODED_CLIP_BYTES as u64 + 1)
-                                .read_to_end(&mut bytes)
-                        })
-                        .map_err(|e| e.to_string())?;
-                    let extension = Path::new(&def.file)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or_default();
-                    SoundAsset::decoded(profile, &bytes, extension, near, far)
-                })
-            });
-            match loaded {
-                Ok(mut asset) => {
-                    asset.playback.looping = def.looping;
-                    self.pack_sounds
-                        .insert(profile.clone(), (Arc::new(asset), def.volume));
-                }
-                Err(error) => {
-                    if self.warnings.len() < 64 {
-                        self.warnings
-                            .insert(format!("Weapon sound {profile}: {error}"));
-                    }
-                }
-            }
-        }
+        self.install_pack_sounds(PreparedSounds::load(self.sound_bank(), pack, root));
+    }
+    pub(crate) fn sound_bank(&self) -> Arc<SoundBank> {
+        self.runtime.bank().clone()
+    }
+    pub(crate) fn install_pack_sounds(&mut self, prepared: PreparedSounds) {
+        self.pack_sounds = prepared.sounds;
+        self.warnings.extend(
+            prepared
+                .warnings
+                .into_iter()
+                .take(64usize.saturating_sub(self.warnings.len())),
+        );
     }
     /// Start `profile`: an Add-On pack's own sound, else the bank's.
     fn start(&mut self, profile: &str, placement: Placement) -> Result<SoundHandle, AudioError> {
@@ -531,7 +575,10 @@ mod tests {
         }
         fn content() -> Result<Self> {
             Ok(Self {
-                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-002"),
+                root: bri_package::testing::pack_dir(
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                    "audio",
+                ),
                 note: "Note3Sound".into(),
                 _scratch: None,
             })

@@ -446,9 +446,9 @@ fn froth_follows_the_surface_and_bubbles_follow_a_splash() -> Result<()> {
 #[ignore = "requires generated effects-runtime-pack-005 and weapons-pack-009; CPU only"]
 fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-    let pack = EffectsPack::load(root.join("effects-runtime-pack-005"))?;
+    let pack = EffectsPack::load(bri_package::testing::pack_dir(&root, "effects_runtime"))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("weapons-pack-009/weapons.json"),
+        bri_package::testing::pack_dir(&root, "weapons").join("weapons.json"),
     )?)?);
     let mut fx = ActorEffects::new(pack, weapons, Default::default())?;
     let mut id = 0;

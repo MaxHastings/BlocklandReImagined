@@ -1256,7 +1256,10 @@ mod tests {
     #[test]
     #[ignore = "requires generated v20 content"]
     fn native_weapons_pack_identity_and_all_21_choices() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
+        let root = bri_package::testing::pack_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "weapons",
+        );
         // 17 weapons plus the four core tools, which are v20 images too.
         assert_eq!(weapons_pack_identity_and_every_choice(&root), 21);
     }
@@ -1431,9 +1434,13 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let weapons = WeaponContent::load(&root.join("weapons-pack-009")).unwrap();
+        let weapons =
+            WeaponContent::load(&bri_package::testing::pack_dir(&root, "weapons")).unwrap();
         assert_eq!(
-            item_physics_covers_every_item(&root.join("item-presentation-pack-010"), &weapons),
+            item_physics_covers_every_item(
+                &bri_package::testing::pack_dir(&root, "item_presentation"),
+                &weapons
+            ),
             21
         );
     }

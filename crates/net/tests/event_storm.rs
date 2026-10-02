@@ -51,9 +51,11 @@ impl Packs {
         let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         Ok(Self {
             weapons: bri_weapons::Pack::from_json(&std::fs::read(
-                content.join("weapons-pack-009/weapons.json"),
+                bri_package::testing::pack_dir(&content, "weapons").join("weapons.json"),
             )?)?,
-            catalog: bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?,
+            catalog: bri_events::Catalog::load(
+                bri_package::testing::pack_dir(&content, "events").join("catalog.json"),
+            )?,
             projectile: "v20.projectile.rocketlauncherprojectile".into(),
             family: "rocketlauncher".into(),
             explosion: "rocketExplosion".into(),

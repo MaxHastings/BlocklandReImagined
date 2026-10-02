@@ -61,7 +61,7 @@ macro_rules! synthetic_and_content {
             $(#[test]
             #[ignore = "requires generated v20 content"]
             fn $body() {
-                super::$body(&bri_ui::testing::content_pack("ui-pack-004"));
+                super::$body(&bri_ui::testing::content_pack(&bri_package::testing::pack_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"), "ui_pack")));
             })*
         }
     };

@@ -347,8 +347,11 @@ mod tests {
         fn content() -> Result<Self> {
             use bri_vehicles::schema::Pack;
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            let mut definitions =
-                Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
+            let mut definitions = Pack::load(
+                bri_package::testing::pack_dir(&root.join("content"), "vehicles")
+                    .join("vehicles.json"),
+            )?
+            .definitions;
             definitions.extend(
                 Pack::load(
                     root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"),
@@ -356,7 +359,10 @@ mod tests {
                 .definitions,
             );
             Ok(Self {
-                assets: crate::avatar::AvatarAssets::load(&root.join("content/avatar-pack-002"))?,
+                assets: crate::avatar::AvatarAssets::load(&bri_package::testing::pack_dir(
+                    &root.join("content"),
+                    "avatar",
+                ))?,
                 definitions,
                 min_seats: 30,
             })

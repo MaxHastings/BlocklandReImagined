@@ -15,6 +15,7 @@ bytemuck.workspace = true
 image.workspace = true
 wgpu.workspace = true
 [dev-dependencies]
+bri-package = { path = "../package" }
 bri-content = { path = "../content" }
 pollster.workspace = true
 bri-physics = { path = "../physics" }

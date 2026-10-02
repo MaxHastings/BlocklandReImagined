@@ -279,6 +279,8 @@ impl App {
             },
             cosmetic_faults: Default::default(),
             addons: AddOns {
+                reload: None,
+                reload_pending: None,
                 package_catalog,
                 client_code,
                 item_skins: Default::default(),

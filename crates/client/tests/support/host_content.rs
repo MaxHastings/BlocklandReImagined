@@ -49,8 +49,8 @@ impl HostContent {
         }
         let content = super::files::repo_root().join("content");
         Definitions::load(
-            &content.join("stock-catalog-004"),
-            &content.join("maps-pass-008"),
+            &bri_package::testing::pack_dir(&content, "brick_catalog"),
+            &bri_package::testing::pack_dir(&content, "geometry"),
         )
     }
 
@@ -58,8 +58,10 @@ impl HostContent {
         if !self.content {
             return Ok(bri_weapons::testing::pack());
         }
-        let pack =
-            std::fs::read(super::files::repo_root().join("content/weapons-pack-009/weapons.json"))?;
+        let pack = std::fs::read(
+            bri_package::testing::pack_dir(&super::files::repo_root().join("content"), "weapons")
+                .join("weapons.json"),
+        )?;
         bri_weapons::Pack::from_json(&pack)
     }
 }

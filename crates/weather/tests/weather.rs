@@ -320,9 +320,10 @@ fn every_placement_rains_its_authored_drops_synthetic() {
     every_placement_rains_its_authored_drops(bri_weather::testing::showcase_pack());
 }
 fn content_pack() -> Arc<WeatherPack> {
-    WeatherPack::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weather-pack-002"),
-    )
+    WeatherPack::load(bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "weather",
+    ))
     .unwrap()
 }
 #[test]

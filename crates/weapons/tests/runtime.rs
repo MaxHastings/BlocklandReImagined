@@ -51,8 +51,11 @@ fn load() -> Pack {
     let path = std::env::var_os("BRI_WEAPONS_PACK")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-009/weapons.json")
+            bri_package::testing::pack_dir(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                "weapons",
+            )
+            .join("weapons.json")
         });
     Pack::from_json(&std::fs::read(path).expect("Run documented importer first")).unwrap()
 }
@@ -887,8 +890,10 @@ fn projectile_sweep_collides_with_authored_bedroom_interior() {
     use bri_content::scene::{Kind, Scene as NativeScene};
     use rapier3d::prelude::*;
     let fx = Fx::content();
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/map-bundle-017");
+    let root = bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "map_bundle",
+    );
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("bundle.json")).unwrap()).unwrap();
     let map = &bundle["maps"][0];

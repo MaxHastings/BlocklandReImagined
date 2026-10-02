@@ -335,7 +335,7 @@ fn overlays_render_offscreen_content() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let dir = std::env::var_os("BRI_UI_PACK")
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("content/ui-pack-004"));
+        .unwrap_or_else(|| bri_package::testing::pack_dir(&root.join("content"), "ui_pack"));
     let out = root.join("artifacts/perf-overlay");
     std::fs::create_dir_all(&out).unwrap();
     overlays_render_offscreen(Rc::new(Pack::load(&dir).unwrap()), Some(&out));

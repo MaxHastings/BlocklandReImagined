@@ -8,7 +8,8 @@ use bri_world::Brick;
 
 /// The generated native weapon pack, which includes the core tool images.
 pub fn weapon_pack() -> bri_weapons::Pack {
-    let path = content_root().join("content/weapons-pack-009/weapons.json");
+    let path = bri_package::testing::pack_dir(&content_root().join("content"), "weapons")
+        .join("weapons.json");
     bri_weapons::Pack::from_json(&std::fs::read(path).expect("Run the documented importer first"))
         .unwrap()
 }
@@ -106,8 +107,10 @@ impl Fixture {
         Self {
             weapons: weapon_pack(),
             native_events: Some(
-                bri_events::Catalog::load(root.join("events-pack-002/catalog.json"))
-                    .expect("Run the documented importer first"),
+                bri_events::Catalog::load(
+                    bri_package::testing::pack_dir(&root, "events").join("catalog.json"),
+                )
+                .expect("Run the documented importer first"),
             ),
             native: true,
             bricks: Default::default(),
@@ -133,8 +136,8 @@ impl Fixture {
                 if self.native {
                     let root = content_root().join("content");
                     bri_sim::definitions::Definitions::load(
-                        &root.join("stock-catalog-004"),
-                        &root.join("maps-pass-008"),
+                        &bri_package::testing::pack_dir(&root, "brick_catalog"),
+                        &bri_package::testing::pack_dir(&root, "geometry"),
                     )
                     .expect("Run the documented importer first")
                 } else {
@@ -150,7 +153,8 @@ impl Fixture {
             .get_or_init(|| {
                 if self.native {
                     bri_vehicles::Pack::load(
-                        content_root().join("content/vehicles-pack-012/vehicles.json"),
+                        bri_package::testing::pack_dir(&content_root().join("content"), "vehicles")
+                            .join("vehicles.json"),
                     )
                     .expect("Run the documented importer first")
                 } else {

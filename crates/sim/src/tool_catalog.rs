@@ -228,16 +228,20 @@ mod tests {
     /// The native inputs: the stock catalog, effects and print materials.
     fn native_inputs() -> Result<(Catalog, Library, Bundle, Definitions)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let catalog_dir = root.join("content/stock-catalog-004");
+        let catalog_dir = bri_package::testing::pack_dir(&root.join("content"), "brick_catalog");
         let catalog: Catalog =
             serde_json::from_slice(&std::fs::read(catalog_dir.join("stock-catalog.json"))?)?;
         let effects: Library = serde_json::from_slice(&std::fs::read(
-            root.join("content/effects-pass-004/effects.json"),
+            bri_package::testing::pack_dir(&root.join("content"), "effects").join("effects.json"),
         )?)?;
         let materials: Bundle = serde_json::from_slice(&std::fs::read(
-            root.join("content/brick-materials-002/brick-materials.json"),
+            bri_package::testing::pack_dir(&root.join("content"), "brick_materials")
+                .join("brick-materials.json"),
         )?)?;
-        let definitions = Definitions::load(&catalog_dir, &root.join("content/maps-pass-008"))?;
+        let definitions = Definitions::load(
+            &catalog_dir,
+            &bri_package::testing::pack_dir(&root.join("content"), "geometry"),
+        )?;
         Ok((catalog, effects, materials, definitions))
     }
 

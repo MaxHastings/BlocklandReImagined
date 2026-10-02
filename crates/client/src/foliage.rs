@@ -289,7 +289,10 @@ mod tests {
         fn content() -> Result<Self> {
             let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
             let map_id = "v20/add-ons/map_bedroom/bedroom.mis";
-            let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map_id)?;
+            let map = bri_sim::map::NativeMap::load(
+                &bri_package::testing::pack_dir(&root, "map_bundle"),
+                map_id,
+            )?;
             let mut building = Building::new(
                 Definitions {
                     entries: BTreeMap::new(),
@@ -300,7 +303,7 @@ mod tests {
             Ok(Self {
                 building,
                 waters: map.waters,
-                pack: root.join("foliage-pack-003"),
+                pack: bri_package::testing::pack_dir(&root, "foliage"),
                 map_id: map_id.into(),
                 placed: 41000,
                 _scratch: None,

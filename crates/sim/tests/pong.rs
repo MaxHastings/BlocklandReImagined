@@ -22,8 +22,7 @@ use rapier3d::prelude::*;
 use serde_json::json;
 use std::path::Path;
 
-const PONG: &str =
-    "worlds-pass-006/8a3130ab3cd542e8cac5dbabdee87e80f6eec7f7ba041d995610aee47156d50c.world.json";
+const PONG: &str = "8a3130ab3cd542e8cac5dbabdee87e80f6eec7f7ba041d995610aee47156d50c.world.json";
 const DIGITS: &str = "print/print_letters_default/";
 /// The paddle columns' court-facing faces.
 const FACE_A: f32 = 134.5;
@@ -39,7 +38,9 @@ fn json(path: &Path) -> anyhow::Result<serde_json::Value> {
 /// The Demo Pong save as converted.
 fn native_save() -> anyhow::Result<bri_world::World> {
     let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-    let world = bri_world::persistence::load(&content.join(PONG))?;
+    let world = bri_world::persistence::load(
+        &bri_package::testing::pack_dir(&content, "worlds").join(PONG),
+    )?;
     assert_eq!(world.name, "Demo Pong");
     Ok(world)
 }
@@ -57,25 +58,30 @@ impl Host {
     /// `world` on the generated native packs, as a dedicated host runs it.
     fn native(world: bri_world::World) -> anyhow::Result<Self> {
         let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let brick_catalog =
-            serde_json::from_value(json(&content.join("stock-catalog-004/stock-catalog.json"))?)?;
-        let effects =
-            serde_json::from_value(json(&content.join("effects-pass-004/effects.json"))?)?;
+        let brick_catalog = serde_json::from_value(json(
+            &bri_package::testing::pack_dir(&content, "brick_catalog").join("stock-catalog.json"),
+        )?)?;
+        let effects = serde_json::from_value(json(
+            &bri_package::testing::pack_dir(&content, "effects").join("effects.json"),
+        )?)?;
         let materials = serde_json::from_value(json(
-            &content.join("brick-materials-002/brick-materials.json"),
+            &bri_package::testing::pack_dir(&content, "brick_materials")
+                .join("brick-materials.json"),
         )?)?;
         let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-            content.join("weapons-pack-009/weapons.json"),
+            bri_package::testing::pack_dir(&content, "weapons").join("weapons.json"),
         )?)?;
         let mut tools = ToolCatalog::from_native(&brick_catalog, &effects, &materials)?;
         tools.install_items(weapons.items.keys().cloned())?;
         Ok(Self {
             world,
             definitions: Definitions::load(
-                &content.join("stock-catalog-004"),
-                &content.join("maps-pass-008"),
+                &bri_package::testing::pack_dir(&content, "brick_catalog"),
+                &bri_package::testing::pack_dir(&content, "geometry"),
             )?,
-            catalog: bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?,
+            catalog: bri_events::Catalog::load(
+                bri_package::testing::pack_dir(&content, "events").join("catalog.json"),
+            )?,
             tools,
             weapons,
         })

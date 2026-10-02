@@ -130,7 +130,10 @@ mod tests {
             Ok(Self { waters: vec![sea] })
         }
         fn content() -> Result<Self> {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/map-bundle-017");
+            let root = bri_package::testing::pack_dir(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                "map_bundle",
+            );
             let map = bri_sim::map::NativeMap::load(
                 &root,
                 "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",

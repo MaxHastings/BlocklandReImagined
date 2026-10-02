@@ -1410,9 +1410,19 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn authored_selector_pack_draw_check() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
+        let pack = Rc::new(
+            Pack::load(&bri_package::testing::pack_dir(
+                &root.join("content"),
+                "ui_pack",
+            ))
+            .unwrap(),
+        );
         let catalog: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(root.join("content/stock-catalog-004/stock-catalog.json")).unwrap(),
+            &std::fs::read(
+                bri_package::testing::pack_dir(&root.join("content"), "brick_catalog")
+                    .join("stock-catalog.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         let bricks: Vec<BrickInfo> = catalog["bricks"]

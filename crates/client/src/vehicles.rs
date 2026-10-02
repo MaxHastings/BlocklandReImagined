@@ -1158,7 +1158,10 @@ mod tests {
         }
         fn content() -> Result<Self> {
             Ok(Self {
-                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012"),
+                root: bri_package::testing::pack_dir(
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                    "vehicles",
+                ),
                 gunners: ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"]
                     .map(String::from)
                     .into(),

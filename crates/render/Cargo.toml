@@ -16,3 +16,6 @@ image = { workspace = true, features = ["jpeg"] }
 bytemuck.workspace = true
 glam.workspace = true
 wgpu.workspace = true
+
+[dev-dependencies]
+bri-package = { path = "../package" }

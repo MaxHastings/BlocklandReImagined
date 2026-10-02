@@ -1168,8 +1168,10 @@ impl Mounts {
         })
     }
     fn content() -> anyhow::Result<Self> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-012");
+        let root = bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "vehicles",
+        );
         Ok(Self {
             assets: crate::vehicles::VehicleAssets::load(&root)?,
             predicted: [

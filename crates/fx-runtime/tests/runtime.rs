@@ -6,12 +6,11 @@ fn fixture(change: impl FnMut(&mut Library)) -> Arc<EffectsPack> {
     bri_fx_runtime::testing::pack(change)
 }
 /// A converted pack under `content/`.
-fn content_pack(name: &str) -> Arc<EffectsPack> {
-    EffectsPack::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content")
-            .join(name),
-    )
+fn content_pack() -> Arc<EffectsPack> {
+    EffectsPack::load(bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "effects_runtime",
+    ))
     .unwrap()
 }
 fn camera() -> Camera {
@@ -426,12 +425,12 @@ fn all_emitters_lights_and_composites_execute_synthetic() {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn original_pack_all_emitters_lights_and_composites_execute() {
-    all_emitters_lights_and_composites_execute(content_pack("effects-runtime-pack-005"));
+    all_emitters_lights_and_composites_execute(content_pack());
 }
 #[test]
 #[ignore = "requires generated v20 content"]
 fn original_pack_counts() {
-    let pack = content_pack("effects-runtime-pack-005");
+    let pack = content_pack();
     assert_eq!(pack.library.particles.len(), 132);
     assert_eq!(pack.library.emitters.len(), 133);
     assert_eq!(pack.textures.len(), 18);
@@ -562,7 +561,7 @@ fn painted_brick_emitters_never_exceed_authored_alpha_synthetic() {
 #[ignore = "requires generated v20 content"]
 fn original_painted_brick_emitters_never_exceed_authored_alpha() {
     painted_brick_emitters_never_exceed_authored_alpha(
-        content_pack("effects-runtime-pack-005"),
+        content_pack(),
         &["Fog A", "Fog B", "Fog C"],
     );
 }

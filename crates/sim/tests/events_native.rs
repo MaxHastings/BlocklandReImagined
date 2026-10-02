@@ -18,8 +18,10 @@ fn json(path: &Path) -> anyhow::Result<serde_json::Value> {
 fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");
-    let catalog = bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?;
-    let audio = json(&content.join("audio-pack-002/manifest.json"))?;
+    let catalog = bri_events::Catalog::load(
+        bri_package::testing::pack_dir(&content, "events").join("catalog.json"),
+    )?;
+    let audio = json(&bri_package::testing::pack_dir(&content, "audio").join("manifest.json"))?;
     let sounds: Vec<String> = audio["sounds"]
         .as_array()
         .unwrap()
@@ -42,19 +44,24 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         })
         .filter_map(|s| s["id"].as_str().map(str::to_string))
         .collect();
-    let brick_catalog =
-        serde_json::from_value(json(&content.join("stock-catalog-004/stock-catalog.json"))?)?;
-    let effects = serde_json::from_value(json(&content.join("effects-pass-004/effects.json"))?)?;
+    let brick_catalog = serde_json::from_value(json(
+        &bri_package::testing::pack_dir(&content, "brick_catalog").join("stock-catalog.json"),
+    )?)?;
+    let effects = serde_json::from_value(json(
+        &bri_package::testing::pack_dir(&content, "effects").join("effects.json"),
+    )?)?;
     let materials = serde_json::from_value(json(
-        &content.join("brick-materials-002/brick-materials.json"),
+        &bri_package::testing::pack_dir(&content, "brick_materials").join("brick-materials.json"),
     )?)?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-        content.join("weapons-pack-009/weapons.json"),
+        bri_package::testing::pack_dir(&content, "weapons").join("weapons.json"),
     )?)?;
-    let vehicles = bri_vehicles::Pack::load(content.join("vehicles-pack-012/vehicles.json"))?;
+    let vehicles = bri_vehicles::Pack::load(
+        bri_package::testing::pack_dir(&content, "vehicles").join("vehicles.json"),
+    )?;
     let mut totals = BTreeMap::<String, usize>::new();
     let mut worlds = 0;
-    for entry in std::fs::read_dir(content.join("worlds-pass-006"))? {
+    for entry in std::fs::read_dir(bri_package::testing::pack_dir(&content, "worlds"))? {
         let path = entry?.path();
         if !path.to_string_lossy().ends_with(".world.json") {
             continue;
@@ -66,8 +73,8 @@ fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
         worlds += 1;
         let name = world.name.clone();
         let definitions = Definitions::load(
-            &content.join("stock-catalog-004"),
-            &content.join("maps-pass-008"),
+            &bri_package::testing::pack_dir(&content, "brick_catalog"),
+            &bri_package::testing::pack_dir(&content, "geometry"),
         )?;
         let mut s = Session::new(Simulation::new(
             world,

@@ -462,3 +462,109 @@ fn identical_brick_files_keep_their_own_native_identity() {
         assert_eq!(mesh.id, entry["id"].as_str().unwrap());
     }
 }
+
+fn door_framework_reference() -> PathBuf {
+    let root = temp("door-framework-reference");
+    write(
+        &root.join("Add-Ons/Support_Doors/server.cs"),
+        "// invented framework fixture; no original scripts\n",
+    );
+    root
+}
+
+/// The original door pack's support framework becomes native bindings;
+/// retaining its Torque requirement would falsely disable the package.
+#[test]
+fn brick_doors_uses_native_swaps_without_a_torque_support_package() {
+    let dir = temp("native-door-port").join("Brick_Doors");
+    write(
+        &dir.join("server.cs"),
+        "ForceRequiredAddOn(\"Support_Doors\");\nexec(\"./bricks/door_house.cs\");\n",
+    );
+    write(
+        &dir.join("bricks/door_house.cs"),
+        r#"
+        datablock fxDTSBrickData (brickDoorOpenData) {
+            brickFile = "./Door.blb"; uiName = "Open Door";
+            isDoor = 1; isOpen = 1;
+            closedCW = "brickDoorData"; closedCCW = "brickDoorData";
+        };
+        datablock fxDTSBrickData (brickDoorData : brickDoorOpenData) {
+            uiName = "Door"; isOpen = 0;
+            openCW = "brickDoorOpenData"; openCCW = "brickDoorOpenData";
+        };
+    "#,
+    );
+    write(&dir.join("bricks/Door.blb"), "1 1 3\nBRICK\n");
+    let out = temp("native-door-port-out").join("out");
+    let report = import(&Options {
+        input: dir,
+        out: out.clone(),
+        reference: Some(door_framework_reference()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        report
+            .ports
+            .iter()
+            .any(|p| p.port == "brick_doors" && p.applied),
+        "{:?}",
+        report.ports
+    );
+    let dependency = report
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Support_Doors")
+        .unwrap();
+    assert_eq!(dependency.status, "ported");
+    assert!(dependency.package.is_none());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("package.json")).unwrap()).unwrap();
+    assert!(manifest["dependencies"].get("support_doors").is_none());
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/bricks.json")).unwrap()).unwrap();
+    assert!(
+        catalog["bricks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["swap"].is_object()
+                && b["other_properties"]["native_swap_sound"] == "v20/sound/brickchange")
+    );
+}
+
+#[test]
+fn an_unmatched_door_copy_keeps_its_support_requirement() {
+    let dir = temp("unmatched-door-port").join("Brick_Doors");
+    write(
+        &dir.join("server.cs"),
+        "ForceRequiredAddOn(\"Support_Doors\");\nexec(\"./unknown_framework.cs\");\n",
+    );
+    let out = temp("unmatched-door-port-out").join("out");
+    let report = import(&Options {
+        input: dir,
+        out: out.clone(),
+        reference: Some(door_framework_reference()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        !report
+            .ports
+            .iter()
+            .any(|p| p.port == "brick_doors" && p.applied)
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("package.json")).unwrap()).unwrap();
+    assert!(manifest["dependencies"].get("support_doors").is_some());
+    assert_ne!(
+        report
+            .dependencies
+            .iter()
+            .find(|d| d.addon == "Support_Doors")
+            .unwrap()
+            .status,
+        "ported"
+    );
+}

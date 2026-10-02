@@ -31,7 +31,10 @@ fn foliage(
     scratch: &bri_client::testing::ScratchDir,
 ) -> Result<(String, PathBuf)> {
     if f.content {
-        return Ok((f.map.0.clone(), f.root.join("foliage-pack-003")));
+        return Ok((
+            f.map.0.clone(),
+            bri_package::testing::pack_dir(&f.root, "foliage"),
+        ));
     }
     let map = f.open_map.0.clone();
     let room = bri_content::testing::map_bundle::rooms_for(bri_client::content::LOADABLE_MAPS)

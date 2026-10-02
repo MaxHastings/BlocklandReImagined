@@ -580,7 +580,7 @@ def full_gate(sha, root, changed=()):
         target = ["--target-dir", str(root / "target")]
         started = time.time()
         steps = [
-            ("gate-tests", [sys.executable, worktree / "tools" / "test_gate.py"]),
+            ("tool-tests", [sys.executable, "-m", "unittest", "discover", "-s", str(worktree / "tools"), "-p", "test_*.py"]),
             ("build", ["cargo", "build", "--workspace", "--all-targets", "--locked", *target]),
             ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", *target,
                         "--", "-D", "warnings"]),

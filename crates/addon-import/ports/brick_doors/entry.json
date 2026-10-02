@@ -1,0 +1,20 @@
+{
+  "addon": "Brick_Doors",
+  "title": "Door Bricks",
+  "port": "brick_doors",
+  "status": "verified",
+  "sha256": [
+    "0df1cdd215dbe4dca0f57924ed752204b58fab106d0fc36d72dbc1fee1c19de2"
+  ],
+  "covers": {
+    "server.cs": {
+      "framework": "ForceRequiredAddOn\\s*\\(\\s*\"Support_Doors\"\\s*\\)",
+      "loads_doors": "exec\\s*\\(\\s*\"\\./bricks/door_house\\.cs\""
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/installed.rs brick_doors_uses_native_swaps_without_a_torque_support_package",
+    "crates/client/tests/default_add_ons.rs bundled_shared_geometry_hosts_and_real_doors_change_footprint",
+    "crates/sim/tests/special_bricks.rs a_click_swaps_a_brick_by_the_side_it_is_clicked_from"
+  ]
+}

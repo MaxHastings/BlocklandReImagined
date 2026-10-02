@@ -520,10 +520,13 @@ fn turning_an_add_on_off_loads_nothing_until_the_screen_closes() -> Result<()> {
     );
     app.ui.core.pop(ScreenId::AddOns);
     step(&mut app)?;
-    ensure!(
-        !loaded(&app, &id),
-        "closing Add-Ons did not load the change"
-    );
+    wait::until(
+        &mut [&mut app],
+        "closing Add-Ons loads the change",
+        Duration::from_secs(1),
+        |apps, _| step(apps[0]),
+        |apps| Ok(!loaded(apps[0], &id)),
+    )?;
     Ok(())
 }
 

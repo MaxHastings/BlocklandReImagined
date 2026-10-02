@@ -263,7 +263,9 @@ mod tests {
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
             Ok(Self {
                 items: Items::content()?,
-                ui: Rc::new(bri_ui::pack::Pack::load(&root.join("ui-pack-004"))?),
+                ui: Rc::new(bri_ui::pack::Pack::load(&bri_package::testing::pack_dir(
+                    &root, "ui_pack",
+                ))?),
             })
         }
         fn weapons(&self) -> Result<bri_net::content_identity::WeaponContent> {

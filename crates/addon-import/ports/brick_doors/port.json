@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "notes": "Brick_Doors' isDoor/isOpen, openCW/openCCW and closedCW/closedCCW fields lower to native click swaps and destination sound bindings. The engine replaces collision and occupancy when the footprint changes and plays BrickChangeSound unless the destination has noBrickSounds. Support_Doors supplies that Torque framework, which the native package does not execute or require. Its source dependency remains in the import report as evidence.",
+  "patch": {
+    "package.json": {
+      "dependencies": {
+        "support_doors": null
+      }
+    }
+  },
+  "handles": {
+    "server.cs": "the imported door fields use native swaps, cooldown and destination sound bindings; no Torque Support_Doors package is needed at runtime",
+    "dependency:Support_Doors": "the imported native click swaps, changing occupancy/collision and destination sound bindings replace this Torque framework"
+  }
+}

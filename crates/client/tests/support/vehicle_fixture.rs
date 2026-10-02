@@ -31,10 +31,10 @@ impl VehicleFixture {
     pub fn content() -> Result<Self> {
         let root = repo_root();
         let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-            root.join("content/weapons-pack-009/weapons.json"),
+            bri_package::testing::pack_dir(&root.join("content"), "weapons").join("weapons.json"),
         )?)?;
         Ok(Self {
-            dir: root.join("content/vehicles-pack-012"),
+            dir: bri_package::testing::pack_dir(&root.join("content"), "vehicles"),
             weapons,
             content: true,
             drawn: [

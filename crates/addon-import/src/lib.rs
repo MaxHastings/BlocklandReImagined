@@ -3980,6 +3980,36 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
             }
         }
         if port.applied {
+            // A port may replace a source framework with native mechanisms.
+            // Report that only when it explicitly handles the dependency AND
+            // removes the runtime requirement; an unapplied port changes neither.
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(cx.out.join("package.json"))?)?;
+            for dependency in &mut cx.report.dependencies {
+                let key = format!("dependency:{}", dependency.addon.to_ascii_lowercase());
+                let Some(how) = port.handled.get(&key) else {
+                    continue;
+                };
+                let package = dependency
+                    .package
+                    .clone()
+                    .unwrap_or_else(|| namespace_for(&dependency.addon).unwrap_or_default());
+                if package.is_empty() || manifest["dependencies"].get(&package).is_some() {
+                    continue;
+                }
+                dependency.status = "ported".into();
+                dependency.package = None;
+                cx.report.ported.push(Finding {
+                    what: format!("dependency {}", dependency.addon),
+                    source: dependency.source.clone(),
+                    detail: "source framework required by the original script".into(),
+                    resolution: Some(format!(
+                        "port {}: {}",
+                        port.port,
+                        how.iter().cloned().collect::<Vec<_>>().join("; ")
+                    )),
+                });
+            }
             let covered = |f: &str| {
                 port.covers.iter().any(|c| c.eq_ignore_ascii_case(f))
                     || port.handled.contains_key(&f.to_ascii_lowercase())

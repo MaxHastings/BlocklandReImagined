@@ -570,8 +570,11 @@ impl GunPack {
         Self { pack, shot_sound }
     }
     fn content() -> Result<Self> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/weapons-pack-009/weapons.json");
+        let root = bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "weapons",
+        )
+        .join("weapons.json");
         Ok(Self {
             pack: bri_weapons::Pack::from_json(&std::fs::read(root)?)?,
             shot_sound: "gunShot1Sound".into(),
@@ -1545,7 +1548,10 @@ async fn avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Resul
 #[ignore = "requires generated v20 content"]
 async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
     avatar_changes_replicate_late_join_reject_invalid_and_resume_with(avatar_package(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002"),
+        &bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "avatar",
+        ),
     )?)
     .await
 }

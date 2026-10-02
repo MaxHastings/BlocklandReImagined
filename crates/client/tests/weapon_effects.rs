@@ -459,9 +459,12 @@ fn runtime_lifetime_cap_validates_and_never_extends_authored_lifetime() -> Resul
 #[ignore = "requires original converted packs; CPU only"]
 fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = EffectsPack::load(root.join("content/effects-runtime-pack-005"))?;
+    let pack = EffectsPack::load(bri_package::testing::pack_dir(
+        &root.join("content"),
+        "effects_runtime",
+    ))?;
     let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
+        bri_package::testing::pack_dir(&root.join("content"), "weapons").join("weapons.json"),
     )?)?);
     let mut fx = WeaponEffects::new(pack, weapons.clone(), EffectsLimits::default())?;
     fx.cues(

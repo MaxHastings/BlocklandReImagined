@@ -1641,7 +1641,13 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn authored_avatar_pack_and_palette_render_check() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
+        let pack = Rc::new(
+            Pack::load(&bri_package::testing::pack_dir(
+                &root.join("content"),
+                "ui_pack",
+            ))
+            .unwrap(),
+        );
         let (faces, decals) = avatar_pack_and_palette_render_check(pack);
         assert!(faces >= 27 && decals >= 28);
     }

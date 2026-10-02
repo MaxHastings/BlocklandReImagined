@@ -3245,7 +3245,13 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn authored_wrench_offscreen() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
+        let pack = Rc::new(
+            Pack::load(&bri_package::testing::pack_dir(
+                &root.join("content"),
+                "ui_pack",
+            ))
+            .unwrap(),
+        );
         let output = root.join("artifacts/ui-native-wrench");
         std::fs::create_dir_all(&output).unwrap();
         wrench_offscreen(pack, Some(&output));

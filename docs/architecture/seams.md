@@ -17,6 +17,8 @@ Owners are named by thread title.
 
 | Seam | What it covers | Owner | State |
 |---|---|---|---|
+| Add-On content preparation | One worker and latest pending choice; owned UI schema crosses threads, caches and audio device stay on the UI thread; host/join continuations preserve cancellation and explicit tool choices | Content reload cleanup | in review |
+| Native framework dependency ports | `handles` dependency declarations paired with manifest removal; only applied ports settle source requirements, with evidence retained | Content reload cleanup | in review |
 | Click swaps | `CatalogEntry::swap` (front/back brick ids), `ToolCatalog::swaps` and `swap_sounds`; swaps replace bounds and collision, including wider open doors, with optional positional sound, at most every 250 ms | Bundled originals (doors, coffins) | on main |
 | Hit regions | `info.region` on damage: head, torso, legs | Bushido's Adventure Pack | in flight |
 | HUD "holding" line | per-gun HUD text while an item is held | Bushido's Adventure Pack | in flight |

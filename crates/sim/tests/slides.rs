@@ -17,8 +17,7 @@ use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use std::path::Path;
 
-const SLIDES: &str =
-    "worlds-pass-006/0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
+const SLIDES: &str = "0a885afb52ad3e873315d260a0a19e94630a1c61bde8c0e6a62d3bd4721aee5c.world.json";
 /// Every `stride`th case of the save, a spread over the whole tower that
 /// runs in a few seconds; `BRI_SLIDES_FULL=1` runs every case (a minute in
 /// release).
@@ -55,7 +54,9 @@ impl Slides {
     /// (z 0, y 0.9) in their own frame; a rider wedges 0.43 under them.
     fn content() -> anyhow::Result<Self> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let world = bri_world::persistence::load(&root.join(SLIDES))?;
+        let world = bri_world::persistence::load(
+            &bri_package::testing::pack_dir(&root, "worlds").join(SLIDES),
+        )?;
         let ramps = world
             .bricks
             .values()
@@ -64,8 +65,10 @@ impl Slides {
             })
             .map(|b| (b.position, b.quarter_turns))
             .collect();
-        let definitions =
-            Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-008"))?;
+        let definitions = Definitions::load(
+            &bri_package::testing::pack_dir(&root, "brick_catalog"),
+            &bri_package::testing::pack_dir(&root, "geometry"),
+        )?;
         Ok(Self {
             sim: simulation(world, definitions)?,
             ramps,
