@@ -731,7 +731,16 @@ impl Session {
         let drivers: BTreeMap<_, _> = self
             .vehicle_infos()
             .into_iter()
-            .map(|v| (v.id, v.occupants.first().copied().flatten()))
+            .map(|v| {
+                let driver = self
+                    .vehicles
+                    .world
+                    .as_ref()
+                    .and_then(|w| w.definition(&v.definition))
+                    .and_then(|d| d.control_seat())
+                    .and_then(|seat| v.occupants.get(seat).copied().flatten());
+                (v.id, driver)
+            })
             .collect();
         for v in self.vehicle_poses() {
             let driver = drivers.get(&v.id).copied().flatten();
@@ -1540,6 +1549,14 @@ mod tests {
         setup_packages(false)
     }
     fn setup_packages(addons: bool) -> (Session, OwnerId, OwnerId) {
+        let pack = bri_vehicles::testing::pack_with(|d| {
+            if d.id == bri_vehicles::testing::BALL {
+                d.name = "Steel Ball".into();
+            }
+        });
+        setup_vehicles(addons, pack)
+    }
+    fn setup_vehicles(addons: bool, pack: bri_vehicles::Pack) -> (Session, OwnerId, OwnerId) {
         let definitions = Definitions {
             entries: [(
                 "plate".into(),
@@ -1560,11 +1577,6 @@ mod tests {
         s.set_lan_host(true);
         s.set_event_catalog(ev::testing::catalog_extended(), Vec::new())
             .unwrap();
-        let pack = bri_vehicles::testing::pack_with(|d| {
-            if d.id == bri_vehicles::testing::BALL {
-                d.name = "Steel Ball".into();
-            }
-        });
         s.set_vehicle_pack(pack, Vec::new()).unwrap();
         s.tool_catalog.vehicle_bricks.insert("plate".into());
         if addons {
@@ -1837,6 +1849,75 @@ mod tests {
         assert!(
             s.pending_events() > 0,
             "reset remains scheduled independently of who scored"
+        );
+    }
+    #[test]
+    fn object_region_credits_the_authored_driver_in_a_reordered_seat_layout() {
+        let pack = bri_vehicles::testing::pack_with(|d| {
+            if d.id == bri_vehicles::testing::BALL {
+                d.name = "Steel Ball".into();
+            } else if d.id == bri_vehicles::testing::CAR {
+                d.seats.swap(0, 2);
+            }
+        });
+        let (mut s, passenger, driver) = setup_vehicles(false, pack);
+        let ids = s.create_rule_lab(passenger, "soccer").unwrap();
+        join_game(&mut s, passenger, driver);
+        s.simulation
+            .mutate(ids[2], |b| {
+                b.vehicle.as_mut().unwrap().vehicle =
+                    bri_world::ContentRef::Resolved(bri_vehicles::testing::CAR.into());
+            })
+            .unwrap();
+        s.respawn_vehicle_brick(ids[2]).unwrap();
+        let object = VehicleId(s.vehicle_infos()[0].id);
+        let world = s.vehicles.world.as_mut().unwrap();
+        for (seat, owner) in [(0, passenger), (2, driver)] {
+            let at = world
+                .vehicle_snapshot(&s.simulation.physics, object)
+                .unwrap()
+                .seats[seat]
+                .transform
+                .position;
+            world
+                .mount(
+                    &s.simulation.physics,
+                    object,
+                    seat,
+                    bri_vehicles::Occupant {
+                        id: bri_vehicles::OccupantId(owner),
+                        owner: bri_vehicles::OwnerId(owner),
+                        body: [1.0, 2.0],
+                    },
+                    at,
+                )
+                .unwrap();
+        }
+        let center = s.object_centre(ObjectRef::Vehicle(object.0)).unwrap();
+        let mut row = lab_programs("soccer")[0].1[0].clone();
+        row.output = "addPlayerScore".into();
+        row.conditions.clear();
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.position = center.to_array();
+                b.rule_region = Some([10.0; 3]);
+                b.events = vec![row];
+            })
+            .unwrap();
+        s.simulation.mutate(ids[1], |b| b.events.clear()).unwrap();
+        s.dirty.extend([ids[0], ids[1], ids[2]]);
+        assert_eq!(s.mover_credit(ObjectRef::Vehicle(object.0)), None);
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert_eq!(
+            score(&s, driver),
+            1,
+            "the authored control seat supplies attribution"
+        );
+        assert_eq!(
+            score(&s, passenger),
+            0,
+            "seat zero is a passenger in this layout"
         );
     }
     #[test]

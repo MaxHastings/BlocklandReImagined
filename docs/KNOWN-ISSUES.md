@@ -16,7 +16,10 @@ missing is listed in `FEATURES.md`.
 - **Bots** find paths over bricks and map shapes but not through moving
   things (vehicles, other players, doors being opened); they stop, then try
   another way. Combat remains scoped to the bot's mini-game. See the release
-  notes for the supported vehicle and physics interactions.
+  notes for the supported vehicle and physics interactions. Autonomous piloting
+  covers ground vehicles; aircraft and boats remain future work. Chassis routes
+  are conservative, and shot safety checks a local straight segment rather than
+  planning a complete ballistic or portal trajectory.
 - **Gamepads** work while playing; menus and building need a keyboard and
   mouse.
 - **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their bricks,
