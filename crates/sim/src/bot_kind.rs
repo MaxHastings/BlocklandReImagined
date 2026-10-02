@@ -62,6 +62,10 @@ pub struct BotKind {
     pub emote: Option<String>,
     /// A swimmer in a mini-game dies after this long out of water.
     pub out_of_water_seconds: Option<f32>,
+    /// When it first sees an enemy, or is hurt, bots of its side within its
+    /// sight that have nothing better to go on go and look where the enemy
+    /// was (Bot_Hole's `hAlertOtherBots`).
+    pub alerts_allies: bool,
 }
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
@@ -138,6 +142,7 @@ impl Default for BotKind {
             look: None,
             emote: None,
             out_of_water_seconds: None,
+            alerts_allies: false,
         }
     }
 }

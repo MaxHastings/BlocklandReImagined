@@ -1,0 +1,3 @@
+Title: Stand-in Shark
+Author: Blockland ReImagined (CC0)
+A stand-in written for tests: the same shape as a shark hole bot, in our own words.

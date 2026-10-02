@@ -9,6 +9,7 @@ use bri_content::{
 use bri_render::scene::{
     AlphaMode, GpuInstances, GpuScene, Material, SceneData, SceneImage, SceneRenderer,
 };
+use bri_sim::archetype::HORSE_SHAPE;
 use bri_sim::player::PlayerState;
 use bri_ui::api::AvatarPrefs;
 use glam::{Mat4, Quat, Vec3};
@@ -20,8 +21,10 @@ pub struct AvatarAssets {
     pub rig: Rig,
     images: BTreeMap<String, SceneImage>,
     detail: usize,
-    /// `HorseArmor`'s horse.dts and sequences, for players of that datablock.
-    horse: Option<Box<AvatarAssets>>,
+    /// Bodies other than the Blockhead, by the archetype model that draws
+    /// them: `HorseArmor`'s horse.dts ([`HORSE_SHAPE`]), and each enabled
+    /// Add-On's own player model (the Shark's `shark.dts`).
+    bodies: BTreeMap<String, Box<AvatarAssets>>,
     /// Each shape object's name in lower case, as outfits name them.
     object_names: Vec<String>,
     /// Node index by lower-case name (the first node of a name), and each
@@ -278,7 +281,7 @@ impl AvatarAssets {
             rig,
             images,
             detail,
-            horse: None,
+            bodies: BTreeMap::new(),
         })
     }
     /// Load `HorseArmor`'s shape, sequence aliases and paint textures from
@@ -372,7 +375,7 @@ impl AvatarAssets {
             ensure!(rig.sequence(needed).is_some(), "Horse lacks {needed}");
         }
         let (node_index, mount_nodes) = node_indices(&rig);
-        self.horse = Some(Box::new(Self {
+        let horse = Box::new(Self {
             tree: node_tree(&rig),
             object_names: lower_names(&rig),
             node_index,
@@ -381,27 +384,181 @@ impl AvatarAssets {
             rig,
             images,
             detail,
-            horse: None,
-        }));
+            bodies: BTreeMap::new(),
+        });
+        self.bodies.insert(HORSE_SHAPE.into(), horse);
         Ok(())
+    }
+    /// Each enabled Add-On's own player model: an archetype whose model is
+    /// one of its package's converted shapes (`<package>:asset/<file>`,
+    /// Import Add-On's `shapeFile`), drawn with that shape's own sequences
+    /// and its materials' textures from the same package.
+    pub fn load_bodies(&mut self, root: &Path, packages: &bri_package::packages::PackageSet) {
+        for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
+            let Ok(dir) = bri_package::packages::package_dir(root, entry) else {
+                continue;
+            };
+            let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) else {
+                continue;
+            };
+            let mut models: Vec<String> = archetypes
+                .flatten()
+                .filter_map(|e| std::fs::read(e.path()).ok())
+                .filter_map(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .filter_map(|a| a["model"].as_str().map(str::to_owned))
+                .filter(|m| m.starts_with(&format!("{}:asset/", entry.id)))
+                .collect();
+            models.sort();
+            models.dedup();
+            for model in models {
+                if self.bodies.contains_key(&model) {
+                    continue;
+                }
+                // One that does not load leaves its players Blockheads.
+                match self.package_body(&dir, &model) {
+                    Ok(body) => {
+                        self.bodies.insert(model, Box::new(body));
+                    }
+                    Err(error) => {
+                        crate::cosmetic::add_on_fault(&entry.id, &model, format!("{error:#}"));
+                    }
+                }
+            }
+        }
+    }
+    /// The body `model` (`<package>:asset/<file>`) in the package at `dir`.
+    fn package_body(&self, dir: &Path, model: &str) -> Result<Self> {
+        let content: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("assets/content.json"))?)?;
+        let file = |id: &str| {
+            content["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|c| c["id"].as_str().is_some_and(|c| c.eq_ignore_ascii_case(id)))
+                .and_then(|c| c["file"].as_str())
+                .map(str::to_owned)
+                .with_context(|| format!("{id} is not in its package"))
+        };
+        let root = dir.canonicalize()?;
+        let shape: bri_content::shape::Shape = serde_json::from_slice(
+            &crate::materials::read_resource(&root, &file(model)?, 32 << 20)?,
+        )?;
+        shape.validate()?;
+        let package = model.split(':').next().unwrap_or_default();
+        let mut images = BTreeMap::new();
+        for material in &shape.materials {
+            let name = material.name.to_ascii_lowercase();
+            let png = if name.ends_with(".png") {
+                name.clone()
+            } else {
+                format!("{name}.png")
+            };
+            let bytes = crate::materials::read_resource(
+                &root,
+                &file(&format!("{package}:asset/{png}"))?,
+                16 << 20,
+            )?;
+            let pixels = image::load_from_memory(&bytes)?.to_rgba8();
+            images.insert(
+                name.clone(),
+                SceneImage {
+                    label: format!("{model}/{name}"),
+                    width: pixels.width(),
+                    height: pixels.height(),
+                    rgba: pixels.into_raw(),
+                    srgb: false,
+                },
+            );
+        }
+        let detail = shape
+            .details
+            .iter()
+            .position(|d| !d.collision)
+            .context("no visible detail")?;
+        let sequences = shape
+            .animations
+            .iter()
+            .map(|a| (a.name.to_ascii_lowercase(), a.clone()))
+            .collect();
+        let rig = Rig {
+            schema_version: self.rig.schema_version,
+            id: model.into(),
+            shape,
+            sequences,
+            sources: Vec::new(),
+            omissions: Vec::new(),
+        };
+        for needed in ["root", "run", "back", "side", "crouch", "look", "headside"] {
+            ensure!(
+                rig.sequence(needed).is_some(),
+                "it lacks the {needed} sequence"
+            );
+        }
+        let (node_index, mount_nodes) = node_indices(&rig);
+        Ok(Self {
+            tree: node_tree(&rig),
+            object_names: lower_names(&rig),
+            node_index,
+            mount_nodes,
+            package: self.package.clone(),
+            rig,
+            images,
+            detail,
+            bodies: BTreeMap::new(),
+        })
+    }
+    /// Whether `model` draws a body other than the Blockhead.
+    pub fn has_body(&self, model: &str) -> bool {
+        self.bodies.contains_key(model)
     }
     /// A player of `HorseArmor`: `ApplyBodyColors` paints the body with the
     /// chest colour and the head black; the ski nodes stay hidden.
     pub fn horse_mesh(&self, appearance: Appearance) -> Result<AvatarMesh> {
-        let horse = self.horse.as_deref().context("Horse model is not loaded")?;
-        let chest = appearance.colors.get("chest").copied().unwrap_or([1.0; 4]);
-        let outfit = Outfit {
-            nodes: [
+        self.body_mesh(HORSE_SHAPE, appearance)
+    }
+    /// A player drawn with the body `model`. An Add-On's own model paints
+    /// each object named as an avatar colour slot with that slot's paint
+    /// (`chest` the torso's), as `ApplyBodyColors` paints the Blockhead's
+    /// nodes, and hides the rest (the Shark hides its helmet and visor).
+    pub fn body_mesh(&self, model: &str, appearance: Appearance) -> Result<AvatarMesh> {
+        let horse = self
+            .bodies
+            .get(model)
+            .with_context(|| format!("Body {model} is not loaded"))?;
+        let nodes = if model == HORSE_SHAPE {
+            let chest = appearance.colors.get("chest").copied().unwrap_or([1.0; 4]);
+            [
                 ("body".into(), chest),
                 ("head".into(), [0.0, 0.0, 0.0, 1.0]),
             ]
-            .into(),
+            .into()
+        } else {
+            horse
+                .object_names
+                .iter()
+                .filter_map(|name| {
+                    let slot = if name == "chest" {
+                        "torso"
+                    } else {
+                        name.as_str()
+                    };
+                    appearance.colors.get(slot).map(|c| (name.clone(), *c))
+                })
+                .collect()
+        };
+        let outfit = Outfit {
+            nodes,
             face: String::new(),
             decal: String::new(),
             head_up: false,
         };
         let mut data = SceneData {
-            name: "Horse".into(),
+            name: if model == HORSE_SHAPE {
+                "Horse".into()
+            } else {
+                model.into()
+            },
             ..Default::default()
         };
         let mut materials = Vec::new();
@@ -411,7 +568,7 @@ impl AvatarAssets {
             data.images.push(horse.images[&name].clone());
             materials.push(data.materials.len());
             data.materials
-                .push(Material::brick_overlay(format!("horse/{name}"), image));
+                .push(Material::brick_overlay(format!("{model}/{name}"), image));
         }
         let translucent_materials: Vec<_> = materials
             .iter()
@@ -424,7 +581,7 @@ impl AvatarAssets {
             })
             .collect();
         let mut mesh = self.mesh_from(appearance, data, outfit, materials, translucent_materials);
-        mesh.horse = true;
+        mesh.model = Some(model.into());
         Ok(mesh)
     }
     /// A node's index by name, ignoring ASCII case.
@@ -437,10 +594,10 @@ impl AvatarAssets {
     }
     /// The rig and textures this mesh draws with.
     fn for_mesh(&self, mesh: &AvatarMesh) -> &AvatarAssets {
-        match (&self.horse, mesh.horse) {
-            (Some(horse), true) => horse,
-            _ => self,
-        }
+        mesh.model
+            .as_ref()
+            .and_then(|m| self.bodies.get(m))
+            .map_or(self, |body| body)
     }
     /// The appearance the player's avatar prefs make: what the avatar
     /// screen previews, what the client sends and what the host keeps.
@@ -508,7 +665,7 @@ impl AvatarAssets {
         translucent_materials: Vec<usize>,
     ) -> AvatarMesh {
         AvatarMesh {
-            horse: false,
+            model: None,
             appearance,
             data,
             gpu: None,
@@ -560,8 +717,8 @@ impl AvatarMesh {
 }
 
 pub struct AvatarMesh {
-    /// Drawn with the `HorseArmor` rig instead of the Blockhead.
-    pub horse: bool,
+    /// The body drawn instead of the Blockhead ([`AvatarAssets::body_mesh`]).
+    pub model: Option<String>,
     posed_nodes: Vec<Mat4>,
     /// While Add-On code poses the body (`override_nodes`), the pose the
     /// animation gave it; empty otherwise. Gameplay-facing nodes (the eye)
@@ -1685,6 +1842,69 @@ pub fn appearance_from_prefs(package: &Package, prefs: &AvatarPrefs) -> Result<A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An Add-On's own player model (Import Add-On's `shapeFile`, the
+    /// Shark's `shark.dts`) loads from its package and draws in place of
+    /// the Blockhead, its objects named as colour slots painted with them
+    /// and the rest hidden.
+    #[test]
+    fn an_add_on_player_model_draws_as_its_body() -> Result<()> {
+        let mut assets = crate::testing::avatar::assets()?;
+        let root = crate::testing::ScratchDir::new("own-body")?;
+        let dir = root.path().join("addons/fish");
+        std::fs::create_dir_all(dir.join("assets/archetypes"))?;
+        // The made-up Blockhead rig, with its sequences inside, as a dts
+        // converts with its own.
+        let rig = crate::testing::avatar::rig();
+        let mut shape = rig.shape.clone();
+        shape.animations = rig.sequences.values().cloned().collect();
+        std::fs::write(
+            dir.join("assets/fish.shape.json"),
+            serde_json::to_vec(&shape)?,
+        )?;
+        let mut content = vec![serde_json::json!({
+            "kind": "asset", "id": "fish:asset/fish.dts", "file": "assets/fish.shape.json"})];
+        for material in &shape.materials {
+            let png = format!("assets/{}.png", material.name);
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])).save(dir.join(&png))?;
+            content.push(serde_json::json!({
+                "kind": "asset", "id": format!("fish:asset/{}.png", material.name), "file": png}));
+        }
+        std::fs::write(
+            dir.join("assets/content.json"),
+            serde_json::to_vec(&serde_json::json!({ "content": content }))?,
+        )?;
+        std::fs::write(
+            dir.join("assets/archetypes/fishbot.json"),
+            br#"{"schema_version":1,"name":"","model":"fish:asset/fish.dts"}"#,
+        )?;
+        let packages: bri_package::packages::PackageSet =
+            serde_json::from_value(serde_json::json!({ "schema_version": 1, "packages": [
+                { "id": "fish", "version": "1.0.0", "side": "shared", "dir": "addons/fish" }]}))?;
+        assert!(!assets.has_body("fish:asset/fish.dts"));
+        assets.load_bodies(root.path(), &packages);
+        assert!(
+            assets.has_body("fish:asset/fish.dts"),
+            "the package's body loaded"
+        );
+        let mut appearance = assets.package.defaults.clone();
+        appearance
+            .colors
+            .insert("torso".into(), [0.1, 0.2, 0.3, 1.0]);
+        let mesh = assets.body_mesh("fish:asset/fish.dts", appearance)?;
+        assert_eq!(mesh.model.as_deref(), Some("fish:asset/fish.dts"));
+        assert_eq!(mesh.outfit.nodes.get("chest"), Some(&[0.1, 0.2, 0.3, 1.0]));
+        assert!(
+            mesh.outfit
+                .nodes
+                .keys()
+                .all(|n| assets.bodies["fish:asset/fish.dts"]
+                    .object_names
+                    .contains(n)),
+            "only its own objects are painted"
+        );
+        Ok(())
+    }
 
     /// A pack with two hats, each with its own accent.
     fn hats_pack() -> Package {

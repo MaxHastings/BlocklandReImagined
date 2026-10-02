@@ -12,6 +12,7 @@
       "aim_error_degrees": 5,
       "memory_seconds": 8,
       "fights_bots": true,
+      "alerts_allies": true,
       "first_names": [
         "Alex",
         "Ben",
