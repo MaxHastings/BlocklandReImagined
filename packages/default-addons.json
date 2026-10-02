@@ -755,6 +755,20 @@
       }
     },
     {
+      "id": "brick_halloween",
+      "original": {
+        "addon": "Brick_Halloween",
+        "title": "Halloween Theme Pack",
+        "authors": [
+          "Anthony Rotondo"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "e1c311c54e885d20ccc49ed4a07aa8b86cb96def0cade04920750d04d47b30ce"
+        ]
+      }
+    },
+    {
       "id": "brick_morerounds",
       "original": {
         "addon": "Brick_MoreRounds",

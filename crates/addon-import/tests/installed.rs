@@ -286,3 +286,60 @@ datablock ShapeBaseImageData(boomImage)
     // A file neither the Add-On nor the game has stays unconverted.
     assert!(pack.sound("weapon_test_boom:sound/boomgonesound").is_none());
 }
+
+/// A newer copy of a base Add-On declares the base game's brick again
+/// beside its own new one. In v20 that changes the same datablock, so the
+/// import adds only the new brick: a save's brick of the base name stays
+/// the base game's, with its behaviour (a stock pumpkin keeps carving).
+#[test]
+fn a_base_brick_declared_again_stays_the_base_games() {
+    let dir = temp("redeclare").join("Brick_Test_Newer");
+    write(&dir.join("server.cs"), "exec(\"./Bricks.cs\");\n");
+    write(
+        &dir.join("Bricks.cs"),
+        r#"datablock fxDTSBrickData (brick1x1Data)
+{
+	brickFile = "./One.blb";
+	category = "Bricks";
+	uiName = "1x1";
+};
+datablock fxDTSBrickData (brick1x1NewData)
+{
+	brickFile = "./One.blb";
+	category = "Bricks";
+	uiName = "1x1 New";
+};
+"#,
+    );
+    write(&dir.join("One.blb"), "1 1 3\nBRICK\n");
+    write(
+        &dir.join("description.txt"),
+        "Title: Newer\nAuthor: Tester\n",
+    );
+    let out = temp("redeclare-out").join("out");
+    let report = import(&Options {
+        input: dir,
+        out: out.clone(),
+        installed: Some(installed_game()),
+        ..Default::default()
+    })
+    .unwrap();
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/bricks.json")).unwrap()).unwrap();
+    let names: Vec<&str> = catalog["bricks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["display_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["1x1 New"]);
+    let r = serde_json::to_value(&report).unwrap();
+    let base = r["datablocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == "brick1x1Data")
+        .unwrap()
+        .clone();
+    assert_eq!(base["status"], "consumed", "{base}");
+}

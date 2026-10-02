@@ -805,7 +805,8 @@ mod tests {
     /// decides between GIANT, BlackDragonIV and its Filler.
     #[test]
     fn the_bundled_brick_packs_are_the_chosen_ones_in_v20_order() {
-        const CHOSEN: [&str; 16] = [
+        const CHOSEN: [&str; 17] = [
+            "Brick_Halloween",
             "Brick_GIANTBrickpackv2",
             "Brick_BlackDragonIV",
             "Brick_TilePlates",
