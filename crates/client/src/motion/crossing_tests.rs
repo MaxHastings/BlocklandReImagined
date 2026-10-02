@@ -71,6 +71,7 @@ fn definition(id: &str, footprint: [u32; 2], plates: u32, link: Link) -> (String
             reflection: None,
             link: Some(link),
             glass: [0.0; 4],
+            bot: None,
         },
     )
 }

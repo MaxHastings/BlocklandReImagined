@@ -74,6 +74,7 @@ fn definitions() -> Definitions {
                     reflection: None,
                     link: None,
                     glass: [0.0; 4],
+                    bot: None,
                 },
             ),
             (PORTAL.into(), portal()),
@@ -151,6 +152,7 @@ fn portal() -> Definition {
         reflection: None,
         link: Some(link),
         glass: [0.0; 4],
+        bot: None,
     }
 }
 /// Two linked portals standing on the ground side by side, both facing

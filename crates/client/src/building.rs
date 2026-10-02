@@ -1940,6 +1940,7 @@ mod tests {
             reflection: None,
             link: None,
             glass: [0.0; 4],
+            bot: None,
         };
         let definitions = Definitions {
             entries: [("plate".into(), definition)].into(),

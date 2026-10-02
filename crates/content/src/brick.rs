@@ -44,6 +44,10 @@ pub struct CatalogEntry {
     /// [`Swap`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swap: Option<Swap>,
+    /// The bot kind (`bots.json` id) this brick keeps one of at all times,
+    /// as Bot_Hole's hole bricks (`isBotHole`, `holeBot`) do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
 }
 
 /// The bricks a click turns a brick into, by the side it is clicked from:

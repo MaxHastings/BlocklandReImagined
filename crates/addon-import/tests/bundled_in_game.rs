@@ -383,6 +383,9 @@ async fn played(game: Game) -> Result<()> {
     if result.is_ok() {
         result = wrench_an_add_on_brick(&mut client, root, &set).await;
     }
+    if result.is_ok() {
+        result = a_hole_brick_brings_its_bot(&mut client, root, &set).await;
+    }
     client.close();
     server.stop().await?;
     result
@@ -739,6 +742,67 @@ async fn wrench_an_add_on_brick(client: &mut Client, root: &Path, set: &PackageS
             .bricks
             .get(&brick)
             .is_some_and(|b| b.name.as_deref() == Some("paired"))
+    })
+    .await
+}
+
+/// A bundled hole brick (the Zombie Hole) planted in the game brings its
+/// bot, named as its kind, with nothing chosen in a wrench.
+async fn a_hole_brick_brings_its_bot(
+    client: &mut Client,
+    root: &Path,
+    set: &PackageSet,
+) -> Result<()> {
+    let extras = bri_net::content_identity::brick_catalog_providers(root, set)?;
+    let mut hole = None;
+    for (_, dir) in &extras {
+        let own: bri_content::brick::Catalog =
+            serde_json::from_value(read(&dir.join("stock-catalog.json")))?;
+        hole = hole.or(own.bricks.into_iter().find(|b| b.bot.is_some()));
+    }
+    let Some(hole) = hole else {
+        bail!("no bundled original adds a hole brick")
+    };
+    let kind = hole.bot.clone().unwrap();
+    let name = std::fs::read_dir(root.join("addons"))?
+        .flatten()
+        .map(|e| e.path().join("assets/bots.json"))
+        .filter(|p| p.is_file())
+        .flat_map(|p| read(&p)["bots"].as_array().cloned().unwrap_or_default())
+        .find(|k| k["id"] == kind.as_str())
+        .and_then(|k| k["name"].as_str().map(str::to_owned))
+        .with_context(|| format!("no installed bots.json has {kind}"))?;
+    let definitions = bri_sim::definitions::Definitions::load_with(
+        &set.role_dir(root, "brick_catalog")?,
+        &set.role_dir(root, "geometry")?,
+        &extras,
+    )?;
+    let mesh = &definitions.entries[&hole.id].mesh;
+    let mut p = Player {
+        client,
+        moves: 2000,
+    };
+    let feet = p.feet();
+    let [w, d] = mesh.footprint_studs.map(|v| v as f32);
+    let at = Vec3::new(
+        ((feet.x - 6.0) * 2.0).round() / 2.0 + w * 0.25,
+        (feet.y / 0.2).floor() * 0.2 + mesh.height_plates as f32 * 0.1,
+        ((feet.z - 6.0) * 2.0).round() / 2.0 + d * 0.25,
+    );
+    match p
+        .command(Command::Plant {
+            definition: hole.id.clone(),
+            position: at.to_array(),
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    {
+        Reply::Planted(_) => {}
+        other => bail!("expected a plant of {}, got {other:?}", hole.id),
+    }
+    p.until(&format!("{name} from its hole"), |p| {
+        p.client.replica.names.values().any(|n| *n == name)
     })
     .await
 }

@@ -438,6 +438,7 @@ fn plate() -> Definitions {
         reflection: None,
         link: None,
         glass: [0.0; 4],
+        bot: None,
     };
     Definitions {
         entries: [(PLATE.to_owned(), definition)].into(),

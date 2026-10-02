@@ -568,6 +568,7 @@ mod tests {
                     reflection: None,
                     link: Some(link),
                     glass: [0.6, 0.7, 0.8, 0.5],
+                    bot: None,
                 },
             )]),
         };

@@ -962,6 +962,7 @@ pub(crate) mod tests {
             reflection: None,
             link: None,
             glass: [0.0; 4],
+            bot: None,
         };
         let floor =
             ColliderBuilder::cuboid(50.0, 0.5, 50.0).translation(Vector::new(0.0, -0.5, 0.0));

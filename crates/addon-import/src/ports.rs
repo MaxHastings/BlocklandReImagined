@@ -1582,11 +1582,27 @@ fn fill(v: &Value, values: &BTreeMap<String, String>) -> Result<Value> {
             let (name, lower) = name
                 .strip_suffix(":lower")
                 .map_or((name, false), |n| (n, true));
+            let (name, rgba) = name
+                .strip_suffix(":rgba")
+                .map_or((name, false), |n| (n, true));
             let value = values
                 .get(name)
                 .with_context(|| format!("the patch uses `{s}`, which no pattern captures"))?;
             if lower {
                 return Ok(Value::String(value.to_ascii_lowercase()));
+            }
+            if rgba {
+                // A colour as Torque writes it (`"0.6 0.7 0.4 1"`).
+                let c: Vec<f64> = value
+                    .split_whitespace()
+                    .map(str::parse)
+                    .collect::<Result<_, _>>()
+                    .ok()
+                    .filter(|c: &Vec<f64>| {
+                        c.len() == 4 && c.iter().all(|v| (0.0..=1.0).contains(v))
+                    })
+                    .with_context(|| format!("`{s}` reads `{value}`, which is not a colour"))?;
+                return Ok(serde_json::json!(c));
             }
             if let Ok(n) = value.parse::<i64>() {
                 serde_json::json!(n)
@@ -1627,8 +1643,34 @@ fn fill(v: &Value, values: &BTreeMap<String, String>) -> Result<Value> {
     })
 }
 
-/// RFC 7396 JSON merge patch.
+/// RFC 7396 JSON merge patch, and one addition: an object patching a list
+/// of objects that all have an `id` patches the ones its keys name (adding
+/// any it names that are not there), so a port reaches one bot kind in
+/// `bots.json` as it reaches one image in `weapons.json`.
 fn merge(target: &mut Value, patch: &Value) {
+    if let (Value::Array(items), Value::Object(p)) = (&mut *target, patch)
+        && !items.is_empty()
+        && items
+            .iter()
+            .all(|i| i.get("id").is_some_and(Value::is_string))
+    {
+        for (k, v) in p {
+            let at = items.iter().position(|i| i["id"] == *k);
+            match (at, v.is_null()) {
+                (Some(at), true) => {
+                    items.remove(at);
+                }
+                (Some(at), false) => merge(&mut items[at], v),
+                (None, false) => {
+                    let mut item = serde_json::json!({ "id": k });
+                    merge(&mut item, v);
+                    items.push(item);
+                }
+                (None, true) => {}
+            }
+        }
+        return;
+    }
     let Value::Object(p) = patch else {
         *target = patch.clone();
         return;
@@ -1675,6 +1717,30 @@ mod tests {
         let mut doc = json!({"a": {"b": 1, "c": 2}, "d": [1, 2]});
         merge(&mut doc, &json!({"a": {"b": null, "e": 3}, "d": [3]}));
         assert_eq!(doc, json!({"a": {"c": 2, "e": 3}, "d": [3]}));
+    }
+
+    #[test]
+    fn a_patch_reaches_listed_items_by_id() {
+        let mut doc = json!({"bots": [{"id": "a", "n": 1}, {"id": "b", "n": 2}]});
+        merge(
+            &mut doc,
+            &json!({"bots": {"b": {"n": 3, "emote": "hug"}, "a": null, "c": {"n": 4}}}),
+        );
+        assert_eq!(
+            doc,
+            json!({"bots": [{"id": "b", "n": 3, "emote": "hug"}, {"id": "c", "n": 4}]})
+        );
+    }
+
+    #[test]
+    fn fill_reads_a_torque_colour() {
+        let values = BTreeMap::from([("c".to_string(), "0.5 0 0.25 1".to_string())]);
+        assert_eq!(
+            fill(&json!("{c:rgba}"), &values).unwrap(),
+            json!([0.5, 0.0, 0.25, 1.0])
+        );
+        let values = BTreeMap::from([("c".to_string(), "red".to_string())]);
+        assert!(fill(&json!("{c:rgba}"), &values).is_err());
     }
 
     #[test]

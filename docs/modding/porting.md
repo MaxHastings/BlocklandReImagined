@@ -121,7 +121,15 @@ hard-codes one copy's values. In a patch, a string that is exactly
 `"{projectiles}"` becomes the captured value (a number when it reads as one).
 `{name}` inside a longer string becomes its text, and `{name:lower}` its
 text in lower case, for ids: Torque ignores the case of names
-(`"weapon_example:projectile/{jab:lower}"`).
+(`"weapon_example:projectile/{jab:lower}"`). A string that is exactly
+`"{name:rgba}"` becomes a colour as Torque writes one (`"0.6 0.7 0.4 1"`
+becomes `[0.6, 0.7, 0.4, 1]`).
+
+One addition to RFC 7396: an object patching a list whose items all have an
+`id` patches the items its keys name (and adds any it names that are not
+there), so a port reaches one kind in `bots.json`
+(`{"bots": {"{namespace}:bot/zombieholebot": {"emote": "hug"}}}`) as it
+reaches one image in `weapons.json`.
 
 ### A port
 

@@ -59,6 +59,7 @@ fn session_on(f: &Fixture, bricks: Vec<Brick>, wall: bool, map_id: &str) -> Sess
                     reflection: None,
                     link: None,
                     glass: [0.0; 4],
+                    bot: None,
                 },
             ),
             (
@@ -72,6 +73,7 @@ fn session_on(f: &Fixture, bricks: Vec<Brick>, wall: bool, map_id: &str) -> Sess
                     reflection: None,
                     link: None,
                     glass: [0.0; 4],
+                    bot: None,
                 },
             ),
         ]
