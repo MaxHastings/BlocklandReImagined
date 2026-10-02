@@ -6,8 +6,12 @@
 use bri_addon_import::{Options, import};
 use std::path::{Path, PathBuf};
 
+/// A fresh folder of its own for each call: tests run in parallel, and
+/// several build the same installed game or Add-On.
 fn temp(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("bri-installed-{}-{name}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("bri-installed-{}-{n}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
