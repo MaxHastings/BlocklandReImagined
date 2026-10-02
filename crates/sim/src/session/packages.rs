@@ -639,6 +639,7 @@ impl Session {
         }
         self.archetypes = archetypes;
         self.fill_body_mount_points()?;
+        self.check_bot_bodies()?;
         let mut mg_catalog = self.minigames.catalog().clone();
         for (id, behaviour) in catalog.behaviours() {
             if let Some(def) = &behaviour.minigame_settings {

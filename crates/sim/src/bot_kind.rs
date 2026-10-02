@@ -42,6 +42,80 @@ pub struct BotKind {
     /// First names rules may call its bots by (Slayer names its bots
     /// "Bot " and a random first name).
     pub first_names: Vec<String>,
+    /// The body it plays in: an archetype an Add-On provides
+    /// (`namespace:archetype/name`: its model, speeds and health). None
+    /// for the standard player.
+    pub body: Option<String>,
+    /// How it hurts what it reaches with its own body while its hands are
+    /// empty (Bot_Hole's `hMelee`): a zombie's swipe, a shark's bite.
+    pub melee: Option<BotMelee>,
+    /// Where it gets about.
+    pub moves: Moves,
+    /// Bot_Hole's `hType`: bots of one side never fight each other and
+    /// fight everyone else, players and other bots, whoever built them.
+    /// None: a builder's bots are one side (`fights_bots`).
+    pub side: Option<String>,
+    /// How a Blockhead body looks, over the avatar pack's defaults.
+    pub look: Option<BotLook>,
+    /// An emote it strikes as it spawns and as it starts a fight (`hug`
+    /// holds the arms out ahead, as `playThread(1, armReadyBoth)` did).
+    pub emote: Option<String>,
+    /// A swimmer in a mini-game dies after this long out of water.
+    pub out_of_water_seconds: Option<f32>,
+}
+/// A bot's own avatar: parts by name in each slot, paint by slot, face
+/// and decal by name, each only where the server's avatar pack has it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotLook {
+    pub parts: std::collections::BTreeMap<String, String>,
+    pub colors: std::collections::BTreeMap<String, [f32; 4]>,
+    pub face: Option<String>,
+    pub decal: Option<String>,
+}
+/// An attack a bot makes with its body.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BotMelee {
+    /// Health taken per hit.
+    pub damage: f32,
+    /// How far from its eye a hit lands, in world units.
+    #[serde(default = "melee_reach")]
+    pub reach: f32,
+    /// Seconds between hits.
+    #[serde(default = "melee_seconds")]
+    pub seconds: f32,
+    /// The action its model plays with each hit (`activate2` swings both
+    /// arms on the Blockhead); none plays nothing.
+    #[serde(default)]
+    pub action: Option<String>,
+    /// What the kill feed and `on_damage` hooks call the hit.
+    #[serde(default = "melee_name")]
+    pub name: String,
+    /// A bot of another side it hits at or under this share of its health
+    /// becomes one of its kind (a zombie's bite turning a bot).
+    #[serde(default)]
+    pub converts_below: Option<f32>,
+}
+fn melee_reach() -> f32 {
+    2.5
+}
+fn melee_seconds() -> f32 {
+    1.0
+}
+fn melee_name() -> String {
+    "Bite".into()
+}
+/// How a bot gets about.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Moves {
+    /// Walks the brick world and jets as a player does.
+    #[default]
+    Walk,
+    /// Swims: in water it heads straight for its goal at any depth and
+    /// keeps to the water; out of it, it walks back to its home.
+    Swim,
 }
 impl Default for BotKind {
     fn default() -> Self {
@@ -57,6 +131,13 @@ impl Default for BotKind {
             memory_seconds: 8.0,
             fights_bots: true,
             first_names: Vec::new(),
+            body: None,
+            melee: None,
+            moves: Moves::Walk,
+            side: None,
+            look: None,
+            emote: None,
+            out_of_water_seconds: None,
         }
     }
 }
@@ -87,6 +168,65 @@ impl BotKind {
                         && !n.chars().any(char::is_control)
                 }),
             "Bot `{}`: first_names are at most {MAX_FIRST_NAMES} names of 1-16 characters",
+            self.id
+        );
+        ensure!(
+            self.body
+                .as_ref()
+                .is_none_or(|b| !b.trim().is_empty() && b.len() <= 128),
+            "Bot `{}`: body must name an archetype",
+            self.id
+        );
+        if let Some(m) = &self.melee {
+            for (name, value, min, max) in [
+                ("damage", m.damage, 0.0, 1000.0),
+                ("reach", m.reach, 0.5, 16.0),
+                ("seconds", m.seconds, 0.05, 30.0),
+            ] {
+                ensure!(
+                    value.is_finite() && (min..=max).contains(&value),
+                    "Bot `{}`: melee {name} must be {min} to {max}",
+                    self.id
+                );
+            }
+            ensure!(
+                !m.name.trim().is_empty()
+                    && m.name.chars().count() <= 32
+                    && m.action.as_ref().is_none_or(|a| {
+                        !a.is_empty()
+                            && a.len() <= 32
+                            && a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    }),
+                "Bot `{}`: melee needs a name of 1-32 characters and an action of letters, digits or _",
+                self.id
+            );
+        }
+        let short = |s: &str| !s.trim().is_empty() && s.len() <= 64 && !s.chars().any(char::is_control);
+        ensure!(
+            self.side.as_deref().is_none_or(short)
+                && self.emote.as_deref().is_none_or(short)
+                && self.look.as_ref().is_none_or(|l| {
+                    l.parts.len() <= 16
+                        && l.colors.len() <= 16
+                        && l.parts.iter().all(|(k, v)| short(k) && short(v))
+                        && l.colors.iter().all(|(k, c)| {
+                            short(k) && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                        })
+                        && l.face.as_deref().is_none_or(short)
+                        && l.decal.as_deref().is_none_or(short)
+                }),
+            "Bot `{}`: side, emote and look names are 1-64 characters, colours 0 to 1",
+            self.id
+        );
+        ensure!(
+            self.melee
+                .as_ref()
+                .and_then(|m| m.converts_below)
+                .is_none_or(|c| c.is_finite() && (0.0..=1.0).contains(&c))
+                && self
+                    .out_of_water_seconds
+                    .is_none_or(|s| s.is_finite() && (0.0..=600.0).contains(&s)),
+            "Bot `{}`: converts_below is 0 to 1 and out_of_water_seconds 0 to 600",
             self.id
         );
         let ranges = [
@@ -173,5 +313,29 @@ mod tests {
             BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"x","name":"X","speed":2}]}"#)
                 .is_err()
         );
+    }
+    #[test]
+    fn body_melee_and_swimming_are_read_and_limited() {
+        let pack = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"bot.fish","name":"Fish","body":"fish:archetype/fish","moves":"swim","melee":{"damage":25,"reach":3,"seconds":0.8,"action":"activate2"}}]}"#,
+        )
+        .unwrap();
+        let fish = &pack.bots[0];
+        assert_eq!(fish.moves, Moves::Swim);
+        assert_eq!(fish.body.as_deref(), Some("fish:archetype/fish"));
+        let melee = fish.melee.as_ref().unwrap();
+        assert_eq!((melee.damage, melee.reach, melee.seconds), (25.0, 3.0, 0.8));
+        assert_eq!(melee.name, "Bite");
+        assert_eq!(BotKind::default().moves, Moves::Walk);
+        for bad in [
+            r#""melee":{"damage":-1}"#,
+            r#""melee":{"damage":5,"seconds":0}"#,
+            r#""melee":{"damage":5,"action":"a b"}"#,
+            r#""moves":"fly""#,
+            r#""body":" ""#,
+        ] {
+            let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
+            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");
+        }
     }
 }

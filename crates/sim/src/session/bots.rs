@@ -27,7 +27,7 @@
 //! follows an enemy it watched go in. Its leash to its brick stretches the
 //! way it walked, through openings included.
 use super::*;
-use crate::bot_kind::BotKind;
+use crate::bot_kind::{BotKind, Moves};
 use behaviour::{Behaviour, Situation, choose};
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
 use bri_content::passage::{Way, carried_yaw};
@@ -62,6 +62,13 @@ const OPEN_SKY: f32 = 16.0;
 const OPEN_ROOM: f32 = 6.0;
 /// How far round it the sky must be open too: where its catch swings.
 const OPEN_SWING: f32 = 3.0;
+/// The animation thread a hit with the body plays its action on, the arms'
+/// (`playThread(2, activate2)`).
+const MELEE_THREAD: u8 = 2;
+/// Emotes a kind may strike: those that are only a look.
+const BOT_EMOTES: [&str; 4] = ["hug", "love", "hate", "confusion"];
+/// How much of a swimmer the water covers for it to swim rather than walk.
+const SWIM_COVERAGE: f32 = 0.5;
 
 #[derive(Default)]
 pub(super) struct Bots {
@@ -124,6 +131,15 @@ struct Brain {
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
     next_grab: u64,
+    /// No hit with its body before this tick (`BotKind::melee`).
+    next_bite: u64,
+    /// Its kind's emote is struck for this life.
+    posed: bool,
+    /// Ticks in a row a swimmer spent out of water in a mini-game.
+    dry: u32,
+    /// The kind its brick made, while a bite has turned it into another
+    /// (`BotMelee::converts_below`); it comes back as this one.
+    born: Option<BotKind>,
 }
 /// An enemy up where a bot flies to them ([`Session::air_chase`]).
 #[derive(Clone, Copy, Debug)]
@@ -192,6 +208,10 @@ impl Brain {
             behaviour: Behaviour::default(),
             carry: None,
             next_grab: 0,
+            next_bite: 0,
+            posed: false,
+            dry: 0,
+            born: None,
         }
     }
     fn random(&mut self) -> f32 {
@@ -250,7 +270,7 @@ impl Brain {
     /// The goal of strolling: somewhere near its brick, or for a rules bot
     /// (no brick to return to) near wherever it is (Slayer's bots,
     /// `hReturnToSpawn` off), now and then.
-    fn wander(&mut self, feet: Vec3, tick: u64) {
+    fn wander(&mut self, feet: Vec3, tick: u64, swimming: bool) {
         if !matches!(self.goal, None | Some(Goal::Wander(_))) {
             // A fight or a carry is over.
             self.set_goal(None);
@@ -262,7 +282,13 @@ impl Brain {
             let angle = self.random() * std::f32::consts::TAU;
             let radius = self.random() * self.kind.wander_radius;
             let around = if self.brick.is_none() { feet } else { self.home };
-            let point = around + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
+            // A swimmer roams up and down too (the water bounds it).
+            let rise = if swimming {
+                (self.random() * 2.0 - 1.0) * self.kind.wander_radius * 0.5
+            } else {
+                0.0
+            };
+            let point = around + Vec3::new(angle.sin() * radius, rise, angle.cos() * radius);
             self.set_goal(Some(Goal::Wander(point)));
             self.next_wander = tick + 240 + (self.random() * 480.0) as u64;
         }
@@ -418,7 +444,10 @@ impl Session {
         let kind = wanted.and_then(|id| self.bots.kind(id)).cloned();
         let same = current
             .and_then(|bot| self.bots.brains.get(&bot))
-            .is_some_and(|b| kind.as_ref().is_some_and(|k| k.id == b.kind.id));
+            .is_some_and(|b| {
+                let born = b.born.as_ref().unwrap_or(&b.kind);
+                kind.as_ref().is_some_and(|k| k.id == born.id)
+            });
         if let Some(bot) = current.filter(|_| !same) {
             self.drop_bot(bot)?;
         }
@@ -456,11 +485,67 @@ impl Session {
         }
         let crossed = self.crossings.count();
         if let Ok(bot) = joined {
+            if let Err(e) = self.embody_bot(bot, &kind) {
+                self.drop_bot(bot)?;
+                self.notify(
+                    builder,
+                    Notice::Center {
+                        text: format!("\u{E000}{e}"),
+                        seconds: 3.0,
+                    },
+                );
+                return Ok(());
+            }
             self.bots.by_brick.insert(brick_id, bot);
             self.bots
                 .brains
                 .insert(bot, Brain::new(Some(brick_id), kind, home, bot, crossed));
             self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
+        }
+        Ok(())
+    }
+    /// A new bot takes its kind's body, and keeps it through respawns and
+    /// mini-games as a body an Add-On chose does (`set_archetype`).
+    fn embody_bot(&mut self, bot: OwnerId, kind: &BotKind) -> Result<()> {
+        let body = match &kind.body {
+            Some(body) => Some(self.archetypes.find(body).with_context(|| {
+                format!("{}: its body {body} is in no enabled Add-On", kind.name)
+            })?),
+            None => None,
+        };
+        let pack = self.avatar_catalog.as_ref();
+        let mut avatar = pack.map(|c| c.defaults.clone());
+        if let (Some(look), Some(avatar)) = (&kind.look, avatar.as_mut()) {
+            UniformParts {
+                parts: look.parts.clone(),
+                face: look.face.clone(),
+                decal: look.decal.clone(),
+            }
+            .dress(avatar, pack);
+            avatar.colors.extend(look.colors.clone());
+        }
+        let peer = self.peers.get_mut(&bot).context("No such bot")?;
+        peer.avatar = avatar;
+        peer.package_archetype = body;
+        let body = body.unwrap_or_else(|| crate::player_types::PlayerType::Standard.archetype());
+        self.set_player_archetype(bot, body)
+    }
+    /// Every bot kind's body is an archetype the enabled Add-Ons provide.
+    pub(super) fn check_bot_bodies(&self) -> Result<()> {
+        for kind in &self.bots.kinds {
+            ensure!(
+                kind.emote.as_deref().is_none_or(|e| BOT_EMOTES.contains(&e)),
+                "Bot {}: its emote is one of {}",
+                kind.id,
+                BOT_EMOTES.join(", ")
+            );
+            if let Some(body) = &kind.body {
+                ensure!(
+                    self.archetypes.find(body).is_some(),
+                    "Bot {}: its body {body} is in no enabled Add-On",
+                    kind.id
+                );
+            }
         }
         Ok(())
     }
@@ -508,6 +593,10 @@ impl Session {
             .context("No such team")?;
         let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
         let bot = self.join_inner(name.to_owned(), drop, false, true, None)?;
+        if let Err(e) = self.embody_bot(bot, &kind) {
+            self.drop_bot(bot)?;
+            return Err(e);
+        }
         let crossed = self.crossings.count();
         self.bots
             .brains
@@ -643,11 +732,19 @@ impl Session {
         if other == bot || !self.peers.get(&other).is_some_and(|p| p.combat.alive) {
             return false;
         }
-        if self.bots.is_brick_bot(bot)
-            && self.bots.is_brick_bot(other)
-            && (!kind.fights_bots || self.bot_brick_owner(other) == self.bot_brick_owner(bot))
-        {
-            return false;
+        if self.bots.is_brick_bot(bot) && self.bots.is_brick_bot(other) {
+            // One side (Bot_Hole's `hType`) never fights itself and fights
+            // every other; bots of no side side with their builder.
+            let theirs = self.bots.brains.get(&other).and_then(|b| b.kind.side.as_deref());
+            let friends = match (kind.side.as_deref(), theirs) {
+                (None, None) => {
+                    !kind.fights_bots || self.bot_brick_owner(other) == self.bot_brick_owner(bot)
+                }
+                (mine, theirs) => mine == theirs,
+            };
+            if friends {
+                return false;
+            }
         }
         self.can_damage_player(bot, other, false)
     }
@@ -835,12 +932,19 @@ impl Session {
             // as soon as its game lets it (Slayer's bot respawn time).
             let wait = if self.bots.by_rules.contains_key(&bot) { 0 } else { 120 };
             if tick >= peer.combat.respawn_tick + wait {
+                // A bot a bite turned comes back as its own kind.
+                if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
+                    self.bots.brains.get_mut(&bot).unwrap().kind = born.clone();
+                    self.embody_bot(bot, &born)?;
+                }
                 let _ = self.request_respawn(bot);
             }
             if let Some(brain) = self.bots.brains.get_mut(&bot) {
                 brain.set_goal(None);
                 brain.target = None;
                 brain.memory = None;
+                brain.posed = false;
+                brain.dry = 0;
                 brain.rehome = brain.brick.is_none();
                 brain.leash = brain.home;
             }
@@ -872,6 +976,39 @@ impl Session {
         let feet = Vec3::from(state.feet);
         let eye = peer.player.eye();
         let body = Body::of(peer.player.tuning(), state.scale);
+        // A swimmer in water: how tall it is, to keep it under.
+        let swim = (self.bots.brains[&bot].kind.moves == Moves::Swim)
+            .then(|| crate::water::body_height(&state, peer.player.tuning()) * state.scale)
+            .filter(|height| {
+                self.simulation
+                    .liquid_at(state.feet, *height)
+                    .is_some_and(|(_, covered)| covered >= SWIM_COVERAGE)
+            });
+        // A swimmer out of water in a mini-game lasts only so long (the
+        // Shark's `hFishOutOfWater`).
+        let height = crate::water::body_height(&state, peer.player.tuning()) * state.scale;
+        let wet = self.simulation.liquid_at(state.feet, height).is_some();
+        let gasping = self.bots.brains[&bot]
+            .kind
+            .out_of_water_seconds
+            .filter(|_| !wet && self.game_of(bot).is_some());
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        brain.dry = if gasping.is_some() { brain.dry + 1 } else { 0 };
+        if gasping.is_some_and(|seconds| brain.dry as f32 >= seconds * 120.0) {
+            brain.dry = 0;
+            return self.kill(bot, None, combat::DamageKind::Suicide);
+        }
+        // Its kind's emote, once each life (a zombie's arms out ahead).
+        if !brain.posed {
+            brain.posed = true;
+            if let Some(name) = brain.kind.emote.clone() {
+                self.emote_cue(
+                    tick,
+                    crate::presentation::CueKind::Emote { actor: bot, name },
+                    state.feet,
+                );
+            }
+        }
         self.bot_crossed(bot);
         let brain = &self.bots.brains[&bot];
         let sight = self.bot_sight(bot, brain, eye);
@@ -887,7 +1024,20 @@ impl Session {
             })
             .and_then(|owner| self.peers.get(&owner))
             .map(|p| Vec3::from(p.player.state().feet));
-        let weapon = self.bot_weapon(bot);
+        // Empty-handed, a kind that hits with its body fights with that.
+        let held = self.bot_weapon(bot);
+        let bite = held
+            .is_none()
+            .then(|| self.bots.brains[&bot].kind.melee.clone())
+            .flatten();
+        let weapon = held.or(bite.as_ref().map(|m| Weapon {
+            melee: true,
+            hold: false,
+            reach: m.reach,
+            speed: 0.0,
+            fall: 0.0,
+            splash: 0.0,
+        }));
         let hurt = self.bots.hurt.remove(&bot);
         let hurt_by = hurt.and_then(|(source, _)| {
             let kind = &self.bots.brains[&bot].kind;
@@ -965,8 +1115,12 @@ impl Session {
         };
         let situation = Situation {
             holding,
-            fly: air.is_some_and(|a| !walks_up(a.to)),
-            enemy: enemy.map(|seen| (flat(seen.feet - feet).length(), seen.feet.y - feet.y)),
+            fly: swim.is_none() && air.is_some_and(|a| !walks_up(a.to)),
+            // A swimmer reaches any depth: only how far counts.
+            enemy: enemy.map(|seen| match swim {
+                Some(_) => (seen.feet.distance(feet), 0.0),
+                None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
+            }),
             far,
             step: body.step,
             remembers: brain.memory.is_some(),
@@ -998,7 +1152,7 @@ impl Session {
                 (false, false)
             }
             Behaviour::Wander => {
-                brain.wander(feet, tick);
+                brain.wander(feet, tick, swim.is_some());
                 (false, false)
             }
         };
@@ -1006,7 +1160,28 @@ impl Session {
         // Path.
         let home = brain.home;
         let mut wanted = None;
-        if let Some(goal) = brain.goal {
+        if let Some(height) = swim {
+            // In water it swims straight there, keeping to the water.
+            brain.plan.clear();
+            brain.search = None;
+            if let Some(goal) = brain.goal
+                && let Some((water, _)) = self.simulation.liquid_at(state.feet, height)
+            {
+                let to = crate::water::swim_point(water, goal.point(home), height);
+                if to.distance(feet) < 0.8 {
+                    brain.settled = true;
+                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                        brain.goal = None;
+                    }
+                } else {
+                    wanted = Some(Waypoint {
+                        feet: to,
+                        jump: false,
+                        through: None,
+                    });
+                }
+            }
+        } else if let Some(goal) = brain.goal {
             let point = goal.point(home);
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
                 brain.search = Some(Search::new(feet, point, SEARCH_BOUND));
@@ -1205,6 +1380,17 @@ impl Session {
             }
             _ => {}
         }
+        if swim.is_some() {
+            // Up and down as a swimmer does: jump rises, crouch dives.
+            let to = match behaviour {
+                Behaviour::Fight => enemy.map(|seen| seen.feet),
+                _ => wanted.map(|w| w.feet),
+            };
+            if let Some(to) = to {
+                input.jump = to.y > feet.y + 0.4;
+                input.crouch = to.y < feet.y - 0.4;
+            }
+        }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up.
@@ -1234,7 +1420,6 @@ impl Session {
         }
         brain.sequence += 1;
         let sequence = brain.sequence;
-        let fire_changed = fire != brain.fire_down;
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
         }
@@ -1242,9 +1427,19 @@ impl Session {
         // that holds (as its data says, or reaching or holding now) keeps
         // it down.
         let held_down = grabbing || weapon.is_some_and(|w| w.hold);
-        let pulse = fire && !held_down && tick.is_multiple_of(40);
+        let pulse = fire && !held_down && tick.is_multiple_of(40) && bite.is_none();
+        let bites = bite.as_ref().filter(|_| fire && tick >= brain.next_bite);
+        if let Some(m) = bites {
+            brain.next_bite = tick + (m.seconds * 120.0).round() as u64;
+        }
+        // A body's hit pulls no trigger.
+        let fire = fire && bite.is_none();
+        let fire_changed = fire != brain.fire_down;
         brain.fire_down = fire && !pulse;
         self.movement(bot, sequence, input)?;
+        if let (Some(m), Some(seen)) = (bites, sight.target) {
+            self.bot_bite(bot, seen.owner, m, tick)?;
+        }
         if sight.target.is_some() {
             self.bot_arm(bot)?;
         }
@@ -1297,6 +1492,67 @@ impl Session {
                 brain.settled = false;
             }
         }
+    }
+    /// A hit with the bot's body (`BotKind::melee`) on `target`, if it
+    /// reaches them and the damage rules let it hurt them.
+    fn bot_bite(
+        &mut self,
+        bot: OwnerId,
+        target: OwnerId,
+        melee: &crate::bot_kind::BotMelee,
+        tick: u64,
+    ) -> Result<()> {
+        let (Some(me), Some(them)) = (self.peers.get(&bot), self.peers.get(&target)) else {
+            return Ok(());
+        };
+        if !them.combat.alive {
+            return Ok(());
+        }
+        let eye = me.player.eye();
+        // The nearest point of their body, feet to head.
+        let state = them.player.state();
+        let feet = Vec3::from(state.feet);
+        let height = crate::water::body_height(state, them.player.tuning()) * state.scale;
+        let point = Vec3::new(feet.x, eye.y.clamp(feet.y, feet.y + height), feet.z);
+        let width = them.player.tuning().width * state.scale * 0.5;
+        if point.distance(eye) > melee.reach + width
+            || !self.can_damage_player(bot, target, false)
+        {
+            return Ok(());
+        }
+        if let Some(action) = &melee.action {
+            self.play_thread(tick, bot, MELEE_THREAD, action);
+        }
+        self.damage_player_at(
+            target,
+            melee.damage,
+            combat::DamageKind::weapon(melee.name.clone(), true),
+            Some(bot),
+            Some(point),
+        )?;
+        // A brick's bot of another side, worn down far enough, turns into
+        // one of its kind, whole again (`holeZombieInfect`); players never do.
+        let Some(below) = melee.converts_below else {
+            return Ok(());
+        };
+        let worn = self.is_alive(target)
+            && self.bots.is_brick_bot(target)
+            && self.peers[&target].combat.health <= self.max_health(target) * below;
+        let kind = self.bots.brains[&bot].kind.clone();
+        let other = self.bots.brains.get(&target).map(|b| b.kind.side.clone());
+        if !worn || other.is_none() || other == Some(kind.side.clone()) {
+            return Ok(());
+        }
+        let brain = self.bots.brains.get_mut(&target).unwrap();
+        let born = std::mem::replace(&mut brain.kind, kind.clone());
+        brain.born.get_or_insert(born);
+        brain.posed = false;
+        brain.target = None;
+        brain.memory = None;
+        self.embody_bot(target, &kind)?;
+        let max = self.max_health(target);
+        self.peers.get_mut(&target).unwrap().combat.health = max;
+        Ok(())
     }
     /// Equip the first real weapon (not a building tool) in the inventory,
     /// unless it holds one already (the rules may have put one in its

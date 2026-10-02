@@ -42,7 +42,21 @@ bot does through the same code.
 ## Data
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
-  rate, aim error, memory, whether it fights other builders' bots.
+  rate, aim error, memory, whether it fights other builders' bots, and:
+  - `body`: the archetype it plays in (an Add-On's player type: its model,
+    speeds and health). It keeps it through respawns and mini-games, which
+    otherwise give their own player type. A body no enabled Add-On has is
+    an error when Add-Ons load, and a bot that cannot take it does not
+    spawn (its builder is told).
+  - `melee` (`damage`, `reach`, `seconds`, `action`, `name`): with empty
+    hands it fights with its body, from the band its reach gives, hitting
+    once every `seconds` and playing `action` on the arms' thread. Damage
+    goes through the same rules as a shot.
+  - `moves`: `walk`, or `swim`. A swimmer in water skips the walk grid and
+    heads straight for its goal at any depth (jump rises, crouch dives),
+    roams up and down as well as across, and every goal is kept inside its
+    water (`water::swim_point`), so an enemy on land brings it to the edge
+    nearest them and no farther. Out of water it walks like any bot.
 - A weapon image's `bot` (`BotUse`): `fire` `tap` (pressed again and
   again, for semi-automatics) or `hold` (held on target: a tool that
   reaches and holds), and `reach` when its projectile does not say. The
