@@ -40,7 +40,7 @@ jobs:
 
       - name: Take the content from the release's Windows zip
         run: |
-          gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-*-windows.zip' --dir "$RUNNER_TEMP/win"
+          gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-windows.zip' --dir "$RUNNER_TEMP/win"
           unzip -q "$RUNNER_TEMP"/win/*.zip -d "$RUNNER_TEMP/win/x"
           python3 - "$RUNNER_TEMP"/win/x/* <<'PY'
           import hashlib, json, pathlib, shutil, sys
@@ -83,7 +83,7 @@ jobs:
       - name: Package
         run: |
           tools/package_playtest.sh --version "$BRI_VERSION" --sha256 "$(sha256sum target/release/bri-client | cut -d' ' -f1)"
-          zip="$(ls dist/BlocklandReImagined-*-linux.zip)"
+          zip=dist/BlocklandReImagined-linux.zip
           rm -rf "$RUNNER_TEMP/check" && mkdir "$RUNNER_TEMP/check" && unzip -q "$zip" -d "$RUNNER_TEMP/check"
           tools/package_playtest.sh --verify "$RUNNER_TEMP"/check/*
           ls -l "$zip"

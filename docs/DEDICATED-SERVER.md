@@ -10,11 +10,10 @@ everyone who plays with the same download joins without extra steps.
 Any 64-bit Linux from Ubuntu 22.04 or Debian 12 on works. No graphics card,
 sound or desktop is needed.
 
-1. On https://github.com/MaxHastings/BlocklandReImagined/releases/latest
-   copy the link of the zip ending in `-linux.zip`, then on the VPS:
+1. Download and unzip the newest Linux release on the VPS:
    ```sh
-   wget <that link>
-   unzip BlocklandReImagined-*-linux.zip && cd BlocklandReImagined-*-linux
+   wget https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-linux.zip
+   unzip BlocklandReImagined-linux.zip && cd BlocklandReImagined-*-linux
    ```
 2. Open the game port for UDP: `sudo ufw allow 28000/udp` (and the same
    port in your VPS provider's firewall, if it has one).

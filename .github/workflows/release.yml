@@ -1,6 +1,7 @@
-# Builds the Windows release and publishes it as a GitHub Release: the zip
-# and the standalone BlocklandReImagined.exe players download, which is also
-# what the game's update check reads. Same recipe as a release built by hand
+# Builds the Windows release and publishes it as a GitHub Release: the
+# BlocklandReImagined-windows.zip players download (the Mac and Linux zips are
+# added by their own workflows), which is also what the game's update check
+# reads. Same recipe as a release built by hand
 # (docs/playtest-package-layout.md); setup and use in docs/release-builds.md.
 #
 # Push a version tag (git tag 2026-10-02-a19 && git push origin 2026-10-02-a19)
@@ -80,8 +81,8 @@ jobs:
         with:
           shared-key: release
 
-      - name: Build the game, Add-On importer and standalone launcher
-        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-launcher --bin BlocklandReImagined
+      - name: Build the game, Add-On importer and dedicated server
+        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
 
       - name: Startup check against the content
         shell: pwsh
@@ -97,28 +98,29 @@ jobs:
           $hash = (Get-FileHash target\release\bri-client.exe -Algorithm SHA256).Hash
           $pack = @{ Version = $env:BRI_VERSION; ExpectedExecutableSha256 = $hash }
           .\tools\package_playtest.ps1 @pack
-          $release = Get-ChildItem dist -Directory | Where-Object { $_.Name -like "BlocklandReImagined-$env:BRI_VERSION-windows" -and $_.Name -notlike '*-standalone' } | Select-Object -First 1
-          .\tools\package_playtest.ps1 -VerifyPackage $release.FullName
-          "RELEASE_DIR=$($release.FullName)" >> $env:GITHUB_ENV
-          "RELEASE_NAME=$($release.Name)" >> $env:GITHUB_ENV
+          "RELEASE_NAME=BlocklandReImagined-$env:BRI_VERSION-windows" >> $env:GITHUB_ENV
 
-      # The same smoke a hand-made release gets: the exe unpacks per user,
-      # keeps a dropped Add-On across starts, and the game passes --check.
-      # (The loopback-join smoke needs an original v20 Add-On archive and a
-      # GPU, so it stays on the PC gate.)
-      - name: Standalone exe smoke
+      # What a player gets: the zip unzips to one release folder whose
+      # manifest matches, and the game starts from there. (The loopback-join
+      # smoke needs an original v20 Add-On archive and a GPU, so it stays on
+      # the PC gate.)
+      - name: Zip smoke
         shell: pwsh
         run: |
-          $env:BRI_STANDALONE_EXE = "$env:RELEASE_DIR-standalone\BlocklandReImagined.exe"
-          cargo test --release --locked -p bri-client --test release_smoke -- --ignored --exact standalone_exe_unpacks_per_user_and_starts_the_game --nocapture
+          $unzipped = Join-Path $env:RUNNER_TEMP 'unzipped'
+          Expand-Archive dist\BlocklandReImagined-windows.zip $unzipped
+          $tops = @(Get-ChildItem $unzipped)
+          if ($tops.Count -ne 1 -or $tops[0].Name -cne $env:RELEASE_NAME) { Write-Output "::error::the zip must hold exactly $env:RELEASE_NAME"; exit 1 }
+          $game = $tops[0].FullName
+          .\tools\package_playtest.ps1 -VerifyPackage $game
+          & (Join-Path $game 'bri-client.exe') --check (Join-Path $game 'content') (Join-Path $env:RUNNER_TEMP 'bri-zip-state')
           exit $LASTEXITCODE
 
       - name: Gather release files
         shell: pwsh
         run: |
           $out = New-Item -ItemType Directory -Force upload
-          Copy-Item "$env:RELEASE_DIR.zip" $out
-          Copy-Item "$env:RELEASE_DIR-standalone\BlocklandReImagined.exe" $out
+          Copy-Item dist\BlocklandReImagined-windows.zip $out
           # Debug symbols for crash reports: kept with the run, not shipped.
           $symbols = New-Item -ItemType Directory -Force "symbols\$env:RELEASE_NAME-symbols"
           Copy-Item target\release\*.pdb $symbols
@@ -144,9 +146,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $notes = @"
-          **Download ``BlocklandReImagined.exe``** and double-click it. It needs no install: the first start unpacks the game into ``%LOCALAPPDATA%\BlocklandReImagined\Game``, and later starts reuse it. Windows may say "Windows protected your PC": click More info, then Run anyway.
-
-          Prefer a folder? Download ``$env:RELEASE_NAME.zip``, unzip it anywhere and run ``Launch.cmd``.
+          **Windows:** download ``BlocklandReImagined-windows.zip``, unzip it anywhere and run ``Launch.cmd``. Windows may say "Windows protected your PC": click More info, then Run anyway. Settings and saves live in ``%LOCALAPPDATA%\BlocklandReImagined``, so a new version's folder picks them up.
 
           To play together, one player hosts and the others join by IP address. Hosting over the internet needs UDP port 28000 forwarded to the host when the router doesn't open it automatically.
           "@

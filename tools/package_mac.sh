@@ -11,7 +11,7 @@
 #   BRI_VERSION=<v> cargo build --release --locked -p bri-client -p bri-addon-import
 #   tools/package_mac.sh --version <v> --sha256 <bri-client sha256> [--stress-lab]
 #   tools/package_mac.sh --validate-only [--stress-lab]
-#   tools/package_mac.sh --verify dist/BlocklandReImagined-<v>-macos.zip
+#   tools/package_mac.sh --verify dist/BlocklandReImagined-macos.zip
 #   [--addon-bundle DIR] [--without-originals]   (the latter only for packaging tests)
 #
 # Works with macOS's own bash 3.2. Needs python3, codesign and ditto.
@@ -203,7 +203,9 @@ if [[ "$skip_version_check" -eq 0 ]]; then
 fi
 
 release="$destination/BlocklandReImagined-$version-macos"
-zip="$release.zip"
+# One download name across versions (releases/latest/download/...);
+# the folder inside carries the version.
+zip="$destination/BlocklandReImagined-macos.zip"
 [[ ! -e "$release" && ! -e "$zip" ]] || die "refusing to overwrite $release or its zip"
 mkdir -p "$destination"
 trap 'rm -rf "$release" "$zip"' ERR

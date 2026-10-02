@@ -1,8 +1,8 @@
 # Release builds on GitHub
 
 `.github/workflows/release.yml` builds the Windows release on a GitHub runner
-and publishes it as a GitHub Release. Players download the standalone
-`BlocklandReImagined.exe` (or the zip) from the
+and publishes it as a GitHub Release. Players download
+`BlocklandReImagined-windows.zip` from the
 [Releases page](https://github.com/MaxHastings/BlocklandReImagined/releases),
 and the game's update check (`crates/client/src/updates.rs`) reads the latest
 release, so once a release is out, older builds say a newer one exists.
@@ -14,15 +14,19 @@ The workflow runs the same recipe as a release built by hand
    here with a clear error when either was never uploaded or lacks a pack or
    an original this commit needs.
 2. `cargo build --release --locked` of `bri-client`, `bri-import-addon` and
-   `bri-launcher`, with `BRI_VERSION` set to the version.
+   `bri-server`, with `BRI_VERSION` set to the version.
 3. `bri-client --check` against the content.
 4. `tools/package_playtest.ps1 -Version <v> -ExpectedExecutableSha256 <hash>`
-   (releases leave the Stress Lab test Add-Ons out), then `-VerifyPackage` (the packager also verifies the
-   standalone exe it writes).
-5. The standalone smoke, `release_smoke`'s
-   `standalone_exe_unpacks_per_user_and_starts_the_game`, on the packaged exe.
+   (releases leave the Stress Lab test Add-Ons out), writing
+   `dist/BlocklandReImagined-windows.zip`.
+5. The zip smoke: unzip it, check it holds exactly the versioned release
+   folder, `-VerifyPackage` that folder and run its `bri-client --check`.
 6. Publish a release tagged with the version, carrying
-   `BlocklandReImagined.exe` and `BlocklandReImagined-<v>-windows.zip`.
+   `BlocklandReImagined-windows.zip`. The Mac and Linux workflows add
+   `BlocklandReImagined-macos.zip` and `BlocklandReImagined-linux.zip`. The
+   names carry no version, so
+   `releases/latest/download/BlocklandReImagined-<os>.zip` always fetches the
+   newest; the folder inside is `BlocklandReImagined-<v>-<os>`.
    The `.pdb` debug symbols are kept as a workflow artifact
    (`...-symbols`, 90 days), not shipped to players.
 

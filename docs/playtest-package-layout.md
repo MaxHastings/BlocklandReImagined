@@ -34,28 +34,29 @@ BlocklandReImagined-<version>-windows/
   Launch.cmd
   Launch-Playtest.ps1
   MANIFEST.json
-  user-state/             created on first launch; never copied into a release
   logs/                   timestamped stdout/stderr files from each launch
 ```
 
 Launch with `Launch.cmd`. It sets the working directory to the package
-folder, uses package-local `user-state/`, and saves separate timestamped logs
-under `logs/`. State and saved host certificates therefore remain beside the
-playtest build.
+folder, saves separate timestamped logs under `logs/`, and runs the game with
+its per-user state folder (`%LOCALAPPDATA%\BlocklandReImagined`; Mac and
+Linux use theirs). Settings, saves and saved host certificates therefore
+outlive the release folder, and a newer release's folder finds them. Below,
+`<state>` is that folder.
 
 LAN hosts answer discovery broadcasts (UDP 28050) with their listing and public
 QUIC certificate; the Join Server list shows them, with saved and favourite
-servers from `user-state/servers.json`. A direct join needs only the
+servers from `<state>/servers.json`. A direct join needs only the
 game port: it trusts the certificate the host presents the first time (or the
-key in a `bri://` invite) and saves it in `user-state/trusted-hosts.json`
+key in a `bri://` invite) and saves it in `<state>/trusted-hosts.json`
 (trust on first use). Internet hosting needs nothing forwarded by hand when the
 router offers UPnP or NAT-PMP (`docs/architecture/hosting.md`). Hosts keep a
-persistent certificate and key in `user-state/host-identity.bin`, so saved
+persistent certificate and key in `<state>/host-identity.bin`, so saved
 trust survives restarts. Do not share `host-identity.bin`.
 
 `MANIFEST.json` contains ordinally sorted relative paths, byte sizes and SHA-256
 hashes for the executable, selected content, normalized config and package
-instructions/helpers. It excludes itself and mutable `logs/` and `user-state/`
+instructions/helpers. It excludes itself and mutable `logs/`
 files so normal launches do not invalidate package verification. Verify a
 completed folder with:
 
@@ -74,35 +75,15 @@ Final assembly requires root's exact executable hash and an explicit package
 version. The generated directory and its content remain ignored; only the
 packager, launcher/trust helpers, and this layout documentation are source.
 
-## Zip and standalone exe
+## Zip
 
-Beside the folder the packager writes `BlocklandReImagined-<version>-windows.zip`
-(the folder under its own name, forward-slash entries) and
-`BlocklandReImagined-<version>-windows-standalone/BlocklandReImagined.exe`: the
-launcher (`crates/launcher`, built with
-`cargo build --release -p bri-launcher`) with that zip appended, then the
-zip's SHA-256, its length and the magic `BRISFX01`. Pass `-NoStandalone` to
-skip the exe. `-VerifyStandalone <exe>` checks the payload hash and verifies
-the release inside it against its manifest; the packager runs it on every
-exe it writes. A code signature is added after the footer, and both the
-launcher and the verifier skip it.
-
-The exe needs no install, admin rights or other files. On start it unpacks
-into `%LOCALAPPDATA%\BlocklandReImagined\Game` (the folder the game already
-keeps settings, saves and identity in, which is also the state folder it
-runs with) and runs `Game\bri-client.exe` from there. A later start with
-the same exe reuses the install; a different version replaces the base
-files and carries across every file the player added (`content\Add-Ons`,
-imported Add-Ons, `packages-disabled.json`, `logs`), keeping the Add-Ons
-they turned on and the optional packages they turned off. If the older game
-is still running the upgrade stops and asks the player to close it.
-`--extract-only` installs and prints the folder; other arguments go to the
-game. `BRI_STANDALONE_ROOT` replaces the per-user folder, for tests.
-
-The release smoke (`crates/client/tests/release_smoke.rs`) checks the exe
-when `BRI_STANDALONE_EXE` names one: it unpacks into a scratch folder,
-keeps a dropped Add-On across a second start, and the game passes `--check`
-from the install.
+Beside the folder the packager writes `BlocklandReImagined-windows.zip`: the
+folder under its own versioned name, forward-slash entries. It is the one
+Windows download, as the Mac and Linux packagers write
+`BlocklandReImagined-macos.zip` and `BlocklandReImagined-linux.zip`. The zip
+names carry no version, so
+`https://github.com/MaxHastings/BlocklandReImagined/releases/latest/download/BlocklandReImagined-<os>.zip`
+always fetches the newest release.
 
 ## Release version and signing
 
@@ -143,7 +124,7 @@ export BRI_VERSION=2026-09-29-a21
 cargo build --release --locked -p bri-client -p bri-addon-import
 tools/package_mac.sh --version "$BRI_VERSION" \
     --sha256 "$(shasum -a 256 target/release/bri-client | cut -d' ' -f1)"
-tools/package_mac.sh --verify dist/BlocklandReImagined-$BRI_VERSION-macos.zip
+tools/package_mac.sh --verify dist/BlocklandReImagined-macos.zip
 ```
 
 ```text

@@ -79,8 +79,6 @@ try {
     $exe = Join-Path $fixture 'bin/bri-client.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))
     $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
-    # A stand-in for the standalone launcher: the packager only appends to it.
-    [IO.File]::WriteAllBytes((Join-Path $fixture 'bin/BlocklandReImagined.exe'), [byte[]](0x4d,0x5a,0x03,0x04))
     $dist = Join-Path $temp 'dist'
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @()
     $package = Join-Path $dist 'BlocklandReImagined-test-fixture-windows'
@@ -103,21 +101,17 @@ try {
         if ($copied -ne @(Get-ChildItem -LiteralPath $source -Recurse -File).Count) { throw "Expected every file of $($addOn.id) in the release." }
     }
     if (-not (Test-Path (Join-Path $package 'content/addons/tool_duplicator-rules/behaviour.json'))) { throw "Expected the Duplicator's host rules in the release." }
-    if (-not (Test-Path "$package.zip" -PathType Leaf)) { throw 'Expected the release zip beside the folder.' }
-    $standalone = Join-Path "$package-standalone" 'BlocklandReImagined.exe'
-    if (-not (Test-Path $standalone -PathType Leaf)) { throw 'Expected the standalone BlocklandReImagined.exe.' }
-    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyStandalone $standalone
-    $bytes = [IO.File]::ReadAllBytes($standalone)
-    $bytes[10] = $bytes[10] -bxor 0xff
-    $damaged = Join-Path $temp 'damaged.exe'
-    [IO.File]::WriteAllBytes($damaged, $bytes)
-    $caught = $false
-    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyStandalone $damaged } catch { $caught = $true }
-    if (-not $caught) { throw 'Verifier accepted a damaged standalone payload.' }
+    # The download keeps one name across versions and holds the versioned folder.
+    $zip = Join-Path $dist 'BlocklandReImagined-windows.zip'
+    if (-not (Test-Path $zip -PathType Leaf)) { throw 'Expected BlocklandReImagined-windows.zip beside the folder.' }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $unzipped = Join-Path $temp 'unzipped'
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip, $unzipped)
+    $tops = @(Get-ChildItem -LiteralPath $unzipped -Force)
+    if ($tops.Count -ne 1 -or $tops[0].Name -cne 'BlocklandReImagined-test-fixture-windows') { throw 'Expected the zip to hold exactly the release folder.' }
+    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $tops[0].FullName
     [IO.Directory]::CreateDirectory((Join-Path $package 'logs')) | Out-Null
-    [IO.Directory]::CreateDirectory((Join-Path $package 'user-state')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $package 'logs/session.log'), 'mutable')
-    [IO.File]::WriteAllText((Join-Path $package 'user-state/preferences.json'), '{}')
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $package
     [IO.File]::WriteAllText((Join-Path $package 'unexpected.txt'), 'unlisted')
     $caught = $false

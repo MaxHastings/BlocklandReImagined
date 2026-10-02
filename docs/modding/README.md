@@ -76,9 +76,7 @@ at least that long (10 by default), `"Guest: ..."` sends as the Guest and
 `other-add-on:command` sends another Add-On's command.
 
 **Play** it: put the folder in the game's `content/addons/` folder
-(`%LOCALAPPDATA%\BlocklandReImagined\Game\content` when you run
-`BlocklandReImagined.exe`, or `content` beside `Launch.cmd` in a release
-folder), open **Start Game > Add-Ons**, and turn it on. The screen turns on what it
+(`content` beside `Launch.cmd` in a release folder), open **Start Game > Add-Ons**, and turn it on. The screen turns on what it
 depends on and shows players what it may do. See
 [mod-manager.md](../architecture/mod-manager.md).
 

@@ -4,8 +4,8 @@
 # default Add-Ons turned on, the tester docs and a checksummed manifest) plus
 # the zip players download. The bundled original Add-Ons come from the
 # Add-On bundle (tools/addon_bundle.py; dist/addon-bundle by default), with
-# their CREDITS.md. Linux has no standalone launcher: the zip is the
-# download, and launch.sh starts the game from the unzipped folder.
+# their CREDITS.md. As on Windows and Mac, the zip is the download, and
+# launch.sh starts the game from the unzipped folder.
 #
 #   tools/package_playtest.sh --version 2026-10-02-a19 --sha256 <release-client-sha256> [--stress-lab]
 #   tools/package_playtest.sh --validate-only [--stress-lab]
@@ -148,7 +148,7 @@ def verify(root):
         if len(data) != entry['bytes'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
             die(f'package checksum mismatch: {path}')
     actual = sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())
-    actual = [p for p in actual if p != 'MANIFEST.json' and not p.startswith(('logs/', 'user-state/'))]
+    actual = [p for p in actual if p != 'MANIFEST.json' and not p.startswith('logs/')]
     if actual != listed:
         die('package contains unlisted or missing files')
     for name in EXECUTABLES:
@@ -254,7 +254,9 @@ if env['BRI_SKIP_VERSION_CHECK'] != '1':
 destination = pathlib.Path(env['BRI_DESTINATION']).resolve()
 destination.mkdir(parents=True, exist_ok=True)
 release = destination / f"BlocklandReImagined-{version}-linux"
-zip_path = release.with_name(release.name + '.zip')
+# One download name across versions (releases/latest/download/...);
+# the folder inside carries the version.
+zip_path = destination / 'BlocklandReImagined-linux.zip'
 for existing in (release, zip_path):
     if existing.exists():
         die(f'refusing to overwrite {existing}')
