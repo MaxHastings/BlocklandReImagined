@@ -1131,3 +1131,26 @@ fn open_bsd_with_building_disabled_only_says_so() {
     assert!(u.core.run_command("openBSD", true));
     assert!(u.core.cmds.contains(&bri_ui::ui::StackCmd::Push(ScreenId::BrickSelector)));
 }
+
+/// Playtest (v0.1.12): holding fire with a bow when the game ended showed
+/// "Request Rejected: Not connected" over the Connection Failed box. The
+/// ended session's held trigger was released to a host that was gone; its
+/// keys are forgotten instead, and letting go later sends nothing either.
+#[test]
+fn a_trigger_held_when_the_game_ends_is_not_released_to_the_gone_host() {
+    let mut u = ui();
+    u.core
+        .binds
+        .bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+    play(&mut u);
+    let (x, y) = (640.0, 480.0);
+    let button = MouseButton::Left;
+    u.handle_input(InputEvent::MouseDown { button, x, y });
+    assert_eq!(actions(&mut u), vec![held(HeldControl::Fire, true)]);
+    u.apply(UiUpdate::Connection(ConnectionState::Failed {
+        reason: "closed by peer: Session ended (code 0)".into(),
+    }));
+    assert_eq!(actions(&mut u), vec![]);
+    u.handle_input(InputEvent::MouseUp { button, x, y });
+    assert_eq!(actions(&mut u), vec![]);
+}
