@@ -805,7 +805,28 @@ mod tests {
     /// decides between GIANT, BlackDragonIV and its Filler.
     #[test]
     fn the_bundled_brick_packs_are_the_chosen_ones_in_v20_order() {
-        const CHOSEN: [&str; 22] = [
+        const CHOSEN: [&str; 43] = [
+            "Brick_DemiansCBFix",
+            "Brick_DemiansBP_2x_Tall",
+            "Brick_VerticalPlatePack",
+            "Brick_DemiansBP_1x_Half",
+            "Brick_SmallRampsPack",
+            "Brick_DemiansBP_4x_Tall",
+            "Brick_PoleAdapters",
+            "Brick_PlateHighRamps",
+            "Brick_DemiansBP_2x_Wide",
+            "Brick_DemiansBP_5x_Tall",
+            "Brick_Default_Fence_Extras",
+            "Brick_DemiansBP_2x_Half",
+            "Brick_DemiansBP_3x_Wide",
+            "Brick_PrintPlatesCeiling",
+            "Brick_Slanted",
+            "Brick_HalfRounds",
+            "Brick_DemiansBP_4x_Wide",
+            "Brick_HorizPoles",
+            "Brick_GlassPanes",
+            "Brick_ExtraArches",
+            "Brick_Domes",
             "Brick_Fence",
             "Brick_Wedge",
             "Brick_InvertedCorners",
