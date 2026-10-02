@@ -129,6 +129,7 @@ mod tests {
             reflection: None,
             link: None,
             stretch: None,
+            bot: None,
         };
         let catalog = Catalog {
             schema_version: 1,

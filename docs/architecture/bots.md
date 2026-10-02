@@ -57,6 +57,15 @@ bot does through the same code.
     roams up and down as well as across, and every goal is kept inside its
     water (`water::swim_point`), so an enemy on land brings it to the edge
     nearest them and no farther. Out of water it walks like any bot.
+- A hole brick (a brick catalog entry's `bot`, Bot_Hole's `isBotHole` and
+  `holeBot`) keeps one bot of that kind from the moment it is planted, as
+  a spawn brick keeps the one chosen in its wrench. Import Add-On turns a
+  Bot_Hole bot (`PlayerData` with `isHoleBot`) into its body (an archetype)
+  and a kind read from its `h` settings: `hName`, `hType` (side),
+  `hSearchRadius` (sight, Bot_Hole's `brickToRadius`), `hSpawnDist`
+  (wander, `brickToMetric`) and `hMelee`/`hAttackDamage` (a swipe once a
+  second playing `activate2`). A port adds what its scripts did (the
+  Zombie's paint, arms out and turning bots).
 - A weapon image's `bot` (`BotUse`): `fire` `tap` (pressed again and
   again, for semi-automatics) or `hold` (held on target: a tool that
   reaches and holds), `reach` when its projectile does not say, and

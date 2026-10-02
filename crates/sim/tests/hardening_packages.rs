@@ -74,6 +74,7 @@ fn definition(id: &str, studs: [u32; 2], plates: u32, size: [f32; 3]) -> (String
             reflection: None,
             link: None,
             glass: [0.0; 4],
+            bot: None,
         },
     )
 }

@@ -1,0 +1,43 @@
+{
+  "addon": "Bot_Zombie",
+  "title": "Zombie",
+  "port": "bot_zombie",
+  "status": "partial",
+  "sha256": [
+    "002a9e6da08e9841a29c203908b89d23b0ee11aee6102b009079c995e9782bcf"
+  ],
+  "covers": {
+    "ZombieHoleBot::onAdd": {
+      "arms": "playthread\\s*\\(\\s*1\\s*,\\s*\"?ArmReadyBoth\"?\\s*\\)",
+      "head": "%obj\\.headColor\\s*=\\s*\"([^\"]+)\"",
+      "torso": "%obj\\.chestColor\\s*=\\s*\"([^\"]+)\"",
+      "larm": "%obj\\.larmColor\\s*=\\s*\"([^\"]+)\"",
+      "rarm": "%obj\\.rarmColor\\s*=\\s*\"([^\"]+)\"",
+      "lhand": "%obj\\.lhandColor\\s*=\\s*\"([^\"]+)\"",
+      "rhand": "%obj\\.rhandColor\\s*=\\s*\"([^\"]+)\"",
+      "hip": "%obj\\.hipColor\\s*=\\s*\"([^\"]+)\"",
+      "lleg": "%obj\\.llegColor\\s*=\\s*\"([^\"]+)\"",
+      "rleg": "%obj\\.rlegColor\\s*=\\s*\"([^\"]+)\"",
+      "face": "%obj\\.faceName\\s*=\\s*\"([^\"]+)\""
+    },
+    "ZombieHoleBot::onBotLoop": {
+      "empty": "^\\s*$"
+    },
+    "ZombieHoleBot::onBotFollow": {
+      "reads_only": "^\\s*(%\\w+\\s*=\\s*%\\w+\\.getPosition\\s*\\(\\s*\\)\\s*;\\s*)*$"
+    },
+    "ZombieHoleBot::onBotCollision": {
+      "empty": "^\\s*$"
+    },
+    "holeZombieInfect": {
+      "heals": "setHealth\\s*\\(",
+      "infects": "%col\\.hIsInfected\\s*=\\s*1"
+    },
+    "armor::onCollision": {
+      "turns_hurt_bots": "%col\\.getDamagePercent\\s*\\(\\s*\\)\\s*>=\\s*(0\\.5)\\b"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/bot_holes.rs the_zombie_port_gives_its_bot_a_look_its_arms_out_and_its_bite_turns_bots"
+  ]
+}

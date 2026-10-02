@@ -71,6 +71,7 @@ fn definition(w: u32, d: u32, h: u32, top: [[f32; 3]; 4]) -> Definition {
         reflection: None,
         link: None,
         glass: [0.0; 4],
+        bot: None,
     }
 }
 

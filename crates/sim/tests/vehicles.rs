@@ -275,6 +275,53 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame(f: &Fixture) ->
 }
 }
 
+on_both! {
+/// A hole brick (Bot_Hole's `isBotHole` and `holeBot`) keeps a bot of its
+/// own kind as soon as it is planted, with nothing chosen in a wrench.
+fn hole_brick_keeps_its_own_bot(f: &Fixture) -> anyhow::Result<()> {
+    let mut definitions = f.bricks();
+    let hole = f.vehicle_spawn_brick().to_string();
+    let entry = definitions.entries.get_mut(&hole).expect("spawn brick");
+    entry.bot = Some("bot.zombie".into());
+    let height = entry.mesh.height_plates as f32 * 0.2;
+    let zombie = bri_sim::bot_kind::BotKind {
+        id: "bot.zombie".into(),
+        name: "Zombie".into(),
+        side: Some("zombie".into()),
+        ..Default::default()
+    };
+    let world = World::new("Holes".into(), "test".into(), vec![[1.0, 0.0, 0.0, 1.0]]);
+    let mut s = Session::new(Simulation::new(world, definitions, vec![ground()])?);
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(f.vehicles(), vec![zombie])?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 6.0)])?;
+    let human = s.join("Human".into(), Vec3::new(0.0, 0.05, 6.0), true)?;
+    s.step()?;
+    s.command(
+        human,
+        1,
+        Command::Plant {
+            definition: hole,
+            position: [0.0, height * 0.5, 0.0],
+            quarter_turns: 0,
+            color: 0,
+        },
+    )?;
+    for _ in 0..10 {
+        s.step()?;
+    }
+    let bots: Vec<String> = s
+        .names()
+        .iter()
+        .filter(|(o, _)| s.is_bot(**o))
+        .map(|(_, n)| n.clone())
+        .collect();
+    assert_eq!(bots, ["Zombie"], "the hole's own bot");
+    assert!(s.vehicle_infos().is_empty(), "bots are not vehicles");
+    Ok(())
+}
+}
+
 /// Feeds one player's input for a number of ticks.
 struct Feeder {
     owner: u64,

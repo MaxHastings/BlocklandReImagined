@@ -60,6 +60,7 @@ fn session_with_sturdy(sturdy: &[&str]) -> Session {
         reflection: None,
         link: None,
         glass: [0.0; 4],
+        bot: None,
     };
     let defs = Definitions {
         entries: std::iter::once(("plate".to_string(), definition(false)))
