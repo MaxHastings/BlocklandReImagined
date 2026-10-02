@@ -12,9 +12,9 @@ For blank-brick challenges, the ambition ladder and a friction log, use the
 Use `Launch.cmd` on Windows, open `BlocklandReImagined.app` on macOS, or run
 `launch.sh` on Linux. The release uses the game's normal per-user settings and
 saves. Start a local game on Slate.
-Steel Ball, Gravity Gun and Portal Bricks ship enabled in this release. Existing
-saved Add-On selections can override those defaults: enable them in Start Game
-if Soccer reports a missing ball. Put the Gravity Gun in your MiniGame equipment
+Steel Ball, Gravity Gun and Portal Bricks are included as optional Add-Ons.
+Enable them in Start Game → Add-Ons for the physics recipes; Soccer requires
+Steel Ball. Toys is enabled by default for the Add-On route-switch recipe. Put the Gravity Gun in your MiniGame equipment
 to use it. Use ordinary vehicle spawn bricks for other vehicles.
 
 Use a clear area. Press Escape and choose **Rule Workshop**, then an example.
