@@ -109,6 +109,7 @@ pub fn definition(
         reflection: None,
         link: None,
         glass: [0.0; 4],
+        bot: None,
     }
 }
 
@@ -246,6 +247,7 @@ pub fn portal(id: &str, size: Option<[u32; 3]>) -> Definition {
         reflection: None,
         link: Some(link),
         glass: [0.0; 4],
+        bot: None,
     }
 }
 

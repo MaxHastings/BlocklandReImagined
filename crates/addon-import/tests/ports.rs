@@ -1362,6 +1362,7 @@ fn plate() -> bri_sim::definitions::Definitions {
                 reflection: None,
                 link: None,
                 glass: [0.0; 4],
+                bot: None,
             },
         )]
         .into(),
@@ -2064,6 +2065,7 @@ fn duplicator_game(
                 reflection: None,
                 link: None,
                 glass: [0.0; 4],
+                bot: None,
             },
         )]
         .into(),

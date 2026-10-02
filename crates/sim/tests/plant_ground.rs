@@ -48,6 +48,7 @@ fn simulation() -> Simulation {
                 reflection: None,
                 link: None,
                 glass: [0.0; 4],
+                bot: None,
             },
         )]
         .into(),

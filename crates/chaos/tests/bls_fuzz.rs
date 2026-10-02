@@ -24,6 +24,7 @@ fn catalog() -> Catalog {
         reflection: None,
         link: None,
         stretch: None,
+        bot: None,
     };
     Catalog {
         schema_version: 1,

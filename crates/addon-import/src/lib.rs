@@ -9,6 +9,7 @@
 //! Findings: `docs/audits/spike-addon-import.md`.
 pub mod behaviour;
 mod help;
+mod hole_bots;
 mod player_types;
 pub mod porting;
 pub mod ports;
@@ -213,6 +214,8 @@ struct Ctx<'a> {
     /// Scripts a port declares (`datablocks.cs`), by lower virtual path:
     /// read beside the Add-On's own, but not among its files.
     ported: BTreeMap<String, String>,
+    /// Bot_Hole bots as bot kinds (`assets/bots.json`).
+    bots: Vec<serde_json::Value>,
 }
 
 impl Ctx<'_> {
@@ -379,6 +382,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         provides: vec![],
         dependency_projectiles: BTreeMap::new(),
         ported: BTreeMap::new(),
+        bots: Vec::new(),
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
@@ -2684,11 +2688,23 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     };
                     let name = cx.owned.get(&key).map_or(key.clone(), |o| o.d.name.clone());
                     b.id = cx.id("brick", &key, &name, "assets/bricks.json");
+                    // A hole brick keeps one bot of its `holeBot`'s kind.
+                    let hole = b
+                        .other_properties
+                        .get("isbothole")
+                        .is_some_and(|v| literal(v).trim() != "0");
+                    b.bot = b
+                        .other_properties
+                        .get("holebot")
+                        .filter(|_| hole)
+                        .and_then(|bot| hole_bot_id(cx, literal(bot).trim()));
                     let special: Vec<String> = b
                         .other_properties
                         .keys()
                         .filter(|k| {
                             ["isbothole", "holebot", "isdoor", "isopen"].contains(&k.as_str())
+                                && !(b.bot.is_some()
+                                    && ["isbothole", "holebot"].contains(&k.as_str()))
                         })
                         .cloned()
                         .collect();
@@ -2912,6 +2928,77 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
     Ok((converted.archetype, converted.left_out))
 }
 
+/// Converts the `PlayerData` `name` to an archetype file and reports it;
+/// its id when written.
+fn player_type(cx: &mut Ctx, name: &str, at: &Location) -> Option<String> {
+    match player_archetype(cx, name) {
+        Ok((def, gaps)) => {
+            let file = format!("assets/archetypes/{}.json", name.to_ascii_lowercase());
+            match serde_json::to_vec_pretty(&def) {
+                Ok(bytes) if cx.write(&file, &bytes).is_ok() => {
+                    let id = cx.id("archetype", name, name, &file);
+                    if gaps.is_empty() {
+                        cx.mark(name, "player_type", "converted", vec![id.clone()], None);
+                    } else {
+                        cx.mark(
+                            name,
+                            "player_type",
+                            "converted_with_gaps",
+                            vec![id.clone()],
+                            Some(format!(
+                                "fields without a native equivalent: {}",
+                                gaps.join(", ")
+                            )),
+                        );
+                    }
+                    Some(id)
+                }
+                _ => {
+                    cx.unsupported(
+                        format!("player type {name}"),
+                        Some(at.clone()),
+                        "its archetype could not be written".into(),
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            cx.mark(
+                name,
+                "player_type",
+                "recognised_only",
+                vec![],
+                Some(format!("{e:#}")),
+            );
+            cx.unsupported(
+                format!("player type {name}"),
+                Some(at.clone()),
+                format!("{e:#}"),
+            );
+            None
+        }
+    }
+}
+
+/// The bot kind of the hole bot `PlayerData` named `name`: this Add-On's
+/// own or that of an Add-On it depends on.
+fn hole_bot_id(cx: &Ctx, name: &str) -> Option<String> {
+    let key = name.to_ascii_lowercase();
+    if key.is_empty() {
+        return None;
+    }
+    if cx.is_owned(&key) {
+        return Some(content_id(&cx.ns, "bot", name));
+    }
+    cx.reference
+        .datablocks
+        .get(&key)
+        .filter(|o| o.addon != "base")
+        .and_then(|o| namespace_for(&o.addon).ok())
+        .map(|ns| content_id(&ns, "bot", name))
+}
+
 /// The archetype a `PlayerData` named `name` is: this Add-On's own or that
 /// of an Add-On it depends on, or else v20's (`v20.player.<datablock>`).
 fn archetype_id(cx: &Ctx, name: &str) -> String {
@@ -3037,7 +3124,7 @@ fn sounds_and_rest(cx: &mut Ctx) {
         };
         mentions(name).saturating_sub(idle) > 1
     };
-    for (name, class, fields, own, path, line) in pending {
+    for (name, class, fields, _, path, line) in pending {
         let at = Location::new(&path, line);
         match class.as_str() {
             "audioprofile" => {
@@ -3129,57 +3216,23 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     e.notes.extend(users.into_iter().map(|id| format!("used by {id}")));
                 }
             }
-            "playerdata" if !fields.contains_key("isholebot") => {
-                match player_archetype(cx, &name) {
-                    Ok((def, gaps)) => {
-                        let file = format!("assets/archetypes/{}.json", name.to_ascii_lowercase());
-                        match serde_json::to_vec_pretty(&def) {
-                            Ok(bytes) if cx.write(&file, &bytes).is_ok() => {
-                                let id = cx.id("archetype", &name, &name, &file);
-                                if gaps.is_empty() {
-                                    cx.mark(&name, "player_type", "converted", vec![id], None);
-                                } else {
-                                    cx.mark(
-                                        &name,
-                                        "player_type",
-                                        "converted_with_gaps",
-                                        vec![id],
-                                        Some(format!("fields without a native equivalent: {}", gaps.join(", "))),
-                                    );
-                                }
-                            }
-                            _ => cx.unsupported(
-                                format!("player type {name}"),
-                                Some(at),
-                                "its archetype could not be written".into(),
-                            ),
-                        }
-                    }
-                    Err(e) => {
-                        cx.mark(&name, "player_type", "recognised_only", vec![], Some(format!("{e:#}")));
-                        cx.unsupported(format!("player type {name}"), Some(at), format!("{e:#}"));
+            "playerdata" => {
+                // A Bot_Hole bot is a body like any player type, and a bot
+                // kind read from its `h` settings.
+                let hole = fields.get("isholebot").is_some_and(|v| literal(v).trim() != "0");
+                let Some(body) = player_type(cx, &name, &at) else {
+                    continue;
+                };
+                if hole {
+                    let id = cx.id("bot", &name, &name, "assets/bots.json");
+                    cx.bots.push(hole_bots::kind(&id, &name, &body, &fields));
+                    if let Some(e) = cx.entry(&name) {
+                        e.ids.push(id);
+                        e.notes.push(
+                            "a Bot_Hole bot: its body, and a bot kind from its h settings (sight, wander, melee, side) that its hole brick keeps one of".into(),
+                        );
                     }
                 }
-            }
-            "playerdata" => {
-                // Bot_Hole's settings are the `h`-prefixed fields this datablock declares.
-                let ai: Vec<_> = own
-                    .keys()
-                    .filter(|k| k.starts_with('h') && k.len() > 2)
-                    .cloned()
-                    .collect();
-                cx.mark(
-                    &name,
-                    "bot",
-                    "recognised_only",
-                    vec![],
-                    Some("no native schema for Add-On bots; bots are Rust brains that join as players".into()),
-                );
-                cx.unsupported(
-                    format!("bot {name}"),
-                    Some(at),
-                    format!("Bot_Hole AI settings ({}) configure a script framework this import does not have", ai.join(", ")),
-                );
             }
             // Images' casings and explosions' debris throw it
             // (`bri_weapons::debris`), drawn with its model.
@@ -3592,6 +3645,7 @@ fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
         ("weapons", "assets/weapons.json"),
         ("vehicles", "assets/vehicles.json"),
         ("bricks", "assets/brick-catalog/stock-catalog.json"),
+        ("bots", "assets/bots.json"),
     ]
     .into_iter()
     .filter(|(_, file)| out.join(file).is_file())
@@ -3645,6 +3699,10 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         .filter_map(|d| d.package.clone())
         .map(|p| (p, "*".to_string()))
         .collect();
+    if !cx.bots.is_empty() {
+        let bytes = serde_json::to_vec_pretty(&hole_bots::pack(&cx.bots))?;
+        cx.write("assets/bots.json", &bytes)?;
+    }
     let src = &cx.report.source;
     // The per-package manifest the package runtime reads
     // (`bri_package_runtime::manifest`): the weapons, vehicles and bricks

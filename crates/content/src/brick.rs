@@ -39,6 +39,10 @@ pub struct CatalogEntry {
     /// [`Brick::stretched`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stretch: Option<[u32; 3]>,
+    /// The bot kind (`bots.json` id) this brick keeps one of at all times,
+    /// as Bot_Hole's hole bricks (`isBotHole`, `holeBot`) do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
 }
 
 /// Flat mirrors on a brick's sides. Each player's game draws what a mirror

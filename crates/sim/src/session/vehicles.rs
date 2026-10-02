@@ -739,7 +739,13 @@ impl Session {
                     bri_world::ContentRef::Resolved(id) => Some(id.clone()),
                     _ => None,
                 });
-            self.reconcile_bot_brick(brick_id, wanted.as_deref())?;
+            // A hole brick keeps its own kind of bot; a spawn brick the one
+            // chosen from its list.
+            let bot = wanted.clone().or_else(|| {
+                let brick = self.simulation.state().bricks.get(&brick_id)?;
+                self.simulation.definitions.get(brick).ok()?.bot.clone()
+            });
+            self.reconcile_bot_brick(brick_id, bot.as_deref())?;
             // Bot kinds share the spawn brick's list but are not vehicles.
             let wanted = wanted.filter(|id| !self.is_bot_kind(id));
             let current = self.vehicles.by_brick.get(&brick_id).copied();

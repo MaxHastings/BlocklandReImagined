@@ -39,6 +39,8 @@ pub struct Definition {
     /// The glass a link's views took the place of, averaged (straight
     /// RGBA): what an unlinked opening shows.
     pub glass: [f32; 4],
+    /// A hole brick's bot kind (`CatalogEntry::bot`).
+    pub bot: Option<String>,
 }
 /// World-space box of a placed brick's logical grid volume.
 /// Every brick's catalog entry the game knows: the base game's in
@@ -407,6 +409,7 @@ impl Definitions {
                             reflection: entry.reflection,
                             link: entry.link,
                             glass,
+                            bot: entry.bot,
                         }
                     )
                     .is_none(),

@@ -41,6 +41,36 @@
     { "id": "steel-ball-fx", "path": "showcase/steel-ball-fx", "enabled": false },
     { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
     {
+      "id": "bot_hole",
+      "enabled": false,
+      "original": {
+        "addon": "Bot_Hole",
+        "title": "Hole Bots",
+        "authors": [
+          "Rotondo"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "500b917ca1f62f71e5a4c43f8c1097478e71d974e9adddb9cd04d88a3aa80220"
+        ]
+      }
+    },
+    {
+      "id": "bot_zombie",
+      "enabled": false,
+      "original": {
+        "addon": "Bot_Zombie",
+        "title": "Zombie",
+        "authors": [
+          "Rotondo"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "002a9e6da08e9841a29c203908b89d23b0ee11aee6102b009079c995e9782bcf"
+        ]
+      }
+    },
+    {
       "id": "tool_newduplicator",
       "enabled": false,
       "original": {

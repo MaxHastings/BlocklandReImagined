@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "notes": "Rotondo's Zombie on the engine's bot brain: its hole brick keeps one zombie (the import reads its h settings: name, side, sight, wander, swipe). The port adds what its scripts did: the zombie's paint and face, its arms held out ahead, and a swipe that turns a bot of another side at half health or less into a zombie. Not ported yet: an infected bot's name gaining 'Zombie', and two zombies of different sides marking each other instead of turning.",
+  "patch": {
+    "assets/bots.json": {
+      "bots": {
+        "{namespace}:bot/zombieholebot": {
+          "emote": "hug",
+          "look": {
+            "colors": {
+              "head": "{head:rgba}",
+              "torso": "{torso:rgba}",
+              "larm": "{larm:rgba}",
+              "rarm": "{rarm:rgba}",
+              "lhand": "{lhand:rgba}",
+              "rhand": "{rhand:rgba}",
+              "hip": "{hip:rgba}",
+              "lleg": "{lleg:rgba}",
+              "rleg": "{rleg:rgba}"
+            },
+            "face": "{face}"
+          },
+          "melee": {
+            "converts_below": "{turns_hurt_bots}"
+          }
+        }
+      }
+    }
+  },
+  "handles": {
+    "ZombieHoleBot::onAdd": "the bot kind's look (paint by slot and face, from this copy's script) and emote hug, which holds the arms out ahead as playThread(1, ArmReadyBoth) did",
+    "ZombieHoleBot::onBotLoop": "does nothing in the original",
+    "ZombieHoleBot::onBotFollow": "only reads positions in the original",
+    "ZombieHoleBot::onBotCollision": "does nothing in the original",
+    "holeZombieInfect": "melee converts_below: the bot turns into one of the zombie's kind (its body, look, side and swipe) with full health",
+    "armor::onCollision": "melee converts_below: a zombie's swipe on a bot of another side at or under half health turns it"
+  }
+}
