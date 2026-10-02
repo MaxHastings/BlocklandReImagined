@@ -71,6 +71,10 @@ pub struct ToolCatalog {
     /// Brick definitions that accept a sound / a vehicle.
     pub sound_bricks: BTreeSet<String>,
     pub vehicle_bricks: BTreeSet<String>,
+    /// What a click turns a brick into (`CatalogEntry::swap`, an Add-On's
+    /// door), by brick id. Only bricks of the same catalog (ids sharing
+    /// everything before the last `/`) are kept.
+    pub swaps: BTreeMap<String, bri_content::brick::Swap>,
 }
 
 impl ToolCatalog {

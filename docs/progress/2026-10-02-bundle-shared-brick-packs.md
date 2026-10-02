@@ -54,6 +54,6 @@ their description.txt, pinned), 22 packs in v20 order.
 Two-of-three round (2026-10-02): the PC's missing-bricks thread downloaded
 21 more packs; `/mnt/project-files/shared-bricks/bundle-list-2of3.md` lists
 45 that qualify. The 43 brick packs are bundled (the two bots go to the
-bot lane), in v20 order. The new packs' titles are their folder names (the
-list has no description titles); Brick_Default_Fence_Extras names no
-author and is credited "Unknown".
+bot lane), in v20 order. The new packs' titles and authors are from their
+description.txt (read on the PC); Brick_Default_Fence_Extras has none, so
+it is titled by its folder and credited "Unknown".

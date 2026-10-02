@@ -18,7 +18,9 @@ struct Harness {
 }
 impl Harness {
     fn new(f: &Fixture) -> anyhow::Result<Self> {
-        let definitions = f.bricks();
+        Self::with(f.bricks())
+    }
+    fn with(definitions: bri_sim::definitions::Definitions) -> anyhow::Result<Self> {
         let world = World::new("Special".into(), "test".into(), vec![[1.0; 4]]);
         let mut s = Session::new(Simulation::new(
             world,
@@ -272,4 +274,64 @@ fn water_bricks_are_swimmable_not_solid(f: &Fixture) -> anyhow::Result<()> {
     assert!(splashes.is_empty(), "{splashes:?}");
     Ok(())
 }
+}
+
+/// A brick whose catalog names a click swap (an Add-On's door) turns into
+/// the brick for the side it is clicked from, at most every quarter second.
+#[test]
+fn a_click_swaps_a_brick_by_the_side_it_is_clicked_from() -> anyhow::Result<()> {
+    use bri_content::brick::Swap;
+    use bri_sim::testing as t;
+    let mut definitions = t::definitions();
+    let door = definitions.entries[t::BRICK].clone();
+    for id in ["test/brick/door-front", "test/brick/door-back"] {
+        definitions.entries.insert(id.into(), door.clone());
+    }
+    let swap = |front: &str, back: &str| Swap {
+        front: front.into(),
+        back: back.into(),
+    };
+    let mut h = Harness::with(definitions)?;
+    let mut tools = bri_sim::session::ToolCatalog::default();
+    tools.swaps.insert(
+        t::BRICK.into(),
+        swap("test/brick/door-front", "test/brick/door-back"),
+    );
+    tools
+        .swaps
+        .insert("test/brick/door-back".into(), swap(t::BRICK, t::BRICK));
+    h.s.set_tool_catalog(tools)?;
+    let brick = h.plant(t::BRICK, 0, -4, 0)?;
+    let definition = |h: &Harness| match &h.s.simulation().state().bricks[&brick].definition {
+        bri_world::ContentRef::Resolved(id) => id.clone(),
+        _ => String::new(),
+    };
+    let click = |h: &mut Harness| -> anyhow::Result<()> {
+        let target = Vec3::from(h.s.simulation().state().bricks[&brick].position);
+        let d = (target - (h.feet() + Vec3::Y * 2.1)).normalize();
+        h.sequence += 1;
+        h.s.command_with_aim(
+            h.owner,
+            h.sequence,
+            Command::Activate,
+            Some(bri_sim::session::ActionAim {
+                yaw: d.x.atan2(-d.z),
+                pitch: d.y.asin(),
+            }),
+        )?;
+        Ok(())
+    };
+    // The player stands behind it (+Z of an unturned brick).
+    click(&mut h)?;
+    assert_eq!(definition(&h), "test/brick/door-back");
+    click(&mut h)?;
+    assert_eq!(
+        definition(&h),
+        "test/brick/door-back",
+        "within the cooldown"
+    );
+    h.run(MoveInput::default(), 40)?;
+    click(&mut h)?;
+    assert_eq!(definition(&h), t::BRICK, "and back");
+    Ok(())
 }

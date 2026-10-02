@@ -69,6 +69,16 @@ impl ToolCatalog {
                 .filter(|b| b.special_kind.as_deref() == Some("VehicleSpawn"))
                 .map(|b| b.id.clone())
                 .collect(),
+            swaps: catalog
+                .bricks
+                .iter()
+                .filter_map(|b| {
+                    let swap = b.swap.as_ref()?;
+                    let own = |id: &str| id.rsplit_once('/').map(|(p, _)| p.to_owned());
+                    (own(&swap.front) == own(&b.id) && own(&swap.back) == own(&b.id))
+                        .then(|| (b.id.clone(), swap.clone()))
+                })
+                .collect(),
         })
     }
     /// Install the music loops and vehicles the host actually supports.
@@ -129,6 +139,7 @@ mod tests {
             reflection: None,
             link: None,
             stretch: None,
+            swap: None,
             bot: None,
         };
         let catalog = Catalog {
@@ -202,6 +213,30 @@ mod tests {
         )?)?;
         let definitions = Definitions::load(&catalog_dir, &root.join("content/maps-pass-008"))?;
         Ok((catalog, effects, materials, definitions))
+    }
+
+    /// A brick's click swap is kept only when both targets are bricks of
+    /// its own catalog: an Add-On cannot turn a brick into another's.
+    #[test]
+    fn a_click_swap_stays_within_its_own_catalog() -> Result<()> {
+        use bri_content::brick::Swap;
+        let (mut catalog, effects, materials, _) = synthetic_inputs();
+        let mut door = serde_json::to_value(&catalog.bricks[0])?;
+        let swap = |front: &str, back: &str| {
+            serde_json::to_value(Swap {
+                front: front.into(),
+                back: back.into(),
+            })
+        };
+        door["id"] = "doors:brick/door".into();
+        door["swap"] = swap("doors:brick/open-a", "doors:brick/open-b")?;
+        catalog.bricks.push(serde_json::from_value(door.clone())?);
+        door["id"] = "doors:brick/thief".into();
+        door["swap"] = swap("doors:brick/open-a", "other:brick/vault")?;
+        catalog.bricks.push(serde_json::from_value(door)?);
+        let tools = ToolCatalog::from_native(&catalog, &effects, &materials)?;
+        assert_eq!(tools.swaps.keys().collect::<Vec<_>>(), ["doors:brick/door"]);
+        Ok(())
     }
 
     /// The catalog lists every print, printable brick, named light and

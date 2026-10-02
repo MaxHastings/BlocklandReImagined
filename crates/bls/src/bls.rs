@@ -490,6 +490,7 @@ mod tests {
             reflection: None,
             link: None,
             stretch: None,
+            swap: None,
             bot: None,
         };
         Catalog {

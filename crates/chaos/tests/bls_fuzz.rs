@@ -24,6 +24,7 @@ fn catalog() -> Catalog {
         reflection: None,
         link: None,
         stretch: None,
+        swap: None,
         bot: None,
     };
     Catalog {

@@ -39,10 +39,27 @@ pub struct CatalogEntry {
     /// [`Brick::stretched`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stretch: Option<[u32; 3]>,
+    /// Clicking it turns it into another brick of its own catalog (not in
+    /// v20's engine: Brick_Doors' script swaps a door's datablock). See
+    /// [`Swap`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swap: Option<Swap>,
     /// The bot kind (`bots.json` id) this brick keeps one of at all times,
     /// as Bot_Hole's hole bricks (`isBotHole`, `holeBot`) do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot: Option<String>,
+}
+
+/// The bricks a click turns a brick into, by the side it is clicked from:
+/// a door opens away from whoever opens it. Both are ids in the same
+/// catalog, of the same size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Swap {
+    /// Clicked from in front (the brick's -Z side, unrotated).
+    pub front: String,
+    /// Clicked from behind.
+    pub back: String,
 }
 
 /// Flat mirrors on a brick's sides. Each player's game draws what a mirror

@@ -774,7 +774,7 @@
       "id": "brick_demiansbp_1x_half",
       "original": {
         "addon": "Brick_DemiansBP_1x_Half",
-        "title": "DemiansBP 1x Half",
+        "title": "Demian's Brick Pack 1x Half",
         "authors": [
           "Demian"
         ],
@@ -788,7 +788,7 @@
       "id": "brick_demiansbp_2x_half",
       "original": {
         "addon": "Brick_DemiansBP_2x_Half",
-        "title": "DemiansBP 2x Half",
+        "title": "Demian's Brick Pack 2x Half",
         "authors": [
           "Demian"
         ],
@@ -802,7 +802,7 @@
       "id": "brick_demiansbp_2x_tall",
       "original": {
         "addon": "Brick_DemiansBP_2x_Tall",
-        "title": "DemiansBP 2x Tall",
+        "title": "Demian's Brick Pack 2x Tall",
         "authors": [
           "Demian"
         ],
@@ -816,7 +816,7 @@
       "id": "brick_demiansbp_2x_wide",
       "original": {
         "addon": "Brick_DemiansBP_2x_Wide",
-        "title": "DemiansBP 2x Wide",
+        "title": "Demian's Brick Pack 2x Wide",
         "authors": [
           "Demian"
         ],
@@ -830,7 +830,7 @@
       "id": "brick_demiansbp_3x_wide",
       "original": {
         "addon": "Brick_DemiansBP_3x_Wide",
-        "title": "DemiansBP 3x Wide",
+        "title": "Demian's Brick Pack 3x Wide",
         "authors": [
           "Demian"
         ],
@@ -844,7 +844,7 @@
       "id": "brick_demiansbp_4x_tall",
       "original": {
         "addon": "Brick_DemiansBP_4x_Tall",
-        "title": "DemiansBP 4x Tall",
+        "title": "Demian's Brick Pack 4x Tall",
         "authors": [
           "Demian"
         ],
@@ -858,7 +858,7 @@
       "id": "brick_demiansbp_4x_wide",
       "original": {
         "addon": "Brick_DemiansBP_4x_Wide",
-        "title": "DemiansBP 4x Wide",
+        "title": "Demian's Brick Pack 4x Wide",
         "authors": [
           "Demian"
         ],
@@ -872,7 +872,7 @@
       "id": "brick_demiansbp_5x_tall",
       "original": {
         "addon": "Brick_DemiansBP_5x_Tall",
-        "title": "DemiansBP 5x Tall",
+        "title": "Demian's Brick Pack 5x Tall",
         "authors": [
           "Demian"
         ],
@@ -886,7 +886,7 @@
       "id": "brick_demianscbfix",
       "original": {
         "addon": "Brick_DemiansCBFix",
-        "title": "DemiansCBFix",
+        "title": "Demians Complete Brickpack",
         "authors": [
           "Demian"
         ],
@@ -928,7 +928,7 @@
       "id": "brick_extraarches",
       "original": {
         "addon": "Brick_ExtraArches",
-        "title": "ExtraArches",
+        "title": "Extra Arch Bricks",
         "authors": [
           "General",
           "Tophius"
@@ -986,7 +986,7 @@
       "id": "brick_glasspanes",
       "original": {
         "addon": "Brick_GlassPanes",
-        "title": "GlassPanes",
+        "title": "Glass Panes",
         "authors": [
           "Emil"
         ],
@@ -1000,7 +1000,7 @@
       "id": "brick_halfrounds",
       "original": {
         "addon": "Brick_HalfRounds",
-        "title": "HalfRounds",
+        "title": "Half rounds",
         "authors": [
           "DessertSource"
         ],
@@ -1028,7 +1028,7 @@
       "id": "brick_horizpoles",
       "original": {
         "addon": "Brick_HorizPoles",
-        "title": "HorizPoles",
+        "title": "Horizontal Polls",
         "authors": [
           "siba",
           "Masterlegodude"
@@ -1088,7 +1088,7 @@
       "id": "brick_platehighramps",
       "original": {
         "addon": "Brick_PlateHighRamps",
-        "title": "PlateHighRamps",
+        "title": "Plate High Ramps",
         "authors": [
           "TheTurtorn"
         ],
@@ -1116,7 +1116,7 @@
       "id": "brick_poleadapters",
       "original": {
         "addon": "Brick_PoleAdapters",
-        "title": "PoleAdapters",
+        "title": "Pole Adapters",
         "authors": [
           "siba",
           "Masterlegodude"
@@ -1131,7 +1131,7 @@
       "id": "brick_printplatesceiling",
       "original": {
         "addon": "Brick_PrintPlatesCeiling",
-        "title": "PrintPlatesCeiling",
+        "title": "Ceiling Print Plates",
         "authors": [
           "Demian",
           "Space Guy",
@@ -1162,7 +1162,7 @@
       "id": "brick_slanted",
       "original": {
         "addon": "Brick_Slanted",
-        "title": "Slanted",
+        "title": "Slanted Bricks",
         "authors": [
           "siba",
           "Masterlegodude"
@@ -1191,7 +1191,7 @@
       "id": "brick_smallrampspack",
       "original": {
         "addon": "Brick_SmallRampsPack",
-        "title": "SmallRampsPack",
+        "title": "Small Ramps Pack",
         "authors": [
           "Emil"
         ],
@@ -1248,7 +1248,7 @@
       "id": "brick_verticalplatepack",
       "original": {
         "addon": "Brick_VerticalPlatePack",
-        "title": "VerticalPlatePack",
+        "title": "Vertical Print Pack",
         "authors": [
           "Emil"
         ],
