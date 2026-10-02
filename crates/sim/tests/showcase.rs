@@ -1386,6 +1386,49 @@ fn a_bot_with_the_gun_grabs_holds_and_throws() {
     assert!(flown > 1.5, "thrown, not dropped: {flown} in 0.1 s");
 }
 
+/// Max, v0.1.14: a bot's Gravity Gun showed no beam. Its `beam` reaches
+/// every player as a player's does (the effects Add-On draws from it), and
+/// goes off when the bot dies holding.
+#[test]
+fn a_bots_beam_shows_on_everyones_screen() {
+    let mut g = Game::with(bot_world());
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let builder = g.join_verified("Builder", Vec3::new(0.0, 0.05, 0.0), 1);
+    g.steps(30);
+    let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
+    g.minigame(builder, &[]);
+    g.s.give_tool(bot, GUN, true).unwrap();
+    let beam = |g: &Game| {
+        g.s.package_state_for(builder).packages["gravity-gun"]
+            .players
+            .get(&bot)
+            .and_then(|p| p.get("beam").cloned())
+    };
+    for _ in 0..2400 {
+        g.steps(1);
+        if g.s.held_by(bot) == Some(ObjectRef::Player(builder)) {
+            break;
+        }
+    }
+    assert_eq!(g.s.held_by(bot), Some(ObjectRef::Player(builder)));
+    g.steps(12);
+    let shown = beam(&g).expect("the bot's beam reaches the builder");
+    assert_eq!(shown[0], 2, "holding a player: {shown}");
+    assert_eq!(shown[1], builder, "the builder: {shown}");
+    assert_eq!(shown[2], 1, "beam on: {shown}");
+    g.cmd(bot, Command::Suicide).unwrap();
+    g.steps(12);
+    let shown = beam(&g).expect("still known");
+    assert_eq!(shown[2], 0, "off once it died: {shown}");
+}
+
 /// Max, v0.1.12: the bot used the gun only once right up close, and often
 /// backed off instead. The gun reaches far (its `bot` data says how far, and
 /// that it grabs from close up): from across the room the bot catches

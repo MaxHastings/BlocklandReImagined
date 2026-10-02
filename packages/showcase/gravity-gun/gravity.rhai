@@ -136,7 +136,8 @@ fn cmd_reel(p, notches) {
 // something while reaching shows it.
 fn on_tick() {
     let tool = get("tool");
-    for pl in players() {
+    // Bots hold the gun too.
+    for pl in players() + bots() {
         let p = pl.id;
         let b = beam_of(p);
         let holding = held(p);
