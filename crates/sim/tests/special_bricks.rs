@@ -158,6 +158,30 @@ fn returning_players_appear_where_a_respawn_would_put_them(f: &Fixture) -> anyho
 }
 
 on_both! {
+fn every_spawn_rotation_is_valid_before_the_first_post_spawn_weapon_tick(f: &Fixture) -> anyhow::Result<()> {
+    for turns in 0..4 {
+        let mut h = Harness::new(f)?;
+        let spawn = h.plant(f.brick(BrickRole::SpawnPoint), 10, 10, turns)?;
+        let center = Vec3::from(h.s.simulation().state().bricks[&spawn].position);
+        h.s.disconnect(h.owner)?;
+        h.s.resume(h.owner, Vec3::new(-20.0, 0.05, -20.0))?;
+        let (state, _) = h.s.motion_states().into_iter().find(|(p, _)| p.owner == h.owner).unwrap();
+        let feet = Vec3::from(state.feet);
+        assert!(Vec3::new(feet.x - center.x, 0., feet.z - center.z).length() < 1.);
+        assert!(state.yaw.abs() <= std::f32::consts::PI,
+            "spawn rotation {turns}: heading {} is outside the weapon/input range", state.yaw);
+        let expected = -f32::from(turns) * std::f32::consts::FRAC_PI_2;
+        let facing = Vec3::new(expected.sin(), 0., -expected.cos());
+        assert!(state.forward().distance(facing) < 1e-5,
+            "normalization must preserve the spawn's facing");
+        // No movement/look command may be needed to repair the spawn heading.
+        h.s.step()?;
+    }
+    Ok(())
+}
+}
+
+on_both! {
 fn consecutive_teledoors_pair_and_carry_players_through(f: &Fixture) -> anyhow::Result<()> {
     let mut h = Harness::new(f)?;
     let a = h.plant(f.brick(BrickRole::Teledoor), 0, -8, 0)?;

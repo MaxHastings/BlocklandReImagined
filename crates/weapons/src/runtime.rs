@@ -127,7 +127,11 @@ impl Frame {
                 && (0.01..=100.0).contains(&self.scale)
                 && self.direction.length_squared() > 0.1
                 && self.velocity.length() < 10000.0,
-            "Invalid actor frame"
+            "Invalid actor frame: yaw={}, scale={}, direction length squared={}, speed={}",
+            self.body_yaw,
+            self.scale,
+            self.direction.length_squared(),
+            self.velocity.length()
         );
         Ok(())
     }

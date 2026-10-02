@@ -1048,7 +1048,10 @@ impl Player {
         let mut state = self.state.clone();
         state.feet = feet.to_array();
         state.velocity = [0.0; 3];
-        state.yaw = yaw;
+        // Spawn bricks and other server teleports can supply a full-turn
+        // heading. Match the canonical input/weapon range without changing facing.
+        state.yaw =
+            (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         state.pitch = 0.0;
         state.grounded = false;
         state.crouched = false;
