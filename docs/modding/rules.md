@@ -669,7 +669,9 @@ turns, color, owner)` plants a brick of any loaded kind into build `owner`,
 centred as near the point as the stud and plate grid allows, as v20 rules
 did with `new fxDTSBrick(...).plant()`; where it does not fit (a brick, a
 player or the map in the way) nothing is planted, so ask `can_plant` first
-when it matters. A rule may plant into, or `remove_brick` from, a build its
+when it matters. `remove_brick` deletes a brick silently, as `%brick.delete()` did (no debris or
+break sound), so splitting or merging bricks reads as a swap; a blast from
+`explode` breaks the bricks it reaches. A rule may plant into, or `remove_brick` from, a build its
 caller has full trust on, or, inside a minigame, a build that minigame plays
 with (its owner's bricks, or everyone's with Use All Players' Bricks); hooks
 with no caller touch only the world's own bricks. `can_edit(brick)` asks

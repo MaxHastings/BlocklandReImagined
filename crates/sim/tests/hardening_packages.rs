@@ -18,6 +18,7 @@ use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::{Catalog, PlayerKey, Store};
 use bri_sim::{
     definitions::{Definition, Definitions},
+    presentation::CueKind,
     session::{
         ActionAim, Command, Notice, PackageArg, PackageCommand, PackageSave, Reply, Session,
     },
@@ -1039,6 +1040,50 @@ fn packages_cannot_remove_other_players_builds() {
         s.simulation().state().bricks.contains_key(&brick),
         "a package removed another player's brick for a stranger"
     );
+}
+
+/// `remove_brick` is Torque's `%brick.delete()`: a rule that swaps bricks
+/// for others (Trench Digging splitting and merging dirt) must not break
+/// them with a hammer's debris and sound.
+#[test]
+fn a_rule_removing_a_brick_breaks_nothing() {
+    let mut s = session(vec![Spec::server(
+        "swapper",
+        &["world.edit"],
+        json!({ "commands": [{ "name": "zap", "args": ["int"] }] }),
+        "fn cmd_zap(p, id) { remove_brick(id); }",
+    )]);
+    let mut builder = Client::new(s.join("Builder".into(), SPAWN, false).unwrap());
+    steps(&mut s, 5);
+    let Reply::Planted(brick) = builder
+        .send(
+            &mut s,
+            Command::Plant {
+                definition: "plate".into(),
+                position: [0.5, 0.1, -3.25],
+                quarter_turns: 0,
+                color: 0,
+            },
+        )
+        .unwrap()
+    else {
+        panic!("expected a planted brick")
+    };
+    s.take_cues();
+    let _ = builder.send(
+        &mut s,
+        pkg("swapper", "zap", vec![PackageArg::Int(brick as i64)]),
+    );
+    steps(&mut s, 2);
+    assert!(
+        !s.simulation().state().bricks.contains_key(&brick),
+        "the rule removed its own builder's brick"
+    );
+    let broke = s
+        .take_cues()
+        .into_iter()
+        .any(|c| matches!(c.kind, CueKind::BrickKill { .. }));
+    assert!(!broke, "a rule's removal broke the brick like a hammer");
 }
 
 // ------------------------------------------- 5. operations with extreme values
