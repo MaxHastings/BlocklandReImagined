@@ -93,7 +93,7 @@ packs only. Tests now read the current pack revisions. The runtime effects
 inventory assertion includes the current pack's 132 particles and 133 emitters.
 The content menu assertion still checks exactly 166 base bricks, separately
 from enabled Add-On entries. Foliage evidence writers create their output
-folder before writing. No tests were skipped or marked known failures.
+folder before writing. No additional tests were skipped or marked known failures.
 
 The admission stress campaign failed binding 127.0.0.2 on macOS (os error
 49). It now uses the Mac's dual-stack wildcard host with idle peers on IPv4
@@ -127,6 +127,22 @@ resolver, definition swap bookkeeping, destination sound bindings and
 identity-preserving importer are the production repairs; these harness
 repairs keep full verification useful on a fresh Mac checkout.
 
-Next: rerun full `python3 tools/gate.py --push` with the integration repair;
-Max verifies visual night lighting and door feel in his interactive playtest.
+Final verification: `python3 tools/gate.py --push` passed on `520c4631` and
+pushed all three commits to main. Workspace build: 36 seconds; clippy with
+warnings denied: 9 seconds; startup content check: 3 seconds; all 317 test
+binaries: 403 seconds, with no retry required. Total gate: 451 seconds.
+Remote main was verified as `520c4631afa62d153df05e80ea8698978bf2caed`.
+Log: `../.bri-gate/logs/520c4631afa6.log` and
+`artifacts/five-fixes-gate-final.log`.
+
+The fixed-save corpus reported skipped because this Mac has no Maxwell
+saves folder (`BRI_SAVES`). The generated stock-save and other save tests
+in the workspace ran; this does not claim verification of his private corpus.
+Windows GitHub Actions started for the pushed commit:
+[CI run](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37069428187).
+It was still in progress when this evidence entry was finalized.
+
+Max's interactive checks: observe Bedroom foliage and distant Slopes water
+through day/night, switch maps and equip/use the spray can, open and close
+doors from both sides with their sounds, and launch with Bot_Shark enabled.
 These fixes do not mark the full alpha contract complete or publish a release.
