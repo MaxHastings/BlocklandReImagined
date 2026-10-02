@@ -1567,7 +1567,8 @@ fn present_gaps(
         let icon = if manifest.textures.contains_key(&icon) {
             Some(icon)
         } else {
-            own_icon(dir, abs, &item.icon, manifest, added, faults)
+            let name = imported_picture(pack, &item.icon).unwrap_or(&item.icon);
+            own_icon(dir, abs, name, manifest, added, faults)
         };
         if let Some(request) = icon_render(dir, abs, &item.icon, faults) {
             added
@@ -1767,6 +1768,19 @@ fn icon_render(
 /// under a key of its own (`<dir>/<name>.png`, so two Add-Ons' icons never
 /// collide). None when there is no such file; a file that cannot be read
 /// is logged and shows the letter instead.
+/// Where an imported Add-On keeps a picture its scripts name: the
+/// importer copies `iconName`'s PNG to `textures/<hash>.png` and lists the
+/// original path in `resources`. The name without `.png`, as [`own_icon`]
+/// takes it.
+fn imported_picture<'a>(pack: &'a bri_weapons::Pack, name: &str) -> Option<&'a str> {
+    let path = format!("{}.png", name.replace('\\', "/"));
+    pack.resources
+        .iter()
+        .find(|r| r.path.eq_ignore_ascii_case(&path))?
+        .native_file
+        .as_deref()?
+        .strip_suffix(".png")
+}
 fn own_icon(
     dir: &str,
     abs: &Path,
@@ -2115,6 +2129,53 @@ mod add_on_icon_tests {
             )
         );
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
+    }
+    /// Max, v0.1.12: Fill Can's icon showed its first letter. The
+    /// importer keeps `./icon_fillcan` as `textures/<hash>.png`, listed
+    /// under its original path in `resources`.
+    #[test]
+    fn an_imported_add_on_item_shows_the_icon_it_shipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let abs = dir.path();
+        std::fs::create_dir_all(abs.join("textures")).unwrap();
+        image::RgbaImage::new(32, 32)
+            .save(abs.join("textures/348acc63.png"))
+            .unwrap();
+        let gravity = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/gravity-gun-tool/assets/weapons.json");
+        let weapons = std::fs::read(gravity).unwrap();
+        let mut pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let item = pack.items.values_mut().next().unwrap();
+        item.icon = "Add-Ons/Tool_Fill_Can/icon_fillcan".into();
+        let id = pack.items.keys().next().unwrap().clone();
+        pack.resources.push(bri_weapons::Resource {
+            path: "Add-Ons/Tool_Fill_Can/icon_fillcan.png".into(),
+            sha256: String::new(),
+            native_file: Some("textures/348acc63.png".into()),
+            diagnostics: Vec::new(),
+            package: None,
+        });
+        let mut manifest = empty();
+        let (mut added, mut faults) = (Added::default(), Vec::new());
+        let mut physics = ItemPhysicsCatalog {
+            schema_version: 1,
+            items: BTreeMap::new(),
+        };
+        present_gaps(
+            "Fill Can",
+            abs,
+            &weapons,
+            &pack,
+            &mut manifest,
+            &mut physics,
+            &mut added,
+            &mut faults,
+        );
+        assert_eq!(
+            manifest.items[&id].icon.as_deref(),
+            Some("fill can/textures/348acc63.png")
+        );
+        assert!(!faults.iter().any(|f| f.contains("icon")), "{faults:?}");
     }
     /// A stand-in tool Add-On with a model of its own: a wooden handle and
     /// an iron head (two materials, each naming its PNG), held at a
