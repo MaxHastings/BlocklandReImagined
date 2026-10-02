@@ -68,6 +68,55 @@ pub fn brick_catalog_providers(
             .collect(),
     )
 }
+/// Native brick geometry from enabled Add-Ons, including asset-only packs.
+/// The source path binding is used by inherited `brickFile` references.
+pub fn brick_geometry_assets(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<BTreeMap<String, bri_content::brick::Brick>> {
+    let mut out = BTreeMap::new();
+    let mut total = 0_u64;
+    for (_, assets) in kind_providers(content_root, packages, "content.json")? {
+        let index: serde_json::Value = serde_json::from_slice(&bounded_bytes(
+            &assets.join("content.json"),
+            WEAPON_INDEX_LIMIT,
+        )?)?;
+        for entry in index["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|e| e["kind"] == "brick_geometry")
+        {
+            let id = entry["id"].as_str().context("Geometry asset has no id")?;
+            let file = entry["file"]
+                .as_str()
+                .context("Geometry asset has no file")?;
+            let package = assets.parent().context("Missing geometry package")?;
+            let bytes = bounded_bytes(&contained(package, file)?, WEAPON_RESOURCE_LIMIT)?;
+            total += bytes.len() as u64;
+            ensure!(
+                total <= WEAPON_TOTAL_LIMIT,
+                "Shared geometry byte budget exceeded"
+            );
+            let mut mesh: bri_content::brick::Brick = serde_json::from_slice(&bytes)?;
+            mesh.validate()?;
+            bri_world::ContentRef::Resolved(id.to_owned()).validate()?;
+            // The content index binds authored identity. Identical source
+            // BLBs may share one generated file with another embedded id.
+            mesh.id = id.to_owned();
+            if mesh.needs_external_collision || mesh.collision_boxes.is_empty() {
+                // These require their catalog's explicit collision recipe.
+                continue;
+            }
+            if let Some((namespace, member)) = id.split_once(":brick_geometry/") {
+                out.insert(format!("v20/add-ons/{namespace}/{member}"), mesh.clone());
+            }
+            out.insert(id.to_owned(), mesh);
+            ensure!(out.len() <= 100_000, "Too many shared geometry assets");
+        }
+    }
+    Ok(out)
+}
 /// Bot kinds from every package providing `assets/bots.json`, in
 /// `packages.json` order (a later id replaces an earlier one). The base
 /// game provides none.

@@ -340,13 +340,21 @@ impl Session {
         } else {
             swap.back
         };
-        // A target missing from this game or of another size (it would
-        // move the brick's neighbours) leaves the brick as it is.
+        // Only catalog-approved targets can replace this brick, in place.
+        // Open doors may have a wider footprint than their closed state.
         if self.simulation.set_definition(brick, &target).is_err() {
             return Ok(());
         }
         self.dirty.insert(brick);
         self.specials.swapped.insert(brick, tick);
+        if let Some(profile) = self.tool_catalog.swap_sounds.get(&target).cloned() {
+            let position = self.simulation.state().bricks[&brick].position;
+            self.cues.emit(
+                tick,
+                crate::presentation::CueKind::WeaponSound { profile },
+                position,
+            );
+        }
         Ok(())
     }
     /// A projectile hit a brick: swords carve pumpkins.

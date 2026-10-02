@@ -615,3 +615,94 @@ fn the_mirror_is_the_base_games_window_with_mirror_faces() -> Result<()> {
     }
     Ok(())
 }
+
+/// The bundled Shark reuses Bot_Hole's asset-only 8xspawn geometry. Host
+/// through the normal Add-Ons screen; an absent placeable donor is valid.
+#[test]
+#[ignore = "generated base content and bundled Bot_Shark/Bot_Hole/Brick_Doors; headless"]
+fn bundled_shared_geometry_hosts_and_real_doors_change_footprint() -> Result<()> {
+    let source = generated_content();
+    let checkout = Checkout::new(&source)?;
+    checkout.install_originals()?;
+    let content = checkout.content();
+    for id in ["bot_hole", "bot_shark", "brick_doors"] {
+        let destination = content.join("addons").join(id);
+        std::fs::remove_dir_all(&destination)?;
+        copy_dir(&source.join("addons").join(id), &destination, false)?;
+    }
+    defaults::install(
+        &content,
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"),
+    )?;
+    let state = checkout.root.join("state");
+    let mut app = app(&content, &state, "SharkHost")?;
+    app.ui.core.push(ScreenId::AddOns);
+    step(&mut app)?;
+    for id in ["bot_hole", "bot_shark", "brick_doors"] {
+        request(
+            &mut app,
+            UiAction::SetAddOnEnabled {
+                id: id.into(),
+                enabled: true,
+            },
+        )?;
+    }
+    app.ui.core.pop(ScreenId::AddOns);
+    step(&mut app)?;
+    host(&mut app, ServerMode::SinglePlayer)?;
+    until(&mut [&mut app], "Shark enabled host starts", 120, |apps| {
+        in_game(apps[0])
+    })?;
+    let paths = &app.content.paths;
+    let mut map = paths.load_map(SLATE, None)?;
+    let shark = &map.simulation.definitions.entries["bot_shark:brick/bricksharkbot_holespawndata"];
+    ensure!(shark.mesh.footprint_studs == [8, 8]);
+    let catalog = bri_sim::definitions::catalog_with(&paths.brick_catalog, &paths.brick_extras)?;
+    let doors: Vec<_> = catalog
+        .bricks
+        .iter()
+        .filter(|b| {
+            b.id.starts_with("brick_doors:")
+                && b.other_properties.get("isopen").is_some_and(|v| v == "0")
+        })
+        .collect();
+    ensure!(!doors.is_empty());
+    let actor = bri_world::authority::Actor {
+        owner: 1,
+        administrator: true,
+        ..Default::default()
+    };
+    let tools = bri_sim::session::ToolCatalog::from_native(
+        &catalog,
+        &app.content.effects,
+        &serde_json::from_slice(&std::fs::read(
+            paths.brick_materials.join("brick-materials.json"),
+        )?)?,
+    )?;
+    for (i, door) in doors.iter().enumerate() {
+        let mesh = &map.simulation.definitions.entries[&door.id].mesh;
+        let old_size = mesh.footprint_studs;
+        let position = [
+            i as f32 * 10.0 + old_size[0] as f32 * 0.25,
+            mesh.height_plates as f32 * 0.1,
+            old_size[1] as f32 * 0.25,
+        ];
+        let brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved(door.id.clone()),
+            position,
+            1,
+        );
+        let id = map.simulation.plant_group_floating(&actor, vec![brick])?[0];
+        let target = &door.swap.as_ref().context("door has no swap")?.front;
+        map.simulation.set_definition(id, target)?;
+        ensure!(
+            map.simulation.definitions.entries[target]
+                .mesh
+                .footprint_studs
+                != old_size
+        );
+        ensure!(tools.swap_sounds.get(target).map(String::as_str) == Some("v20/sound/brickchange"));
+        map.simulation.set_definition(id, &door.id)?;
+    }
+    Ok(())
+}

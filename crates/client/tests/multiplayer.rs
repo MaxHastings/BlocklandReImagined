@@ -411,6 +411,26 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change(f: &ContentRoot
             })
         },
     )?;
+    // The background scene replacement must sync its palette even if no
+    // brick delta arrived since MapChanged. Exercise both players' real UI path.
+    for app in [&mut host, &mut guest] {
+        request(app, UiAction::UseSprayCan { color: 1 })?;
+    }
+    until(
+        &mut [&mut host, &mut guest],
+        "both spray cans equip after the map change",
+        Duration::from_secs(10),
+        |apps| {
+            apps.iter().all(|app| {
+                app.network_view().is_some_and(|v| {
+                    v.weapons
+                        .images
+                        .get(&v.owner)
+                        .is_some_and(|images| images.iter().any(|image| image.paint == Some(1)))
+                })
+            })
+        },
+    )?;
     until(
         &mut [&mut host, &mut guest],
         "trust survives the map change",

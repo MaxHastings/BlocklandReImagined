@@ -69,6 +69,32 @@ impl ToolCatalog {
                 .filter(|b| b.special_kind.as_deref() == Some("VehicleSpawn"))
                 .map(|b| b.id.clone())
                 .collect(),
+            swap_sounds: catalog
+                .bricks
+                .iter()
+                .filter_map(|b| {
+                    let swap = b.swap.as_ref()?;
+                    let own = |id: &str| id.rsplit_once('/').map(|(p, _)| p.to_owned());
+                    if own(&swap.front) != own(&b.id) || own(&swap.back) != own(&b.id) {
+                        return None;
+                    }
+                    let silent = b
+                        .other_properties
+                        .get("nobricksounds")
+                        .is_some_and(|v| matches!(v.trim().trim_matches('"'), "1" | "true"));
+                    let sound = b
+                        .other_properties
+                        .get("native_swap_sound")
+                        .cloned()
+                        .or_else(|| {
+                            b.other_properties
+                                .get("isdoor")
+                                .filter(|v| matches!(v.trim().trim_matches('"'), "1" | "true"))
+                                .map(|_| "v20/sound/brickchange".to_owned())
+                        })?;
+                    (!silent).then(|| (b.id.clone(), sound))
+                })
+                .collect(),
             swaps: catalog
                 .bricks
                 .iter()

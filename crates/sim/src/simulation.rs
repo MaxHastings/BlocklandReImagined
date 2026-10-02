@@ -1312,21 +1312,16 @@ impl Simulation {
             build()
         }
     }
-    /// Swap a brick to another definition with the same grid size (the
-    /// treasure chest opening, a pumpkin being carved).
+    /// Swap a brick's definition in place, replacing its grid bounds and
+    /// collision as well as its look (including wider open doors).
     pub fn set_definition(&mut self, id: BrickId, definition: &str) -> Result<()> {
         let brick = self.state().bricks.get(&id).context("Unknown brick")?;
-        let old = self.definitions.get(brick)?;
         let new = self
             .definitions
             .entries
             .get(definition)
             .context("Unknown brick definition")?;
-        ensure!(
-            old.mesh.footprint_studs == new.mesh.footprint_studs
-                && old.mesh.height_plates == new.mesh.height_plates,
-            "Replacement brick has a different size"
-        );
+        let bounds = Bounds::new(brick, &new.mesh)?;
         let definition = definition.to_string();
         if let Some(handle) = self.detach(id) {
             self.parked.remove(&mut self.physics, &[handle]);
@@ -1335,6 +1330,7 @@ impl Simulation {
         self.authority.mutate(id, |b| {
             b.definition = bri_world::ContentRef::Resolved(definition)
         })?;
+        self.index.insert(id, bounds);
         self.note_kind(id);
         self.attach(id)?;
         self.detect_collisions();

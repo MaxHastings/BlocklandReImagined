@@ -965,6 +965,13 @@ fn slot_size(slot:u32)->vec2<f32> {
         let reflection=display_color(textureSample(layer2,clamped,reflection_uv).rgb);
         rgb=mix(rgb,reflection,clamp(material[3].z*(0.5+0.15*(cos(phase.x)+sin(phase.y))),0.0,1.0));
         if alpha<=0.00001 {discard;}
+        // Authored surface/reflection textures are daylight colours. Apply
+        // the live environment before fog, including distant water and shore.
+        let live_up=max(-normalize(camera.sun_direction.xyz).y,0.0);
+        let baked_up=max(-baked_sun_direction().y,0.0);
+        let daylight=baked_ambient()+baked_sun_color()*baked_up;
+        let water_light=select(vec3<f32>(1.0),clamp((camera.ambient.rgb+camera.sun_color.rgb*live_up)/max(daylight,vec3<f32>(0.001)),vec3<f32>(0.0),vec3<f32>(4.0)),relit());
+        rgb*=water_light;
         if depth_mapped {
             // fluid::CalcVertSpecular, added (SRC_ALPHA, ONE) under the depth
             // mask: colour.rgb*colour.a*pow(half.up,power)^2, sun as light 0.
@@ -973,7 +980,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             let facing=max(half_vector.y,0.0);
             var shine=1.0;
             if material[4].w>0.0 {shine=select(0.0,pow(facing,material[4].w),facing>0.0);}
-            rgb+=material[4].rgb*shine*shine*a/alpha;
+            rgb+=material[4].rgb*shine*shine*a/alpha*water_light;
         }
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }

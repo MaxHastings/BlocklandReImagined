@@ -365,8 +365,12 @@ fn prepare_map(
     let visual = load_map_bundle(&paths.map_bundle, &map)?;
     let mut light_volume = LightVolumeState::start(&visual.scene, light_cache);
     // The same definitions the host's session loads, Add-On bricks included.
-    let definitions =
-        Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
+    let definitions = Definitions::load_with_geometry(
+        &paths.brick_catalog,
+        &paths.geometry,
+        &paths.brick_extras,
+        &bri_net::content_identity::brick_geometry_assets(&paths.root, &paths.packages)?,
+    )?;
     let meshes = Arc::new(
         definitions
             .entries

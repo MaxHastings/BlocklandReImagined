@@ -400,6 +400,13 @@ datablock fxDTSBrickData (brickTestDoorData : brickTestDoorOpenData)
     };
     let (open, closed) = (swap("Test Door Open"), swap("Test Door"));
     assert!(
+        catalog["bricks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["other_properties"]["native_swap_sound"] == "v20/sound/brickchange")
+    );
+    assert!(
         open["front"]
             .as_str()
             .unwrap()
@@ -413,4 +420,45 @@ datablock fxDTSBrickData (brickTestDoorData : brickTestDoorOpenData)
             .ends_with("/bricktestdooropendata"),
         "{closed}"
     );
+}
+
+/// Identical BLBs under different authored names need independent identities;
+/// hashing only original bytes let the later conversion overwrite the first.
+#[test]
+fn identical_brick_files_keep_their_own_native_identity() {
+    let dir = temp("duplicate-geometry").join("Brick_Test_Aliases");
+    write(
+        &dir.join("server.cs"),
+        r#"
+        datablock fxDTSBrickData (firstData) { brickFile = "./First.blb"; uiName = "First"; };
+        datablock fxDTSBrickData (secondData) { brickFile = "./Second.blb"; uiName = "Second"; };
+    "#,
+    );
+    for name in ["First.blb", "Second.blb"] {
+        write(&dir.join(name), "1 1 3\nBRICK\n");
+    }
+    let out = temp("duplicate-geometry-out").join("out");
+    import(&Options {
+        input: dir,
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/content.json")).unwrap()).unwrap();
+    let entries: Vec<_> = index["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "brick_geometry")
+        .collect();
+    assert_eq!(entries.len(), 2);
+    assert_ne!(entries[0]["file"], entries[1]["file"]);
+    for entry in entries {
+        let mesh: bri_content::brick::Brick = serde_json::from_slice(
+            &std::fs::read(out.join(entry["file"].as_str().unwrap())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mesh.id, entry["id"].as_str().unwrap());
+    }
 }

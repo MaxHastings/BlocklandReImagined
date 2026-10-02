@@ -284,6 +284,13 @@ impl HudModel {
         if self.paint_row >= self.paint_rows.len() {
             self.paint_row = 0;
         }
+        self.paint_swatch = self
+            .paint_swatch
+            .min(self.paint_rows[self.paint_row].saturating_sub(1));
+        if self.color(self.spray_index).is_none() {
+            self.spray_index = 0;
+        }
+        self.paint_name = self.paint_name_for();
         if self.mode != ScrollMode::Paint && self.prefs.hide_paint_box {
             self.paint_slide.offset += self.paint_hide_dist() - old_hide_dist;
         }
@@ -1025,6 +1032,28 @@ mod tests {
         assert_eq!(h.paint_name, "Bold - 1");
     }
 
+    #[test]
+    fn a_smaller_colorset_clamps_the_selected_swatch_before_scrolling() {
+        let mut h = model();
+        h.paint_row = 1;
+        h.paint_swatch = 8;
+        h.spray_index = 17;
+        h.set_colorset(vec![
+            PaintDivision {
+                name: "First".into(),
+                colors: vec![[1.0; 4]; 9],
+            },
+            PaintDivision {
+                name: "Last".into(),
+                colors: vec![[1.0; 4]; 2],
+            },
+        ]);
+        assert_eq!(h.paint_swatch, 1);
+        assert_eq!(h.spray_index, 0);
+        let mut out = Outbox::default();
+        h.scroll_paint(-1, &mut out);
+        assert_eq!(out.actions, vec![UiAction::UseSprayCan { color: 9 }]);
+    }
     #[test]
     fn paint_columns_and_fx() {
         let mut h = model();

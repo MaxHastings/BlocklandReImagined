@@ -857,6 +857,22 @@ impl App {
             &passages,
             |drop| self.world_items.drop_center(drop),
         );
+        // Plants keep their authored tint, scaled by the live outdoor light
+        // relative to the mission's own daylight. All other views share it.
+        let live_up = (-glam::Vec3::from_slice(&camera.sun_direction)
+            .normalize_or_zero()
+            .y)
+            .max(0.0);
+        let baked_up = (-glam::Vec3::from_array(scene.sun_direction)
+            .normalize_or_zero()
+            .y)
+            .max(0.0);
+        let plant_light = std::array::from_fn(|i| {
+            ((camera.ambient[i] + camera.sun_color[i] * live_up)
+                / (scene.ambient[i] + scene.sun_color[i] * baked_up).max(0.001))
+            .clamp(0.0, 4.0)
+        });
+        self.foliage.set_illumination(plant_light)?;
         self.foliage.prepare(
             frame,
             &bri_foliage::Camera {

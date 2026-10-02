@@ -17,7 +17,7 @@ Owners are named by thread title.
 
 | Seam | What it covers | Owner | State |
 |---|---|---|---|
-| Click swaps | `CatalogEntry::swap` (front/back brick ids), `ToolCatalog::swaps`; a click turns a brick into the one for its side, only bricks of its own catalog and size, at most every 250 ms | Bundled originals (doors, coffins) | in flight |
+| Click swaps | `CatalogEntry::swap` (front/back brick ids), `ToolCatalog::swaps` and `swap_sounds`; swaps replace bounds and collision, including wider open doors, with optional positional sound, at most every 250 ms | Bundled originals (doors, coffins) | on main |
 | Hit regions | `info.region` on damage: head, torso, legs | Bushido's Adventure Pack | in flight |
 | HUD "holding" line | per-gun HUD text while an item is held | Bushido's Adventure Pack | in flight |
 | Scope zoom | zoom, `hide_nodes`, `both_arms` | Kaje's Sniper Rifle | in flight |

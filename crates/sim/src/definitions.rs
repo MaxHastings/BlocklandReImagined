@@ -187,13 +187,62 @@ impl Definitions {
         content: &Path,
         extras: &[(String, std::path::PathBuf)],
     ) -> Result<Self> {
+        Self::load_with_geometry(catalog_dir, content, extras, &BTreeMap::new())
+    }
+    /// Native geometry assets may be shared even when their package declares
+    /// no placeable bricks. They never become extra menu entries.
+    pub fn load_with_geometry(
+        catalog_dir: &Path,
+        content: &Path,
+        extras: &[(String, std::path::PathBuf)],
+        geometry: &BTreeMap<String, Brick>,
+    ) -> Result<Self> {
+        let mut shared = Self::default();
+        for (id, mesh) in geometry {
+            mesh.validate()?;
+            ensure!(
+                !mesh.needs_external_collision,
+                "Shared mesh {id} requires a collision recipe"
+            );
+            let collision = CollisionBody {
+                id: id.clone(),
+                parts: mesh
+                    .collision_boxes
+                    .iter()
+                    .map(|b| bri_content::collision::Part::Box {
+                        center: b.center,
+                        size: b.size,
+                    })
+                    .collect(),
+            };
+            let shape = bri_physics::content::collider(&collision)?
+                .build()
+                .shared_shape()
+                .clone();
+            shared.entries.insert(
+                id.clone(),
+                Definition {
+                    mesh: mesh.clone(),
+                    collision,
+                    shape,
+                    indestructible: false,
+                    special: Special::None,
+                    reflection: None,
+                    link: None,
+                    glass: [1.0; 4],
+                    bot: None,
+                },
+            );
+        }
         let mut out = Self::load(catalog_dir, content)?;
+        shared.entries.extend(out.entries.clone());
         for (dir, catalog) in extras {
-            for (id, definition) in Self::load_on(catalog, catalog, &out)?.entries {
+            for (id, definition) in Self::load_on(catalog, catalog, &shared)?.entries {
                 ensure!(
                     !out.entries.contains_key(&id),
                     "{dir}: brick {id} is already defined"
                 );
+                shared.entries.insert(id.clone(), definition.clone());
                 out.entries.insert(id, definition);
             }
         }
@@ -250,8 +299,8 @@ impl Definitions {
                 None => {
                     let base = shared
                         .entries
-                        .values()
-                        .find(|d| d.mesh.id == entry.mesh_id)
+                        .get(&entry.mesh_id)
+                        .or_else(|| shared.entries.values().find(|d| d.mesh.id == entry.mesh_id))
                         .with_context(|| {
                             format!(
                                 "Brick {}: its shape {} is not a loaded brick's",
@@ -586,6 +635,35 @@ mod tests {
         );
         assert_eq!(mirror_brick.reflection.as_ref().unwrap().faces.len(), 2);
         assert!(window.reflection.is_none());
+        // A dependency may carry native geometry without a placeable brick.
+        // The Shark hole uses Bot_Hole's 8xspawn asset this way.
+        let mut asset = window.mesh.clone();
+        asset.id = "dependency:brick_geometry/window.blb".into();
+        asset.collision_boxes = vec![bri_content::brick::CollisionBox {
+            center: [0.0; 3],
+            size: [2.0, 0.6, 0.5],
+        }];
+        catalog(
+            &addon,
+            &[entry(
+                "mirror:brick/mirror",
+                "v20/add-ons/dependency/window.blb",
+                None,
+            )],
+            &[("mirror:brick/mirror", json!({}))],
+            &[],
+        );
+        let geometry = BTreeMap::from([("v20/add-ons/dependency/window.blb".into(), asset)]);
+        let loaded = Definitions::load_with_geometry(&base, &base, &extras, &geometry).unwrap();
+        assert_eq!(
+            loaded.entries["mirror:brick/mirror"].mesh.id,
+            "dependency:brick_geometry/window.blb"
+        );
+        assert_eq!(
+            loaded.entries.len(),
+            2,
+            "an asset alone is not a brick definition"
+        );
         // A shape nothing loaded is an error naming the brick.
         catalog(
             &addon,

@@ -20,6 +20,7 @@ struct Uniform {
     position: [f32; 4],
     right: [f32; 4],
     time_fog: [f32; 4],
+    illumination: [f32; 4],
 }
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct RenderStats {
@@ -42,6 +43,7 @@ pub struct RenderConfig {
     pub samples: u32,
 }
 pub struct FoliageRenderer {
+    illumination: [f32; 3],
     plant_buffer: wgpu::Buffer,
     original_plants: Vec<GpuPlant>,
     time_origin: f64,
@@ -335,6 +337,7 @@ impl FoliageRenderer {
             cache: None,
         });
         let mut renderer = Self {
+            illumination: [1.0; 3],
             plant_buffer,
             original_plants: data,
             time_origin: 0.,
@@ -356,7 +359,7 @@ impl FoliageRenderer {
     fn add_view(&mut self, device: &wgpu::Device) {
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("foliage camera"),
-            size: 112,
+            size: std::mem::size_of::<Uniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -386,6 +389,15 @@ impl FoliageRenderer {
             indices,
             runs: vec![],
         });
+    }
+    /// Environment light shared by the player's view, mirrors and probes.
+    pub fn set_illumination(&mut self, illumination: [f32; 3]) -> Result<()> {
+        ensure!(
+            illumination.iter().all(|v| v.is_finite() && *v >= 0.0),
+            "Invalid foliage illumination"
+        );
+        self.illumination = illumination;
+        Ok(())
     }
     pub fn prepare(
         &mut self,
@@ -432,7 +444,7 @@ impl FoliageRenderer {
         }
         let (visible, culling) = self.write(queue, 0, camera, seconds, fog_start, fog_end)?;
         self.stats.visible = visible;
-        self.stats.upload_bytes = 112 + visible * 4 + rebase_bytes;
+        self.stats.upload_bytes = std::mem::size_of::<Uniform>() + visible * 4 + rebase_bytes;
         self.stats.draw_calls = self.views[0].runs.len();
         self.stats.culling = culling;
         Ok(self.stats.clone())
@@ -493,6 +505,12 @@ impl FoliageRenderer {
             position: camera.position.extend(1.).to_array(),
             right: camera.right.extend(0.).to_array(),
             time_fog: [(seconds - self.time_origin) as f32, fog_start, fog_end, 0.],
+            illumination: [
+                self.illumination[0],
+                self.illumination[1],
+                self.illumination[2],
+                0.,
+            ],
         };
         let target = &mut self.views[view];
         queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));

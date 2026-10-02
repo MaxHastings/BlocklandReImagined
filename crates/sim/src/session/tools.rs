@@ -75,6 +75,8 @@ pub struct ToolCatalog {
     /// door), by brick id. Only bricks of the same catalog (ids sharing
     /// everything before the last `/`) are kept.
     pub swaps: BTreeMap<String, bri_content::brick::Swap>,
+    /// Optional sound of a successful click swap, by destination definition.
+    pub swap_sounds: BTreeMap<String, String>,
 }
 
 impl ToolCatalog {
@@ -121,7 +123,8 @@ impl ToolCatalog {
                 && self.prints.len() <= 100_000
                 && self.brick_print_aspects.len() <= 100_000
                 && self.brick_names.len() <= 100_000
-                && self.brick_names.values().all(|n| n.len() <= 256),
+                && self.brick_names.values().all(|n| n.len() <= 256)
+                && self.swap_sounds.len() <= 100_000,
             "Tool catalog exceeds limit"
         );
         for id in self
@@ -132,6 +135,13 @@ impl ToolCatalog {
             .chain(self.prints.keys())
         {
             ContentRef::Resolved(id.clone()).validate()?;
+        }
+        for (definition, profile) in &self.swap_sounds {
+            ensure!(
+                self.swaps.contains_key(definition),
+                "Swap sound has no click swap"
+            );
+            ContentRef::Resolved(profile.clone()).validate()?;
         }
         for (definition, aspect) in &self.brick_print_aspects {
             ensure!(

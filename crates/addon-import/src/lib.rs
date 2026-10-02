@@ -1409,8 +1409,9 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                 let id = content_id(&cx.ns, "brick_geometry", &member);
                 match bri_convert::brick::read(&f.bytes, id.clone()) {
                     Ok((brick, provenance)) => {
-                        let rel = format!("bricks/{}.brick.json", &digest[..24]);
-                        cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&brick)?)?;
+                        let native = serde_json::to_vec(&brick)?;
+                        let rel = format!("bricks/{}.brick.json", &hash(&native)[..24]);
+                        cx.write(&format!("assets/{rel}"), &native)?;
                         let id =
                             cx.id("brick_geometry", &member, &f.path, &format!("assets/{rel}"));
                         cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
@@ -2689,6 +2690,12 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     let name = cx.owned.get(&key).map_or(key.clone(), |o| o.d.name.clone());
                     b.id = cx.id("brick", &key, &name, "assets/bricks.json");
                     b.swap = door_swap(&b);
+                    if b.swap.is_some() {
+                        // Support_Doors::setDoorDataBlock plays the stock
+                        // clickChange clip unless the target suppresses it.
+                        b.other_properties
+                            .insert("native_swap_sound".into(), "v20/sound/brickchange".into());
+                    }
                     // A hole brick keeps one bot of its `holeBot`'s kind.
                     let hole = b
                         .other_properties

@@ -297,6 +297,10 @@ impl ContentPaths {
             geometry: self.geometry.clone(),
             tutorial: Some(self.tutorial.clone()),
             brick_extras: self.brick_extras.clone(),
+            brick_geometry: bri_net::content_identity::brick_geometry_assets(
+                &self.root,
+                &self.packages,
+            )?,
             weapons: self.weapon_content()?,
         })
     }

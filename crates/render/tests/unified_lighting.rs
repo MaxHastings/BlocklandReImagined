@@ -1414,3 +1414,60 @@ fn a_changed_environment_relights_the_maps_lightmaps() -> Result<()> {
     assert!((noon_shade - shade).abs() <= 3, "{noon_shade} {shade}");
     Ok(())
 }
+
+/// The water surface, shore and authored reflection darken together, in
+/// plain and depth-mapped paths and at both near and far viewing distances.
+#[test]
+fn water_follows_the_live_day_night_environment() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = color_target(&device, format, 128, 128);
+    for depth_mapped in [false, true] {
+        let mut scene = SceneData::default();
+        let mut water = bri_content::water::Water::volume([-30.0, -2.0, -30.0], [30.0, 0.0, 30.0]);
+        water.depth_mask = depth_mapped;
+        water.reflection = Some(water.surface.clone());
+        water.reflection_intensity = 0.5;
+        water.wave_amplitude = 0.0;
+        bri_render::water_scene::append(
+            &mut scene,
+            &water,
+            [0; 3],
+            ([0.5; 4], 8.0),
+            false,
+            |_, _| None,
+        )?;
+        let mut renderer = SceneRenderer::with_settings(&device, format, 1, None);
+        let mesh = renderer.upload(&device, &queue, &scene)?;
+        for distance in [12.0, 100.0] {
+            let mut camera =
+                Camera::perspective([0.0, distance, 0.1], [0.0; 3], 1.0, 1.2, 0.05, 400.0);
+            camera.apply_environment(&scene);
+            let day = camera;
+            renderer.update_camera(&queue, &day);
+            let pixels = render(&device, &queue, &mut renderer, &target, &[&mesh], &[], &[])?;
+            let middle = (64 * 128 + 64) * 4;
+            let daytime = pixels[middle..middle + 3]
+                .iter()
+                .map(|c| u32::from(*c))
+                .sum::<u32>();
+            camera.baked_sun_direction = day.sun_direction;
+            camera.baked_sun_direction[3] = 1.0;
+            camera.baked_sun_color = day.sun_color;
+            camera.baked_ambient = day.ambient;
+            camera.sun_color = [0.01, 0.01, 0.02, 0.0];
+            camera.ambient = [0.02, 0.025, 0.04, 0.0];
+            renderer.update_camera(&queue, &camera);
+            let pixels = render(&device, &queue, &mut renderer, &target, &[&mesh], &[], &[])?;
+            let nighttime = pixels[middle..middle + 3]
+                .iter()
+                .map(|c| u32::from(*c))
+                .sum::<u32>();
+            assert!(
+                daytime > 100 && nighttime * 3 < daytime,
+                "water depth={depth_mapped}, distance={distance}: day={daytime}, night={nighttime}"
+            );
+        }
+    }
+    Ok(())
+}

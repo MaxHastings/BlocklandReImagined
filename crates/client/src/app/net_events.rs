@@ -811,6 +811,10 @@ impl App {
             self.scene.palette = Some(prepared.palette);
             self.gpu.gpu_palette = None;
             let old = self.build.building.replace(prepared.building);
+            // The new controller has not seen any world or palette yet.
+            // The replica can be unchanged while the background map load finishes.
+            self.scene.query_source = None;
+            self.scene.query_log = None;
             self.motion.install(prepared.mirror);
             let building = self.build.building.as_mut().unwrap();
             building.set_tool_catalog(self.item_ui.catalog())?;
