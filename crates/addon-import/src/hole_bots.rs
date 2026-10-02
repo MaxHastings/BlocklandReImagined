@@ -72,6 +72,9 @@ pub(crate) fn kind(
             "name": "Melee",
         });
     }
+    if on("halertotherbots") {
+        kind["alerts_allies"] = json!(true);
+    }
     if let Some(side) = text("htype") {
         kind["side"] = json!(
             side.to_ascii_lowercase()
@@ -103,6 +106,7 @@ mod tests {
             ("hspawndist", "20"),
             ("hmelee", "1"),
             ("hattackdamage", "12"),
+            ("halertotherbots", "1"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -121,5 +125,6 @@ mod tests {
         assert_eq!(k["melee"]["damage"], 12.0);
         assert_eq!(k["melee"]["action"], "activate2");
         assert_eq!(k["body"], "x:archetype/walkerbot");
+        assert_eq!(k["alerts_allies"], true);
     }
 }

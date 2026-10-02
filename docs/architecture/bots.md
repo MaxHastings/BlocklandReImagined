@@ -11,7 +11,11 @@ bot does through the same code.
 1. **Perceive.** It looks for an enemy (`bot_sight`: in view, straight or
    through a portal) and remembers where one was seen, where a hit came
    from, and an enemy that went through a portal. Memory fades after the
-   kind's `memory_seconds`.
+   kind's `memory_seconds`. A kind with `alerts_allies` (Bot_Hole's
+   `hAlertOtherBots`) warns its side when it first sees an enemy or is
+   hit: allied bots within its sight that see and remember nothing take
+   the warning as a memory and go and look (`hear_alerts`, after every
+   bot has stepped).
 2. **Choose a behaviour.** `behaviour::choose` picks one from a
    `Situation` (what it holds, the enemy's distance and height, its
    memory, how far it strayed), the first that applies in this order:
@@ -42,7 +46,8 @@ bot does through the same code.
 ## Data
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
-  rate, aim error, memory, whether it fights other builders' bots, and:
+  rate, aim error, memory, whether it fights other builders' bots,
+  whether it warns its side (`alerts_allies`), and:
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is

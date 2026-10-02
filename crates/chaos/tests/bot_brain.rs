@@ -771,3 +771,56 @@ fn a_bot_with_a_spear_holds_it_back_then_throws_it() {
     eprintln!("speared after {hit:?} ticks");
     assert!(hit.is_some(), "the bot threw its spear and hit the builder");
 }
+
+/// A bot that sees an enemy warns its side: one standing out of sight of
+/// the enemy, but within the warner's, goes to look where the enemy was
+/// (Bot_Hole's `hAlertOtherBots`). Without the warning it stays home.
+#[test]
+fn a_bot_that_sees_an_enemy_warns_its_side() {
+    for alerts in [false, true] {
+        let mut s = session();
+        only_kind(&mut s, |k| {
+            k.sight = 32.0;
+            k.wander_radius = 0.0;
+            k.side = Some("pack".into());
+            k.alerts_allies = alerts;
+            k.melee = Some(bite(5.0));
+        });
+        let human = s
+            .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+            .unwrap();
+        let mut sequence = 0;
+        steps(&mut s, &[human], 10, &mut sequence);
+        // The mini-game puts the human at a spawn, (4.5, ±4.5): the near
+        // bot sees it (20 to 29 away), the far one, 14 behind the near one,
+        // is out of its sight (34 to 43).
+        load(
+            &mut s,
+            human,
+            vec![
+                bot_brick([10.0, 0.1, 24.0], human),
+                bot_brick([10.0, 0.1, 38.0], human),
+            ],
+        );
+        minigame(&mut s, human, TOOLS_ONLY);
+        steps(&mut s, &[human], 30, &mut sequence);
+        let far = *bots(&s)
+            .iter()
+            .max_by(|a, b| feet(&s, **a).z.total_cmp(&feet(&s, **b).z))
+            .unwrap();
+        let start = feet(&s, far).distance(feet(&s, human));
+        steps(&mut s, &[human], 120 * 3, &mut sequence);
+        let now = feet(&s, far).distance(feet(&s, human));
+        if alerts {
+            assert!(
+                now < start - 6.0,
+                "the warned bot came to look: {start} to {now}"
+            );
+        } else {
+            assert!(
+                now > start - 1.0,
+                "unwarned, it stayed home: {start} to {now}"
+            );
+        }
+    }
+}

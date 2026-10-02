@@ -82,6 +82,17 @@ pub(super) struct Bots {
     navs: Vec<(Body, Nav)>,
     /// Who last hurt each bot, and when.
     hurt: BTreeMap<OwnerId, (OwnerId, u64)>,
+    /// Warnings bots gave this tick (`BotKind::alerts_allies`), heard by
+    /// their side once every bot has stepped.
+    alerts: Vec<Alert>,
+}
+/// A bot that saw an enemy, or was hurt, tells its side where.
+struct Alert {
+    from: OwnerId,
+    /// Where the enemy was.
+    at: Vec3,
+    /// How far it is heard: the warner's sight.
+    reach: f32,
 }
 struct Brain {
     /// The vehicle spawn brick that made it; `None` for a bot the rules
@@ -743,25 +754,38 @@ impl Session {
         if other == bot || !self.peers.get(&other).is_some_and(|p| p.combat.alive) {
             return false;
         }
-        if self.bots.is_brick_bot(bot) && self.bots.is_brick_bot(other) {
-            // One side (Bot_Hole's `hType`) never fights itself and fights
-            // every other; bots of no side side with their builder.
-            let theirs = self
-                .bots
-                .brains
-                .get(&other)
-                .and_then(|b| b.kind.side.as_deref());
-            let friends = match (kind.side.as_deref(), theirs) {
-                (None, None) => {
-                    !kind.fights_bots || self.bot_brick_owner(other) == self.bot_brick_owner(bot)
-                }
-                (mine, theirs) => mine == theirs,
-            };
-            if friends {
-                return false;
-            }
+        if self.bots.is_brick_bot(bot)
+            && self.bots.is_brick_bot(other)
+            && (self.bot_allies(bot, other)
+                || !kind.fights_bots
+                    && kind.side.is_none()
+                    && self
+                        .bots
+                        .brains
+                        .get(&other)
+                        .is_some_and(|b| b.kind.side.is_none()))
+        {
+            return false;
         }
         self.can_damage_player(bot, other, false)
+    }
+    /// Whether two brick bots are on one side: one side (Bot_Hole's
+    /// `hType`) never fights itself and fights every other; bots of no side
+    /// side with their builder.
+    fn bot_allies(&self, bot: OwnerId, other: OwnerId) -> bool {
+        if !self.bots.is_brick_bot(bot) || !self.bots.is_brick_bot(other) {
+            return false;
+        }
+        let side = |o: OwnerId| {
+            self.bots
+                .brains
+                .get(&o)
+                .and_then(|b| b.kind.side.as_deref())
+        };
+        match (side(bot), side(other)) {
+            (None, None) => self.bot_brick_owner(other) == self.bot_brick_owner(bot),
+            (mine, theirs) => mine == theirs,
+        }
     }
     fn bot_sight(&self, bot: OwnerId, brain: &Brain, eye: Vec3) -> Sight {
         let kind = &brain.kind;
@@ -940,7 +964,43 @@ impl Session {
         for bot in bots {
             self.step_bot(bot, tick)?;
         }
+        self.hear_alerts(tick);
         Ok(())
+    }
+    /// Bots of a warner's side within its reach that have nothing better
+    /// to go on remember where the enemy was, and go and look (Bot_Hole's
+    /// `hAlertOtherBots`).
+    fn hear_alerts(&mut self, tick: u64) {
+        for alert in std::mem::take(&mut self.bots.alerts) {
+            let Some(from) = self
+                .peers
+                .get(&alert.from)
+                .map(|p| Vec3::from(p.player.state().feet))
+            else {
+                continue;
+            };
+            let heard: Vec<OwnerId> = self
+                .bots
+                .brains
+                .iter()
+                .filter(|(o, b)| {
+                    **o != alert.from
+                        && b.memory.is_none()
+                        && b.target.is_none()
+                        && self.bot_allies(**o, alert.from)
+                        && self.peers.get(o).is_some_and(|p| {
+                            p.combat.alive
+                                && Vec3::from(p.player.state().feet).distance(from) <= alert.reach
+                        })
+                })
+                .map(|(o, _)| *o)
+                .collect();
+            for bot in heard {
+                let brain = self.bots.brains.get_mut(&bot).unwrap();
+                let ticks = (brain.kind.memory_seconds * 120.0) as u64;
+                brain.memory = Some((alert.at, tick + ticks));
+            }
+        }
     }
     fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
         let Some(peer) = self.peers.get(&bot) else {
@@ -1105,11 +1165,13 @@ impl Session {
         }
         // Remember enemies seen, and where a hit came from.
         let memory_ticks = (kind.memory_seconds * 120.0) as u64;
+        let mut warn = None;
         match sight.target {
             Some(seen) => {
                 if brain.target != Some(seen.owner) {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
+                    warn = Some(seen.real);
                 }
                 brain.memory = Some((seen.real, tick + memory_ticks));
             }
@@ -1119,6 +1181,17 @@ impl Session {
                     brain.memory = Some((at, tick + memory_ticks));
                 }
             }
+        }
+        // It tells its side when it first sees an enemy or is hurt.
+
+        if kind.alerts_allies
+            && let Some(at) = warn.or(hurt_by)
+        {
+            self.bots.alerts.push(Alert {
+                from: bot,
+                at,
+                reach: kind.sight,
+            });
         }
         if brain.memory.is_some_and(|(_, until)| tick >= until) {
             brain.memory = None;
