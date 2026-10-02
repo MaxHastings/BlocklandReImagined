@@ -3,101 +3,7 @@ use super::*;
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
-        // The last frame, holding any picture copied then, was submitted.
-        // Failures are logged by the writer; success is not news.
-        self.files.save_shots.submitted();
-        self.files.save_shots.poll(frame.device);
-        if let Some(path) = self.files.save_picture.take() {
-            self.take_save_picture(frame, path)?;
-        }
-        // Anti-aliasing and shadow quality rebuild world pipelines and maps;
-        // a map change needs renderers built for the new map.
-        // Colour-vision assistance is a pipeline constant, too.
-        let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
-        if std::mem::take(&mut self.gpu.gpu_restart)
-            || bri_render::color::color_vision() != vision
-            || self.gpu.renderer.as_mut().and_then(|r| r.ready()).is_some_and(|r| {
-                r.samples() != self.graphics.samples || r.shadow_settings() != self.graphics.shadows
-            })
-        {
-            self.gpu_ready(frame.device, frame.queue, frame.format)?;
-        }
-        self.item_ui.register_icons(frame);
-        // Until its pipelines finish compiling, the preview stays due.
-        if self.avatar.preview_dirty
-            && let Some((appearance, rotation, distance)) = &self.avatar.preview_request
-            && let Some(preview) = self
-                .avatar.avatar_preview
-                .as_mut()
-                .context("Avatar preview GPU not initialized")?
-                .ready()
-        {
-            preview.render(&self.avatar.avatar_assets, appearance, *rotation, *distance, frame)?;
-            self.ui.apply(UiUpdate::AvatarPreview(IconRef::External(
-                crate::avatar::Preview::ID,
-            )));
-            self.avatar.preview_dirty = false;
-        }
-        // An enabled Add-On's splash over the main menu, once a run.
-        if !self.splash_checked
-            && self.net.attempt.is_none()
-            && self.ui.stack().first() == Some(&bri_ui::screens::ScreenId::MainMenu)
-        {
-            self.splash_checked = true;
-            let prefs = &self.ui.core.prefs;
-            let due = self.addons.package_catalog.as_deref().and_then(|catalog| {
-                crate::splash::due(catalog, crate::splash::today(), |key| {
-                    prefs.get(key).and_then(|v| v.parse().ok())
-                })
-            });
-            if let Some((key, view, pictures)) = due {
-                for (id, picture) in &pictures {
-                    crate::save_picture::upload_as(frame, *id, picture);
-                }
-                let year = crate::splash::today().0;
-                self.ui.core.prefs.set(&key, year.to_string());
-                self.ui.core.save_settings();
-                self.ui.apply(UiUpdate::Splash(view));
-            }
-        }
-        if let Some(((map, name), picture)) = self.files.save_previews.ready.take() {
-            crate::save_picture::upload(frame, &picture);
-            self.ui.apply(UiUpdate::SavePreview {
-                map,
-                name,
-                preview: IconRef::External(crate::save_picture::ID),
-            });
-        }
-
-        // The map bake's leak cleanup patches the map's lightmaps once: the
-        // scene kept for uploads, and the uploaded textures.
-        if !self.lighting.light_volume.leaks.is_empty()
-            && let Some(scene) = self.scene.cpu_scene.as_mut()
-        {
-            let fixes = std::mem::take(&mut self.lighting.light_volume.leaks);
-            let changed = bri_render::map_lighting::TexelFix::apply(&fixes, &mut scene.images);
-            if let Some(gpu) = &self.gpu.gpu_scene {
-                gpu.patch_images(frame.queue, &scene.images, &changed)?;
-            }
-        }
-        // The map's lightmaps take the bake's per-texel images (what each
-        // light leaves and how much of it each texel holds) and the scene
-        // uploads again with them, once a mode needs them: Dynamic always;
-        // the Unified modes on a map whose lights can switch (a bulb or tube
-        // to break, an Add-On's rules), so a switched light leaves exactly
-        // the light it baked, the same as in Dynamic. Otherwise no mode
-        // carries them.
-        let rules = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()).is_some_and(|v| !v.map_lights.is_empty());
-        let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
-        if (self.graphics.lighting == 3 || (self.graphics.lighting > 0 && switchable))
-            && !self.lighting.light_volume.dynamic_equipped
-            && self.lighting.light_volume.map.is_some()
-            && let Some(scene) = self.scene.cpu_scene.as_mut()
-        {
-            bri_render::map_lighting::DynamicSheet::equip(&self.lighting.light_volume.dynamic, scene);
-            self.lighting.light_volume.dynamic_equipped = true;
-            self.gpu.gpu_scene = None;
-        }
+        self.prepare_render(frame)?;
         let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) else {
             return Ok(false);
         };
@@ -1221,5 +1127,106 @@ impl App {
         self.addons.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
         Ok(true)
+    }
+
+    /// Before the game is drawn: save pictures, renderer rebuilds, icons,
+    /// the avatar preview, the splash and the map bake's lightmap patches.
+    fn prepare_render(&mut self, frame: &mut RenderContext<'_>) -> Result<()> {
+        // The last frame, holding any picture copied then, was submitted.
+        // Failures are logged by the writer; success is not news.
+        self.files.save_shots.submitted();
+        self.files.save_shots.poll(frame.device);
+        if let Some(path) = self.files.save_picture.take() {
+            self.take_save_picture(frame, path)?;
+        }
+        // Anti-aliasing and shadow quality rebuild world pipelines and maps;
+        // a map change needs renderers built for the new map.
+        // Colour-vision assistance is a pipeline constant, too.
+        let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
+        if std::mem::take(&mut self.gpu.gpu_restart)
+            || bri_render::color::color_vision() != vision
+            || self.gpu.renderer.as_mut().and_then(|r| r.ready()).is_some_and(|r| {
+                r.samples() != self.graphics.samples || r.shadow_settings() != self.graphics.shadows
+            })
+        {
+            self.gpu_ready(frame.device, frame.queue, frame.format)?;
+        }
+        self.item_ui.register_icons(frame);
+        // Until its pipelines finish compiling, the preview stays due.
+        if self.avatar.preview_dirty
+            && let Some((appearance, rotation, distance)) = &self.avatar.preview_request
+            && let Some(preview) = self
+                .avatar.avatar_preview
+                .as_mut()
+                .context("Avatar preview GPU not initialized")?
+                .ready()
+        {
+            preview.render(&self.avatar.avatar_assets, appearance, *rotation, *distance, frame)?;
+            self.ui.apply(UiUpdate::AvatarPreview(IconRef::External(
+                crate::avatar::Preview::ID,
+            )));
+            self.avatar.preview_dirty = false;
+        }
+        // An enabled Add-On's splash over the main menu, once a run.
+        if !self.splash_checked
+            && self.net.attempt.is_none()
+            && self.ui.stack().first() == Some(&bri_ui::screens::ScreenId::MainMenu)
+        {
+            self.splash_checked = true;
+            let prefs = &self.ui.core.prefs;
+            let due = self.addons.package_catalog.as_deref().and_then(|catalog| {
+                crate::splash::due(catalog, crate::splash::today(), |key| {
+                    prefs.get(key).and_then(|v| v.parse().ok())
+                })
+            });
+            if let Some((key, view, pictures)) = due {
+                for (id, picture) in &pictures {
+                    crate::save_picture::upload_as(frame, *id, picture);
+                }
+                let year = crate::splash::today().0;
+                self.ui.core.prefs.set(&key, year.to_string());
+                self.ui.core.save_settings();
+                self.ui.apply(UiUpdate::Splash(view));
+            }
+        }
+        if let Some(((map, name), picture)) = self.files.save_previews.ready.take() {
+            crate::save_picture::upload(frame, &picture);
+            self.ui.apply(UiUpdate::SavePreview {
+                map,
+                name,
+                preview: IconRef::External(crate::save_picture::ID),
+            });
+        }
+
+        // The map bake's leak cleanup patches the map's lightmaps once: the
+        // scene kept for uploads, and the uploaded textures.
+        if !self.lighting.light_volume.leaks.is_empty()
+            && let Some(scene) = self.scene.cpu_scene.as_mut()
+        {
+            let fixes = std::mem::take(&mut self.lighting.light_volume.leaks);
+            let changed = bri_render::map_lighting::TexelFix::apply(&fixes, &mut scene.images);
+            if let Some(gpu) = &self.gpu.gpu_scene {
+                gpu.patch_images(frame.queue, &scene.images, &changed)?;
+            }
+        }
+        // The map's lightmaps take the bake's per-texel images (what each
+        // light leaves and how much of it each texel holds) and the scene
+        // uploads again with them, once a mode needs them: Dynamic always;
+        // the Unified modes on a map whose lights can switch (a bulb or tube
+        // to break, an Add-On's rules), so a switched light leaves exactly
+        // the light it baked, the same as in Dynamic. Otherwise no mode
+        // carries them.
+        let rules = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()).is_some_and(|v| !v.map_lights.is_empty());
+        let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
+        if (self.graphics.lighting == 3 || (self.graphics.lighting > 0 && switchable))
+            && !self.lighting.light_volume.dynamic_equipped
+            && self.lighting.light_volume.map.is_some()
+            && let Some(scene) = self.scene.cpu_scene.as_mut()
+        {
+            bri_render::map_lighting::DynamicSheet::equip(&self.lighting.light_volume.dynamic, scene);
+            self.lighting.light_volume.dynamic_equipped = true;
+            self.gpu.gpu_scene = None;
+        }
+        Ok(())
     }
 }

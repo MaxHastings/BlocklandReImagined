@@ -21,6 +21,392 @@ impl App {
             }
         }
         self.show_progress(&mut a);
+        let mut failed = self.drain_events(&mut a)?;
+        if failed.is_none() && a.worker.events.is_closed() {
+            failed = Some("Connection worker stopped".into());
+        }
+        if let Some(mut reason) = failed {
+            // A joined remote game whose network dropped is rejoined
+            // automatically a few times; the host gives the player their
+            // owner number, and so their bricks, back.
+            let id = a.id;
+            let rejoin =
+                (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
+                    .then(|| a.name.clone());
+            if let Some(address) = rejoin
+                && self.net.reconnects < MAX_RECONNECTS
+            {
+                self.net.reconnects += 1;
+                if self.join(id, address, String::new()).is_ok() {
+                    return Ok(());
+                }
+            }
+            self.net.reconnects = 0;
+            // The server's Add-Ons bring content: load it and join again
+            // (the downloads are cached, so this join fetches nothing).
+            let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(set) = add_ons {
+                self.disconnect();
+                let applied = self.apply_packages(&set);
+                // The next game this player hosts runs their own list again.
+                self.addons.packages_from_tools = false;
+                // Add-Ons that do not load here are joined without: the
+                // player is told which, in chat, once in the game.
+                if let Err(error) = applied {
+                    let text = format!(
+                        "Some of this server's Add-Ons could not be loaded on this computer, so you joined without them: {error:#}"
+                    );
+                    bri_console::warn(&text);
+                    self.net.join_notices.push(text);
+                    self.addons.skip_add_on_reload = true;
+                }
+                match self.join(id, a.name.clone(), String::new()) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        self.net.join_notices.clear();
+                        reason =
+                            format!("Could not join again with the server's Add-Ons: {error:#}");
+                        bri_console::warn(&reason);
+                    }
+                }
+            }
+            if a.identity_changed
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                let question = self.identity_question(&a.name);
+                self.ui
+                    .apply_session(id, UiUpdate::FailureQuestion(question));
+            }
+            if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
+                self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
+            }
+            self.ui
+                .apply_session(id, UiUpdate::Connection(ConnectionState::Failed { reason }));
+            self.disconnect();
+            return Ok(());
+        }
+        if let Some(reason) = a.map_failure.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.ui.apply_session(
+                a.id,
+                UiUpdate::Connection(ConnectionState::Failed {
+                    reason: format!("Could not load the new map: {reason}"),
+                }),
+            );
+            self.disconnect();
+            return Ok(());
+        }
+        self.take_prepared_scene(&mut a)?;
+        if a.worker.view.has_changed().unwrap_or(false) {
+            a.view = a.worker.view.borrow_and_update().clone();
+        }
+        // The server's Add-Ons' wrench events join the wrench's lists.
+        if let Some(view) = &a.view
+            && let Some(update) = self
+                .build.tool_ui
+                .offer_events(&view.brick_events)
+            && a.entered
+        {
+            self.ui.apply_session(a.id, update);
+        }
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
+            building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
+                images.iter().any(|image| {
+                    image.hand == 0
+                        && bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
+                })
+            }));
+            building.set_held_image(view.weapons.images.get(&view.owner).is_some_and(|images| {
+                images.iter().any(|image| {
+                    image.hand == 0
+                        && !bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
+                })
+            }));
+        }
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
+            && let Some(inventory) = view.tools.get(&view.owner)
+        {
+            match building.sync_tools(inventory) {
+                Ok(updates) => {
+                    for update in updates {
+                        self.ui.apply_session(a.id, update);
+                    }
+                }
+                Err(error) => {
+                    self.ui.apply_session(
+                        a.id,
+                        UiUpdate::Connection(ConnectionState::Failed {
+                            reason: format!("Native tool inventory: {error:#}"),
+                        }),
+                    );
+                    self.disconnect();
+                    return Ok(());
+                }
+            }
+        }
+        if a.entered
+            && let Some(building) = &self.build.building
+        {
+            let hand = bri_sim::session::BrickHand {
+                stocked: building.inventory().iter().any(Option::is_some),
+                equipped: matches!(building.equipment(), crate::building::Equipment::Brick(_)),
+                ghost: building.ghost().is_some(),
+            };
+            // A full request queue leaves the report pending for the next frame.
+            if self.net.brick_hand != Some(hand)
+                && a.worker
+                    .request(REPORT_REQUEST, Command::BrickHand(hand))
+                    .is_ok()
+            {
+                self.net.brick_hand = Some(hand);
+            }
+            // Others see the ghost too (v20 ghosted `tempBrick`). Moves are
+            // sent at most ten times a second; putting it away goes at once.
+            let ghost = building.ghost().and_then(|ghost| {
+                let id = |r: &bri_world::ContentRef| match r {
+                    bri_world::ContentRef::Resolved(id) => Some(id.clone()),
+                    _ => None,
+                };
+                Some(bri_sim::session::GhostBrick {
+                    definition: id(&ghost.definition)?,
+                    position: ghost.position,
+                    quarter_turns: ghost.quarter_turns,
+                    color: ghost.color,
+                    print: ghost.print.as_ref().and_then(id),
+                })
+            });
+            let due = self.build.ghost_report.as_ref().is_none_or(|(sent, at)| {
+                *sent != ghost && (ghost.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
+            });
+            if due
+                && a.worker
+                    .request(REPORT_REQUEST, Command::GhostBrick(ghost.clone()))
+                    .is_ok()
+            {
+                self.build.ghost_report = Some((ghost, std::time::Instant::now()));
+            }
+            // Where the copy in hand stands, for its Add-On to show the
+            // others; at the same pace.
+            let copy = building.copy_report();
+            let due = self.copy_report.as_ref().is_none_or(|(sent, at)| {
+                *sent != copy && (copy.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
+            }) && (copy.is_some() || self.copy_report.is_some());
+            if due
+                && a.worker
+                    .request(
+                        REPORT_REQUEST,
+                        Command::CopyPose(copy.map(|(_, pose)| pose)),
+                    )
+                    .is_ok()
+            {
+                self.copy_report = Some((copy, std::time::Instant::now()));
+            }
+        }
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
+            building.set_broken_shapes(&view.broken_shapes)?;
+        }
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
+            && self
+                .scene.query_source
+                .as_ref()
+                .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
+        {
+            let known = self
+                .scene.query_log
+                .as_ref()
+                .filter(|(log, _)| self.scene.query_source.is_some() && Arc::ptr_eq(log, &view.world_log))
+                .and_then(|(log, revision)| log.between(*revision, view.world_revision));
+            if let Err(error) = building.sync_world_changes(&view.world, known.as_ref()) {
+                self.ui.apply_session(
+                    a.id,
+                    UiUpdate::Connection(ConnectionState::Failed {
+                        reason: format!("Native query mirror: {error:#}"),
+                    }),
+                );
+                self.disconnect();
+                return Ok(());
+            }
+            if a.entered
+                && self
+                    .scene.query_source
+                    .as_ref()
+                    .is_none_or(|old| old.palette != view.world.palette)
+            {
+                let colors = self.colorset(&view.world.palette);
+                self.ui.apply_session(a.id, UiUpdate::Colorset(colors));
+            }
+            self.scene.query_source = Some(view.world.clone());
+            self.scene.query_log = Some((view.world_log.clone(), view.world_revision));
+            self.gpu.ghost_uploaded = u64::MAX;
+            self.fx.brick_debris.sync_world(&view.world);
+            self.gpu.hidden_uploaded = None;
+        }
+        if let Some(view) = &a.view {
+            self.scene.mirror_index.follow(
+                &view.world,
+                &view.world_log,
+                view.world_revision,
+                &self.scene.mirror_shapes,
+            );
+            // One set of openings: the windows show where bodies go.
+            if let Some(collision) = self.motion.collision() {
+                self.scene.mirror_index.link(collision.links(), &self.scene.mirror_shapes);
+            }
+        }
+        if let Some(job) = &mut self.scene.world_job
+            && let Ok((source, revision, log, result)) = job.receiver.try_recv()
+        {
+            let left_out = std::mem::take(&mut job.left_out);
+            self.scene.world_job = None;
+            match result {
+                // Always applied: chunk state is consistent with `source`, and
+                // a newer replica is reached by the next incremental update.
+                Ok((chunked, changes)) => {
+                    self.scene.chunked = chunked;
+                    for (key, built) in changes {
+                        if let Some(built) = built {
+                            self.scene.cpu_chunks.insert(key, built.scene);
+                            self.scene.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
+                            self.gpu.chunk_uploads.insert(key);
+                        } else {
+                            self.scene.cpu_chunks.remove(&key);
+                            self.scene.cpu_chunk_bricks.remove(&key);
+                            self.gpu.gpu_chunks.remove(&key);
+                            self.gpu.gpu_chunk_bricks.remove(&key);
+                            self.gpu.chunk_uploads.remove(&key);
+                        }
+                    }
+                    self.scene.world_source = Some(source);
+                    self.scene.world_revision = revision;
+                    self.scene.world_log = Some(log);
+                    self.fx.brick_fades.chunks_applied(&left_out);
+                    self.scene.chunks_left_out = left_out;
+                }
+                Err(reason) => {
+                    self.ui.apply_session(
+                        a.id,
+                        UiUpdate::Connection(ConnectionState::Failed { reason }),
+                    );
+                    self.disconnect();
+                    return Ok(());
+                }
+            }
+        }
+        if self.scene.world_job.is_none()
+            && let (Some(meshes), Some(materials), Some(palette), Some(view)) =
+                (&self.scene.meshes, &self.scene.materials, &self.scene.palette, &a.view)
+            && (self
+                .scene.world_source
+                .as_ref()
+                .is_none_or(|previous| !Arc::ptr_eq(previous, &view.world))
+                || self.fx.brick_fades.needs_rebuild(&self.scene.chunks_left_out))
+        {
+            let meshes = meshes.clone();
+            let materials = materials.clone();
+            let palette = palette.clone();
+            let world = view.world.clone();
+            let (revision, log) = (view.world_revision, view.world_log.clone());
+            // Compare only the bricks the replica reports changed since the
+            // applied revision; without that history, compare whole worlds.
+            let known = self
+                .scene.world_log
+                .as_ref()
+                .filter(|applied| Arc::ptr_eq(applied, &log))
+                .and_then(|log| log.between(self.scene.world_revision, revision));
+            // v20 eases repainted bricks to their new colour (`brick_fade`).
+            match (&self.scene.world_source, &known) {
+                (Some(drawn), Some(known)) if !known.palette => {
+                    self.fx.brick_fades
+                        .observe(drawn, &world, known.bricks.iter().copied());
+                    // A knocked-out brick does not fade out in place: its
+                    // debris replaces it at once. Easing it would draw it
+                    // twice and cost a model per brick plus a second
+                    // chunk rebuild once the fades settle.
+                    let killing = self.pending_kills();
+                    for id in &known.bricks {
+                        if self.fx.brick_debris.is_dead(*id) || killing.contains(id) {
+                            self.fx.brick_fades.settle(*id);
+                        }
+                    }
+                }
+                _ => self.fx.brick_fades.settle_all(),
+            }
+            let left_out = self.fx.brick_fades.left_out();
+            let job_left_out = left_out.clone();
+            let mut chunked = std::mem::take(&mut self.scene.chunked);
+            let (send, receive) = mpsc::sync_channel(1);
+            let load_limit = self.load_limit.clone();
+            let task = self.runtime.spawn(async move {
+                let Ok(permit) = load_limit.acquire_owned().await else {
+                    return;
+                };
+                let source = world.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    chunked
+                        .update_leaving_out(
+                            world,
+                            known.as_ref(),
+                            &left_out,
+                            &meshes,
+                            &palette,
+                            Some(&materials),
+                            WORLD_TRIANGLE_BUDGET,
+                        )
+                        .map(|changes| (chunked, changes))
+                        .map_err(|e| format!("{e:#}"))
+                })
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()));
+                let _ = send.send((source, revision, log, result));
+            });
+            self.scene.world_job = Some(WorldJob {
+                receiver: receive,
+                abort: task.abort_handle(),
+                left_out: job_left_out,
+            });
+        }
+        if a.reloading
+            && let Some(view) = &a.view
+            && self.scene.scene_map.as_deref() == Some(view.world.map_id.as_str())
+            && self
+                .scene.world_source
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &view.world))
+        {
+            a.reloading = false;
+            self.ui.apply_session(
+                a.id,
+                UiUpdate::Connection(ConnectionState::InGame {
+                    server_name: a.name.clone(),
+                    max_players: a.max_players,
+                    local: a.local,
+                    single_player: a.single,
+                    admin: view.administrator,
+                }),
+            );
+        }
+        self.enter_when_ready(&mut a)?;
+        self.present_session(&mut a)?;
+        if let Some(view) = &a.view
+            && let Err(error) = self.motion.observe(view)
+        {
+            self.ui.apply_session(
+                a.id,
+                UiUpdate::Connection(ConnectionState::Failed {
+                    reason: format!("Movement prediction: {error:#}"),
+                }),
+            );
+            self.disconnect();
+            return Ok(());
+        }
+        self.track_unsaved(&mut a);
+        self.net.attempt = Some(a);
+        Ok(())
+    }
+
+    /// Handles the worker's queued events in order; the failure that ends
+    /// the connection, if one came.
+    fn drain_events(&mut self, a: &mut Attempt) -> Result<Option<String>> {
         let mut failed = None;
         while let Ok(event) = a.worker.events.try_recv() {
             match event {
@@ -366,7 +752,7 @@ impl App {
                     self.ui.apply_session(a.id, update);
                 }
                 network::Event::Reply { request, result } => {
-                    self.accept_reply(&a, request, result);
+                    self.accept_reply(a, request, result);
                 }
                 network::Event::Failed(reason) => {
                     failed = Some(reason);
@@ -374,79 +760,11 @@ impl App {
                 }
             }
         }
-        if failed.is_none() && a.worker.events.is_closed() {
-            failed = Some("Connection worker stopped".into());
-        }
-        if let Some(mut reason) = failed {
-            // A joined remote game whose network dropped is rejoined
-            // automatically a few times; the host gives the player their
-            // owner number, and so their bricks, back.
-            let id = a.id;
-            let rejoin =
-                (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
-                    .then(|| a.name.clone());
-            if let Some(address) = rejoin
-                && self.net.reconnects < MAX_RECONNECTS
-            {
-                self.net.reconnects += 1;
-                if self.join(id, address, String::new()).is_ok() {
-                    return Ok(());
-                }
-            }
-            self.net.reconnects = 0;
-            // The server's Add-Ons bring content: load it and join again
-            // (the downloads are cached, so this join fetches nothing).
-            let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
-            if let Some(set) = add_ons {
-                self.disconnect();
-                let applied = self.apply_packages(&set);
-                // The next game this player hosts runs their own list again.
-                self.addons.packages_from_tools = false;
-                // Add-Ons that do not load here are joined without: the
-                // player is told which, in chat, once in the game.
-                if let Err(error) = applied {
-                    let text = format!(
-                        "Some of this server's Add-Ons could not be loaded on this computer, so you joined without them: {error:#}"
-                    );
-                    bri_console::warn(&text);
-                    self.net.join_notices.push(text);
-                    self.addons.skip_add_on_reload = true;
-                }
-                match self.join(id, a.name.clone(), String::new()) {
-                    Ok(()) => return Ok(()),
-                    Err(error) => {
-                        self.net.join_notices.clear();
-                        reason =
-                            format!("Could not join again with the server's Add-Ons: {error:#}");
-                        bri_console::warn(&reason);
-                    }
-                }
-            }
-            if a.identity_changed
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                let question = self.identity_question(&a.name);
-                self.ui
-                    .apply_session(id, UiUpdate::FailureQuestion(question));
-            }
-            if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
-                self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
-            }
-            self.ui
-                .apply_session(id, UiUpdate::Connection(ConnectionState::Failed { reason }));
-            self.disconnect();
-            return Ok(());
-        }
-        if let Some(reason) = a.map_failure.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.ui.apply_session(
-                a.id,
-                UiUpdate::Connection(ConnectionState::Failed {
-                    reason: format!("Could not load the new map: {reason}"),
-                }),
-            );
-            self.disconnect();
-            return Ok(());
-        }
+        Ok(failed)
+    }
+
+    /// Takes the map scene the loader prepared and sets up the world for it.
+    fn take_prepared_scene(&mut self, a: &mut Attempt) -> Result<()> {
         if let Ok(prepared) = a.scene.try_recv() {
             a.progress.begin(
                 bri_progress::Stage::LoadingGraphics,
@@ -490,295 +808,11 @@ impl App {
                 }
             }
         }
-        if a.worker.view.has_changed().unwrap_or(false) {
-            a.view = a.worker.view.borrow_and_update().clone();
-        }
-        // The server's Add-Ons' wrench events join the wrench's lists.
-        if let Some(view) = &a.view
-            && let Some(update) = self
-                .build.tool_ui
-                .offer_events(&view.brick_events)
-            && a.entered
-        {
-            self.ui.apply_session(a.id, update);
-        }
-        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
-            building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
-                images.iter().any(|image| {
-                    image.hand == 0
-                        && bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
-                })
-            }));
-            building.set_held_image(view.weapons.images.get(&view.owner).is_some_and(|images| {
-                images.iter().any(|image| {
-                    image.hand == 0
-                        && !bri_sim::session::BRICK_HAND_IMAGES.contains(&image.image.as_str())
-                })
-            }));
-        }
-        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
-            && let Some(inventory) = view.tools.get(&view.owner)
-        {
-            match building.sync_tools(inventory) {
-                Ok(updates) => {
-                    for update in updates {
-                        self.ui.apply_session(a.id, update);
-                    }
-                }
-                Err(error) => {
-                    self.ui.apply_session(
-                        a.id,
-                        UiUpdate::Connection(ConnectionState::Failed {
-                            reason: format!("Native tool inventory: {error:#}"),
-                        }),
-                    );
-                    self.disconnect();
-                    return Ok(());
-                }
-            }
-        }
-        if a.entered
-            && let Some(building) = &self.build.building
-        {
-            let hand = bri_sim::session::BrickHand {
-                stocked: building.inventory().iter().any(Option::is_some),
-                equipped: matches!(building.equipment(), crate::building::Equipment::Brick(_)),
-                ghost: building.ghost().is_some(),
-            };
-            // A full request queue leaves the report pending for the next frame.
-            if self.net.brick_hand != Some(hand)
-                && a.worker
-                    .request(REPORT_REQUEST, Command::BrickHand(hand))
-                    .is_ok()
-            {
-                self.net.brick_hand = Some(hand);
-            }
-            // Others see the ghost too (v20 ghosted `tempBrick`). Moves are
-            // sent at most ten times a second; putting it away goes at once.
-            let ghost = building.ghost().and_then(|ghost| {
-                let id = |r: &bri_world::ContentRef| match r {
-                    bri_world::ContentRef::Resolved(id) => Some(id.clone()),
-                    _ => None,
-                };
-                Some(bri_sim::session::GhostBrick {
-                    definition: id(&ghost.definition)?,
-                    position: ghost.position,
-                    quarter_turns: ghost.quarter_turns,
-                    color: ghost.color,
-                    print: ghost.print.as_ref().and_then(id),
-                })
-            });
-            let due = self.build.ghost_report.as_ref().is_none_or(|(sent, at)| {
-                *sent != ghost && (ghost.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
-            });
-            if due
-                && a.worker
-                    .request(REPORT_REQUEST, Command::GhostBrick(ghost.clone()))
-                    .is_ok()
-            {
-                self.build.ghost_report = Some((ghost, std::time::Instant::now()));
-            }
-            // Where the copy in hand stands, for its Add-On to show the
-            // others; at the same pace.
-            let copy = building.copy_report();
-            let due = self.copy_report.as_ref().is_none_or(|(sent, at)| {
-                *sent != copy && (copy.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
-            }) && (copy.is_some() || self.copy_report.is_some());
-            if due
-                && a.worker
-                    .request(
-                        REPORT_REQUEST,
-                        Command::CopyPose(copy.map(|(_, pose)| pose)),
-                    )
-                    .is_ok()
-            {
-                self.copy_report = Some((copy, std::time::Instant::now()));
-            }
-        }
-        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
-            building.set_broken_shapes(&view.broken_shapes)?;
-        }
-        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
-            && self
-                .scene.query_source
-                .as_ref()
-                .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
-        {
-            let known = self
-                .scene.query_log
-                .as_ref()
-                .filter(|(log, _)| self.scene.query_source.is_some() && Arc::ptr_eq(log, &view.world_log))
-                .and_then(|(log, revision)| log.between(*revision, view.world_revision));
-            if let Err(error) = building.sync_world_changes(&view.world, known.as_ref()) {
-                self.ui.apply_session(
-                    a.id,
-                    UiUpdate::Connection(ConnectionState::Failed {
-                        reason: format!("Native query mirror: {error:#}"),
-                    }),
-                );
-                self.disconnect();
-                return Ok(());
-            }
-            if a.entered
-                && self
-                    .scene.query_source
-                    .as_ref()
-                    .is_none_or(|old| old.palette != view.world.palette)
-            {
-                let colors = self.colorset(&view.world.palette);
-                self.ui.apply_session(a.id, UiUpdate::Colorset(colors));
-            }
-            self.scene.query_source = Some(view.world.clone());
-            self.scene.query_log = Some((view.world_log.clone(), view.world_revision));
-            self.gpu.ghost_uploaded = u64::MAX;
-            self.fx.brick_debris.sync_world(&view.world);
-            self.gpu.hidden_uploaded = None;
-        }
-        if let Some(view) = &a.view {
-            self.scene.mirror_index.follow(
-                &view.world,
-                &view.world_log,
-                view.world_revision,
-                &self.scene.mirror_shapes,
-            );
-            // One set of openings: the windows show where bodies go.
-            if let Some(collision) = self.motion.collision() {
-                self.scene.mirror_index.link(collision.links(), &self.scene.mirror_shapes);
-            }
-        }
-        if let Some(job) = &mut self.scene.world_job
-            && let Ok((source, revision, log, result)) = job.receiver.try_recv()
-        {
-            let left_out = std::mem::take(&mut job.left_out);
-            self.scene.world_job = None;
-            match result {
-                // Always applied: chunk state is consistent with `source`, and
-                // a newer replica is reached by the next incremental update.
-                Ok((chunked, changes)) => {
-                    self.scene.chunked = chunked;
-                    for (key, built) in changes {
-                        if let Some(built) = built {
-                            self.scene.cpu_chunks.insert(key, built.scene);
-                            self.scene.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
-                            self.gpu.chunk_uploads.insert(key);
-                        } else {
-                            self.scene.cpu_chunks.remove(&key);
-                            self.scene.cpu_chunk_bricks.remove(&key);
-                            self.gpu.gpu_chunks.remove(&key);
-                            self.gpu.gpu_chunk_bricks.remove(&key);
-                            self.gpu.chunk_uploads.remove(&key);
-                        }
-                    }
-                    self.scene.world_source = Some(source);
-                    self.scene.world_revision = revision;
-                    self.scene.world_log = Some(log);
-                    self.fx.brick_fades.chunks_applied(&left_out);
-                    self.scene.chunks_left_out = left_out;
-                }
-                Err(reason) => {
-                    self.ui.apply_session(
-                        a.id,
-                        UiUpdate::Connection(ConnectionState::Failed { reason }),
-                    );
-                    self.disconnect();
-                    return Ok(());
-                }
-            }
-        }
-        if self.scene.world_job.is_none()
-            && let (Some(meshes), Some(materials), Some(palette), Some(view)) =
-                (&self.scene.meshes, &self.scene.materials, &self.scene.palette, &a.view)
-            && (self
-                .scene.world_source
-                .as_ref()
-                .is_none_or(|previous| !Arc::ptr_eq(previous, &view.world))
-                || self.fx.brick_fades.needs_rebuild(&self.scene.chunks_left_out))
-        {
-            let meshes = meshes.clone();
-            let materials = materials.clone();
-            let palette = palette.clone();
-            let world = view.world.clone();
-            let (revision, log) = (view.world_revision, view.world_log.clone());
-            // Compare only the bricks the replica reports changed since the
-            // applied revision; without that history, compare whole worlds.
-            let known = self
-                .scene.world_log
-                .as_ref()
-                .filter(|applied| Arc::ptr_eq(applied, &log))
-                .and_then(|log| log.between(self.scene.world_revision, revision));
-            // v20 eases repainted bricks to their new colour (`brick_fade`).
-            match (&self.scene.world_source, &known) {
-                (Some(drawn), Some(known)) if !known.palette => {
-                    self.fx.brick_fades
-                        .observe(drawn, &world, known.bricks.iter().copied());
-                    // A knocked-out brick does not fade out in place: its
-                    // debris replaces it at once. Easing it would draw it
-                    // twice and cost a model per brick plus a second
-                    // chunk rebuild once the fades settle.
-                    let killing = self.pending_kills();
-                    for id in &known.bricks {
-                        if self.fx.brick_debris.is_dead(*id) || killing.contains(id) {
-                            self.fx.brick_fades.settle(*id);
-                        }
-                    }
-                }
-                _ => self.fx.brick_fades.settle_all(),
-            }
-            let left_out = self.fx.brick_fades.left_out();
-            let job_left_out = left_out.clone();
-            let mut chunked = std::mem::take(&mut self.scene.chunked);
-            let (send, receive) = mpsc::sync_channel(1);
-            let load_limit = self.load_limit.clone();
-            let task = self.runtime.spawn(async move {
-                let Ok(permit) = load_limit.acquire_owned().await else {
-                    return;
-                };
-                let source = world.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    let _permit = permit;
-                    chunked
-                        .update_leaving_out(
-                            world,
-                            known.as_ref(),
-                            &left_out,
-                            &meshes,
-                            &palette,
-                            Some(&materials),
-                            WORLD_TRIANGLE_BUDGET,
-                        )
-                        .map(|changes| (chunked, changes))
-                        .map_err(|e| format!("{e:#}"))
-                })
-                .await
-                .unwrap_or_else(|error| Err(error.to_string()));
-                let _ = send.send((source, revision, log, result));
-            });
-            self.scene.world_job = Some(WorldJob {
-                receiver: receive,
-                abort: task.abort_handle(),
-                left_out: job_left_out,
-            });
-        }
-        if a.reloading
-            && let Some(view) = &a.view
-            && self.scene.scene_map.as_deref() == Some(view.world.map_id.as_str())
-            && self
-                .scene.world_source
-                .as_ref()
-                .is_some_and(|source| Arc::ptr_eq(source, &view.world))
-        {
-            a.reloading = false;
-            self.ui.apply_session(
-                a.id,
-                UiUpdate::Connection(ConnectionState::InGame {
-                    server_name: a.name.clone(),
-                    max_players: a.max_players,
-                    local: a.local,
-                    single_player: a.single,
-                    admin: view.administrator,
-                }),
-            );
-        }
+        Ok(())
+    }
+
+    /// Enters the game once the connection is ready and the world is built.
+    fn enter_when_ready(&mut self, a: &mut Attempt) -> Result<()> {
         if a.ready
             && !a.entered
             && self.scene.world_source.is_some()
@@ -878,6 +912,12 @@ impl App {
             a.worker
                 .request(REPORT_REQUEST, Command::TrustList(list.entries()))?;
         }
+        Ok(())
+    }
+
+    /// Hands the session's view to the interface: environment, players,
+    /// minigames and the other windows that follow the game.
+    fn present_session(&mut self, a: &mut Attempt) -> Result<()> {
         if let Some(view) = &a.view {
             // The Environment window's view: on every change, and each
             // second while a day/night cycle turns.
@@ -1014,20 +1054,6 @@ impl App {
                 },
             );
         }
-        if let Some(view) = &a.view
-            && let Err(error) = self.motion.observe(view)
-        {
-            self.ui.apply_session(
-                a.id,
-                UiUpdate::Connection(ConnectionState::Failed {
-                    reason: format!("Movement prediction: {error:#}"),
-                }),
-            );
-            self.disconnect();
-            return Ok(());
-        }
-        self.track_unsaved(&mut a);
-        self.net.attempt = Some(a);
         Ok(())
     }
 }
