@@ -205,10 +205,7 @@ fn write_bricks(catalog_dir: &Path, geometry_dir: &Path) -> Result<Vec<(String, 
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("Fixture {name}"));
         let icon = format!("fixture/bricks/{name}");
-        let mut other = serde_json::Map::new();
-        if d.special == Special::Water {
-            other.insert("iswaterbrick".into(), json!("1"));
-        }
+        let other = serde_json::Map::new();
         entries.push(json!({
             "id": id, "display_name": display, "category": "Bricks",
             "subcategory": if mesh.height_plates == 1 { "Plates" } else { "Basic" },

@@ -741,6 +741,20 @@
       }
     },
     {
+      "id": "brick_fence",
+      "original": {
+        "addon": "Brick_Fence",
+        "title": "Fence Bricks",
+        "authors": [
+          "General"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "96dc232d9b6986255740240679f6f61b880d91da07af83d04783b1f29ff29991"
+        ]
+      }
+    },
+    {
       "id": "brick_giantbrickpackv2",
       "original": {
         "addon": "Brick_GIANTBrickpackv2",
@@ -765,6 +779,20 @@
         "version": "1.0.0",
         "sha256": [
           "e1c311c54e885d20ccc49ed4a07aa8b86cb96def0cade04920750d04d47b30ce"
+        ]
+      }
+    },
+    {
+      "id": "brick_invertedcorners",
+      "original": {
+        "addon": "Brick_InvertedCorners",
+        "title": "Inverted Corner Ramp Bricks",
+        "authors": [
+          "Space Guy"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "41861e2cde07afd6ea03fb064d0486f2c5895edeb3e72d559db093d5515b48a3"
         ]
       }
     },
@@ -796,6 +824,35 @@
         "version": "1.0.0",
         "sha256": [
           "b68468c491520780ceca5babdf5b9019dc17fb27cfa1562ea244ef1258bd5602"
+        ]
+      }
+    },
+    {
+      "id": "brick_pole",
+      "original": {
+        "addon": "Brick_Pole",
+        "title": "Pole Bricks",
+        "authors": [
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "30fa2dec2b26f00f406a1c2933a458d3124645da230a668c37c837c27a3cf418"
+        ]
+      }
+    },
+    {
+      "id": "brick_round_corners",
+      "original": {
+        "addon": "Brick_Round_Corners",
+        "title": "Round Corner Bricks",
+        "authors": [
+          "General",
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "d56b6fa90b5bd6d54d34b17b162b0a6895385fa02e3b40cedb008fa88b3cb0b9"
         ]
       }
     },
@@ -853,6 +910,20 @@
         "version": "1.0.0",
         "sha256": [
           "367e18f06d6f2d001127db7b8a8e2855ef1f0e4eaf88aa4b6e197430f3890d91"
+        ]
+      }
+    },
+    {
+      "id": "brick_wedge",
+      "original": {
+        "addon": "Brick_Wedge",
+        "title": "Wedge Bricks",
+        "authors": [
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "b6106566846edc5e71ebb2160507b7d029a9b2ac202a5a47250e826b06a69fcc"
         ]
       }
     },

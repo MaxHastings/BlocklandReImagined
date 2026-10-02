@@ -798,14 +798,19 @@ mod tests {
     }
 
     /// The brick packs bundled on at start are exactly the ones Maxwell
-    /// chose (2026-10-02: those defining bricks both his Halloween Block
-    /// Party 2026 and Jazz CityRPG saves use), and they load in v20's order,
+    /// chose (2026-10-02: those defining bricks at least two of his
+    /// Halloween Block Party 2026, Jazz CityRPG and 2023 XMas saves use), and they load in v20's order,
     /// Add-On name order. Where two define a brick of the same name, the
     /// one loaded later is the one a save gets, as in v20, so the order
     /// decides between GIANT, BlackDragonIV and its Filler.
     #[test]
     fn the_bundled_brick_packs_are_the_chosen_ones_in_v20_order() {
-        const CHOSEN: [&str; 17] = [
+        const CHOSEN: [&str; 22] = [
+            "Brick_Fence",
+            "Brick_Wedge",
+            "Brick_InvertedCorners",
+            "Brick_Pole",
+            "Brick_Round_Corners",
             "Brick_Halloween",
             "Brick_GIANTBrickpackv2",
             "Brick_BlackDragonIV",

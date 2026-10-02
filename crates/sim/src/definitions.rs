@@ -12,7 +12,8 @@ use std::{collections::BTreeMap, path::Path};
 pub enum Special {
     #[default]
     None,
-    /// `isWaterBrick`: a swimmable, non-solid liquid volume.
+    /// A stock water brick (Brick_Large_Cubes): a swimmable, non-solid
+    /// liquid volume.
     Water,
     Checkpoint,
     Teledoor,
@@ -299,14 +300,16 @@ impl Definitions {
                     }
                 }
             };
-            let special = if entry
-                .other_properties
-                .get("iswaterbrick")
-                .is_some_and(|v| v == "true" || v == "1")
-            {
-                Special::Water
-            } else {
+            let special = {
                 match entry.id.as_str() {
+                    // Brick_Large_Cubes' water bricks: each one's own
+                    // `onTrustCheckFinished` calls `createWaterZone`.
+                    // `isWaterBrick` alone only lets bricks be planted
+                    // inside (a coffin), so it makes no water.
+                    "v20/brick/brick8xwaterdata"
+                    | "v20/brick/brick8xwaterriverdata"
+                    | "v20/brick/brick8xwaterrapidsdata"
+                    | "v20/brick/brick32xwaterdata" => Special::Water,
                     "v20/brick/brickcheckpointdata" => Special::Checkpoint,
                     "v20/brick/brickteledoordata" => Special::Teledoor,
                     "v20/brick/bricktreasurechestdata" => Special::TreasureChest,
@@ -477,6 +480,50 @@ mod tests {
         assert_eq!(ids[0], "plate");
         assert!(ids.contains(&"brick_portal:brick/brickportal1x14x10data"));
         assert!(twice.unwrap_err().to_string().contains("already defined"));
+    }
+
+    /// v20 makes a water zone only from the water bricks' own script
+    /// (`brick8xWaterData::onTrustCheckFinished` calls `createWaterZone`).
+    /// An Add-On's `isWaterBrick`, which a coffin sets so bricks can be
+    /// planted inside it, makes no water.
+    #[test]
+    fn only_the_water_bricks_script_makes_water() {
+        let dir = std::env::temp_dir().join(format!("bri-water-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut coffin = entry("halloween:brick/brickcoffindata", "plate", None);
+        coffin["other_properties"] = json!({ "iswaterbrick": "true", "isdoor": "1" });
+        let ids = [
+            "v20/brick/brick8xwaterdata",
+            "halloween:brick/brickcoffindata",
+        ];
+        catalog(
+            &dir,
+            &[entry(ids[0], "plate", None), coffin],
+            &ids.map(|id| (id, json!({ "native_mesh": "plate.brick.json" }))),
+            &ids,
+        );
+        std::fs::write(
+            dir.join("plate.brick.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1, "id": "plate", "footprint_studs": [1, 1],
+                "height_plates": 1, "attachment_rows": ["b"], "collision_boxes": [],
+                "needs_external_collision": false, "coverage": null, "quads": [{
+                    "face": "omni", "surface": "side", "colors": null,
+                    "vertices": [
+                        { "position": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                        { "position": [1.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                        { "position": [1.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                        { "position": [0.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] }
+                    ]
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let loaded = Definitions::load(&dir, &dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded.entries[ids[0]].special, Special::Water);
+        assert_eq!(loaded.entries[ids[1]].special, Special::None);
     }
 
     #[test]
