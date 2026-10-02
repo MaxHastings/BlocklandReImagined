@@ -1539,3 +1539,49 @@ datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = pl
         report.diagnostics
     );
 }
+
+/// An Add-On that names its models through a path global
+/// (`$X::Path = filePath($Con::File) @ "/"`, then
+/// `shapeFile = $X::Path @ "gun.dts"`) gets its models: the importer reads
+/// the constant expression as the path the game makes of it at load. Taken
+/// literally, the path matched no file and the model went invisible (the
+/// New Duplicator's wand and selection box).
+#[test]
+fn a_shape_named_through_a_path_global_is_found() {
+    let source = fresh("pathglobal-source").with_file_name("Weapon_PathGlobal");
+    std::fs::create_dir_all(source.join("models")).unwrap();
+    std::fs::write(source.join("description.txt"), "Title: Path Global\nAuthor: Tester\nA test.").unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        "$PG::FilePath = filePath($Con::File) @ \"/\";\n$PG::ModelPath = $PG::FilePath @ \"models/\";\nexec(\"./guns.cs\");\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("models/gun.dts"),
+        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["metal"]),
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("guns.cs"),
+        r#"
+datablock ItemData(pathGunItem) { shapeFile = $PG::ModelPath @ "gun.dts"; uiName = "Path Gun"; image = pathGunImage; };
+datablock ShapeBaseImageData(pathGunImage) { shapeFile = $PG::ModelPath @ "gun.dts"; item = pathGunItem; stateName[0] = "Ready"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("pathglobal-out").join("weapon_pathglobal");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let r = serde_json::to_value(&report).unwrap();
+    assert!(!r.to_string().contains("is not in this Add-On"), "{r}");
+    let presentation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
+            .unwrap();
+    let model = &presentation["models"]["add-ons/weapon_pathglobal/models/gun.dts"];
+    assert_ne!(model["source"], "placeholder", "{model}");
+    assert!(!model.is_null(), "{}", presentation["models"]);
+}

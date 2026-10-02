@@ -224,20 +224,26 @@ fn constant(tokens: &[Token], globals: &Globals) -> Option<String> {
 }
 /// A global's value as an Add-On sets it at load (`$X = <text>;`), when it
 /// is constant: literals, earlier globals in `globals`, `@`, `SPC`, `TAB`,
-/// `NL`, and `filePath(expandFileName("./file.cs"))`, the declaring
-/// script's folder `script_directory`.
+/// `NL`, and `filePath(expandFileName("./file.cs"))` or
+/// `filePath($Con::File)`, the declaring script's folder `script_directory`.
 pub fn constant_global(text: &str, script_directory: &str, globals: &Globals) -> Option<String> {
     let tokens = lex(text).ok()?;
-    // `filePath(expandFileName("./x"))`: the folder the script lives in.
+    // `filePath(expandFileName("./x"))` and `filePath($Con::File)`: the
+    // folder the script lives in.
     let mut folded = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
-        if tokens[i].atom("filePath")
-            && tokens.get(i + 1) == Some(&Token::Symbol('('))
-            && tokens.get(i + 2).is_some_and(|t| t.atom("expandFileName"))
+        let running = tokens.get(i + 2).is_some_and(|t| t.atom("$Con"))
+            && tokens.get(i + 3) == Some(&Token::Symbol(':'))
+            && tokens.get(i + 4) == Some(&Token::Symbol(':'))
+            && tokens.get(i + 5).is_some_and(|t| t.atom("File"));
+        let expanded = tokens.get(i + 2).is_some_and(|t| t.atom("expandFileName"))
             && tokens.get(i + 3) == Some(&Token::Symbol('('))
             && matches!(tokens.get(i + 4), Some(Token::String(p)) if p.starts_with("./") && !p[2..].contains('/'))
-            && tokens.get(i + 5) == Some(&Token::Symbol(')'))
+            && tokens.get(i + 5) == Some(&Token::Symbol(')'));
+        if tokens[i].atom("filePath")
+            && tokens.get(i + 1) == Some(&Token::Symbol('('))
+            && (running || expanded)
             && tokens.get(i + 6) == Some(&Token::Symbol(')'))
         {
             folded.push(Token::String(script_directory.to_string()));
@@ -570,6 +576,17 @@ pub fn read_with_globals(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_running_scripts_folder_is_a_constant() {
+        let mut globals = Globals::new();
+        let path = constant_global(r#"filePath($Con::File) @ "/""#, "Add-Ons/A", &globals);
+        assert_eq!(path.as_deref(), Some("Add-Ons/A/"));
+        globals.insert("$a::path".into(), path.unwrap());
+        assert_eq!(
+            constant_global(r#"$A::Path @ "x.dts""#, "Add-Ons/A", &globals).as_deref(),
+            Some("Add-Ons/A/x.dts")
+        );
+    }
     #[test]
     fn parents_from_another_package_are_inherited_but_not_returned() {
         let parents = r#"datablock fxDTSBrickData(brick2x2DiscData) {brickFile="base/data/bricks/2x2disc.blb";category="Bricks";subCategory="Round";uiName="2x2 Disc";};"#;

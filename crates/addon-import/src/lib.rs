@@ -1081,7 +1081,9 @@ fn behaviour_pure(callee: &str) -> bool {
 }
 
 fn datablocks(cx: &mut Ctx, scripts: &[Script]) {
+    let globals = load_globals(cx, scripts);
     for s in scripts {
+        let dir = s.path.rsplit_once('/').map_or(s.path.as_str(), |(d, _)| d);
         for d in &s.datablocks {
             let key = d.name.to_ascii_lowercase();
             if cx.owned.contains_key(&key) {
@@ -1101,6 +1103,16 @@ fn datablocks(cx: &mut Ctx, scripts: &[Script]) {
                 );
             }
             let mut d = d.clone();
+            // `$X::Path @ "shape.dts"`: a constant expression of globals the
+            // game or Add-On sets at load reads as the value it makes.
+            for v in d.fields.values_mut() {
+                if (v.contains('$') || v.contains('@'))
+                    && let Some(value) = bri_convert::catalog::constant_global(v, dir, &globals)
+                    && !value.contains(['"', '\\'])
+                {
+                    *v = format!("\"{value}\"");
+                }
+            }
             resolve_file_fields(&mut d, &s.path);
             cx.owned.insert(
                 key,

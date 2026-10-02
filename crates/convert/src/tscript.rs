@@ -533,6 +533,10 @@ impl Parser<'_> {
                 && t.text.starts_with('$')
                 && self.tok(1).is_some_and(|t| t.sym('='))
                 && !self.tok(2).is_some_and(|t| t.sym('='))
+                // `for ($i = 1; ...)` counts: a loop's counter is no setting.
+                && !(self.at >= 2
+                    && self.toks[self.at - 1].sym('(')
+                    && self.toks[self.at - 2].is("for"))
             {
                 let line = self.line(t.start);
                 let name = t.text.clone();
