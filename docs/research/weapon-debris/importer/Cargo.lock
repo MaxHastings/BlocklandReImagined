@@ -70,7 +70,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glam",
+ "image",
  "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
