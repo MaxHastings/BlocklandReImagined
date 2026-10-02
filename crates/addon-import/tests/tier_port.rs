@@ -905,6 +905,21 @@ fn tier_preferences_are_server_settings_the_host_changes() {
         "2"
     );
     assert!(!kicks(&played(&g)), "Recoil off");
+    // Retuning the guns keeps every player type the mini-game menu lists.
+    let games = g.s.minigame_views().len();
+    g.cmd(
+        b,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 1,
+            settings: Settings {
+                player_type: bri_sim::player_types::PlayerType::NoJet.id().into(),
+                loadout: Default::default(),
+                ..Settings::default()
+            },
+        }),
+    );
+    assert_eq!(g.s.minigame_views().len(), games + 1, "a No-Jet game");
+    g.cmd(b, Command::MiniGame(MiniGameRequest::End));
     for _ in 0..8 {
         g.shoot_at(a, b, 1.2);
     }

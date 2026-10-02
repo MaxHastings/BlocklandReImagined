@@ -69,10 +69,12 @@ impl Session {
         let pack = self
             .authored_weapons
             .with_settings(|name| values.get(name).cloned())?;
-        let catalog = super::combat::catalog(&pack);
+        // Items a setting shows or hides come and go from loadouts; the
+        // player types and Add-On limits the catalog was given stay.
+        let mut catalog = self.minigames.catalog().clone();
+        catalog.items = super::combat::catalog(&pack).items;
         self.weapons.retune(pack)?;
         self.weapon_values = values;
-        // Items a setting shows or hides come and go from loadouts.
         if &catalog != self.minigames.catalog() {
             self.minigames
                 .set_catalog(catalog)
