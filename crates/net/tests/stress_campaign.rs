@@ -185,21 +185,39 @@ async fn command_latency(client: &mut Client) -> Result<Duration> {
 /// keep a real player out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_handshakes_from_one_address_cannot_lock_out_real_players() -> Result<()> {
-    let server = server::start(session(), options())?;
-    // Replay: 96 QUIC connections from one address (127.0.0.2, so the real
-    // player on 127.0.0.1 is another source); none opens a stream.
+    // macOS does not configure all of 127/8 as loopback addresses. Its
+    // dual-stack wildcard socket lets IPv4 idle peers and an IPv6 real
+    // player use distinct sources without changing the host's interfaces.
+    #[cfg(target_os = "macos")]
+    let (server, idle_bind, idle_address) = {
+        let mut options = options();
+        options.bind = "[::]:0".parse()?;
+        let mut server = server::start(session(), options)?;
+        server.address.set_ip("::1".parse()?);
+        let idle_address = std::net::SocketAddr::new("127.0.0.1".parse()?, server.address.port());
+        (server, "127.0.0.1:0", idle_address)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (server, idle_bind, idle_address) = {
+        let server = server::start(session(), options())?;
+        let address = server.address;
+        (server, "127.0.0.2:0", address)
+    };
+    // Replay: 96 QUIC connections from one source, distinct from the real
+    // player's source; none opens a stream.
     let mut idle = Vec::new();
     for _ in 0..96 {
-        let endpoint = endpoint_from(&server.certificate, "127.0.0.2:0")?;
+        let endpoint = endpoint_from(&server.certificate, idle_bind)?;
         if let Ok(Ok(connection)) = tokio::time::timeout(
             Duration::from_secs(2),
-            endpoint.connect(server.address, "blockland.local")?,
+            endpoint.connect(idle_address, "blockland.local")?,
         )
         .await
         {
             idle.push((endpoint, connection));
         }
     }
+    assert!(!idle.is_empty(), "the replay made no idle connections");
     let started = Instant::now();
     let joined = tokio::time::timeout(Duration::from_secs(5), join(&server, "Real")).await;
     assert!(

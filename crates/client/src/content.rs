@@ -1420,7 +1420,11 @@ mod tests {
         assert_eq!(
             (
                 content.maps.len(),
-                content.bricks.len(),
+                content
+                    .bricks
+                    .iter()
+                    .filter(|b| !b.id.contains(':'))
+                    .count(),
                 content.worlds.len()
             ),
             (14, 166, 35)

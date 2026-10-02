@@ -204,6 +204,7 @@ fn offscreen_gpu_sway_depth_and_upload_bounds_synthetic() -> Result<()> {
 #[ignore = "requires generated v20 content"]
 fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Result<()> {
     let (first, report) = offscreen_gpu_sway_depth_and_upload_bounds(&Fixture::content())?;
+    std::fs::create_dir_all(root().join("artifacts/native-foliage"))?;
     image::save_buffer(
         root().join("artifacts/native-foliage/offscreen.png"),
         &first,

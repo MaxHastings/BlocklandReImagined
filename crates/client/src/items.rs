@@ -3474,8 +3474,8 @@ pub(crate) mod fixture {
                 hammer_item: "v20.weapon.hammeritem".into(),
                 hammer_image: "v20.image.hammerimage".into(),
                 spray_packs: (
-                    content.join("item-presentation-pack-009"),
-                    content.join("weapons-pack-008"),
+                    content.join("item-presentation-pack-010"),
+                    content.join("weapons-pack-009"),
                 ),
                 clear_can: (
                     "base/data/shapes/transspraycan.dts".into(),

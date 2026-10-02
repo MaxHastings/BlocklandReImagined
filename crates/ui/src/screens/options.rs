@@ -3478,7 +3478,7 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn authored_options_save_players_offscreen() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
         let output = root.join("artifacts/ui-native-dialogs");
         std::fs::create_dir_all(&output).unwrap();
         options_save_players_offscreen(pack, Some(&output));

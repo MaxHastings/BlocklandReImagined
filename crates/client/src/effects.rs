@@ -293,7 +293,7 @@ mod tests {
         fn content() -> Result<Self> {
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
             Ok(Self {
-                pack: EffectsPack::load(root.join("content/effects-runtime-pack-001"))?,
+                pack: EffectsPack::load(root.join("content/effects-runtime-pack-005"))?,
                 emitter: "v20/emitter/playerjetemitter".into(),
                 light: "v20/light/redlight".into(),
             })

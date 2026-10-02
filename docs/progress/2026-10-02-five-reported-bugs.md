@@ -84,6 +84,28 @@ supplied two Cargo name filters and was rejected;
 a later invocation used the wrong synthetic suffix and ran zero tests.
 Both were corrected; the passing results above ran actual named tests.
 
-Next: full `python3 tools/gate.py --push` on the committed main change;
+The first full gate on `a87daa8e` passed history, workspace build, workspace
+clippy and the content check (14 maps, 963 definitions, 35 pictures), then
+stopped at older harness assumptions. Failures used retired pack folders
+(UI 001/003, effects runtime 001, weapon debris 001, avatar rig 001,
+map bundle 006, spray packs 009/008); the fresh checkout keeps the current
+packs only. Tests now read the current pack revisions. The runtime effects
+inventory assertion includes the current pack's 132 particles and 133 emitters.
+The content menu assertion still checks exactly 166 base bricks, separately
+from enabled Add-On entries. Foliage evidence writers create their output
+folder before writing. No tests were skipped or marked known failures.
+
+The admission stress campaign failed binding 127.0.0.2 on macOS (os error
+49). It now uses the Mac's dual-stack wildcard host with idle peers on IPv4
+loopback and the real player on IPv6 loopback, retaining distinct source
+addresses without configuring system interfaces. Other platforms retain the
+existing 127.0.0.2 scenario. The replay also requires at least one successful
+idle connection. Targeted `bri-net --test stress_campaign
+idle_handshakes_from_one_address_cannot_lock_out_real_players` passed (1 test).
+The gate also reported several parallel GPU icon tests as flaky: each passed
+when retried alone. The complete log is
+`../.bri-gate/logs/a87daa8eadc4.log`.
+
+Next: rerun full `python3 tools/gate.py --push` with these harness repairs;
 Max verifies visual night lighting and door feel in his interactive playtest.
 These fixes do not mark the full alpha contract complete or publish a release.

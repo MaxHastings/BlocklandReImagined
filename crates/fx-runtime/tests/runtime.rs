@@ -426,14 +426,14 @@ fn all_emitters_lights_and_composites_execute_synthetic() {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn original_pack_all_emitters_lights_and_composites_execute() {
-    all_emitters_lights_and_composites_execute(content_pack("effects-runtime-pack-001"));
+    all_emitters_lights_and_composites_execute(content_pack("effects-runtime-pack-005"));
 }
 #[test]
 #[ignore = "requires generated v20 content"]
 fn original_pack_counts() {
-    let pack = content_pack("effects-runtime-pack-001");
-    assert_eq!(pack.library.particles.len(), 119);
-    assert_eq!(pack.library.emitters.len(), 120);
+    let pack = content_pack("effects-runtime-pack-005");
+    assert_eq!(pack.library.particles.len(), 132);
+    assert_eq!(pack.library.emitters.len(), 133);
     assert_eq!(pack.textures.len(), 18);
 }
 #[test]

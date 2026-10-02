@@ -552,7 +552,7 @@ impl AvatarRig {
     fn content() -> Result<Self> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let rig: bri_content::avatar::Rig = serde_json::from_slice(&std::fs::read(
-            root.join("content/avatar-rig-001/rig.json"),
+            root.join("content/avatar-pack-002/rig.json"),
         )?)?;
         rig.validate()?;
         Ok(Self {

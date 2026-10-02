@@ -20,7 +20,7 @@ impl DebrisFixture {
     pub fn content() -> Result<Self> {
         let root = repo_root();
         Ok(Self {
-            dir: root.join("content/weapon-debris-pack-001"),
+            dir: root.join("content/weapon-debris-pack-004"),
             content: true,
             out: root.join("artifacts/native-weapon-debris"),
             _scratch: None,

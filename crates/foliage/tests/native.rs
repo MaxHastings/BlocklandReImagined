@@ -246,7 +246,8 @@ fn terrain_architecture_and_static_collision_probe_synthetic() {
 fn real_bedroom_terrain_architecture_and_static_collision_probe() {
     let start = std::time::Instant::now();
     let report = terrain_architecture_and_static_collision_probe(&Fixture::content());
-    let report = serde_json::json!({"schema_version":1,"native_map":"map-bundle-014","total_milliseconds":start.elapsed().as_secs_f64()*1000.,"reports":report,"subjective_parity":false});
+    let report = serde_json::json!({"schema_version":1,"native_map":"map-bundle-017","total_milliseconds":start.elapsed().as_secs_f64()*1000.,"reports":report,"subjective_parity":false});
+    std::fs::create_dir_all(root().join("artifacts/native-foliage")).unwrap();
     std::fs::write(
         root().join("artifacts/native-foliage/placement-probe.json"),
         serde_json::to_vec_pretty(&report).unwrap(),

@@ -41,11 +41,11 @@ synthetic_and_content! {
     options_tabs_fit_short_and_wide_windows, "ui-pack-004";
     windows_drag_by_their_title_bar_and_stay_on_screen, "ui-pack-004";
     music_files_turns_tracks_off_for_the_next_hosted_game, "ui-pack-004";
-    press_up_to_repeat_chat_recalls_sent_lines, "ui-pack-003";
-    ml_text_switches_fonts_colours_and_margins_like_the_help_pages, "ui-pack-003";
-    resizable_windows_grow_from_their_edges, "ui-pack-003";
-    maximize_and_minimize_boxes_toggle_the_window, "ui-pack-003";
-    differing_save_colours_ask_to_match_or_add_them, "ui-pack-003";
+    press_up_to_repeat_chat_recalls_sent_lines, "ui-pack-004";
+    ml_text_switches_fonts_colours_and_margins_like_the_help_pages, "ui-pack-004";
+    resizable_windows_grow_from_their_edges, "ui-pack-004";
+    maximize_and_minimize_boxes_toggle_the_window, "ui-pack-004";
+    differing_save_colours_ask_to_match_or_add_them, "ui-pack-004";
 }
 
 const SCREENS: [ScreenId; 19] = [
@@ -813,7 +813,7 @@ fn differing_save_colours_ask_to_match_or_add_them(pack: &Rc<Pack>) {
 #[ignore = "requires generated v20 content"]
 fn original_color_warning_rows_are_40_apart() {
     use bri_ui::api::UiUpdate;
-    let pack = content_pack("ui-pack-003");
+    let pack = content_pack("ui-pack-004");
     let mut u = ui(&pack);
     u.apply(UiUpdate::ColorWarning { append: true });
     u.update(0);
