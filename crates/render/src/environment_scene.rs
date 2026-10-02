@@ -64,6 +64,7 @@ pub fn append(
         "Missing sky image binding"
     );
     out.fog = env.fog;
+    out.sky_below = env.bottom;
     out.clear_color = [env.fog.color[0], env.fog.color[1], env.fog.color[2], 1.0];
     out.omissions.extend(env.warnings.clone());
     let radius = env.fog.end * 0.95;

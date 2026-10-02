@@ -419,13 +419,15 @@ fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
     let right = rising.cross(Vec3::Y).normalize();
     let ray = (rising + (right - right.cross(rising)) * half_pixel).normalize();
     let fogged = |face: [u8; 3], up: f32| {
-        let a = env.fog.sky_amount(up);
+        let a = env.fog.sky_amount(up, env.bottom);
         face.map(|c| (f32::from(c) * (1.0 - a) + 255.0 * a).round() as u8)
     };
     for (direction, expected) in [
         (Vec3::Z, [255, 255, 255]),
         (rising, fogged([255, 0, 0], ray.y)),
         (Vec3::Y, fogged([255, 0, 255], 1.0)),
+        // A bottom face (Skylands' mirrored floor) hazes like the sky above.
+        (Vec3::NEG_Y, fogged([0, 255, 255], -1.0)),
     ] {
         let mut camera = Camera::perspective(
             [0.0; 3],
@@ -446,20 +448,22 @@ fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
         }
     }
     // A thin fog leaves a horizon haze and a nearly clear sky overhead.
-    let haze = env.fog.sky_amount(ray.y);
+    let haze = env.fog.sky_amount(ray.y, env.bottom);
     assert!(haze > 0.3 && haze < 0.95, "haze {haze}");
-    assert!(env.fog.sky_amount(1.0) < 0.1);
-    assert_eq!(env.fog.sky_amount(0.0), 1.0);
-    // Geometry ends as fogged as the sky behind it, high or level.
-    for up in [0.0_f32, 0.05, 0.2, 0.6] {
+    assert!(env.fog.sky_amount(1.0, env.bottom) < 0.1);
+    assert_eq!(env.fog.sky_amount(0.0, env.bottom), 1.0);
+    // Without a bottom face the fog backdrop fills below the horizon.
+    assert_eq!(env.fog.sky_amount(-0.5, false), 1.0);
+    // Geometry ends as fogged as the sky behind it, high, level or low.
+    for up in [-0.4_f32, 0.0, 0.05, 0.2, 0.6] {
         let d = env.fog.end;
         let offset = [0.0, up * d, (1.0 - up * up).sqrt() * d];
-        assert!((env.fog.amount_along(offset) - env.fog.sky_amount(up)).abs() < 1e-3);
+        assert!((env.fog.amount_along(offset, env.bottom) - env.fog.sky_amount(up, env.bottom)).abs() < 1e-3);
     }
     // Thick fog reaches far up the sky.
     env.fog.start = 5.0;
     env.fog.end = 90.0;
-    assert!(env.fog.sky_amount(0.5) > 0.99);
+    assert!(env.fog.sky_amount(0.5, env.bottom) > 0.99);
     Ok(())
 }
 

@@ -343,6 +343,9 @@ pub struct SceneData {
     pub sun_color: [f32; 3],
     pub ambient: [f32; 3],
     pub fog: bri_content::environment::Fog,
+    /// The sky goes on below the horizon (a bottom face, Skylands' floor),
+    /// so fog below the eye thins as it does above (`Fog::sky_amount`).
+    pub sky_below: bool,
     /// Authored fog backdrop below the sky horizon, or a diagnostic clear color.
     pub clear_color: [f32; 4],
     /// Each decomposed interior lightmap (an image index, see
@@ -367,6 +370,7 @@ impl Default for SceneData {
             ambient: [0.35; 3],
             clear_color: [0.05, 0.08, 0.12, 1.0],
             fog: Default::default(),
+            sky_below: false,
             lightmap_bases: vec![],
         }
     }
@@ -850,6 +854,7 @@ impl Camera {
         self.sun_color[..3].copy_from_slice(&scene.sun_color);
         self.ambient[..3].copy_from_slice(&scene.ambient);
         self.fog_color[..3].copy_from_slice(&scene.fog.color);
+        self.fog_color[3] = f32::from(u8::from(scene.sky_below));
         self.atmosphere[0] = scene.fog.start;
         self.atmosphere[1] = scene.fog.end;
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
