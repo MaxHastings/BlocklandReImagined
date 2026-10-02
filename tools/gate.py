@@ -877,7 +877,9 @@ def ci_test():
             say(f"skipping {label} (needs generated content)")
             continue
         say(f"running {label}")
-        if subprocess.run([executable], cwd=cwd).returncode:
+        output, code = run_binary(label, executable, [], cwd)
+        print(output, end="", flush=True)
+        if code:
             failed.append(label)
     if failed:
         say(f"failing test targets: {', '.join(failed)}")

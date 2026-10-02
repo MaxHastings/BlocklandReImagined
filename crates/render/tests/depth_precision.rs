@@ -56,7 +56,8 @@ fn floor(y: f32, half: f32, color: [f32; 4]) -> SceneData {
 #[test]
 fn a_surface_a_millimetre_above_another_covers_it_far_away() -> Result<()> {
     let (device, queue) = pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

@@ -129,7 +129,7 @@ struct Gpu {
 fn gpu() -> Result<Gpu> {
     // The platform tries every primary backend except Vulkan first (DX12 on
     // Windows); WGPU_BACKEND overrides, as it does in the game.
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     descriptor.backends =
         wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN);
     let instance = wgpu::Instance::new(descriptor);

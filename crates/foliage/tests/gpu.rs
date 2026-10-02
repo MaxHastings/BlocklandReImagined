@@ -12,7 +12,9 @@ struct Gpu {
 impl Gpu {
     fn new() -> Result<Self> {
         pollster::block_on(async {
-            let i = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let i = wgpu::Instance::new(
+                wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            );
             let a = i
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await?;

@@ -303,7 +303,8 @@ async fn run() -> Result<()> {
     );
     std::fs::create_dir_all(&a[1])?;
     let pack = WeatherPack::load(&a[0])?;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,

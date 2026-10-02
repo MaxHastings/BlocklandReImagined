@@ -45,7 +45,8 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             ],
         )
         .unwrap();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
         let mut renderer = EffectsRenderer::new(

@@ -52,7 +52,8 @@ impl EarlyGpu {
         let thread = std::thread::Builder::new()
             .name("open GPU".into())
             .spawn(move || -> Result<Opened> {
-                let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+                let mut descriptor =
+                    wgpu::InstanceDescriptor::new_without_display_handle_from_env();
                 descriptor.backends = backends;
                 let instance = wgpu::Instance::new(descriptor);
                 let (adapter, device, queue) = request_device(&instance, None, software)?;

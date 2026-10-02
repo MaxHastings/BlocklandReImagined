@@ -47,5 +47,11 @@ jobs:
         run: cargo build --workspace --all-targets --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Provision software graphics for offscreen tests
+        run: ./tools/setup_ci_gpu.ps1
       - name: Test
         run: python tools/gate.py --ci-test
+        env:
+          WGPU_BACKEND: dx12
+          WGPU_DX12_COMPILER: dxc
+          RUST_TEST_THREADS: 1

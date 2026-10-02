@@ -409,7 +409,8 @@ fn native_loader_rejects_corruption_dimensions_and_unsafe_paths() {
 #[test]
 fn gpu_preserves_atlas_alpha_and_reads_without_writing_host_depth() {
     pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
         let manifest = fixture(|_| {}).manifest.clone();

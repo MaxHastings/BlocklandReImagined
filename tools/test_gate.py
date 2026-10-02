@@ -1,7 +1,27 @@
 """Regression tests for release-gate outcomes; no content or compiler needed."""
 import unittest
+from unittest.mock import patch
+from pathlib import Path
+import sys
 
 import gate
+
+
+class BinaryDeadline(unittest.TestCase):
+    def test_stalled_binary_is_stopped_and_reported_as_failure(self):
+        with patch.object(gate, 'BINARY_TIMEOUT', 0.1):
+            output, code = gate.run_binary(
+                'fixture/stalled', sys.executable,
+                ['-c', 'import time; time.sleep(60)'], Path.cwd())
+        self.assertNotEqual(code, 0)
+        self.assertIn('test fixture/stalled::gate_timeout ... FAILED', output)
+
+    def test_binary_failure_keeps_its_diagnostic(self):
+        output, code = gate.run_binary(
+            'fixture/error', sys.executable,
+            ['-c', 'print("specific failure"); raise SystemExit(42)'], Path.cwd())
+        self.assertEqual(code, 42)
+        self.assertIn('specific failure', output)
 
 
 class SaveCorpusResult(unittest.TestCase):

@@ -42,7 +42,8 @@ pub async fn render_geometry(
         width > 0 && height > 0 && width <= 4096 && height <= 4096 && width.is_multiple_of(64),
         "Invalid/alignment-sensitive readback dimensions"
     );
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
