@@ -106,6 +106,27 @@ The gate also reported several parallel GPU icon tests as flaky: each passed
 when retried alone. The complete log is
 `../.bri-gate/logs/a87daa8eadc4.log`.
 
-Next: rerun full `python3 tools/gate.py --push` with these harness repairs;
+The second full gate on `c724a433` passed build, clippy, content validation
+and all but one of 317 test binaries (419 seconds). The bundled client
+integration test repeated a Grapple Rope assertion failure alone: travelled
+3.1678 tied and 3.7958 free. The ratio assumed a rope with no slack. The
+native policy is a fixed-length leash, not a winch; the original port and
+motor were unchanged. The integration test now waits for the replicated
+attachment, checks its fixed anchor and length, checks the grip remains
+within that length while held, waits for release and landing, then verifies
+walking carries the grip beyond the old rope's reach. It also verifies
+that the replay actually attached, which the distance ratio could miss.
+The full hosted Add-On scenario passed after this repair (1 test, 77 seconds),
+including its subsequent Fill Can, wrench and hole-bot interactions.
+Logs: `../.bri-gate/logs/c724a4338847.log`, its `-retry.log`, and
+`artifacts/five-fixes-bundled-integration.log`.
+
+Max explicitly included useful refactoring, technical debt and other
+integration issues encountered in this work. The shared native geometry
+resolver, definition swap bookkeeping, destination sound bindings and
+identity-preserving importer are the production repairs; these harness
+repairs keep full verification useful on a fresh Mac checkout.
+
+Next: rerun full `python3 tools/gate.py --push` with the integration repair;
 Max verifies visual night lighting and door feel in his interactive playtest.
 These fixes do not mark the full alpha contract complete or publish a release.
