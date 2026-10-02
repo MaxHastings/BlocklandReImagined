@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod bots;
+pub use bots::{BotEvidence, BotTask, BotThought};
 mod breakables;
 mod build_load;
 pub use build_load::LoadPace;
@@ -2623,6 +2624,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
+        let mut push_contacts = Vec::new();
         let mut crossed = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
@@ -2768,6 +2770,7 @@ impl Session {
                     glass_hits.push((owner, motion.hits));
                 }
                 if peer.combat.alive {
+                    push_contacts.extend(motion.contacts.into_iter().map(|c| (owner, c)));
                     touches.extend(motion.touched.into_iter().map(|brick| (owner, brick)));
                     impacts.push((owner, motion.impact));
                 }
@@ -2787,6 +2790,7 @@ impl Session {
                 Default::default()
             }
         };
+        self.push_contacts(push_contacts);
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, carry) in crossed {

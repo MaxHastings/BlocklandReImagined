@@ -2162,6 +2162,38 @@ impl WeaponsWorld {
         }
         Ok(())
     }
+    /// Abandon a held charge without taking its release-to-fire transition.
+    /// Restart the same hand images through the normal unmount/mount events,
+    /// preserving selection and paint. Worn images and inventory are untouched.
+    /// Hosts must clear any queued presses before using this cancellation.
+    pub fn cancel_charge(&mut self, id: ActorId) -> Result<bool> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        if !a.images[0]
+            .as_ref()
+            .is_some_and(|e| self.pack.images[&e.image].charges())
+        {
+            return Ok(false);
+        }
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        let image = a.images[0].as_ref().expect("checked");
+        let restart = NextImage {
+            image: image.image.clone(),
+            paint: image.paint,
+        };
+        let mut a = self.actors.remove(&id).expect("checked");
+        let flags = (a.ammo, a.loaded);
+        let pending = a.next.take();
+        a.trigger = false;
+        self.swap_images(id, &mut a, restart);
+        (a.ammo, a.loaded) = flags;
+        a.next = pending;
+        self.actors.insert(id, a);
+        Ok(true)
+    }
+
     /// Sports movement trigger switches dribble/standing presentation to shoot mode.
     pub fn sport_trigger(&mut self, id: ActorId, trigger: u8, down: bool) -> Result<()> {
         ensure!(self.events.len() < 8192, "Command event budget");

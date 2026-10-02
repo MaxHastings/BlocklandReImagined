@@ -698,6 +698,7 @@ pub struct MotionEvents {
     /// Each collision's collider and the speed into its surface before the
     /// collision stopped it (Torque `Player::updatePos` `bd`).
     pub hits: Vec<(ColliderHandle, f32)>,
+    pub contacts: Vec<crate::torque::SweepContact>,
     /// The body went through an opening this tick: the carry that took it
     /// to the partner's side (a player's view turns with it).
     pub passed: Option<glam::Affine3A>,
@@ -1191,6 +1192,7 @@ impl Player {
                 touched: vec![],
                 impact: Vec3::ZERO,
                 hits: vec![],
+                contacts: vec![],
                 passed: None,
             }
         };
@@ -1658,6 +1660,7 @@ impl Player {
             touched,
             impact: before_collision - velocity,
             hits: moved.hit,
+            contacts: moved.contacts,
             passed,
         })
     }

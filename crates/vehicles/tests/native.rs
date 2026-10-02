@@ -246,6 +246,31 @@ fn flight_and_water_families(f: &Fixture) {
 }
 }
 on_both! {
+fn cancelling_a_vehicle_charge_never_fires_and_allows_a_fresh_shot(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.cannon, 0.1);
+    mount(&mut v, &w, 0);
+    v.drain_intents();
+    v.set_controls(OwnerId(10), OccupantId(20), Controls { fire: true, ..Default::default() }).unwrap();
+    step(&mut v, &mut w, 30, None);
+    assert!(v.snapshot(&w).vehicles[0].charge > 0);
+    v.drain_intents();
+    v.cancel_weapon_charge(OccupantId(999));
+    assert!(v.snapshot(&w).vehicles[0].charge > 0, "an unrelated occupant cannot cancel");
+    v.cancel_weapon_charge(OccupantId(20));
+    step(&mut v, &mut w, 1, None);
+    let cancelled = v.drain_intents();
+    assert_eq!(v.snapshot(&w).vehicles[0].charge, 0);
+    assert!(!cancelled.iter().any(|i| matches!(i, Intent::Fire(_))));
+    assert!(cancelled.iter().any(|i| matches!(i, Intent::Effect { active: false, .. })));
+    v.set_controls(OwnerId(10), OccupantId(20), Controls { fire: true, ..Default::default() }).unwrap();
+    step(&mut v, &mut w, 30, None);
+    v.set_controls(OwnerId(10), OccupantId(20), Controls::default()).unwrap();
+    step(&mut v, &mut w, 1, None);
+    assert!(v.drain_intents().iter().any(|i| matches!(i, Intent::Fire(_))), "ordinary release still fires");
+}
+}
+on_both! {
 fn cannon_authored_charge_and_cooldown(f: &Fixture) {
     let (mut v, mut w) = setup(f);
     spawn(&mut v, &mut w, f.cannon, 0.1);
@@ -1230,5 +1255,34 @@ fn an_authored_simple_dismount_leaves_in_place(f: &Fixture) {
     let (at, velocity) = dismounted(&mut v);
     assert!(at.distance(seat) < 1e-3, "{at} vs {seat}");
     assert!(velocity.distance(Vec3::new(3., 0., 0.)) < 1e-3, "{velocity}");
+}
+}
+
+on_both! {
+fn leaving_other_seats_preserves_the_gunners_held_charge(f: &Fixture) {
+    let mut pack = f.pack.clone();
+    let gun = pack.definitions.iter_mut().find(|d| d.id == f.tank).unwrap()
+        .weapon.as_mut().unwrap();
+    gun.charge_ticks = 24;
+    gun.charge_steps = 3;
+    let mut v = VehiclesWorld::new(pack).unwrap();
+    let mut w = common::floor(500.);
+    spawn(&mut v, &mut w, f.tank, 2.);
+    mount(&mut v, &w, 0);
+    mount(&mut v, &w, 1);
+    mount(&mut v, &w, 2);
+    v.set_controls(OwnerId(10), OccupantId(22), Controls { fire: true, ..Default::default() }).unwrap();
+    step(&mut v, &mut w, 1, None);
+    assert!(v.snapshot(&w).vehicles[0].charge > 0);
+    v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
+    v.dismount(&w, OwnerId(10), OccupantId(21), false).unwrap();
+    assert!(v.snapshot(&w).vehicles[0].charge > 0, "another role cannot cancel this gunner's action");
+    step(&mut v, &mut w, 80, None);
+    assert_eq!(v.occupant(OccupantId(22)), Some((VehicleId(1), 2)));
+    assert_eq!(v.snapshot(&w).vehicles[0].charge, 3);
+    v.drain_intents();
+    v.set_controls(OwnerId(10), OccupantId(22), Controls::default()).unwrap();
+    step(&mut v, &mut w, 1, None);
+    assert!(v.drain_intents().iter().any(|i| matches!(i, Intent::Fire(f) if f.occupant == Some(OccupantId(22)))));
 }
 }

@@ -18,6 +18,8 @@ pub(crate) enum Behaviour {
     Carry,
     /// An enemy up where no walk leads: jet up and over to them.
     Fly,
+    /// A useful, reservable opportunity in the environment.
+    Interact,
     /// An enemy in sight within its weapon's band: stand its ground,
     /// strafe and shoot.
     Fight,
@@ -41,6 +43,8 @@ pub(crate) struct Situation {
     /// An enemy it can fly to where its path does not walk up
     /// (`Session::air_chase`).
     pub fly: bool,
+    /// Utility of an available interaction; zero when there is none.
+    pub interaction: f32,
     /// The enemy in sight within its chase radius: how far across, and how
     /// much higher.
     pub enemy: Option<(f32, f32)>,
@@ -63,9 +67,10 @@ const RISE_SLACK: f32 = 1.0;
 
 impl Behaviour {
     /// Every behaviour, most urgent first.
-    pub(crate) const ALL: [Behaviour; 7] = [
+    pub(crate) const ALL: [Behaviour; 8] = [
         Behaviour::Carry,
         Behaviour::Fly,
+        Behaviour::Interact,
         Behaviour::Fight,
         Behaviour::Chase,
         Behaviour::Search,
@@ -85,6 +90,7 @@ impl Behaviour {
         match self {
             Behaviour::Carry => fits(s.holding, 1.0),
             Behaviour::Fly => fits(s.fly, 0.9),
+            Behaviour::Interact => s.interaction,
             Behaviour::Fight => fits(
                 s.enemy.is_some_and(|(distance, rise)| {
                     let slack = if current == Behaviour::Fight {

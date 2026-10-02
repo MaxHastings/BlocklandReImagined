@@ -327,6 +327,11 @@ fn only_a_steering_seat_drives_its_vehicle() {
         None,
         "a passenger"
     );
+    assert_eq!(
+        super::driven_vehicle(Some((7, 2)), |_, seat| seat == 2),
+        Some(7),
+        "an authored control seat need not be first"
+    );
     // A tumble's seat: its rider is drawn from the host's poses.
     assert_eq!(
         super::driven_vehicle(Some((7, 0)), steers(false)),

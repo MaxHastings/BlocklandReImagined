@@ -1139,7 +1139,7 @@ fn driven_vehicle(
     mounted: Option<(u64, u8)>,
     steers: impl FnOnce(u64, usize) -> bool,
 ) -> Option<u64> {
-    let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
+    let (vehicle, seat) = mounted?;
     steers(vehicle, usize::from(seat)).then_some(vehicle)
 }
 

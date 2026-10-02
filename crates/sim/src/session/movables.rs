@@ -359,6 +359,9 @@ impl Session {
     pub fn held_by(&self, player: OwnerId) -> Option<ObjectRef> {
         self.movables.holds.get(&player).map(|h| h.target)
     }
+    pub(super) fn object_held(&self, target: ObjectRef) -> bool {
+        self.movables.holds.values().any(|h| h.target == target)
+    }
     /// Who a push or throw credits for what `target` hits now.
     pub(super) fn mover_credit(&self, target: ObjectRef) -> Option<OwnerId> {
         let tick = self.simulation.state().tick;
@@ -371,6 +374,39 @@ impl Session {
     pub(super) fn credit(&mut self, target: ObjectRef, by: OwnerId) {
         let until = self.simulation.state().tick + CREDIT_TICKS;
         self.movables.credits.insert(target, (by, until));
+    }
+    /// All walking actors exchange the momentum their motor stopped with
+    /// loose vehicle bodies. Attribution follows a real, permitted transfer.
+    pub(super) fn push_contacts(
+        &mut self,
+        contacts: Vec<(OwnerId, bri_motor::torque::SweepContact)>,
+    ) {
+        for (owner, contact) in contacts {
+            let Some(collider) = self.simulation.physics.colliders.get(contact.collider) else {
+                continue;
+            };
+            if collider.user_data >> 64 != super::vehicles::VEHICLE_TAG >> 64 {
+                continue;
+            }
+            let vehicle = collider.user_data as u64;
+            let target = ObjectRef::Vehicle(vehicle);
+            if !self.may_move(owner, target) || self.object_held(target) {
+                continue;
+            }
+            let transferred = self.vehicles.world.as_mut().map_or(0.0, |w| {
+                w.push_contact(
+                    &mut self.simulation.physics,
+                    VehicleId(vehicle),
+                    &contact,
+                    combat::PLAYER_MASS,
+                )
+            });
+            if transferred > 0.0 {
+                self.credit(target, owner);
+                let tick = self.simulation.state().tick;
+                self.bot_push_progress(owner, vehicle, tick);
+            }
+        }
     }
 
     /// The vehicle a player's body is part of: their seat, or their tumble.

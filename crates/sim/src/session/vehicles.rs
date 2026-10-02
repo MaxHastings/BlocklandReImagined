@@ -431,13 +431,23 @@ impl Session {
             .map(|v| VehiclePose {
                 driver_input: v
                     .seats
-                    .first()
+                    .get(
+                        world
+                            .definition(&v.definition)
+                            .and_then(|d| d.control_seat())
+                            .unwrap_or(usize::MAX),
+                    )
                     .and_then(|s| s.occupant)
                     .and_then(|o| self.peers.get(&o.owner.0))
                     .map_or(0, |p| p.processed_move),
                 driver_steering: v
                     .seats
-                    .first()
+                    .get(
+                        world
+                            .definition(&v.definition)
+                            .and_then(|d| d.control_seat())
+                            .unwrap_or(usize::MAX),
+                    )
                     .and_then(|s| s.occupant)
                     .map_or(DEFAULT_STEERING, |o| self.vehicles.steering(o.owner.0)),
                 id: v.id.0,
@@ -466,6 +476,104 @@ impl Session {
             .mounted
             .get(&owner)
             .map(|m| (m.vehicle.0, m.seat as u8))
+    }
+    /// Reach-checked boarding for an actor approaching a particular seat.
+    /// Reservations confer no authority: real occupancy, body capability,
+    /// trust/minigame rules and the Add-On ride hook decide at execution.
+    /// Physical approach is separate from occupancy/trust and package action
+    /// approval. A transparent solid brick still blocks mounting.
+    pub(super) fn vehicle_board_reach(&self, owner: OwnerId, vehicle: u64, seat: u8) -> bool {
+        let Some(peer) = self.peers.get(&owner) else {
+            return false;
+        };
+        let Some(w) = &self.vehicles.world else {
+            return false;
+        };
+        let Some(v) = w.vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle)) else {
+            return false;
+        };
+        let Some(d) = w.definition(&v.definition) else {
+            return false;
+        };
+        let Some(at) = w.seat_position(&self.simulation.physics, v.id, usize::from(seat)) else {
+            return false;
+        };
+        let at = Vec3::from(at);
+        if Vec3::from(peer.player.state().feet).distance(at) > d.mount_distance * v.scale {
+            return false;
+        }
+        let delta = at - peer.player.eye();
+        if delta.length() < 0.001 {
+            return true;
+        }
+        let wall_clear = self
+            .simulation
+            .target_bricks_always(peer.player.eye(), delta.normalize(), delta.length())
+            .is_ok_and(|h| h.is_none());
+        wall_clear
+            && self
+                .simulation
+                .sight(peer.player.eye(), at, d.mount_distance * v.scale + 2.0)
+                .is_some()
+    }
+
+    pub(super) fn board_vehicle(&mut self, owner: OwnerId, vehicle: u64, seat: u8) -> Result<()> {
+        ensure!(
+            self.vehicle_board_reach(owner, vehicle, seat),
+            "Seat physically out of reach"
+        );
+        ensure!(!self.seated(owner), "Already seated");
+        let peer = self.peers.get(&owner).context("No player")?;
+        ensure!(peer.combat.alive, "Only living players board");
+        ensure!(
+            self.archetypes
+                .resolve(peer.player.state().archetype)
+                .can_ride,
+            "Body cannot ride"
+        );
+        ensure!(
+            self.vehicles
+                .may_remount(owner, self.simulation.state().tick),
+            "Just dismounted"
+        );
+        let position = peer.player.state().feet;
+        let eye = peer.player.eye();
+        let world = self.vehicles.world.as_ref().context("No vehicles")?;
+        let v = world
+            .vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle))
+            .context("No vehicle")?;
+        ensure!(
+            !v.destroyed && self.can_ride(owner, v.owner.0),
+            "Cannot use vehicle"
+        );
+        let d = world
+            .definition(&v.definition)
+            .context("No vehicle definition")?;
+        let at = world
+            .seat_position(&self.simulation.physics, v.id, usize::from(seat))
+            .context("No seat")?;
+        ensure!(
+            Vec3::from(position).distance(Vec3::from(at)) <= d.mount_distance * v.scale,
+            "Seat out of reach"
+        );
+        ensure!(
+            self.simulation
+                .sight(eye, Vec3::from(at), d.mount_distance * v.scale + 2.0)
+                .is_some(),
+            "Boarding obstructed"
+        );
+        ensure!(self.package_ride(owner, vehicle), "Ride hook refused");
+        let rider = occupant(&self.peers, owner);
+        let world = self.vehicles.world.as_mut().context("No vehicles")?;
+        world.mount(
+            &self.simulation.physics,
+            VehicleId(vehicle),
+            usize::from(seat),
+            rider,
+            position,
+        )?;
+        let intents = world.drain_intents();
+        self.apply_vehicle_intents(intents)
     }
 
     /// Admin teleports of a rider (`dropPlayerAtCamera`, `/fetch`, `/find`)

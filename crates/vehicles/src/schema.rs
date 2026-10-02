@@ -575,6 +575,17 @@ impl Definition {
         }
         ids
     }
+    /// The actor supplying chassis controls. Actor guns share their weapon
+    /// seat with the motor; wheel/flight vehicles use the controls flag.
+    pub fn control_seat(&self) -> Option<usize> {
+        self.seats
+            .iter()
+            .position(|s| s.controls)
+            .or_else(|| self.is_actor().then(|| self.weapon_seat()).flatten())
+    }
+    pub fn weapon_seat(&self) -> Option<usize> {
+        self.seats.iter().position(|s| s.weapon)
+    }
     pub fn seat_role(&self, seat: usize) -> SeatRole {
         self.seat_role_for(seat, true)
     }
@@ -837,6 +848,12 @@ impl Pack {
                     && d.look_limits[0] <= d.look_limits[1],
                 "invalid camera or look limits"
             );
+            ensure!(
+                d.seats.iter().filter(|s| s.controls).count() <= 1
+                    && d.seats.iter().filter(|s| s.weapon).count() <= 1
+                    && (d.is_actor() || !d.seats.iter().any(|s| s.controls && s.weapon)),
+                "ambiguous vehicle control roles"
+            );
             for wheel in &d.wheels {
                 ensure!(
                     wheel.position.iter().all(|v| v.is_finite())
@@ -870,7 +887,7 @@ impl Pack {
                 d.attachment_mount.is_none()
                     || (!d.attachment_collision_hulls.is_empty()
                         && d.attachment_fallback_seat.is_some()
-                        && d.seats.len() > 2),
+                        && d.weapon_seat().is_some()),
                 "incomplete attachment"
             );
             ensure!(
@@ -928,6 +945,32 @@ impl Pack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reordered_capabilities_and_ambiguous_roles_are_explicit() {
+        let mut pack = crate::testing::pack();
+        let d = pack
+            .definitions
+            .iter_mut()
+            .find(|d| d.id == crate::testing::TANK)
+            .unwrap();
+        d.seats.swap(0, 2);
+        assert_eq!(d.control_seat(), Some(2));
+        assert_eq!(d.weapon_seat(), Some(0));
+        assert_eq!(d.seat_role(0), SeatRole::Gunner);
+        assert_ne!(d.seat_role(2), SeatRole::Gunner);
+        pack.validate().unwrap();
+        let d = pack
+            .definitions
+            .iter_mut()
+            .find(|d| d.id == crate::testing::TANK)
+            .unwrap();
+        d.seats[2].weapon = true;
+        assert!(
+            pack.validate().is_err(),
+            "one gun cannot be independently driven by two seats"
+        );
+    }
+
     /// `WheeledVehicle::updateForces` (0x5746ea): squared steering, and a
     /// wheel steering against the front turns by `atan(k tan(s|s|))`.
     #[test]

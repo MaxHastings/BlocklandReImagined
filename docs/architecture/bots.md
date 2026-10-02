@@ -11,11 +11,13 @@ bot does through the same code.
 1. **Perceive.** It looks for an enemy (`bot_sight`: in view, straight or
    through a portal) and remembers where one was seen, where a hit came
    from, and an enemy that went through a portal. Memory fades after the
-   kind's `memory_seconds`. A kind with `alerts_allies` (Bot_Hole's
-   `hAlertOtherBots`) warns its side when it first sees an enemy or is
-   hit: allied bots within its sight that see and remember nothing take
-   the warning as a memory and go and look (`hear_alerts`, after every
-   bot has stepped).
+   kind's `memory_seconds`. Evidence stores the enemy identity, observed
+   position, observation tick and expiry. Hidden movement never refreshes it;
+   death, removal or a changed alliance invalidates hostility. A kind with
+   `alerts_allies` (Bot_Hole's `hAlertOtherBots`) shares sightings and hits with
+   nearby allies (`hear_alerts`, after every bot has stepped). A receiver keeps
+   the observation's original age and accepts newer evidence, without extending
+   its lifetime. Friendly-fire permission does not make teammates enemies.
 2. **Choose a behaviour.** `behaviour::choose` scores each behaviour
    from a `Situation` (what it holds, the enemy's distance and height, its
    memory, how far it strayed), scales each score by the kind's
@@ -25,7 +27,8 @@ bot does through the same code.
    | Behaviour | When | Does |
    |---|---|---|
    | Carry | its tool holds something | carries it to open space, swings and lets go |
-   | Fly | an enemy up where its path does not walk | jets straight up, out from under cover, over, down by them |
+   | Fly | an enemy up where its path does not walk, with usable jets | jets straight up, out from under cover, over, down by them |
+   | Interact | a useful, permitted environmental opportunity | reserves a seat or loose hazard, approaches and executes through ordinary controls |
    | Fight | an enemy in sight within its weapon's band | stands, strafes, backs off when too close |
    | Chase | an enemy in sight out of its band | paths to them |
    | Search | an enemy remembered | goes where they were, looks around |
@@ -34,7 +37,9 @@ bot does through the same code.
 
    A weight of 0 turns a behaviour off (`"chase": 0` makes a guard that
    stays at its post and fights what comes within reach); more than 1 puts
-   it ahead of others. Nothing scoring: it wanders.
+   it ahead of others. Ordinary behaviours default to 1; `interact` defaults
+   to 0 and the standard Blockhead package opts in. Creature policy remains
+   in its package. Nothing scoring: it wanders.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
    past its band, and a walk home goes all the way.
@@ -42,14 +47,29 @@ bot does through the same code.
    (`crate::nav`, shared by every bot of a body size, updated as bricks
    change, portals included) finds the way a little each tick. Gaps only
    a crouched body fits (crawlspaces) are on the grid: crawling costs
-   more than walking, and the bot crouches into them.
+   more than walking, and the bot crouches into them. A wheeled driver's body
+   uses the chassis footprint and clearance, with no pedestrian jump, crawl or
+   portal edges. Local execution checks the actual oriented hull and brakes for
+   allied bodies. A nearby final interaction approach continues beyond the
+   grid cell to the authored point; physical reach still decides success.
 4. **Aim and trigger.** The aim follows the enemy whatever the behaviour
    (leading shots by the projectile's speed and drop, with the kind's aim
    error shrinking as it tracks), the path when there is none, and Carry
    steers its own. It fires once its reaction time has passed and the aim
-   is on.
+   is on, its weapon can reach, and allies do not obstruct the shot. Mounted
+   weapons use their actual projectile, speed, charge state and muzzle. Lost
+   targets cancel a held charge without firing it. A driver steers the
+   chassis independently of the gunner's world aim; an armed passenger's world
+   aim is preserved when its seat converts the look to a relative angle.
 5. **Move and act.** The behaviour's movement, then getting unstuck (hop,
-   plan again, give up the goal) for all of them.
+   plan again, give up the goal) on foot; drivers instead brake, replan and
+   relinquish an unproductive seat. Shared claims are exclusive advisory
+   intentions, released on success, preemption or invalidation. A claim never
+   overrides human occupancy, trust, mini-game policy or an Add-On ride hook.
+   Physical pushing transfers only momentum stopped at actual motor contacts,
+   through the same mechanism for humans and bots; mass and geometry determine
+   the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
+   budgets, provider boundary and examples.
 
 ## Data
 

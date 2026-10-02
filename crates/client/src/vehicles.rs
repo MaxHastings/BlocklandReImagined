@@ -727,7 +727,7 @@ impl ClientVehicles {
             Vec3::from(s.transform.position),
             Quat::from_array(s.transform.rotation),
         );
-        if seat == 2 && d.attachment_mount.is_some() {
+        if d.weapon_seat() == Some(seat) && d.attachment_mount.is_some() {
             let pivot = d
                 .attachment_mount
                 .as_ref()

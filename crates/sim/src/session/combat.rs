@@ -1042,6 +1042,11 @@ impl Session {
         {
             return Ok(());
         }
+        let source_observation = source.and_then(|o| {
+            self.peers
+                .get(&o)
+                .map(|p| (o, Vec3::from(p.player.state().feet)))
+        });
         let Some(peer) = self.peers.get_mut(&target) else {
             return Ok(());
         };
@@ -1107,7 +1112,7 @@ impl Session {
         peer.combat.pain_tick = tick;
         let alive = peer.combat.health > 0.0;
         let level = peer.combat.pain_level;
-        self.bots.note_hurt(target, source, tick);
+        self.bots.note_hurt(target, source_observation, tick);
         let feet = peer.player.state().feet;
         self.emote_cue(
             tick,
