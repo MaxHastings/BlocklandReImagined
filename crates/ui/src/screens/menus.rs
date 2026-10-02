@@ -185,11 +185,18 @@ impl NativeScreen {
             }
         }
         if id == ScreenId::EscapeMenu {
-            let parent = s.view.walk()
+            let parent = s
+                .view
+                .walk()
                 .find(|n| s.view.node(*n).ctrl.class == "GuiWindowCtrl")
                 .unwrap_or(s.view.root);
-            let mut b = button("BlockButtonProfile", Rect::new(10, 70, 200, 22),
-                "base/client/ui/button1", "Rule Workshop", "ruleworkshop");
+            let mut b = button(
+                "BlockButtonProfile",
+                Rect::new(10, 70, 200, 22),
+                "base/client/ui/button1",
+                "Rule Workshop",
+                "ruleworkshop",
+            );
             b.name = Some("EM_RuleWorkshop".into());
             let n = s.view.add(parent, b);
             s.view.set_visible(n, core.in_game() && core.is_admin());

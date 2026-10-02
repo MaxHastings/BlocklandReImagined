@@ -1376,10 +1376,7 @@ impl Screen for AddOnSettings {
         let revision = self.revision(core);
         if self.seen != Some(revision) {
             let (settings, teams) = self.changes(core);
-            if self.request.is_none()
-                && !self.typed_dirty
-                && settings.is_empty()
-                && teams.is_none()
+            if self.request.is_none() && !self.typed_dirty && settings.is_empty() && teams.is_none()
             {
                 self.load(core);
             } else {

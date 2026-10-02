@@ -642,8 +642,10 @@ impl MiniGameScreen {
         // player's own.
         let target = self.addons_target(core);
         if let Some(n) = self.view.id(ADDONS_BUTTON) {
-            self.view
-                .set_visible(n, target.is_some() || !core.minigames.addon_settings.is_empty());
+            self.view.set_visible(
+                n,
+                target.is_some() || !core.minigames.addon_settings.is_empty(),
+            );
             self.view.set_active(n, target.is_some());
         }
     }
