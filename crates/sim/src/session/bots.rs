@@ -300,6 +300,11 @@ struct Weapon {
     melee: bool,
     /// Its trigger is held down on target rather than tapped (`BotUse`).
     hold: bool,
+    /// It fires on letting go after holding (`Image::charges`): held down
+    /// while it charges, let go once letting go fires.
+    charge: bool,
+    /// Closest it is used from, when its data says (`BotUse::near`).
+    near: Option<f32>,
     reach: f32,
     speed: f32,
     /// Downward acceleration of its projectile, units per second squared.
@@ -314,7 +319,7 @@ impl Weapon {
             (0.0, (self.reach * 0.8).max(1.2))
         } else {
             let far = (self.reach * 0.7).clamp(6.0, 40.0);
-            let near = (self.splash + 3.0).max(5.0);
+            let near = self.near.unwrap_or((self.splash + 3.0).max(5.0));
             (near, far.max(near + 4.0))
         }
     }
@@ -862,10 +867,13 @@ impl Session {
             .as_ref()
             .and_then(|p| self.weapons.pack.projectiles.get(p));
         let Some(p) = projectile else {
+            let reach = using.reach.unwrap_or(3.0);
             return Some(Weapon {
-                melee: true,
+                melee: reach < 6.0,
                 hold,
-                reach: using.reach.unwrap_or(3.0),
+                charge: image.charges(),
+                near: using.near,
+                reach,
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
@@ -877,6 +885,8 @@ impl Session {
         Some(Weapon {
             melee: image.melee || reach < 6.0,
             hold,
+            charge: image.charges(),
+            near: using.near,
             reach,
             speed: p.speed,
             fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
@@ -1033,6 +1043,8 @@ impl Session {
         let weapon = held.or(bite.as_ref().map(|m| Weapon {
             melee: true,
             hold: false,
+            charge: false,
+            near: None,
             reach: m.reach,
             speed: 0.0,
             fall: 0.0,
@@ -1426,8 +1438,17 @@ impl Session {
         // Tap the trigger so semi-automatic weapons keep firing; a tool
         // that holds (as its data says, or reaching or holding now) keeps
         // it down.
-        let held_down = grabbing || weapon.is_some_and(|w| w.hold);
+        let charging = weapon.is_some_and(|w| w.charge);
+        let held_down = grabbing || charging || weapon.is_some_and(|w| w.hold);
         let pulse = fire && !held_down && tick.is_multiple_of(40) && bite.is_none();
+        // A charged weapon is held until letting go fires it, then let go.
+        let pulse = pulse
+            || fire
+                && charging
+                && self
+                    .weapons
+                    .image_state(ActorId(bot), 0)
+                    .is_some_and(|(image, state)| image.fires_on_release(state));
         let bites = bite.as_ref().filter(|_| fire && tick >= brain.next_bite);
         if let Some(m) = bites {
             brain.next_bite = tick + (m.seconds * 120.0).round() as u64;

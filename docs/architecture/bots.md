@@ -59,7 +59,12 @@ bot does through the same code.
     nearest them and no farther. Out of water it walks like any bot.
 - A weapon image's `bot` (`BotUse`): `fire` `tap` (pressed again and
   again, for semi-automatics) or `hold` (held on target: a tool that
-  reaches and holds), and `reach` when its projectile does not say. The
+  reaches and holds), `reach` when its projectile does not say, and
+  `near`, the closest it is used from (the Gravity Gun grabs from 2.5
+  away; without, a bot keeps clear of the splash). A charged image (a
+  state whose letting go fires, `Image::charges`: the Spear) needs no
+  data: the bot holds its trigger while it charges and lets go once
+  letting go fires. The
   band it fights from follows the reach. Without `bot`, reach comes from
   the projectile (close range without one) and the trigger is tapped; a
   tool reaching or holding right now is held anyway.

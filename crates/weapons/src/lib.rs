@@ -469,6 +469,11 @@ pub struct BotUse {
     /// (or it has none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reach: Option<f32>,
+    /// Closest it is used from: nearer, a bot gives ground. Without, a
+    /// bot keeps clear of its splash (a tool that reaches and holds, such
+    /// as the Gravity Gun, grabs from right up close).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub near: Option<f32>,
 }
 /// How a bot pulls an image's trigger.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -642,6 +647,19 @@ pub struct Rope {
     pub speed: f32,
 }
 impl Image {
+    /// Whether letting go of the trigger in `state` fires: the image is
+    /// charged (a spear held back), and a bot holding it lets go now.
+    pub fn fires_on_release(&self, state: &State) -> bool {
+        state
+            .up
+            .and_then(|to| self.states.get(to))
+            .is_some_and(|s| s.script.eq_ignore_ascii_case("onfire"))
+    }
+    /// Whether the image fires on letting go of its trigger after holding
+    /// it (a charge, as the Spear's), rather than as it is pressed.
+    pub fn charges(&self) -> bool {
+        self.states.iter().any(|s| self.fires_on_release(s))
+    }
     /// Every projectile the image can launch: its own, its shots' moving
     /// and rested ones, its volleys' and its scripts'.
     pub fn projectile_refs(&self) -> impl Iterator<Item = &String> {
@@ -2616,9 +2634,11 @@ impl Pack {
             ensure!(
                 image
                     .bot
-                    .and_then(|b| b.reach)
-                    .is_none_or(|r| r.is_finite() && r > 0.0 && r <= 2000.0),
-                "Invalid image bot reach"
+                    .is_none_or(|b| [b.reach, b.near].into_iter().flatten().all(|r| {
+                        r.is_finite() && (0.0..=2000.0).contains(&r)
+                    }) && b.reach.is_none_or(|r| r > 0.0)
+                        && b.near.is_none_or(|n| b.reach.is_none_or(|r| n < r))),
+                "Invalid image bot reach or near"
             );
             ensure!(
                 image.command.as_deref().is_none_or(is_image_command)

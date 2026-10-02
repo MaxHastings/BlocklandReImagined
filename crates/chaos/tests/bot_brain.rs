@@ -734,3 +734,38 @@ fn a_swimming_bot_goes_up_after_a_swimmer_and_bites_them() {
     let bitten = bitten.expect("the bot bit the swimmer");
     eprintln!("bitten after {bitten} ticks, bot at {}", feet(&s, bot));
 }
+
+/// A charged weapon (the Spear) is held back until it is ready, then let
+/// go to throw; tapping it as a gun only ever aborts the charge.
+#[test]
+fn a_bot_with_a_spear_holds_it_back_then_throws_it() {
+    let mut s = session();
+    let human = s
+        .join("Builder".into(), Vec3::new(-20.0, 0.05, 36.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(&mut s, human, vec![bot_brick([-20.0, 0.1, 20.0], human)]);
+    minigame(
+        &mut s,
+        human,
+        [
+            Some(bri_weapons::testing::SPEAR_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
+    );
+    steps(&mut s, &[human], 60, &mut sequence);
+    let mut hit = None;
+    for tick in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        if s.vitals()[&human].health < 100.0 {
+            hit = Some(tick);
+            break;
+        }
+    }
+    eprintln!("speared after {hit:?} ticks");
+    assert!(hit.is_some(), "the bot threw its spear and hit the builder");
+}
