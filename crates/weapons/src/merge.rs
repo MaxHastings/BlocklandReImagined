@@ -137,6 +137,7 @@ impl Pack {
                 .extend(part.diagnostics.into_iter().map(|d| format!("{dir}: {d}")));
             self.id = format!("{}+{}", self.id, part.id);
         }
+        resolve_shared_sounds(&mut self);
         // Drop what a missing package would have provided, innermost first.
         // A projectile a part took from a package it depends on is now
         // either here or missing.
@@ -199,6 +200,53 @@ impl Pack {
             _ => projectiles.contains_key(&b.field[1]),
         });
         (self, notes)
+    }
+}
+
+/// v20 has one datablock namespace: an Add-On's `pistolFireSound` may be
+/// a profile another Add-On defines (Tier 2A and the skins use Tier 1's,
+/// Frog's WWII uses Frog's). The importer namespaces the profiles a pack
+/// defines (`ns:sound/name`) and leaves a name it could not find bare, so
+/// once every pack is merged a bare name that no sound is keyed by takes
+/// the Add-On profile of that name, the referrer's own namespace first.
+fn resolve_shared_sounds(pack: &mut Pack) {
+    let mut named: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for key in pack.sounds.keys() {
+        if let Some((_, name)) = key.split_once(":sound/") {
+            named
+                .entry(name.to_ascii_lowercase())
+                .or_default()
+                .push(key.clone());
+        }
+    }
+    let sounds = &pack.sounds;
+    let resolve = |owner: &str, name: &mut String| {
+        if name.is_empty() || name.contains(':') || sounds.contains_key(name.as_str()) {
+            return;
+        }
+        let Some(keys) = named.get(&name.trim().to_ascii_lowercase()) else {
+            return;
+        };
+        let own = add_on_of(owner);
+        let key = keys
+            .iter()
+            .find(|k| own.is_some_and(|ns| add_on_of(k) == Some(ns)))
+            .unwrap_or(&keys[0]);
+        *name = key.clone();
+    };
+    for (id, image) in &mut pack.images {
+        for state in &mut image.states {
+            resolve(id, &mut state.sound);
+            for cue in &mut state.cues {
+                resolve(id, &mut cue.sound);
+            }
+        }
+    }
+    for (id, projectile) in &mut pack.projectiles {
+        resolve(id, &mut projectile.sound);
+    }
+    for explosion in pack.explosions.values_mut() {
+        resolve("", &mut explosion.sound);
     }
 }
 
@@ -415,6 +463,38 @@ mod tests {
             .unwrap()
             .murder_message
             .clone()
+    }
+
+    /// A sound an Add-On names but another defines plays, as v20's one
+    /// datablock namespace let Tier 2A use Tier 1's `PistolFireSound`.
+    #[test]
+    fn a_sound_another_add_on_defines_resolves_to_it() {
+        let mut tier1 = part("tier1", "%2 shot %1");
+        let sound = SoundDef {
+            file: "fire.wav".into(),
+            volume: 1.0,
+            looping: false,
+            local: false,
+            package: None,
+            stock: false,
+        };
+        tier1
+            .sounds
+            .insert("tier1:sound/pistolfiresound".into(), sound);
+        let mut tier2a = part("tier2a", "%2 shot %1");
+        tier2a
+            .projectiles
+            .get_mut("tier2a:projectile/round")
+            .unwrap()
+            .sound = "pistolfireSound".into();
+        let (both, _) = testing::pack().merge(vec![
+            ("tier1/assets".to_owned(), tier1),
+            ("tier2a/assets".to_owned(), tier2a),
+        ]);
+        assert_eq!(
+            both.projectiles["tier2a:projectile/round"].sound,
+            "tier1:sound/pistolfiresound"
+        );
     }
 
     /// Two Add-Ons that name a damage type alike each keep theirs, unless
