@@ -1039,8 +1039,13 @@ mod tests {
             let r = s.view.node(list).rect;
             let rh = s.view.node(list).state.row_height.max(16);
             let mut out = Vec::new();
-            s.view
-                .mouse_down(MouseButton::Left, r.x + x, r.y + row * rh + rh / 2, &pack, &mut out);
+            s.view.mouse_down(
+                MouseButton::Left,
+                r.x + x,
+                r.y + row * rh + rh / 2,
+                &pack,
+                &mut out,
+            );
             for ev in &out {
                 s.on_event(ev, &mut ui.core);
             }
@@ -1085,7 +1090,10 @@ mod tests {
         // Leaving the screen loads the changes, once.
         s.on_sleep(&mut ui.core);
         assert_eq!(
-            ui.drain_actions().into_iter().map(|(_, a)| a).collect::<Vec<_>>(),
+            ui.drain_actions()
+                .into_iter()
+                .map(|(_, a)| a)
+                .collect::<Vec<_>>(),
             [UiAction::ApplyAddOns]
         );
     }

@@ -1638,11 +1638,10 @@ impl View {
         };
         let cols = self.list_columns(id);
         let check = self.list_check_column(id);
-        let check_style = pack.data.styles.get(
-            n.ctrl
-                .field("checkProfile")
-                .unwrap_or("GuiCheckBoxProfile"),
-        );
+        let check_style = pack
+            .data
+            .styles
+            .get(n.ctrl.field("checkProfile").unwrap_or("GuiCheckBoxProfile"));
         let sel = self.selected(id);
         for (i, (text, item)) in n.state.items.iter().enumerate() {
             let row = Rect::new(r.x, r.y + i as i32 * rh, r.w, rh);
@@ -1707,7 +1706,12 @@ impl View {
     /// The text list column whose [`check_cell`]s draw as check boxes and
     /// toggle with one click (`checkColumn`), if it has one.
     fn list_check_column(&self, id: NodeId) -> Option<usize> {
-        self.nodes[id].ctrl.field("checkColumn")?.trim().parse().ok()
+        self.nodes[id]
+            .ctrl
+            .field("checkColumn")?
+            .trim()
+            .parse()
+            .ok()
     }
 
     /// GuiConsole rows: item ids are log levels (0 normal, 1 warning,
@@ -2290,11 +2294,7 @@ impl View {
                         let from = cols.get(c).copied().unwrap_or(0);
                         let to = cols.get(c + 1).copied().unwrap_or(r.w);
                         (from..to).contains(&(x - r.x))
-                            && text
-                                .split('\t')
-                                .nth(c)
-                                .and_then(parse_check_cell)
-                                .is_some()
+                            && text.split('\t').nth(c).and_then(parse_check_cell).is_some()
                     });
                     if check.is_some() {
                         self.nodes[t].state.value = Value::Selected(Some(item));

@@ -506,7 +506,12 @@ fn turning_an_add_on_off_loads_nothing_until_the_screen_closes() -> Result<()> {
         },
     )?;
     ensure!(
-        app.ui.core.add_ons.rows.iter().any(|r| r.id == id && !r.enabled),
+        app.ui
+            .core
+            .add_ons
+            .rows
+            .iter()
+            .any(|r| r.id == id && !r.enabled),
         "the Add-Ons list does not show {id} off"
     );
     ensure!(
@@ -515,7 +520,10 @@ fn turning_an_add_on_off_loads_nothing_until_the_screen_closes() -> Result<()> {
     );
     app.ui.core.pop(ScreenId::AddOns);
     step(&mut app)?;
-    ensure!(!loaded(&app, &id), "closing Add-Ons did not load the change");
+    ensure!(
+        !loaded(&app, &id),
+        "closing Add-Ons did not load the change"
+    );
     Ok(())
 }
 
