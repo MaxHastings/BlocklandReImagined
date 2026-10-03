@@ -165,3 +165,12 @@ Validation after the final fixture changes:
 No visible game window or operating-system input was used. Screenshots remain
 local ignored artifacts. Maxwell's creator usability/fidelity playtest remains
 required; this review does not claim every screen state was rendered.
+
+The 2026-10-03 candidate gate exposed an actual fallback wrench overlap:
+the detection region toggle covered Rendering. The native vehicle dialog also
+had a five-pixel overlap with Respawn. The production adapter now inserts
+the region row at the semantic footer boundary, preserving editable rows.
+New rectangle checks fail on both old layouts and pass after repair; all six
+field-flow tests, native offscreen captures, 181 UI library tests and scoped
+clippy pass. See [the footer regression entry](../progress/2026-10-03-sol-wrench-footer.md)
+for exact commands, logs, layout scope and remaining combined-gate validation.

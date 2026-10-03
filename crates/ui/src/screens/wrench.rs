@@ -107,11 +107,36 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
     {
         let old_height = window.extent[1];
         let height = (old_height + 34).max(if expanded { 326 } else { 0 });
+        let footer_commands = [
+            format!("{layout}.send();"),
+            format!("{layout}.respawn();"),
+            format!("canvas.popDialog({layout});"),
+            "canvas.pushDialog(WrenchEventsDlg);".into(),
+        ];
+        // Insert a row before the actual footer actions. A fixed distance from
+        // the bottom can cover editable rows in compact layouts or Respawn in
+        // the original vehicle dialog.
+        let footer_top = window
+            .children
+            .iter()
+            .filter(|c| {
+                c.command
+                    .as_ref()
+                    .is_some_and(|command| footer_commands.contains(command))
+            })
+            .map(|c| c.position[1])
+            .min()
+            .unwrap_or(old_height);
         for control in &mut window.children {
             // Keep the recovered left column intact when adding a right panel.
             control.h_sizing = HSizing::Right;
             control.v_sizing = VSizing::Bottom;
-            if control.position[1] >= old_height - 80 {
+            let footer_blocker = control
+                .name
+                .as_deref()
+                .is_some_and(|name| name.ends_with("Blocker"))
+                && control.position[1] + control.extent[1] > footer_top;
+            if control.position[1] >= footer_top || footer_blocker {
                 control.position[1] += height - old_height;
             }
         }
@@ -182,7 +207,12 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         window.children.push(named(
             button(
                 "BlockButtonProfile",
-                Rect::new(14, height - 96, 185.min(x - 36), 30),
+                Rect::new(
+                    14,
+                    footer_top + height - old_height - 34,
+                    185.min(x - 36),
+                    30,
+                ),
                 "base/client/ui/button2",
                 if expanded {
                     "Hide detection region"
@@ -2312,6 +2342,83 @@ mod tests {
     use crate::schema::UiPack;
     use crate::ui::{StackCmd, Ui, UiConfig};
     use std::rc::Rc;
+
+    fn region_row_does_not_cover_original_controls(pack: Rc<Pack>) {
+        let mut ui = fixture();
+        ui.core.pack = pack.clone();
+        for (layout, prefix) in [
+            ("wrenchDlg", "Wrench"),
+            ("wrenchSoundDlg", "WrenchSound"),
+            ("wrenchVehicleSpawnDlg", "WrenchVehicleSpawn"),
+        ] {
+            let original = pack.data.layouts[layout]
+                .children
+                .iter()
+                .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
+                .unwrap();
+            for expanded in [false, true] {
+                for logical in [(640, 480), (1024, 768), (1920, 1080), (960, 540)] {
+                    ui.core.logical = logical;
+                    let mut view = region_view(&ui.core, layout, prefix, expanded);
+                    view.layout(logical.0, logical.1);
+                    let toggle = view.id("Wrench_RegionToggle").unwrap();
+                    let toggle_rect = view.node(toggle).rect;
+                    let window = view
+                        .node(view.id(&format!("{prefix}_Window")).unwrap())
+                        .rect;
+                    assert_eq!(window.intersect(&toggle_rect), Some(toggle_rect));
+                    for control in &original.children {
+                        if !matches!(
+                            control.class.as_str(),
+                            "GuiTextEditCtrl"
+                                | "GuiPopUpMenuCtrl"
+                                | "GuiCheckBoxCtrl"
+                                | "GuiRadioCtrl"
+                                | "GuiBitmapButtonCtrl"
+                                | "GuiButtonCtrl"
+                        ) {
+                            continue;
+                        }
+                        let id = control
+                            .name
+                            .as_deref()
+                            .and_then(|name| view.id(name))
+                            .or_else(|| control.command.as_deref().and_then(|c| view.by_command(c)))
+                            .unwrap();
+                        let rect = view.node(id).rect;
+                        // Native Copy boxes have oversized authored widths;
+                        // preserve that clipping while keeping all rows inside
+                        // the window vertically.
+                        assert!(
+                            rect.y >= window.y && rect.bottom() <= window.bottom(),
+                            "{layout}, expanded={expanded}, logical={logical:?}: row outside window: {control:?}"
+                        );
+                        if !control.class.ends_with("ButtonCtrl") {
+                            assert_eq!(rect.y - window.y, control.position[1]);
+                        }
+                        assert!(
+                            view.node(id).rect.intersect(&toggle_rect).is_none(),
+                            "{layout}, expanded={expanded}, logical={logical:?}: toggle covers {control:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn region_row_preserves_fallback_controls() {
+        region_row_does_not_cover_original_controls(crate::testing::screens_pack());
+    }
+
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn region_row_preserves_authored_controls() {
+        let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        region_row_does_not_cover_original_controls(crate::testing::content_pack(
+            &bri_package::testing::pack_dir(&content, "ui_pack"),
+        ));
+    }
 
     #[test]
     fn dimensions_edit_directly_and_invalid_values_do_not_send() {
