@@ -1026,17 +1026,21 @@ mod tests {
         let path = if definition.starts_with("test_plane:") {
             root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json")
         } else {
+            if !root.join("content").is_dir() {
+                return None;
+            }
             bri_package::testing::pack_dir(&root.join("content"), "vehicles").join("vehicles.json")
         };
-        bri_vehicles::Pack::load(path).ok()
+        Some(
+            bri_vehicles::Pack::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display())),
+        )
     }
-    fn drive_run(definition: &str, seed: u64) -> Result<DriveRun> {
+    fn drive_run(pack: bri_vehicles::Pack, definition: &str, seed: u64) -> Result<DriveRun> {
         use bri_vehicles::{
             Occupant, OccupantId, OwnerId as VehicleOwner, Spawn, Transform, VehicleId,
             VehiclesWorld,
         };
         use rapier3d::prelude::{ColliderBuilder, RigidBodyBuilder, Vector};
-        let pack = pack_for(definition).ok_or_else(|| anyhow::anyhow!("vehicle pack missing"))?;
         // The shipped steering prefs: the mouse steers, nothing returns.
         let steering = bri_sim::session::DEFAULT_STEERING;
         let ground =
@@ -1299,24 +1303,31 @@ mod tests {
     /// fades gently, over a real connection's timing.
     #[test]
     fn a_driven_vehicle_is_drawn_smoothly_through_corrections() -> Result<()> {
-        if vehicle_pack().is_none() {
-            eprintln!("vehicle pack missing; skipped");
-            return Ok(());
-        }
-        for definition in [
-            "v20.vehicle.magiccarpetvehicle",
-            "v20.vehicle.flyingwheeledjeepvehicle",
-            "test_plane:vehicle/standinplane",
-            "v20.vehicle.horsearmor",
-            "v20.vehicle.jeepvehicle",
-            "v20.vehicle.tankvehicle",
-        ] {
-            if pack_for(definition).is_none() {
-                eprintln!("{definition}: its pack is not in content/; skipped");
-                continue;
+        use bri_vehicles::testing;
+        let synthetic = testing::pack();
+        // Ground stand-ins and the checked-in plane always exercise the
+        // acceptance assertions in content-free CI. Authored air vehicles
+        // below retain their original tuning and thresholds when installed.
+        let mut cases: Vec<_> = [testing::CAR, testing::TANK, testing::HORSE]
+            .into_iter()
+            .map(|id| (id, synthetic.clone()))
+            .collect();
+        if let Some(original) = vehicle_pack() {
+            for definition in [
+                "v20.vehicle.magiccarpetvehicle",
+                "v20.vehicle.flyingwheeledjeepvehicle",
+                "v20.vehicle.horsearmor",
+                "v20.vehicle.jeepvehicle",
+                "v20.vehicle.tankvehicle",
+            ] {
+                cases.push((definition, original.clone()));
             }
+        }
+        let plane = "test_plane:vehicle/standinplane";
+        cases.push((plane, pack_for(plane).expect("checked-in plane fixture")));
+        for (definition, pack) in cases {
             for seed in [0x9e37_79b9_7f4a_7c15, 0x2545_f491_4f6c_dd1d] {
-                let run = drive_run(definition, seed)?;
+                let run = drive_run(pack.clone(), definition, seed)?;
                 println!(
                     "{definition}: pop {:.4} units {:.4} rad, whip {:.3} u/s {:.3} rad/s, {} corrections, worst {:.4} units {:.4} rad, jerk {:.2} u/s {:.2} rad/s, {} rough frames",
                     run.pop.0,

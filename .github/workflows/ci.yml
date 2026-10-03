@@ -22,7 +22,9 @@ env:
 jobs:
   check:
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Serial software-GPU coverage exceeds one hour on hosted Windows runners.
+    # Individual test binaries retain the gate's ten-minute stall deadline.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
         with:

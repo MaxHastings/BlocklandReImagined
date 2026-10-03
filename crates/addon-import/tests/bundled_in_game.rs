@@ -212,11 +212,25 @@ enum TurnedOn {
 
 impl Game {
     fn new(how: TurnedOn) -> Self {
+        // Import every pinned stand-in once per binary. Each scenario still
+        // gets an independent installed folder and its own enabled list.
+        static INSTALLED: std::sync::OnceLock<Game> = std::sync::OnceLock::new();
+        let installed = INSTALLED.get_or_init(|| {
+            let scratch = bri_content::testing::ScratchDir::new("bundled-base").unwrap();
+            let root = scratch.path().to_path_buf();
+            bri_net::testing::write_root(&root, &[MAP]).unwrap();
+            let originals = bundled_originals();
+            install_bundle(&root, &originals);
+            Game {
+                _scratch: scratch,
+                root,
+                originals,
+            }
+        });
         let scratch = bri_content::testing::ScratchDir::new("bundled-in-game").unwrap();
         let root = scratch.path().to_path_buf();
-        bri_net::testing::write_root(&root, &[MAP]).unwrap();
-        let originals = bundled_originals();
-        install_bundle(&root, &originals);
+        copy_fixture(&installed.root, &root);
+        let originals = installed.originals.clone();
         match how {
             TurnedOn::ByAnOldList => {
                 let library = Library::scan(&root).unwrap();
@@ -271,6 +285,25 @@ impl Game {
             }
         }
         rules
+    }
+}
+
+fn copy_fixture(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            copy_fixture(&entry.path(), &target);
+        } else {
+            assert!(
+                kind.is_file(),
+                "unexpected fixture entry {}",
+                entry.path().display()
+            );
+            std::fs::copy(entry.path(), target).unwrap();
+        }
     }
 }
 
@@ -379,16 +412,24 @@ async fn played(game: Game) -> Result<()> {
         None,
     )
     .await?;
-    let mut result = play(&mut client).await;
+    let mut result = play(&mut client).await.context("bundled tool gameplay");
     if result.is_ok() {
-        result = wrench_an_add_on_brick(&mut client, root, &set).await;
+        result = wrench_an_add_on_brick(&mut client, root, &set)
+            .await
+            .context("bundled brick wrench");
     }
     if result.is_ok() {
-        result = a_hole_brick_brings_its_bot(&mut client, root, &set).await;
+        result = a_hole_brick_brings_its_bot(&mut client, root, &set)
+            .await
+            .context("bundled bot hole");
     }
     client.close();
-    server.stop().await?;
-    result
+    let stopped = tokio::time::timeout(Duration::from_secs(30), server.stop())
+        .await
+        .context("timed out stopping bundled Add-On server")?;
+    result?;
+    stopped?;
+    Ok(())
 }
 
 struct Player<'a> {
