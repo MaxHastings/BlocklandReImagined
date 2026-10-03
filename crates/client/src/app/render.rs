@@ -93,6 +93,9 @@ impl App {
             self.lighting.reflections = None;
             self.lighting.environment_probe = None;
         }
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
         if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
             self.lighting.light_volume.tint(
                 renderer,
@@ -1089,20 +1092,19 @@ impl App {
             // Players, vehicles and items (dropped and held) cast, like v20's
             // projected shape shadows; bricks only with the BrickShadows pref,
             // and bricks that do not cast still stop shadows passing through
-            // them. The map (interiors and terrain) neither casts nor stops
-            // them: its shadows are baked (see bri_render::shadow).
+            // them. Dynamic includes current bricks and terrain independently
+            // of compatibility preferences, even while a mode switch is pending.
             let chunks: Vec<&GpuScene> = self
                 .gpu
                 .gpu_chunks
                 .values()
                 .chain(self.fx.fade_models.scenes())
                 .collect();
-            let (mut bodies, blockers) =
-                if self.graphics.brick_shadows || self.graphics.lighting == 3 {
-                    (chunks, Vec::new())
-                } else {
-                    (Vec::new(), chunks)
-                };
+            let (mut bodies, blockers) = if self.graphics.brick_shadows || effective.lighting == 3 {
+                (chunks, Vec::new())
+            } else {
+                (Vec::new(), chunks)
+            };
             let mut blocking = Vec::new();
 
             // Rigged mounts (the horse) draw through their own meshes, not
@@ -1125,7 +1127,7 @@ impl App {
             }
             // Debris is bricks, so it follows the same setting as the bricks
             // it broke from; Add-On models cast like items.
-            if self.graphics.brick_shadows || self.graphics.lighting == 3 {
+            if self.graphics.brick_shadows || effective.lighting == 3 {
                 models.extend(self.fx.debris_models.draws());
             } else {
                 blocking.extend(self.fx.debris_models.draws());
@@ -1135,13 +1137,13 @@ impl App {
             // In the Unified modes the map's own walls shade objects from
             // the sun too (the map layer), so they are sunlit exactly where
             // the walls beside them are.
-            let map: Vec<&GpuScene> = if self.graphics.lighting != 0 {
+            let map: Vec<&GpuScene> = if effective.lighting != 0 {
                 self.gpu.gpu_scene.iter().collect()
             } else {
                 Vec::new()
             };
             renderer.begin_timing(frame.encoder);
-            let terrain_map: Vec<_> = if self.graphics.lighting == 3 {
+            let terrain_map: Vec<_> = if effective.lighting == 3 {
                 self.gpu
                     .gpu_terrain
                     .iter()
@@ -1292,19 +1294,17 @@ impl App {
     /// the avatar preview, the splash and the map bake's lightmap patches.
     fn prepare_render(&mut self, frame: &mut RenderContext<'_>) -> Result<()> {
         if let Some(current) = &self.scene.cpu_scene
-            && let Some(visual) = self.lighting.light_volume.poll_source(
+            && let Some((visual, compatibility_source)) = self.lighting.light_volume.poll_source(
                 &self.content.paths.map_bundle,
                 &current.id,
                 self.graphics.lighting == 3,
             )
         {
-            let mut state = LightVolumeState::start(
-                &visual.scene,
+            self.lighting.light_volume.change_source(
+                compatibility_source,
                 &self.state_dir.join("light-volumes"),
                 visual.modern_lights.as_deref(),
             );
-            state.light_shapes = self.lighting.light_volume.light_shapes.clone();
-            self.lighting.light_volume = state;
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
             self.scene.shape_indices = visual.shape_indices;
@@ -1312,6 +1312,14 @@ impl App {
             self.lighting.reflections = None;
             self.lighting.environment_probe = None;
         }
+        if self.graphics.lighting != 3 {
+            self.lighting
+                .light_volume
+                .ensure_compatibility(&self.state_dir.join("light-volumes"));
+        }
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
         // The last frame, holding any picture copied then, was submitted.
         // Failures are logged by the writer; success is not news.
         self.files.save_shots.submitted();
@@ -1331,8 +1339,7 @@ impl App {
                 .as_mut()
                 .and_then(|r| r.ready())
                 .is_some_and(|r| {
-                    r.samples() != self.graphics.samples
-                        || r.shadow_settings() != self.graphics.shadows
+                    r.samples() != self.graphics.samples || r.shadow_settings() != effective.shadows
                 })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
@@ -1393,7 +1400,7 @@ impl App {
 
         // The map bake's leak cleanup patches the map's lightmaps once: the
         // scene kept for uploads, and the uploaded textures.
-        if self.graphics.lighting != 3
+        if effective.lighting != 3
             && !self.lighting.light_volume.leaks.is_empty()
             && let Some(scene) = self.scene.cpu_scene.as_mut()
         {
@@ -1412,7 +1419,7 @@ impl App {
             .and_then(|a| a.view.as_ref())
             .is_some_and(|v| !v.map_lights.is_empty());
         let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
-        if (self.graphics.lighting == 2 && switchable)
+        if (effective.lighting == 2 && switchable)
             && !self.lighting.light_volume.switchable_equipped
             && self.lighting.light_volume.map.is_some()
             && let Some(scene) = self.scene.cpu_scene.as_mut()

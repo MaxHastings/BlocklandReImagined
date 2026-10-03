@@ -82,7 +82,7 @@ pub const MAX_LAMPS: usize = 4;
 /// Cube faces, in the order the shader picks them: +X, -X, +Y, -Y, +Z, -Z.
 const FACES: usize = 6;
 /// Lamp shadows reach no nearer to their lamp than this.
-const LAMP_NEAR: f32 = 0.05;
+pub(crate) const LAMP_NEAR: f32 = 0.05;
 /// Lights reaching farther than this are the fit's broad fill (bounced
 /// light spread over a room), not lamps: a shadow from one would be a long
 /// smear across the room.
@@ -1326,6 +1326,24 @@ mod tests {
             pick_lamps(&lights, Vec3::ZERO, 1, &[], everywhere, hidden),
             vec![1]
         );
+    }
+
+    #[test]
+    fn validated_light_radii_have_finite_shadow_faces() {
+        for outer in [0.001, LAMP_NEAR, 0.050001, 1.0, 50.0] {
+            if crate::lighting_parameters::valid_radii(0.0, outer) {
+                assert!(
+                    lamp_faces(Vec3::new(3.0, 4.0, 5.0), outer, 512)
+                        .iter()
+                        .all(|face| face.to_cols_array().iter().all(|v| v.is_finite()))
+                );
+            } else {
+                assert!(
+                    outer <= LAMP_NEAR,
+                    "tiny/equal inputs must be rejected before projection"
+                );
+            }
+        }
     }
 
     #[test]

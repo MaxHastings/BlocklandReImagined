@@ -49,6 +49,18 @@ pub fn shadow_settings(level: i64) -> Option<ShadowSettings> {
     }
 }
 impl Graphics {
+    /// Shadow resources follow the mode that can shade the accepted source,
+    /// while the stored preference remains the user's requested selection.
+    pub fn with_lighting(self, lighting: u8) -> Self {
+        Self {
+            lighting,
+            shadows: self.shadows.map(|s| ShadowSettings {
+                light_cubes: lighting == 3,
+                ..s
+            }),
+            ..self
+        }
+    }
     pub fn from_settings(settings: &Settings) -> Self {
         let prefs = Prefs::new(&BTreeMap::new(), &settings.prefs);
         let default = TextureFiltering::default();

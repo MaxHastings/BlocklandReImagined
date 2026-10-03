@@ -1500,7 +1500,10 @@ impl PlatformApp for App {
             &self.ui.core.prefs,
         ));
         let samples = self.graphics.samples;
-        let (scene_device, shadows) = (device.clone(), self.graphics.shadows);
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
+        let (scene_device, shadows) = (device.clone(), effective.shadows);
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
             move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),

@@ -1914,8 +1914,7 @@ fn validate_light_parameters(lights: &[crate::map_lighting::MapLight]) -> Result
                 .chain(&l.color)
                 .chain([&l.inner, &l.outer])
                 .all(|x| x.is_finite())
-                && l.inner >= 0.0
-                && l.outer > l.inner),
+                && crate::lighting_parameters::valid_radii(l.inner, l.outer)),
         "Invalid map light parameters"
     );
     Ok(())
@@ -4361,6 +4360,23 @@ pub fn create_depth_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadowed_light_parameters_reject_tiny_or_equal_near_radii() {
+        let mut light = crate::map_lighting::MapLight {
+            position: [0.0; 3],
+            color: [1.0; 3],
+            inner: 0.0,
+            outer: 1.0,
+            channel: None,
+        };
+        for outer in [0.001, crate::shadow::LAMP_NEAR] {
+            light.outer = outer;
+            assert!(validate_light_parameters(&[light]).is_err());
+        }
+        light.outer = 1.0;
+        assert!(validate_light_parameters(&[light]).is_ok());
+    }
 
     fn vertex(n: u32) -> SceneVertex {
         SceneVertex {

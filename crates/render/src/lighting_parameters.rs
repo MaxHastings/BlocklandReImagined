@@ -52,7 +52,53 @@ pub fn fingerprint(root: &Path) -> Result<String> {
         Sha256::digest(std::fs::read(root.join("bundle.json"))?)
     ))
 }
+/// All geometry-shadow projectors require their far plane strictly beyond
+/// the fixed near plane. Reject tiny radii consistently before GPU upload.
+pub(crate) fn valid_radii(inner: f32, outer: f32) -> bool {
+    inner.is_finite()
+        && outer.is_finite()
+        && inner >= 0.0
+        && outer > inner
+        && outer > crate::shadow::LAMP_NEAR
+}
 impl Parameters {
+    fn validate(&self, root: &Path) -> Result<()> {
+        ensure!(
+            self.schema_version == 1 && self.bundle_sha256 == fingerprint(root)?,
+            "Light parameters are stale or use an unsupported schema"
+        );
+        for lights in self.maps.values() {
+            ensure!(
+                lights.len() <= crate::map_lighting::MAX_LIGHTS
+                    && lights.iter().all(|l| l
+                        .position
+                        .iter()
+                        .chain(&l.color)
+                        .all(|v| v.is_finite())
+                        && l.color.iter().all(|c| *c >= 0.0)
+                        && valid_radii(l.inner, l.outer)),
+                "Invalid recovered light parameters"
+            );
+        }
+        Ok(())
+    }
+    /// The offline generator validates the same fields as runtime, and the
+    /// encoded size, before replacing an existing descriptor file.
+    pub fn write_atomic(&self, root: &Path, output: &Path) -> Result<()> {
+        self.validate(root)?;
+        let bytes = serde_json::to_vec_pretty(self)?;
+        ensure!(
+            bytes.len() as u64 <= MAX_BYTES,
+            "Light parameters exceed 256 KiB"
+        );
+        let partial = output.with_extension(format!("{}.partial", std::process::id()));
+        let result =
+            std::fs::write(&partial, bytes).and_then(|_| std::fs::rename(&partial, output));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+        result.context("Replacing prepared light parameters")
+    }
     pub fn read(root: &Path) -> Result<Self> {
         let file = root.join(FILE);
         let mut bytes = Vec::new();
@@ -64,25 +110,7 @@ impl Parameters {
             "Light parameters exceed 256 KiB"
         );
         let data: Self = serde_json::from_slice(&bytes)?;
-        ensure!(
-            data.schema_version == 1 && data.bundle_sha256 == fingerprint(root)?,
-            "Light parameters are stale or use an unsupported schema"
-        );
-        for lights in data.maps.values() {
-            ensure!(
-                lights.len() <= crate::map_lighting::MAX_LIGHTS
-                    && lights.iter().all(|l| l
-                        .position
-                        .iter()
-                        .chain(&l.color)
-                        .chain([&l.inner, &l.outer])
-                        .all(|v| v.is_finite())
-                        && l.color.iter().all(|c| *c >= 0.0)
-                        && l.inner >= 0.0
-                        && l.outer > l.inner),
-                "Invalid recovered light parameters"
-            );
-        }
+        data.validate(root)?;
         Ok(data)
     }
     pub fn lights(&self, id: &str) -> Result<Vec<crate::map_lighting::MapLight>> {
@@ -94,5 +122,52 @@ impl Parameters {
             .cloned()
             .map(Into::into)
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generator_validation_preserves_existing_file_on_bad_radii_or_size() -> Result<()> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "bri-light-parameters-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root)?;
+        std::fs::write(root.join("bundle.json"), b"{}")?;
+        let mut parameters = Parameters {
+            schema_version: 1,
+            bundle_sha256: fingerprint(&root)?,
+            maps: BTreeMap::from([(
+                "map".into(),
+                vec![SourceLight {
+                    position: [0.0; 3],
+                    color: [1.0; 3],
+                    inner: 0.0,
+                    outer: 1.0,
+                }],
+            )]),
+        };
+        let output = root.join(FILE);
+        parameters.write_atomic(&root, &output)?;
+        let original = std::fs::read(&output)?;
+        for outer in [0.001, crate::shadow::LAMP_NEAR] {
+            parameters.maps.get_mut("map").unwrap()[0].outer = outer;
+            assert!(parameters.write_atomic(&root, &output).is_err());
+            assert_eq!(std::fs::read(&output)?, original);
+        }
+        parameters.maps.get_mut("map").unwrap()[0].outer = 1.0;
+        parameters
+            .maps
+            .insert("x".repeat(MAX_BYTES as usize), Vec::new());
+        assert!(parameters.write_atomic(&root, &output).is_err());
+        assert_eq!(std::fs::read(&output)?, original);
+        assert!(Parameters::read(&root).is_ok());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
     }
 }

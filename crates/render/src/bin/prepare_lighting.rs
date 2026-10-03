@@ -72,7 +72,7 @@ fn main() -> Result<()> {
         bundle_sha256: fingerprint(&root)?,
         maps,
     };
-    std::fs::write(&output, serde_json::to_vec_pretty(&data)?)?;
+    data.write_atomic(&root, &output)?;
     println!("Prepared {} maps: {}", data.maps.len(), output.display());
     Ok(())
 }
