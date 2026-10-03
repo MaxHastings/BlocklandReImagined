@@ -2,6 +2,7 @@
 //! identified as data; no recovered script is executed.
 use super::*;
 use crate::api::{Choice, EventCatalog, ParamValue, UiAction};
+use crate::models::events::DraftField;
 use crate::models::events::{self, EventsModel, NAMED_BRICK, RowState};
 use crate::models::wrench::{WrenchField, clean_name, respawn_ms};
 use crate::schema::ParamSpec;
@@ -106,7 +107,38 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
     {
         let old_height = window.extent[1];
-        let height = (old_height + 34).max(if expanded { 326 } else { 0 });
+        // Share an existing action row when its neighboring space is free.
+        // Imported layouts with a crowded footer still receive a separate row.
+        let respawn_command = format!("{layout}.respawn();");
+        let shared_region = window.children.iter().find_map(|action| {
+            (action.command.as_deref() == Some(respawn_command.as_str()))
+                .then(|| {
+                    Rect::new(
+                        action.position[0] + action.extent[0] + 8,
+                        action.position[1],
+                        91,
+                        38,
+                    )
+                })
+                .filter(|space| {
+                    space.right() <= window.extent[0] - 14
+                        && window.children.iter().all(|control| {
+                            !control.visible
+                                || Rect::new(
+                                    control.position[0],
+                                    control.position[1],
+                                    control.extent[0],
+                                    control.extent[1],
+                                )
+                                .intersect(space)
+                                .is_none()
+                        })
+                })
+        });
+        let region_row = if shared_region.is_some() { 0 } else { 42 };
+        let panel_height = 180;
+        let height =
+            (old_height + region_row).max(if expanded { 28 + panel_height + 8 } else { 0 });
         let footer_commands = [
             format!("{layout}.send();"),
             format!("{layout}.respawn();"),
@@ -152,7 +184,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         let mut panel = ctrl(
             "GuiControl",
             "GuiDefaultProfile",
-            Rect::new(x, 28, 236, 274),
+            Rect::new(x, 28, 236, panel_height),
         );
         panel.name = Some("Wrench_RegionPanel".into());
         panel.children.push(text(
@@ -202,18 +234,19 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         window.children.push(named(
             button(
                 "BlockButtonProfile",
-                Rect::new(
-                    14,
-                    footer_top + height - old_height - 34,
-                    185.min(x - 36),
-                    30,
+                shared_region.map_or_else(
+                    || {
+                        Rect::new(
+                            14,
+                            footer_top + height - old_height - region_row,
+                            91.min(x - 36),
+                            38,
+                        )
+                    },
+                    |space| Rect::new(space.x, space.y + height - old_height, space.w, space.h),
                 ),
                 "base/client/ui/button2",
-                if expanded {
-                    "Hide detection region"
-                } else {
-                    "Detection region..."
-                },
+                if expanded { "Hide region" } else { "Region..." },
                 "wrench.region",
             ),
             "Wrench_RegionToggle",
@@ -690,6 +723,18 @@ enum Binding {
     ConditionValue(usize, usize),
 }
 
+impl Binding {
+    fn text_field(&self) -> Option<(usize, DraftField)> {
+        match *self {
+            Self::Parameter(row, i, _) => Some((row, DraftField::Parameter(i))),
+            Self::VectorAxis(row, i, _) => Some((row, DraftField::VectorAxis(i))),
+            Self::ConditionKey(row, i) => Some((row, DraftField::ConditionKey(i))),
+            Self::ConditionValue(row, i) => Some((row, DraftField::ConditionValue(i))),
+            _ => None,
+        }
+    }
+}
+
 fn parameter_labels(output: &str) -> &'static [&'static str] {
     match output {
         "setVariable" => &["Keep on", "Variable name", "Set to"],
@@ -850,6 +895,41 @@ fn parameter_type_matches(spec: &ParamSpec, value: &ParamValue) -> bool {
     }
 }
 
+fn complete_row_supported(
+    catalog: &EventCatalog,
+    input: &str,
+    target: &str,
+    output: &str,
+    params: &[ParamValue],
+) -> bool {
+    let class = EventsModel::target_class(catalog, input, target);
+    catalog
+        .inputs
+        .iter()
+        .any(|i| i.supported && i.name == input)
+        && catalog.outputs.iter().any(|o| {
+            o.supported
+                && o.name == output
+                && class
+                    .as_ref()
+                    .is_some_and(|c| o.class.eq_ignore_ascii_case(c))
+                && o.params.len() == params.len()
+                && o.params
+                    .iter()
+                    .zip(params)
+                    .all(|(spec, value)| parameter_type_matches(spec, value))
+        })
+}
+
+/// Compact authoring actions use the existing scalable native small-button
+/// profile; bitmap button2 is a whole 91x38 image, not a resizable border.
+fn authoring_button(rect: Rect, label: &str, command: &str) -> crate::schema::Control {
+    let mut control = ctrl("GuiButtonCtrl", "GuiButtonSmProfile", rect);
+    control.text = Some(label.into());
+    control.command = Some(command.into());
+    control
+}
+
 impl WrenchEvents {
     pub fn new(core: &Core) -> Self {
         let catalog = editable_catalog(&core.events);
@@ -874,28 +954,13 @@ impl WrenchEvents {
         let Some(model) = &mut self.model else { return };
         for row in &mut model.rows {
             let RowState::Editable(e) = row else { continue };
+            if e.copied_draft {
+                continue;
+            }
             let (Some(input), Some(target), Some(output)) = (&e.input, &e.target, &e.output) else {
                 continue;
             };
-            let class = EventsModel::target_class(&self.catalog, input, target);
-            let valid = self
-                .catalog
-                .inputs
-                .iter()
-                .any(|i| i.supported && &i.name == input)
-                && self.catalog.outputs.iter().any(|o| {
-                    o.supported
-                        && &o.name == output
-                        && class
-                            .as_ref()
-                            .is_some_and(|c| o.class.eq_ignore_ascii_case(c))
-                        && o.params.len() == e.params.len()
-                        && o.params
-                            .iter()
-                            .zip(&e.params)
-                            .all(|(spec, value)| parameter_type_matches(spec, value))
-                });
-            if !valid {
+            if !complete_row_supported(&self.catalog, input, target, output, &e.params) {
                 let line = crate::api::EventLine {
                     conditions: e.conditions.clone(),
                     enabled: e.enabled,
@@ -913,6 +978,34 @@ impl WrenchEvents {
                 };
             }
         }
+    }
+
+    fn copied_unavailable(&self, e: &events::EditRow) -> bool {
+        if !e.copied_draft {
+            return false;
+        }
+        let Some(input) = &e.input else { return false };
+        if !self
+            .catalog
+            .inputs
+            .iter()
+            .any(|i| i.supported && &i.name == input)
+        {
+            return true;
+        }
+        let Some(target) = &e.target else {
+            return false;
+        };
+        if target == NAMED_BRICK && !self.model.as_ref().is_some_and(|m| m.allow_named) {
+            return true;
+        }
+        if EventsModel::target_class(&self.catalog, input, target).is_none() {
+            return true;
+        }
+        let Some(output) = &e.output else {
+            return false;
+        };
+        !complete_row_supported(&self.catalog, input, target, output, &e.params)
     }
 
     fn current(&self, core: &Core) -> bool {
@@ -958,7 +1051,18 @@ impl WrenchEvents {
         n
     }
 
-    fn menu(&mut self, node: NodeId, options: Vec<String>, selected: Option<&str>, blank: bool) {
+    fn menu(
+        &mut self,
+        node: NodeId,
+        mut options: Vec<String>,
+        selected: Option<&str>,
+        blank: bool,
+    ) {
+        if let Some(selected) = selected
+            && !options.iter().any(|o| o == selected)
+        {
+            options.push(selected.to_owned());
+        }
         let mut items = Vec::new();
         if blank {
             items.push(("-".into(), -1));
@@ -971,6 +1075,76 @@ impl WrenchEvents {
             .or(if blank { Some(-1) } else { None });
         self.view.state(node).items = items;
         self.view.select(node, value);
+    }
+
+    fn event_menu_hints(&mut self, node: NodeId, input: bool, class: Option<&str>, core: &Core) {
+        self.view.nodes[node].ctrl.fields.insert(
+            "searchPlaceholder".into(),
+            if input {
+                "Search events..."
+            } else {
+                "Search actions..."
+            }
+            .into(),
+        );
+        let choices: Vec<_> = self
+            .view
+            .node(node)
+            .state
+            .items
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        for (name, id) in self.view.node(node).state.items.clone() {
+            if name == "-" {
+                continue;
+            }
+            let group = if input {
+                events::input_group(&name, &choices)
+            } else {
+                self.catalog
+                    .outputs
+                    .iter()
+                    .find(|o| {
+                        o.name == name
+                            && o.supported
+                            && class.is_some_and(|c| o.class.eq_ignore_ascii_case(c))
+                    })
+                    .and_then(|o| {
+                        if o.provider == "core:rules" {
+                            Some("Game rules".into())
+                        } else if !["core", "Blockland"].contains(&o.provider.as_str()) {
+                            Some(
+                                core.add_ons
+                                    .rows
+                                    .iter()
+                                    .find(|p| p.id == o.provider)
+                                    .map(|p| p.name.clone())
+                                    .unwrap_or_else(|| o.provider.clone()),
+                            )
+                        } else {
+                            None
+                        }
+                    })
+            };
+            let state = self.view.state(node);
+            state.popup_aliases.insert(id, events::event_aliases(&name));
+            if let Some(group) = group {
+                state.popup_groups.insert(id, group);
+            }
+        }
+    }
+
+    fn remember_text(&mut self, node: NodeId) {
+        if self.view.node(node).ctrl.class != "GuiTextEditCtrl" {
+            return;
+        }
+        if let Some((row, field)) = self.bindings.get(&node).and_then(Binding::text_field)
+            && let Some(RowState::Editable(e)) =
+                self.model.as_mut().and_then(|m| m.rows.get_mut(row))
+        {
+            e.draft_text.insert(field, self.view.edit_text(node));
+        }
     }
 
     fn build(&mut self, core: &Core) {
@@ -989,12 +1163,7 @@ impl WrenchEvents {
         let width = core.logical.0.clamp(400, 1000);
         let height = core.logical.1.clamp(300, 600);
         let compact = width < 600;
-        let expanded = self.model.as_ref().is_some_and(|m| {
-            m.rows
-                .iter()
-                .any(|r| matches!(r, RowState::Editable(e) if !e.conditions.is_empty()))
-        });
-        let stacked = compact || expanded;
+        let stacked = compact;
         self.view.nodes[win].ctrl.position =
             [(core.logical.0 - width) / 2, (core.logical.1 - height) / 2];
         self.view.nodes[win].ctrl.extent = [width, height];
@@ -1023,13 +1192,7 @@ impl WrenchEvents {
             let (name, label, command, x, w) =
                 ("Rule_Explain", "Explain saved", "rules.explain", 11, 100);
             let button = named(
-                button(
-                    "BlockButtonProfile",
-                    Rect::new(x, 26, w, 26),
-                    "base/client/ui/button2",
-                    label,
-                    command,
-                ),
+                authoring_button(Rect::new(x, 26, w, 26), label, command),
                 name,
             );
             self.view.add(win, button);
@@ -1047,15 +1210,7 @@ impl WrenchEvents {
         for (caption, x, w) in [
             ("On", 1, 28),
             ("Delay ms", 31, 53),
-            (
-                if expanded {
-                    "Input Event (WHEN)"
-                } else {
-                    "Input Event"
-                },
-                88,
-                input_w,
-            ),
+            ("Input Event", 88, input_w),
         ] {
             self.view.add(
                 win,
@@ -1110,16 +1265,48 @@ impl WrenchEvents {
                     let mut label = named(
                         text(
                             "GuiDefaultProfile",
-                            Rect::new(4, y, bw - 8, 38),
+                            Rect::new(4, y, bw - 108, 38),
                             &format!("Unavailable (kept): {preserved}"),
                         ),
                         format!("WrenchEvent_{row}_preserved"),
                     );
                     label.class = "GuiMLTextCtrl".into();
                     self.view.add(body, label);
+                    self.view.add(
+                        body,
+                        named(
+                            authoring_button(
+                                Rect::new(bw - 96, y + 6, 90, 26),
+                                "Remove row",
+                                &format!("rules.delete.{row}"),
+                            ),
+                            format!("Rule_{row}_delete"),
+                        ),
+                    );
                     y += 42;
                 }
                 RowState::Editable(e) => {
+                    if self.copied_unavailable(&e) {
+                        self.view.add(
+                            body,
+                            named(
+                                text(
+                                    "GuiDefaultProfile",
+                                    Rect::new(4, y, bw - 8, 22),
+                                    "Copied event unavailable: edit or remove this row.",
+                                ),
+                                format!("WrenchEvent_{row}_unavailable"),
+                            ),
+                        );
+                        y += 25;
+                    }
+                    // Only this row needs the WHEN / IF / DO layout. A guarded
+                    // neighbor must not stretch otherwise ordinary event rows.
+                    let stacked = compact || !e.conditions.is_empty();
+                    let row_input_w = if stacked { bw - 88 } else { input_w };
+                    let target_x = if stacked { 88 } else { target_x };
+                    let output_x = target_x + target_w + 4;
+                    let output_w = bw - output_x - 4;
                     let enabled = self.widget(
                         body,
                         "GuiCheckBoxCtrl",
@@ -1142,7 +1329,7 @@ impl WrenchEvents {
                     let input = self.widget(
                         body,
                         "GuiPopUpMenuCtrl",
-                        Rect::new(88, y, input_w, 22),
+                        Rect::new(88, y, row_input_w, 22),
                         row,
                         "input",
                         Binding::Input(row),
@@ -1153,6 +1340,7 @@ impl WrenchEvents {
                         e.input.as_deref(),
                         true,
                     );
+                    self.event_menu_hints(input, true, None, core);
                     let mut action_y = y;
                     if stacked {
                         action_y += 25;
@@ -1216,6 +1404,7 @@ impl WrenchEvents {
                             e.output.as_deref(),
                             false,
                         );
+                        self.event_menu_hints(output, false, Some(&class), core);
                     }
                     y = action_y + 25;
                     if e.target.as_deref() == Some(NAMED_BRICK) {
@@ -1231,12 +1420,13 @@ impl WrenchEvents {
                             "named",
                             Binding::Named(row),
                         );
-                        self.menu(
-                            node,
-                            self.model.as_ref().unwrap().named_choices(),
-                            e.named.as_deref(),
-                            false,
-                        );
+                        let mut names = self.model.as_ref().unwrap().named_choices();
+                        if let Some(name) = &e.named
+                            && !names.contains(name)
+                        {
+                            names.push(name.clone());
+                        }
+                        self.menu(node, names, e.named.as_deref(), false);
                         y += 25;
                     }
                     let specs = self.model.as_ref().unwrap().param_specs(row, &self.catalog);
@@ -1310,13 +1500,7 @@ impl WrenchEvents {
                                 format!("rules.{suffix}.{row}")
                             };
                             let button = named(
-                                button(
-                                    "BlockButtonProfile",
-                                    Rect::new(x, y, w, 26),
-                                    "base/client/ui/button2",
-                                    label,
-                                    &command,
-                                ),
+                                authoring_button(Rect::new(x, y, w, 26), label, &command),
                                 format!("Rule_{row}_{suffix}"),
                             );
                             let n = self.view.add(body, button);
@@ -1357,6 +1541,16 @@ impl WrenchEvents {
             }
         }
         self.view.nodes[body].ctrl.extent[1] = y.max(1);
+        for (node, binding) in &self.bindings {
+            if self.view.node(*node).ctrl.class == "GuiTextEditCtrl"
+                && let Some((row, field)) = binding.text_field()
+                && let Some(RowState::Editable(e)) =
+                    self.model.as_ref().and_then(|m| m.rows.get(row))
+                && let Some(text) = e.draft_text.get(&field)
+            {
+                self.view.set_text(*node, text);
+            }
+        }
         self.view.state(scroll).scroll_y = scroll_offset;
         self.view.add(
             win,
@@ -1451,6 +1645,7 @@ impl WrenchEvents {
             Binding::ConditionProperty(row, index),
         );
         let mut properties = condition_properties(c.subject, self.target_class(row).as_deref());
+        let pending = self.model.as_ref().is_some_and(|m| matches!(&m.rows[row], RowState::Editable(e) if e.pending_conditions.contains(&index)));
         if !properties.iter().any(|(_, p)| *p == c.property) {
             properties.extend(
                 rules::PROPERTIES
@@ -1465,9 +1660,60 @@ impl WrenchEvents {
                 .iter()
                 .map(|(_, p)| property_label(*p).to_string())
                 .collect(),
-            Some(property_label(c.property)),
-            false,
+            (!pending).then_some(property_label(c.property)),
+            pending,
         );
+        let aliases = properties
+            .iter()
+            .map(|(_, p)| {
+                let label = property_label(*p);
+                let id = self
+                    .view
+                    .node(n)
+                    .state
+                    .items
+                    .iter()
+                    .find(|(name, _)| name == label)
+                    .unwrap()
+                    .1;
+                (
+                    id,
+                    match p {
+                        Property::SpawnedBy => "exact ball spawner named brick goal".into(),
+                        Property::Variable => "state progress checkpoint puzzle".into(),
+                        Property::Team => "team name players red blue".into(),
+                        _ => label.to_lowercase(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        self.view.state(n).popup_aliases.extend(aliases);
+        self.view.nodes[n]
+            .ctrl
+            .fields
+            .insert("searchPlaceholder".into(), "Search checks...".into());
+        if pending {
+            self.view.add(
+                body,
+                text(
+                    "GuiDefaultProfile",
+                    Rect::new(88, y + 47, bw - 92, 22),
+                    "Choose a check",
+                ),
+            );
+            self.view.add(
+                body,
+                named(
+                    authoring_button(
+                        Rect::new(bw - 27, y + 17, 23, 24),
+                        "X",
+                        &format!("rules.remove.{row}.{index}"),
+                    ),
+                    format!("Rule_{row}_if{index}_remove"),
+                ),
+            );
+            return;
+        }
         let n = self.widget(
             body,
             "GuiPopUpMenuCtrl",
@@ -1491,10 +1737,8 @@ impl WrenchEvents {
             false,
         );
         let remove = named(
-            button(
-                "BlockButtonProfile",
+            authoring_button(
                 Rect::new(bw - 27, y + 17, 23, 24),
-                "base/client/ui/button2",
                 "X",
                 &format!("rules.remove.{row}.{index}"),
             ),
@@ -1520,10 +1764,12 @@ impl WrenchEvents {
         } else {
             88
         };
-        let label = if c.property == Property::SpawnedBy {
-            "Brick:"
-        } else {
-            "Value:"
+        let label = match c.property {
+            Property::SpawnedBy => "Spawner:",
+            Property::Team => "Team:",
+            Property::Kind => "Type:",
+            Property::Score => "Points:",
+            _ => "Value:",
         };
         let label_x = if c.property == Property::Variable {
             216
@@ -1532,7 +1778,20 @@ impl WrenchEvents {
         };
         self.view.add(
             body,
-            text("GuiDefaultProfile", Rect::new(label_x, vy, 46, 22), label),
+            text(
+                "GuiDefaultProfile",
+                Rect::new(
+                    label_x,
+                    vy,
+                    if c.property == Property::Variable {
+                        46
+                    } else {
+                        80
+                    },
+                    22,
+                ),
+                label,
+            ),
         );
         let class = if boolean_property(c.property)
             || matches!(
@@ -1573,6 +1832,9 @@ impl WrenchEvents {
                     names.push(name.to_owned());
                 }
                 self.menu(n, names.clone(), current, false);
+                if names.is_empty() {
+                    self.view.set_text(n, "Name a spawn brick first");
+                }
                 self.resources
                     .insert(n, names.into_iter().map(Some).collect());
             }
@@ -1682,7 +1944,17 @@ impl WrenchEvents {
             Property::Team | Property::Color => {
                 Datum::Number(self.view.selected(node).ok_or("Choose a value")?)
             }
-            Property::Kind | Property::SpawnedBy => Datum::Text(
+            Property::SpawnedBy => Datum::Text(
+                self.view
+                    .selected(node)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| self.resources.get(&node)?.get(i))
+                    .cloned()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .ok_or("Name a spawn brick, then choose it for Spawner.")?,
+            ),
+            Property::Kind => Datum::Text(
                 self.view
                     .selected(node)
                     .and_then(|i| usize::try_from(i).ok())
@@ -1931,8 +2203,58 @@ impl WrenchEvents {
     }
 
     fn accept_parameters(&mut self) -> Result<(), String> {
+        self.accept_parameters_except(None)
+    }
+
+    fn ready_to_send(&self) -> Result<(), String> {
+        if let Some(model) = &self.model {
+            for (index, row) in model.rows.iter().enumerate() {
+                let RowState::Editable(e) = row else { continue };
+                if self.copied_unavailable(e) {
+                    return Err(format!(
+                        "Row {}: copied event unavailable here; choose available events or remove this row.",
+                        index + 1
+                    ));
+                }
+                if !e.pending_conditions.is_empty() {
+                    return Err(format!(
+                        "Row {}: choose an IF check or remove it before sending.",
+                        index + 1
+                    ));
+                }
+                if e.input.is_some() {
+                    if e.target.as_deref() == Some(NAMED_BRICK) && e.named.is_none() {
+                        return Err(format!(
+                            "Row {}: name a brick, then choose the named target.",
+                            index + 1
+                        ));
+                    }
+                    if e.target.is_none() || e.output.is_none() {
+                        return Err(format!(
+                            "Row {}: choose a target and output event.",
+                            index + 1
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn accept_parameters_except(&mut self, removed_row: Option<usize>) -> Result<(), String> {
         let bindings = self.bindings.clone();
         for (node, binding) in bindings {
+            let row = match &binding {
+                Binding::VectorAxis(row, ..)
+                | Binding::Parameter(row, ..)
+                | Binding::Delay(row)
+                | Binding::ConditionKey(row, ..)
+                | Binding::ConditionValue(row, ..) => Some(*row),
+                _ => None,
+            };
+            if removed_row.is_some() && row == removed_row {
+                continue;
+            }
             match binding {
                 Binding::VectorAxis(row, axis, spec) => {
                     self.accept_vector_axis(node, row, axis, &spec)?;
@@ -1965,7 +2287,10 @@ impl WrenchEvents {
             }
         }
         if let Some(model) = &self.model {
-            for row in &model.rows {
+            for (index, row) in model.rows.iter().enumerate() {
+                if removed_row == Some(index) {
+                    continue;
+                }
                 if let RowState::Editable(e) = row {
                     if matches!(e.output.as_deref(), Some("setVariable" | "addVariable"))
                         && let Some(ParamValue::Text(key)) = e.params.get(1)
@@ -2017,6 +2342,9 @@ impl Screen for WrenchEvents {
         if self.request.is_some() {
             return;
         }
+        if matches!(ev.kind, EventKind::Changed | EventKind::Submit) {
+            self.remember_text(ev.node);
+        }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
         if ev.kind == EventKind::Click {
             if command == "rules.explain" {
@@ -2028,6 +2356,16 @@ impl Screen for WrenchEvents {
             if let Some(rest) = command.strip_prefix("rules.") {
                 let parts: Vec<_> = rest.split('.').collect();
                 if let Some(row) = parts.get(1).and_then(|s| s.parse::<usize>().ok()) {
+                    if parts[0] != "remove"
+                        && let Err(error) =
+                            self.accept_parameters_except((parts[0] == "delete").then_some(row))
+                    {
+                        self.error = Some(error.clone());
+                        if let Some(n) = self.view.id("WrenchEvents_Status") {
+                            self.view.set_text(n, error);
+                        }
+                        return;
+                    }
                     if let Some(model) = &mut self.model {
                         if parts[0] == "delete" {
                             if row < model.rows.len() {
@@ -2039,6 +2377,7 @@ impl Screen for WrenchEvents {
                             }
                         } else if let Some(RowState::Editable(e)) = model.rows.get_mut(row) {
                             if parts[0] == "if" && e.conditions.len() < rules::MAX_CONDITIONS {
+                                e.pending_conditions.insert(e.conditions.len());
                                 e.conditions.push(Condition {
                                     subject: Subject::SelfBrick,
                                     ..rules::default_condition()
@@ -2050,6 +2389,26 @@ impl Screen for WrenchEvents {
                                 && index < e.conditions.len()
                             {
                                 e.conditions.remove(index);
+                                e.draft_text = e
+                                    .draft_text
+                                    .iter()
+                                    .filter_map(|(field, text)| {
+                                        field
+                                            .remove_condition(index)
+                                            .map(|field| (field, text.clone()))
+                                    })
+                                    .collect();
+                                e.pending_conditions = e
+                                    .pending_conditions
+                                    .iter()
+                                    .filter_map(|i| {
+                                        if *i == index {
+                                            None
+                                        } else {
+                                            Some(if *i > index { *i - 1 } else { *i })
+                                        }
+                                    })
+                                    .collect();
                             }
                         }
                     }
@@ -2074,7 +2433,8 @@ impl Screen for WrenchEvents {
                 return;
             }
             if command == "wrencheventsdlg.send();" {
-                match self.accept_parameters() {
+                let ready = self.ready_to_send().and_then(|()| self.accept_parameters());
+                match ready {
                     Ok(()) => {
                         let m = self.model.as_ref().unwrap();
                         self.request = Some(core.request_pending(
@@ -2146,6 +2506,13 @@ impl Screen for WrenchEvents {
                     && let Some(c) = self.condition_mut(row, index)
                 {
                     reset_condition_property(c, value);
+                    if let Some(RowState::Editable(e)) =
+                        self.model.as_mut().and_then(|m| m.rows.get_mut(row))
+                    {
+                        e.pending_conditions.remove(&index);
+                        e.draft_text.remove(&DraftField::ConditionValue(index));
+                        e.draft_text.remove(&DraftField::ConditionKey(index));
+                    }
                 }
             }
             Binding::ConditionCompare(row, index) => {
@@ -2352,7 +2719,13 @@ mod tests {
                 .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
                 .unwrap();
             for expanded in [false, true] {
-                for logical in [(640, 480), (1024, 768), (1920, 1080), (960, 540)] {
+                for logical in [
+                    (400, 300),
+                    (640, 480),
+                    (1024, 768),
+                    (1920, 1080),
+                    (960, 540),
+                ] {
                     ui.core.logical = logical;
                     let mut view = region_view(&ui.core, layout, prefix, expanded);
                     view.layout(logical.0, logical.1);
@@ -2410,9 +2783,45 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn region_row_preserves_authored_controls() {
         let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        region_row_does_not_cover_original_controls(crate::testing::content_pack(
-            &bri_package::testing::pack_dir(&content, "ui_pack"),
-        ));
+        let pack =
+            crate::testing::content_pack(&bri_package::testing::pack_dir(&content, "ui_pack"));
+        region_row_does_not_cover_original_controls(pack.clone());
+        let mut ui = fixture();
+        ui.core.pack = pack;
+        for logical in [(400, 300), (1024, 768)] {
+            ui.core.logical = logical;
+            for expanded in [false, true] {
+                let mut view = region_view(
+                    &ui.core,
+                    "wrenchVehicleSpawnDlg",
+                    "WrenchVehicleSpawn",
+                    expanded,
+                );
+                view.layout(logical.0, logical.1);
+                let region = view.node(view.id("Wrench_RegionToggle").unwrap()).rect;
+                let respawn = view
+                    .node(view.by_command("wrenchVehicleSpawnDlg.respawn();").unwrap())
+                    .rect;
+                assert_eq!((region.w, region.h), (91, 38));
+                assert_eq!((respawn.w, respawn.h), (91, 38));
+                assert_eq!(region.y, respawn.y, "related actions share a row");
+                assert_eq!(region.x - respawn.right(), 8);
+                assert_eq!(
+                    view.node(view.id("WrenchVehicleSpawn_Window").unwrap())
+                        .rect
+                        .h,
+                    295,
+                    "neither collapsed nor expanded regions add spare vertical space"
+                );
+                let mut sound = region_view(&ui.core, "wrenchSoundDlg", "WrenchSound", expanded);
+                sound.layout(logical.0, logical.1);
+                assert_eq!(
+                    sound.node(sound.id("WrenchSound_Window").unwrap()).rect.h,
+                    221,
+                    "two region hints need no extra expanded window height"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2642,8 +3051,30 @@ mod tests {
 
     fn click(s: &mut dyn Screen, name: &str, core: &mut Core) {
         let n = s.view().id(name).unwrap();
+        let mut ancestor = s.view().node(n).parent;
+        while let Some(parent) = ancestor {
+            if s.view().node(parent).ctrl.class == "GuiScrollCtrl" {
+                for _ in 0..100 {
+                    let viewport = s.view().scroll_content_rect(&core.pack, parent);
+                    let r = s.view().node(n).rect;
+                    if r.y >= viewport.y && r.bottom() <= viewport.bottom() {
+                        break;
+                    }
+                    let mut out = vec![];
+                    s.view_mut()
+                        .mouse_move(viewport.x + 2, viewport.y + 2, &mut out);
+                    if !s.view_mut().wheel(if r.y < viewport.y { 1 } else { -1 }) {
+                        break;
+                    }
+                }
+                break;
+            }
+            ancestor = s.view().node(parent).parent;
+        }
         let r = s.view().node(n).rect;
         let mut events = vec![];
+        s.view_mut()
+            .mouse_move(r.x + r.w / 2, r.y + r.h / 2, &mut events);
         s.view_mut().mouse_down(
             MouseButton::Left,
             r.x + r.w / 2,
@@ -3032,6 +3463,467 @@ mod tests {
     }
 
     #[test]
+    fn mixed_rows_stay_compact_and_pending_checks_survive_copy_and_return() {
+        let mut ui = fixture();
+        let mut s = WrenchEvents::new(&ui.core);
+        for row in 0..2 {
+            choose(
+                &mut s,
+                &format!("WrenchEvent_{row}_input"),
+                "onActivate",
+                &mut ui.core,
+            );
+            choose(
+                &mut s,
+                &format!("WrenchEvent_{row}_output"),
+                "setLight",
+                &mut ui.core,
+            );
+        }
+        let rect = |s: &WrenchEvents, name: &str| s.view.node(s.view.id(name).unwrap()).rect;
+        let before = rect(&s, "WrenchEvent_0_input");
+        click(&mut s, "Rule_1_add_if", &mut ui.core);
+        assert_eq!(rect(&s, "WrenchEvent_0_input"), before);
+        assert_eq!(rect(&s, "WrenchEvent_0_target").y, before.y);
+        assert!(rect(&s, "WrenchEvent_1_target").y > rect(&s, "WrenchEvent_1_input").y + 25);
+        assert!(
+            s.view.id("WrenchEvent_1_if0_value").is_none(),
+            "no invented default value"
+        );
+        click(&mut s, "Rule_1_copy", &mut ui.core);
+        s.cancel(&mut ui.core);
+        let mut s = WrenchEvents::new(&ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        assert!(ui.drain_actions().is_empty(), "unfinished IF cannot run");
+        assert!(s.error.as_deref().unwrap().contains("choose an IF check"));
+        click(&mut s, "Rule_1_if0_remove", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_2_if0_property",
+            "Variable",
+            &mut ui.core,
+        );
+        edit(&mut s, "WrenchEvent_2_if0_key", "checkpoint", &mut ui.core);
+        edit(&mut s, "WrenchEvent_2_if0_value", "2", &mut ui.core);
+        edit(&mut s, "WrenchEvent_2_delay", "500", &mut ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, .. }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        let EventRow::Editable(last) = &rows[2] else {
+            panic!()
+        };
+        assert_eq!(last.delay_ms, 500);
+        assert_eq!(last.conditions[0].key, "checkpoint");
+        assert_eq!(last.conditions[0].value, Datum::Number(2));
+    }
+
+    #[test]
+    fn unfinished_number_survives_rebuild_return_and_unrelated_removal() {
+        let mut ui = fixture();
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "core:rules".into(),
+            class: "fxDTSBrick".into(),
+            name: "setAmount".into(),
+            params: vec![ParamSpec::Float {
+                min: -10.0,
+                max: 10.0,
+                step: 0.1,
+                default: 0.0,
+            }],
+            supported: true,
+        });
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "setAmount", &mut ui.core);
+        choose(&mut s, "WrenchEvent_1_input", "onActivate", &mut ui.core);
+        choose(&mut s, "WrenchEvent_1_output", "setLight", &mut ui.core);
+        edit(&mut s, "WrenchEvent_0_param0", "-", &mut ui.core);
+        s.layout(640, 480, &mut ui.core);
+        assert_eq!(
+            s.view.edit_text(s.view.id("WrenchEvent_0_param0").unwrap()),
+            "-"
+        );
+        click(&mut s, "Rule_1_delete", &mut ui.core);
+        assert_eq!(
+            s.model.as_ref().unwrap().rows.len(),
+            3,
+            "other unfinished field prevents silent loss"
+        );
+        s.cancel(&mut ui.core);
+        let mut s = WrenchEvents::new(&ui.core);
+        assert_eq!(
+            s.view.edit_text(s.view.id("WrenchEvent_0_param0").unwrap()),
+            "-"
+        );
+        click(&mut s, "Rule_0_copy", &mut ui.core);
+        assert_eq!(s.model.as_ref().unwrap().rows.len(), 3);
+        edit(&mut s, "WrenchEvent_0_param0", "-2.5", &mut ui.core);
+        click(&mut s, "Rule_0_copy", &mut ui.core);
+        assert_eq!(s.model.as_ref().unwrap().rows.len(), 4);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, .. }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        for row in &rows[..2] {
+            let EventRow::Editable(line) = row else {
+                panic!()
+            };
+            assert_eq!(line.params, vec![ParamValue::Float(-2.5)]);
+        }
+    }
+
+    #[test]
+    fn grouped_event_search_chooses_the_exact_legacy_identity() {
+        let mut ui = fixture();
+        for base in ["onActivate", "onPlayerTouch", "onCPCapture"] {
+            if !ui.core.events.inputs.iter().any(|i| i.name == base) {
+                let mut input = ui.core.events.inputs[0].clone();
+                input.name = base.into();
+                ui.core.events.inputs.push(input);
+            }
+            for team in 1..=6 {
+                let mut input = ui.core.events.inputs[0].clone();
+                input.name = format!("{base}(Team{team})");
+                ui.core.events.inputs.push(input);
+            }
+        }
+        let mut s = WrenchEvents::new(&ui.core);
+        click(&mut s, "WrenchEvent_0_input", &mut ui.core);
+        let root_rows = s.view.popup_rows();
+        assert!(root_rows.iter().any(|(name, _)| name == "onActivate"));
+        assert_eq!(
+            root_rows
+                .iter()
+                .filter(|(name, _)| name.ends_with("variants >"))
+                .count(),
+            3
+        );
+        assert!(!root_rows.iter().any(|(name, _)| name.contains("(Team")));
+        let mut out = vec![];
+        for ch in "activate team6".chars() {
+            s.view.char(ch, &mut out);
+        }
+        assert_eq!(
+            s.view.popup_highlight().map(|(n, _)| n).as_deref(),
+            Some("onActivate(Team6)")
+        );
+        s.view.key(Key::Return, Modifiers::NONE, &mut out);
+        for event in out {
+            s.on_event(&event, &mut ui.core);
+        }
+        choose(&mut s, "WrenchEvent_0_output", "setLight", &mut ui.core);
+        edit(&mut s, "WrenchEvent_0_delay", "900", &mut ui.core);
+        click(&mut s, "WrenchEvent_0_input", &mut ui.core);
+        assert!(
+            s.view
+                .popup_rows()
+                .iter()
+                .any(|(name, _)| name == "onActivate(Team6)"),
+            "selected variant stays visible"
+        );
+        let mut out = vec![];
+        s.view.key(Key::Escape, Modifiers::NONE, &mut out);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, .. }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        let EventRow::Editable(line) = &rows[0] else {
+            panic!()
+        };
+        assert_eq!(line.input, "onActivate(Team6)");
+        assert_eq!(line.delay_ms, 900);
+        assert!(line.conditions.is_empty(), "no conversion to due-time IF");
+    }
+
+    #[test]
+    fn missing_named_target_and_spawner_are_explained_without_omitting_the_row() {
+        let mut ui = fixture();
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", NAMED_BRICK, &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "setLight", &mut ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        assert!(ui.drain_actions().is_empty());
+        assert!(s.error.as_deref().unwrap().contains("name a brick"));
+        s.model.as_mut().unwrap().named_targets.push("Door".into());
+        s.build(&ui.core);
+        choose(&mut s, "WrenchEvent_0_named", "Door", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Object", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_0_if0_property",
+            "Spawned by",
+            &mut ui.core,
+        );
+        s.model.as_mut().unwrap().named_targets.clear();
+        s.build(&ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        assert!(ui.drain_actions().is_empty());
+        assert!(s.error.as_deref().unwrap().contains("spawn brick"));
+        s.model
+            .as_mut()
+            .unwrap()
+            .named_targets
+            .push("MatchBall".into());
+        s.build(&ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_value", "MatchBall", &mut ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, .. }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        let EventRow::Editable(line) = &rows[0] else {
+            panic!()
+        };
+        assert_eq!(line.named_target.as_deref(), Some("Door"));
+        assert_eq!(line.conditions[0].value, Datum::Text("MatchBall".into()));
+    }
+
+    #[test]
+    fn exact_ball_goal_copies_independently_and_delayed_puzzle_keeps_its_state() {
+        let mut ui = fixture();
+        for name in ["onObjectEnter", "onRuleVariableChanged"] {
+            ui.core.events.inputs.push(EventInputInfo {
+                name: name.into(),
+                supported: true,
+                targets: vec![
+                    ("Self".into(), "fxDTSBrick".into()),
+                    ("Player".into(), "Player".into()),
+                    ("Object".into(), "Vehicle".into()),
+                ],
+            });
+        }
+        ui.core.events.outputs.extend([
+            EventOutputInfo {
+                provider: "core:rules".into(),
+                class: "Player".into(),
+                name: "addTeamScore".into(),
+                params: vec![ParamSpec::Int {
+                    min: -100,
+                    max: 100,
+                    default: 1,
+                }],
+                supported: true,
+            },
+            EventOutputInfo {
+                provider: "core:rules".into(),
+                class: "fxDTSBrick".into(),
+                name: "setVariable".into(),
+                params: vec![
+                    ParamSpec::List {
+                        items: vec![("Brick".into(), 0), ("MiniGame".into(), 2)],
+                    },
+                    ParamSpec::String {
+                        max_length: 48,
+                        width: 100,
+                    },
+                    ParamSpec::Int {
+                        min: -100,
+                        max: 100,
+                        default: 1,
+                    },
+                ],
+                supported: true,
+            },
+        ]);
+        let mut s = WrenchEvents::new(&ui.core);
+        s.model
+            .as_mut()
+            .unwrap()
+            .named_targets
+            .extend(["MatchBall".into(), "PracticeBall".into()]);
+        choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "Player", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "addTeamScore", &mut ui.core);
+        edit(&mut s, "WrenchEvent_0_param0", "7", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Object", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_0_if0_property",
+            "Spawned by",
+            &mut ui.core,
+        );
+        choose(&mut s, "WrenchEvent_0_if0_value", "MatchBall", &mut ui.core);
+        click(&mut s, "Rule_0_copy", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_1_if0_value",
+            "PracticeBall",
+            &mut ui.core,
+        );
+        choose(
+            &mut s,
+            "WrenchEvent_2_input",
+            "onRuleVariableChanged",
+            &mut ui.core,
+        );
+        choose(&mut s, "WrenchEvent_2_output", "setVariable", &mut ui.core);
+        choose(&mut s, "WrenchEvent_2_param0", "Brick", &mut ui.core);
+        edit(&mut s, "WrenchEvent_2_param1", "checkpoint", &mut ui.core);
+        edit(&mut s, "WrenchEvent_2_param2", "1", &mut ui.core);
+        edit(&mut s, "WrenchEvent_2_delay", "750", &mut ui.core);
+        click(&mut s, "Rule_2_add_if", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_2_if0_property",
+            "Variable",
+            &mut ui.core,
+        );
+        edit(&mut s, "WrenchEvent_2_if0_key", "switches", &mut ui.core);
+        edit(&mut s, "WrenchEvent_2_if0_value", "2", &mut ui.core);
+        ui.core.datablocks.insert("Unused".into(), vec![]);
+        s.on_update(&mut ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, .. }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        assert_eq!(rows.len(), 3);
+        for (row, spawner) in rows[..2].iter().zip(["MatchBall", "PracticeBall"]) {
+            let EventRow::Editable(line) = row else {
+                panic!()
+            };
+            assert_eq!(line.input, "onObjectEnter");
+            assert_eq!(line.output, "addTeamScore");
+            assert_eq!(line.params, vec![ParamValue::Int(7)]);
+            assert_eq!(line.conditions[0].subject, Subject::Object);
+            assert_eq!(line.conditions[0].value, Datum::Text(spawner.into()));
+        }
+        let EventRow::Editable(line) = &rows[2] else {
+            panic!()
+        };
+        assert_eq!(line.delay_ms, 750);
+        assert_eq!(line.conditions[0].key, "switches");
+        assert_eq!(line.conditions[0].value, Datum::Number(2));
+        assert_eq!(
+            line.params,
+            vec![
+                ParamValue::List(0),
+                ParamValue::Text("checkpoint".into()),
+                ParamValue::Int(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn unavailable_host_row_can_be_removed_without_clearing_other_tokens_or_events() {
+        let mut ui = fixture();
+        let opaque = |token: &str| EventRow::Preserved {
+            enabled: false,
+            text: "legacy unavailable".into(),
+            token: token.into(),
+        };
+        let supported = EventRow::Editable(crate::api::EventLine {
+            enabled: true,
+            delay_ms: 700,
+            conditions: vec![],
+            input: "onActivate".into(),
+            target: "Self".into(),
+            named_target: None,
+            output: "setLight".into(),
+            params: vec![ParamValue::Datablock(None)],
+        });
+        ui.core.wrench.open_events(
+            10,
+            vec![opaque("host:10:0"), opaque("host:10:1"), supported.clone()],
+            vec![],
+            true,
+            &ui.core.events,
+        );
+        let mut s = WrenchEvents::new(&ui.core);
+        assert!(
+            s.view.id("WrenchEvent_0_input").is_none(),
+            "preserved row remains read-only"
+        );
+        click(&mut s, "Rule_0_delete", &mut ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, brick }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        assert_eq!(*brick, 10);
+        assert_eq!(rows, &vec![opaque("host:10:1"), supported]);
+    }
+
+    #[test]
+    fn cross_brick_copy_keeps_pending_text_and_blocks_unavailable_provider() {
+        let mut ui = fixture();
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "setVector", &mut ui.core);
+        edit(&mut s, "WrenchEvent_0_param0", "20 2 -30", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        // Keep the current editor's unfinished text without accepting it.
+        let node = s.view.id("WrenchEvent_0_param0").unwrap();
+        s.view.set_text(node, "-");
+        s.remember_text(node);
+        s.save_draft(&mut ui.core);
+        ui.core.wrench.events_copy = s.model.clone();
+        let opaque = EventRow::Preserved {
+            enabled: false,
+            text: "destination legacy".into(),
+            token: "destination:20:0".into(),
+        };
+        ui.core
+            .wrench
+            .open_events(20, vec![opaque.clone()], vec![], true, &ui.core.events);
+        let mut copied = WrenchEvents::new(&ui.core);
+        assert_eq!(
+            copied
+                .view
+                .text_of(copied.view.id("WrenchEvent_1_param0").unwrap()),
+            "-"
+        );
+        let RowState::Editable(row) = &copied.model.as_ref().unwrap().rows[1] else {
+            panic!()
+        };
+        assert!(row.pending_conditions.contains(&0));
+        assert!(
+            copied
+                .model
+                .as_ref()
+                .unwrap()
+                .to_send()
+                .iter()
+                .all(|r| matches!(r, EventRow::Preserved { .. }))
+        );
+        click(&mut copied, "Events_Send", &mut ui.core);
+        assert!(ui.drain_actions().is_empty());
+        // Provider availability can change between source and destination.
+        ui.core
+            .events
+            .outputs
+            .iter_mut()
+            .find(|o| o.name == "setVector")
+            .unwrap()
+            .supported = false;
+        copied.on_update(&mut ui.core);
+        assert!(copied.view.id("WrenchEvent_1_unavailable").is_some());
+        let output = copied.view.id("WrenchEvent_1_output").unwrap();
+        assert_eq!(
+            copied.view.selected_text(output).as_deref(),
+            Some("setVector")
+        );
+        click(&mut copied, "Events_Send", &mut ui.core);
+        assert!(ui.drain_actions().is_empty());
+        assert!(
+            copied
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("copied event unavailable")
+        );
+        // Removal is explicit and must not accept the invalid raw field first.
+        click(&mut copied, "Rule_1_delete", &mut ui.core);
+        click(&mut copied, "Events_Send", &mut ui.core);
+        let (_, UiAction::SendEvents { rows, brick }) = &ui.drain_actions()[0] else {
+            panic!()
+        };
+        assert_eq!(*brick, 20);
+        assert_eq!(rows, &vec![opaque]);
+    }
+
+    #[test]
     fn invalid_vector_does_not_send_and_cancel_does_not_apply() {
         let mut ui = fixture();
         let mut s = WrenchEvents::new(&ui.core);
@@ -3322,6 +4214,7 @@ mod tests {
         let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
         let mut render = |name: &str, screen: &mut dyn Screen, core: &mut Core| {
             for (physical, scale) in [
+                ((400, 300), 1),
                 ((640, 480), 1),
                 ((1024, 768), 1),
                 ((1024, 768), 2),
@@ -3330,14 +4223,45 @@ mod tests {
             ] {
                 let mut prefs = core.prefs.clone();
                 prefs.set(crate::ui::UI_SCALE, (scale * 100).to_string());
-                let effective =
+                let effective = if physical == (400, 300) {
+                    UiConfig {
+                        size: (400, 300),
+                        scale: None,
+                        platform: Platform::Windows,
+                    }
+                    .effective_scale()
+                } else {
                     crate::ui::preferred_scale(&prefs, (physical.0 as u32, physical.1 as u32))
-                        .unwrap();
+                        .unwrap()
+                };
                 core.logical = (
                     (physical.0 as f32 / effective).floor() as i32,
                     (physical.1 as f32 / effective).floor() as i32,
                 );
                 screen.layout(core.logical.0, core.logical.1, core);
+                let popup = if name.ends_with("Input-Grouped") || name.ends_with("Input-Search") {
+                    Some((
+                        "WrenchEvent_0_input",
+                        if name.ends_with("Input-Search") {
+                            "activate team6"
+                        } else {
+                            ""
+                        },
+                    ))
+                } else if name.ends_with("Output-Grouped") {
+                    Some(("WrenchEvent_0_output", ""))
+                } else {
+                    None
+                };
+                if let Some((control, query)) = popup {
+                    click(screen, control, core);
+                    let view = screen.view_mut();
+                    let mut out = vec![];
+                    for ch in query.chars() {
+                        view.char(ch, &mut out);
+                    }
+                    assert!(!view.popup_rows().is_empty());
+                }
                 let mut list = DrawList::new(Rect::new(0, 0, core.logical.0, core.logical.1));
                 screen.draw(&pack, &mut list, core);
                 assert!(list.glyph_count() > 20, "{name}");
@@ -3385,7 +4309,7 @@ mod tests {
                 "Maxwell".into(),
                 WrenchData {
                     name: "test_brick".into(),
-                    rule_region: Some([8.0, 5.0, 8.0]),
+                    rule_region_default: Some([8.0, 5.0, 8.0]),
                     light: Some("FxLightData:beta".into()),
                     raycasting: true,
                     colliding: true,
@@ -3400,7 +4324,36 @@ mod tests {
                 &mut Wrench::new(&ui.core, variant),
                 &mut ui.core,
             );
+            let mut expanded = Wrench::new(&ui.core, variant);
+            click(&mut expanded, "Wrench_RegionToggle", &mut ui.core);
+            render(
+                &format!("{variant:?}-Detection"),
+                &mut expanded,
+                &mut ui.core,
+            );
         }
+        let mut basic = WrenchEvents::new(&ui.core);
+        choose(
+            &mut basic,
+            "WrenchEvent_0_input",
+            "onActivate",
+            &mut ui.core,
+        );
+        choose(&mut basic, "WrenchEvent_0_output", "setLight", &mut ui.core);
+        render("Events-Basic", &mut basic, &mut ui.core);
+        click(&mut basic, "Rule_0_add_if", &mut ui.core);
+        render("Events-PendingIF", &mut basic, &mut ui.core);
+        click(&mut basic, "Rule_0_if0_remove", &mut ui.core);
+        for team in 1..=6 {
+            ui.core.events.inputs.push(EventInputInfo {
+                name: format!("onActivate(Team{team})"),
+                targets: vec![("Self".into(), "fxDTSBrick".into())],
+                supported: true,
+            });
+        }
+        basic.on_update(&mut ui.core);
+        render("Events-Input-Grouped", &mut basic, &mut ui.core);
+        render("Events-Input-Search", &mut basic, &mut ui.core);
         ui.core.wrench.open_events(
             10,
             vec![EventRow::Preserved {
@@ -3498,6 +4451,80 @@ mod tests {
         );
         choose(&mut events, "WrenchEvent_1_if0_value", "Blue", &mut ui.core);
         render("Events-Conditions", &mut events, &mut ui.core);
+        choose(
+            &mut events,
+            "WrenchEvent_2_input",
+            "onActivate",
+            &mut ui.core,
+        );
+        choose(
+            &mut events,
+            "WrenchEvent_2_output",
+            "setLight",
+            &mut ui.core,
+        );
+        render("Events-Mixed", &mut events, &mut ui.core);
+        ui.core.events.inputs.push(EventInputInfo {
+            name: "onObjectEnter".into(),
+            supported: true,
+            targets: vec![
+                ("Self".into(), "fxDTSBrick".into()),
+                ("Player".into(), "Player".into()),
+                ("Object".into(), "Vehicle".into()),
+            ],
+        });
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "core:rules".into(),
+            class: "Player".into(),
+            name: "addTeamScore".into(),
+            supported: true,
+            params: vec![ParamSpec::Int {
+                min: -100,
+                max: 100,
+                default: 1,
+            }],
+        });
+        ui.core.wrench.open_events(
+            10,
+            vec![],
+            vec!["MatchBall".into(), "PracticeBall".into()],
+            true,
+            &ui.core.events,
+        );
+        let mut ball = WrenchEvents::new(&ui.core);
+        choose(
+            &mut ball,
+            "WrenchEvent_0_input",
+            "onObjectEnter",
+            &mut ui.core,
+        );
+        choose(&mut ball, "WrenchEvent_0_target", "Player", &mut ui.core);
+        choose(
+            &mut ball,
+            "WrenchEvent_0_output",
+            "addTeamScore",
+            &mut ui.core,
+        );
+        click(&mut ball, "Rule_0_add_if", &mut ui.core);
+        choose(
+            &mut ball,
+            "WrenchEvent_0_if0_subject",
+            "Object",
+            &mut ui.core,
+        );
+        choose(
+            &mut ball,
+            "WrenchEvent_0_if0_property",
+            "Spawned by",
+            &mut ui.core,
+        );
+        choose(
+            &mut ball,
+            "WrenchEvent_0_if0_value",
+            "MatchBall",
+            &mut ui.core,
+        );
+        render("Events-BallGoal", &mut ball, &mut ui.core);
         ui.core.events.outputs.extend([
             EventOutputInfo {
                 provider: "core:rules".into(),
@@ -3556,6 +4583,7 @@ mod tests {
             );
         }
         render("Events-Region", &mut dimensions, &mut ui.core);
+        render("Events-Output-Grouped", &mut dimensions, &mut ui.core);
         choose(
             &mut dimensions,
             "WrenchEvent_0_output",

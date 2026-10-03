@@ -1,7 +1,7 @@
 # Creator usability and NPC hardening plan — 2026-10-03
 
-Planning state only. v0.2.1 is already published; this pass does not replace
-its artifacts. Maxwell requested a cohesive next pass covering Wrench Events,
+Implementation is active on `codex/v0.2.2-hardening`. v0.2.1 is already
+published; v0.2.2 will be a separate release with fresh artifacts. Maxwell requested a cohesive next pass covering Wrench Events,
 MiniGame setup, NPC behavior/performance, and incomplete Shark behavior.
 All delegated work uses GPT-6.1 Sol High. Maxwell owns interactive playtests.
 
@@ -126,6 +126,23 @@ decision; presentation grouping can preserve the current runtime identity.
    a short mutation checklist and honest remaining limits. Subjective ease and
    behavior feel require Maxwell's playtest. A subsequent publication uses a
    new version and matching source/content across all three platforms.
+
+### Final consolidation requested by Maxwell
+
+After the lanes integrate, review maintenance hot spots and make bounded,
+behavior-preserving cleanups where duplication or tangled ownership has a
+demonstrable cost. Do not introduce frameworks or split files merely to reduce
+line counts. Review every GitHub branch against main, recover worthwhile
+unmerged changes, and discard stale or ambiguous work. Archive the inspected
+tips locally before removing refs; never merge an old tree over newer fixes.
+Main must contain the final reviewed implementation before publication.
+
+Polish the repository's current entry points and player/creator guides, correct
+stale platform and setup requirements, and check local links. Keep historical
+progress and research as dated evidence rather than rewriting past results.
+Record branch dispositions, maintenance changes, remaining limitations and
+release verification in a new progress entry. Publish v0.2.2 only after the
+gate, Windows CI and all three platform package/startup checks pass.
 
 ## Stop rule
 

@@ -120,6 +120,11 @@ impl App {
             });
         }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
+        ui.apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+            &content.paths.root,
+            state_dir,
+            &content.paint,
+        )));
         ui.core.music_tracks = content.music.iter().map(|(_, name)| name.clone()).collect();
         ui.apply(UiUpdate::GameModes(crate::packages::modes(
             server_packages.as_ref(),

@@ -392,6 +392,21 @@ impl ContentPaths {
     /// Expensive geometry decoding and collider construction belongs on the host
     /// worker. Only the requested saved world is read, never the whole corpus.
     pub fn load_map(&self, map_id: &str, world_id: Option<&str>) -> Result<LoadedMap> {
+        self.load_map_with_palette(map_id, world_id, None)
+    }
+
+    /// A selected host colorset initializes a fresh world's palette. Saved
+    /// reference worlds retain their own palette and cannot be overridden.
+    pub fn load_map_with_palette(
+        &self,
+        map_id: &str,
+        world_id: Option<&str>,
+        palette: Option<&[[f32; 4]]>,
+    ) -> Result<LoadedMap> {
+        ensure!(
+            world_id.is_none() || palette.is_none(),
+            "Cannot replace a saved world's colorset"
+        );
         ensure!(
             LOADABLE_MAPS.contains(&map_id),
             "Map is not integrated for native loading yet: {map_id}"
@@ -428,7 +443,11 @@ impl ContentPaths {
             world
         } else {
             let pack = load_ui_schema(&self.ui_pack)?;
-            bri_world::World::new(entry.name.clone(), map_id.into(), default_palette(&pack)?)
+            bri_world::World::new(
+                entry.name.clone(),
+                map_id.into(),
+                palette.map_or_else(|| default_palette(&pack), |colors| Ok(colors.to_vec()))?,
+            )
         };
         self.map_content()?.load(world)
     }

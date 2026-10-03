@@ -62,6 +62,10 @@ pub struct NodeState {
     pub value: Value,
     /// Popup/list items: (text, id). List text uses `\t` to separate columns.
     pub items: Vec<(String, i64)>,
+    /// Optional local disclosure groups; item IDs and selected values stay intact.
+    pub popup_groups: HashMap<i64, String>,
+    /// Gameplay search words, without changing the displayed or authored identity.
+    pub popup_aliases: HashMap<i64, String>,
     /// Vertical scroll offset (scroll controls).
     pub scroll_y: i32,
     pub cursor: usize,
@@ -149,12 +153,20 @@ struct Popup {
     row_h: i32,
     /// Rows visible at once; fewer than the item count adds a scroll bar.
     rows: usize,
+    capacity: usize,
     /// First visible item.
     scroll: usize,
     /// Highlighted item (mouse hover or keyboard cursor).
     hover: Option<usize>,
     /// Opened by the current press: releasing over a row selects it.
     dragging: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PopupRow {
+    Item(usize),
+    Group(String),
+    Back,
 }
 
 impl Popup {
@@ -237,6 +249,15 @@ fn rank_matches(keys: &[String], query: &str, keep: impl Fn(&str) -> bool, out: 
         (0..keys.len())
             .filter(|&i| keep(&keys[i]) && !keys[i].starts_with(query) && keys[i].contains(query)),
     );
+    // Gameplay queries often name the subject and verb in a different order
+    // from the authored label. Keep exact phrases first, then match all words.
+    if query.split_whitespace().count() > 1 {
+        out.extend((0..keys.len()).filter(|&i| {
+            keep(&keys[i])
+                && !keys[i].contains(query)
+                && query.split_whitespace().all(|word| keys[i].contains(word))
+        }));
+    }
 }
 
 /// The type-to-filter search for lists a screen builds itself: indices of
@@ -281,7 +302,8 @@ pub struct View {
     popup_keys: Vec<String>,
     /// Item indices the open dropdown shows, in order; `Popup::hover` and
     /// `Popup::scroll` index this.
-    popup_shown: Vec<usize>,
+    popup_shown: Vec<PopupRow>,
+    popup_group: Option<String>,
     /// Scroll control whose thumb is being dragged: (control, grab offset,
     /// up arrow height, down arrow height).
     scroll_drag: Option<(NodeId, i32, i32, i32)>,
@@ -342,6 +364,7 @@ impl View {
             popup_query: String::new(),
             popup_keys: Vec::new(),
             popup_shown: Vec::new(),
+            popup_group: None,
             scroll_drag: None,
             window_drag: None,
             window_resize: None,
@@ -370,6 +393,8 @@ impl View {
                 tint: None,
                 value: initial_value(c),
                 items: Vec::new(),
+                popup_groups: HashMap::new(),
+                popup_aliases: HashMap::new(),
                 scroll_y: 0,
                 cursor: 0,
                 frame: 0,
@@ -1131,14 +1156,17 @@ impl View {
                         let tw = font.as_ref().map_or(0, |f| f.width(typed));
                         let grey = s.font_color_na.unwrap_or([128, 128, 128, 255]);
                         if typed.is_empty() {
-                            // The current choice, greyed like a placeholder:
-                            // typing replaces it.
+                            // Typing replaces the open picker's placeholder.
+                            let placeholder = self.nodes[id]
+                                .ctrl
+                                .field("searchPlaceholder")
+                                .unwrap_or(&label);
                             self.draw_text_in(
                                 pack,
                                 dl,
                                 id,
                                 inner,
-                                &label,
+                                placeholder,
                                 Some(Justify::Left),
                                 Some(grey),
                             );
@@ -1764,8 +1792,13 @@ impl View {
             .enumerate()
             .skip(p.scroll)
             .take(p.rows);
-        for (row, (i, &item)) in visible.enumerate() {
-            let Some((text, _)) = n.state.items.get(item) else {
+        for (row, (i, item)) in visible.enumerate() {
+            let text = match item {
+                PopupRow::Item(item) => n.state.items.get(*item).map(|(text, _)| text.clone()),
+                PopupRow::Group(group) => Some(format!("{group} >")),
+                PopupRow::Back => Some("< Back".into()),
+            };
+            let Some(text) = text else {
                 continue;
             };
             let row = Rect::new(r.x + 1, r.y + 1 + (row as i32) * p.row_h, text_w, p.row_h);
@@ -1779,7 +1812,7 @@ impl View {
                     dl,
                     p.node,
                     t,
-                    text,
+                    &text,
                     Some(Justify::Left),
                     Some(geom::BLACK),
                 );
@@ -1823,6 +1856,12 @@ impl View {
                 .items
                 .iter()
                 .map(|(t, _)| f.width(t))
+                .chain(
+                    n.state
+                        .popup_groups
+                        .values()
+                        .map(|g| f.width(&format!("{g} >"))),
+                )
                 .max()
                 .unwrap_or(0)
         });
@@ -1841,6 +1880,7 @@ impl View {
             rect: Rect::new(x, y, w, h),
             row_h,
             rows,
+            capacity: max_rows.max(1) as usize,
             scroll: 0,
             hover: selected,
             dragging: true,
@@ -1853,11 +1893,18 @@ impl View {
             .state
             .items
             .iter()
-            .map(|(t, _)| search_key(t))
+            .map(|(t, item_id)| {
+                let alias = self.nodes[id]
+                    .state
+                    .popup_aliases
+                    .get(item_id)
+                    .filter(|_| !pinned_key(&search_key(t)));
+                search_key(&alias.map_or_else(|| t.clone(), |a| format!("{t} {a}")))
+            })
             .collect();
-        self.popup_shown.clear();
-        self.popup_shown.extend(0..items);
+        self.popup_group = None;
         self.popup = Some(p);
+        self.refilter_popup();
     }
 
     /// The control whose list is open, if any.
@@ -1889,23 +1936,29 @@ impl View {
         self.popup.map(|_| self.popup_query.as_str())
     }
 
-    /// Items (text, id) the open dropdown currently lists, in order.
+    /// Visible rows. Disclosure rows have no selectable item ID and use
+    /// i64::MIN here for inspection only; they never emit a Changed event.
     pub fn popup_rows(&self) -> Vec<(String, i64)> {
         let Some(p) = self.popup else {
             return Vec::new();
         };
-        let items = &self.nodes[p.node].state.items;
         self.popup_shown
             .iter()
-            .filter_map(|&i| items.get(i).cloned())
+            .filter_map(|row| match row {
+                PopupRow::Item(i) => self.nodes[p.node].state.items.get(*i).cloned(),
+                PopupRow::Group(group) => Some((format!("{group} >"), i64::MIN)),
+                PopupRow::Back => Some(("< Back".into(), i64::MIN)),
+            })
             .collect()
     }
 
-    /// The highlighted item of the open dropdown, if any.
+    /// A highlighted ordinary item; disclosure rows do not select values.
     pub fn popup_highlight(&self) -> Option<(String, i64)> {
         let p = self.popup?;
-        let item = *self.popup_shown.get(p.hover?)?;
-        self.nodes[p.node].state.items.get(item).cloned()
+        let PopupRow::Item(item) = self.popup_shown.get(p.hover?)? else {
+            return None;
+        };
+        self.nodes[p.node].state.items.get(*item).cloned()
     }
 
     /// Rest of the highlighted item after the typed text, shown as grey
@@ -1929,20 +1982,66 @@ impl View {
             return;
         };
         let q = self.popup_query.to_lowercase();
-        filter_keys(&self.popup_keys, &q, &mut self.popup_shown);
+        self.popup_shown.clear();
+        let state = &self.nodes[p.node].state;
+        if !q.is_empty() {
+            let mut indices = Vec::new();
+            filter_keys(&self.popup_keys, &q, &mut indices);
+            self.popup_shown
+                .extend(indices.into_iter().map(PopupRow::Item));
+        } else if let Some(group) = &self.popup_group {
+            self.popup_shown.push(PopupRow::Back);
+            self.popup_shown
+                .extend(state.items.iter().enumerate().filter_map(|(i, (_, id))| {
+                    (state.popup_groups.get(id) == Some(group)).then_some(PopupRow::Item(i))
+                }));
+        } else {
+            let selected = self.selected(p.node);
+            let mut groups = Vec::new();
+            for (i, (_, id)) in state.items.iter().enumerate() {
+                if let Some(group) = state.popup_groups.get(id).filter(|g| !g.is_empty()) {
+                    if !groups.contains(group) {
+                        groups.push(group.clone());
+                    }
+                    // Keep the authored choice visible even if its family is collapsed.
+                    if Some(*id) == selected {
+                        self.popup_shown.push(PopupRow::Item(i));
+                    }
+                } else {
+                    self.popup_shown.push(PopupRow::Item(i));
+                }
+            }
+            self.popup_shown
+                .extend(groups.into_iter().map(PopupRow::Group));
+        }
+        let anchor = self.nodes[p.node].rect;
+        let room = (self.canvas.1 - anchor.bottom())
+            .max(anchor.y)
+            .max(p.row_h + 2);
+        let capacity = p
+            .capacity
+            .min(((room - 2) / p.row_h.max(1)).max(1) as usize);
+        p.rows = self.popup_shown.len().min(capacity).max(1);
+        p.rect.h = p.rows as i32 * p.row_h + 2;
+        p.rect.y = if anchor.bottom() + p.rect.h <= self.canvas.1 {
+            anchor.bottom()
+        } else {
+            (anchor.y - p.rect.h).max(0)
+        };
         p.scroll = 0;
         p.hover = if q.is_empty() {
-            self.selected(p.node).and_then(|s| {
-                self.nodes[p.node]
-                    .state
+            self.popup_shown.iter().position(|row| match row {
+                PopupRow::Item(i) => state
                     .items
-                    .iter()
-                    .position(|(_, i)| *i == s)
+                    .get(*i)
+                    .is_some_and(|(_, id)| Some(*id) == self.selected(p.node)),
+                _ => false,
             })
         } else {
-            self.popup_shown
-                .iter()
-                .position(|&i| !pinned_key(&self.popup_keys[i]))
+            self.popup_shown.iter().position(|row| match row {
+                PopupRow::Item(i) => !pinned_key(&self.popup_keys[*i]),
+                _ => false,
+            })
         };
         if let Some(i) = p.hover {
             p.scroll_to(i, self.popup_shown.len());
@@ -1954,18 +2053,41 @@ impl View {
         self.popup = None;
     }
 
-    /// Choose display row `row` of the open list.
-    fn choose_popup_item(&mut self, p: Popup, row: usize, out: &mut Vec<ViewEvent>) {
-        self.popup = None;
-        let Some(&i) = self.popup_shown.get(row) else {
+    fn choose_popup_item(&mut self, mut p: Popup, row: usize, out: &mut Vec<ViewEvent>) {
+        let Some(choice) = self.popup_shown.get(row).cloned() else {
             return;
         };
-        if let Some((_, item)) = self.nodes[p.node].state.items.get(i).cloned() {
-            self.nodes[p.node].state.value = Value::Selected(Some(item));
-            out.push(ViewEvent {
-                node: p.node,
-                kind: EventKind::Changed,
-            });
+        match choice {
+            PopupRow::Item(i) => {
+                self.popup = None;
+                if let Some((_, item)) = self.nodes[p.node].state.items.get(i).cloned() {
+                    self.nodes[p.node].state.value = Value::Selected(Some(item));
+                    out.push(ViewEvent {
+                        node: p.node,
+                        kind: EventKind::Changed,
+                    });
+                }
+            }
+            PopupRow::Group(group) => {
+                self.popup_group = Some(group);
+                self.popup_query.clear();
+                p.dragging = false;
+                self.popup = Some(p);
+                self.refilter_popup();
+                if let Some(p) = &mut self.popup {
+                    p.hover = None;
+                }
+            }
+            PopupRow::Back => {
+                self.popup_group = None;
+                self.popup_query.clear();
+                p.dragging = false;
+                self.popup = Some(p);
+                self.refilter_popup();
+                if let Some(p) = &mut self.popup {
+                    p.hover = None;
+                }
+            }
         }
     }
 
@@ -2016,12 +2138,17 @@ impl View {
                 self.refilter_popup();
                 return;
             }
+            Key::Escape if self.popup_group.is_some() => {
+                self.popup_group = None;
+                self.refilter_popup();
+                return;
+            }
             Key::Escape => {
                 self.popup = None;
                 return;
             }
             Key::Backspace => {
-                if self.popup_query.pop().is_some() {
+                if self.popup_query.pop().is_some() || self.popup_group.take().is_some() {
                     self.refilter_popup();
                 }
                 return;

@@ -1,17 +1,31 @@
 # Docs
 
-Every doc, grouped by what you're after. Start at the top of your group.
+Starting points grouped by what you're after. Start at the top of your group.
 
 ## Playing and testing
 
-These ship in every release folder.
+Release-folder guides and platform notes:
 
 - [TESTER-GUIDE.md](TESTER-GUIDE.md): install, playing together, what to send.
+- [PLAYTEST-MAC.md](PLAYTEST-MAC.md): Mac startup and file locations; this
+  additional guide ships with Mac releases.
 - [FEATURES.md](FEATURES.md): what is done, partly done and missing.
 - [PLAYTEST.md](PLAYTEST.md): things to try, default keys, slow-PC tips.
 - [KNOWN-ISSUES.md](KNOWN-ISSUES.md): known problems.
 - [stress-lab/PLAYTEST-STRESS-LAB.md](stress-lab/PLAYTEST-STRESS-LAB.md):
   the Stress Lab game mode, in builds packaged with it.
+
+## Building games without code
+
+Start with the Wrench's Events screen and MiniGames for teams, equipment
+and settings. These guides ship with every release under `RULE-WORKSHOP-*`
+filenames.
+
+- [rule-workshop/PLAYTEST.md](rule-workshop/PLAYTEST.md): editable examples,
+  IF checks, regions, state and objects; the Workshop remains experimental.
+- [rule-workshop/CREATOR-TEST-CARD.md](rule-workshop/CREATOR-TEST-CARD.md):
+  short creator journeys and checks to try.
+- [rule-workshop/DESIGN.md](rule-workshop/DESIGN.md): rule semantics and limits.
 
 ## Making Add-Ons
 

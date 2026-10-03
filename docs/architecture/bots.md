@@ -33,12 +33,14 @@ bot does through the same code.
    | Chase | an enemy in sight out of its band | paths to them |
    | Search | an enemy remembered | goes where they were, looks around |
    | Return | strayed from its brick | walks home |
+   | Objective | a supported, worthwhile authored rule goal | plans bounded steps, approaches a source and uses ordinary activation/touch controls |
    | Wander | otherwise | strolls near its brick (a rules bot near itself) |
 
    A weight of 0 turns a behaviour off (`"chase": 0` makes a guard that
    stays at its post and fights what comes within reach); more than 1 puts
    it ahead of others. Ordinary behaviours default to 1; `interact` defaults
-   to 0 and the standard Blockhead package opts in. Creature policy remains
+   to 0 and the standard Blockhead package opts in. Objective utility also
+   requires its explicit kind opt-in; it does not grant a creature a new brain. Creature policy remains
    in its package. Nothing scoring: it wanders.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
@@ -70,6 +72,25 @@ bot does through the same code.
    through the same mechanism for humans and bots; mass and geometry determine
    the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
    budgets, provider boundary and examples.
+
+## Bounded rule and weapon adapters
+
+The objective adapter summarizes supported rule facts/actions, then executes
+through normal movement and inputs. The existing event scheduler alone applies
+effects. It has finite grounding, search and depth limits; it does not reason
+about arbitrary scripts, ball delivery, hookshot routes or cooperative stacking.
+An interrupted approach excludes time spent in another behavior, while an event
+that was already scheduled keeps its absolute due time. Failed search reuse
+revalidates the authoritative model, game, round and team before accepting it.
+See [the objective audit](../audits/bot-objective-spike.md) and
+[the v0.2.2 evidence](../progress/2026-10-03-sol-npc-hardening.md).
+
+Supported native hand weapons supply mechanical attack descriptors for bounded
+ballistic choice and launch-time safety checks. Unsupported script/mounted
+mechanics retain their narrower existing executors. At the final attack boundary,
+canonical spawn protection withholds ammunition-spending attacks and charge
+release, retaining aim and proven non-firing holds. It does not make prediction
+of a moving target infallible or change damage permissions.
 
 ## Data
 

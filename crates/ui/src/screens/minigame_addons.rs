@@ -11,7 +11,7 @@
 use super::*;
 use crate::api::*;
 use crate::view::EventKind;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Settings by key (`None`: back to the default), and the team list.
 type Changes = (
@@ -31,6 +31,15 @@ const RESET: &str = "AOS_Reset";
 const END: &str = "AOS_End";
 const NOTIFY: &str = "AOS_Notify";
 const FAVS: &str = "AOS_Favs";
+const CATEGORY: &str = "AOS_Category";
+const TEAM_PICK: &str = "AOS_Team";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Setup,
+    Teams,
+    Players,
+}
 /// The editor's choice to tell the game's players what they change
 /// (Slayer's Notify Players on Update).
 pub const NOTIFY_PREF: &str = "$Pref::AddOnSettings::NotifyPlayers";
@@ -108,6 +117,14 @@ pub struct AddOnSettings {
     /// The vanilla rules a loaded favourite brings, sent with Apply when
     /// they differ from the game's.
     rules: Option<MiniGameRules>,
+    page: Page,
+    selected_team: usize,
+    category: Option<(String, String)>,
+    categories: Vec<(String, String)>,
+    // Raw text survives category/team switches even while it is not a valid
+    // number or team name. Apply validates every retained field, including hidden ones.
+    typed: BTreeMap<(Option<usize>, String), String>,
+    name_field: Option<(usize, String)>,
 }
 
 fn value_text(v: &MiniGameSettingValue) -> String {
@@ -138,6 +155,7 @@ fn same_color(a: &str, b: &str) -> bool {
 
 impl AddOnSettings {
     pub fn new(core: &mut Core) -> Self {
+        let teams_route = std::mem::take(&mut core.minigame_addons_teams);
         let root = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
         let mut win = ctrl(
             "GuiWindowCtrl",
@@ -169,6 +187,23 @@ impl AddOnSettings {
             ROWS,
         ));
         win.children.push(scroll);
+        for (x, label, name) in [
+            (12, "Setup", "AOS_Setup"),
+            (92, "Teams", "AOS_Teams"),
+            (172, "Players", "AOS_Players"),
+        ] {
+            win.children
+                .push(push_button(Rect::new(x, 32, 76, 24), label, name));
+        }
+        win.children.push(push_button(
+            Rect::new(W - 122, 32, 110, 24),
+            "Add Team",
+            "AOS_AddTeam",
+        ));
+        win.children
+            .push(popup(Rect::new(12, 62, W - 24, 20), CATEGORY));
+        win.children
+            .push(popup(Rect::new(12, 62, 180, 20), TEAM_PICK));
         let mut status = named(
             text("GuiMLTextProfile", Rect::new(12, H - 104, W - 24, 34), ""),
             STATUS,
@@ -194,7 +229,7 @@ impl AddOnSettings {
         ));
         win.children.push(push_button(
             Rect::new(258, H - 68, 56, 24),
-            "Save",
+            "Store",
             "AOS_FavSave",
         ));
         win.children
@@ -213,17 +248,17 @@ impl AddOnSettings {
             .push(push_button(Rect::new(80, H - 36, 64, 28), "End", END));
         win.children.push(push_button(
             Rect::new(W - 316, H - 36, 80, 28),
-            "Close",
+            "Cancel",
             "AOS_Close",
         ));
         win.children.push(push_button(
             Rect::new(W - 232, H - 36, 120, 28),
-            "Apply & Reset",
+            "Save & Reset",
             APPLY_RESET,
         ));
         win.children.push(push_button(
             Rect::new(W - 108, H - 36, 94, 28),
-            "Apply",
+            "Save",
             APPLY,
         ));
         let mut root = root;
@@ -244,12 +279,31 @@ impl AddOnSettings {
             typed_dirty: false,
             seen: None,
             rules: None,
+            page: if teams_route {
+                Page::Teams
+            } else {
+                Page::Setup
+            },
+            selected_team: 0,
+            category: None,
+            categories: Vec::new(),
+            typed: BTreeMap::new(),
+            name_field: None,
         };
         if let Some(n) = screen.view.id(NOTIFY) {
             let on = core.prefs.bool_or(NOTIFY_PREF, true);
             screen.view.set_bool(n, on);
         }
         screen.fill_favorites(core);
+        if !screen.server
+            && core
+                .minigames
+                .addon_settings
+                .iter()
+                .all(|s| s.team || s.server)
+        {
+            screen.page = Page::Teams;
+        }
         screen.load(core);
         screen
     }
@@ -356,10 +410,13 @@ impl AddOnSettings {
         if fav.rules.is_some() {
             self.rules = fav.rules;
         }
+        self.rows.clear();
+        self.typed.clear();
+        self.name_field = None;
         self.build(core);
         self.status(
             core,
-            Some(&format!("Loaded slot {}. Apply to use it.", slot + 1)),
+            Some(&format!("Loaded slot {}. Save to use it.", slot + 1)),
         );
     }
     /// Whether a setting may hold `value` (a favourite's, kept from before).
@@ -373,7 +430,12 @@ impl AddOnSettings {
             (MiniGameSettingKind::Text { max_length }, MiniGameSettingValue::Text(t)) => {
                 t.chars().count() <= *max_length as usize
             }
-            (MiniGameSettingKind::List { items }, v) => items.iter().any(|(i, _)| i == v),
+            (
+                MiniGameSettingKind::List { items }
+                | MiniGameSettingKind::Item { items }
+                | MiniGameSettingKind::PlayerType { items },
+                v,
+            ) => items.iter().any(|(i, _)| i == v),
             _ => false,
         }
     }
@@ -570,6 +632,9 @@ impl AddOnSettings {
     /// Take the host's values afresh.
     fn load(&mut self, core: &Core) {
         self.seen = Some(self.revision(core));
+        self.rows.clear();
+        self.typed.clear();
+        self.name_field = None;
         self.typed_dirty = false;
         self.rules = None;
         if self.server {
@@ -640,7 +705,7 @@ impl AddOnSettings {
             .collect();
         if let Some(n) = self.view.id("AOS_Window") {
             self.view
-                .set_text(n, format!("Teams & Add-Ons: {}", g.title));
+                .set_text(n, format!("MiniGame Settings: {}", g.title));
         }
         self.values = values.clone();
         self.teams = teams.clone();
@@ -666,13 +731,84 @@ impl AddOnSettings {
         current.is_some_and(|v| when.holds(&v))
     }
 
-    /// Lay the rows out again from the draft.
+    /// Settings which control dependent rows stay at the top of Setup. This
+    /// uses declared dependencies, never Add-On names or setting-name guesses.
+    fn controller(core: &Core, key: &str) -> bool {
+        core.minigames
+            .teams_shown_when
+            .as_ref()
+            .is_some_and(|w| w.setting == key)
+            || core
+                .minigames
+                .addon_settings
+                .iter()
+                .any(|s| s.shown_when.as_ref().is_some_and(|w| w.setting == key))
+    }
+
+    fn capture_fields(&mut self) {
+        for (target, name) in &self.rows {
+            let Some(n) = self.view.id(name) else {
+                continue;
+            };
+            if self.view.node(n).ctrl.class != "GuiTextEditCtrl" {
+                continue;
+            }
+            // The stable setting key is stored on the control, since incoming
+            // catalogs can reorder indexes while an existing draft is open.
+            if let Some(key) = self.view.node(n).ctrl.field("settingKey") {
+                let team = match target {
+                    Target::Game(_) => None,
+                    Target::Team(t, _) => Some(*t),
+                };
+                self.typed
+                    .insert((team, key.into()), self.view.edit_text(n));
+            }
+        }
+        if let Some((t, name)) = &self.name_field
+            && let Some(n) = self.view.id(name)
+        {
+            self.typed
+                .insert((Some(*t), String::new()), self.view.edit_text(n));
+        }
+    }
+
+    fn remove_team(&mut self, t: usize) {
+        if t >= self.teams.len() {
+            return;
+        }
+        self.capture_fields();
+        self.teams.remove(t);
+        self.typed = std::mem::take(&mut self.typed)
+            .into_iter()
+            .filter_map(|((team, key), value)| match team {
+                Some(n) if n == t => None,
+                Some(n) if n > t => Some(((Some(n - 1), key), value)),
+                _ => Some(((team, key), value)),
+            })
+            .collect();
+        self.rows.clear();
+        self.name_field = None;
+        self.selected_team = self.selected_team.min(self.teams.len().saturating_sub(1));
+    }
+
+    /// Lay out one task at a time. Navigation and Add Team stay outside the
+    /// scrolling details; category switches do not commit or discard a draft.
     fn build(&mut self, core: &Core) {
+        self.capture_fields();
+        let focus = self.view.focus.and_then(|n| {
+            self.view
+                .node(n)
+                .ctrl
+                .name
+                .clone()
+                .map(|name| (name, self.view.node(n).state.cursor))
+        });
         let Some(rows) = self.view.id(ROWS) else {
             return;
         };
         self.view.clear_children(rows);
         self.rows.clear();
+        self.name_field = None;
         let editable = self.editable(core);
         let width = self.width - 42;
         let mut y = 4;
@@ -683,161 +819,308 @@ impl AddOnSettings {
             );
             *y += 24;
         };
+        let teams_available =
+            !self.server && self.summary(core).is_some() && self.teams_shown(core);
+        if self.server {
+            self.page = Page::Setup;
+        }
+        if self.page != Page::Setup && !teams_available {
+            self.page = Page::Setup;
+        }
+        if let Some(n) = self.view.id("AOS_AddTeam") {
+            self.view
+                .set_visible(n, self.page == Page::Teams && teams_available && editable);
+            self.view.set_active(n, editable && self.request.is_none());
+        }
+        for (name, page) in [
+            ("AOS_Setup", Page::Setup),
+            ("AOS_Teams", Page::Teams),
+            ("AOS_Players", Page::Players),
+        ] {
+            if let Some(n) = self.view.id(name) {
+                self.view.set_visible(n, !self.server);
+                self.view
+                    .set_active(n, page == Page::Setup || teams_available);
+                self.view.set_text(
+                    n,
+                    match page {
+                        Page::Setup => "Setup",
+                        Page::Teams => "Teams",
+                        Page::Players => "Players",
+                    },
+                );
+            }
+        }
         if !self.open(core) {
             heading(&mut self.view, &mut y, "That mini-game has ended.");
         }
         let settings = core.minigames.addon_settings.clone();
-        let mut last_group = (String::new(), String::new());
-        for (i, s) in settings.iter().enumerate() {
-            if !self.mine(s) || s.avatar.is_some() || !self.open(core) || !self.shown(core, s, None)
-            {
-                continue;
+        self.selected_team = self.selected_team.min(self.teams.len().saturating_sub(1));
+        self.categories.clear();
+        for s in &settings {
+            let relevant = match self.page {
+                Page::Setup => {
+                    self.mine(s)
+                        && s.avatar.is_none()
+                        && !Self::controller(core, &s.key)
+                        && self.shown(core, s, None)
+                }
+                Page::Teams => s.team && self.shown(core, s, Some(self.selected_team)),
+                Page::Players => false,
+            };
+            let group = (s.add_on.clone(), s.category.clone());
+            if relevant && !self.categories.contains(&group) {
+                self.categories.push(group);
             }
-            if last_group.0 != s.add_on {
-                heading(&mut self.view, &mut y, &s.add_on);
-                last_group = (s.add_on.clone(), String::new());
-            }
-            if last_group.1 != s.category && !s.category.is_empty() {
-                self.view.add(
-                    rows,
-                    text(
-                        "GuiTextProfile",
-                        Rect::new(8, y, width - 16, 20),
-                        &format!("{}:", s.category),
-                    ),
-                );
-                y += 22;
-                last_group.1 = s.category.clone();
-            }
-            let value = self
-                .values
-                .get(&s.key)
-                .cloned()
-                .unwrap_or_else(|| s.default.clone());
-            self.row(Target::Game(i), s, &value, 20, y, editable, core);
-            y += ROW;
         }
-        if !self.server && self.summary(core).is_some() && self.teams_shown(core) {
-            heading(&mut self.view, &mut y, "Teams");
-            let name_width = width - 268;
-            let color_x = 26 + name_width;
-            self.view.add(
-                rows,
-                text("GuiTextProfile", Rect::new(20, y, name_width, 18), "Name"),
+        if !self
+            .category
+            .as_ref()
+            .is_some_and(|g| self.categories.contains(g))
+        {
+            self.category = self.categories.first().cloned();
+        }
+        if let Some(n) = self.view.id(CATEGORY) {
+            let rect = if self.page == Page::Teams {
+                Rect::new(18 + (self.width - 30) / 2, 62, (self.width - 30) / 2, 20)
+            } else {
+                Rect::new(12, 62, self.width - 24, 20)
+            };
+            self.view.nodes[n].ctrl.position = [rect.x, rect.y];
+            self.view.nodes[n].ctrl.extent = [rect.w, rect.h];
+            self.view.state(n).items = self
+                .categories
+                .iter()
+                .enumerate()
+                .map(|(i, (addon, category))| {
+                    (
+                        if category.is_empty() {
+                            addon.clone()
+                        } else {
+                            format!("{addon}: {category}")
+                        },
+                        i as i64,
+                    )
+                })
+                .collect();
+            self.view.select(
+                n,
+                self.category
+                    .as_ref()
+                    .and_then(|g| self.categories.iter().position(|v| v == g))
+                    .map(|i| i as i64),
             );
-            self.view.add(
-                rows,
-                text("GuiTextProfile", Rect::new(color_x, y, 90, 18), "Color"),
-            );
-            y += 20;
-            for t in 0..self.teams.len() {
-                let team = self.teams[t].clone();
-                let name = format!("AOS_T{t}_Name");
-                let n = self
-                    .view
-                    .add(rows, edit(Rect::new(20, y, name_width, 20), &name));
-                self.view.set_text(n, team.name.clone());
-                self.view.set_active(n, editable);
-                let color = format!("AOS_T{t}_Color");
-                let n = self
-                    .view
-                    .add(rows, popup(Rect::new(color_x, y, 90, 20), &color));
-                self.view.state(n).items = (0..core.minigames.palette.len().min(64))
-                    .map(|c| (format!("Colour {}", c + 1), c as i64))
-                    .collect();
-                self.view.select(n, Some(i64::from(team.color)));
-                self.view.set_active(n, editable);
-                let rgb = core
-                    .minigames
-                    .palette
-                    .get(usize::from(team.color))
-                    .copied()
-                    .unwrap_or([255; 3]);
-                self.view.add(
-                    rows,
-                    named(
-                        swatch(
-                            Rect::new(color_x + 94, y + 2, 16, 16),
-                            rgba([
-                                f32::from(rgb[0]) / 255.0,
-                                f32::from(rgb[1]) / 255.0,
-                                f32::from(rgb[2]) / 255.0,
-                                1.0,
-                            ]),
-                        ),
-                        &format!("AOS_T{t}_Swatch"),
-                    ),
-                );
-                if editable {
-                    let remove = format!("AOS_T{t}_Remove");
+            self.view
+                .set_visible(n, self.page != Page::Players && !self.categories.is_empty());
+            self.view.set_active(n, true);
+        }
+        if let Some(n) = self.view.id(TEAM_PICK) {
+            self.view.state(n).items = self
+                .teams
+                .iter()
+                .enumerate()
+                .map(|(t, team)| {
+                    let name = self
+                        .typed
+                        .get(&(Some(t), String::new()))
+                        .unwrap_or(&team.name);
+                    (format!("{}: {}", t + 1, name), t as i64)
+                })
+                .collect();
+            self.view.select(n, Some(self.selected_team as i64));
+            self.view
+                .set_visible(n, self.page == Page::Teams && !self.teams.is_empty());
+        }
+        if self.open(core) {
+            match self.page {
+                Page::Setup => {
+                    for (i, s) in settings
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| Self::controller(core, &s.key))
+                        .chain(
+                            settings
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, s)| !Self::controller(core, &s.key)),
+                        )
+                    {
+                        if !self.mine(s) || s.avatar.is_some() || !self.shown(core, s, None) {
+                            continue;
+                        }
+                        if !Self::controller(core, &s.key)
+                            && self.category.as_ref()
+                                != Some(&(s.add_on.clone(), s.category.clone()))
+                        {
+                            continue;
+                        }
+                        let value = self
+                            .values
+                            .get(&s.key)
+                            .cloned()
+                            .unwrap_or_else(|| s.default.clone());
+                        self.row(Target::Game(i), s, &value, 20, y, editable, core);
+                        y += ROW;
+                    }
+                    if self.categories.is_empty() && self.rows.is_empty() {
+                        heading(&mut self.view, &mut y, "No Add-On settings.");
+                    }
+                }
+                Page::Teams if !self.teams.is_empty() => {
+                    let t = self.selected_team;
+                    let team = self.teams[t].clone();
                     self.view.add(
                         rows,
-                        push_button(Rect::new(width - 84, y - 2, 76, 24), "Remove", &remove),
+                        text("GuiTextProfile", Rect::new(4, y, 58, 20), "Name"),
                     );
-                }
-                y += ROW;
-                for (i, s) in settings.iter().enumerate() {
-                    if !s.team || s.avatar.is_some() || !self.shown(core, s, Some(t)) {
-                        continue;
-                    }
-                    let value = team
-                        .settings
-                        .get(&s.key)
-                        .cloned()
-                        .unwrap_or_else(|| s.default.clone());
-                    self.row(Target::Team(t, i), s, &value, 36, y, editable, core);
-                    y += ROW;
-                }
-                // A look's parts open together in the avatar editor.
-                for category in Self::look_categories(core) {
-                    let shown = settings.iter().any(|s| {
-                        s.team
-                            && s.avatar.is_some()
-                            && s.category == category
-                            && self.shown(core, s, Some(t))
-                    });
-                    if !shown {
-                        continue;
-                    }
-                    let name = format!("AOS_T{t}_Look_{category}");
-                    let n = self.view.add(
-                        rows,
-                        push_button(
-                            Rect::new(36, y - 2, 150, 24),
-                            &format!("Edit {category}"),
-                            &name,
-                        ),
+                    let name = format!("AOS_T{t}_Name");
+                    self.name_field = Some((t, name.clone()));
+                    let n = self
+                        .view
+                        .add(rows, edit(Rect::new(62, y, width - 150, 20), &name));
+                    self.view.set_text(
+                        n,
+                        self.typed
+                            .get(&(Some(t), String::new()))
+                            .cloned()
+                            .unwrap_or_else(|| team.name.clone()),
                     );
                     self.view.set_active(n, editable);
+                    if editable {
+                        self.view.add(
+                            rows,
+                            push_button(
+                                Rect::new(width - 84, y - 2, 76, 24),
+                                "Remove",
+                                &format!("AOS_T{t}_Remove"),
+                            ),
+                        );
+                    }
                     y += ROW;
+                    self.view.add(
+                        rows,
+                        text("GuiTextProfile", Rect::new(4, y, 58, 20), "Color"),
+                    );
+                    let n = self.view.add(
+                        rows,
+                        popup(Rect::new(62, y, 130, 20), &format!("AOS_T{t}_Color")),
+                    );
+                    self.view.state(n).items = (0..core.minigames.palette.len().min(64))
+                        .map(|c| (format!("Colour {}", c + 1), c as i64))
+                        .collect();
+                    self.view.select(n, Some(i64::from(team.color)));
+                    self.view.set_active(n, editable);
+                    let rgb = core
+                        .minigames
+                        .palette
+                        .get(usize::from(team.color))
+                        .copied()
+                        .unwrap_or([255; 3]);
+                    self.view.add(
+                        rows,
+                        named(
+                            swatch(
+                                Rect::new(198, y + 2, 16, 16),
+                                rgba([
+                                    f32::from(rgb[0]) / 255.0,
+                                    f32::from(rgb[1]) / 255.0,
+                                    f32::from(rgb[2]) / 255.0,
+                                    1.0,
+                                ]),
+                            ),
+                            &format!("AOS_T{t}_Swatch"),
+                        ),
+                    );
+                    y += ROW + 4;
+                    let mut details: Vec<_> = settings
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| {
+                            s.team
+                                && s.avatar.is_none()
+                                && self.shown(core, s, Some(t))
+                                && self.category.as_ref()
+                                    == Some(&(s.add_on.clone(), s.category.clone()))
+                        })
+                        .collect();
+                    let prerequisites: BTreeSet<_> = details
+                        .iter()
+                        .filter_map(|(_, s)| s.shown_when.as_ref().map(|w| w.setting.clone()))
+                        .collect();
+                    // Authored semantic types keep common body/loadout picks
+                    // ahead of deeper settings. Stable sort retains authored
+                    // order within each group and the original control IDs.
+                    details.sort_by_key(|(_, s)| {
+                        if prerequisites.contains(&s.key) {
+                            0
+                        } else if matches!(
+                            s.kind,
+                            MiniGameSettingKind::Item { .. }
+                                | MiniGameSettingKind::PlayerType { .. }
+                        ) {
+                            1
+                        } else {
+                            2
+                        }
+                    });
+                    for (i, s) in details {
+                        let value = team
+                            .settings
+                            .get(&s.key)
+                            .cloned()
+                            .unwrap_or_else(|| s.default.clone());
+                        self.row(Target::Team(t, i), s, &value, 20, y, editable, core);
+                        y += ROW;
+                    }
+                    for category in Self::look_categories(core) {
+                        if !settings.iter().any(|s| {
+                            s.team
+                                && s.avatar.is_some()
+                                && s.category == category
+                                && self.shown(core, s, Some(t))
+                                && self.category.as_ref()
+                                    == Some(&(s.add_on.clone(), s.category.clone()))
+                        }) {
+                            continue;
+                        }
+                        let n = self.view.add(
+                            rows,
+                            push_button(
+                                Rect::new(20, y - 2, 180, 24),
+                                &format!("Edit {category}"),
+                                &format!("AOS_T{t}_Look_{category}"),
+                            ),
+                        );
+                        self.view.set_active(n, editable);
+                        y += ROW;
+                    }
                 }
-                y += 6;
+                Page::Teams => heading(&mut self.view, &mut y, "No teams yet."),
+                Page::Players => {
+                    if self.teams.iter().any(|t| t.id.is_none()) {
+                        heading(
+                            &mut self.view,
+                            &mut y,
+                            "Save new teams before assigning players.",
+                        );
+                    }
+                    y = self.player_rows(core, y, editable);
+                }
             }
-            if editable {
-                self.view.add(
-                    rows,
-                    push_button(Rect::new(20, y, 110, 24), "Add Team", "AOS_AddTeam"),
-                );
-                y += ROW + 4;
-            }
-            y = self.player_rows(core, y, editable);
         }
         if self.server && settings.iter().any(|s| s.server && s.restart) {
             heading(&mut self.view, &mut y, RESTART_NOTE);
         }
-        if self.server && !settings.iter().any(|s| s.server) {
-            heading(
-                &mut self.view,
-                &mut y,
-                if self.server {
-                    "No server settings."
-                } else {
-                    "No running Add-On has settings."
-                },
-            );
-        }
         self.view.nodes[rows].ctrl.extent[1] = y + 4;
         self.view.relayout();
+        if let Some((name, cursor)) = focus
+            && let Some(n) = self.view.id(&name)
+            && self.view.node(n).state.active
+            && self.view.node(n).state.visible
+        {
+            self.view.focus = Some(n);
+            self.view.state(n).cursor = cursor.min(self.view.edit_text(n).chars().count());
+        }
         self.status(core, None);
     }
 
@@ -955,7 +1238,17 @@ impl AddOnSettings {
             }
             MiniGameSettingKind::Int { .. } | MiniGameSettingKind::Text { .. } => {
                 let n = self.view.add(rows, edit(control, &name));
-                self.view.set_text(n, value_text(value));
+                let team = match target {
+                    Target::Game(_) => None,
+                    Target::Team(t, _) => Some(t),
+                };
+                self.view.set_text(
+                    n,
+                    self.typed
+                        .get(&(team, s.key.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| value_text(value)),
+                );
                 n
             }
             MiniGameSettingKind::PaintColor { min, max } => {
@@ -995,7 +1288,9 @@ impl AddOnSettings {
                 }
                 n
             }
-            MiniGameSettingKind::List { items } => {
+            MiniGameSettingKind::List { items }
+            | MiniGameSettingKind::Item { items }
+            | MiniGameSettingKind::PlayerType { items } => {
                 let n = self.view.add(rows, popup(control, &name));
                 self.view.state(n).items = items
                     .iter()
@@ -1009,6 +1304,10 @@ impl AddOnSettings {
                 n
             }
         };
+        self.view.nodes[n]
+            .ctrl
+            .fields
+            .insert("settingKey".into(), s.key.clone());
         // The host changes server settings, whoever may change a game's.
         self.view
             .set_active(n, editable && (self.server || !self.locked(core, &s.key)));
@@ -1028,21 +1327,36 @@ impl AddOnSettings {
         self.rows.push((target, name));
     }
 
-    /// Read typed fields (numbers, text, team names) into the draft.
+    /// Validate visible and retained hidden text together before committing it
+    /// to the typed draft. Browsing away never silently replaces invalid input.
     fn read_fields(&mut self, core: &Core) -> Result<(), String> {
-        for (target, name) in self.rows.clone() {
-            let Some(n) = self.view.id(&name) else {
+        self.capture_fields();
+        let mut values = Vec::new();
+        let mut names = Vec::new();
+        for ((team, key), text) in &self.typed {
+            if key.is_empty() {
+                if let Some(t) = team.filter(|t| *t < self.teams.len()) {
+                    if text.trim().is_empty() || text.chars().count() > 50 {
+                        return Err(format!(
+                            "Team {} needs a name of 1 to 50 characters.",
+                            t + 1
+                        ));
+                    }
+                    names.push((t, text.clone()));
+                }
                 continue;
-            };
-            let i = match target {
-                Target::Game(i) | Target::Team(_, i) => i,
-            };
-            let Some(s) = core.minigames.addon_settings.get(i) else {
+            }
+            let Some((i, s)) = core
+                .minigames
+                .addon_settings
+                .iter()
+                .enumerate()
+                .find(|(_, s)| &s.key == key)
+            else {
                 continue;
             };
             let value = match &s.kind {
                 MiniGameSettingKind::Int { min, max } => {
-                    let text = self.view.edit_text(n);
                     let n: i64 = text
                         .trim()
                         .parse()
@@ -1053,24 +1367,24 @@ impl AddOnSettings {
                     MiniGameSettingValue::Int(n)
                 }
                 MiniGameSettingKind::Text { max_length } => {
-                    let text = self.view.edit_text(n);
                     if text.chars().count() > *max_length as usize {
                         return Err(format!("{} is at most {max_length} characters.", s.title));
                     }
-                    MiniGameSettingValue::Text(text)
+                    MiniGameSettingValue::Text(text.clone())
                 }
                 _ => continue,
             };
-            self.set(target, &s.key.clone(), value);
+            let target = match team {
+                Some(t) => Target::Team(*t, i),
+                None => Target::Game(i),
+            };
+            values.push((target, key.clone(), value));
         }
-        for t in 0..self.teams.len() {
-            if let Some(n) = self.view.id(&format!("AOS_T{t}_Name")) {
-                let name = self.view.edit_text(n);
-                if name.trim().is_empty() || name.chars().count() > 50 {
-                    return Err("A team's name is 1 to 50 characters.".into());
-                }
-                self.teams[t].name = name;
-            }
+        for (target, key, value) in values {
+            self.set(target, &key, value);
+        }
+        for (t, name) in names {
+            self.teams[t].name = name;
         }
         Ok(())
     }
@@ -1157,6 +1471,9 @@ impl AddOnSettings {
                 self.view.set_active(n, ready && shown);
                 self.view.set_visible(n, shown);
             }
+        }
+        if let Some(n) = self.view.id("AOS_AddTeam") {
+            self.view.set_active(n, ready && self.teams_shown(core));
         }
     }
 
@@ -1297,13 +1614,23 @@ impl Screen for AddOnSettings {
             c.h_sizing = HSizing::Right;
             c.v_sizing = VSizing::Bottom;
         }
-        let footer = if compact { 172 } else { 140 };
-        let fav_y = height - if compact { 98 } else { 66 };
+        let footer = if compact { 152 } else { 140 };
+        let fav_y = height - if compact { 90 } else { 66 };
         let notify_x = if compact { 158 } else { 326 };
         let notify_y = if compact { height - 68 } else { fav_y };
         let positions = [
-            (SCROLL, Rect::new(12, 32, width - 24, height - footer)),
-            (STATUS, Rect::new(12, height - footer + 36, width - 24, 34)),
+            (SCROLL, Rect::new(12, 94, width - 24, height - footer - 62)),
+            ("AOS_AddTeam", Rect::new(width - 122, 32, 110, 24)),
+            (TEAM_PICK, Rect::new(12, 62, (width - 30) / 2, 20)),
+            (
+                CATEGORY,
+                if self.page == Page::Teams {
+                    Rect::new(18 + (width - 30) / 2, 62, (width - 30) / 2, 20)
+                } else {
+                    Rect::new(12, 62, width - 24, 20)
+                },
+            ),
+            (STATUS, Rect::new(12, height - footer + 36, width - 24, 26)),
             ("AOS_FavLabel", Rect::new(12, fav_y, 70, 20)),
             (FAVS, Rect::new(84, fav_y, 110, 20)),
             ("AOS_FavLoad", Rect::new(198, fav_y - 2, 56, 24)),
@@ -1381,7 +1708,7 @@ impl Screen for AddOnSettings {
                 self.load(core);
             } else {
                 self.seen = Some(revision);
-                self.status(core, None);
+                self.build(core);
             }
         }
     }
@@ -1441,7 +1768,7 @@ impl Screen for AddOnSettings {
                 && t < self.teams.len()
             {
                 let _ = self.read_fields(core);
-                self.teams.remove(t);
+                self.remove_team(t);
                 self.build(core);
                 return true;
             }
@@ -1465,6 +1792,33 @@ impl Screen for AddOnSettings {
             .unwrap_or_default();
         let row = self.rows.iter().find(|(_, n)| *n == name).map(|(t, _)| *t);
         if ev.kind == EventKind::Changed {
+            if name == CATEGORY {
+                self.capture_fields();
+                self.category = self
+                    .view
+                    .selected(ev.node)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| self.categories.get(i))
+                    .cloned();
+                if let Some(n) = self.view.id(SCROLL) {
+                    self.view.state(n).scroll_y = 0;
+                }
+                self.build(core);
+                return;
+            }
+            if name == TEAM_PICK {
+                self.capture_fields();
+                self.selected_team = self
+                    .view
+                    .selected(ev.node)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .unwrap_or(0);
+                if let Some(n) = self.view.id(SCROLL) {
+                    self.view.state(n).scroll_y = 0;
+                }
+                self.build(core);
+                return;
+            }
             if let Some(player) = name
                 .strip_prefix("AOS_P")
                 .and_then(|r| r.strip_suffix("_Team"))
@@ -1494,7 +1848,9 @@ impl Screen for AddOnSettings {
                     self.set(target, &s.key, MiniGameSettingValue::Int(c));
                     self.build(core);
                 } else if let Some(s) = core.minigames.addon_settings.get(i).cloned()
-                    && let MiniGameSettingKind::List { items } = &s.kind
+                    && let MiniGameSettingKind::List { items }
+                    | MiniGameSettingKind::Item { items }
+                    | MiniGameSettingKind::PlayerType { items } = &s.kind
                     && let Some((v, _)) = self
                         .view
                         .selected(ev.node)
@@ -1529,6 +1885,19 @@ impl Screen for AddOnSettings {
         }
         let command = command_of(&self.view, ev.node);
         match command.as_str() {
+            "AOS_Setup" | "AOS_Teams" | "AOS_Players" => {
+                self.capture_fields();
+                self.page = match command.as_str() {
+                    "AOS_Teams" => Page::Teams,
+                    "AOS_Players" => Page::Players,
+                    _ => Page::Setup,
+                };
+                self.category = None;
+                if let Some(n) = self.view.id(SCROLL) {
+                    self.view.state(n).scroll_y = 0;
+                }
+                self.build(core);
+            }
             "AOS_Close" => Self::close(core),
             APPLY => self.apply(core, false),
             APPLY_RESET => self.apply(core, true),
@@ -1578,6 +1947,11 @@ impl Screen for AddOnSettings {
                     color,
                     settings,
                 });
+                self.selected_team = self.teams.len() - 1;
+                self.page = Page::Teams;
+                if let Some(n) = self.view.id(SCROLL) {
+                    self.view.state(n).scroll_y = 0;
+                }
                 self.build(core);
             }
             _ => {
@@ -1617,7 +1991,7 @@ impl Screen for AddOnSettings {
                 {
                     let _ = self.read_fields(core);
                     if t < self.teams.len() {
-                        self.teams.remove(t);
+                        self.remove_team(t);
                     }
                     self.build(core);
                 } else if let Some(Target::Game(i) | Target::Team(_, i)) = row

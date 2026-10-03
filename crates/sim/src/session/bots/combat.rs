@@ -439,9 +439,13 @@ pub(super) fn choose(
                 seen,
                 tick,
                 image,
-                release_authorized: true,
+                release_authorized: !session.spawn_protected(seen.owner),
             });
-            Decision::Ready(choice)
+            if choice.capability.trigger.charge_on_release && session.spawn_protected(seen.owner) {
+                Decision::Charging(choice)
+            } else {
+                Decision::Ready(choice)
+            }
         }
         _ if !supported => Decision::Unsupported,
         _ if pending => Decision::Pending,
@@ -716,6 +720,11 @@ pub(super) fn validate_intent(
     // charge from exhausting the shared ray budget on every fighter tick.
     if image.charges() && (!intent.release_authorized || !image.fires_on_release(current)) {
         return true;
+    }
+    // Keep aim/movement and proven non-firing charge holds while immunity
+    // runs out. Reject only an attack which could spend rounds on no damage.
+    if session.spawn_protected(intent.seen.owner) {
+        return false;
     }
     validate_fire(
         session,

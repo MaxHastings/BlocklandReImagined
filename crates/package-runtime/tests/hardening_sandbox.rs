@@ -178,6 +178,48 @@ fn call(function: &str, budget: Budget) -> Call<'_> {
         world: None,
     }
 }
+
+#[test]
+fn actor_relationships_distinguish_body_mounts_from_vehicle_seats() {
+    let (_, rt) = runtime(
+        "fn relationships() { [player(1).mount, player(1).model, player(2).mount == (), player(2).riding, player(3).model, player(3).bot_kind, player(1).bot_kind] }",
+        json!([]),
+    );
+    let mut rider = player(1);
+    rider.mount = Some(3);
+    rider.model = "test:asset/body.dts".into();
+    let mut driver = player(2);
+    driver.riding = Some((9, 0));
+    let mut bot = player(3);
+    bot.bot = true;
+    bot.model = "test:asset/animal.dts".into();
+    bot.bot_kind = "other:bot/brain".into();
+    let mut request = call("relationships", Budget::Command);
+    request.snapshot = Arc::new(Snapshot {
+        players: vec![rider, driver],
+        bots: vec![bot],
+        ..Default::default()
+    });
+    let values = rt
+        .call("probe", request)
+        .unwrap()
+        .returned
+        .into_array()
+        .unwrap();
+    assert_eq!(values[0].clone().as_int().unwrap(), 3);
+    assert_eq!(
+        values[1].clone().into_string().unwrap(),
+        "test:asset/body.dts"
+    );
+    assert!(values[2].clone().as_bool().unwrap());
+    assert_eq!(values[3].clone().as_int().unwrap(), 9);
+    assert_eq!(
+        values[4].clone().into_string().unwrap(),
+        "test:asset/animal.dts"
+    );
+    assert_eq!(values[5].clone().into_string().unwrap(), "other:bot/brain");
+    assert_eq!(values[6].clone().into_string().unwrap(), "");
+}
 /// Run `function` from `script` and time it.
 fn run(script: &str, function: &str, budget: Budget) -> (Result<Dynamic, Diagnostic>, Duration) {
     let (_, rt) = runtime(script, json!([]));

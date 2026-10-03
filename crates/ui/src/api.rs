@@ -44,6 +44,18 @@ pub struct GameModeInfo {
     pub map: Option<String>,
 }
 
+pub const HOST_COLORSET_PREF: &str = "$Pref::Server::ColorSet";
+
+/// Local host choices. The client revalidates the selected file before hosting;
+/// the resulting world palette remains authoritative for joined players.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostColorset {
+    /// Empty means the stock colorset; other IDs come from the local catalog.
+    pub id: String,
+    pub name: String,
+    pub divisions: Vec<PaintDivision>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapInfo {
     /// Stable id the host understands (e.g. the converted map bundle id).
@@ -681,6 +693,10 @@ pub enum UiAction {
     Quit,
     /// Main menu "Tutorial" (stock v20 loads Map_Tutorial, absent here).
     StartTutorial,
+    /// Refresh local host colorsets when opening Start Game.
+    RefreshHostColorsets,
+    /// Open the user's colorsets folder, then refresh the local catalog.
+    ColorsetsFolder,
     HostGame {
         map: String,
         mode: ServerMode,
@@ -1270,6 +1286,14 @@ pub enum MiniGameSettingKind {
     List {
         items: Vec<(MiniGameSettingValue, String)>,
     },
+    /// Same picker as List, retaining the authored gameplay purpose for
+    /// presenting starting equipment before less common team settings.
+    Item {
+        items: Vec<(MiniGameSettingValue, String)>,
+    },
+    PlayerType {
+        items: Vec<(MiniGameSettingValue, String)>,
+    },
     Text {
         max_length: u32,
     },
@@ -1513,6 +1537,7 @@ pub enum UiUpdate {
     Maps(Vec<MapInfo>),
     /// Game modes the enabled Add-Ons declare (Start Game).
     GameModes(Vec<GameModeInfo>),
+    HostColorsets(Vec<HostColorset>),
     LanServers {
         servers: Vec<ServerInfo>,
         querying: bool,

@@ -58,6 +58,9 @@ pub struct BotThought {
     pub searching: bool,
     pub objective: Option<BrickId>,
     pub objective_diagnostic: Option<&'static str>,
+    /// Actual searches and unchanged failed-search reuse, for headless diagnostics.
+    pub objective_searches: u64,
+    pub objective_reused: u64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct BotEvidence {
@@ -796,7 +799,21 @@ impl Session {
         self.weapons.cancel_charge(ActorId(bot))
     }
     pub(super) fn rest_rules_bot(&mut self, package: &str, bot: OwnerId, rest: bool) -> Result<()> {
-        self.own_bot(package, bot)?;
+        let own_kind = self.bots.brains.get(&bot).is_some_and(|brain| {
+            let Some((owner, _)) = brain.kind.id.split_once(':') else {
+                return false;
+            };
+            owner == package
+                || self.packages.as_ref().is_some_and(|host| {
+                    host.catalog.packages.get(owner).is_some_and(|provider| {
+                        provider.manifest.companions.iter().any(|id| id == package)
+                    })
+                })
+        });
+        ensure!(
+            self.bots.rules_package(bot) == Some(package) || own_kind,
+            "Bot {bot} was not added by `{package}` and its kind is not owned by that package or its companion"
+        );
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
         if rest && !brain.resting {
             brain.set_goal(None);
@@ -910,6 +927,8 @@ impl Session {
                 searching: b.search.is_some(),
                 objective: b.objective.step.as_ref().map(|s| s.brick),
                 objective_diagnostic: b.objective.diagnostic,
+                objective_searches: b.objective.searches,
+                objective_reused: b.objective.reused,
             })
             .collect()
     }
@@ -1181,7 +1200,10 @@ impl Session {
                 .brains
                 .iter()
                 .filter(|(bot, brain)| {
-                    brain.objective.ready(tick)
+                    !brain.resting
+                        && self.riding.driver_of(**bot).is_none()
+                        && !self.riding.is_riding(**bot)
+                        && brain.objective.ready(tick)
                         && brain
                             .kind
                             .behaviours
@@ -1296,6 +1318,7 @@ impl Session {
         // Held still by the rules: it stands, holding its fire.
         if self.bots.brains.get(&bot).is_some_and(|b| b.resting) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.objective.suspend(tick);
             brain.sequence += 1;
             let sequence = brain.sequence;
             let input = MoveInput {
@@ -1315,6 +1338,12 @@ impl Session {
         // Ridden by a player who steers it, or carried by one
         // (`mountObject`): its brain rests.
         if self.riding.driver_of(bot).is_some() || self.riding.is_riding(bot) {
+            self.bots
+                .brains
+                .get_mut(&bot)
+                .unwrap()
+                .objective
+                .suspend(tick);
             return Ok(());
         }
         if !self.seated(bot) {
@@ -2276,6 +2305,13 @@ impl Session {
         Ok(())
     }
     /// The bot kinds as rules see them (`bot_kinds()`).
+    pub(super) fn bot_kind_id(&self, bot: OwnerId) -> Option<&str> {
+        self.bots
+            .brains
+            .get(&bot)
+            .map(|brain| brain.kind.id.as_str())
+    }
+
     pub(super) fn bot_kind_views(&self) -> Vec<bri_package_runtime::script::BotKindView> {
         self.bots
             .kinds

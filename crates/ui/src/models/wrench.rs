@@ -242,30 +242,25 @@ impl WrenchState {
         allow_named: bool,
         catalog: &EventCatalog,
     ) {
-        let incoming = EventsModel::open(brick, rows, named_targets.clone(), allow_named, catalog);
-        let rows = if let Some(copy) = &self.events_copy {
-            // Opaque preserved tokens belong to the destination host brick/row.
-            // Never duplicate them from the previous brick.
+        let mut incoming = EventsModel::open(brick, rows, named_targets, allow_named, catalog);
+        if let Some(copy) = &self.events_copy {
+            use crate::models::events::{EditRow, RowState};
+            // Only the destination host owns its opaque preservation tokens.
             incoming
-                .to_send()
-                .into_iter()
-                .filter(|r| matches!(r, EventRow::Preserved { .. }))
-                .chain(
-                    copy.to_send()
-                        .into_iter()
-                        .filter(|r| matches!(r, EventRow::Editable(_))),
-                )
-                .collect()
-        } else {
-            incoming.to_send()
-        };
-        self.events = Some(EventsModel::open(
-            brick,
-            rows,
-            named_targets,
-            allow_named,
-            catalog,
-        ));
+                .rows
+                .retain(|r| matches!(r, RowState::Preserved { .. }));
+            incoming.rows.extend(copy.rows.iter().filter_map(|row| {
+                let RowState::Editable(draft) = row else {
+                    return None;
+                };
+                draft.input.as_ref()?;
+                let mut draft = draft.clone();
+                draft.copied_draft = true;
+                Some(RowState::Editable(draft))
+            }));
+            incoming.rows.push(RowState::Editable(EditRow::blank()));
+        }
+        self.events = Some(incoming);
     }
 }
 

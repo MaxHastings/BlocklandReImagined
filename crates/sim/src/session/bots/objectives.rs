@@ -123,11 +123,49 @@ struct FailedAction {
     team: Option<bri_minigames::TeamId>,
     until: u64,
 }
+
+/// One bounded negative result, checked against freshly grounded facts/actions.
+/// A complete NoPlan/depth proof is independent of positive action costs;
+/// exhausted work budgets depend on queue order and require identical costs.
+#[derive(Clone, Debug)]
+struct FailedSearch {
+    facts: Facts,
+    actions: Vec<Action>,
+    context: (bri_minigames::GameId, u64, Option<bri_minigames::TeamId>),
+    failure: planning::Failure,
+}
+impl FailedSearch {
+    fn matches(
+        &self,
+        facts: &Facts,
+        actions: &[Action],
+        context: (bri_minigames::GameId, u64, Option<bri_minigames::TeamId>),
+    ) -> bool {
+        self.context == context
+            && self.facts == *facts
+            && self.actions.len() == actions.len()
+            && self.actions.iter().zip(actions).all(|(a, b)| {
+                a.id == b.id
+                    && a.preconditions == b.preconditions
+                    && a.effect_groups == b.effect_groups
+                    && (a.cost == b.cost
+                        || (b.cost > 0
+                            && matches!(
+                                self.failure,
+                                planning::Failure::NoPlan | planning::Failure::DepthLimitExceeded
+                            )))
+            })
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
     pub step: Option<Step>,
     next: u64,
     failed: Vec<FailedAction>,
+    failed_search: Option<FailedSearch>,
+    last_tick: Option<u64>,
+    pub(super) searches: u64,
+    pub(super) reused: u64,
     pub diagnostic: Option<&'static str>,
 }
 
@@ -147,6 +185,25 @@ pub(super) fn next_turn(
     first
 }
 impl State {
+    /// Rest/rider control skips the entire brain tick. Account for that pause
+    /// here; retaining the old Objective behavior must not consume approach
+    /// time on resumption. Authored event waiting deadlines are never paused.
+    pub(super) fn suspend(&mut self, tick: u64) {
+        self.account_control(tick, true);
+    }
+
+    fn account_control(&mut self, tick: u64, suspended: bool) {
+        let elapsed = self
+            .last_tick
+            .replace(tick)
+            .map_or(0, |old| tick.saturating_sub(old));
+        if suspended
+            && let Some(step) = self.step.as_mut()
+            && step.waiting.is_none()
+        {
+            step.deadline = step.deadline.saturating_add(elapsed);
+        }
+    }
     pub(super) fn ready(&self, tick: u64) -> bool {
         self.step.is_none() && tick >= self.next
     }
@@ -789,6 +846,12 @@ impl Session {
             return None;
         }
         let mut state = std::mem::take(&mut self.bots.brains.get_mut(&bot)?.objective);
+        // Previous control ticks spent fighting, resting or ridden are not
+        // evidence that approach failed. Waiting event due times remain real.
+        state.account_control(
+            tick,
+            self.bots.brains[&bot].behaviour != Behaviour::Objective,
+        );
         if tick >= state.next {
             state.failed.retain(|f| {
                 tick < f.until
@@ -922,6 +985,25 @@ impl Session {
             state.next = tick + RETRY;
             let result = self.objective_snapshot(bot, tick, &state.failed).and_then(
                 |(facts, actions, mut steps)| {
+                    let game = self.game_of(bot).ok_or(planning::Failure::NoPlan)?;
+                    let round = self
+                        .minigames
+                        .game(game)
+                        .map_err(|_| planning::Failure::NoPlan)?
+                        .round;
+                    let team = self
+                        .peers
+                        .get(&bot)
+                        .and_then(|p| self.minigames.player(p.combat.player).ok())
+                        .and_then(|p| p.team);
+                    let context = (game, round, team);
+                    if let Some(cached) = state.failed_search.as_ref()
+                        && cached.matches(&facts, &actions, context)
+                    {
+                        state.reused = state.reused.saturating_add(1);
+                        return Err(cached.failure);
+                    }
+                    state.searches = state.searches.saturating_add(1);
                     let route = planning::plan(
                         &facts,
                         &actions,
@@ -935,7 +1017,22 @@ impl Session {
                             max_model_terms: 4096,
                             max_model_bytes: 65536,
                         },
-                    )?;
+                    );
+                    let route = match route {
+                        Ok(route) => {
+                            state.failed_search = None;
+                            route
+                        }
+                        Err(failure) => {
+                            state.failed_search = Some(FailedSearch {
+                                facts,
+                                actions,
+                                context,
+                                failure,
+                            });
+                            return Err(failure);
+                        }
+                    };
                     let step = steps
                         .remove(route.first().ok_or(planning::Failure::NoPlan)?)
                         .ok_or(planning::Failure::Unsupported)?;
@@ -1048,6 +1145,52 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_search_reuse_checks_current_facts_semantics_context_and_order_sensitive_costs() {
+        let facts = Facts::from([("latch".into(), FactValue::Number(0))]);
+        let actions = vec![Action {
+            id: "unfamiliar-source/input".into(),
+            cost: 10,
+            preconditions: vec![],
+            effect_groups: vec![EffectGroup {
+                guards: vec![],
+                effects: vec![Effect::Set {
+                    key: "latch".into(),
+                    value: FactValue::Number(1),
+                }],
+            }],
+        }];
+        let context = (bri_minigames::GameId(1), 2, None);
+        let mut cache = FailedSearch {
+            facts: facts.clone(),
+            actions: actions.clone(),
+            context,
+            failure: planning::Failure::NoPlan,
+        };
+        assert!(cache.matches(&facts, &actions, context));
+        let changed_facts = Facts::from([("latch".into(), FactValue::Number(1))]);
+        assert!(!cache.matches(&changed_facts, &actions, context));
+        assert!(!cache.matches(&facts, &actions, (context.0, 3, None)));
+        assert!(!cache.matches(&facts, &actions, (bri_minigames::GameId(2), 2, None)));
+        assert!(!cache.matches(
+            &facts,
+            &actions,
+            (context.0, 2, Some(bri_minigames::TeamId(1)))
+        ));
+        let mut changed = actions.clone();
+        changed[0].id = "replacement/input".into();
+        assert!(!cache.matches(&facts, &changed, context));
+        changed = actions.clone();
+        changed[0].effect_groups[0].effects.clear();
+        assert!(!cache.matches(&facts, &changed, context));
+        changed = actions.clone();
+        changed[0].cost = 30; // Wander changes distance; a complete NoPlan remains a proof.
+        assert!(cache.matches(&facts, &changed, context));
+        cache.failure = planning::Failure::NodeBudgetExceeded;
+        assert!(!cache.matches(&facts, &changed, context));
+        assert!(cache.matches(&facts, &actions, context));
+    }
     #[test]
     fn round_robin_does_not_starve_same_modulo_owner_ids() {
         let bots = [1, 121, 241];

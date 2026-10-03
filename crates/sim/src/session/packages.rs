@@ -1013,6 +1013,7 @@ impl Session {
         };
         PlayerView {
             id: owner,
+            bot_kind: self.bot_kind_id(owner).unwrap_or_default().to_owned(),
             key: self.player_key(owner),
             name: p.name.clone(),
             position: p.player.state().feet,
@@ -1051,6 +1052,8 @@ impl Session {
                 .clone(),
             crouched: state.crouched,
             mounted: self.seated(owner),
+            mount: self.riding_seat(owner).map(|(mount, _)| mount),
+            model: self.archetypes.resolve(state.archetype).look.model.clone(),
             scale: state.scale,
             center: [state.feet[0], state.feet[1] + height * 0.5, state.feet[2]],
             slot: actor.and_then(|a| a.selected).map(|s| s as u64),

@@ -420,7 +420,7 @@ pub fn native_capability(
     if !p.children.is_empty() || p.aura.is_some() {
         return Err(DescriptorRequired::SecondaryEffects);
     }
-    if !p.collide_players && ray.is_none() {
+    if !p.collide_players {
         return Err(DescriptorRequired::NonActorAttack);
     }
     if !scale.is_finite()
@@ -432,6 +432,17 @@ pub fn native_capability(
     }
     if ray.is_some_and(|r| !r.explosion.is_empty() || !r.flown.is_empty() || r.ricochet.is_some()) {
         return Err(DescriptorRequired::AlternateHitscanImpact);
+    }
+    if ray.is_some_and(|r| {
+        r.moving_range.is_some()
+            || (!r.from_eye
+                && (p.inherit != 0.0 || p.speed <= 0.0 || r.converge || r.eye_within.is_some()))
+    }) {
+        // Non-eye native rays may use inherited launch velocity or converge
+        // from the muzzle, rather than the live look direction we validate.
+        // Keep their ordinary legacy executor until a faithful descriptor is
+        // available; do not authorize a different ray from the one traced.
+        return Err(DescriptorRequired::StateDependentLaunch);
     }
     let using = image.bot.unwrap_or_default();
     let delivery = if ray.is_some() {
@@ -1381,7 +1392,7 @@ mod tests {
     #[test]
     fn hitscan_and_complex_native_launch_paths_remain_distinct() {
         let mut image: bri_weapons::Image = serde_json::from_str(
-            r#"{"projectile":"unknown:ray","shot":{"hitscan":{"range":150}}}"#,
+            r#"{"projectile":"unknown:ray","shot":{"hitscan":{"range":150,"from_eye":true}}}"#,
         )
         .unwrap();
         let p = native_projectile();
@@ -1405,6 +1416,77 @@ mod tests {
         assert_eq!(
             native_capability(&image, Some(&p), 1.0, 60),
             Err(DescriptorRequired::AlternateHitscanImpact)
+        );
+    }
+
+    #[test]
+    fn a_moving_shooters_inherited_muzzle_ray_requires_a_descriptor() {
+        let mut image: bri_weapons::Image = serde_json::from_str(
+            r#"{"projectile":"unfamiliar:ray","shot":{"hitscan":{"range":100}}}"#,
+        )
+        .unwrap();
+        let mut p = native_projectile();
+        let look = Vec3::NEG_Z;
+        let velocity = look * p.speed + Vec3::X * 10.0 * p.inherit;
+        assert!(
+            velocity.normalize().distance(look) > 0.1,
+            "ordinary moving-shooter launch ray differs from the look we validate"
+        );
+        assert_eq!(
+            native_capability(&image, Some(&p), 1.0, 60),
+            Err(DescriptorRequired::StateDependentLaunch)
+        );
+        image
+            .shot
+            .as_mut()
+            .unwrap()
+            .hitscan
+            .as_mut()
+            .unwrap()
+            .from_eye = true;
+        assert_eq!(
+            native_capability(&image, Some(&p), 1.0, 60)
+                .unwrap()
+                .delivery,
+            Delivery::Ray
+        );
+        p.collide_players = false;
+        assert_eq!(
+            native_capability(&image, Some(&p), 1.0, 60),
+            Err(DescriptorRequired::NonActorAttack)
+        );
+        p.collide_players = true;
+        p.inherit = 0.0;
+        let ray = image.shot.as_mut().unwrap().hitscan.as_mut().unwrap();
+        ray.from_eye = false;
+        assert_eq!(
+            native_capability(&image, Some(&p), 1.0, 60)
+                .unwrap()
+                .delivery,
+            Delivery::Ray
+        );
+        let straight = image.clone();
+        for converge in [false, true] {
+            let ray = image.shot.as_mut().unwrap().hitscan.as_mut().unwrap();
+            ray.converge = converge;
+            ray.eye_within = (!converge).then_some(2.0);
+            assert_eq!(
+                native_capability(&image, Some(&p), 1.0, 60),
+                Err(DescriptorRequired::StateDependentLaunch)
+            );
+        }
+        image = straight;
+        image
+            .shot
+            .as_mut()
+            .unwrap()
+            .hitscan
+            .as_mut()
+            .unwrap()
+            .moving_range = Some(10.0);
+        assert_eq!(
+            native_capability(&image, Some(&p), 1.0, 60),
+            Err(DescriptorRequired::StateDependentLaunch)
         );
     }
     #[test]

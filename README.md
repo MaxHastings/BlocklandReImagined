@@ -3,7 +3,8 @@
 Blockland v20 rebuilt from scratch in Rust. It keeps v20's maps, bricks,
 tools, weapons, vehicles, mini-games, events, art, music and sounds, and
 adds modern safety nets, easy direct-IP hosting and Add-Ons that can go
-much further than v20's. Windows 10 and 11 only.
+much further than v20's. Available for Windows x86-64, Apple Silicon Macs
+and Linux x86-64.
 
 ## What's in it
 
@@ -45,17 +46,28 @@ picks them up.
 
 - [Tester guide](docs/TESTER-GUIDE.md): install, playing together, what to
   send when something breaks.
+- [Mac startup](docs/PLAYTEST-MAC.md): opening the app and finding your files.
 - [Features](docs/FEATURES.md): what is done, partly done and missing.
 - [Playtest notes](docs/PLAYTEST.md): things to try, default keys, what
   to do if it runs slowly.
 - [Known issues](docs/KNOWN-ISSUES.md).
 
-All four ship in every release folder.
+The tester guide, features, playtest notes and known issues ship in every
+release folder; Mac releases also include the Mac startup guide.
 
 **Hosting** is a direct connection: pick LAN or Internet in Start Game.
 Friends join by IP address or with the invite the game copies for you.
 Over the internet only **UDP port 28000** needs forwarding, and the game
 asks your router to open it for you. UDP 28050 only finds LAN games.
+
+## Build games
+
+Use the Wrench's Events screen for brick actions and checks, and MiniGames
+for teams, equipment and game settings. The experimental
+[Rule Workshop guide](docs/rule-workshop/PLAYTEST.md) starts with editable
+examples, including team doors, checkpoints, puzzles and ball goals. Its
+[creator test card](docs/rule-workshop/CREATOR-TEST-CARD.md) gives focused
+things to try. Both ship in the release folder; no code or checkout is needed.
 
 ## Make Add-Ons
 
@@ -65,15 +77,17 @@ importing old v20 Add-Ons, porting what their scripts did, and what players
 are asked to trust. You need a checkout of this repository and Rust, but
 not the v20 game or its content. The Commando sample shows a small total
 conversion built only from those hooks, and
-[total-conversion.md](docs/audits/total-conversion.md) lists the seams
-still to come, such as custom movement, a side camera, animated models and
-Add-On magazines and recoil.
+[total-conversion.md](docs/audits/total-conversion.md) records the implemented
+hooks and remaining seams.
 
 ## Develop
 
-You need Windows, git, Python 3.9+ and a Blockland v20 install (the folder
-with `base/`, `Add-Ons/` and `saves/`). The v20 install is only read; its
-content is converted locally and never committed.
+You need git, Python 3.11+ and a Blockland v20 install (the folder with
+`base/`, `Add-Ons/` and `saves/`). Development works on Windows, macOS and
+Linux; bootstrap checks the platform's toolchain. The v20 install is only
+read; its content is converted locally and never committed. Bootstrap alone
+supports Python 3.9+, but the push gate requires 3.11+ for `tomllib`. On macOS
+or Linux, use `python3` if that is your Python 3.11+ command.
 
 ```sh
 git clone https://github.com/MaxHastings/BlocklandReImagined.git
@@ -94,7 +108,7 @@ Read [AGENTS.md](AGENTS.md) before working here. It covers disk use, the
 push gate (`python tools/gate.py --push`), the testing boundary and the
 engineering rules. Then:
 
-- [Docs index](docs/README.md): every doc, grouped by what you're after.
+- [Docs index](docs/README.md): starting points grouped by what you're after.
 - [Status](docs/STATUS.md): decisions already made and what is open.
 - [Platform principles](docs/architecture/platform-principles.md): read
   before changing content identity, saves, the wire protocol or Add-Ons.

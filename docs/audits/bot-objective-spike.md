@@ -1,5 +1,17 @@
 # Bounded objective planning for bots
 
+## v0.2.2 follow-up — 2026-10-03
+
+Bounded admissible guidance and live-model failure reuse improve supported
+search without raising its work/depth ceilings. Eight independent guarded
+switches now complete through real controls and canonical round-end effects;
+sixteen independent actions exceed the retained depth12 limit and are diagnosed.
+Rest/ride/combat interruptions preserve approach time and fair planner turns,
+while already scheduled event waits remain absolute. Focused evidence and
+sustained measurement status are in the
+[NPC lane entry](../progress/2026-10-03-sol-npc-hardening.md). These are internal
+experimental adapters, not a universal goal or weapon API.
+
 ## Implemented v0.2.1 experiment — 2026-10-02
 
 Root approved the runtime ownership and physical-actor context pivot. The new

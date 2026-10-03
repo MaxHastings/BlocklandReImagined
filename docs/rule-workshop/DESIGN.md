@@ -126,7 +126,13 @@ briefs informed the experiment; they do not define mandatory infrastructure.
     status. This is neither a public goal format nor inference of opaque Add-Ons.
     Inventory tactics similarly use native mechanical descriptors and actual
     launch-time checks, leaving unsupported script-driven mechanics on their
-    existing path. See the [v0.2.1 checklist](V0.2.1-PLAYTEST.md) for limits.
+    existing path. A paused approach excludes time spent fighting/resting/riding,
+    while scheduled event waits remain absolute. Resting/riding controllers do
+    not take the shared planning turn. One bounded failed search may be reused
+    only against an equivalent live model; changed facts/authority invalidate it.
+    Supported native attacks retain aim/valid non-firing charge holds but wait
+    for canonical spawn protection to end before spending ammunition or releasing.
+    See the [v0.2.2 checklist](V0.2.2-PLAYTEST.md) for limits.
 
 ## Awkward seams and deliberate limits
 
@@ -135,8 +141,11 @@ briefs informed the experiment; they do not define mandatory infrastructure.
   and splits region/velocity vectors into axes. Supported subjects can still be
   absent from an input's context; menus are not a full capability type system.
   Input selection defaults the target to Self when supported, otherwise the first
-  available target. Adding IF starts at Self Exists = Yes, a neutral guard for
-  ordinary live bricks. Changing its subject chooses a supported check if needed.
+  available target. Adding IF creates an unfinished UI check; the creator must
+  choose a real property before Send. No neutral Exists/Alive placeholder is
+  silently saved. Only guarded rows expand, with IF before the action. Raw
+  unfinished values survive local rebuild/copy/return. Changing a completed
+  check's subject chooses a supported check if needed.
   Input/target changes reset incompatible Target checks to Exists.
   These are reversible authoring defaults, not runtime or format commitments.
   The native team editor is available without an Add-On declaring a team setting;

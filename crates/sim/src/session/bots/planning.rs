@@ -118,14 +118,204 @@ pub(super) enum Failure {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct QueueEntry {
+    priority: (u64, Reverse<usize>),
     cost: u64,
     depth: usize,
     path: Vec<String>,
     facts: Facts,
 }
 
-/// Least-cost plan within all supplied bounds. Queue ties use depth, path IDs
-/// and ordered facts. Depth belongs to visited identity: a cheap deep route
+/// Mandatory equalities shared by every possible achiever form landmarks.
+/// Earlier authored effects may supply a guard in the same action, so those
+/// guards are never inferred as external prerequisites. Add effects make an
+/// equality's prerequisites ambiguous and disable that inference entirely.
+/// Action costs are partitioned across all landmarks they can establish: the
+/// sum of landmark weights covered by any action cannot exceed its cost.
+/// Consequently their unsatisfied sum is a lower bound, even with shared
+/// achievers, deletes, conditional groups and repeated actions. This guides
+/// ordinary search without changing its optimal-cost or depth contract.
+#[derive(Default)]
+struct Guidance {
+    predicates: Vec<Predicate>,
+    parents: Vec<Vec<usize>>,
+    roots: Vec<usize>,
+    weights: Vec<u64>,
+    step_weights: Vec<u64>,
+}
+
+impl Guidance {
+    const NODES: usize = 128;
+
+    fn build(actions: &[&Action], goal: &Goal, mut work: usize) -> Option<Self> {
+        let mut out = Self::default();
+        for predicate in &goal.0 {
+            let index = out.insert(predicate)?;
+            if !out.roots.contains(&index) {
+                out.roots.push(index);
+            }
+        }
+        let mut at = 0;
+        while at < out.predicates.len() {
+            let requirements = Self::requirements(&out.predicates[at], actions, &mut work)?;
+            for predicate in requirements {
+                let parent = out.insert(&predicate)?;
+                if !out.parents[at].contains(&parent) {
+                    out.parents[at].push(parent);
+                }
+            }
+            at += 1;
+        }
+        out.weights = vec![u64::MAX; out.predicates.len()];
+        out.step_weights = vec![u64::MAX; out.predicates.len()];
+        for action in actions {
+            let mut covers = Vec::new();
+            for (index, predicate) in out.predicates.iter().enumerate() {
+                let mut covered = false;
+                for group in &action.effect_groups {
+                    for effect in &group.effects {
+                        work = work.checked_sub(1)?;
+                        covered |= match effect {
+                            Effect::Set { key, value } => {
+                                key == &predicate.key
+                                    && (predicate.compare != Compare::Equal
+                                        || value == &predicate.value)
+                            }
+                            Effect::Add { key, .. } => key == &predicate.key,
+                        };
+                    }
+                }
+                if covered {
+                    covers.push(index);
+                }
+            }
+            if !covers.is_empty() {
+                let weight = u64::from(action.cost) / covers.len() as u64;
+                let step_weight = 1 / covers.len() as u64;
+                for index in covers {
+                    out.weights[index] = out.weights[index].min(weight);
+                    out.step_weights[index] = out.step_weights[index].min(step_weight);
+                }
+            }
+        }
+        for weight in out.weights.iter_mut().chain(&mut out.step_weights) {
+            if *weight == u64::MAX {
+                *weight = 0; // Lack of a relaxed achiever is not a new NoPlan proof.
+            }
+        }
+        Some(out)
+    }
+
+    fn insert(&mut self, predicate: &Predicate) -> Option<usize> {
+        if let Some(index) = self.predicates.iter().position(|p| p == predicate) {
+            return Some(index);
+        }
+        if self.predicates.len() == Self::NODES {
+            return None;
+        }
+        self.predicates.push(predicate.clone());
+        self.parents.push(Vec::new());
+        Some(self.predicates.len() - 1)
+    }
+
+    fn requirements(
+        predicate: &Predicate,
+        actions: &[&Action],
+        work: &mut usize,
+    ) -> Option<Vec<Predicate>> {
+        if predicate.compare != Compare::Equal {
+            return Some(Vec::new());
+        }
+        let mut common: Option<Vec<Predicate>> = None;
+        for action in actions {
+            let mut written = Vec::<&str>::new();
+            for group in &action.effect_groups {
+                for effect in &group.effects {
+                    *work = work.checked_sub(1)?;
+                    match effect {
+                        Effect::Add { key, .. } if key == &predicate.key => {
+                            return Some(Vec::new());
+                        }
+                        Effect::Set { key, value }
+                            if key == &predicate.key && value == &predicate.value =>
+                        {
+                            let mut required = Vec::new();
+                            for p in action.preconditions.iter().chain(
+                                group
+                                    .guards
+                                    .iter()
+                                    .filter(|p| !written.contains(&p.key.as_str())),
+                            ) {
+                                *work = work.checked_sub(1)?;
+                                if p.compare == Compare::Equal && !required.contains(p) {
+                                    if required.len() == Self::NODES {
+                                        return None;
+                                    }
+                                    required.push(p.clone());
+                                }
+                            }
+                            if let Some(common) = &mut common {
+                                common.retain(|p| required.contains(p));
+                            } else {
+                                common = Some(required);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                for effect in &group.effects {
+                    let (Effect::Set { key, .. } | Effect::Add { key, .. }) = effect;
+                    if !written.contains(&key.as_str()) {
+                        if written.len() == Self::NODES {
+                            return None;
+                        }
+                        written.push(key);
+                    }
+                }
+            }
+        }
+        Some(common.unwrap_or_default())
+    }
+
+    fn estimate(&self, facts: &Facts) -> u64 {
+        self.estimate_with(facts, &self.weights)
+    }
+
+    fn min_steps(&self, facts: &Facts) -> u64 {
+        self.estimate_with(facts, &self.step_weights)
+    }
+
+    fn estimate_with(&self, facts: &Facts, weights: &[u64]) -> u64 {
+        let mut visited = [false; Self::NODES];
+        let mut stack = [0; Self::NODES];
+        let mut length = 0;
+        for root in &self.roots {
+            visited[*root] = true;
+            stack[length] = *root;
+            length += 1;
+        }
+        let mut estimate = 0_u64;
+        while length > 0 {
+            length -= 1;
+            let index = stack[length];
+            if self.predicates[index].matches(facts) {
+                continue; // Already established: its old prerequisites need not be restored.
+            }
+            estimate = estimate.saturating_add(weights[index]);
+            for parent in &self.parents[index] {
+                if !visited[*parent] {
+                    visited[*parent] = true;
+                    stack[length] = *parent;
+                    length += 1;
+                }
+            }
+        }
+        estimate
+    }
+}
+
+/// Least-cost plan within all supplied bounds. An admissible, bounded landmark
+/// estimate guides the queue; equal estimates prefer deeper progress, then cost,
+/// path IDs and ordered facts. Depth belongs to visited identity: a cheap deep route
 /// must not evict a costlier shallow route with more remaining actions.
 /// Budget exhaustion returns no partial plan, even if a goal was queued.
 /// Callers use small deterministic budgets and schedule/retry between ticks.
@@ -147,7 +337,30 @@ pub(super) fn plan(
     if limits.max_nodes == 0 {
         return Err(Failure::NodeBudgetExceeded);
     }
+    let guidance = Guidance::build(
+        &ordered,
+        goal,
+        limits.max_candidates.min(limits.max_model_terms),
+    )
+    .unwrap_or_default();
+    search(initial, &ordered, goal, limits, &guidance)
+}
+
+fn search(
+    initial: &Facts,
+    ordered: &[&Action],
+    goal: &Goal,
+    limits: Limits,
+    guidance: &Guidance,
+) -> Result<Vec<String>, Failure> {
+    // The same partition, using unit action cost, only rejects when it proves
+    // the goal cannot fit the existing depth envelope. Shared achievers may
+    // yield zero weights; this is deliberately a weak conservative proof.
+    if guidance.min_steps(initial) > limits.max_depth as u64 {
+        return Err(Failure::DepthLimitExceeded);
+    }
     let first = QueueEntry {
+        priority: (guidance.estimate(initial), Reverse(0)),
         cost: 0,
         depth: 0,
         path: Vec::new(),
@@ -165,7 +378,7 @@ pub(super) fn plan(
         if reached(&current.facts, goal) {
             return Ok(current.path);
         }
-        for action in &ordered {
+        for action in ordered {
             if candidates >= limits.max_candidates {
                 return Err(Failure::CandidateBudgetExceeded);
             }
@@ -208,6 +421,10 @@ pub(super) fn plan(
             path.push(action.id.clone());
             best.insert((next_facts.clone(), depth), next_cost);
             queue.push(Reverse(QueueEntry {
+                priority: (
+                    next_cost.saturating_add(guidance.estimate(&next_facts)),
+                    Reverse(depth),
+                ),
                 cost: next_cost,
                 depth,
                 path,
@@ -407,6 +624,287 @@ mod tests {
         let mut reversed = actions.to_vec();
         reversed.reverse();
         assert_eq!(plan(&initial, &reversed, &goal, limits()), Ok(expected));
+    }
+
+    #[test]
+    fn eight_independent_guards_compose_under_the_existing_search_caps() {
+        let initial = (0..8)
+            .map(|n| (format!("unfamiliar-{n}"), FactValue::Number(0)))
+            .chain([("victory".into(), FactValue::Bool(false))])
+            .collect();
+        let mut actions = (0..8)
+            .map(|n| set_flag(&format!("switch-{n}"), &format!("unfamiliar-{n}")))
+            .collect::<Vec<_>>();
+        actions[7].effect_groups.push(EffectGroup {
+            guards: (0..8)
+                .map(|n| number(&format!("unfamiliar-{n}"), Compare::Equal, 1))
+                .collect(),
+            effects: vec![Effect::Set {
+                key: "victory".into(),
+                value: FactValue::Bool(true),
+            }],
+        });
+        let goal = Goal(vec![Predicate {
+            key: "victory".into(),
+            compare: Compare::Equal,
+            value: FactValue::Bool(true),
+        }]);
+        let bound = Limits {
+            max_candidates: 4096,
+            max_depth: 12,
+            ..limits()
+        };
+        let expected = (0..8).map(|n| format!("switch-{n}")).collect::<Vec<_>>();
+        let ordered = actions.iter().collect::<Vec<_>>();
+        assert!(matches!(
+            search(&initial, &ordered, &goal, bound, &Guidance::default()),
+            Err(Failure::NodeBudgetExceeded | Failure::CandidateBudgetExceeded)
+        ));
+        assert_eq!(plan(&initial, &actions, &goal, bound), Ok(expected.clone()));
+        actions.reverse();
+        assert_eq!(plan(&initial, &actions, &goal, bound), Ok(expected));
+    }
+
+    #[test]
+    #[ignore = "optimized planner diagnostic; no timing thresholds"]
+    fn profile_guidance_against_the_same_unguided_search() {
+        for count in [4, 8, 16] {
+            let initial: Facts = (0..count)
+                .map(|n| (format!("flag-{n}"), FactValue::Number(0)))
+                .chain([("victory".into(), FactValue::Bool(false))])
+                .collect();
+            let mut actions = (0..count)
+                .map(|n| set_flag(&format!("switch-{n:02}"), &format!("flag-{n}")))
+                .collect::<Vec<_>>();
+            actions[count - 1].effect_groups.push(EffectGroup {
+                guards: (0..count)
+                    .map(|n| number(&format!("flag-{n}"), Compare::Equal, 1))
+                    .collect(),
+                effects: vec![Effect::Set {
+                    key: "victory".into(),
+                    value: FactValue::Bool(true),
+                }],
+            });
+            let goal = Goal(vec![Predicate {
+                key: "victory".into(),
+                compare: Compare::Equal,
+                value: FactValue::Bool(true),
+            }]);
+            let bound = Limits {
+                max_candidates: 4096,
+                max_depth: 12,
+                ..limits()
+            };
+            let ordered = actions.iter().collect::<Vec<_>>();
+            for guided in [false, true] {
+                let mut samples = Vec::new();
+                let mut outcome = None;
+                for _ in 0..200 {
+                    let start = std::time::Instant::now();
+                    let result = if guided {
+                        plan(&initial, &actions, &goal, bound)
+                    } else {
+                        search(&initial, &ordered, &goal, bound, &Guidance::default())
+                    };
+                    samples.push(start.elapsed().as_nanos());
+                    if let Some(old) = &outcome {
+                        assert_eq!(old, &result);
+                    }
+                    outcome = Some(result);
+                }
+                samples.sort_unstable();
+                let p =
+                    |f: f64| samples[((samples.len() - 1) as f64 * f).ceil() as usize] as f64 / 1e6;
+                eprintln!(
+                    "planner flags={count} guided={guided} samples={} ms[p50={:.4},p95={:.4},p99={:.4},max={:.4}] outcome={outcome:?}",
+                    samples.len(),
+                    p(0.5),
+                    p(0.95),
+                    p(0.99),
+                    p(1.0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guidance_does_not_count_old_prerequisites_or_shared_effects_twice() {
+        let actions = [
+            Action {
+                id: "shared".into(),
+                cost: 5,
+                preconditions: vec![number("stage", Compare::Equal, 0)],
+                effect_groups: vec![EffectGroup {
+                    guards: vec![],
+                    effects: vec![
+                        Effect::Set {
+                            key: "stage".into(),
+                            value: FactValue::Number(1),
+                        },
+                        Effect::Set {
+                            key: "other".into(),
+                            value: FactValue::Number(1),
+                        },
+                    ],
+                }],
+            },
+            Action {
+                id: "finish".into(),
+                cost: 1,
+                preconditions: vec![
+                    number("stage", Compare::Equal, 1),
+                    number("other", Compare::Equal, 1),
+                ],
+                effect_groups: vec![EffectGroup {
+                    guards: vec![],
+                    effects: vec![Effect::Set {
+                        key: "done".into(),
+                        value: FactValue::Bool(true),
+                    }],
+                }],
+            },
+        ];
+        let goal = Goal(vec![Predicate {
+            key: "done".into(),
+            compare: Compare::Equal,
+            value: FactValue::Bool(true),
+        }]);
+        let references = actions.iter().collect::<Vec<_>>();
+        let guidance = Guidance::build(&references, &goal, 4096).unwrap();
+        let initial = Facts::from([
+            ("stage".into(), FactValue::Number(0)),
+            ("other".into(), FactValue::Number(0)),
+        ]);
+        assert!(guidance.estimate(&initial) <= 6);
+        assert!(guidance.min_steps(&initial) <= 2);
+        let progressed = apply(&initial, &actions[0].effect_groups, 64)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            guidance.estimate(&progressed),
+            1,
+            "the stage0 prerequisite was consumed, not a goal to restore"
+        );
+        assert_eq!(guidance.min_steps(&progressed), 1);
+        assert_eq!(
+            plan(&initial, &actions, &goal, limits()),
+            Ok(vec!["shared".into(), "finish".into()])
+        );
+    }
+
+    #[test]
+    fn proved_depth_excess_does_not_reject_a_shared_achiever() {
+        let initial: Facts = (0..16)
+            .map(|n| (format!("item-{n}"), FactValue::Number(0)))
+            .collect();
+        let mut actions = (0..16)
+            .map(|n| set_flag(&format!("touch-{n:02}"), &format!("item-{n}")))
+            .collect::<Vec<_>>();
+        let goal = Goal(
+            (0..16)
+                .map(|n| number(&format!("item-{n}"), Compare::Equal, 1))
+                .collect(),
+        );
+        let bound = Limits {
+            max_depth: 12,
+            max_candidates: 4096,
+            ..limits()
+        };
+        assert_eq!(
+            plan(&initial, &actions, &goal, bound),
+            Err(Failure::DepthLimitExceeded)
+        );
+        actions.push(Action {
+            id: "one_shared_mechanism".into(),
+            cost: 1,
+            preconditions: vec![],
+            effect_groups: vec![EffectGroup {
+                guards: vec![],
+                effects: (0..16)
+                    .map(|n| Effect::Set {
+                        key: format!("item-{n}"),
+                        value: FactValue::Number(1),
+                    })
+                    .collect(),
+            }],
+        });
+        assert_eq!(
+            plan(&initial, &actions, &goal, bound),
+            Ok(vec!["one_shared_mechanism".into()])
+        );
+    }
+
+    #[test]
+    fn guided_costs_match_zero_guidance_on_varied_small_models() {
+        // Exhaustive state search is a test oracle, not a runtime fallback
+        // with inflated budgets. Vary costs, shared setters, deletes and Add.
+        for seed in 0..80 {
+            let initial = Facts::from([
+                ("x".into(), FactValue::Number(0)),
+                ("y".into(), FactValue::Number(0)),
+            ]);
+            let mut actions = vec![
+                transition("advance", 0, 1, 1 + seed % 7),
+                transition("direct", 0, 2, 1 + seed % 11),
+                transition("finish", 1, 2, 1 + seed % 5),
+            ];
+            actions[0].effect_groups[0].effects.push(Effect::Set {
+                key: "y".into(),
+                value: FactValue::Number(1),
+            });
+            actions.push(Action {
+                id: "increment".into(),
+                cost: 1 + seed % 3,
+                preconditions: vec![number("y", Compare::Less, 2)],
+                effect_groups: vec![EffectGroup {
+                    guards: vec![number("x", Compare::Greater, 0)],
+                    effects: vec![Effect::Add {
+                        key: "y".into(),
+                        amount: 1,
+                    }],
+                }],
+            });
+            actions.push(Action {
+                id: "delete".into(),
+                cost: 1,
+                preconditions: vec![],
+                effect_groups: vec![EffectGroup {
+                    guards: vec![],
+                    effects: vec![Effect::Set {
+                        key: "y".into(),
+                        value: FactValue::Number(0),
+                    }],
+                }],
+            });
+            let goal = Goal(vec![
+                number("x", Compare::Equal, 2),
+                number("y", Compare::AtLeast, 1),
+            ]);
+            let bound = Limits {
+                max_depth: 6,
+                ..limits()
+            };
+            let references = actions.iter().collect::<Vec<_>>();
+            let plain = search(&initial, &references, &goal, bound, &Guidance::default()).unwrap();
+            let guided = plan(&initial, &actions, &goal, bound).unwrap();
+            let cost = |path: &[String]| {
+                path.iter()
+                    .map(|id| u64::from(actions.iter().find(|a| a.id == *id).unwrap().cost))
+                    .sum::<u64>()
+            };
+            assert_eq!(cost(&guided), cost(&plain), "seed {seed}");
+            for action in &mut actions {
+                action.cost = 1;
+            }
+            let references = actions.iter().collect::<Vec<_>>();
+            let minimum =
+                search(&initial, &references, &goal, bound, &Guidance::default()).unwrap();
+            let guidance = Guidance::build(&references, &goal, 4096).unwrap();
+            assert!(
+                guidance.min_steps(&initial) <= minimum.len() as u64,
+                "minimum steps seed {seed}"
+            );
+        }
     }
 
     #[test]

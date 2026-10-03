@@ -317,6 +317,7 @@ fn host_uses_current_catalog_once_and_rejection_reenables_form() {
         preview: IconRef::None,
     }]));
     click(&mut u, ScreenId::MainMenu, "start");
+    assert_eq!(actions(&mut u), vec![UiAction::RefreshHostColorsets]);
     click(&mut u, ScreenId::StartMission, "host");
     // Hosting also saves the chosen server type, as v20's prefs did.
     let a: Vec<_> = u

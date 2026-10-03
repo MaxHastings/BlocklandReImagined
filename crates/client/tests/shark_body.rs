@@ -1,6 +1,6 @@
 //! Real converted Shark body evidence; no window, GPU, audio or gameplay input.
 use anyhow::{Context, Result, ensure};
-use bri_client::avatar::AvatarAssets;
+use bri_client::avatar::{AvatarAnimationInput, AvatarAssets, HeldToolPose};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use std::path::PathBuf;
 
@@ -133,6 +133,53 @@ fn converted_shark_body_loads_its_textures_and_finite_scaled_geometry() -> Resul
             mesh.data.vertices.len(),
             mesh.data.indices.len(),
             mesh.data.images.len()
+        );
+    }
+    let player: bri_sim::player::PlayerState = serde_json::from_value(serde_json::json!({
+        "owner": 1, "feet": [0.0,0.0,0.0], "velocity": [0.0,0.0,0.0],
+        "yaw": 0.0, "pitch": 0.0, "grounded": false, "crouched": false,
+        "jetting": false, "scale": 1.0
+    }))?;
+    let wet = AvatarAnimationInput {
+        water_coverage: 1.0,
+        ..Default::default()
+    };
+    let mut swimming = assets.body_mesh(MODEL, assets.package.defaults.clone())?;
+    swimming.pose_with_animation(&assets, &player, 0.0, &wet)?;
+    let initial: Vec<_> = swimming.data.vertices.iter().map(|v| v.position).collect();
+    swimming.pose_with_animation(&assets, &player, 0.1, &wet)?;
+    swimming.pose_with_animation(&assets, &player, 0.2, &wet)?;
+    ensure!(
+        swimming
+            .data
+            .vertices
+            .iter()
+            .zip(initial)
+            .any(|(v, before)| {
+                glam::Vec3::from_array(v.position).distance(glam::Vec3::from_array(before)) > 0.001
+            }),
+        "real authored swim loop moves geometry over time, without script cues"
+    );
+    for (i, held_tool_pose) in [HeldToolPose::Right, HeldToolPose::Left, HeldToolPose::Both]
+        .into_iter()
+        .enumerate()
+    {
+        swimming.pose_with_animation(
+            &assets,
+            &player,
+            0.3 + i as f64 * 0.1,
+            &AvatarAnimationInput {
+                held_tool_pose,
+                ..wet.clone()
+            },
+        )?;
+        ensure!(
+            swimming
+                .data
+                .vertices
+                .iter()
+                .all(|v| v.position.iter().all(|x| x.is_finite())),
+            "held tool preserves finite authored body pose"
         );
     }
     Ok(())

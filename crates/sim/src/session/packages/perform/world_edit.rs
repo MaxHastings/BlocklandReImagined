@@ -277,13 +277,15 @@ impl Perform for ops::SetBrickColor {
 }
 impl Perform for ops::SetBrickShown {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { caller, .. } = cx;
+        let OpCall {
+            package, caller, ..
+        } = cx;
         let ops::SetBrickShown {
             brick,
             rendering,
             colliding,
             raycasting,
         } = self;
-        session.package_set_brick_shown(brick, [rendering, colliding, raycasting], caller)
+        session.package_set_brick_shown(package, brick, [rendering, colliding, raycasting], caller)
     }
 }

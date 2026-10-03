@@ -100,6 +100,13 @@ fn session(flags: usize) -> Result<(Session, u64, Vec<u64>)> {
                 450,
             ));
             b.events.push(row("winRound", vec![], guards, 450));
+            b.events.push(Row {
+                input: "onRuleRoundEnd".into(),
+                output: "setColorFX".into(),
+                target: Target::Slot(Slot::SelfBrick),
+                params: vec![Value::Int(1)],
+                ..row("setColorFX", vec![], vec![], 0)
+            });
         }
         world.bricks.insert(17 + n as u64, b);
     }
@@ -161,8 +168,29 @@ fn profile(
     let mut active_nanos = Vec::new();
     let mut damaged = false;
     let mut max_tick = 0;
+    let mut objective_searches = 0;
+    let mut objective_reused = 0;
+    let mut previous_counters = BTreeMap::new();
+    let mut windows = Vec::<(usize, usize, f64)>::new();
+    let mut previous_health = BTreeMap::new();
     for tick in 0..count {
+        if tick % 1200 == 0 {
+            windows.push((0, 0, 0.0));
+        }
         for human in humans {
+            let vitals = &s.vitals()[human];
+            if !vitals.alive
+                && !vitals.respawn_held
+                && s.simulation().state().tick >= vitals.respawn_tick
+            {
+                // A participating human would click to respawn; use that
+                // ordinary command so the mixed phase keeps a live opponent.
+                s.command(
+                    *human,
+                    (1 << 41) + s.simulation().state().tick,
+                    Command::Respawn,
+                )?;
+            }
             s.movement(
                 *human,
                 (1 << 40) + s.simulation().state().tick,
@@ -183,16 +211,31 @@ fn profile(
                 .map(|p| p.id),
         );
         let thoughts = s.bot_thoughts();
-        if thoughts
-            .iter()
-            .any(|b| matches!(b.behaviour, "fight" | "objective"))
-        {
+        if thoughts.iter().any(|b| {
+            s.vitals()[&b.bot].health > 0.0 && matches!(b.behaviour, "fight" | "objective")
+        }) {
             active_nanos.push(elapsed);
         }
         damaged |= humans.iter().any(|h| s.vitals()[h].health < 100.0);
+        for human in humans {
+            let health = s.vitals()[human].health;
+            if let Some(old) = previous_health.insert(*human, health) {
+                windows.last_mut().unwrap().2 += f64::from((old - health).max(0.0));
+            }
+        }
         for thought in thoughts {
-            objective_ticks += usize::from(thought.behaviour == "objective");
-            fight_ticks += usize::from(thought.behaviour == "fight");
+            let alive = s.vitals()[&thought.bot].health > 0.0;
+            objective_ticks += usize::from(alive && thought.behaviour == "objective");
+            fight_ticks += usize::from(alive && thought.behaviour == "fight");
+            let window = windows.last_mut().unwrap();
+            window.0 += usize::from(alive && thought.behaviour == "objective");
+            window.1 += usize::from(alive && thought.behaviour == "fight");
+            let next = (thought.objective_searches, thought.objective_reused);
+            let old = previous_counters
+                .insert(thought.bot, next)
+                .unwrap_or_default();
+            objective_searches += next.0.saturating_sub(old.0);
+            objective_reused += next.1.saturating_sub(old.1);
             if let Some(d) = thought.objective_diagnostic {
                 *diagnostic.entry(d.into()).or_default() += 1;
             }
@@ -214,6 +257,9 @@ fn profile(
         nanos.iter().filter(|n| **n > 5_000_000).count(),
         nanos.iter().filter(|n| **n > 50_000_000).count(),
         projectiles.len()
+    );
+    eprintln!(
+        "{label} objective_searches={objective_searches} objective_reused={objective_reused} windows_10s[objective_ticks,fight_ticks,observed_human_health_loss]={windows:?}"
     );
     active_nanos.sort_unstable();
     if !active_nanos.is_empty() {
@@ -248,9 +294,9 @@ fn sixteen_objective_controllers_and_mixed_inventory_combat() -> Result<()> {
         .ok()
         .map(|s| s.parse::<usize>())
         .transpose()?
-        .unwrap_or(2400);
+        .unwrap_or(7200);
     ensure!(ticks > 0, "positive duration");
-    for flags in [4, 8] {
+    for flags in [4, 8, 16] {
         let (mut s, owner, bots) = session(flags)?;
         let objective = profile(
             &mut s,
@@ -259,10 +305,18 @@ fn sixteen_objective_controllers_and_mixed_inventory_combat() -> Result<()> {
             &format!("independent-{flags}-latch-model"),
             ticks,
         )?;
-        if flags == 4 {
+        if flags <= 8 {
             ensure!(
                 objective.objective_ticks > 0 && objective.max_score >= 17,
                 "objective phase must make real control/score progress"
+            );
+            ensure!(
+                s.simulation()
+                    .state()
+                    .bricks
+                    .values()
+                    .any(|b| b.color_effect == 1),
+                "objective phase must reach its authored round-end observer"
             );
         } else {
             ensure!(

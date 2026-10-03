@@ -121,8 +121,9 @@ merging; it also reruns on every push to main. In a fresh clone, install the
 hook with `python tools/gate.py --install-hook`.
 
 ## Current collaboration boundary
-Maxwell requires GPT-6 Luna for all subagent work going forward (latest instruction
-2026-09-26). Earlier GPT-6 Astra subagents were interrupted; do not resume them.
+Maxwell requires GPT-6.1 Sol with High reasoning for all subagent work
+(latest instruction 2026-10-03). This supersedes the earlier Luna preference.
+Earlier GPT-6 Astra subagents were interrupted; do not resume them.
 Root owns shared integration, root manifests/lockfile and existing engine
 crates. New agents must remain inside their assigned paths; do not spawn further
 agents without root coordination. Opus delivered a partial terrain handoff:

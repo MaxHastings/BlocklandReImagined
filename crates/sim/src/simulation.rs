@@ -1391,7 +1391,7 @@ impl Simulation {
     /// up to four times player scale.
     pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, false)
+        self.target_filtered(origin, direction, max_distance, |brick| brick.raycast)
     }
     /// [`Self::target`] on through the openings of linked bricks
     /// (portals), as the player sees: the hit, its distance along the whole
@@ -1421,14 +1421,25 @@ impl Simulation {
     /// The shortest way `from` sees `to` by, no longer than `reach`:
     /// straight across, or in through one opening of a linked brick and
     /// out of its partner ([`bri_content::passage::Passages::ways`]), with
-    /// nothing that stops a targeting ray on any leg (within half a unit
-    /// of `to`, which may stand in a body).
+    /// no opaque surface on any leg (within half a unit of `to`, which
+    /// may stand in a body). Water bricks are liquid volumes, not walls;
+    /// they remain selectable by editing rays.
     pub fn sight(&self, from: Vec3, to: Vec3, reach: f32) -> Option<bri_content::passage::Way> {
         // Nothing within `slack` of a leg's end counts.
         let clear = |origin: Vec3, direction: Vec3, length: f32, slack: f32| {
             length <= 1e-3
                 || self
-                    .target(origin, direction, length.min(Self::MAX_TARGET_DISTANCE))
+                    .target_filtered(
+                        origin,
+                        direction,
+                        length.min(Self::MAX_TARGET_DISTANCE),
+                        |brick| {
+                            brick.raycast
+                                && self.definitions.get(brick).is_ok_and(|definition| {
+                                    definition.special != crate::definitions::Special::Water
+                                })
+                        },
+                    )
                     .ok()
                     .flatten()
                     .is_none_or(|hit| hit.distance > length - slack)
@@ -1468,14 +1479,14 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
     ) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, true)
+        self.target_filtered(origin, direction, max_distance, |_| true)
     }
     fn target_filtered(
         &self,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        all_bricks: bool,
+        accept: impl Fn(&Brick) -> bool,
     ) -> Result<Option<Hit>> {
         ensure!(
             origin.is_finite()
@@ -1516,7 +1527,7 @@ impl Simulation {
             });
         }
         self.walk_bricks(origin, direction, max_distance, &mut nearest, |_, brick| {
-            all_bricks || brick.raycast
+            accept(brick)
         })?;
         Ok(nearest)
     }

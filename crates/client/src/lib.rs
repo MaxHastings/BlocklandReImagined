@@ -14,6 +14,7 @@ pub mod brick_debris;
 pub mod brick_fade;
 pub mod building;
 pub mod client_code;
+pub mod colorsets;
 pub mod console;
 pub mod content;
 pub mod controls;

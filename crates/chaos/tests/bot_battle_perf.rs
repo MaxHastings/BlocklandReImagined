@@ -5,6 +5,13 @@
 //! `BRI_BATTLE_WORLD` selects a world by its exact name; `BRI_BATTLE_TICKS`
 //! changes each weapon phase length (quiet warm-up remains 600 ticks).
 //! `BRI_BATTLE_STOP_AFTER` ends after an exact phase label, for bounded profiles.
+//! `BRI_BATTLE_BOTS=12|16`, `BRI_BATTLE_MIXED=1` and
+//! `BRI_BATTLE_REQUIRE_ACTIVE=1` enable the sustained hardening diagnostic.
+//! `BRI_BATTLE_RANGED_SIDES=1` uses the same published Blockhead policy for
+//! both sides, with two ordinary creator owners joined to the MiniGame.
+//! Default retains the stock Blockhead-versus-converting-Zombie encounter.
+//! `BRI_BATTLE_RELOADS=1..4` repeats data/collision/session construction in the
+//! same process, reporting sampled RSS. This is not a network map-change test.
 //! Snapshot encoding diagnostics are outside `Session::step` and are not
 //! a claim that the host encodes a full world on every update.
 use anyhow::{Result, ensure};
@@ -12,12 +19,30 @@ use bri_chaos::{fixture, scan::ensure_finite};
 use bri_sim::session::{Command, MiniGameRequest, Session};
 use bri_world::{Brick, ContentRef, VehicleSpawn, World};
 use glam::Vec3;
-use std::collections::{BTreeSet, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 const HOST: u64 = 1;
 const TICKS_PER_PHASE: usize = 120 * 8;
+
+/// Sampled process RSS outside the measured simulation phase. POSIX ps is not
+/// available on every platform; absence is explicit, not zero memory usage.
+fn resident_kib() -> Option<u64> {
+    let pid = std::process::id().to_string();
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    std::str::from_utf8(&output.stdout)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
 
 #[derive(Default)]
 struct Profile {
@@ -32,6 +57,27 @@ struct Profile {
     path_steps: u64,
     slow_5ms: u64,
     slow_50ms: u64,
+    active_step_nanos: Vec<u128>,
+    fight_controller_ticks: u64,
+    living_controller_ticks: u64,
+    participating: BTreeSet<u64>,
+    health_loss_observed: f64,
+    deaths_observed: u64,
+    objective_searches: u64,
+    objective_reused: u64,
+    rss_kib: Vec<u64>,
+    windows: Vec<ActivityWindow>,
+}
+
+#[derive(Default)]
+struct ActivityWindow {
+    ticks: usize,
+    active_steps: usize,
+    fight_controller_ticks: u64,
+    living_controller_ticks: u64,
+    health_loss_observed: f64,
+    deaths_observed: u64,
+    participating: BTreeSet<u64>,
 }
 
 impl Profile {
@@ -64,6 +110,33 @@ impl Profile {
             self.evidence.finish(),
             search_pct,
         );
+        eprintln!(
+            "{phase} activity: active_steps={} fight_controller_ticks={} living_controller_ticks={} participating_bot_ids={} health_loss_observed={:.1} deaths_observed={} objective_searches={} objective_reused={} rss_kib[start={:?},last={:?},sampled_max={:?}]",
+            self.active_step_nanos.len(),
+            self.fight_controller_ticks,
+            self.living_controller_ticks,
+            self.participating.len(),
+            self.health_loss_observed,
+            self.deaths_observed,
+            self.objective_searches,
+            self.objective_reused,
+            self.rss_kib.first(),
+            self.rss_kib.last(),
+            self.rss_kib.iter().max()
+        );
+        for (i, window) in self.windows.iter().enumerate() {
+            eprintln!(
+                "{phase} window[{i}] ticks={} active_steps={} fight_controller_ticks={} living_controller_ticks={} health_loss_observed={:.1} deaths_observed={} participating_bot_ids={}",
+                window.ticks,
+                window.active_steps,
+                window.fight_controller_ticks,
+                window.living_controller_ticks,
+                window.health_loss_observed,
+                window.deaths_observed,
+                window.participating.len(),
+            );
+        }
+        report_auxiliary(phase, "active_combat_step", &mut self.active_step_nanos);
         report_auxiliary(phase, "snapshot", &mut self.snapshot_nanos);
         report_auxiliary(phase, "snapshot_messagepack", &mut self.encode_nanos);
     }
@@ -88,13 +161,83 @@ fn report_auxiliary(phase: &str, label: &str, samples: &mut [u128]) {
 fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
     eprintln!("phase_begin={phase} ticks={ticks}");
     let mut result = Profile::default();
+    let mut health = BTreeMap::new();
+    let mut counters = BTreeMap::new();
+    for thought in s.bot_thoughts() {
+        health.insert(thought.bot, s.vitals()[&thought.bot].health);
+        counters.insert(
+            thought.bot,
+            (thought.objective_searches, thought.objective_reused),
+        );
+    }
+    if let Some(rss) = resident_kib() {
+        result.rss_kib.push(rss);
+    }
     for tick in 0..ticks {
+        if tick % 1200 == 0 {
+            result.windows.push(ActivityWindow::default());
+        }
+        let window = result.windows.last_mut().unwrap();
+        window.ticks += 1;
         let start = Instant::now();
         s.step()?;
         let nanos = start.elapsed().as_nanos();
         result.slow_5ms += u64::from(nanos > 5_000_000);
         result.slow_50ms += u64::from(nanos > 50_000_000);
         result.step_nanos.push(nanos);
+        let thoughts = s.bot_thoughts();
+        let mut active = false;
+        let mut current_health = BTreeMap::new();
+        let mut current_counters = BTreeMap::new();
+        for thought in &thoughts {
+            let now = s.vitals()[&thought.bot].health;
+            result.living_controller_ticks += u64::from(now > 0.0);
+            window.living_controller_ticks += u64::from(now > 0.0);
+            if let Some(old) = health.get(&thought.bot) {
+                let loss = f64::from((old - now).max(0.0));
+                let death = u64::from(*old > 0.0 && now <= 0.0);
+                result.health_loss_observed += loss;
+                result.deaths_observed += death;
+                window.health_loss_observed += loss;
+                window.deaths_observed += death;
+            }
+            current_health.insert(thought.bot, now);
+            let next = (thought.objective_searches, thought.objective_reused);
+            let before = counters.get(&thought.bot).copied().unwrap_or_default();
+            result.objective_searches += if next.0 >= before.0 {
+                next.0 - before.0
+            } else {
+                next.0
+            };
+            result.objective_reused += if next.1 >= before.1 {
+                next.1 - before.1
+            } else {
+                next.1
+            };
+            current_counters.insert(thought.bot, next);
+            if now > 0.0
+                && thought.visible.is_some()
+                && matches!(thought.behaviour, "fight" | "chase" | "fly")
+            {
+                active = true;
+                result.participating.insert(thought.bot);
+                window.participating.insert(thought.bot);
+            }
+            let fighting = now > 0.0 && thought.behaviour == "fight";
+            result.fight_controller_ticks += u64::from(fighting);
+            window.fight_controller_ticks += u64::from(fighting);
+        }
+        health = current_health;
+        counters = current_counters;
+        if active {
+            result.active_step_nanos.push(nanos);
+            window.active_steps += 1;
+        }
+        if tick % 1200 == 0
+            && let Some(rss) = resident_kib()
+        {
+            result.rss_kib.push(rss);
+        }
         let weapons = s.weapon_view();
         for projectile in weapons.fired() {
             result.active_projectile_samples += 1;
@@ -117,6 +260,35 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
                 result.path_steps += thought.path_steps as u64;
             }
         }
+    }
+    if let Some(rss) = resident_kib() {
+        result.rss_kib.push(rss);
+    }
+    if std::env::var("BRI_BATTLE_REQUIRE_ACTIVE").is_ok_and(|v| v == "1")
+        && matches!(
+            phase,
+            "gun battle" | "rocket battle" | "spear battle" | "mixed battle"
+        )
+    {
+        let required = s.bot_thoughts().len();
+        let inactive = result
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, w)| {
+                (w.active_steps == 0
+                    || w.health_loss_observed == 0.0
+                    || ranged_sides() && w.participating.len() != required)
+                    .then_some(i)
+            })
+            .collect::<Vec<_>>();
+        let damage = result.health_loss_observed;
+        result.report(phase);
+        ensure!(
+            inactive.is_empty() && damage > 0.0,
+            "{phase} needs combat/damage in every 10-second window and all {required} controllers participating for ranged sides; inactive_windows={inactive:?} health_loss_observed={damage}"
+        );
+        return Ok(());
     }
     result.report(phase);
     Ok(())
@@ -143,10 +315,13 @@ fn add_bots(
     anchor: Vec3,
     blockhead: &str,
     zombie: &str,
+    bots: usize,
 ) -> World {
+    let ranged = ranged_sides();
     let first = world.next_brick_id;
+    let per_side = bots / 2;
     for side in 0..2 {
-        for i in 0..8 {
+        for i in 0..per_side {
             let offset = Vec3::new(
                 (i % 4) as f32 * (size[0] + 1.0),
                 0.0,
@@ -155,24 +330,32 @@ fn add_bots(
             let mut brick = Brick::new(
                 ContentRef::Resolved(plate.to_owned()),
                 (anchor + offset).into(),
-                HOST,
+                if ranged && side == 1 { HOST + 1 } else { HOST },
             );
             brick.vehicle = Some(Box::new(VehicleSpawn {
-                vehicle: ContentRef::Resolved(if side == 0 {
+                vehicle: ContentRef::Resolved(if ranged || side == 0 {
                     blockhead.to_owned()
                 } else {
                     zombie.to_owned()
                 }),
                 recolor: false,
             }));
-            world.bricks.insert(first + (side * 8 + i) as u64, brick);
+            world
+                .bricks
+                .insert(first + (side * per_side + i) as u64, brick);
         }
     }
-    world.next_brick_id = first + 16;
+    world.next_brick_id = first + bots as u64;
     world.owners.insert(
         HOST,
         bri_world::OwnerRecord::new([1; 32], "Battle profile host".into()),
     );
+    if ranged {
+        world.owners.insert(
+            HOST + 1,
+            bri_world::OwnerRecord::new([2; 32], "Opposing creator".into()),
+        );
+    }
     world
 }
 
@@ -204,9 +387,22 @@ fn run_battle(
     } else {
         "release"
     };
-    let brick_count = world.bricks.len() + 16;
-    let world = add_bots(world, plate, size, anchor, blockhead, zombie);
+    let count = std::env::var("BRI_BATTLE_BOTS")
+        .ok()
+        .map(|v| v.parse::<usize>())
+        .transpose()?
+        .unwrap_or(16);
+    ensure!(matches!(count, 12 | 16), "BRI_BATTLE_BOTS must be 12 or 16");
+    let brick_count = world.bricks.len() + count;
+    let world = add_bots(world, plate, size, anchor, blockhead, zombie, count);
+    let before_rss = resident_kib();
+    let load_started = Instant::now();
     let mut s = bri_net::dedicated::load_packages(root, packages, world)?.session;
+    eprintln!(
+        "world={world_name} session_load_ms={:.3} rss_kib[before={before_rss:?},after={:?}]",
+        load_started.elapsed().as_secs_f64() * 1000.0,
+        resident_kib()
+    );
     s.set_spawn_points(vec![origin])?;
     let host = s.join_verified(
         "Battle profile host".into(),
@@ -214,14 +410,35 @@ fn run_battle(
         true,
         Some(bri_admin::Principal([1; 32])),
     )?;
+    let other_creator = if ranged_sides() {
+        let owner = s.join_verified(
+            "Opposing creator".into(),
+            origin,
+            false,
+            Some(bri_admin::Principal([2; 32])),
+        )?;
+        ensure!(owner == HOST + 1, "authored opposing creator ownership");
+        Some(owner)
+    } else {
+        None
+    };
     for _ in 0..30 {
         s.step()?;
     }
     let bots = s.names().keys().filter(|o| s.is_bot(**o)).count();
-    ensure!(bots == 16, "expected 16 bots, got {bots}");
+    ensure!(bots == count, "expected {count} bots, got {bots}");
+    let side = bots / 2;
     eprintln!(
-        "world={} bricks={} bots={bots} teams=8+8 step_hz=120 profile={build}-headless; timings include the full Session::step and make no accuracy claim",
+        "world={} bricks={} bots={bots} teams={side}+{side} step_hz=120 profile={build}-headless; timings include the full Session::step and make no accuracy claim",
         world_name, brick_count,
+    );
+    eprintln!(
+        "encounter_policy={} Blockhead_kind_runtime_override=false",
+        if ranged_sides() {
+            "two-ordinary-creator-Blockhead-sides"
+        } else {
+            "stock-Blockhead-vs-converting-Zombie"
+        }
     );
 
     profile(&mut s, "quiet wander", 120 * 5)?;
@@ -237,6 +454,14 @@ fn run_battle(
             settings: gun,
         }),
     )?;
+    if let Some(creator) = other_creator {
+        let game = s.minigame_views()[0].id;
+        s.command(
+            creator,
+            1,
+            Command::MiniGame(MiniGameRequest::Join { game }),
+        )?;
+    }
     profile(&mut s, "gun battle", ticks)?;
     if stop_after("gun battle") {
         return Ok(());
@@ -254,14 +479,36 @@ fn run_battle(
         eprintln!("{label} loadout_change_ms={ms:.3}");
         profile(&mut s, label, ticks)?;
         if stop_after(label) {
-            break;
+            return Ok(());
         }
+    }
+    if std::env::var("BRI_BATTLE_MIXED").is_ok_and(|v| v == "1") {
+        let settings = bri_minigames::Settings {
+            loadout: [
+                Some("v20.weapon.gunitem".into()),
+                Some("v20.weapon.rocketlauncheritem".into()),
+                Some("v20.weapon.spearitem".into()),
+                Some("v20.weapon.sworditem".into()),
+                None,
+            ],
+            ..Default::default()
+        };
+        s.command(
+            host,
+            6,
+            Command::MiniGame(MiniGameRequest::Configure { settings }),
+        )?;
+        profile(&mut s, "mixed battle", ticks)?;
     }
     Ok(())
 }
 
 fn stop_after(phase: &str) -> bool {
     std::env::var("BRI_BATTLE_STOP_AFTER").is_ok_and(|wanted| wanted == phase)
+}
+
+fn ranged_sides() -> bool {
+    std::env::var("BRI_BATTLE_RANGED_SIDES").is_ok_and(|v| v == "1")
 }
 
 fn saved_world(root: &std::path::Path, wanted: &str) -> Result<Option<World>> {
@@ -302,7 +549,11 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
         ensure!(
             matches!(
                 phase.as_str(),
-                "gun battle" | "rocket battle" | "gravity-gun battle" | "spear battle"
+                "gun battle"
+                    | "rocket battle"
+                    | "gravity-gun battle"
+                    | "spear battle"
+                    | "mixed battle"
             ),
             "BRI_BATTLE_STOP_AFTER must name a weapon phase exactly"
         );
@@ -356,6 +607,8 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
         mesh.height_plates as f32 * 0.2,
         mesh.footprint_studs[1] as f32 * 0.5,
     ];
+    // The catalog-probe session is not a second active host in the RSS run.
+    drop(initial);
     let cells = [0.5, 0.2, 0.5];
     let anchor = Vec3::from_array(std::array::from_fn(|axis| {
         ((origin[axis] - size[axis] * 0.5) / cells[axis]).round() * cells[axis] + size[axis] * 0.5
@@ -365,23 +618,54 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
         "v20/add-ons/map_bedroom/bedroom.mis".into(),
         vec![[1.0; 4]],
     );
-    run_battle(
-        &root,
-        &packages,
-        empty_world,
-        origin,
-        &plate,
-        size,
-        anchor,
-        &blockhead,
-        &zombie,
-    )?;
+    let reloads = std::env::var("BRI_BATTLE_RELOADS")
+        .ok()
+        .map(|v| v.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    ensure!(
+        (1..=4).contains(&reloads),
+        "BRI_BATTLE_RELOADS must be 1..4"
+    );
+    for reload in 0..reloads {
+        eprintln!("session_construction_repeat={reload}");
+        run_battle(
+            &root,
+            &packages,
+            empty_world.clone(),
+            origin,
+            &plate,
+            size,
+            anchor,
+            &blockhead,
+            &zombie,
+        )?;
+        eprintln!(
+            "session_construction_complete={reload} idle_rss_kib={:?}",
+            resident_kib()
+        );
+    }
     for name in ["Beta City 16", "ACM City"] {
         if let Some(city) = saved_world(&root, name)? {
             eprintln!("loading {name} converted save read-only from worlds-pass-006");
-            run_battle(
-                &root, &packages, city, origin, &plate, size, anchor, &blockhead, &zombie,
-            )?;
+            for reload in 0..reloads {
+                eprintln!("world={name} session_construction_repeat={reload}");
+                run_battle(
+                    &root,
+                    &packages,
+                    city.clone(),
+                    origin,
+                    &plate,
+                    size,
+                    anchor,
+                    &blockhead,
+                    &zombie,
+                )?;
+                eprintln!(
+                    "world={name} session_construction_complete={reload} idle_rss_kib={:?}",
+                    resident_kib()
+                );
+            }
         } else {
             ensure!(
                 !std::env::var("BRI_BATTLE_WORLD").is_ok_and(|wanted| wanted == name),

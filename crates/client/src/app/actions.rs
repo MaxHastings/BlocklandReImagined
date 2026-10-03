@@ -320,6 +320,25 @@ impl App {
             }
             UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
             UiAction::OpenSavesFolder => show_drop_folder(self.files.old_saves.saves_folder()),
+            UiAction::RefreshHostColorsets => {
+                self.ui
+                    .apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+                        &self.content.paths.root,
+                        &self.state_dir,
+                        &self.content.paint,
+                    )));
+                Ok(())
+            }
+            UiAction::ColorsetsFolder => {
+                let result = show_drop_folder(&self.state_dir.join("colorsets"));
+                self.ui
+                    .apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+                        &self.content.paths.root,
+                        &self.state_dir,
+                        &self.content.paint,
+                    )));
+                result
+            }
             UiAction::OpenUrl(url) => {
                 // Only web pages, after the player confirmed them.
                 if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())

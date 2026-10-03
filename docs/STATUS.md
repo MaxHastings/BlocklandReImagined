@@ -14,6 +14,14 @@ The full alpha contract remains open. The Rule Workshop and bounded NPC objectiv
 weapon work remain experimental; the reported Windows firefight NaN crash is not
 claimed causally fixed.
 
+**v0.2.2 candidate:** creator menus prioritize common Wrench/mini-game tasks,
+Start Game selects local colorsets (including credited Trueno), Shark has
+verified body/swim/mouth-capture behavior, and bounded NPC planning/recovery has
+focused real-control coverage. Blast debris lasts 10 seconds plus a 3-second
+fade. See the [short mutation guide](rule-workshop/V0.2.2-PLAYTEST.md) and
+[integration evidence](progress/2026-10-03-v022-root-integration-and-cleanup.md).
+Sustained measurements, full gate, Windows CI and publication remain pending.
+
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in
 [progress.md](progress.md) with its commit and protocol version. The first
@@ -55,9 +63,9 @@ Don't reopen these without Max.
   The shelved join-codes patch lives in the project's shared files, not
   the repo. See [architecture/hosting.md](architecture/hosting.md).
 - **Release platforms:** Maxwell authorized Windows x86-64, macOS Apple silicon
-  and Linux x86-64 releases on 2026-10-02. v0.2.0 Alpha is published from the
-  reviewed bot, content reload and Rule Workshop work. All interactive
-  acceptance remains Maxwell's; the full alpha roadmap is still open.
+  and Linux x86-64 releases on 2026-10-02. All interactive acceptance remains
+  Maxwell's; the full alpha roadmap is still open. Current publication is
+  recorded above rather than duplicated here.
 - **Players see "Add-Ons".** "Package" is an internal word.
 - **Add-On client code is sandboxed, with trust tiers.** Data needs no
   prompt. Sandboxed wasm and WGSL asks once per server ("Trust and join"),

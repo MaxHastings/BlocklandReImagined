@@ -346,7 +346,7 @@ pub fn with_addon_settings(
                 },
                 // The server's items and player types, as the mini-game's
                 // own loadout offers them.
-                SettingType::Item => MiniGameSettingKind::List {
+                SettingType::Item => MiniGameSettingKind::Item {
                     items: std::iter::once((
                         MiniGameSettingValue::Text(String::new()),
                         "NONE".into(),
@@ -354,7 +354,7 @@ pub fn with_addon_settings(
                     .chain(state.items.iter().map(choice))
                     .collect(),
                 },
-                SettingType::PlayerType => MiniGameSettingKind::List {
+                SettingType::PlayerType => MiniGameSettingKind::PlayerType {
                     items: state.player_types.iter().map(choice).collect(),
                 },
                 SettingType::PaintColor => MiniGameSettingKind::PaintColor {
@@ -621,5 +621,48 @@ mod tests {
             ..Default::default()
         })
         .is_err()
+    }
+
+    #[test]
+    fn authored_equipment_and_body_purpose_survive_the_ui_bridge() {
+        let setting = |key: &str, kind: &str| AddOnSetting {
+            package: "unfamiliar".into(),
+            package_name: "Orbit".into(),
+            def: serde_json::from_value(serde_json::json!({
+                "key": key, "title": "An authored choice", "category": "Crew",
+                "scope": "team", "type": kind, "default": ""
+            }))
+            .unwrap(),
+            items: vec![],
+        };
+        let base = MiniGameUiState {
+            items: vec![MiniGameChoice {
+                id: "new:tool/a".into(),
+                name: "Tool".into(),
+            }],
+            player_types: vec![MiniGameChoice {
+                id: "new:body/b".into(),
+                name: "Body".into(),
+            }],
+            ..Default::default()
+        };
+        let mapped = with_addon_settings(
+            base,
+            &[],
+            &[setting("a", "item"), setting("b", "player_type")],
+            1,
+            &Rank::default(),
+            None,
+            &[],
+        );
+        assert!(
+            matches!(&mapped.addon_settings[0].kind, MiniGameSettingKind::Item { items }
+            if items.len() == 2 && items[1].0 == MiniGameSettingValue::Text("new:tool/a".into()))
+        );
+        assert!(
+            matches!(&mapped.addon_settings[1].kind, MiniGameSettingKind::PlayerType { items }
+            if items.len() == 1 && items[0].0 == MiniGameSettingValue::Text("new:body/b".into()))
+        );
+        assert!(mapped.addon_settings.iter().all(|setting| setting.team));
     }
 }

@@ -143,6 +143,80 @@ fn radios_checkbox_popup() {
 }
 
 #[test]
+fn grouped_popup_discloses_without_changing_values_and_searches_hidden_choices() {
+    let pack = Pack::from_parts(UiPack::default(), ".".into());
+    let mut v = View::new(&layout());
+    v.layout(640, 480);
+    let pop = v.id("pop").unwrap();
+    v.state(pop).items = vec![
+        ("-".into(), -1),
+        ("onActivate".into(), 4),
+        ("onActivate(Team1)".into(), 7),
+        ("onActivate(Team2)".into(), 8),
+    ];
+    for id in [7, 8] {
+        v.state(pop)
+            .popup_groups
+            .insert(id, "Activate by team".into());
+    }
+    v.state(pop)
+        .popup_aliases
+        .insert(8, "Blue team button".into());
+    v.select(pop, Some(4));
+    click(&mut v, &pack, 20, 185);
+    assert_eq!(
+        v.popup_rows()
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        ["-", "onActivate", "Activate by team >"]
+    );
+    let mut out = Vec::new();
+    v.key(Key::End, Modifiers::NONE, &mut out);
+    v.key(Key::Return, Modifiers::NONE, &mut out);
+    assert!(out.is_empty(), "opening a family never changes the event");
+    assert_eq!(v.selected(pop), Some(4));
+    assert_eq!(v.popup_rows()[0].0, "< Back");
+    v.key(Key::End, Modifiers::NONE, &mut out);
+    v.key(Key::Return, Modifiers::NONE, &mut out);
+    assert_eq!(v.selected(pop), Some(8));
+    assert_eq!(
+        out,
+        [ViewEvent {
+            node: pop,
+            kind: EventKind::Changed
+        }]
+    );
+
+    click(&mut v, &pack, 20, 185);
+    assert!(
+        v.popup_rows().iter().any(|(_, id)| *id == 8),
+        "keep authored grouped value visible"
+    );
+    out.clear();
+    for ch in "blue".chars() {
+        v.char(ch, &mut out);
+    }
+    assert_eq!(v.popup_highlight().map(|(_, id)| id), Some(8));
+    v.key(Key::Return, Modifiers::NONE, &mut out);
+    assert_eq!(v.selected(pop), Some(8));
+
+    click(&mut v, &pack, 20, 185);
+    v.key(Key::End, Modifiers::NONE, &mut out);
+    v.key(Key::Return, Modifiers::NONE, &mut out);
+    out.clear();
+    v.key(Key::Escape, Modifiers::NONE, &mut out);
+    assert!(
+        v.open_popup_node().is_some(),
+        "first Escape returns from the family"
+    );
+    v.key(Key::Escape, Modifiers::NONE, &mut out);
+    assert!(v.open_popup_node().is_none());
+    assert!(out.is_empty());
+    assert_eq!(v.selected(pop), Some(8));
+}
+
+#[test]
 fn resize_rules_scale_layouts() {
     use bri_ui::geom::Rect;
     use bri_ui::schema::{HSizing, VSizing};

@@ -4,13 +4,15 @@ Blockland ReImagined is Blockland v20 rebuilt from scratch. The goal is
 v20 as you remember it, with its own art, music and sounds, plus Add-Ons
 that can go much further than v20's ever could. This page says what is
 done, what is partly done, and what is still missing. It was checked
-against the game's own code and test reports on 2026-09-29.
+against the game's own code and focused test reports on 2026-10-03. Use the
+[v0.2.2 creator and bot checks](rule-workshop/V0.2.2-PLAYTEST.md) to try the
+current changes; [known issues](KNOWN-ISSUES.md) records the remaining limits.
 
 ## v20: what's done
 
 **Menus.** Start Game, Join Game, Player (avatar), Options, About, Credits,
 the Tutorial and F1 help with v20's eight help pages. The screens are v20's
-own layouts.
+own layouts and artwork, with native additions for the new settings.
 
 **Maps.** All 14 v20 maps: Bedroom, Bedroom - Dark, Construct, Destruct,
 Halloween Slate, Kitchen, Kitchen - Dark, Skylands, Slate, Slate Desert,
@@ -41,18 +43,26 @@ knocks bricks out for 30 seconds, and only the hammer, the wand and undo
 remove them for good.
 
 **Wrench and events.** Names, lights, emitters, items, respawn,
-raycasting, collision and rendering. The events dialog with all 16 inputs
-and all 65 outputs. Demo Pong in Bedroom plays.
+raycasting, collision and rendering. The stock events dialog has v20's 16
+inputs and 65 outputs. Common choices stay easy to find; Add-On choice families
+are grouped and searchable. A plain row stays compact beside a row with checks.
+Partial edits survive navigation/copy, and an unavailable row can be removed
+individually. Selected legacy team inputs retain their original meaning.
+Demo Pong in Bedroom plays.
 
 **Rule Workshop.** Events can have optional IF checks, bounded variables,
 player/object regions, scoring and round rules. Set region dimensions directly
 in the Wrench with a live preview and Send; building tools reveal their bounds.
-Nine editable examples and included creator guides explain the behavior.
+**+ IF** starts an unfinished check for you to configure before Send;
+**Region...** opens Detection region. Nine editable examples and included
+creator guides explain the behavior.
 Explain saved shows recent conditions, actions and rejection reasons.
 
 **Mini-games.** Create, join, leave, invite, remove, reset and end, with
 all 21 rule settings, ten favourite presets, scores in the player list,
-kill messages and respawn.
+kill messages and respawn. **Teams** puts adding/naming/coloring teams and their
+body/equipment choices together; **Setup** groups deeper settings. Partial
+numeric edits survive switching categories without hiding Add Team below them.
 
 **Bots** (the optional **Blockhead Bot** Add-On, off until you turn it on:
 v20's spawn brick bots have no brain). Blockhead Bots from Vehicle Spawn
@@ -65,6 +75,12 @@ Allied ground crews coordinate driver, gunner and passenger seats, share dated
 observations and abandon actions that stop making progress. Human occupants
 keep their seats. Bots and players push loose physical bodies by walking into
 them, using the same game permissions and contact mechanism.
+Supported switches/checkpoints can form multi-step score or round goals.
+Bots reconsider changed rules and resume an approach after combat or an
+authorized rest/ride pause; already scheduled event delays continue in real
+time. Supported native hand weapons account for ammunition, readiness and safer
+weapon choices. Planning and prediction have finite limits; the linked guide
+describes which creator rules and interactions are covered.
 
 **Save and load.** Builds save with their description, events and
 ownership, load per map, and sort by name or date. Loading a save made
@@ -86,6 +102,13 @@ wand, the F7/F8 admin camera, and `/fetch`, `/find`, `/warp`,
 `/timescale`, `/spy`, `/ret`, `/realbrickcount`, `/cancelallevents`,
 `/clearbots` and the vehicle resets. `/brickcount` and `/clearinventory`
 for everyone.
+
+**Colorsets...** in Start Game opens a radio chooser with swatches, Use and
+Cancel. It offers Default, installed colorsets including Trueno's, and custom
+files from its writable **Folder...**: a named `.txt` or subfolder containing
+`colorSet.txt`. The selection initializes new hosted worlds and guests receive
+their palette automatically. Loading brick saves retains the existing color
+matching choice, and the Tutorial uses its stock palette.
 
 **Chat and players.** Say and team chat, the talking indicator, name tags,
 centre and bottom prints, the player list with trust and ignore, and the
@@ -123,9 +146,8 @@ and render modes.
 
 ## Beyond v20
 
-- **Big builds.** Bricks draw in batched chunks with far fewer draw calls,
-  joining a big build is quick, and saves are compact binary files. The
-  goal is a million bricks at 60 fps.
+- **Big builds.** Bricks draw in batched chunks and saves are compact binary
+  files. Large-build performance remains under test.
 - **Easy hosting.** The game asks your router to open its port, tells you
   in chat whether friends can reach you, and copies an invite to paste
   into Connect to IP. It can fix the Windows firewall for you. LAN games
@@ -146,7 +168,9 @@ and render modes.
 - **Gamepad** while playing.
 - **Performance overlay** (F3) and net graph (Ctrl+N).
 - **Knocked-out bricks** can be pushed around by players, vehicles and
-  shots. This is only for show and never affects play.
+  shots. This is only for show and never affects play. Explosion debris stays
+  opaque for ten seconds, then fades for three; existing Physics Quality and
+  load caps can retire older pieces early.
 
 ## Add-Ons
 
@@ -159,6 +183,14 @@ Zeblote's New Duplicator: copy a build or everything in a box between two
 clicks, mirror the copy, cut the original away to move a build, or paint
 it in one go, each undone with Ctrl+Z. It sits beside the classic
 Duplicator, which stays the simple default.
+
+**Bot ports.** The optional Shark port uses its original model/textures, native
+collision dimensions, color/buoyancy variants and authored swim loop. Focused
+actual-content checks cover mouth-node capture, the five-second hold and credited
+death, release/lifecycle behavior and hiding its hole marker. Custom bodies keep
+their own animation types, including additive swim/held-arm clips. Shark and
+Zombie still have original behavior gaps listed in known issues; this is a
+partial port, with human visual/gameplay acceptance still required.
 
 **Making Add-Ons.** New Add-Ons can add:
 

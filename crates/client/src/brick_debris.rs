@@ -55,9 +55,9 @@ const LEARN_RATE: f64 = 0.2;
 const GHOST_SECONDS: f32 = 0.35;
 /// Seconds a body stays solid before it starts to fade: long enough to
 /// kick it around.
-const SOLID_SECONDS: f32 = 3.0;
+const SOLID_SECONDS: f32 = 10.0;
 /// Seconds of fading to fully transparent, after which the body is removed.
-const FADE_SECONDS: f32 = 2.0;
+const FADE_SECONDS: f32 = 3.0;
 /// Converts v20 blast force into launch speed (units/s).
 const FORCE_TO_SPEED: f32 = 0.5;
 const MAX_SPEED: f32 = 40.0;
@@ -1150,7 +1150,11 @@ pub(crate) mod tests {
         );
         let (_, t) = debris.instances().next().unwrap();
         assert_eq!(t.tint[3], 1.0);
-        run(&mut debris, &building, SOLID_SECONDS);
+        // A rocket's debris is still fully visible after the old five-second
+        // total lifetime, so creators can enjoy the settled destruction.
+        run(&mut debris, &building, 4.0);
+        assert_eq!(debris.instances().next().unwrap().1.tint[3], 1.0);
+        run(&mut debris, &building, SOLID_SECONDS - 4.0);
         let (_, t) = debris.instances().next().unwrap();
         assert!(
             t.tint[3] > 0.0 && t.tint[3] < 1.0,

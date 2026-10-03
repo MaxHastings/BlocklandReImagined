@@ -9,6 +9,7 @@ pub mod colorwarn;
 pub mod console;
 pub mod environment;
 pub mod help;
+pub mod host_colorsets;
 pub mod menus;
 pub mod minigame_addons;
 pub mod minigames;
@@ -96,6 +97,8 @@ pub enum ScreenId {
     AddOnMismatch,
     /// Start Game's game mode picker (native; v20 had none).
     GameModes,
+    /// Local host colorset choice, committed only with Use.
+    HostColorsets,
     /// Start Game's Advanced Config (`serverConfigGui` over the saved
     /// `$Pref::Server::*`), before a game is hosted.
     ServerConfig,
@@ -213,6 +216,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::PackageDownload => return Box::new(addons::PackageDownload::new(core)),
         ScreenId::AddOnMismatch => return Box::new(addons::Mismatch::new(core)),
         ScreenId::GameModes => return Box::new(modes::GameModes::new(core)),
+        ScreenId::HostColorsets => return Box::new(host_colorsets::HostColorsets::new(core)),
         ScreenId::ServerConfig => return Box::new(admin::ServerConfig::new(core)),
         ScreenId::Help => return Box::new(help::Help::new(core)),
         ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),

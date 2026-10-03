@@ -663,11 +663,32 @@ impl Session {
     /// as v20's `setRendering`, `setColliding` and `setRayCasting`.
     pub(in crate::session) fn package_set_brick_shown(
         &mut self,
+        package: &str,
         brick: BrickId,
         [rendering, colliding, raycasting]: [bool; 3],
         caller: Option<OwnerId>,
     ) -> Result<()> {
-        self.package_may_edit(brick, caller)?;
+        // A definition's provider may control the visibility of its own
+        // mechanisms (for example a hidden spawn marker). This does not
+        // grant permission to edit, remove or hide another provider's bricks.
+        let own_definition = self.simulation.state().bricks.get(&brick).is_some_and(|b| {
+            let bri_world::ContentRef::Resolved(id) = &b.definition else {
+                return false;
+            };
+            let Some((provider, _)) = id.split_once(':') else {
+                return false;
+            };
+            provider == package
+                || self.packages.as_ref().is_some_and(|host| {
+                    host.catalog
+                        .packages
+                        .get(provider)
+                        .is_some_and(|p| p.manifest.companions.iter().any(|id| id == package))
+                })
+        });
+        if !own_definition {
+            self.package_may_edit(brick, caller)?;
+        }
         self.simulation.mutate(brick, |b| {
             b.visible = rendering;
             b.colliding = colliding;

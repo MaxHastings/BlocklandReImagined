@@ -295,3 +295,92 @@ fn a_long_flight_weapon_closes_distance_instead_of_waiting_forever_on_a_budget()
         "approached and fired but did not hit the ordinary target"
     );
 }
+
+#[test]
+fn a_depleted_stored_magazine_switches_to_the_usable_undrawn_slot() {
+    const NEXT: &str = "tactics:weapon/borealis";
+    let mut p = pack();
+    alias(
+        &mut p,
+        testing::GUN_ITEM,
+        testing::GUN_IMAGE,
+        testing::GUN_PROJECTILE,
+        NEXT,
+    );
+    p.projectiles
+        .get_mut("tactics:projectile/borealis")
+        .unwrap()
+        .damage = 10.0;
+    for image in ["tactics:image/orbit", "tactics:image/borealis"] {
+        // These authored ray weapons isolate ammunition/control recovery from
+        // a one-round projectile miss while preserving ordinary turn/error.
+        p.images.get_mut(image).unwrap().shot = Some(
+            serde_json::from_str(r#"{"projectiles":1,"hitscan":{"range":100,"from_eye":true}}"#)
+                .unwrap(),
+        );
+        p.images.get_mut(image).unwrap().magazine = Some(
+            serde_json::from_str(
+                r#"{"size":1,"ammo":"one_shared_reserve","reload_ticks":24,"reserve":0}"#,
+            )
+            .unwrap(),
+        );
+    }
+    let (mut s, human, bot, mut seq) = game(p, &[A, NEXT], 20.0);
+    let protected_until = s.vitals()[&human].spawn_tick + 300;
+    let mut held = BTreeSet::new();
+    let mut traces = Vec::new();
+    let mut states = BTreeSet::new();
+    for _ in 0..120 * 25 {
+        ticks(&mut s, human, &mut seq, 1);
+        if let Some(images) = s.weapon_view().images.get(&bot) {
+            states.extend(
+                images
+                    .iter()
+                    .filter(|i| i.hand == 0)
+                    .map(|i| (i.image.clone(), i.state.clone())),
+            );
+            held.extend(
+                images
+                    .iter()
+                    .filter(|i| i.hand == 0)
+                    .map(|i| i.image.clone()),
+            );
+        }
+        for cue in s.take_cues() {
+            if matches!(cue.kind, bri_sim::presentation::CueKind::Tracer { actor, .. } if actor == bot)
+            {
+                traces.push((cue.tick, cue.position, feet(&s, bot), feet(&s, human)));
+            }
+        }
+        if s.vitals()[&human].health <= 80.0 {
+            break;
+        }
+    }
+    assert!(
+        held.contains("tactics:image/orbit"),
+        "first available slot was never equipped"
+    );
+    assert!(
+        held.contains("tactics:image/borealis"),
+        "depleted first slot blocked usable new equipment: {:?}",
+        s.bot_thoughts()
+    );
+    assert_eq!(
+        s.vitals()[&human].health,
+        80.0,
+        "both actual one-round magazines must deliver damage without a fabricated refill: traces={traces:?} states={states:?} thoughts={:?}",
+        s.bot_thoughts()
+    );
+    assert_eq!(traces.len(), 2, "one shot from each finite magazine");
+    assert!(
+        traces.iter().all(|(tick, ..)| *tick >= protected_until),
+        "finite rounds were spent against canonical spawn immunity: {traces:?}"
+    );
+    // Remaining inventory must not be repeatedly redrawn to refill its empty
+    // stored magazine or the shared exhausted reserve.
+    ticks(&mut s, human, &mut seq, 120 * 3);
+    assert_eq!(s.vitals()[&human].health, 80.0);
+    assert!(!s.take_cues().iter().any(|cue| {
+        matches!(cue.kind, bri_sim::presentation::CueKind::Tracer { actor, .. } if actor == bot)
+    }));
+}

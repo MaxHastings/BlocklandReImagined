@@ -82,8 +82,22 @@ pub fn preferred_scale(prefs: &crate::prefs::Prefs, size: (u32, u32)) -> Option<
     if percent <= 0 {
         return None;
     }
-    let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(1.0);
-    Some((percent as f32 / 100.0).clamp(1.0, fit))
+    let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(0.5);
+    Some((percent as f32 / 100.0).clamp(1.0, 8.0).min(fit))
+}
+
+#[cfg(test)]
+#[test]
+fn requested_ui_scale_fits_small_window_without_clipping_native_canvas() {
+    let mut prefs = crate::prefs::Prefs::default();
+    for percent in [100, 200, 800] {
+        prefs.set(UI_SCALE, percent.to_string());
+        assert_eq!(preferred_scale(&prefs, (400, 300)), Some(0.625));
+    }
+    prefs.set(UI_SCALE, "200");
+    assert_eq!(preferred_scale(&prefs, (1920, 1080)), Some(2.0));
+    prefs.set(UI_SCALE, "0");
+    assert_eq!(preferred_scale(&prefs, (400, 300)), None);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -326,6 +340,8 @@ pub struct Core {
     pub maps: Vec<MapInfo>,
     /// Start Game's game modes, from the enabled Add-Ons.
     pub game_modes: Vec<crate::api::GameModeInfo>,
+    /// Installed local colorsets offered before starting a host.
+    pub host_colorsets: Vec<crate::api::HostColorset>,
     pub servers: Vec<ServerInfo>,
     pub lan_querying: bool,
     pub bricks: Vec<BrickInfo>,
@@ -371,6 +387,8 @@ pub struct Core {
     pub minigames: MiniGameUiState,
     /// The mini-game whose Add-On Settings window is open (or opening).
     pub minigame_addons: Option<MiniGameId>,
+    /// Initial destination for this opening, not a saved user preference.
+    pub minigame_addons_teams: bool,
     /// The Add-On Settings window shows the server-wide settings instead
     /// (opened from the Admin menu).
     pub server_addon_settings: bool,
@@ -1388,6 +1406,20 @@ impl Ui {
             print_letters_visible: false,
             maps: Vec::new(),
             game_modes: Vec::new(),
+            host_colorsets: vec![crate::api::HostColorset {
+                id: String::new(),
+                name: "Default (v20)".into(),
+                divisions: pack
+                    .data
+                    .data
+                    .brick_colorset
+                    .iter()
+                    .map(|division| crate::api::PaintDivision {
+                        name: division.name.clone(),
+                        colors: division.colors.clone(),
+                    })
+                    .collect(),
+            }],
             servers: Vec::new(),
             lan_querying: false,
             bricks: Vec::new(),
@@ -1420,6 +1452,7 @@ impl Ui {
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
             minigame_addons: None,
+            minigame_addons_teams: false,
             server_addon_settings: false,
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
@@ -1821,6 +1854,7 @@ impl Ui {
             }
             UiUpdate::Maps(m) => c.maps = m,
             UiUpdate::GameModes(m) => c.game_modes = m,
+            UiUpdate::HostColorsets(choices) => c.host_colorsets = choices,
             UiUpdate::LanServers { servers, querying } => {
                 c.servers = servers;
                 c.lan_querying = querying;

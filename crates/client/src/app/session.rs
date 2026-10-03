@@ -270,6 +270,15 @@ impl App {
         let admin = bri_admin::Secret::new(admin)?;
         let super_admin = bri_admin::Secret::new(super_admin)?;
         ensure!((1..=64).contains(&max_players), "Invalid player limit");
+        let host_palette = if map.contains("map_tutorial") {
+            None
+        } else {
+            crate::colorsets::selected(
+                &self.content.paths.root,
+                &self.state_dir,
+                self.ui.core.prefs.str_or("$Pref::Server::ColorSet", ""),
+            )?
+        };
         // A host runs its own Add-On list as it is now; a game joined before
         // may have loaded another server's.
         self.disconnect();
@@ -387,6 +396,7 @@ impl App {
             .map(|(id, _)| id.clone())
             .collect();
         let progress = bri_progress::Progress::new();
+        let palette_for_maps = host_palette.clone();
         progress.set_subject(&map);
         let reporting = progress.clone();
         let host_runtime = self.host_runtime.handle().clone();
@@ -416,7 +426,8 @@ impl App {
                 weapon_snapshot.ensure_same(&weapons)?;
                 let item_physics = paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
-                let loaded = paths.load_map(&base_map, None)?;
+                let loaded =
+                    paths.load_map_with_palette(&base_map, None, host_palette.as_deref())?;
                 let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
                 let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
                 light_volume.set_light_shapes(&loaded.breakables);
@@ -535,7 +546,11 @@ impl App {
                 add_ons,
                 load_map: Some({
                     let paths = paths_for_maps.clone();
-                    Arc::new(move |map: &str| Ok(paths.load_map(map, None)?.into_session()))
+                    Arc::new(move |map: &str| {
+                        Ok(paths
+                            .load_map_with_palette(map, None, palette_for_maps.as_deref())?
+                            .into_session())
+                    })
                 }),
             });
             let (session, spawn_points) = setup.session(&hosted, loaded.into_session())?;

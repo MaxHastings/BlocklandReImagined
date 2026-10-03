@@ -37,6 +37,9 @@ fn variable(key: &str, value: i64) -> Condition {
     }
 }
 fn game(bricks: Vec<Brick>) -> (Session, OwnerId, u64) {
+    game_with_spawner(bricks, true)
+}
+fn game_with_spawner(bricks: Vec<Brick>, spawner: bool) -> (Session, OwnerId, u64) {
     let mut s = fixture::synthetic().unwrap().session;
     s.set_spawn_points(vec![Vec3::new(-40.0, 0.05, -40.0)])
         .unwrap();
@@ -65,7 +68,9 @@ fn game(bricks: Vec<Brick>) -> (Session, OwnerId, u64) {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
     }));
-    world.bricks.insert(1, spawn);
+    if spawner {
+        world.bricks.insert(1, spawn);
+    }
     for (i, mut b) in bricks.into_iter().enumerate() {
         b.owner = owner;
         world.bricks.insert(i as u64 + 2, b);
@@ -110,6 +115,28 @@ fn brick(at: [f32; 3], name: &str, rows: Vec<Row>) -> Brick {
     b.events = rows;
     b
 }
+fn round_observer() -> Brick {
+    let event = row(
+        "onRuleRoundEnd",
+        "setColorFX",
+        Slot::SelfBrick,
+        vec![Value::Int(1)],
+        vec![],
+        0,
+    );
+    brick([-40.25, 0.1, -40.25], "round_end_observer", vec![event])
+}
+fn assert_round_ended(s: &mut Session, owner: OwnerId, sequence: &mut u64) {
+    ticks(s, owner, sequence, 5);
+    assert!(
+        s.simulation()
+            .state()
+            .bricks
+            .values()
+            .any(|b| b.name.as_deref() == Some("round_end_observer") && b.color_effect == 1),
+        "canonical onRuleRoundEnd observer did not run"
+    );
+}
 fn run_score(s: &mut Session, owner: OwnerId, sequence: &mut u64, score: i64) -> OwnerId {
     let bot = s
         .names()
@@ -133,7 +160,208 @@ fn run_score(s: &mut Session, owner: OwnerId, sequence: &mut u64, score: i64) ->
 
 #[test]
 fn four_specific_activation_bricks_compose_without_injected_goals() {
-    let flags = ["blueLatch", "violetLatch", "copperLatch", "linenLatch"];
+    independent_activations(4);
+}
+
+#[test]
+fn unchanged_impossible_models_reuse_failure_and_a_new_source_restores_real_progress() {
+    let impossible = brick(
+        [0.25, 0.1, 28.25],
+        "inert_puzzle",
+        vec![
+            row(
+                "onActivate",
+                "setVariable",
+                Slot::SelfBrick,
+                vec![
+                    Value::Int(1),
+                    Value::Text("unrelated".into()),
+                    Value::Int(1),
+                ],
+                vec![variable("unrelated", 0)],
+                0,
+            ),
+            row(
+                "onActivate",
+                "winRound",
+                Slot::Player,
+                vec![],
+                vec![variable("missing_dependency", 1)],
+                0,
+            ),
+        ],
+    );
+    let (mut s, owner, mut sequence) = game(vec![impossible]);
+    ticks(&mut s, owner, &mut sequence, 120 * 6);
+    let thought = s
+        .bot_thoughts()
+        .into_iter()
+        .find(|t| s.is_bot(t.bot))
+        .unwrap();
+    assert_eq!(
+        thought.objective_searches, 1,
+        "unchanged complete NoPlan proof should survive wandering distance-cost changes"
+    );
+    assert!(
+        thought.objective_reused >= 4,
+        "ordinary retries did not reuse failure: {thought:?}"
+    );
+    assert_eq!(
+        thought.objective_diagnostic,
+        Some("no grounded objective plan")
+    );
+    let mut solution = brick(
+        [0.25, 0.1, 35.25],
+        "newly_authored_solution",
+        vec![
+            row(
+                "onActivate",
+                "addPlayerScore",
+                Slot::Player,
+                vec![Value::Int(43)],
+                vec![],
+                0,
+            ),
+            row("onActivate", "winRound", Slot::Player, vec![], vec![], 0),
+        ],
+    );
+    solution.owner = owner;
+    let mut world = World::new(
+        "Additional solution".into(),
+        "chaos/map".into(),
+        vec![[1.0; 4]],
+    );
+    world.bricks.insert(1, solution);
+    world.next_brick_id = 2;
+    s.command(
+        owner,
+        102,
+        Command::LoadBuild {
+            build: Box::new(SavedBuild::new(world)),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    let bot = run_score(&mut s, owner, &mut sequence, 43);
+    let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+    assert!(
+        thought.objective_searches >= 2,
+        "new grounded action failed to invalidate the negative result"
+    );
+    assert!(s.take_event_diagnostics().is_empty());
+}
+
+#[test]
+fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
+    let finish = brick(
+        [0.25, 0.1, 55.25],
+        "remote_finish",
+        vec![
+            row(
+                "onActivate",
+                "addPlayerScore",
+                Slot::Player,
+                vec![Value::Int(29)],
+                vec![],
+                0,
+            ),
+            row("onActivate", "winRound", Slot::Player, vec![], vec![], 0),
+        ],
+    );
+    let (mut s, owner, mut sequence) = game(vec![finish, round_observer()]);
+    let bot = s.bot_thoughts()[0].bot;
+    for _ in 0..240 {
+        if s.bot_thoughts()[0].objective.is_some() {
+            break;
+        }
+        ticks(&mut s, owner, &mut sequence, 1);
+    }
+    assert!(
+        s.bot_thoughts()[0].objective.is_some(),
+        "authored objective acquired before the interruption"
+    );
+    let bot_feet = || {
+        s.snapshot()
+            .players
+            .iter()
+            .find(|p| p.owner == bot)
+            .unwrap()
+            .feet
+    };
+    let at = Vec3::from(bot_feet()) + Vec3::X * 1.5;
+    s.set_spawn_points(vec![at]).unwrap();
+    let enemy = s.join("Unarmed opponent".into(), at, false).unwrap();
+    let game = s.minigame_views()[0].id;
+    s.command(enemy, 1, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    let mut interruptions = 0;
+    for n in 0..120 * 34 {
+        let snapshot = s.snapshot();
+        let at = |o| Vec3::from(snapshot.players.iter().find(|p| p.owner == o).unwrap().feet);
+        let delta = at(bot) - at(enemy);
+        s.movement(
+            enemy,
+            100000 + n,
+            MoveInput {
+                yaw: delta.x.atan2(-delta.z),
+                forward: if delta.x.hypot(delta.z) > 1.6 {
+                    1.0
+                } else {
+                    0.0
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        ticks(&mut s, owner, &mut sequence, 1);
+        interruptions += usize::from(
+            s.bot_thoughts()
+                .iter()
+                .any(|t| t.bot == bot && matches!(t.behaviour, "fight" | "fly" | "chase")),
+        );
+    }
+    assert!(
+        interruptions > 120 * 30,
+        "did not suspend objective approach for longer than its ordinary 30-second approach budget: {interruptions}"
+    );
+    assert_eq!(
+        s.vitals()[&bot].score,
+        0,
+        "fixture finished before testing resumption"
+    );
+    eprintln!(
+        "interruption before disconnect: thoughts={:?} vitals={:?} players={:?}",
+        s.bot_thoughts(),
+        s.vitals(),
+        s.snapshot()
+            .players
+            .iter()
+            .map(|p| (p.owner, p.feet))
+            .collect::<Vec<_>>()
+    );
+    s.disconnect(enemy).unwrap();
+    assert_eq!(run_score(&mut s, owner, &mut sequence, 29), bot);
+    assert_round_ended(&mut s, owner, &mut sequence);
+    assert!(s.take_event_diagnostics().is_empty());
+}
+
+#[test]
+fn eight_specific_activation_bricks_compose_without_injected_goals() {
+    independent_activations(8);
+}
+
+fn independent_activations(count: usize) {
+    let flags = [
+        "blueLatch",
+        "violetLatch",
+        "copperLatch",
+        "linenLatch",
+        "cedarLatch",
+        "clayLatch",
+        "indigoLatch",
+        "silverLatch",
+    ];
+    let flags = &flags[..count];
     let guards: Vec<_> = flags.iter().map(|key| variable(key, 1)).collect();
     let mut bricks = Vec::new();
     for (i, key) in flags.iter().enumerate() {
@@ -145,7 +373,7 @@ fn four_specific_activation_bricks_compose_without_injected_goals() {
             vec![variable(key, 0)],
             0,
         )];
-        if i == 3 {
+        if i + 1 == count {
             rows.push(row(
                 "onActivate",
                 "addPlayerScore",
@@ -171,8 +399,10 @@ fn four_specific_activation_bricks_compose_without_injected_goals() {
     }
     // World order and authored names carry no objective policy.
     bricks.swap(0, 2);
+    bricks.push(round_observer());
     let (mut s, owner, mut sequence) = game(bricks);
     let bot = run_score(&mut s, owner, &mut sequence, 17);
+    assert_round_ended(&mut s, owner, &mut sequence);
     assert_eq!(
         s.vitals()[&owner].score,
         0,

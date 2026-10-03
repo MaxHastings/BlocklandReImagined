@@ -12,6 +12,9 @@ const MAX_PLAYERS: &str = "$Pref::Server::MaxPlayers";
 /// Start Game's native Game Mode button (v20 had no game modes).
 const GAME_MODE_BUTTON: &str = "SM_GameMode";
 const GAME_MODE_COMMAND: &str = "nativegamemodes";
+const COLORSET_BUTTON: &str = "SM_ColorSets";
+const COLORSET_SUMMARY: &str = "SM_ColorSetName";
+const COLORSET_COMMAND: &str = "nativecolorsets";
 
 pub struct NativeScreen {
     id: ScreenId,
@@ -21,6 +24,8 @@ pub struct NativeScreen {
     request: Option<RequestId>,
     /// The game mode the Start Game controls last showed.
     shown_mode: Option<Option<String>>,
+    /// A local chooser changes prefs without waiting for a host action result.
+    shown_colorset: Option<String>,
     /// Chat input: the sent line Up and Down have recalled, if any.
     history: Option<usize>,
     /// Join Server's sort: v20's `JS_serverList.sortedBy` column and
@@ -97,6 +102,7 @@ impl NativeScreen {
             server_addresses: vec![],
             request: None,
             shown_mode: None,
+            shown_colorset: None,
             server_sort: None,
             escape_workshop_layout_delta: 0,
             history: None,
@@ -139,6 +145,7 @@ impl NativeScreen {
                 s.radio(radio);
                 s.server_type(core, radio != "SM_OptSinglePlayer");
                 s.game_mode_button();
+                s.colorset_button();
             }
             ScreenId::JoinServer => {
                 s.visible("JSG_demoBanner", false); s.visible("JSG_demoBanner2", false);
@@ -369,6 +376,57 @@ impl NativeScreen {
             self.view.set_active(n, fixed.is_none());
         }
     }
+
+    fn colorset_button(&mut self) {
+        let Some(start) = self.view.by_command("SM_StartMission();") else {
+            return;
+        };
+        let parent = self.view.node(start).parent.unwrap_or(self.view.root);
+        let anchor = self
+            .view
+            .by_command("canvas.pushDialog(AddOnsGui);")
+            .filter(|&n| self.view.node(n).parent == Some(parent))
+            .unwrap_or(start);
+        let control = &self.view.node(anchor).ctrl;
+        let y = control.position[1] - 28;
+        let (h_sizing, v_sizing) = (control.h_sizing, control.v_sizing);
+        let mut button = control.clone();
+        button.children.clear();
+        button.position = [20, y];
+        button.extent = [100, 22];
+        button.variable = None;
+        button.accelerator = None;
+        button.name = Some(COLORSET_BUTTON.into());
+        button.text = Some("Colorsets...".into());
+        button.command = Some(COLORSET_COMMAND.into());
+        button.h_sizing = h_sizing;
+        button.v_sizing = v_sizing;
+        self.view.add(parent, button);
+        let mut summary = text("GuiTextProfile", Rect::new(130, y + 2, 348, 18), "");
+        summary.name = Some(COLORSET_SUMMARY.into());
+        summary.h_sizing = h_sizing;
+        summary.v_sizing = v_sizing;
+        self.view.add(parent, summary);
+    }
+
+    fn colorset_available(&self, core: &Core) -> bool {
+        let selected = core.prefs.str_or(HOST_COLORSET_PREF, "");
+        core.host_colorsets
+            .iter()
+            .any(|choice| choice.id == selected)
+    }
+
+    fn show_colorsets(&mut self, core: &Core) {
+        let selected = core.prefs.str_or(HOST_COLORSET_PREF, "");
+        self.shown_colorset = Some(selected.into());
+        self.set(
+            COLORSET_SUMMARY,
+            &super::host_colorsets::label(core, selected),
+        );
+        if let Some(button) = self.view.id(COLORSET_BUTTON) {
+            self.view.set_active(button, self.request.is_none());
+        }
+    }
     /// startMissionGui::ClickSinglePlayer/ClickLAN/ClickInternet: single
     /// player greys the server options out and plays alone.
     fn server_type(&mut self, core: &Core, lan: bool) {
@@ -413,10 +471,13 @@ impl NativeScreen {
                     self.view.select(n, i.map(|i| i as i64));
                 }
                 self.show_game_mode(core);
+                self.show_colorsets(core);
                 self.map_preview(core);
                 if let Some(n) = self.view.by_command("SM_StartMission();") {
-                    self.view
-                        .set_active(n, !maps.is_empty() && self.request.is_none());
+                    self.view.set_active(
+                        n,
+                        !maps.is_empty() && self.request.is_none() && self.colorset_available(core),
+                    );
                 }
             }
             ScreenId::JoinServer => {
@@ -596,6 +657,13 @@ impl NativeScreen {
         if self.request.is_some() {
             return;
         }
+        if !self.colorset_available(core) {
+            core.message_ok(
+                "Color set unavailable",
+                "Choose an installed color set before starting the game.",
+            );
+            return;
+        }
         let Some(id) = self
             .selected("SM_missionList")
             .and_then(|i| self.map_ids.get(i))
@@ -721,6 +789,9 @@ impl Screen for NativeScreen {
         self.id != ScreenId::Play
     }
     fn on_wake(&mut self, core: &mut Core) {
+        if self.id == ScreenId::StartMission {
+            core.request(UiAction::RefreshHostColorsets);
+        }
         // Back at the main menu from a first-run Tutorial: the name question.
         if self.id == ScreenId::MainMenu
             && core.prefs.str_or(crate::ui::NAME_PROMPT, "") == "after_tutorial"
@@ -749,7 +820,9 @@ impl Screen for NativeScreen {
     fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
         // The Game Mode dialog stores its choice; show it once it closes.
         if self.id == ScreenId::StartMission
-            && self.shown_mode.as_ref() != Some(&super::modes::chosen(core).map(|m| m.id.clone()))
+            && (self.shown_mode.as_ref() != Some(&super::modes::chosen(core).map(|m| m.id.clone()))
+                || self.shown_colorset.as_deref()
+                    != Some(core.prefs.str_or(HOST_COLORSET_PREF, "")))
         {
             self.refresh(core);
         }
@@ -882,6 +955,7 @@ impl Screen for NativeScreen {
             }
             "sm_startmission();" => self.host(core),
             GAME_MODE_COMMAND => core.push(ScreenId::GameModes),
+            COLORSET_COMMAND if self.request.is_none() => core.push(ScreenId::HostColorsets),
             "canvas.pushdialog(serverconfiggui);" => core.push(ScreenId::ServerConfig),
             "canvas.pushdialog(musicfilesgui);" => core.push(ScreenId::MusicFiles),
             "sm_missionlist.select();" => self.map_preview(core),
@@ -908,10 +982,6 @@ impl Screen for NativeScreen {
                 if first_run {
                     core.first_run_welcome();
                 }
-            }
-            c if c.starts_with("js_sortlist(") || c.starts_with("js_sortnumlist(") => {
-                self.server_sort = next_server_sort(self.server_sort, c);
-                self.refresh(core);
             }
             c if c.starts_with("js_sortlist(") || c.starts_with("js_sortnumlist(") => {
                 self.server_sort = next_server_sort(self.server_sort, c);
@@ -1190,6 +1260,368 @@ impl Screen for MessageScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn colorset_fixture() -> crate::ui::Ui {
+        let mut ui = crate::ui::Ui::new(
+            crate::testing::screens_pack(),
+            crate::ui::UiConfig {
+                size: (1024, 768),
+                scale: Some(1.0),
+                platform: crate::binds::Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        ui.core.maps = vec![MapInfo {
+            id: "slate".into(),
+            name: "Slate".into(),
+            description: String::new(),
+            preview: IconRef::None,
+        }];
+        ui.core
+            .host_colorsets
+            .extend([host_colorset("first"), host_colorset("second")]);
+        ui
+    }
+
+    fn host_colorset(id: &str) -> HostColorset {
+        HostColorset {
+            id: id.into(),
+            name: "A creator's colors".into(),
+            divisions: vec![],
+        }
+    }
+
+    fn choose_colorset(screen: &mut NativeScreen, core: &mut Core, id: &str) {
+        let mut chooser = super::super::host_colorsets::HostColorsets::new(core);
+        let index = core
+            .host_colorsets
+            .iter()
+            .position(|choice| choice.id == id)
+            .unwrap();
+        chooser.on_event(
+            &ViewEvent {
+                node: chooser.view().id(&format!("HC_Choice{index}")).unwrap(),
+                kind: EventKind::Changed,
+            },
+            core,
+        );
+        chooser.on_event(
+            &ViewEvent {
+                node: chooser.view().id("HC_Use").unwrap(),
+                kind: EventKind::Click,
+            },
+            core,
+        );
+        screen.on_update(core);
+    }
+
+    #[test]
+    fn colorset_choice_persists_without_changing_host_payload_or_raw_fields() {
+        let mut ui = colorset_fixture();
+        let mut screen = NativeScreen::new(ScreenId::StartMission, &ui.core);
+        screen.layout(1024, 768, &mut ui.core);
+        for (name, raw) in [
+            ("TxtServerName", "My unfinished name "),
+            ("TxtServerAdminPasswordCRAP", "private phrase"),
+        ] {
+            let node = screen.view.id(name).unwrap();
+            screen.view.set_text(node, raw);
+            screen.on_event(
+                &ViewEvent {
+                    node,
+                    kind: EventKind::Changed,
+                },
+                &mut ui.core,
+            );
+        }
+        let players = screen.view.id("SM_PlayerCountMenu").unwrap();
+        screen.view.select(players, Some(17));
+        choose_colorset(&mut screen, &mut ui.core, "second");
+        assert_eq!(ui.core.prefs.get(HOST_COLORSET_PREF), Some("second"));
+        assert!(
+            ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::SaveSettings(_)))
+        );
+        ui.apply(UiUpdate::HostColorsets(vec![
+            host_colorset("second"),
+            host_colorset("first"),
+        ]));
+        screen.on_update(&mut ui.core);
+        screen.on_wake(&mut ui.core);
+        assert_eq!(screen.edit("TxtServerName"), "My unfinished name ");
+        assert_eq!(screen.edit("TxtServerAdminPasswordCRAP"), "private phrase");
+        assert_eq!(screen.view.selected(players), Some(17));
+        assert_eq!(ui.core.prefs.get(HOST_COLORSET_PREF), Some("second"));
+        assert!(
+            ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::RefreshHostColorsets))
+        );
+        screen.host(&mut ui.core);
+        assert!(ui.drain_actions().iter().any(|(_, action)| matches!(action,
+            UiAction::HostGame { map, server_name, admin_password, max_players:17, .. }
+            if map == "slate" && server_name == "My unfinished name " && admin_password == "private phrase")));
+        let reopened = NativeScreen::new(ScreenId::StartMission, &ui.core);
+        assert_eq!(
+            reopened
+                .view
+                .node(reopened.view.id(COLORSET_SUMMARY).unwrap())
+                .state
+                .text
+                .as_deref(),
+            Some("A creator's colors")
+        );
+    }
+
+    #[test]
+    fn missing_colorset_stays_visible_and_blocks_even_direct_launch_until_replaced() {
+        let mut ui = colorset_fixture();
+        ui.core.prefs.set(HOST_COLORSET_PREF, "missing-choice");
+        let mut screen = NativeScreen::new(ScreenId::StartMission, &ui.core);
+        let summary = screen.view.id(COLORSET_SUMMARY).unwrap();
+        assert_eq!(
+            screen.view.node(summary).state.text.as_deref(),
+            Some("Unavailable: missing-choice")
+        );
+        assert!(
+            !screen
+                .view
+                .node(screen.view.by_command("SM_StartMission();").unwrap())
+                .state
+                .active
+        );
+        screen.host(&mut ui.core);
+        assert!(
+            !ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::HostGame { .. }))
+        );
+        assert_eq!(
+            ui.core.prefs.get(HOST_COLORSET_PREF),
+            Some("missing-choice")
+        );
+        ui.core.host_colorsets.clear();
+        screen.on_update(&mut ui.core);
+        assert_eq!(
+            ui.core.prefs.get(HOST_COLORSET_PREF),
+            Some("missing-choice")
+        );
+        ui.core.host_colorsets.push(HostColorset {
+            id: String::new(),
+            name: "Default".into(),
+            divisions: vec![],
+        });
+        screen.on_update(&mut ui.core);
+        choose_colorset(&mut screen, &mut ui.core, "");
+        screen.host(&mut ui.core);
+        assert!(
+            ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::HostGame { .. }))
+        );
+    }
+
+    #[test]
+    fn chooser_use_refreshes_start_game_before_save_ack_and_keeps_raw_draft() {
+        use crate::input::{InputEvent, MouseButton};
+        fn click(ui: &mut crate::ui::Ui, screen: ScreenId, control: &str) {
+            let (x, y) = ui.control_center(screen, control).unwrap();
+            ui.handle_input(InputEvent::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+            });
+            ui.handle_input(InputEvent::MouseUp {
+                button: MouseButton::Left,
+                x,
+                y,
+            });
+        }
+        let mut ui = colorset_fixture();
+        ui.core.prefs.set(HOST_COLORSET_PREF, "user:removed.txt");
+        ui.core.prefs.set(SERVER_TYPE, "LAN");
+        ui.core.prefs.set("$Pref::Server::Name", "");
+        ui.core.push(ScreenId::StartMission);
+        ui.update(0);
+        ui.drain_actions(); // Neither a catalog nor a save acknowledgment is delivered.
+        click(&mut ui, ScreenId::StartMission, "TxtServerName");
+        for c in "A raw unfinished name ".chars() {
+            ui.handle_input(InputEvent::Char(c));
+        }
+        let view = ui.screen(ScreenId::StartMission).unwrap().view();
+        let raw = view.edit_text(view.id("TxtServerName").unwrap());
+        assert_eq!(raw, "A raw unfinished name ");
+        assert!(
+            !view
+                .node(view.by_command("SM_StartMission();").unwrap())
+                .state
+                .active
+        );
+        click(&mut ui, ScreenId::StartMission, COLORSET_BUTTON);
+        assert_eq!(ui.top_id(), ScreenId::HostColorsets);
+        click(&mut ui, ScreenId::HostColorsets, "HC_Choice1");
+        click(&mut ui, ScreenId::HostColorsets, "HC_Use");
+        assert_eq!(ui.top_id(), ScreenId::StartMission);
+        assert_eq!(ui.core.prefs.get(HOST_COLORSET_PREF), Some("first"));
+        ui.update(0);
+        let view = ui.screen(ScreenId::StartMission).unwrap().view();
+        assert_eq!(
+            view.text_of(view.id(COLORSET_SUMMARY).unwrap()),
+            "A creator's colors"
+        );
+        assert!(
+            view.node(view.by_command("SM_StartMission();").unwrap())
+                .state
+                .active
+        );
+        assert_eq!(view.edit_text(view.id("TxtServerName").unwrap()), raw);
+        click(&mut ui, ScreenId::StartMission, "SM_StartMission();");
+        assert!(ui.drain_actions().iter().any(
+            |(_, a)| matches!(a,UiAction::HostGame { server_name,.. } if server_name == &raw)
+        ));
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires generated v20 UI content; bounded offscreen native capture"]
+    fn authored_start_game_colorsets_fit_and_render() -> anyhow::Result<()> {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let pack = crate::testing::content_pack(&bri_package::testing::pack_dir(
+            &workspace.join("content"),
+            "ui_pack",
+        ));
+        let out = workspace.join("artifacts/ui-native-host-colorsets");
+        std::fs::create_dir_all(&out)?;
+        let gpu = crate::gpu::Headless::new()?;
+        let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+        for (physical, requested) in [
+            ((400, 300), 1),
+            ((1024, 768), 1),
+            ((1024, 768), 2),
+            ((1920, 1080), 1),
+            ((1920, 1080), 2),
+        ] {
+            let mut ui = colorset_fixture();
+            ui.core.pack = pack.clone();
+            ui.core.host_colorsets[0].divisions = pack
+                .data
+                .data
+                .brick_colorset
+                .iter()
+                .map(|division| PaintDivision {
+                    name: division.name.clone(),
+                    colors: division.colors.clone(),
+                })
+                .collect();
+            ui.core.host_colorsets[1].name = "Builder's bright colors".into();
+            ui.core.host_colorsets[1].divisions = vec![PaintDivision {
+                name: "Example".into(),
+                colors: vec![
+                    [1.0, 0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0, 0.5],
+                ],
+            }];
+            ui.core.host_colorsets[2].name = "Transparent & pastel".into();
+            let mut prefs = ui.core.prefs.clone();
+            prefs.set(crate::ui::UI_SCALE, (requested * 100).to_string());
+            let scale =
+                crate::ui::preferred_scale(&prefs, (physical.0 as u32, physical.1 as u32)).unwrap();
+            ui.core.logical = (
+                (physical.0 as f32 / scale).floor() as i32,
+                (physical.1 as f32 / scale).floor() as i32,
+            );
+            let canvas = Rect::new(0, 0, ui.core.logical.0, ui.core.logical.1);
+            let mut screen = NativeScreen::new(ScreenId::StartMission, &ui.core);
+            screen.layout(ui.core.logical.0, ui.core.logical.1, &mut ui.core);
+            let button = screen.view.id(COLORSET_BUTTON).unwrap();
+            let summary = screen.view.id(COLORSET_SUMMARY).unwrap();
+            let window = screen
+                .view
+                .node(screen.view.node(button).parent.unwrap())
+                .rect;
+            assert_eq!(canvas.intersect(&window), Some(window));
+            for added in [button, summary] {
+                let rect = screen.view.node(added).rect;
+                assert_eq!(window.intersect(&rect), Some(rect));
+                for node in screen.view.walk() {
+                    if node == button || node == summary || !screen.view.node(node).state.visible {
+                        continue;
+                    }
+                    if matches!(
+                        screen.view.node(node).ctrl.class.as_str(),
+                        "GuiTextEditCtrl"
+                            | "GuiPopUpMenuCtrl"
+                            | "GuiBitmapButtonCtrl"
+                            | "GuiButtonCtrl"
+                            | "GuiRadioCtrl"
+                    ) {
+                        assert!(
+                            screen.view.node(node).rect.intersect(&rect).is_none(),
+                            "colorset control overlaps {:?}",
+                            screen.view.node(node).ctrl
+                        );
+                    }
+                }
+            }
+            for state in ["selected", "choices", "custom", "missing"] {
+                let mut chooser = super::super::host_colorsets::HostColorsets::new(&ui.core);
+                if state == "custom" {
+                    chooser.on_event(
+                        &ViewEvent {
+                            node: chooser.view().id("HC_Choice1").unwrap(),
+                            kind: EventKind::Changed,
+                        },
+                        &mut ui.core,
+                    );
+                } else if state == "missing" {
+                    ui.core
+                        .prefs
+                        .set(HOST_COLORSET_PREF, "user:removed-colors.txt");
+                    chooser = super::super::host_colorsets::HostColorsets::new(&ui.core);
+                    screen.on_update(&mut ui.core);
+                }
+                let mut draw = DrawList::new(canvas);
+                screen.draw(&pack, &mut draw, &ui.core);
+                if state != "selected" {
+                    let rect = chooser
+                        .view()
+                        .node(chooser.view().id("HC_Window").unwrap())
+                        .rect;
+                    assert_eq!(canvas.intersect(&rect), Some(rect));
+                    for name in ["HC_List", "HC_Preview", "HC_Folder", "HC_Cancel", "HC_Use"] {
+                        let action = chooser.view().node(chooser.view().id(name).unwrap()).rect;
+                        assert_eq!(rect.intersect(&action), Some(action));
+                    }
+                    chooser.draw(&pack, &mut draw, &ui.core);
+                }
+                let pixels = gpu.render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &draw,
+                    (physical.0 as u32, physical.1 as u32),
+                    scale,
+                    [0.15, 0.15, 0.18, 1.0],
+                )?;
+                assert!(renderer.missing_textures().next().is_none());
+                image::save_buffer(
+                    out.join(format!(
+                        "StartGame-{state}-{}x{}-{requested}x.png",
+                        physical.0, physical.1
+                    )),
+                    &pixels,
+                    physical.0 as u32,
+                    physical.1 as u32,
+                    image::ColorType::Rgba8,
+                )?;
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn escape_workshop_row_has_native_gaps_and_window_fits_canvas() {

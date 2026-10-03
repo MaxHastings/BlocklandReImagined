@@ -237,7 +237,7 @@ impl App {
         }
     }
     /// Paint divisions for a world palette: the content's named divisions
-    /// when the world uses the default palette, numbered ones otherwise.
+    /// when the world matches a locally installed colorset, numbered ones otherwise.
     pub(super) fn colorset(&self, palette: &[[f32; 4]]) -> Vec<PaintDivision> {
         let default_colors: Vec<_> = self
             .content
@@ -247,6 +247,13 @@ impl App {
             .collect();
         if palette == default_colors.as_slice() {
             self.content.paint.clone()
+        } else if let Some(set) = self.ui.core.host_colorsets.iter().find(|set| {
+            set.divisions
+                .iter()
+                .flat_map(|d| d.colors.iter().copied())
+                .eq(palette.iter().copied())
+        }) {
+            set.divisions.clone()
         } else {
             palette
                 .chunks(9)

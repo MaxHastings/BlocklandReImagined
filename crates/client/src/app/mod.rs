@@ -1426,6 +1426,17 @@ impl PlatformApp for App {
     }
     fn focus_changed(&mut self, focused: bool) {
         self.audio.set_focused(focused);
+        if focused
+            && (self.ui.is_open(bri_ui::screens::ScreenId::StartMission)
+                || self.ui.is_open(bri_ui::screens::ScreenId::HostColorsets))
+        {
+            self.ui
+                .apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+                    &self.content.paths.root,
+                    &self.state_dir,
+                    &self.content.paint,
+                )));
+        }
     }
     fn wants_frame_timing(&self) -> bool {
         self.ui.core.perf.visible()

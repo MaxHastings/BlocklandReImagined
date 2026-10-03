@@ -20,7 +20,8 @@ to use it. Use ordinary vehicle spawn bricks for other vehicles.
 Use a clear area. Press Escape and choose **Rule Workshop**, then an example.
 The picker plants editable bricks six units east of you. Wrench a brick and
 open Events. Choose an Input Event; Self is selected automatically, then choose
-an Output Event. `+ IF` adds an optional condition; `X` removes it; `Copy row`
+an Output Event. `+ IF` adds a blank check: choose what to check and its value
+before Send. `X` removes it; `Copy row`
 makes a neighboring editable row. Multiple conditions mean AND. With conditions,
 rows expand into trigger, IF, then DO order. Delay ms is milliseconds (up to five
 minutes). Send applies the edits. The classic rows
@@ -76,7 +77,8 @@ them. Goals are sensors on colored plates; build the field and walls.
 
 A region is centered on its event brick. It follows the brick's footprint
 (minimum one world unit) and is four units tall by default. To resize it, open
-that brick's Wrench and turn on **Custom size** under **Detection region**;
+that brick's Wrench, click **Region...**, and turn on **Custom size** in
+**Detection region**;
 enter width, height and depth, then Send. The outline previews the selected
 brick and shows saved sensors. A region is a sensor, not a wall. Player checks
 use a point above the feet; object checks use the vehicle/ball center. The
