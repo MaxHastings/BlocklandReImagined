@@ -94,7 +94,7 @@ STEP_INPUTS = {
     'tutorial': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 2),
 }
 PACK_STEPS = list(STEP_INPUTS)
-STEPS = ['decompile', 'build_tools', *PACK_STEPS, 'check']
+STEPS = ['decompile', 'build_tools', *PACK_STEPS, 'modern_lighting', 'check']
 
 # Workspace packages each pack step runs (bri-client is always built for the check).
 STEP_CARGO = {
@@ -506,7 +506,7 @@ class Pipeline:
         # unification and recompiles much of the client even when nothing changed.
         packages = sorted({p for names in STEP_CARGO.values() for p in names})
         args = []
-        for package in packages + ['bri-client']:
+        for package in packages + ['bri-client', 'bri-render']:
             args += ['-p', package]
         run('cargo', 'build', '--release', '--locked', *args)
         manifests = sorted({m for key in PACK_STEPS if self.plan[key]['build'] for m in STEP_MANIFESTS.get(key, [])})
@@ -652,6 +652,13 @@ class Pipeline:
         # The target models and their textures come from the archive itself.
         run(self.bin('tutorial_pack'), bound, setup, zips['map_tutorial.zip'], self.pack('tutorial'))
 
+    def modern_lighting(self):
+        # Copied/unstamped packs also need the derived modern-light descriptor.
+        # The Rust preparer validates source identity and skips a fresh sidecar;
+        # stale/missing data is recovered offline, never during Dynamic play.
+        run(self.bin('prepare_lighting'), self.pack('map_bundle'))
+        run(self.bin('prepare_lighting'), self.pack('map_bundle'), '--check')
+
     def check(self):
         run(self.bin('bri-client'), '--check', self.content)
 
@@ -666,7 +673,8 @@ TITLES = {
     'weapon_debris': 'Weapon debris', 'effects_runtime': 'Runtime effects, including weapon effects',
     'item_presentation': 'Held and dropped item presentation', 'audio': 'Audio', 'vehicles': 'Vehicles',
     'events': 'Wrench events', 'weather': 'Weather', 'foliage': 'Foliage', 'worlds': 'Stock saves',
-    'tutorial': 'Tutorial', 'check': 'Startup validation (bri-client --check)',
+    'tutorial': 'Tutorial', 'modern_lighting': 'Modern live-light parameters (offline recovery)',
+    'check': 'Startup validation (bri-client --check)',
 }
 
 DOTNET_HINT = {
@@ -712,10 +720,12 @@ def regenerate(v20, content, steps, rebuild_decompiled=False, keep_stale=False, 
             import PIL  # noqa: F401
         except ImportError:
             fail(f'The item presentation step needs Pillow: `{sys.executable} -m pip install pillow`')
+    prepare_lighting = bool({'map_bundle', 'modern_lighting', 'check'} & set(steps))
     selected = [s for s in STEPS
                 if (s in PACK_STEPS and s in building)
                 or (s == 'decompile' and 'decompile' in steps and (building or rebuild_decompiled))
-                or (s == 'build_tools' and (building or 'check' in steps))
+                or (s == 'build_tools' and (building or prepare_lighting))
+                or (s == 'modern_lighting' and prepare_lighting)
                 or (s == 'check' and 'check' in steps)]
     started = time.monotonic()
     for index, step in enumerate(selected, 1):

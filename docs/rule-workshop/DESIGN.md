@@ -137,9 +137,9 @@ briefs informed the experiment; they do not define mandatory infrastructure.
     only against an equivalent live model; changed facts/authority invalidate it.
     Supported native attacks retain aim/valid non-firing charge holds but wait
     for canonical spawn protection to end before spending ammunition or releasing.
-    See the [current pipeline audit](../audits/npc-pipeline-current.md) and
-    [v0.2.2 checklist](V0.2.2-PLAYTEST.md) for evidence and limits; focused passes
-    do not establish all fourteen journeys or replace human playtests.
+    See the [v0.2.2 checklist](V0.2.2-PLAYTEST.md) for supported creator cases
+    and limits. Independent headless acceptance covers the fourteen journeys
+    and a held-out composition; it does not replace human playtests.
 
 ## Awkward seams and deliberate limits
 
