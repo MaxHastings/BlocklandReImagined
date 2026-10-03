@@ -26,8 +26,8 @@ pub struct Graphics {
     /// Native `$pref::Video::Lighting`: 0 Classic (v20's look: baked maps,
     /// sun-lit bricks), 2 Unified (default: bricks and maps share the map's
     /// recovered lights, sun and shadows, with highlights; see
-    /// `bri_render::map_lighting`), 3 Dynamic (2, with the map's own
-    /// surfaces lit live; its shadows keep a light cube per map light).
+    /// `bri_render::map_lighting`), 3 Dynamic (live illumination of current
+    /// geometry, with no legacy lightmap/visibility/residual shading).
     /// A saved 1 (Unified without highlights) reads as 2.
     pub lighting: u8,
 }
@@ -58,12 +58,9 @@ impl Graphics {
             .parse::<f32>()
             .unwrap_or((f32::from(default.anisotropy) - 1.0) / 15.0);
         let shadows = shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0));
-        // Dynamic reads each map light's reach from its shadow cube: with
-        // shadows off it draws as Unified.
-        let lighting = match bri_ui::screens::options::lighting(&prefs) as u8 {
-            3 if shadows.is_none() => 2,
-            mode => mode,
-        };
+        // Shadow quality never changes the lighting model. Dynamic with
+        // shadows disabled is the same live model, explicitly unshadowed.
+        let lighting = bri_ui::screens::options::lighting(&prefs) as u8;
         Self {
             filtering: TextureFiltering::from_v20(
                 prefs.bool_or("$pref::OpenGL::textureTrilinear", default.trilinear),
@@ -118,7 +115,7 @@ mod tests {
         assert_eq!(graphics(&[]).shadows.map(|s| s.light_cubes), Some(false));
         assert_eq!(
             graphics(&[(LIGHTING, "3"), ("$pref::ShadowQuality", "4")]).lighting,
-            2
+            3
         );
         // The old Unified without highlights is Unified.
         assert_eq!(graphics(&[(LIGHTING, "1")]).lighting, 2);

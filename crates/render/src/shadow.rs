@@ -56,14 +56,13 @@
 //! reaches much farther toward the sun than the casters' (`MAP_REACH`):
 //! the map is large and its walls stand far from the eye.
 //!
-//! The Dynamic lighting mode (`ShadowSettings::light_cubes`) lights
-//! objects from every map light, not only those with a visibility channel,
-//! at any distance from the eye. (Map surfaces carry each light's reach per
-//! lightmap texel from the bake.) Each light without a channel keeps a cube
-//! of the map's surfaces (half a moving caster's face, at least 128), drawn
-//! once, a few lights a frame, into layers after the lamps'. The map is
-//! static, so they never redraw while it stays; bricks and players still
-//! shade only the lamps with a slot.
+//! Dynamic shades map surfaces and objects from the live sun, ambient and
+//! recovered light parameters. Every recovered map light keeps a map-geometry
+//! cube, populated 24 faces per frame. No legacy lightmap, visibility volume or
+//! residual is sampled. Geometry changes invalidate the cubes. The nearest
+//! quality-limited lamps additionally receive live brick and moving shadows;
+//! sun cascades read current opaque map geometry including terrain and models.
+//! Past the finite cascade range the sun is unshadowed rather than baked.
 //!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, or when the static chunks
@@ -122,10 +121,9 @@ pub struct ShadowSettings {
     /// `resolution`: faces are tiles of the sun's map layers).
     pub lamps: u32,
     pub lamp_resolution: u32,
-    /// The Dynamic lighting mode: every map light without a visibility
-    /// channel also keeps a cube of the map's own surfaces
-    /// (`cube_resolution`), drawn once, so its light reaches exactly the
-    /// objects it sees.
+    /// Dynamic: every recovered map light keeps a geometry-derived cube.
+    /// Map surfaces and objects both read it; no legacy visibility channel.
+    /// Cached faces are rebuilt when map geometry or light parameters change.
     pub light_cubes: bool,
 }
 impl ShadowSettings {
@@ -174,12 +172,10 @@ impl ShadowSettings {
         let per_layer = self.tiles_of(size) * self.tiles_of(size);
         (self.lamps * FACES as u32).div_ceil(per_layer)
     }
-    /// Each map light's cube face in the Dynamic mode: half a moving
-    /// caster's face, at least 128.
+    /// Each Dynamic map light face: moving-caster resolution, at least
+    /// 256 (512 at Best). Finite MAX_LIGHTS x 6 faces in the shared atlas.
     pub fn cube_resolution(&self) -> u32 {
-        (self.lamp_dynamic_resolution() / 2)
-            .max(128)
-            .min(self.resolution)
+        self.lamp_dynamic_resolution().max(256).min(self.resolution)
     }
     /// The map lights' cubes' layers, after the lamps' (none unless
     /// `light_cubes`).
@@ -1160,8 +1156,7 @@ impl ShadowMaps {
     /// The map lights' cube faces to draw this frame from `map` (identified
     /// by `key`), at most `budget`, lights in order, marking them drawn; and
     /// whether every cube is then whole. `lights` are each light's position
-    /// and reach, or `None` for a light that needs no cube (map surfaces
-    /// carry its visibility per texel). Without light cubes or a map, none.
+    /// and reach, or `None` for an inactive light. Without cubes or a map, none.
     pub fn stale_cube_faces(
         &self,
         key: &[usize],
@@ -1373,22 +1368,22 @@ mod tests {
         assert_eq!(best.lamp_map_tile(23), (21, [1536, 512, 512]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
-        // Dynamic: 24 lights' cubes after the lamps, 64 faces of 256 a layer.
+        // Dynamic: 24 lights' cubes after the lamps, 16 faces of 512 a layer.
         assert_eq!(best.cube_layers(), 0);
         let dynamic = ShadowSettings {
             light_cubes: true,
             ..best
         };
-        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (256, 3));
-        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 256]));
-        assert_eq!(dynamic.cube_tile(143), (24, [1792, 256, 256]));
+        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (512, 9));
+        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 512]));
+        assert_eq!(dynamic.cube_tile(143), (30, [1536, 1536, 512]));
         let low = ShadowSettings {
             light_cubes: true,
             ..ShadowSettings::LOW
         };
         assert_eq!(
             (low.cube_resolution(), low.cube_layers(), low.cube_tile(0).0),
-            (128, 3, 6)
+            (256, 9, 6)
         );
     }
 }

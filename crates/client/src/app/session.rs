@@ -303,6 +303,7 @@ impl App {
             "This map has no usable native bundle yet"
         );
         let paths = self.content.paths.clone();
+        let lighting = self.graphics.lighting;
         let light_cache = self.state_dir.join("light-volumes");
         let paths_for_maps = paths.clone();
         let base_map = hosted.base_map.clone();
@@ -431,8 +432,12 @@ impl App {
                 physics_snapshot.ensure_same(&item_physics)?;
                 let loaded =
                     paths.load_map_with_palette(&base_map, None, host_palette.as_deref())?;
-                let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
-                let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                let visual = load_visual_map(&paths.map_bundle, &base_map, lighting)?;
+                let mut light_volume = LightVolumeState::start(
+                    &visual.scene,
+                    &light_cache,
+                    visual.modern_lights.as_deref(),
+                );
                 light_volume.set_light_shapes(&loaded.breakables);
                 // Every package this host loaded, hashed: what joiners must match.
                 let identity = paths.environment()?;
@@ -724,6 +729,7 @@ impl App {
         let servers_file = self.state_dir.join("servers.json");
         let lan_hosts = self.lobby.lan_hosts.clone();
         let paths = self.content.paths.clone();
+        let lighting = self.graphics.lighting;
         let light_cache = self.state_dir.join("light-volumes");
         let player = self.join_name();
         let weapon_snapshot = self.content.weapons.clone();
@@ -906,7 +912,7 @@ impl App {
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
-                prepare_map(&paths, &map, selected, &catalog, &light_cache)
+                prepare_map(&paths, &map, selected, &catalog, &light_cache, lighting)
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;

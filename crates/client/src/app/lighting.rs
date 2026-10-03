@@ -1,7 +1,7 @@
-//! Baked map lighting: the light volume and its cache.
+//! Isolated modern source lighting and compatibility light-volume preparation.
 use super::*;
 
-/// Map lighting: the baked light volume, reflections and the environment probe.
+/// Map lighting, reflections and the environment probe.
 pub(super) struct Lighting {
     pub(super) light_volume: LightVolumeState,
     /// Mirror surfaces and their reflections, for the world pass's format.
@@ -10,21 +10,14 @@ pub(super) struct Lighting {
     pub(super) environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
 }
 
-/// The map's baked lighting, started on its own thread as soon as the map's
-/// scene is read, so it bakes while the rest of the map loads, and uploaded
-/// once per renderer. Two bakes: the classic light volume
-/// (`bri_render::light_volume`, for the Classic lighting mode) and the map's
-/// recovered lights with their visibility and residual volumes
-/// (`bri_render::map_lighting`, for the Unified modes). Each is stored under
-/// the client state directory by its content key, so each map bakes once.
-/// Until a bake arrives, the modes that need it draw as Classic.
+/// Compatibility preparation runs only for a compatibility scene: Classic's
+/// light volume and Unified's recovered lights, visibility, residual and
+/// switchable per-texel shares. Dynamic loads an offline descriptor sidecar,
+/// without starting either bake. A mode switch lazily prepares its own scene.
 pub(super) enum Baked {
     Volume(bri_render::light_volume::LightVolume),
-    /// The map bake, and whether its Dynamic-mode residual volume is in it
-    /// (else `ResidualAll` follows).
-    Map(Box<bri_render::map_lighting::MapLighting>, bool),
-    /// The Dynamic mode's residual volume, when it bakes after the rest.
-    ResidualAll(bri_render::light_volume::LightVolume),
+    /// The Unified bake, including its legacy switchable-light shares.
+    Map(Box<bri_render::map_lighting::MapLighting>),
 }
 #[derive(Default)]
 pub(super) struct LightVolumeState {
@@ -36,13 +29,15 @@ pub(super) struct LightVolumeState {
     pub(super) leaks: Vec<bri_render::map_lighting::TexelFix>,
     /// The bake's per-texel lightmaps (leftover light and each light's
     /// share), for the map's images once a mode needs them.
-    pub(super) dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
-    /// The Dynamic mode's residual volume is baked (it can follow the rest
-    /// of the map bake).
-    pub(super) dynamic_ready: bool,
+    pub(super) switchable_sheets: Vec<bri_render::map_lighting::DynamicSheet>,
+    /// Prepared source descriptors; no recovery runs in the client.
+    pub(super) recovered: Vec<bri_render::map_lighting::MapLight>,
+    pub(super) source_modern: bool,
+    source_loading: Option<(bool, std::sync::Mutex<LightingSourceReceiver>)>,
+    source_failed: Option<bool>,
     /// The map's images hold the per-texel lightmaps (the scene uploaded
     /// again with them).
-    pub(super) dynamic_equipped: bool,
+    pub(super) switchable_equipped: bool,
     pub(super) uploaded: bool,
     /// The lighting mode the bound volumes serve.
     pub(super) bound_mode: u8,
@@ -50,6 +45,8 @@ pub(super) struct LightVolumeState {
     /// switches its lights off.
     pub(super) light_shapes: Vec<(u32, Vec3)>,
 }
+type LightingSourceReceiver =
+    std::sync::mpsc::Receiver<std::result::Result<bri_render::scene_loader::MapScene, String>>;
 /// Each recovered light's run-time tint: what the Add-On rules give it (1
 /// as the map was lit), scaled by the share of its owning light shapes still
 /// whole, so it goes dark when all of them break and half when one of two
@@ -98,7 +95,73 @@ impl LightVolumeState {
     /// grids cost frame time where many surfaces overlap on screen.
     const VIS_CELL: f32 = 2.0;
     const VIS_CELLS: usize = 2_000_000;
-    pub(super) fn start(scene: &SceneData, cache: &std::path::Path) -> Self {
+    pub(super) fn start(
+        scene: &SceneData,
+        cache: &std::path::Path,
+        modern_lights: Option<&[bri_render::map_lighting::MapLight]>,
+    ) -> Self {
+        let source_modern = modern_lights.is_some();
+        let mut state = if source_modern {
+            Self::default()
+        } else {
+            Self::start_legacy(scene, cache)
+        };
+        state.source_modern = source_modern;
+        state.recovered = modern_lights.unwrap_or_default().to_vec();
+        state
+    }
+    /// Source-mode changes prepare off-thread; completed work is applied only
+    /// if the user's latest selection still wants it. Gameplay is untouched.
+    pub(super) fn poll_source(
+        &mut self,
+        root: &Path,
+        id: &str,
+        modern: bool,
+    ) -> Option<bri_render::scene_loader::MapScene> {
+        if let Some((loading, rx)) = &mut self.source_loading {
+            let received = rx.get_mut().ok().map(|rx| rx.try_recv());
+            match received {
+                Some(Ok(Ok(scene))) => {
+                    let applies = *loading == modern;
+                    self.source_loading = None;
+                    if applies {
+                        return Some(scene);
+                    }
+                }
+                Some(Ok(Err(error))) => {
+                    eprintln!("Lighting mode preparation failed: {error}");
+                    self.source_failed = Some(*loading);
+                    self.source_loading = None;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return None,
+                _ => self.source_loading = None,
+            }
+        }
+        if modern == self.source_modern {
+            self.source_failed = None;
+            return None;
+        }
+        if self.source_failed == Some(modern) {
+            return None;
+        }
+        let root = root.to_owned();
+        let id = id.to_owned();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("lighting mode source".into())
+            .spawn(move || {
+                let result = super::load_visual_map(&root, &id, if modern { 3 } else { 2 })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(result);
+            });
+        if spawned.is_ok() {
+            self.source_loading = Some((modern, std::sync::Mutex::new(rx)));
+        } else {
+            self.source_failed = Some(modern);
+        }
+        None
+    }
+    fn start_legacy(scene: &SceneData, cache: &std::path::Path) -> Self {
         let Some(baker) = bri_render::light_volume::Baker::new(scene) else {
             return Self::default();
         };
@@ -134,22 +197,19 @@ impl LightVolumeState {
                 });
                 match stored {
                     Some(lighting) => {
-                        let _ = tx.send(Baked::Map(Box::new(lighting), true));
+                        let _ = tx.send(Baked::Map(Box::new(lighting)));
                     }
                     None => {
-                        // The other modes start without waiting for the
-                        // Dynamic mode's own residual volume.
-                        let (mut lighting, rest) = map.bake_staged(
+                        // Only compatibility modes ask for this bake. The
+                        // residual for all recovered lights is obsolete in
+                        // Dynamic, so do not bake that second volume.
+                        let lighting = map.bake_compatibility(
                             Self::MIN_CELL,
                             Self::MAX_CELLS,
                             Self::VIS_CELL,
                             Self::VIS_CELLS,
                         );
-                        let _ = tx.send(Baked::Map(Box::new(lighting.clone()), rest.is_none()));
-                        if let Some(rest) = rest {
-                            lighting.residual_all = rest.bake(Self::MIN_CELL, Self::MAX_CELLS);
-                            let _ = tx.send(Baked::ResidualAll(lighting.residual_all.clone()));
-                        }
+                        let _ = tx.send(Baked::Map(Box::new(lighting.clone())));
                         store_bake(&cache, &file, lighting.to_bytes(key));
                     }
                 }
@@ -180,10 +240,15 @@ impl LightVolumeState {
         broken: &BTreeSet<u32>,
         rules: &[bri_sim::session::MapLightRule],
     ) {
-        if let Some(map) = &self.map {
+        let lights = if self.bound_mode == 3 {
+            Some(self.recovered.as_slice())
+        } else {
+            self.map.as_ref().map(|m| m.lights.as_slice())
+        };
+        if let Some(lights) = lights {
             renderer.set_map_light_tints(
                 queue,
-                &map_light_tints(&map.lights, &self.light_shapes, broken, rules),
+                &map_light_tints(lights, &self.light_shapes, broken, rules),
             );
         }
     }
@@ -191,18 +256,18 @@ impl LightVolumeState {
     /// map bake when the map has interior lightmaps (their residual light
     /// replaces the classic volume).
     pub(super) fn mode(&self, requested: u8) -> u8 {
-        // Without interior lightmaps (an outdoor map) there is nothing to
-        // wait for: Unified is the sun, its shadows and ambient. Dynamic
-        // draws as Unified with highlights until its own residual volume
-        // is baked and the map's images hold its lightmaps.
-        if requested == 3 && self.map.is_some() && !(self.dynamic_ready && self.dynamic_equipped) {
-            2
-        } else if requested == 0 || self.map.is_some() || self.baking.is_none() {
+        // Dynamic uses current geometry and the live environment immediately;
+        // recovered point parameters join when preparation completes.
+        if self.source_modern {
+            return 3;
+        }
+        if requested == 3 || requested == 0 || self.map.is_some() || self.baking.is_none() {
             requested
         } else {
             0
         }
     }
+
     pub(super) fn upload(
         &mut self,
         renderer: &mut SceneRenderer,
@@ -220,17 +285,11 @@ impl LightVolumeState {
                     self.volume = Some(volume);
                     self.uploaded = false;
                 }
-                Ok(Baked::Map(map, dynamic_ready)) => {
+                Ok(Baked::Map(map)) => {
                     self.leaks = map.leaks.clone();
-                    self.dynamic = map.dynamic.clone();
+                    self.switchable_sheets = map.dynamic.clone();
                     self.map = Some(*map);
-                    self.dynamic_ready = dynamic_ready;
-                    self.uploaded = false;
-                }
-                Ok(Baked::ResidualAll(volume)) => {
-                    if let Some(map) = &mut self.map {
-                        map.residual_all = volume;
-                        self.dynamic_ready = true;
+                    if requested != 3 {
                         self.uploaded = false;
                     }
                 }
@@ -242,21 +301,78 @@ impl LightVolumeState {
         if self.uploaded && self.bound_mode == mode {
             return Ok(());
         }
-        let unified = mode > 0;
-        // Dynamic shades every recovered light live, so objects add the
-        // residual without any of them.
-        let dynamic = mode == 3;
-        let map = self.map.as_ref().filter(|_| unified);
-        let volume = match map {
-            Some(map) if dynamic => Some(&map.residual_all),
-            Some(map) => Some(&map.residual),
-            None if unified => None,
-            None => self.volume.as_ref(),
-        };
-        renderer.set_light_volume(device, queue, volume)?;
-        renderer.set_map_lighting(device, queue, map, dynamic)?;
+        if mode == 3 {
+            renderer.set_dynamic_lights(device, queue, &self.recovered)?;
+        } else {
+            let unified = mode > 0;
+            let map = self.map.as_ref().filter(|_| unified);
+            let volume = match map {
+                Some(map) => Some(&map.residual),
+                None if unified => None,
+                None => self.volume.as_ref(),
+            };
+            renderer.set_light_volume(device, queue, volume)?;
+            renderer.set_map_lighting(device, queue, map, false)?;
+        }
         self.uploaded = true;
         self.bound_mode = mode;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn modern_scene() -> bri_render::scene_loader::MapScene {
+        bri_render::scene_loader::MapScene {
+            scene: SceneData::default(),
+            terrain: Vec::new(),
+            shape_indices: Default::default(),
+            modern_lights: Some(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn modern_state_has_no_compatibility_preparation() {
+        let descriptor = bri_render::map_lighting::MapLight {
+            position: [1.0, 2.0, 3.0],
+            color: [0.5; 3],
+            inner: 0.0,
+            outer: 20.0,
+            channel: None,
+        };
+        let scene = SceneData::default();
+        let state = LightVolumeState::start(
+            &scene,
+            Path::new("unused"),
+            Some(std::slice::from_ref(&descriptor)),
+        );
+        assert!(state.baking.is_none());
+        assert!(state.volume.is_none() && state.map.is_none());
+        assert!(state.leaks.is_empty() && state.switchable_sheets.is_empty());
+        assert_eq!(state.recovered, vec![descriptor]);
+        assert_eq!(state.mode(3), 3);
+        // Until the compatibility source reload arrives, keep this scene in
+        // modern shading; its placeholder illumination cannot enter Classic.
+        assert_eq!(state.mode(0), 3);
+    }
+
+    #[test]
+    fn latest_source_selection_discards_stale_completion() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(modern_scene())).unwrap();
+        let mut state = LightVolumeState {
+            source_modern: false,
+            source_loading: Some((true, std::sync::Mutex::new(rx))),
+            ..Default::default()
+        };
+        assert!(
+            state
+                .poll_source(Path::new("unused"), "unused", false)
+                .is_none()
+        );
+        assert!(state.source_loading.is_none());
+        assert!(!state.source_modern);
     }
 }

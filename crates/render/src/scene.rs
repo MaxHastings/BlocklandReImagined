@@ -245,7 +245,7 @@ pub struct Material {
     /// Slots 0..8 diffuse layers, 8 lightmap, 9/10 RGBA weight maps,
     /// 11 terrain detail, 12 terrain emboss bump. A decomposed interior
     /// lightmap (`DECOMPOSED_LIGHTMAP`) puts its decomposition in 9; in the
-    /// Dynamic mode (`map_lighting::DynamicSheet::equip`) its leftover
+    /// Unified's switchable sheets (`map_lighting::DynamicSheet::equip`) its leftover
     /// light in 10 and its lights' visibility in 1..=6.
     /// A surface/VertexLit material uses diffuse slot 0; supply valid fallback
     /// indices in unused slots (normally the 1x1 white image).
@@ -311,7 +311,7 @@ pub const FOG_BACKDROP: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4
 /// static light (RGB) and baked sun visibility (A); see `crate::map_lighting`.
 pub const DECOMPOSED_LIGHTMAP: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]];
 /// Whether `parameters` mark a decomposed interior lightmap: exactly
-/// `DECOMPOSED_LIGHTMAP`, or it with the Dynamic mode's light channels
+/// `DECOMPOSED_LIGHTMAP`, or it with Unified's switchable light channels
 /// (`map_lighting::DynamicSheet::equip`).
 pub fn decomposed_lightmap(parameters: Option<[[f32; 4]; 4]>) -> bool {
     parameters.is_some_and(|p| p[0][0] == 1.0)
@@ -1905,6 +1905,22 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
 const MAP_LIGHT_CUBES: usize =
     48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
+fn validate_light_parameters(lights: &[crate::map_lighting::MapLight]) -> Result<()> {
+    ensure!(
+        lights.len() <= crate::map_lighting::MAX_LIGHTS
+            && lights.iter().all(|l| l
+                .position
+                .iter()
+                .chain(&l.color)
+                .chain([&l.inner, &l.outer])
+                .all(|x| x.is_finite())
+                && l.inner >= 0.0
+                && l.outer > l.inner),
+        "Invalid map light parameters"
+    );
+    Ok(())
+}
+
 impl MapLightBinding {
     /// `every_light`: shade every recovered light (the Dynamic mode, where
     /// light cubes stand in for visibility channels), not only those with a
@@ -1912,9 +1928,11 @@ impl MapLightBinding {
     fn new(
         device: &wgpu::Device,
         lighting: Option<(&wgpu::Queue, &crate::map_lighting::MapLighting)>,
-        every_light: bool,
+        dynamic: Option<(&wgpu::Queue, &[crate::map_lighting::MapLight])>,
     ) -> Self {
-        let dims = lighting.map_or([1; 3], |(_, l)| l.visibility.dims);
+        let every_light = dynamic.is_some();
+        let visibility = lighting;
+        let dims = visibility.map_or([1; 3], |(_, l)| l.visibility.dims);
         let size = wgpu::Extent3d {
             width: dims[0],
             height: dims[1],
@@ -1936,47 +1954,57 @@ impl MapLightBinding {
         let mut channels = Vec::new();
         if let Some((queue, lighting)) = lighting {
             let v = &lighting.visibility;
-            let layer = (dims[0] * dims[1]) as usize;
-            let mut texels = Vec::with_capacity(layer * size.depth_or_array_layers as usize * 4);
-            let block = |texels: &mut Vec<u8>, z: u32, half: usize| {
-                for t in &v.texels[z as usize * layer..(z as usize + 1) * layer] {
-                    texels.extend_from_slice(&t[half * 4..half * 4 + 4]);
+            if !every_light {
+                let layer = (dims[0] * dims[1]) as usize;
+                let mut texels =
+                    Vec::with_capacity(layer * size.depth_or_array_layers as usize * 4);
+                let block = |texels: &mut Vec<u8>, z: u32, half: usize| {
+                    for t in &v.texels[z as usize * layer..(z as usize + 1) * layer] {
+                        texels.extend_from_slice(&t[half * 4..half * 4 + 4]);
+                    }
+                };
+                for z in 0..dims[2] {
+                    block(&mut texels, z, 0);
                 }
+                block(&mut texels, dims[2] - 1, 0);
+                block(&mut texels, 0, 1);
+                for z in 0..dims[2] {
+                    block(&mut texels, z, 1);
+                }
+                queue.write_texture(
+                    texture.as_image_copy(),
+                    &texels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(dims[0] * 4),
+                        rows_per_image: Some(dims[1]),
+                    },
+                    size,
+                );
+            }
+        }
+        let source = dynamic.or_else(|| lighting.map(|(q, l)| (q, l.lights.as_slice())));
+        if let Some((_, source)) = source {
+            let mut words: Vec<f32> = if every_light {
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0]
+            } else {
+                let v = &lighting.unwrap().1.visibility;
+                vec![
+                    v.origin[0],
+                    v.origin[1],
+                    v.origin[2],
+                    v.cell,
+                    dims[0] as f32,
+                    dims[1] as f32,
+                    dims[2] as f32,
+                    1.0,
+                ]
             };
-            for z in 0..dims[2] {
-                block(&mut texels, z, 0);
-            }
-            block(&mut texels, dims[2] - 1, 0);
-            block(&mut texels, 0, 1);
-            for z in 0..dims[2] {
-                block(&mut texels, z, 1);
-            }
-            queue.write_texture(
-                texture.as_image_copy(),
-                &texels,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(dims[0] * 4),
-                    rows_per_image: Some(dims[1]),
-                },
-                size,
-            );
-            let mut words: Vec<f32> = vec![
-                v.origin[0],
-                v.origin[1],
-                v.origin[2],
-                v.cell,
-                dims[0] as f32,
-                dims[1] as f32,
-                dims[2] as f32,
-                1.0,
-            ];
             // Objects shade the lights with a channel (every light in the
             // Dynamic mode); the rest follow, for map surfaces' per-texel
             // shares alone.
             let on_objects = |l: &crate::map_lighting::MapLight| every_light || l.channel.is_some();
-            let mut lights: Vec<_> = lighting
-                .lights
+            let mut lights: Vec<_> = source
                 .iter()
                 .enumerate()
                 .take(crate::map_lighting::MAX_LIGHTS)
@@ -1997,11 +2025,12 @@ impl MapLightBinding {
                         color: Vec3::from(l.color),
                         outer: l.outer,
                     });
-                    channels.push(l.channel);
+                    channels.push(if every_light { None } else { l.channel });
                 }
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
-                words.extend([l.channel.map_or(-1.0, f32::from), 1.0, 1.0, 1.0]);
+                let channel = if every_light { None } else { l.channel };
+                words.extend([channel.map_or(-1.0, f32::from), 1.0, 1.0, 1.0]);
             }
             // Each `MapLighting::lights` index's place in the uniform.
             let mut slots = [-1.0f32; crate::map_lighting::MAX_LIGHTS];
@@ -2022,7 +2051,7 @@ impl MapLightBinding {
             }),
             lamps,
             channels,
-            volume: lighting.map(|(_, l)| l.visibility.clone()),
+            volume: visibility.map(|(_, l)| l.visibility.clone()),
             tints: vec![Vec3::ONE; shaded.len()],
             shaded,
         }
@@ -2564,7 +2593,7 @@ impl SceneRenderer {
         let shadows =
             crate::shadow::ShadowMaps::new(device, shadows, &material_layout, &vertex_layouts());
         let volume = VolumeBinding::new(device, None);
-        let map_lights = MapLightBinding::new(device, None, false);
+        let map_lights = MapLightBinding::new(device, None, None);
         let mut renderer = Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
@@ -3139,6 +3168,11 @@ impl SceneRenderer {
         lighting: Option<&crate::map_lighting::MapLighting>,
         every_light: bool,
     ) -> Result<()> {
+        // Kept for existing probes: Dynamic extracts descriptors only. New
+        // runtime callers use set_dynamic_lights and never need a legacy bake.
+        if every_light {
+            return self.set_dynamic_lights(device, queue, lighting.map_or(&[], |l| &l.lights));
+        }
         if let Some(l) = lighting {
             let v = &l.visibility;
             ensure!(
@@ -3146,19 +3180,27 @@ impl SceneRenderer {
                     && v.texels.len() == v.dims.iter().map(|d| *d as usize).product::<usize>()
                     && v.cell.is_finite()
                     && v.cell > 0.0
-                    && v.origin.iter().all(|x| x.is_finite())
-                    && l.lights.iter().all(|l| {
-                        l.position
-                            .iter()
-                            .chain(&l.color)
-                            .chain([&l.inner, &l.outer])
-                            .all(|x| x.is_finite())
-                            && l.outer > l.inner
-                    }),
-                "Invalid map lighting"
+                    && v.origin.iter().all(|x| x.is_finite()),
+                "Invalid map lighting visibility"
             );
+            validate_light_parameters(&l.lights)?;
         }
-        self.map_lights = MapLightBinding::new(device, lighting.map(|l| (queue, l)), every_light);
+        self.map_lights = MapLightBinding::new(device, lighting.map(|l| (queue, l)), None);
+        self.shadows.forget_map_faces();
+        self.rebuild_view_groups(device);
+        Ok(())
+    }
+    /// Modern Dynamic lighting accepts only source descriptors. No visibility
+    /// volume, lightmap shares or residual can enter this binding.
+    pub fn set_dynamic_lights(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        lights: &[crate::map_lighting::MapLight],
+    ) -> Result<()> {
+        validate_light_parameters(lights)?;
+        self.volume = VolumeBinding::new(device, None);
+        self.map_lights = MapLightBinding::new(device, None, Some((queue, lights)));
         self.shadows.forget_map_faces();
         self.rebuild_view_groups(device);
         Ok(())
@@ -3330,8 +3372,28 @@ impl SceneRenderer {
         occluders: ShadowCasters<'_>,
         map: &[&GpuScene],
     ) {
+        self.render_shadows_with_geometry(
+            encoder,
+            casters,
+            occluders,
+            ShadowCasters {
+                scenes: map,
+                instances: &[],
+            },
+        );
+    }
+    /// Current map geometry, including instanced terrain. Compatibility
+    /// callers keep their old scene-only map layer through the wrapper above.
+    pub fn render_shadows_with_geometry(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        casters: ShadowCasters<'_>,
+        occluders: ShadowCasters<'_>,
+        map: ShadowCasters<'_>,
+    ) {
         let cascades = &self.shadows.cascades;
-        let map_drawn = !map.is_empty() && !cascades.is_empty();
+        let map_drawn =
+            (!map.scenes.is_empty() || !map.instances.is_empty()) && !cascades.is_empty();
         if let Some(queue) = self.queue.borrow().as_ref() {
             self.shadows.set_map_drawn(queue, map_drawn);
         }
@@ -3486,10 +3548,7 @@ impl SceneRenderer {
                     &self.shadows.layer_views[2 * cascades.len() + index],
                     None,
                     cascade.map_view_projection,
-                    ShadowCasters {
-                        scenes: map,
-                        instances: &[],
-                    },
+                    map,
                     &self.shadows.caster_group,
                     &self.shadows.pipelines,
                     crate::shadow::ShadowMaps::map_offset(index),
@@ -3505,8 +3564,30 @@ impl SceneRenderer {
         // stays, with only its surfaces (as the map layer), so they tell
         // whether a lamp's light reaches a point past the map's own walls.
         let map_key: Vec<usize> = if map_drawn {
-            map.iter()
-                .flat_map(|s| [std::ptr::from_ref::<GpuScene>(*s) as usize, s.index_count])
+            map.scenes
+                .iter()
+                .flat_map(|s| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    for batch in &s.batches {
+                        batch.indices.hash(&mut hash);
+                    }
+                    [
+                        std::ptr::from_ref::<GpuScene>(*s) as usize,
+                        hash.finish() as usize,
+                    ]
+                })
+                .chain(map.instances.iter().map(|(scene, instances)| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    (std::ptr::from_ref(*scene) as usize).hash(&mut hash);
+                    for transform in &instances.transforms {
+                        for v in transform.transform.to_cols_array() {
+                            v.to_bits().hash(&mut hash);
+                        }
+                    }
+                    hash.finish() as usize
+                }))
                 .collect()
         } else {
             Vec::new()
@@ -3519,8 +3600,7 @@ impl SceneRenderer {
             .map_lights
             .lamps
             .iter()
-            .zip(&self.map_lights.channels)
-            .map(|(l, channel)| channel.is_none().then_some((l.position, l.outer)))
+            .map(|l| Some((l.position, l.outer)))
             .collect();
         let (stale_cubes, cubes_ready) =
             self.shadows
@@ -3559,10 +3639,7 @@ impl SceneRenderer {
                     &self.shadows.layer_views[layer as usize],
                     Some(tile),
                     matrix,
-                    ShadowCasters {
-                        scenes: map,
-                        instances: &[],
-                    },
+                    map,
                     &self.shadows.caster_group,
                     &self.shadows.pipelines,
                     crate::shadow::ShadowMaps::cube_offset(light, face),
@@ -3580,10 +3657,7 @@ impl SceneRenderer {
                     &self.shadows.layer_views[layer as usize],
                     Some(tile),
                     lamp.faces[face],
-                    ShadowCasters {
-                        scenes: map,
-                        instances: &[],
-                    },
+                    map,
                     &self.shadows.caster_group,
                     &self.shadows.pipelines,
                     crate::shadow::ShadowMaps::lamp_offset(slot, face),
@@ -3802,6 +3876,13 @@ impl SceneRenderer {
                         if map_only
                             && scene.material_descriptors[batch.material].kind
                                 != MaterialKind::Surface
+                            && !(self.shadows.settings.is_some_and(|s| s.light_cubes)
+                                && matches!(
+                                    scene.material_descriptors[batch.material].kind,
+                                    MaterialKind::Terrain
+                                        | MaterialKind::VertexLit
+                                        | MaterialKind::Metal
+                                ))
                         {
                             flush!();
                             continue;

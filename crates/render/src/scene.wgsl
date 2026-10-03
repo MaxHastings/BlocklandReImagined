@@ -254,6 +254,7 @@ fn map_cascade_lit(c:CascadeCoord)->f32 {
 // shade it as everywhere.
 fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     let c=shadow_coord(position,normal);
+    if lighting_mode()==3 {return dynamic_sun(position,normal);}
     var map=vis.low.x;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
@@ -399,8 +400,8 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
 }
 // Lighting model (camera.ambient.w): 0 Classic, the v20 look (baked maps,
 // sun-lit bricks, live shadows darken lightmaps by a fixed share); 2 Unified
-// (map_lighting.rs, with specular highlights on objects); 3 Dynamic (2, with
-// the map's surfaces lit live by every recovered light: `dynamic_lightmap`).
+// (map_lighting.rs, with specular highlights on objects); 3 Dynamic uses
+// independent live illumination and current geometry shadows on all surfaces.
 // 1 was Unified without highlights and draws as 2.
 fn lighting_mode()->i32 {return i32(camera.ambient.w+0.5);}
 // The live environment differs from the map's baked sun or ambient.
@@ -537,40 +538,49 @@ fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec
     }
     return total;
 }
-// Dynamic: an interior surface lit live from its parts (see
-// map_lighting::DynamicSheet): the light no recovered light explains
-// (`left`: bounced light, ambient, the fit's error; A the baked sun share),
-// each light that reaches the surface's lightmap sheet (its channels, in
-// material slots 1..=6) at its colour and brightness now, times the share
-// of it the texel receives past the map's walls (from the same rays the
-// map's light was fitted with, so no leaks or acne) and past the casters of
-// a lamp with a shadow slot; and the sun (N.L) where the bake let it
-// through, past live casters.
-fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
-    let n=normal/max(length(normal),0.0001);
-    let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
-    let facing=max(dot(n,-direction),0.0);
-    var sun=left.a;
-    if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
-    if relit() && facing>0.0 {sun=relit_sun(left.a,position,n);}
-    let count=min(u32(material[1].y),24u);
-    let seen=channel_shares(uv,count);
-    var light=vec3<f32>(0.0);
-    let lights=min(map_lights.count.z,24u);
-    for(var c=0u;c<count;c+=1u) {
-        let i=channel_light(c);
-        // Branch on the light, not the texel's share: llvmpipe's JIT
-        // crashes on a share-dependent branch around the shadow taps.
-        if i<lights {
-            let l=map_lights.values[i];
-            var reach=light_given(l,position)*light_tint(l)*seen[c/4u][c%4u];
-            let slot=lamp_slot(i);
-            if slot>=0 {reach*=lamp_lit(u32(slot),position,n);}
-            light+=reach;
-        }
+// Dynamic's authoritative sun visibility comes only from current geometry.
+// Beyond the bounded cascade range it fades to unshadowed, never old masks.
+fn dynamic_sun(position:vec3<f32>,normal:vec3<f32>)->f32 {
+    let c=shadow_coord(position,normal);
+    var map=1.0;
+    if c.near.cascade>=0 && shadows.map_params.x>0.0 {
+        var lit=map_cascade_lit(c.near);
+        if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        map=mix(1.0,lit,c.strength);
     }
-    let ambient=camera.ambient.rgb-baked_ambient();
-    return clamp(left.rgb+ambient+light+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
+    return min(map,shadow_lit(c));
+}
+// Descriptors plus current geometry cubes: no legacy visibility input exists
+// in this function. Uniform ambient approximates unreconstructed indirect light.
+fn dynamic_light_sum(position:vec3<f32>,normal:vec3<f32>,power:f32)->LocalLight {
+    var out=LocalLight(vec3<f32>(0.0),vec3<f32>(0.0));
+    let n=normal/max(length(normal),0.0001);
+    let eye=normalize(camera.eye.xyz-position);
+    for(var i=0u;i<min(map_lights.count.x,24u);i+=1u) {
+        let light=map_lights.values[i];
+        let delta=light.position_inner.xyz-position;
+        let distance=length(delta);
+        let facing=max(dot(n,delta)/max(distance,0.0001),0.0);
+        if distance>=light.color_outer.w || facing<=0.0 {continue;}
+        var seen=1.0;
+        if shadows.params.x>0.0 {seen=max(cube_seen(i,position,n),0.0);}
+        let slot=lamp_slot(i);
+        if slot>=0 {seen*=lamp_lit(u32(slot),position,n);}
+        let rgb=light_given(light,position)*light_tint(light)*seen;
+        out.diffuse+=rgb*facing;
+        out.specular+=rgb*glint(n,delta/max(distance,0.0001),eye,power);
+    }
+    return out;
+}
+fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
+    let n=normal/max(length(normal),0.0001);
+    let toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let facing=max(dot(n,toward),0.0);
+    let sun=dynamic_sun(position,n);
+    let local=dynamic_light_sum(position,n,SPECULAR_POWER);
+    let eye=normalize(camera.eye.xyz-position);
+    return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
+        (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
 }
 // A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a
 // lamp's bright spot can hold more than its fitted light.
@@ -720,6 +730,7 @@ const LAMBERT_FLOOR:f32=0.5;
 // `power` sharpens the highlights (SPECULAR_POWER for painted surfaces).
 fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,lambert:bool,power:f32)->LocalLight {
     var out=LocalLight(vec3<f32>(0.0),vec3<f32>(0.0));
+    if lighting_mode()==3 {return dynamic_light_sum(position,normal,power);}
     if visibility.state==0u {return out;}
     var vis=visibility;
     let n=normal/max(length(normal),0.0001);
@@ -888,7 +899,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     let flags=u32(material[2].w);
     var color=clamp(mix(lit,camera.fog_color.rgb,fog),vec3<f32>(0.0),vec3<f32>(1.0));
     let zero_bump=material[1].y;
-    if (flags&2u)!=0u && distance<zero_bump {
+    if lighting_mode()!=3 && (flags&2u)!=0u && distance<zero_bump {
         // Halved bump plus halved-inverted bump shifted toward the sun,
         // faded to neutral grey over the last quarter, then modulate-2x.
         let uv=local/material[3].x*material[2].x;
@@ -967,10 +978,16 @@ fn slot_size(slot:u32)->vec2<f32> {
         if alpha<=0.00001 {discard;}
         // Authored surface/reflection textures are daylight colours. Apply
         // the live environment before fog, including distant water and shore.
+        var water_light:vec3<f32>;
+        if lighting_mode()==3 {
+            water_light=dynamic_illumination(v.world_position,v.normal).diffuse
+                +point_illumination(v.world_position,v.normal);
+        } else {
         let live_up=max(-normalize(camera.sun_direction.xyz).y,0.0);
         let baked_up=max(-baked_sun_direction().y,0.0);
         let daylight=baked_ambient()+baked_sun_color()*baked_up;
-        let water_light=select(vec3<f32>(1.0),clamp((camera.ambient.rgb+camera.sun_color.rgb*live_up)/max(daylight,vec3<f32>(0.001)),vec3<f32>(0.0),vec3<f32>(4.0)),relit());
+        water_light=select(vec3<f32>(1.0),clamp((camera.ambient.rgb+camera.sun_color.rgb*live_up)/max(daylight,vec3<f32>(0.001)),vec3<f32>(0.0),vec3<f32>(4.0)),relit());
+        }
         rgb*=water_light;
         if depth_mapped {
             // fluid::CalcVertSpecular, added (SRC_ALPHA, ONE) under the depth
@@ -1017,7 +1034,9 @@ fn slot_size(slot:u32)->vec2<f32> {
             +display_color(textureSample(layer6,tiled,v.uv).rgb)*b.b
             +display_color(textureSample(layer7,tiled,v.uv).rgb)*b.a;
         let light_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(lightmap));
-        let terrain_lit=terrain_light(textureSample(lightmap,tiled_exact,light_uv).rgb,v.world_position,v.normal);
+        var terrain_lit:vec3<f32>;
+        if lighting_mode()==3 {terrain_lit=dynamic_illumination(v.world_position,v.normal).diffuse;}
+        else {terrain_lit=terrain_light(textureSampleLevel(lightmap,tiled_exact,light_uv,0.0).rgb,v.world_position,v.normal);}
         return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_illumination(v.world_position,v.normal)),v.world_position),v.color.a);
     }
     let fx=v.fx;let time=camera.atmosphere.z;
@@ -1081,7 +1100,8 @@ fn slot_size(slot:u32)->vec2<f32> {
     if material[0].x==7.0 || material[0].x==8.0 {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
-    let baked_light=textureSample(lightmap,clamped_exact,v.lightmap_uv);
+    var baked_light=vec4<f32>(1.0);
+    if lighting_mode()!=3 {baked_light=textureSampleLevel(lightmap,clamped_exact,v.lightmap_uv,0.0);}
     var illumination=baked_light.rgb;
     var specular=vec3<f32>(0.0);
     let sun_toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -1102,6 +1122,10 @@ fn slot_size(slot:u32)->vec2<f32> {
             // and bricks.
             illumination=max(ambient_at(reach)+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
                 +v.point_light*strength;
+        } else if lighting_mode()==3 {
+            let live=dynamic_illumination(v.world_position,v.normal);
+            illumination=live.diffuse+point_illumination(v.world_position,v.normal)*strength;
+            specular=live.specular;
         } else {
             // Unified: the map's own model. Sun where the map's geometry and
             // live casters let it through, the recovered lights through their
@@ -1125,9 +1149,10 @@ fn slot_size(slot:u32)->vec2<f32> {
             for(var c=0;c<3;c+=1) {if camera.sun_color[c]>0.0 {shortest=min(shortest,camera.sun_color[c]);}}
             illumination=camera.ambient.rgb+camera.sun_color.rgb/shortest;
         }
-    } else if material[1].x==1.0 && lighting_mode()==3 {
-        illumination=dynamic_lightmap(textureSample(weights1,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
-            +point_illumination(v.world_position,v.normal);
+    } else if lighting_mode()==3 {
+        let live=dynamic_illumination(v.world_position,v.normal);
+        illumination=live.diffuse+point_illumination(v.world_position,v.normal);
+        specular=live.specular;
     } else if material[1].x==1.0 {
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);
@@ -1245,7 +1270,8 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
     if lighting_mode()==0 {
         radiance+=sun_rgb*ggx_light(n,toward_sun,e,alpha,f0)*sun_visibility(v.world_position,n);
     } else {
-        let vis=map_visibility(v.world_position,n);
+        var vis=MapVisibility(vec4<f32>(1.0,0.0,0.0,0.0),vec4<f32>(0.0),vec3<f32>(0.0),0u);
+        if lighting_mode()!=3 {vis=map_visibility(v.world_position,n);}
         var sun_share=0.0;
         if dot(n,toward_sun)>0.0 {sun_share=object_sun(v.world_position,n,vis);}
         radiance+=sun_rgb*ggx_light(n,toward_sun,e,alpha,f0)*sun_share;

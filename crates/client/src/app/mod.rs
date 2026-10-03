@@ -367,16 +367,29 @@ fn packages_for<'a>(
         Some(&view.mods)
     }
 }
+fn load_visual_map(
+    root: &Path,
+    id: &str,
+    lighting: u8,
+) -> Result<bri_render::scene_loader::MapScene> {
+    if lighting == 3 {
+        bri_render::scene_loader::load_map_bundle_dynamic(root, id)
+    } else {
+        load_map_bundle(root, id)
+    }
+}
 fn prepare_map(
     paths: &crate::content::ContentPaths,
     map: &str,
     selected: Vec<(String, u8)>,
     catalog: &bri_sim::session::ToolCatalog,
     light_cache: &std::path::Path,
+    lighting: u8,
 ) -> Result<Prepared> {
     let map = map.to_owned();
-    let visual = load_map_bundle(&paths.map_bundle, &map)?;
-    let mut light_volume = LightVolumeState::start(&visual.scene, light_cache);
+    let visual = load_visual_map(&paths.map_bundle, &map, lighting)?;
+    let mut light_volume =
+        LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
     // The same definitions the host's session loads, Add-On bricks included.
     let definitions = Definitions::load_with_geometry(
         &paths.brick_catalog,

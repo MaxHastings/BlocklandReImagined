@@ -435,6 +435,7 @@ impl App {
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
+                    let lighting = self.graphics.lighting;
                     let light_cache = self.state_dir.join("light-volumes");
                     let selected = self.content.selectable.clone();
                     let catalog = self.build.tool_ui.server_catalog();
@@ -471,7 +472,14 @@ impl App {
                             let permit = load_limit.acquire_owned().await?;
                             tokio::task::spawn_blocking(move || {
                                 let _permit = permit;
-                                prepare_map(&paths, &map, selected, &catalog, &light_cache)
+                                prepare_map(
+                                    &paths,
+                                    &map,
+                                    selected,
+                                    &catalog,
+                                    &light_cache,
+                                    lighting,
+                                )
                             })
                             .await?
                         }
