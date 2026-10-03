@@ -44,6 +44,12 @@ remove them for good.
 raycasting, collision and rendering. The events dialog with all 16 inputs
 and all 65 outputs. Demo Pong in Bedroom plays.
 
+**Rule Workshop.** Events can have optional IF checks, bounded variables,
+player/object regions, scoring and round rules. Set region dimensions directly
+in the Wrench with a live preview and Send; building tools reveal their bounds.
+Nine editable examples and included creator guides explain the behavior.
+Explain saved shows recent conditions, actions and rejection reasons.
+
 **Mini-games.** Create, join, leave, invite, remove, reset and end, with
 all 21 rule settings, ten favourite presets, scores in the player list,
 kill messages and respawn.
@@ -55,6 +61,10 @@ they are going. In their builder's mini-game they arm themselves and fight:
 they turn their aim like a person, keep the distance their weapon wants,
 turn on whoever hurts them and search where they last saw you. One
 builder's bots are on one side.
+Allied ground crews coordinate driver, gunner and passenger seats, share dated
+observations and abandon actions that stop making progress. Human occupants
+keep their seats. Bots and players push loose physical bodies by walking into
+them, using the same game permissions and contact mechanism.
 
 **Save and load.** Builds save with their description, events and
 ownership, load per map, and sort by name or date. Loading a save made

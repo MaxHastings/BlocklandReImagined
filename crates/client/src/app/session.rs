@@ -107,6 +107,10 @@ impl App {
             lines.clear();
         }
         self.gpu.hidden_uploaded = None;
+        if let Some(lines) = &mut self.gpu.region_lines {
+            lines.clear();
+        }
+        self.gpu.region_outlines.clear();
         if let Some(lines) = &mut self.gpu.selection_lines {
             lines.clear();
         }
@@ -1088,7 +1092,8 @@ impl App {
                     .tool_ui
                     .accept_inspection(&reply, mode, expected, &view.world, &view.names, view.owner)
                     .map_err(|e| format!("{e:#}"))?;
-                for update in updates {
+                for mut update in updates {
+                    region_defaults(&mut update, &reply, self.scene.meshes.as_deref());
                     self.ui.apply_session(attempt.id, update);
                 }
             } else if matches!(

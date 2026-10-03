@@ -127,10 +127,12 @@ briefs informed the experiment; they do not define mandatory infrastructure.
   outside the demonstrated path. Existing Projectile reflection outputs reject
   IF because their specialized contact cache does not execute normal guarded
   rows. This is an explicit limitation rather than silently ignoring guards.
-- Region dimensions are changed by an ordinary event action, with no dedicated
-  region gizmo/editor. Explain shows dimensions/occupants, but there is
-  no permanent colored region outline. Center tests, ground-height differences
-  and overlapping sensors deserve deliberate playtesting.
+- Region dimensions are directly authored in the wrench, with a live preview.
+  Building tools reveal detection outlines using the invisible-brick convention.
+  The server observer and client renderer share bounds; disabled rows and the
+  observer budget have distinct colors. `setRegionSize` remains a runtime action.
+  Center tests, ground-height differences and overlapping sensors still deserve
+  deliberate playtesting. There is no drag-to-resize gizmo.
 - Mover attribution is reused, not comprehensive causality: gun hits or complex
   chains do not provide a guaranteed last-touch/assist history. It expires after
   five seconds. Soccer recipes require credited opposing-team entries: the first

@@ -309,6 +309,7 @@ fn color_row(color: u8) -> EventRow {
 
 fn properties(name: Option<&str>, visible: bool) -> WrenchProperties {
     WrenchProperties {
+        rule_region: None,
         name: name.map(Into::into),
         light: None,
         emitter: None,

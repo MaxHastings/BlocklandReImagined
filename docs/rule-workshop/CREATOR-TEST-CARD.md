@@ -18,6 +18,10 @@ compare concrete friction, not just nostalgia or which interface looks nicer.
 
 ## 30-minute ambition: discover one new concept at a time
 
+Wrench a region brick, set its dimensions to 8 × 5 × 8, and Send. Verify the
+outline matches that size, disappears when tools are put away, and returns after
+save/load. Try Cancel, invalid dimensions, and removing the region input.
+
 Build a team-only door from scratch. Then choose two recipes to mutate:
 
 | Challenge | Change to make | What it reveals |

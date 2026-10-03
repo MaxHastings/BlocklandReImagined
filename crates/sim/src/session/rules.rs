@@ -8,7 +8,7 @@ use bri_vehicles::VehicleId;
 use ev::rules::{Condition, Datum, Property, RuleOp, Subject};
 
 const MAX_VARIABLES: usize = 8192;
-const MAX_REGIONS: usize = 256;
+const MAX_REGIONS: usize = bri_world::regions::MAX_OBSERVED_REGIONS;
 const MAX_TRACE: usize = 128;
 const MAX_PENDING_FACTS: usize = 256;
 // Namespace, mini-game, round, subject class, subject identity, key.
@@ -657,14 +657,7 @@ impl Session {
             return Ok(());
         };
         let mut regions = BTreeSet::new();
-        for fact in [
-            "onRegionEnter",
-            "onRegionLeave",
-            "onRegionStay",
-            "onObjectEnter",
-            "onObjectLeave",
-            "onObjectStay",
-        ] {
+        for fact in bri_world::regions::REGION_INPUTS {
             regions.extend(world.listeners(fact).into_iter().map(|b| b.index));
         }
         if regions.len() > MAX_REGIONS && tick.is_multiple_of(120) {
@@ -758,14 +751,7 @@ impl Session {
             let Some((min, max)) = self.simulation.brick_box(brick) else {
                 continue;
             };
-            let center = (min + max) * 0.5;
-            let size = source.rule_region.map(Vec3::from).unwrap_or(Vec3::new(
-                (max.x - min.x).max(1.0),
-                4.0,
-                (max.z - min.z).max(1.0),
-            ));
-            let lo = center - size * 0.5;
-            let hi = center + size * 0.5;
+            let (lo, hi) = bri_world::regions::bounds(source.rule_region, (min, max));
             for (kind, id, position, by) in &objects {
                 // Players share the builder's game, including None in free build.
                 if *kind == 0 && self.game_of(*id) != builder_game {
@@ -880,16 +866,36 @@ impl Session {
             "Use /rulelab puzzle, race, hill, slayer, soccer, sandbox, switch, teamdoor or addon"
         );
         if self.game_of(owner).is_none() {
-            let settings = mg::Settings {
+            let mut settings = mg::Settings {
                 title: format!("Rule Workshop: {mode}"),
                 points_kill_player: 0,
                 points_kill_self: 0,
                 points_die: 0,
                 points_plant_brick: 0,
                 points_break_brick: 0,
-                ..Default::default()
+                ..self.minigames.catalog().defaults.clone()
             };
+            // Match the ordinary MiniGame editor's available-item defaults.
+            // Optional stock weapons can be disabled, and non-v20 hosts need
+            // not supply the stock loadout just to create a region example.
+            let mut missing_items = false;
+            for item in &mut settings.loadout {
+                if item
+                    .as_ref()
+                    .is_some_and(|id| !self.minigames.catalog().items.contains_key(id))
+                {
+                    *item = None;
+                    missing_items = true;
+                }
+            }
             self.minigame_request(owner, MiniGameRequest::Create { color: 0, settings })?;
+            if missing_items {
+                self.private_chat(
+                    owner,
+                    "Some starting tools are unavailable. Choose equipment in MiniGame settings."
+                        .into(),
+                );
+            }
         }
         let game = self.game_of(owner).context("Create a mini-game first")?;
         ensure!(
@@ -1616,6 +1622,36 @@ mod tests {
     }
     fn score(s: &Session, p: OwnerId) -> i64 {
         s.minigames.player(s.peers[&p].combat.player).unwrap().score
+    }
+    #[test]
+    fn workshop_example_uses_available_starting_equipment() {
+        let (mut s, owner, _) = setup();
+        let mut catalog = s.minigames.catalog().clone();
+        catalog.defaults.respawn_ms = 17000;
+        let defaults = catalog.defaults.loadout.clone();
+        let unavailable = defaults.iter().flatten().next_back().unwrap().clone();
+        assert!(catalog.items.remove(&unavailable).is_some());
+        s.minigames.set_catalog(catalog.clone()).unwrap();
+        let ids = s.create_rule_lab(owner, "hill").unwrap();
+        assert!(!ids.is_empty());
+        let settings = &s
+            .minigames
+            .game(s.game_of(owner).unwrap())
+            .unwrap()
+            .settings;
+        assert_eq!(settings.respawn_ms, 17000, "server policy must remain");
+        for (before, after) in defaults.iter().zip(&settings.loadout) {
+            if before.as_ref() == Some(&unavailable) {
+                assert_eq!(after, &None);
+            } else {
+                assert_eq!(after, before, "available equipment must remain");
+            }
+        }
+        assert!(!s.minigames.catalog().items.contains_key(&unavailable));
+        assert!(s.take_private_notices().iter().any(|(who, notice)| {
+            *who == owner
+                && matches!(notice, Notice::Chat(text) if text.contains("Choose equipment"))
+        }));
     }
     #[test]
     fn timer_variable_change_keeps_match_context_without_an_actor() {

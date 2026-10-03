@@ -84,6 +84,7 @@ pub struct Wrench {
     menus: BTreeMap<NodeId, Vec<Option<String>>>,
     request: Option<(RequestId, Operation)>,
     datablocks: crate::api::DatablockMenus,
+    region_expanded: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -93,6 +94,111 @@ enum Operation {
     Respawn,
 }
 
+/// Extend the recovered wrench without modifying generated original layouts.
+fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View {
+    let Some(mut root) = core.pack.data.layouts.get(layout).cloned() else {
+        return layout_view(core, layout);
+    };
+    root.extent = [core.logical.0, core.logical.1];
+    if let Some(window) = root
+        .children
+        .iter_mut()
+        .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
+    {
+        let old_height = window.extent[1];
+        let height = (old_height + 34).max(if expanded { 326 } else { 0 });
+        for control in &mut window.children {
+            // Keep the recovered left column intact when adding a right panel.
+            control.h_sizing = HSizing::Right;
+            control.v_sizing = VSizing::Bottom;
+            if control.position[1] >= old_height - 80 {
+                control.position[1] += height - old_height;
+            }
+        }
+        let x = window.extent[0] + 8;
+        if expanded {
+            window.extent[0] += 256;
+        }
+        window.extent[1] = height;
+        window.position = [
+            (core.logical.0 - window.extent[0]) / 2,
+            (core.logical.1 - window.extent[1]) / 2,
+        ];
+        let mut panel = ctrl(
+            "GuiControl",
+            "GuiDefaultProfile",
+            Rect::new(x, 28, 236, 274),
+        );
+        panel.name = Some("Wrench_RegionPanel".into());
+        panel.children.push(text(
+            "GuiDefaultProfile",
+            Rect::new(0, 0, 232, 22),
+            "Detection region",
+        ));
+        let mut custom = named(
+            ctrl(
+                "GuiCheckBoxCtrl",
+                "GuiCheckBoxProfile",
+                Rect::new(0, 27, 232, 22),
+            ),
+            "Wrench_RegionCustom",
+        );
+        custom.text = Some("Custom size".into());
+        panel.children.push(custom);
+        for (i, label) in ["Width (X)", "Height (Y)", "Depth (Z)"].iter().enumerate() {
+            let y = 58 + i as i32 * 28;
+            panel
+                .children
+                .push(text("GuiDefaultProfile", Rect::new(0, y, 100, 22), label));
+            panel.children.push(named(
+                ctrl(
+                    "GuiTextEditCtrl",
+                    "GuiTextEditProfile",
+                    Rect::new(104, y, 116, 22),
+                ),
+                format!("Wrench_Region{i}"),
+            ));
+        }
+        for (i, line) in [
+            "World units; centered on brick.",
+            "Auto follows brick; 4 units tall.",
+            "Hold a build tool to see bounds.",
+            "Use region events for detection.",
+            "Cyan active; pale preview; gray off.",
+            "Orange means too many sensors.",
+            "Send saves; Cancel discards.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            panel.children.push(text(
+                "GuiDefaultProfile",
+                Rect::new(0, 144 + i as i32 * 18, 232, 18),
+                line,
+            ));
+        }
+        panel.visible = expanded;
+        window.children.push(panel);
+        window.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(14, height - 95, x - 36, 22),
+                "base/client/ui/button1",
+                if expanded {
+                    "Hide detection region"
+                } else {
+                    "Detection region..."
+                },
+                "wrench.region",
+            ),
+            "Wrench_RegionToggle",
+        ));
+    }
+    let mut view = View::new(&root);
+    view.measure(&core.pack);
+    view
+}
+
 impl Wrench {
     pub fn new(core: &Core, variant: WrenchVariant) -> Self {
         let (layout, prefix) = match variant {
@@ -100,8 +206,10 @@ impl Wrench {
             WrenchVariant::Sound => ("wrenchSoundDlg", "WrenchSound"),
             WrenchVariant::VehicleSpawn => ("wrenchVehicleSpawnDlg", "WrenchVehicleSpawn"),
         };
+        let data = core.wrench.values(variant);
+        let region_expanded = data.region_inputs || data.rule_region.is_some();
         let mut s = Self {
-            view: layout_view(core, layout),
+            view: region_view(core, layout, prefix, region_expanded),
             variant,
             brick: core
                 .wrench
@@ -113,6 +221,7 @@ impl Wrench {
             menus: BTreeMap::new(),
             request: None,
             datablocks: core.datablocks.clone(),
+            region_expanded,
         };
         s.fill(core);
         s.view.layout(core.logical.0, core.logical.1);
@@ -132,6 +241,20 @@ impl Wrench {
 
     fn fill(&mut self, core: &Core) {
         let data = core.wrench.values(self.variant);
+        if let Some(n) = self.view.id("Wrench_RegionCustom") {
+            self.view.set_bool(n, data.rule_region.is_some());
+        }
+        for i in 0..3 {
+            if let Some(n) = self.view.id(&format!("Wrench_Region{i}")) {
+                self.view.set_text(
+                    n,
+                    data.rule_region
+                        .or(data.rule_region_default)
+                        .map(|size| size[i].to_string())
+                        .unwrap_or_default(),
+                );
+            }
+        }
         self.menus.clear();
         for &field in WrenchField::for_variant(self.variant) {
             if let Some(n) = self
@@ -230,10 +353,50 @@ impl Wrench {
             }
         }
         // Pending actions must finish/reject before an edit can be resubmitted.
+        if let Some(n) = self.view.id("Wrench_RegionPanel") {
+            self.view
+                .set_visible(n, self.region_expanded && !core.wrench.filling());
+        }
+        if let Some(n) = self.view.id("Wrench_RegionToggle") {
+            self.view.set_visible(n, !core.wrench.filling());
+        }
+        let custom = self
+            .view
+            .id("Wrench_RegionCustom")
+            .is_some_and(|n| self.view.bool_value(n));
+        for i in 0..3 {
+            if let Some(n) = self.view.id(&format!("Wrench_Region{i}")) {
+                self.view
+                    .set_active(n, ready && custom && !core.wrench.filling());
+            }
+        }
+    }
+
+    fn region_value(&self) -> Result<Option<[f32; 3]>, String> {
+        if !self
+            .view
+            .id("Wrench_RegionCustom")
+            .is_some_and(|n| self.view.bool_value(n))
+        {
+            return Ok(None);
+        }
+        let mut size = [0.0; 3];
+        for (i, value) in size.iter_mut().enumerate() {
+            *value = self.view.id(&format!("Wrench_Region{i}"))
+                .and_then(|n| self.view.edit_text(n).trim().parse::<f32>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0 && *v <= 100.0)
+                .ok_or_else(|| "Width, height and depth must each be greater than 0 and at most 100 world units.".to_string())?;
+        }
+        Ok(Some(size))
     }
 
     fn store(&mut self, core: &mut Core) {
         let mut data = core.wrench.values(self.variant);
+        if !core.wrench.filling()
+            && let Ok(size) = self.region_value()
+        {
+            data.rule_region = size;
+        }
         for &field in WrenchField::for_variant(self.variant) {
             if let Some(n) = self
                 .view
@@ -332,11 +495,49 @@ impl Screen for Wrench {
         }
         if matches!(ev.kind, EventKind::Changed | EventKind::Submit) {
             self.store(core);
+            self.refresh(core);
         }
         if ev.kind != EventKind::Click {
             return;
         }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
+        if command == "wrench.region" {
+            self.store(core);
+            let custom = self
+                .view
+                .id("Wrench_RegionCustom")
+                .map(|n| self.view.bool_value(n));
+            let draft: Vec<_> = (0..3)
+                .map(|i| {
+                    self.view
+                        .id(&format!("Wrench_Region{i}"))
+                        .map(|n| self.view.edit_text(n))
+                })
+                .collect();
+            self.region_expanded = !self.region_expanded;
+            let layout = match self.variant {
+                WrenchVariant::Normal => "wrenchDlg",
+                WrenchVariant::Sound => "wrenchSoundDlg",
+                WrenchVariant::VehicleSpawn => "wrenchVehicleSpawnDlg",
+            };
+            self.view = region_view(core, layout, self.prefix, self.region_expanded);
+            self.fill(core);
+            if let Some(n) = self.view.id("Wrench_RegionCustom")
+                && let Some(custom) = custom
+            {
+                self.view.set_bool(n, custom);
+            }
+            for (i, value) in draft.iter().enumerate() {
+                if let Some(n) = self.view.id(&format!("Wrench_Region{i}"))
+                    && let Some(value) = value
+                {
+                    self.view.set_text(n, value);
+                }
+            }
+            self.refresh(core);
+            self.view.layout(core.logical.0, core.logical.1);
+            return;
+        }
         if command.contains("popdialog(") {
             self.cancel(core);
             return;
@@ -355,6 +556,13 @@ impl Screen for Wrench {
             None
         };
         if let Some(op) = op {
+            if op == Operation::Send
+                && !core.wrench.filling()
+                && let Err(error) = self.region_value()
+            {
+                core.message_ok("Invalid detection region", &error);
+                return;
+            }
             let data = core.wrench.values(self.variant);
             let action = match op {
                 Operation::Send if core.wrench.filling() => UiAction::SendFillWrench {
@@ -2076,6 +2284,41 @@ mod tests {
     use crate::ui::{StackCmd, Ui, UiConfig};
     use std::rc::Rc;
 
+    #[test]
+    fn dimensions_edit_directly_and_invalid_values_do_not_send() {
+        let mut ui = fixture();
+        let mut s = Wrench::new(&ui.core, WrenchVariant::Normal);
+        click(&mut s, "Wrench_RegionToggle", &mut ui.core);
+        click(&mut s, "Wrench_RegionCustom", &mut ui.core);
+        for (i, value) in ["8", "5", "8"].iter().enumerate() {
+            edit(&mut s, &format!("Wrench_Region{i}"), value, &mut ui.core);
+        }
+        assert_eq!(
+            ui.core.wrench.values(WrenchVariant::Normal).rule_region,
+            Some([8.0, 5.0, 8.0])
+        );
+        edit(&mut s, "Wrench_Region0", "NaN", &mut ui.core);
+        click(&mut s, "Wrench_Send", &mut ui.core);
+        assert!(ui.drain_actions().is_empty());
+        edit(&mut s, "Wrench_Region0", "8", &mut ui.core);
+        click(&mut s, "Wrench_Send", &mut ui.core);
+        let actions = ui.drain_actions();
+        assert!(
+            matches!(&actions[0].1, UiAction::SendWrench {data, ..} if data.rule_region == Some([8.0, 5.0, 8.0]))
+        );
+        s.on_result(
+            actions[0].0,
+            Some(&Pending::Wrench),
+            &Err("retry".into()),
+            &mut ui.core,
+        );
+        click(&mut s, "Wrench_RegionCustom", &mut ui.core);
+        click(&mut s, "Wrench_Send", &mut ui.core);
+        assert!(
+            matches!(&ui.drain_actions()[0].1, UiAction::SendWrench {data, ..} if data.rule_region.is_none())
+        );
+    }
+
     fn fixture() -> Ui {
         let mut data = UiPack::default();
         for (layout, prefix, variant) in [
@@ -2959,6 +3202,7 @@ mod tests {
                 "Maxwell".into(),
                 WrenchData {
                     name: "test_brick".into(),
+                    rule_region: Some([8.0, 5.0, 8.0]),
                     light: Some("FxLightData:beta".into()),
                     raycasting: true,
                     colliding: true,

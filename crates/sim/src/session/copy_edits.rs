@@ -165,6 +165,7 @@ pub(super) fn wrench_properties(brick: &Brick) -> WrenchProperties {
         _ => None,
     };
     WrenchProperties {
+        rule_region: brick.rule_region,
         name: brick.name.clone(),
         light: brick.light.as_ref().and_then(|l| resolved(&l.asset)),
         emitter: brick

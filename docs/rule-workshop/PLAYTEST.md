@@ -53,16 +53,20 @@ are saved, while live variable progress is not.
 |---|---|---|
 | `/rulelab switch` | Classic switch opens a named panel for two seconds; reactivation extends it. No conditions. | Add sounds/lights, relays, more named targets or replace the panel. Compare authoring with ordinary v20 Events. |
 | `/rulelab teamdoor` | Open and Close buttons control a solid gate, only for Blue. Fresh games create Blue/Red and put you on Blue; existing games use their first team. | Change your team in Teams & Add-Ons and verify refusal. Change the allowed team, add a delay, or require a shared `keyFound` variable. Add walls around the gate. |
-| `/rulelab puzzle` | Three distinct switches in order open a gate. Any player in the MiniGame can contribute. Wrong order/repeated completed switches do not advance it; Reset clears progress and closes it. | Make wrong input reset progress, require simultaneous switches, add a timeout or let a ball operate one switch. Rename shared `puzzleStep` for an independent puzzle. |
+| `/rulelab puzzle` | Three distinct switches in order open a gate. Any player in the MiniGame can contribute. Wrong order/repeated completed switches do not advance it; resetting the MiniGame clears progress and closes it. | Make wrong input reset progress, require simultaneous switches, add a timeout or let a ball operate one switch. Rename shared `puzzleStep` for an independent puzzle. |
 | `/rulelab race` | Three ordered player/object checkpoints; three laps wins. | Reverse order, alter lap count, drive a Jeep, jump over sensors, try two racers or use a portal. Rename `checkpoint` to make a second course independent. |
 | `/rulelab hill` | An uncontested occupant gains a real point each second; ten wins. | Remove the opponents check for a crowded hill, configure teams, require consecutive hold time, or make control unlock a door instead of awarding points. |
 | `/rulelab slayer` | Five credited player kills wins. Environmental deaths and suicides give no point. | Change penalties/thresholds, team assignment, native damage/health/equipment actions. Try a delayed killer reward with IF Instigator Alive = Yes; die during the delay. |
-| `/rulelab soccer` | Two opposing-team goal sensors and a steel-ball spawn. A credited entry into the opposing goal scores for the toucher’s team; team total five wins. Ball resets after three seconds. | First goal accepts the second team, second goal the first. Own goals reset the ball without scoring. Change the team/credit/kind checks, invent own-goal penalties, use a gravity gun, or replace a goal with a portal. |
+| `/rulelab soccer` | Two opposing-team goal sensors and a steel-ball spawn. A credited entry into the opposing goal scores for the credited player’s team; team total five wins. Ball resets after three seconds. | First goal accepts the second team, second goal the first. Own goals reset the ball without scoring. Change the team/credit/kind checks, invent own-goal penalties, use a gravity gun, or replace a goal with a portal. |
 | `/rulelab sandbox` | A three-click charged launcher shares charge between clickers; a bounce pad rewards every third visit per player; a MiniGame timer alternates colors every five seconds. | Swap velocity for damage, points or a gate. Compare shared Brick charge with private Player visits. Make the timer control the team door; change variable names to join or separate mechanisms. |
 | `/rulelab addon` | Toys cycles Red → Green → Blue; core events respond to its facts. Blue increments MiniGame `blueSelections`. | Replace color responses with doors, score, launches or a win condition. Use `cycleRoute` on another brick. Disable Toys and inspect unavailable rows. Source is `packages/rule-workshop-toys/`. |
 
 These are ordinary brick events. Delete rows, copy bricks, change names, combine
 facts/actions across examples and try ideas the recipes never anticipated.
+Resetting a MiniGame resets progress; it does not remove the example bricks.
+Hammer unwanted examples or use the existing clear-bricks tools, and choose a
+new clear area before placing another example batch.
+
 Examples are arranged eastward in the order described. Team door places Open,
 Close, Gate; Puzzle places switches 1/2/3, then Gate. Gate panels use a tall
 ordinary brick when available. Checkpoints are a line; build the course around
@@ -70,13 +74,14 @@ them. Goals are sensors on colored plates; build the field and walls.
 
 ## Regions, state and objects
 
-A region is centered on its event brick. Default width/depth follow the brick
-footprint (minimum one world unit), and height is four world units. To change it,
-add `onActivate → Self → setRegionSize` with width, height, depth, Send and
-activate the brick. The size stays with the saved brick. This is a sensor; it
-does not create walls. Player checks use a point one unit above their feet;
-object checks use the vehicle/ball center. The recipe plates are deliberately
-floating just above the ground. Do not assume touching the outer edge counts.
+A region is centered on its event brick. It follows the brick's footprint
+(minimum one world unit) and is four units tall by default. To resize it, open
+that brick's Wrench and turn on **Custom size** under **Detection region**;
+enter width, height and depth, then Send. The outline previews the selected
+brick and shows saved sensors. A region is a sensor, not a wall. Player checks
+use a point above the feet; object checks use the vehicle/ball center. The
+recipe plates sit just above the ground, so test the outline instead of assuming
+touching its outer edge counts.
 
 `onRegionEnter/Leave/Stay` observes players; `onObjectEnter/Leave/Stay` observes
 vehicles and balls spawned by this builder. Stay fires once per second, on the
@@ -102,7 +107,8 @@ Team refers to the acting player's current team.
 
 ## When it does nothing
 
-Send first. Press **Explain saved** to open a small results window. Choose
+Send first. The brick's builder or an administrator can press **Explain saved**
+to open a small results window. Choose
 **Back to game**, perform the interaction, then open Explain saved again.
 **Refresh** reads newer results without leaving that window. It shows the saved
 row count, region dimensions/occupants, then recent condition values, skips,

@@ -349,6 +349,29 @@ impl App {
             } else {
                 Vec::new()
             };
+            let preview = self
+                .ui
+                .core
+                .wrench
+                .open
+                .as_ref()
+                .filter(|open| open.fill.is_none())
+                .map(|open| {
+                    (
+                        open.brick,
+                        self.ui.core.wrench.values(open.variant).rule_region,
+                    )
+                });
+            if let Some(vertices) =
+                self.gpu
+                    .region_outlines
+                    .update(&view.world.bricks, show, preview, |brick| {
+                        crate::brick_cover::mesh(brick, meshes)
+                    })
+                && let Some(lines) = &mut self.gpu.region_lines
+            {
+                lines.set_lines(frame.device, &vertices)?;
+            }
             if (self.gpu.hidden_uploaded != Some(show) || self.gpu.hidden_fading != fading)
                 && let Some(lines) = &mut self.gpu.hidden_lines
             {
@@ -910,6 +933,9 @@ impl App {
         if let Some(lines) = &self.gpu.hidden_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
+        if let Some(lines) = &self.gpu.region_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
         if let Some(lines) = &self.gpu.selection_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
@@ -1212,6 +1238,9 @@ impl App {
         self.addons.item_skins.render(&mut pass);
         self.addons.client_code.render(&mut pass);
         if let Some(lines) = &self.gpu.hidden_lines {
+            lines.render(&mut pass);
+        }
+        if let Some(lines) = &self.gpu.region_lines {
             lines.render(&mut pass);
         }
         if let Some(lines) = &self.gpu.selection_lines {

@@ -517,7 +517,8 @@ impl App {
                         view.owner,
                     ) {
                         Ok(updates) => {
-                            for update in updates {
+                            for mut update in updates {
+                                region_defaults(&mut update, &reply, self.scene.meshes.as_deref());
                                 self.ui.apply_session(a.id, update);
                             }
                         }

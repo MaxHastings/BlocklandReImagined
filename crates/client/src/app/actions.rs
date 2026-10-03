@@ -929,10 +929,14 @@ impl App {
                 let folder = bri_package::classic::folder(&self.content.paths.root);
                 std::fs::create_dir_all(&folder)
                     .with_context(|| format!("Could not create {}", folder.display()))
-                    .map(|()| {
+                    .and_then(|()| {
                         if !bri_crash::open(&folder.to_string_lossy()) {
-                            bri_console::warn(format!("Could not open {}", folder.display()));
+                            anyhow::bail!(
+                                "Could not open the Add-Ons folder. You can open it manually at {}",
+                                folder.display()
+                            );
                         }
+                        Ok(())
                     })
             }
             UiAction::ToggleFavorite { ref address } => {

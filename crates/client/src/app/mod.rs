@@ -70,6 +70,19 @@ use scene::*;
 use session::*;
 use view::*;
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
+
+/// Supply actual automatic bounds to the editor, so selecting Custom starts
+/// from the inspected brick's current footprint rather than an invented size.
+fn region_defaults(update: &mut UiUpdate, reply: &Reply, meshes: Option<&Meshes>) {
+    if let UiUpdate::OpenWrench { data, .. } = update
+        && let Reply::Inspected { brick, .. } = reply
+        && let Some(mesh) = meshes.and_then(|meshes| crate::brick_cover::mesh(brick, meshes))
+    {
+        let (lo, hi) =
+            bri_world::regions::bounds(None, bri_sim::definitions::brick_box(brick, mesh));
+        data.rule_region_default = Some((hi - lo).to_array());
+    }
+}
 /// One player's script-thread animations by thread number (`playThread`).
 type AvatarThreads = [Option<crate::avatar::ActionAnimation>; 4];
 
@@ -1466,6 +1479,13 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.gpu.region_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.gpu.region_outlines.clear();
         self.gpu.selection_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -1555,6 +1575,8 @@ impl PlatformApp for App {
         self.gpu.effects_renderer = None;
         self.gpu.hidden_lines = None;
         self.gpu.selection_lines = None;
+        self.gpu.region_lines = None;
+        self.gpu.region_outlines.clear();
         self.world_shapes = None;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();

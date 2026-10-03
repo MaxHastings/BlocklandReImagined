@@ -502,7 +502,7 @@ impl Screen for AddOns {
             }
             (IMPORT, EventKind::Click) => self.import(core),
             (OPEN_FOLDER, EventKind::Click) => {
-                core.request(UiAction::OpenAddOnsFolder);
+                self.requests.push(core.request(UiAction::OpenAddOnsFolder));
             }
             (ENABLED, EventKind::Click) => {
                 self.toggle(core);

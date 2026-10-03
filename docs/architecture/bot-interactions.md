@@ -1,8 +1,7 @@
 # Bots acting together in a physical world
 
-Branch: `codex/bot-vehicle-coordination`, based on main `7ca4b632`.
 This records the implemented mechanism, its deliberate boundary and acceptance
-evidence. The branch remains separate from main until integration review.
+evidence, integrated for the v0.2.0 alpha release.
 
 ## Problem
 
@@ -90,7 +89,11 @@ made by this first implementation.
 
 ## Examples the rules should permit
 
-These are design cases, not promises that each is implemented on this branch.
+These combinations describe the direction of the mechanism. Ground crews,
+seat replacement, human occupancy, bounded physical pushing and dated allied
+observations have headless acceptance evidence below. Strategic objectives,
+general tool programs and complete ballistic or portal planning remain future
+work; this table does not claim every combination is implemented.
 
 | Shared fact or capability | Possible combinations |
 |---|---|

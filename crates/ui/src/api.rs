@@ -224,6 +224,11 @@ pub enum WrenchVariant {
 /// `None` = NONE.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WrenchData {
+    /// Directly authored detection size, in world X/Y/Z units; None: automatic.
+    pub rule_region: Option<[f32; 3]>,
+    /// Effective automatic dimensions from the client geometry adapter.
+    pub rule_region_default: Option<[f32; 3]>,
+    pub region_inputs: bool,
     pub name: String,
     pub light: Option<String>,
     pub emitter: Option<String>,

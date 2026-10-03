@@ -147,6 +147,8 @@ impl App {
                 renderer: None,
                 shell_gpu: None,
                 hidden_lines: None,
+                region_lines: None,
+                region_outlines: Default::default(),
                 vignette: None,
                 selection_lines: None,
                 selection_uploaded: None,

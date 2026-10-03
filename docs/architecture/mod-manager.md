@@ -112,8 +112,9 @@ they add.
 
 - The host and client load `packages.json`. A join fetches missing Add-Ons
   through `bri_net::packages::fetch_missing_pinned`
-  (`crates/net/src/client.rs`), but the client does not yet drive
-  `ConnectionState::DownloadingPackages` from it.
+  (`crates/net/src/client.rs`). The client drives
+  `ConnectionState::DownloadingPackages` with byte progress and Cancel, then
+  resumes the same pinned join after verified package preparation.
 - **Trust prompt.** When a server's Add-Ons include sandboxed client code the
   player has not trusted, the client asks before that code runs. Accepting
   remembers exactly what the question showed (`crates/client/src/client_code.rs`);
