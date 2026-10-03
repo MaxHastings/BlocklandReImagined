@@ -1,17 +1,18 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-10-02. It summarises; the linked docs are the evidence, and
+Revised 2026-10-03. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
 
-Current public release: [v0.2.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.0),
-source `28b3e3248fa2da23ffe9e87a802f61daa7bcf21b`, with verified Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives. See the
-[publication evidence and open playtest reports](progress/2026-10-02-v0.2.0-published.md).
-The full alpha contract remains open; the current playtest fixes are being
-prepared on the v0.2.1 branch.
+Current public release: [v0.2.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.1),
+source `d738257192cb9ab54bfa7dadc0c7107d15a71956`, with verified Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives. The reviewed code is on main.
+See the [publication evidence, hashes and remaining playtest limits](progress/2026-10-03-v021-published.md).
+The full alpha contract remains open. The Rule Workshop and bounded NPC objective/
+weapon work remain experimental; the reported Windows firefight NaN crash is not
+claimed causally fixed.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in

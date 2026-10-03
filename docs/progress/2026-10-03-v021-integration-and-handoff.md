@@ -54,3 +54,10 @@ and initial failure log. No original was changed and no test expectation was
 weakened. This is an input-version limitation, not evidence of a repaired or
 introduced loading regression. Logs: `/tmp/bri-v021-save-corpus.log` (initial),
 `/tmp/bri-v021-save-corpus-canonical.log` (five canonical cases passed).
+
+## Publication handoff
+
+The final candidate d738257192cb passed the full gate and Windows CI, was
+merged to main and published as v0.2.1 on all three platforms. Exact run IDs,
+hashes, final gate repairs and remaining limits are recorded in
+[the publication entry](2026-10-03-v021-published.md).
