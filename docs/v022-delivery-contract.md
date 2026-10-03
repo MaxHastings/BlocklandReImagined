@@ -108,6 +108,14 @@ render/network/snapshot costs. Headless Mac results do not establish Windows FPS
 
 ## Publication gate
 
+**Final release direction:** Maxwell subsequently asked to stop additional
+detail work, accepted the current scope as good enough, and requested the push
+and release. Further hardening and extended performance investigations stop
+here. The fourteen journeys and held-out composition retain their passing
+independent evidence; the long battle's strict activity failure and unfinished
+measurement phases remain documented rather than counted as passes. Required
+repository checks and matching platform-package verification still apply.
+
 - Focused tests, affected crate regressions and strict clippy pass; no generated
   original content, downloaded tools or scratch implementation lands in Git.
 - Required repository gate, including workspace ignored tests and client content

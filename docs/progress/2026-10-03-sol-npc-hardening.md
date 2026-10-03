@@ -742,3 +742,40 @@ checks its exact ID, uses its actual version and canonical `side()` derivation,
 then retains ordinary loader validation/companion following and the loaded
 provider requirement. Root approved the narrow correction and checkpoint
 rebuild; snapshot and production code remain unchanged.
+
+The corrected explicit-provider pilot (`20fa89e3`,
+`/tmp/bri-v022-sol-final-provider-rocket-pilot2.log`) passed both 30-second
+Gun/Rocket phases with the actual `gamemode_slayer_ctf-rules` namespace loaded.
+Its damage/participation fingerprints match the plain pilot. Gun step
+p50/p95/p99/max was 1.137/1.903/3.441/9.713 ms; Rocket was
+0.797/1.513/2.133/5.771 ms. This measures empty-offer discovery; the installed
+provider receives no authored flag/team offers in this diagnostic. VM duration
+is neither an exact query count nor the full snapshot/model preparation cost.
+
+The first full 300-second Beta City 12-controller run remains a failed receipt:
+`/tmp/bri-v022-sol-final-beta12.log`, source `20fa89e3`, unchanged snapshot
+SHA256 `161735207b50e5abe574a5b86fca698c9cd969210f74271888a7cd6e98a16a92`.
+Gun passed every strict 10-second activity window, with 42,770 observed health
+loss/425 deaths and step p50/p95/p99/max 1.043/1.552/1.820/7.252 ms. Rocket
+had 35,973 active steps of 36,000, 25,135.2 observed health loss/253 deaths,
+and step 0.754/1.283/1.639/10.926 ms, but failed windows 16, 18, 19 and 21.
+Window 16 had all 12 participating controllers and 12,916 Fight ticks, with
+zero damage; the other three had 11 participating controllers and real damage.
+These do not establish a permanently silent brain or a physics/runtime stall.
+All 12 spawners survived, and phase-end living peers retained Fight/Fly/Search
+control. One apparent overdue corpse was still within the canonical extra
+120-tick brick-bot respawn wait. No Windows FPS, crash fix or measured v0.2.1
+speedup is claimed. Later weapon/reconstruction phases did not run after this
+failure; they remain required work.
+
+Root approved bounded harness-only window diagnostics without changing the
+strict acceptance condition. Reports now retain exact participating/missing
+IDs, per-controller life/visibility/behavior/mounted-state counts, actual spawn
+transitions, and distinct observed live projectile IDs by source. Strictly
+failing windows capture their public end poses, vitals and thoughts. All reads
+occur outside timed `Session::step`; mounted states and sampled projectile IDs
+are observations, not a complete shot-event counter. Production and inputs are
+unchanged. The original failed receipt remains preserved, and a final-source
+replay must establish the specific missing-controller and zero-damage causes.
+The exclusive compute lease was explicitly released to root for reviewed
+rendering integration; no NPC Cargo or timing run is active during that work.

@@ -61,3 +61,28 @@ consolidate main, refresh verified private assets and prepare matching platform
 archives before publishing v0.2.2. Obsolete branches remain recoverably archived
 until the final integration is safe to retire. The unrelated local setup note
 and primary/gate build output are preserved.
+
+## Maxwell's finalization instruction
+
+Maxwell then explicitly requested “lets just push”, “no more little details”,
+“its good enough” and “lets go”. Root stops optional polish and extended
+investigation and proceeds to committed-source CI, the required main gate and
+three-platform publication. The delivery contract records that superseding
+release decision. No benchmark failure or incomplete measurement becomes a pass.
+
+The first long Beta City twelve-bot run completed 300 simulation seconds of
+Gun and Rocket phases. Rocket recorded 25,135 observed health loss and 253
+deaths, with no 50-ms simulation steps, but strict activity checks failed four
+ten-second windows: one had no damage and three had eleven visible combat
+participants instead of twelve. Later phases/cities were not completed.
+Bounded diagnostic additions preserve that strict criterion for future replay;
+they do not change bot behavior or inject inputs. Normal death/search lifecycles
+remain distinguishable from permanent inactivity, but the failed windows are
+not claimed explained or fixed. The failed receipt is preserved.
+
+Reviewed lighting commits were integrated as `f8a932a7`, `b92bfb4c` and
+`bad6ed05`. Only the seam-table conflict needed manual reconciliation; both
+owners' rows were retained. Session and guest-music changes merged together.
+Root added the required sidecar validation to packaged `--check`. Integrated
+render/client strict all-target clippy passed; the complete unfiltered client
+regression and generated sidecar/startup checks are next.

@@ -55,7 +55,11 @@ current changes. Focused headless/offscreen checks do not replace your playtest.
 - **Block faces** from Add-Ons that generate worlds aren't drawn yet.
 - **The Kitchen's main floor** sits slightly off the brick grid.
 - **The Tutorial** runs in single player only.
-- **Lighting, shadows, water and sky** aren't final.
+- **Lighting, shadows, water and sky** aren't final. Dynamic uses live geometry
+  lighting and shadows; Classic and Unified retain their legacy appearance.
+  Recovered map lamps approximate lost source metadata, and Dynamic has no
+  general indirect lighting. Sun-shadow distance and the number of shadowed
+  moving lights remain bounded. Dark interiors need your visual playtest.
 - **Knocked-out brick visuals** tumble differently on each player's screen.
   They never affect play. Explosion debris lasts up to 13 seconds (ten opaque,
   three fading); Physics Quality and load limits can retire older pieces early.

@@ -72,6 +72,19 @@ struct Profile {
     objective_reused: u64,
     rss_kib: Vec<u64>,
     windows: Vec<ActivityWindow>,
+    controllers: BTreeSet<u64>,
+}
+
+#[derive(Debug, Default)]
+struct ControllerActivity {
+    living_ticks: u64,
+    dead_ticks: u64,
+    visible_ticks: u64,
+    participating_ticks: u64,
+    spawn_transitions: u64,
+    health_loss_observed: f64,
+    behaviour_ticks: BTreeMap<&'static str, u64>,
+    mounted_state_ticks: BTreeMap<String, u64>,
 }
 
 #[derive(Default)]
@@ -83,6 +96,10 @@ struct ActivityWindow {
     health_loss_observed: f64,
     deaths_observed: u64,
     participating: BTreeSet<u64>,
+    controllers: BTreeMap<u64, ControllerActivity>,
+    observed_projectiles: BTreeSet<u64>,
+    projectile_source_counts: BTreeMap<u64, u64>,
+    failure_endpoints: Vec<String>,
 }
 
 impl Profile {
@@ -130,8 +147,9 @@ impl Profile {
             self.rss_kib.iter().max()
         );
         for (i, window) in self.windows.iter().enumerate() {
+            let missing: Vec<_> = self.controllers.difference(&window.participating).collect();
             eprintln!(
-                "{phase} window[{i}] ticks={} active_steps={} fight_controller_ticks={} living_controller_ticks={} health_loss_observed={:.1} deaths_observed={} participating_bot_ids={}",
+                "{phase} window[{i}] ticks={} active_steps={} fight_controller_ticks={} living_controller_ticks={} health_loss_observed={:.1} deaths_observed={} participating_bot_ids={} participating={:?} missing={missing:?} distinct_live_projectile_ids={} distinct_live_projectile_ids_by_source={:?}",
                 window.ticks,
                 window.active_steps,
                 window.fight_controller_ticks,
@@ -139,7 +157,19 @@ impl Profile {
                 window.health_loss_observed,
                 window.deaths_observed,
                 window.participating.len(),
+                window.participating,
+                window.observed_projectiles.len(),
+                window.projectile_source_counts,
             );
+            if window.active_steps == 0 || window.health_loss_observed == 0.0 || !missing.is_empty()
+            {
+                for (bot, activity) in &window.controllers {
+                    eprintln!("{phase} window[{i}] bot={bot} lifecycle={activity:?}");
+                }
+                for endpoint in &window.failure_endpoints {
+                    eprintln!("{phase} window[{i}] end {endpoint}");
+                }
+            }
         }
         report_auxiliary(phase, "active_combat_step", &mut self.active_step_nanos);
         report_auxiliary(phase, "snapshot", &mut self.snapshot_nanos);
@@ -171,8 +201,12 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
     let mut result = Profile::default();
     let mut health = BTreeMap::new();
     let mut counters = BTreeMap::new();
+    let mut spawn_ticks = BTreeMap::new();
+    let initial_vitals = s.vitals();
     for thought in s.bot_thoughts() {
-        health.insert(thought.bot, s.vitals()[&thought.bot].health);
+        result.controllers.insert(thought.bot);
+        health.insert(thought.bot, initial_vitals[&thought.bot].health);
+        spawn_ticks.insert(thought.bot, initial_vitals[&thought.bot].spawn_tick);
         counters.insert(
             thought.bot,
             (thought.objective_searches, thought.objective_reused),
@@ -194,11 +228,24 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
         result.slow_50ms += u64::from(nanos > 50_000_000);
         result.step_nanos.push(nanos);
         let thoughts = s.bot_thoughts();
+        let vitals = s.vitals();
         let mut active = false;
         let mut current_health = BTreeMap::new();
         let mut current_counters = BTreeMap::new();
         for thought in &thoughts {
-            let now = s.vitals()[&thought.bot].health;
+            let vital = &vitals[&thought.bot];
+            let now = vital.health;
+            let controller = window.controllers.entry(thought.bot).or_default();
+            controller.living_ticks += u64::from(vital.alive);
+            controller.dead_ticks += u64::from(!vital.alive);
+            controller.visible_ticks += u64::from(vital.alive && thought.visible.is_some());
+            controller.spawn_transitions += u64::from(
+                spawn_ticks.insert(thought.bot, vital.spawn_tick) != Some(vital.spawn_tick),
+            );
+            *controller
+                .behaviour_ticks
+                .entry(thought.behaviour)
+                .or_default() += 1;
             result.living_controller_ticks += u64::from(now > 0.0);
             window.living_controller_ticks += u64::from(now > 0.0);
             if let Some(old) = health.get(&thought.bot) {
@@ -208,6 +255,7 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
                 result.deaths_observed += death;
                 window.health_loss_observed += loss;
                 window.deaths_observed += death;
+                controller.health_loss_observed += loss;
             }
             current_health.insert(thought.bot, now);
             let next = (thought.objective_searches, thought.objective_reused);
@@ -230,6 +278,7 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
                 active = true;
                 result.participating.insert(thought.bot);
                 window.participating.insert(thought.bot);
+                controller.participating_ticks += 1;
             }
             let fighting = now > 0.0 && thought.behaviour == "fight";
             result.fight_controller_ticks += u64::from(fighting);
@@ -250,6 +299,42 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
         for projectile in weapons.fired() {
             result.active_projectile_samples += 1;
             result.observed_projectiles.insert(projectile.id);
+            if window.observed_projectiles.insert(projectile.id) {
+                *window
+                    .projectile_source_counts
+                    .entry(projectile.source.0)
+                    .or_default() += 1;
+            }
+        }
+        for (bot, controller) in &mut window.controllers {
+            let image = weapons
+                .images
+                .get(bot)
+                .and_then(|images| images.iter().find(|i| i.hand == 0));
+            let state = image.map_or("unmounted".to_owned(), |image| {
+                format!("{}:{}", image.image, image.state)
+            });
+            *controller.mounted_state_ticks.entry(state).or_default() += 1;
+        }
+        if (tick + 1) % 1200 == 0 || tick + 1 == ticks {
+            let missing = result
+                .controllers
+                .difference(&window.participating)
+                .next()
+                .is_some();
+            if window.active_steps == 0 || window.health_loss_observed == 0.0 || missing {
+                let snapshot = s.snapshot();
+                for thought in &thoughts {
+                    window.failure_endpoints.push(format!(
+                        "bot={} state={:?} vitals={:?} tools={:?} mounts={:?} thought={thought:?}",
+                        thought.bot,
+                        snapshot.players.iter().find(|p| p.owner == thought.bot),
+                        vitals.get(&thought.bot),
+                        snapshot.tools.get(&thought.bot),
+                        weapons.images.get(&thought.bot),
+                    ));
+                }
+            }
         }
         if tick % 120 == 0 {
             // Keep diagnostics outside the measured `Session::step` window.
