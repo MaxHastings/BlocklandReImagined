@@ -11,6 +11,9 @@
 //! both sides, with two ordinary creator owners joined to the MiniGame.
 //! `BRI_BATTLE_BRICK_DAMAGE=0` explicitly disables ordinary MiniGame brick
 //! damage for a stable-world diagnostic; the default remains enabled.
+//! `BRI_BATTLE_CTF_PROVIDER=1` selects installed Slayer/CTF Add-Ons through the
+//! ordinary package loader, requiring their query provider before timing.
+//! Without authored flag sources this measures empty-offer discovery only.
 //! Default retains the stock Blockhead-versus-converting-Zombie encounter.
 //! `BRI_BATTLE_RELOADS=1..4` repeats data/collision/session construction in the
 //! same process, reporting sampled RSS. This is not a network map-change test.
@@ -620,6 +623,22 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
             });
         }
     }
+    let query_ctf = std::env::var("BRI_BATTLE_CTF_PROVIDER").is_ok_and(|v| v == "1");
+    if query_ctf {
+        // Select the same installed dependencies a creator enables. Their
+        // declared server companions follow through the ordinary loader below.
+        for id in ["gamemode_slayer", "gamemode_slayer_ctf"] {
+            if !packages.packages.iter().any(|p| p.id == id) {
+                packages.packages.push(bri_package::packages::PackageEntry {
+                    id: id.into(),
+                    version: "1.0.0".into(),
+                    side: bri_package::packages::Side::Shared,
+                    dir: format!("addons/{id}"),
+                    role: None,
+                });
+            }
+        }
+    }
     bri_package::library::follow_manifest_sides(&root, &mut packages);
     bri_package::library::follow_companions(&root, &mut packages);
     let initial = bri_net::dedicated::load_packages(
@@ -655,6 +674,13 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    ensure!(
+        !query_ctf
+            || query_providers
+                .iter()
+                .any(|p| p == "gamemode_slayer_ctf-rules"),
+        "requested CTF discovery provider must actually be loaded before timing"
+    );
     let objective_weights: Vec<_> = initial
         .setup
         .content
@@ -669,7 +695,7 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
         })
         .collect();
     eprintln!(
-        "loaded_objective_query_providers={query_providers:?} actual_bot_objective_weights={objective_weights:?}; populated_package_objective_actions_not_implied=true"
+        "ctf_provider_selected={query_ctf} loaded_objective_query_providers={query_providers:?} loaded_bot_kind_objective_weights={objective_weights:?}; populated_package_objective_actions_not_implied=true"
     );
     let plate = "v20/brick/brickvehiclespawndata".to_owned();
     let mesh = &initial.session.simulation().definitions.entries[&plate].mesh;

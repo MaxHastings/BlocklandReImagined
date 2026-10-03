@@ -713,3 +713,23 @@ credit and rule semantics are preserved. Exact-spawner decoys, replacement after
 real movement and two-bot competition also pass their transformed variants.
 The remaining closeout in this lane is strict affected-target checking and
 exclusive optimized, provider-enabled sustained city/combined measurements.
+
+Final exclusive measurement began from committed `c66bdff0`, with fresh APFS
+content snapshot9471files/392,843,334bytes, SHA256
+`161735207b50e5abe574a5b86fca698c9cd969210f74271888a7cd6e98a16a92`.
+The first30-second Beta City12-controller Gun/Rocket pilot passed real damage
+and all-controller participation in every10-second window. Gun step
+p50/p95/p99/max1.086/1.682/1.955/3.769ms; Rocket0.770/1.344/1.594/3.020ms,
+2419.4observed health loss and26deaths. These are plain-battle pilot costs.
+
+The newly explicit loaded-provider report exposed a coverage gap: the default
+package selection loads no objective-query providers even though the installed
+CTF manifest opts in. Root approved a harness-only ordinary selection flag,
+`BRI_BATTLE_CTF_PROVIDER=1`, adding the installed Slayer and CTF packages and
+following their declared server companions through the existing package loader.
+The harness requires the actual CTF query namespace to be loaded before timing;
+it preserves default plain selection when the flag is absent. Final source
+provenance/rebuild and a new provider-enabled activity pilot precede long runs.
+Without authored flag sources these city fights measure empty-offer discovery,
+not populated CarryReturn action grounding. Imported CTF/package acceptance
+proves that separate actual-control path; total VM duration is not a query count.
