@@ -186,12 +186,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         }
         for (i, line) in [
             "World units; centered on brick.",
-            "Auto follows brick; 4 units tall.",
             "Hold a build tool to see bounds.",
-            "Use region events for detection.",
-            "Cyan active; pale preview; gray off.",
-            "Orange means too many sensors.",
-            "Send saves; Cancel discards.",
         ]
         .iter()
         .enumerate()

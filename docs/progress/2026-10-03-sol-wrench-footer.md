@@ -40,3 +40,13 @@ visually separated. Artifacts remain ignored; no original assets are added.
 No visible game or operating-system input was used. Root must rerun the
 combined candidate gate and Windows checks before release; this local fix
 does not close the overall release or interactive acceptance.
+
+Final bounded UI polish after root's capture review: the expanded region panel
+now has only two short hints, identifying world units/brick centering and the
+build-tool preview. Removed the color legend, event instructions and redundant
+Send/Cancel prose. Controls, actions and layout tests are unchanged. Repeated
+all six field-flow cases (pass, 0.48s), native offscreen captures (pass, 2.20s,
+no missing textures), and UI all-target clippy (pass). Logs:
+`/tmp/bri-v021-sol-wrench-hints-{field-flow,offscreen,clippy}.log`.
+Inspected the refreshed native VehicleSpawn 1024×768 requested-2× capture;
+two hints and clear controls remain. No visible game/input or commit/push.
