@@ -10,6 +10,7 @@ use bri_package::diag::Severity;
 use bri_package::library::{Library, LibraryEntry};
 use bri_package::packages::Side;
 use bri_ui::api::{AddOnRow, AddOnsView};
+use std::io::Read;
 use std::path::Path;
 
 /// The one row standing for every base game package.
@@ -246,11 +247,9 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
     }
     // A companion (an import's host rules) is part of its Add-On's row,
     // never a row of its own: it turns on and off with it.
-    for e in library
-        .entries
-        .iter()
-        .filter(|e| !e.required && library.companion_of(e.id()).is_none())
-    {
+    for e in library.entries.iter().filter(|e| {
+        !e.required && library.companion_of(e.id()).is_none() && !palette_only(library, e)
+    }) {
         out.push(row(library, e));
     }
     // Base first, then categories in table order, then Other; the library's
@@ -286,6 +285,51 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
         });
     }
     out
+}
+
+/// Imported palette-only content is selected in Colorsets, independently of
+/// Add-On switches. Keep mixed content and damaged imports visible here.
+fn palette_only(library: &Library, entry: &LibraryEntry) -> bool {
+    let Some(info) = &entry.info else {
+        return false;
+    };
+    if entry.has_errors()
+        || entry.package.role.is_some()
+        || !info.provides.is_empty()
+        || !info.capabilities.is_empty()
+        || !info.companions.is_empty()
+        || !info.dependencies.is_empty()
+        || !info.optional_dependencies.is_empty()
+        || info.client.is_some()
+    {
+        return false;
+    }
+    let Ok(dir) = bri_package::packages::package_dir(library.root(), &entry.package) else {
+        return false;
+    };
+    if crate::colorsets::read(&dir.join("colorSet.txt")).is_err() {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(dir.join("assets/content.json")) else {
+        return false;
+    };
+    let mut bytes = Vec::new();
+    if file.take(65_537).read_to_end(&mut bytes).is_err() || bytes.len() > 65_536 {
+        return false;
+    }
+    let Ok(index) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    let Some(content) = index.get("content").and_then(|c| c.as_array()) else {
+        return false;
+    };
+    index.get("schema_version").and_then(|v| v.as_u64()) == Some(1)
+        && content.len() == 1
+        && content[0].get("kind").and_then(|v| v.as_str()) == Some("asset")
+        && content[0]
+            .get("file")
+            .and_then(|v| v.as_str())
+            .is_some_and(|file| file.eq_ignore_ascii_case("colorSet.txt"))
 }
 
 /// Row ids of classic Add-Ons in the drop folder not converted yet.
@@ -593,6 +637,51 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn palette_only_imports_belong_to_colorsets_but_mixed_content_stays_visible() {
+        let root = std::env::temp_dir().join(format!("bri-palette-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("packages.json"),
+            json!({"schema_version": 1, "packages": []}).to_string(),
+        )
+        .unwrap();
+        for (id, extra_asset, client_code, palette) in [
+            ("unfamiliar_palette", false, false, "255 0 0 255"),
+            ("mixed_assets", true, false, "0 255 0 255"),
+            ("with_client", false, true, "0 0 255 255"),
+            ("broken_palette", false, false, "not a palette"),
+        ] {
+            let dir = root.join("addons").join(id);
+            std::fs::create_dir_all(dir.join("assets")).unwrap();
+            let mut info = json!({"schema_version": 1, "id": id, "version": "1.0.0",
+                "api": 1, "name": id, "provides": [], "capabilities": []});
+            if client_code {
+                info["client"] = json!({"module": "ui.wasm"});
+            }
+            std::fs::write(dir.join("package.json"), info.to_string()).unwrap();
+            std::fs::write(dir.join("colorSet.txt"), palette).unwrap();
+            let mut content = vec![json!({"file": "colorSet.txt", "kind": "asset"})];
+            if extra_asset {
+                content.push(json!({"file": "model.dts", "kind": "asset"}));
+            }
+            std::fs::write(
+                dir.join("assets/content.json"),
+                json!({"schema_version": 1, "content": content}).to_string(),
+            )
+            .unwrap();
+        }
+        let rows = view(&root).rows;
+        assert!(!rows.iter().any(|r| r.id == "unfamiliar_palette"));
+        for id in ["mixed_assets", "with_client", "broken_palette"] {
+            assert!(rows.iter().any(|r| r.id == id), "missing {id}");
+        }
+        let choices = crate::colorsets::discover(&root, &root.join("player"));
+        assert!(choices.iter().any(|c| c.id == "addon:unfamiliar_palette"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// An import's host rules (its companion) are part of its row: no row
     /// or switch of their own, their problems shown on it, on and off with

@@ -36,6 +36,7 @@ pub struct HostColorsets {
     draft: String,
     choices: Vec<(NodeId, String)>,
     request: Option<RequestId>,
+    catalog: Vec<crate::api::HostColorset>,
 }
 
 impl HostColorsets {
@@ -49,6 +50,7 @@ impl HostColorsets {
             draft: core.prefs.str_or(HOST_COLORSET_PREF, "").into(),
             choices: vec![],
             request: None,
+            catalog: vec![],
         };
         screen.build(core);
         screen
@@ -183,6 +185,7 @@ impl HostColorsets {
             .set_active(self.view.id("HC_Folder").unwrap(), self.request.is_none());
         self.view
             .scroll_to(self.view.id("HC_List").unwrap(), previous_scroll);
+        self.catalog.clone_from(&core.host_colorsets);
     }
 
     fn use_choice(&mut self, core: &mut Core) {
@@ -214,7 +217,11 @@ impl Screen for HostColorsets {
         }
     }
     fn on_update(&mut self, core: &mut Core) {
-        self.build(core);
+        // Frame/network updates also reach this screen. Replacing the view
+        // between mouse down and up discards its captured press.
+        if self.catalog != core.host_colorsets {
+            self.build(core);
+        }
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         match key {
@@ -488,5 +495,70 @@ mod tests {
                 .h,
             300
         );
+    }
+
+    #[test]
+    fn pointer_clicks_survive_frame_and_unchanged_catalog_updates() {
+        use crate::api::UiUpdate;
+        use crate::input::{InputEvent, MouseButton};
+
+        fn click_across_updates(ui: &mut Ui, control: &str) {
+            let (x, y) = ui.control_center(ScreenId::HostColorsets, control).unwrap();
+            ui.handle_input(InputEvent::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+            });
+            ui.apply(UiUpdate::PerfFrame(Default::default()));
+            ui.apply(UiUpdate::HostColorsets(ui.core.host_colorsets.clone()));
+            ui.update(16);
+            ui.handle_input(InputEvent::MouseUp {
+                button: MouseButton::Left,
+                x,
+                y,
+            });
+        }
+
+        for size in [(400, 300), (1024, 768)] {
+            let mut ui = fixture();
+            ui.resize(size, Some(1.0));
+            ui.core.prefs.set(HOST_COLORSET_PREF, "first");
+            ui.core.push(ScreenId::HostColorsets);
+            ui.update(0);
+            ui.drain_actions();
+
+            click_across_updates(&mut ui, "HC_Choice2");
+            let view = ui.screen(ScreenId::HostColorsets).unwrap().view();
+            assert!(view.bool_value(view.id("HC_Choice2").unwrap()));
+            assert!(!view.bool_value(view.id("HC_Choice1").unwrap()));
+            assert_eq!(ui.core.prefs.get(HOST_COLORSET_PREF), Some("first"));
+            click_across_updates(&mut ui, "HC_Cancel");
+            assert_ne!(ui.top_id(), ScreenId::HostColorsets);
+            assert_eq!(ui.core.prefs.get(HOST_COLORSET_PREF), Some("first"));
+            assert!(ui.drain_actions().is_empty());
+
+            ui.core.push(ScreenId::HostColorsets);
+            ui.update(0);
+            ui.drain_actions();
+            click_across_updates(&mut ui, "HC_Choice2");
+            click_across_updates(&mut ui, "HC_Use");
+            assert_ne!(ui.top_id(), ScreenId::HostColorsets);
+            assert_eq!(ui.core.prefs.get(HOST_COLORSET_PREF), Some("second"));
+            assert!(
+                ui.drain_actions()
+                    .iter()
+                    .any(|(_, action)| { matches!(action, UiAction::SaveSettings(_)) })
+            );
+
+            ui.core.push(ScreenId::HostColorsets);
+            ui.update(0);
+            ui.drain_actions();
+            click_across_updates(&mut ui, "HC_Folder");
+            assert!(
+                ui.drain_actions()
+                    .iter()
+                    .any(|(_, action)| { *action == UiAction::ColorsetsFolder })
+            );
+        }
     }
 }

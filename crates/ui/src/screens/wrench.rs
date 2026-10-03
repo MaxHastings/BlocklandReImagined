@@ -935,13 +935,16 @@ fn complete_row_supported(
         })
 }
 
-/// Compact authoring actions use the existing scalable native small-button
-/// profile; bitmap button2 is a whole 91x38 image, not a resizable border.
+/// Keep the compact native button artwork and Block font used in v0.2.1.
+/// All event authoring actions share this style, including newly added rows.
 fn authoring_button(rect: Rect, label: &str, command: &str) -> crate::schema::Control {
-    let mut control = ctrl("GuiButtonCtrl", "GuiButtonSmProfile", rect);
-    control.text = Some(label.into());
-    control.command = Some(command.into());
-    control
+    button(
+        "BlockButtonProfile",
+        rect,
+        "base/client/ui/button2",
+        label,
+        command,
+    )
 }
 
 impl WrenchEvents {

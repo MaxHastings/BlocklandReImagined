@@ -89,7 +89,7 @@ pub fn parse(text: &str) -> Result<Vec<PaintDivision>> {
     Ok(divisions)
 }
 
-fn read(path: &Path) -> Result<Vec<PaintDivision>> {
+pub(super) fn read(path: &Path) -> Result<Vec<PaintDivision>> {
     let mut bytes = Vec::new();
     fs::File::open(path)?
         .take(MAX_BYTES + 1)
