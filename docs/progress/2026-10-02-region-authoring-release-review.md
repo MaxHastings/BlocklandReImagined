@@ -116,6 +116,10 @@ is preserved.
 Workspace formatting and all-targets warnings-denied clippy for client, sim,
 UI, world and importer pass. The first lint run flagged the new outline module's
 test block preceding its implementation; moving tests to the end resolved it.
+Windows CI 37086470219 then found a missing end-of-file newline left
+by that move. Root corrected the file and restarts validation/builds from the
+corrected commit; the nonpublishing 37086471497 build was cancelled. No runtime
+assertion or formatter requirement is bypassed.
 
 Pending: commit the final reviewed source, run the complete local gate and new
 Windows CI, then build and validate fresh Windows/macOS/Linux assets from that
