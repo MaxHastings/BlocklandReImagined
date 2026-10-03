@@ -526,6 +526,19 @@ pub(crate) fn lamp_faces(position: Vec3, outer: f32, resolution: u32) -> [Mat4; 
     })
 }
 
+/// Admission uses the same six-face construction as rendering, rather than a
+/// coordinate envelope. All face axes are checked. Resolution changes only the
+/// lateral margin (scale <= 1); the overflow-prone depth coefficients are the
+/// same at every quality, so the standard cube faces cover that contract.
+pub(crate) fn finite_lamp_faces(position: Vec3, outer: f32) -> bool {
+    position.is_finite()
+        && outer.is_finite()
+        && outer > LAMP_NEAR
+        && lamp_faces(position, outer, ShadowSettings::BEST.cube_resolution())
+            .iter()
+            .all(|face| face.to_cols_array().iter().all(|value| value.is_finite()))
+}
+
 /// Shadow map textures, uniforms and caster pipelines. Disabled shadows keep
 /// a 1x1 map and a zero cascade count so receivers need no variant.
 pub(crate) struct ShadowMaps {
@@ -1344,6 +1357,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn finite_positions_can_overflow_shadow_depth_projection() {
+        let position = Vec3::new(1e38, 0.0, 0.0);
+        let outer = 0.050001;
+        assert!(position.is_finite());
+        assert!(crate::lighting_parameters::valid_radii(0.0, outer));
+        for resolution in [256, 512] {
+            assert!(
+                lamp_faces(position, outer, resolution)
+                    .iter()
+                    .any(|face| face.to_cols_array().iter().any(|value| !value.is_finite()))
+            );
+        }
+        assert!(!finite_lamp_faces(position, outer));
+        // There is no invented position limit: the math itself decides.
+        assert!(finite_lamp_faces(position, 50.0));
+        assert!(finite_lamp_faces(Vec3::new(3.0, 4.0, 5.0), outer));
     }
 
     #[test]

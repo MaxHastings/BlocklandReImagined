@@ -61,6 +61,12 @@ pub(crate) fn valid_radii(inner: f32, outer: f32) -> bool {
         && outer > inner
         && outer > crate::shadow::LAMP_NEAR
 }
+/// Finite fields alone cannot guarantee a finite projector: depth scaling
+/// can overflow a finite translation. Reader, writer and GPU admission share
+/// the actual shadow-matrix check without constraining authored coordinates.
+pub(crate) fn valid_geometry(position: [f32; 3], inner: f32, outer: f32) -> bool {
+    valid_radii(inner, outer) && crate::shadow::finite_lamp_faces(position.into(), outer)
+}
 impl Parameters {
     fn validate(&self, root: &Path) -> Result<()> {
         ensure!(
@@ -76,7 +82,7 @@ impl Parameters {
                         .chain(&l.color)
                         .all(|v| v.is_finite())
                         && l.color.iter().all(|c| *c >= 0.0)
-                        && valid_radii(l.inner, l.outer)),
+                        && valid_geometry(l.position, l.inner, l.outer)),
                 "Invalid recovered light parameters"
             );
         }
@@ -160,7 +166,20 @@ mod tests {
             assert!(parameters.write_atomic(&root, &output).is_err());
             assert_eq!(std::fs::read(&output)?, original);
         }
-        parameters.maps.get_mut("map").unwrap()[0].outer = 1.0;
+        let light = &mut parameters.maps.get_mut("map").unwrap()[0];
+        light.position = [1e38, 0.0, 0.0];
+        light.outer = 0.050001;
+        assert!(valid_radii(light.inner, light.outer));
+        assert!(parameters.write_atomic(&root, &output).is_err());
+        assert_eq!(std::fs::read(&output)?, original);
+        // A hash-matching descriptor written outside the generator is also
+        // rejected by the runtime reader, not just by offline publication.
+        std::fs::write(&output, serde_json::to_vec(&parameters)?)?;
+        assert!(Parameters::read(&root).is_err());
+        std::fs::write(&output, &original)?;
+        let light = &mut parameters.maps.get_mut("map").unwrap()[0];
+        light.position = [0.0; 3];
+        light.outer = 1.0;
         parameters
             .maps
             .insert("x".repeat(MAX_BYTES as usize), Vec::new());

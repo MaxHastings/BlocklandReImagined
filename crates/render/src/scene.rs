@@ -1914,7 +1914,7 @@ fn validate_light_parameters(lights: &[crate::map_lighting::MapLight]) -> Result
                 .chain(&l.color)
                 .chain([&l.inner, &l.outer])
                 .all(|x| x.is_finite())
-                && crate::lighting_parameters::valid_radii(l.inner, l.outer)),
+                && crate::lighting_parameters::valid_geometry(l.position, l.inner, l.outer)),
         "Invalid map light parameters"
     );
     Ok(())
@@ -4376,6 +4376,23 @@ mod tests {
         }
         light.outer = 1.0;
         assert!(validate_light_parameters(&[light]).is_ok());
+    }
+
+    #[test]
+    fn shadowed_light_parameters_reject_finite_position_projection_overflow() {
+        let light = crate::map_lighting::MapLight {
+            position: [1e38, 0.0, 0.0],
+            color: [1.0; 3],
+            inner: 0.0,
+            outer: 0.050001,
+            channel: None,
+        };
+        assert!(light.position.iter().all(|value| value.is_finite()));
+        assert!(crate::lighting_parameters::valid_radii(
+            light.inner,
+            light.outer
+        ));
+        assert!(validate_light_parameters(&[light]).is_err());
     }
 
     fn vertex(n: u32) -> SceneVertex {
