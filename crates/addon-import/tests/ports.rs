@@ -2008,6 +2008,21 @@ fn duplicator_game(
     u64,
     bri_addon_import::report::Report,
 ) {
+    duplicator_game_config(name, fixture_name, id, true, false)
+}
+
+fn duplicator_game_config(
+    name: &str,
+    fixture_name: &str,
+    id: &str,
+    joined: bool,
+    actual_content: bool,
+) -> (
+    PathBuf,
+    bri_sim::session::Session,
+    u64,
+    bri_addon_import::report::Report,
+) {
     use bri_package::packages::{PackageEntry, PackageSet, Side};
     use bri_sim::session::Session;
     use rapier3d::prelude::*;
@@ -2020,6 +2035,24 @@ fn duplicator_game(
         out.clone(),
     ))
     .unwrap();
+    if actual_content
+        && fixture_name == "Tool_NewDuplicator"
+        && let Some(root) = std::env::var_os("BRI_TEST_DUPLICATOR_CONTENT")
+    {
+        let root = PathBuf::from(root);
+        std::fs::copy(
+            root.join(format!("addons/{id}/assets/weapons.json")),
+            out.join("assets/weapons.json"),
+        )
+        .unwrap();
+        for file in ["newduplicator.rhai", "behaviour.json"] {
+            std::fs::copy(
+                root.join(format!("addons/{id}-rules/{file}")),
+                out.with_file_name(format!("{id}-rules")).join(file),
+            )
+            .unwrap();
+        }
+    }
     let applied = &report.ports[0];
     assert!(applied.applied, "{:?}", applied.reason);
     let rules = applied.rules.as_ref().expect("the port has host rules");
@@ -2103,10 +2136,24 @@ fn duplicator_game(
     s.install_packages(std::sync::Arc::new(catalog), None)
         .unwrap();
 
-    let host = s
-        .join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true)
-        .unwrap();
+    let host = if joined {
+        s.join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true)
+            .unwrap()
+    } else {
+        0
+    };
     (dir, s, host, report)
+}
+
+fn actual_new_duplicator_game(
+    name: &str,
+) -> (
+    PathBuf,
+    bri_sim::session::Session,
+    u64,
+    bri_addon_import::report::Report,
+) {
+    duplicator_game_config(name, "Tool_NewDuplicator", "tool_newduplicator", true, true)
 }
 
 /// The Duplorcator's port, on the stand-in Duplicator in a hosted game:
@@ -2786,6 +2833,109 @@ fn swing(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64
     for _ in 0..30 {
         look(s, host);
     }
+}
+
+/// BRI_TEST_DUPLICATOR_CONTENT optionally exercises the locally installed original,
+/// not only a stand-in, through the same click path. No original assets committed.
+#[test]
+fn new_duplicator_selects_after_a_short_click_and_after_map_adoption() {
+    use bri_sim::session::{Command, Reply};
+    let (dir, mut s, host, _) = actual_new_duplicator_game("nd-lifecycle");
+    let seq = std::cell::Cell::new(0);
+    for pass in 0..2 {
+        let reply = send(
+            &mut s,
+            host,
+            &seq,
+            Command::Plant {
+                definition: "plate".into(),
+                position: [0.5, 0.1, 0.25],
+                quarter_turns: 0,
+                color: 1,
+            },
+        )
+        .unwrap();
+        assert!(matches!(reply, Reply::Planted(_)));
+        send(&mut s, host, &seq, typed("newduplicator", &[])).unwrap();
+        swing(&mut s, host, &seq);
+        assert!(
+            s.blueprint(host).is_some(),
+            "pass {pass}: {:?}",
+            told(&mut s)
+        );
+        if pass == 0 {
+            let (other, mut next, _, _) = duplicator_game_config(
+                "nd-lifecycle-next",
+                "Tool_NewDuplicator",
+                "tool_newduplicator",
+                false,
+                true,
+            );
+            next.set_spawn_points(vec![Vec3::new(0.0, 0.05, 2.0)])
+                .unwrap();
+            next.adopt(s, host).unwrap();
+            s = next;
+            std::fs::remove_dir_all(other).unwrap();
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The classic Duplicator's click path survives a map adoption with fresh
+/// package state, just as it does after an ordinary join.
+#[test]
+fn duplorcator_selects_after_map_adoption() {
+    use bri_sim::session::{Command, PackageCommand, Reply};
+    let (dir, mut s, host, _) =
+        duplicator_game("dup-lifecycle", "Tool_Duplicator", "tool_duplicator");
+    let seq = std::cell::Cell::new(0);
+    for pass in 0..2 {
+        let reply = send(
+            &mut s,
+            host,
+            &seq,
+            Command::Plant {
+                definition: "plate".into(),
+                position: [0.5, 0.1, 0.25],
+                quarter_turns: 0,
+                color: 1,
+            },
+        )
+        .unwrap();
+        assert!(matches!(reply, Reply::Planted(_)));
+        send(
+            &mut s,
+            host,
+            &seq,
+            Command::Package(PackageCommand {
+                package: String::new(),
+                command: "dup".into(),
+                args: vec![],
+            }),
+        )
+        .unwrap();
+        swing(&mut s, host, &seq);
+        assert!(
+            s.blueprint(host).is_some(),
+            "pass {pass}: {:?}",
+            told(&mut s)
+        );
+        if pass == 0 {
+            let (other, mut next, _, _) = duplicator_game_config(
+                "dup-lifecycle-next",
+                "Tool_Duplicator",
+                "tool_duplicator",
+                false,
+                false,
+            );
+            next.set_spawn_points(vec![Vec3::new(0.0, 0.05, 2.0)])
+                .unwrap();
+            next.adopt(s, host).unwrap();
+            s = next;
+            std::fs::remove_dir_all(other).unwrap();
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// The New Duplicator's port on the stand-in in a hosted game: taking it

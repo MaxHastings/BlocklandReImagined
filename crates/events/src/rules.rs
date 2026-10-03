@@ -28,6 +28,7 @@ pub enum Property {
     RoundOver,
     Color,
     Kind,
+    SpawnedBy,
     Speed,
     Variable,
     Occupants,
@@ -60,6 +61,7 @@ pub const PROPERTIES: &[(&str, Property)] = &[
     ("Round ended", Property::RoundOver),
     ("Color", Property::Color),
     ("Object kind", Property::Kind),
+    ("Spawned by", Property::SpawnedBy),
     ("Speed", Property::Speed),
     ("Variable", Property::Variable),
     ("Players in region", Property::Occupants),
@@ -124,7 +126,7 @@ impl Condition {
             Property::Exists | Property::Alive | Property::RoundOver | Property::IsInstigator => {
                 matches!(self.value, Datum::Bool(_))
             }
-            Property::Kind => matches!(self.value, Datum::Text(_)),
+            Property::Kind | Property::SpawnedBy => matches!(self.value, Datum::Text(_)),
             _ => matches!(self.value, Datum::Number(_)),
         };
         ensure!(valid, "Condition value has the wrong type");
@@ -144,6 +146,9 @@ impl Condition {
         let ordering = match (&actual, &self.value) {
             (Datum::Number(a), Datum::Number(b)) => a.cmp(b),
             (Datum::Bool(a), Datum::Bool(b)) => a.cmp(b),
+            (Datum::Text(a), Datum::Text(b)) if self.property == Property::SpawnedBy => {
+                a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase())
+            }
             (Datum::Text(a), Datum::Text(b)) => a.cmp(b),
             _ => return false,
         };

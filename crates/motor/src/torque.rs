@@ -266,7 +266,10 @@ impl Soup {
             // coordinates: keep `n . p < offset`.
             let o = passage.centre - self.origin;
             let (n, u, v, half) = (passage.normal, passage.u, passage.v, passage.half);
-            let behind = (n, n.dot(o));
+            // A backing wall can lie exactly on the opening's plane. Give
+            // that coplanar face to the cut, rather than retaining a solid
+            // pane inside a live portal (also important for camera volumes).
+            let behind = (n, n.dot(o) + bri_content::passage::PAST);
             let inside = [
                 (u, u.dot(o) + half.x),
                 (-u, -(u.dot(o) - half.x)),
@@ -338,7 +341,11 @@ impl Soup {
                     .map(|p| (back.transform_point3(*p + far.origin) - self.origin, false))
                     .collect();
                 let mut piece = Some(verts);
-                for (normal, offset) in std::iter::once(behind).chain(inside) {
+                // The copied side starts strictly beyond the plane. Keeping
+                // its coplanar backing face would put the cut-away wall back
+                // as a zero-thickness pane at the exit.
+                let beyond = (n, n.dot(o) - bri_content::passage::PAST);
+                for (normal, offset) in std::iter::once(beyond).chain(inside) {
                     piece = piece.and_then(|p| clip(&p, normal, offset, false));
                 }
                 if let Some(piece) = piece {

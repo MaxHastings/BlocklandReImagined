@@ -12,7 +12,7 @@ const MAX_REGIONS: usize = bri_world::regions::MAX_OBSERVED_REGIONS;
 const MAX_TRACE: usize = 128;
 const MAX_PENDING_FACTS: usize = 256;
 // Namespace, mini-game, round, subject class, subject identity, key.
-type StateKey = (u64, u64, u64, u8, u64, String);
+pub(in crate::session) type StateKey = (u64, u64, u64, u8, u64, String);
 #[derive(Default)]
 pub(super) struct RuleState {
     variables: BTreeMap<StateKey, i64>,
@@ -61,7 +61,7 @@ impl Session {
             .or(cx.client.as_ref())
             .map(|e| e.id.index)
     }
-    fn rule_key(
+    pub(in crate::session) fn rule_key(
         &self,
         cx: &Trigger,
         target: Entity,
@@ -203,7 +203,7 @@ impl Session {
             Property::Alive => matches!(e.class, Class::Player | Class::Client | Class::Vehicle),
             Property::RoundOver => e.class == Class::MiniGame && c.subject != Subject::Team,
             Property::Color => e.class == Class::Brick,
-            Property::Kind | Property::Speed => e.class == Class::Vehicle,
+            Property::Kind | Property::SpawnedBy | Property::Speed => e.class == Class::Vehicle,
             _ => false,
         };
         if !compatible {
@@ -242,6 +242,17 @@ impl Session {
                 .into_iter()
                 .find(|v| v.id == e.id.index)
                 .map(|v| Datum::Text(v.definition)),
+            Property::SpawnedBy => {
+                let spawner = self.vehicle_spawn_brick(VehicleId(e.id.index))?;
+                let brick = self.simulation.state().bricks.get(&spawner)?;
+                let owner = self.simulation.state().bricks.get(&cx.source.index)?.owner;
+                // Named references, like classic named targets, belong to the creator.
+                // Missing/deleted/unnamed or foreign spawners cannot match, even !=.
+                if brick.owner != owner {
+                    return None;
+                }
+                brick.name.clone().map(Datum::Text)
+            }
             Property::Speed => self
                 .object_velocity(ObjectRef::Vehicle(e.id.index))
                 .map(|v| Datum::Number(v.length().round() as i64)),
@@ -362,21 +373,64 @@ impl Session {
                 )),
             );
         }
+        let author = self.simulation.state().bricks.get(&brick).map(|b| b.owner);
+        let bot_summaries: Vec<_> = self
+            .bot_thoughts()
+            .into_iter()
+            .filter(|thought| {
+                thought.objective == Some(brick)
+                    || (thought.objective_diagnostic.is_some()
+                        && self
+                            .game_of(thought.bot)
+                            .and_then(|g| self.minigames.game(g).ok())
+                            .map(|g| g.owner.account.0)
+                            == author)
+            })
+            .take(4)
+            .map(|thought| {
+                let name = self
+                    .peers
+                    .get(&thought.bot)
+                    .map_or("NPC", |p| p.name.as_str());
+                let status = thought
+                    .objective_diagnostic
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{}; objective brick {}",
+                            thought.behaviour,
+                            thought.objective.unwrap_or(brick)
+                        )
+                    });
+                format!("[NPC {name}] {status}")
+            })
+            .collect();
+        for summary in bot_summaries {
+            self.notify(owner, Notice::Chat(summary));
+        }
         for line in lines.into_iter().rev().take(12).rev() {
             self.notify(owner, Notice::Chat(line));
         }
         Ok(())
     }
     fn rule_game(&self, d: &Dispatch) -> Result<mg::GameId> {
+        self.rule_game_context(&d.context, d.source, d.target)
+    }
+    pub(in crate::session) fn rule_game_context(
+        &self,
+        context: &Trigger,
+        source_id: ev::Id,
+        target: Entity,
+    ) -> Result<mg::GameId> {
         let e = self
-            .rule_subject(&d.context, d.target, Subject::MiniGame)
+            .rule_subject(context, target, Subject::MiniGame)
             .context("This action needs a mini-game")?;
         let game = mg::GameId(e.id.index);
         let source = self
             .simulation
             .state()
             .bricks
-            .get(&d.source.index)
+            .get(&source_id.index)
             .context("Rule source is gone")?;
         let g = self
             .minigames
@@ -386,9 +440,9 @@ impl Session {
             g.owner.account.0 == source.owner,
             "Only the mini-game owner's rules may change match policy"
         );
-        if matches!(d.target.class, Class::Player | Class::Client) {
+        if matches!(target.class, Class::Player | Class::Client) {
             ensure!(
-                self.game_of(d.target.id.index) == Some(game),
+                self.game_of(target.id.index) == Some(game),
                 "Target left this mini-game"
             );
         }
@@ -904,22 +958,28 @@ impl Session {
                 .is_ok_and(|g| g.owner.account.0 == owner),
             "Leave the other host's mini-game before creating a lab"
         );
+        let vehicle_bricks = self.tool_catalog.vehicle_bricks.clone();
+        let ordinary = |id: &String, d: &crate::definitions::Definition| {
+            d.special == crate::definitions::Special::None
+                && d.bot.is_none()
+                && d.link.is_none()
+                && d.reflection.is_none()
+                && !vehicle_bricks.contains(id)
+        };
         let definition = self
             .simulation
             .definitions
             .entries
             .iter()
-            .find(|(_, d)| {
-                d.mesh.footprint_studs == [4, 4]
-                    && d.mesh.height_plates == 1
-                    && d.special == crate::definitions::Special::None
+            .find(|(id, d)| {
+                d.mesh.footprint_studs == [4, 4] && d.mesh.height_plates == 1 && ordinary(id, d)
             })
             .or_else(|| {
                 self.simulation
                     .definitions
                     .entries
                     .iter()
-                    .find(|(_, d)| d.special == crate::definitions::Special::None)
+                    .find(|(id, d)| ordinary(id, d))
             })
             .map(|(id, _)| id.clone())
             .context("No ordinary brick available")?;
@@ -1028,12 +1088,32 @@ impl Session {
                     });
                 }
             }
+            for (_, rows) in &mut programs {
+                for row in rows {
+                    row.conditions.push(Condition {
+                        subject: Subject::Object,
+                        property: Property::SpawnedBy,
+                        key: String::new(),
+                        compare: ev::rules::Compare::Equal,
+                        value: Datum::Text("lab_soccer_2".into()),
+                    });
+                }
+            }
             programs.push(("Ball spawner".into(), vec![]));
+            programs.push(("Practice ball spawner".into(), vec![]));
         }
         let mut bricks = vec![];
         let batch = self.simulation.state().next_brick_id;
         for (_, rows) in &mut programs {
             for row in rows {
+                for condition in &mut row.conditions {
+                    if condition.property == Property::SpawnedBy
+                        && let Datum::Text(name) = &mut condition.value
+                        && let Some(index) = name.strip_prefix(&format!("lab_{mode}_"))
+                    {
+                        *name = format!("lab_{mode}_{batch}_{index}");
+                    }
+                }
                 if let ev::Target::Named(name) = &mut row.target
                     && let Some(index) = name.strip_prefix(&format!("lab_{mode}_"))
                 {
@@ -1043,19 +1123,22 @@ impl Session {
         }
         for (index, (name, events)) in programs.into_iter().enumerate() {
             self.validate_event_rows(&events)?;
-            let definition = if name == "Gate panel" {
+            let definition = if matches!(name.as_str(), "Gate panel" | "Door panel") {
                 self.simulation
                     .definitions
                     .entries
                     .iter()
-                    .find(|(_, d)| {
+                    .find(|(id, d)| {
                         d.mesh.footprint_studs == [4, 1]
                             && d.mesh.height_plates >= 12
-                            && d.special == crate::definitions::Special::None
+                            && matches!(d.collision.parts.as_slice(), [bri_content::collision::Part::Box { center, size }]
+                                if Vec3::from(*center).length_squared() < 0.000001
+                                && (Vec3::from(*size) - Vec3::new(2.0, d.mesh.height_plates as f32 * 0.2, 0.5)).length_squared() < 0.000001)
+                            && ordinary(id, d)
                     })
                     .map(|(id, _)| id.clone())
                     .unwrap_or_else(|| definition.clone())
-            } else if name == "Ball spawner" {
+            } else if name.ends_with("ball spawner") || name == "Ball spawner" {
                 self.tool_catalog
                     .vehicle_bricks
                     .iter()
@@ -1066,12 +1149,20 @@ impl Session {
                 definition.clone()
             };
             let mesh = &self.simulation.definitions.entries[&definition].mesh;
-            let lift = if name == "Gate panel" {
+            let lift = if matches!(name.as_str(), "Gate panel" | "Door panel") {
                 mesh.height_plates as f32 * crate::grid::CELL[1] * 0.5
             } else {
                 1.0
             };
-            let at = feet + Vec3::new(6.0 + index as f32 * 7.0, lift, 0.0);
+            let mut at = feet + Vec3::new(6.0 + index as f32 * 7.0, lift, 0.0);
+            if matches!(name.as_str(), "Gate panel" | "Door panel")
+                && let Some(hit) =
+                    self.simulation
+                        .target(Vec3::new(at.x, feet.y + 2.0, at.z), -Vec3::Y, 8.0)?
+                && hit.normal.y > 0.7
+            {
+                at.y = hit.position.y + lift;
+            }
             let size = [
                 mesh.footprint_studs[0] as f32,
                 mesh.height_plates as f32,
@@ -1091,8 +1182,8 @@ impl Session {
             brick.color = (index % self.simulation.state().palette.len().max(1)) as u8;
             brick.name = Some(format!("lab_{mode}_{batch}_{index}"));
             brick.events = events;
-            if name == "Ball spawner" {
-                brick.vehicle = spawn.take().map(|v| {
+            if name.ends_with("ball spawner") || name == "Ball spawner" {
+                brick.vehicle = spawn.clone().map(|v| {
                     Box::new(bri_world::VehicleSpawn {
                         vehicle: bri_world::ContentRef::Resolved(v),
                         recolor: true,
@@ -1564,10 +1655,16 @@ mod tests {
     }
     fn setup_vehicles(addons: bool, pack: bri_vehicles::Pack) -> (Session, OwnerId, OwnerId) {
         let definitions = Definitions {
-            entries: [(
-                "plate".into(),
-                crate::testing::definition("plate", [4, 4], 1, Special::None, false),
-            )]
+            entries: [
+                (
+                    "plate".into(),
+                    crate::testing::definition("plate", [4, 4], 1, Special::None, false),
+                ),
+                (
+                    "vehicle-plate".into(),
+                    crate::testing::definition("vehicle-plate", [4, 4], 1, Special::None, false),
+                ),
+            ]
             .into(),
         };
         let simulation = Simulation::new(
@@ -1584,7 +1681,7 @@ mod tests {
         s.set_event_catalog(ev::testing::catalog_extended(), Vec::new())
             .unwrap();
         s.set_vehicle_pack(pack, Vec::new()).unwrap();
-        s.tool_catalog.vehicle_bricks.insert("plate".into());
+        s.tool_catalog.vehicle_bricks.insert("vehicle-plate".into());
         if addons {
             use bri_package::packages::{PackageEntry, PackageSet, Side};
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
@@ -1623,6 +1720,117 @@ mod tests {
     fn score(s: &Session, p: OwnerId) -> i64 {
         s.minigames.player(s.peers[&p].combat.player).unwrap().score
     }
+    #[test]
+    fn switch_recipe_uses_a_solid_upright_door_and_real_delayed_close() {
+        let (mut s, owner, _) = setup();
+        let mut panel =
+            crate::testing::definition("upright-panel", [4, 1], 15, Special::None, false);
+        panel.bot = None;
+        s.simulation
+            .definitions
+            .entries
+            .insert("upright-panel".into(), panel);
+        s.simulation.definitions.entries.insert(
+            "aaa-nonsolid-panel".into(),
+            crate::testing::ramp("aaa-nonsolid-panel", [4, 1], 15),
+        );
+        for tick in 1..=60 {
+            s.movement(owner, tick, crate::player::MoveInput::default())
+                .unwrap();
+            s.step().unwrap();
+        }
+        let ground = 0.0;
+        let ids = s.create_rule_lab(owner, "switch").unwrap();
+        s.step().unwrap(); // Normal event phase installs all named targets.
+        let panel = ids[1];
+        let definition = s
+            .simulation
+            .definitions
+            .get(&s.simulation.state().bricks[&panel])
+            .unwrap();
+        assert_eq!(definition.mesh.footprint_studs, [4, 1]);
+        assert!(definition.mesh.height_plates >= 12);
+        assert!(matches!(
+            definition.collision.parts.as_slice(),
+            [bri_content::collision::Part::Box { .. }]
+        ));
+        let (lo, _) = s.simulation.brick_box(panel).unwrap();
+        assert!(
+            (lo.y - ground).abs() < 0.2,
+            "panel reaches the creator foot plane: {lo:?}, {ground}"
+        );
+        assert!(s.simulation.state().bricks[&panel].colliding);
+        s.events.rules.traced.insert(ids[0]);
+        let cx = s
+            .input_context(
+                ids[0],
+                "onActivate",
+                Some(owner),
+                super::super::events::InputExtra::default(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            s.events
+                .world
+                .as_ref()
+                .unwrap()
+                .row_targets(cx.source, &cx, 2)
+                .unwrap(),
+            vec![ev::Entity::brick(super::super::events::id(panel))]
+        );
+        run(&mut s, ids[0], "onActivate", owner);
+        assert!(
+            !s.simulation.state().bricks[&panel].colliding,
+            "real panel opened through authored event; diagnostics {:?}, events {:?}",
+            s.take_event_diagnostics(),
+            s.simulation.state().bricks[&ids[0]].events
+        );
+        for _ in 0..241 {
+            s.simulation.step().unwrap();
+        }
+        s.start_event_tick(s.simulation.state().tick).unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert!(
+            s.simulation.state().bricks[&panel].colliding,
+            "real panel closed after the authored delay"
+        );
+    }
+    #[test]
+    fn workshop_never_uses_hole_bricks_for_ordinary_example_controls() {
+        for mode in [
+            "switch", "teamdoor", "puzzle", "race", "hill", "slayer", "soccer", "sandbox", "addon",
+        ] {
+            let (mut s, owner, _) = setup_packages(true);
+            for (id, footprint, height) in [
+                ("aaa-zombie-hole", [4, 4], 1),
+                ("aaa-tall-bot-hole", [4, 1], 15),
+            ] {
+                let mut hole =
+                    crate::testing::definition(id, footprint, height, Special::None, false);
+                hole.bot = Some("zombie".into());
+                s.simulation.definitions.entries.insert(id.into(), hole);
+            }
+            let ids = s.create_rule_lab(owner, mode).unwrap();
+            for id in ids {
+                let b = &s.simulation.state().bricks[&id];
+                let d = s.simulation.definitions.get(b).unwrap();
+                assert!(
+                    d.bot.is_none(),
+                    "{mode}: {} unexpectedly spawns a bot",
+                    b.name.as_deref().unwrap()
+                );
+                assert!(d.link.is_none() && d.reflection.is_none());
+                if b.vehicle.is_none() {
+                    let bri_world::ContentRef::Resolved(id) = &b.definition else {
+                        panic!()
+                    };
+                    assert!(!s.tool_catalog.vehicle_bricks.contains(id));
+                }
+            }
+        }
+    }
+
     #[test]
     fn workshop_example_uses_available_starting_equipment() {
         let (mut s, owner, _) = setup();
@@ -2327,6 +2535,94 @@ mod tests {
         }
         assert!(s.events.rules.variables.values().any(|v| *v == 1));
     }
+    #[test]
+    fn spawned_by_distinguishes_identical_balls_and_survives_respawn_without_cross_owner_matches() {
+        let (mut s, p, q) = setup();
+        let ids = s.create_rule_lab(p, "soccer").unwrap();
+        assert_eq!(
+            ids.len(),
+            4,
+            "match ball and practice ball have distinct named spawners"
+        );
+        for spawner in &ids[2..] {
+            s.respawn_vehicle_brick(*spawner).unwrap();
+        }
+        let mut cx = Trigger::new(super::super::events::id(ids[1]), "onObjectEnter", 1);
+        let target = Entity::brick(cx.source);
+        let condition = Condition {
+            subject: Subject::Object,
+            property: Property::SpawnedBy,
+            key: String::new(),
+            compare: ev::rules::Compare::Equal,
+            value: Datum::Text(
+                s.simulation.state().bricks[&ids[2]]
+                    .name
+                    .clone()
+                    .unwrap()
+                    .to_uppercase(),
+            ),
+        };
+        let ball = |s: &Session, brick| {
+            s.vehicle_infos()
+                .into_iter()
+                .find(|v| s.vehicle_spawn_brick(VehicleId(v.id)) == Some(brick))
+                .unwrap()
+                .id
+        };
+        let original = ball(&s, ids[2]);
+        cx.targets.insert(
+            Slot::Object,
+            super::super::events::entity(Class::Vehicle, original),
+        );
+        assert!(condition.matches(s.rule_query(&cx, target, &condition)));
+        cx.targets.insert(
+            Slot::Object,
+            super::super::events::entity(Class::Vehicle, ball(&s, ids[3])),
+        );
+        assert!(
+            !condition.matches(s.rule_query(&cx, target, &condition)),
+            "same kind is not same spawner"
+        );
+        s.respawn_vehicle_brick(ids[2]).unwrap();
+        cx.targets.insert(
+            Slot::Object,
+            super::super::events::entity(Class::Vehicle, original),
+        );
+        assert_eq!(
+            s.rule_query(&cx, target, &condition),
+            None,
+            "delayed context never follows a replacement ball"
+        );
+        cx.targets.insert(
+            Slot::Object,
+            super::super::events::entity(Class::Vehicle, ball(&s, ids[2])),
+        );
+        assert!(
+            condition.matches(s.rule_query(&cx, target, &condition)),
+            "new ball keeps authored spawner identity"
+        );
+        s.simulation.mutate(ids[2], |b| b.owner = q).unwrap();
+        assert_eq!(
+            s.rule_query(&cx, target, &condition),
+            None,
+            "foreign names cannot match"
+        );
+        s.simulation
+            .mutate(ids[2], |b| {
+                b.owner = p;
+                b.name = None;
+            })
+            .unwrap();
+        assert_eq!(
+            s.rule_query(&cx, target, &condition),
+            None,
+            "unnamed spawner has no named relationship"
+        );
+        let actor = s.peers[&p].actor.clone();
+        s.simulation.remove(&actor, ids[2]).unwrap();
+        assert_eq!(s.rule_query(&cx, target, &condition), None);
+    }
+
     #[test]
     fn ball_goal_uses_real_scores_requires_credit_and_delayed_reset_replaces_object() {
         let (mut s, p, _) = setup();

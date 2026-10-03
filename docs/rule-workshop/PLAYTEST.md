@@ -1,6 +1,6 @@
 # Rule Workshop: creator playtest
 
-Rule Workshop ships as an experimental creator tool in v0.2.0. Judge whether it
+Rule Workshop ships as an experimental creator tool. Judge whether it
 feels like the next step for Wrench Events and how soon you wish you were writing
 an Add-On. These are editable starting recipes, not finished game modes.
 The important semantics and architectural assessment are in [DESIGN.md](DESIGN.md).
@@ -57,7 +57,7 @@ are saved, while live variable progress is not.
 | `/rulelab race` | Three ordered player/object checkpoints; three laps wins. | Reverse order, alter lap count, drive a Jeep, jump over sensors, try two racers or use a portal. Rename `checkpoint` to make a second course independent. |
 | `/rulelab hill` | An uncontested occupant gains a real point each second; ten wins. | Remove the opponents check for a crowded hill, configure teams, require consecutive hold time, or make control unlock a door instead of awarding points. |
 | `/rulelab slayer` | Five credited player kills wins. Environmental deaths and suicides give no point. | Change penalties/thresholds, team assignment, native damage/health/equipment actions. Try a delayed killer reward with IF Instigator Alive = Yes; die during the delay. |
-| `/rulelab soccer` | Two opposing-team goal sensors and a steel-ball spawn. A credited entry into the opposing goal scores for the credited player’s team; team total five wins. Ball resets after three seconds. | First goal accepts the second team, second goal the first. Own goals reset the ball without scoring. Change the team/credit/kind checks, invent own-goal penalties, use a gravity gun, or replace a goal with a portal. |
+| `/rulelab soccer` | Two opposing-team goal sensors and two identical steel-ball spawns. Only the named scoring spawner's ball counts. A credited entry into the opposing goal scores for the credited player's team; team total five wins. Ball resets after three seconds. | Push the other ball into the goal, then change Object Spawned by to select it. First goal accepts the second team, second goal the first. Own goals reset the selected ball without scoring. Change the team/credit/kind checks, invent own-goal penalties, use a gravity gun, or replace a goal with a portal. |
 | `/rulelab sandbox` | A three-click charged launcher shares charge between clickers; a bounce pad rewards every third visit per player; a MiniGame timer alternates colors every five seconds. | Swap velocity for damage, points or a gate. Compare shared Brick charge with private Player visits. Make the timer control the team door; change variable names to join or separate mechanisms. |
 | `/rulelab addon` | Toys cycles Red → Green → Blue; core events respond to its facts. Blue increments MiniGame `blueSelections`. | Replace color responses with doors, score, launches or a win condition. Use `cycleRoute` on another brick. Disable Toys and inspect unavailable rows. Source is `packages/rule-workshop-toys/`. |
 
@@ -100,10 +100,16 @@ use `Exists = No` when absence is intentional.
 Useful property combinations: Self/Target with Variable, Color, Players in
 region or Opponents in region; Player/Instigator with Score, Team, Alive,
 Is Instigator or Variable; MiniGame with Round ended or Variable; Team with
-Score or Variable; Object with Object kind, Speed, Alive or Variable.
+Score or Variable; Object with Object kind, Spawned by, Speed, Alive or Variable.
 Menus show the checks supported by the selected subject. A supported check can
 still lack context for a particular input; Explain shows that as unavailable.
 Team refers to the acting player's current team.
+
+**Object → Spawned by** compares the creator-authored name of its vehicle/ball
+spawn brick, ignoring case. It selects the spawner relationship, not a runtime
+object ID or every object of the same kind. An unnamed, deleted or foreign
+spawner is unavailable, including for inequality. Resetting the object creates
+a new live identity associated with the same authored spawner.
 
 ## When it does nothing
 

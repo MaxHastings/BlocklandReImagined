@@ -176,6 +176,10 @@ impl App {
                 let anchor = Vec3::from(bricks[0].position);
                 for brick in &mut bricks {
                     brick.position = (Vec3::from(brick.position) - anchor).to_array();
+                    // Placement previews show every copied brick, including invisible
+                    // triggers. Only these local render copies change; planting retains
+                    // the blueprint's authored rendering and collision flags.
+                    crate::world_scene::show_placement_ghost(brick);
                 }
                 let look = GhostLook {
                     bricks,
@@ -561,6 +565,7 @@ impl App {
                 .building
                 .as_ref()
                 .context("Camera collision mirror missing")?,
+            self.motion.collision(),
             &self.vehicle_assets,
             &self.vehicles,
             view,

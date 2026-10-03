@@ -830,6 +830,21 @@ fn orbit_drawn_offset(
         _ => None,
     }
 }
+/// Only portal-adjacent segments need the walking mirror's clipped geometry.
+/// Ordinary player and driver booms retain the cheap indexed camera query.
+fn camera_segment_near_portal(
+    passages: &bri_content::passage::Passages,
+    from: Vec3,
+    to: Vec3,
+) -> bool {
+    passages.first(from, to).is_some()
+        || passages.near(from, 0.2).any(|p| p.within(from, 0.15))
+        || passages
+            .closed
+            .iter()
+            .any(|p| p.crossing(from, to).is_some())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn camera_eye(
     controls: &Controls,
@@ -837,12 +852,33 @@ fn camera_eye(
     entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     drawn_offset: Option<Vec3>,
     building: &crate::building::Building,
+    collision: Option<&bri_sim::prediction::CollisionMirror>,
     own_eye: Vec3,
     forward: Vec3,
     chase: Option<(Vec3, f32)>,
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
+    let boom = |from, pivot, distance| {
+        crate::portal_view::boom(
+            from,
+            pivot,
+            forward,
+            distance,
+            passages,
+            |eye, forward, d| {
+                // Use the walking mirror near openings: it cuts the backing wall
+                // and sees the destination geometry. Keep the ordinary indexed
+                // sweep elsewhere so a portal never adds work to unrelated views.
+                let end = eye - forward.normalize() * d;
+                let nearby = camera_segment_near_portal(passages, eye, end);
+                match collision.filter(|_| nearby) {
+                    Some(mirror) => mirror.portal_camera_position(eye, forward, d),
+                    None => building.camera_position(eye, forward, d),
+                }
+            },
+        )
+    };
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position) | ObserverMode::Path(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`,
@@ -853,14 +889,12 @@ fn camera_eye(
                 .orbit_focus(presented, building.archetypes(), entities)
                 .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye);
-            building.camera_boom(focus, focus, forward, controls.orbit_distance(), passages)
+            boom(focus, focus, controls.orbit_distance())
         }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
             // on the body at `from`.
-            Some((from, distance)) => {
-                building.camera_boom(from, own_eye, forward, distance, passages)
-            }
+            Some((from, distance)) => boom(from, own_eye, distance),
             None => Ok((own_eye, None)),
         },
     }

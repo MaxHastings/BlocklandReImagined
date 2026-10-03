@@ -1725,11 +1725,11 @@ impl Ui {
                 for id in before {
                     if !c.admin.pending.contains_key(&id) {
                         c.pending.remove(&id);
+                        c.deadlines.remove(&id);
                     }
                 }
             }
             UiUpdate::ActionResult { id, result } => {
-                c.deadlines.remove(&id);
                 if c.abandoned.contains(&id) {
                     bri_console::echo(format!(
                         "Dropped a late answer to request {id}: {}",
@@ -1742,6 +1742,11 @@ impl Ui {
                 }
                 let kind = c.pending.remove(&id);
                 let mut handled = c.admin.result(id, &result);
+                // An acknowledgement is not the correlated list/state. Keep
+                // its deadline while Admin still awaits that second reply.
+                if !c.admin.pending.contains_key(&id) {
+                    c.deadlines.remove(&id);
+                }
                 for d in self.dialogs.iter_mut().rev().filter(|_| !handled) {
                     if d.on_result(id, kind.as_ref(), &result, &mut self.core) {
                         handled = true;
@@ -2792,6 +2797,79 @@ mod sound_tests {
         });
         ui.update(0);
         assert!(!has_message(&ui), "a late answer is dropped");
+    }
+
+    #[test]
+    fn an_admin_acknowledgement_without_its_state_still_times_out() {
+        use crate::models::admin::{
+            AdminAction, AdminFeature, AdminRole, AdminSnapshot, AdminUpdate,
+        };
+        for action in [
+            AdminAction::Refresh,
+            AdminAction::RequestMaps,
+            AdminAction::RequestBans,
+            AdminAction::RequestBrickGroups,
+            AdminAction::RequestRanks,
+        ] {
+            let mut ui = fixture();
+            ui.apply(UiUpdate::Admin(AdminUpdate::State(AdminSnapshot {
+                revision: 1,
+                role: AdminRole::SuperAdmin,
+                local_host: true,
+                legacy_lan: false,
+                supported: [
+                    AdminFeature::Maps,
+                    AdminFeature::Ban,
+                    AdminFeature::Unban,
+                    AdminFeature::ClearBricks,
+                    AdminFeature::Ranks,
+                ]
+                .into(),
+                players: vec![],
+                options: None,
+            })));
+            let id = ui.core.admin_request(action.clone()).unwrap();
+            // A newer unsolicited snapshot can beat the correlated list.
+            if action == AdminAction::RequestMaps {
+                let mut newer = ui.core.admin.snapshot.clone().unwrap();
+                newer.revision = 2;
+                ui.apply(UiUpdate::Admin(AdminUpdate::State(newer)));
+                ui.apply(UiUpdate::Admin(AdminUpdate::Maps {
+                    request: id,
+                    revision: 1,
+                    rows: vec![],
+                }));
+            }
+            ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+            assert!(ui.core.admin.busy());
+            ui.update(Pending::Other.timeout_ms());
+            assert!(
+                !ui.core.admin.busy(),
+                "{action:?} left every admin button disabled"
+            );
+            assert!(ui.core.admin.status.contains(REQUEST_TIMED_OUT));
+            assert!(ui.core.admin_request(AdminAction::Refresh).is_some());
+        }
+    }
+
+    #[test]
+    fn an_admin_list_after_its_ack_completes_without_a_false_timeout() {
+        use crate::models::admin::{AdminAction, AdminUpdate};
+        let mut ui = fixture();
+        let id = ui
+            .core
+            .request_pending(UiAction::Admin(AdminAction::RequestMaps), Pending::Other);
+        ui.core.admin.pending.insert(id, AdminAction::RequestMaps);
+        ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+        ui.apply(UiUpdate::Admin(AdminUpdate::Maps {
+            request: id,
+            revision: 0,
+            rows: vec![],
+        }));
+        assert!(!ui.core.admin.busy());
+        assert!(!ui.core.deadlines.contains_key(&id));
+        ui.update(Pending::Other.timeout_ms());
+        assert!(ui.core.admin.status.is_empty());
     }
 
     #[test]

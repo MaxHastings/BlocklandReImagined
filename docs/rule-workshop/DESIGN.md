@@ -1,6 +1,6 @@
 # Rule Workshop: chosen semantics and assessment
 
-Rule Workshop ships in v0.2.0 as an experimental creator tool. Its format and
+Rule Workshop ships as an experimental creator tool. Its format and
 semantics remain alpha decisions, without a beta compatibility freeze. The
 existing `Row`, typed catalog and bounded event scheduler remain the sole
 execution path. Optional guards and a small native vocabulary are added to it.
@@ -102,6 +102,31 @@ briefs informed the experiment; they do not define mandatory infrastructure.
     responses. Its private per-brick switch state resets on server/package reload,
     not MiniGame Reset. This difference is explicit evidence for deciding how
     package state and creator-visible state should relate later.
+13. **Authored spawner identity is distinct from kind.** Object Spawned by
+    reads the creator-owned vehicle/ball spawn brick's name, comparing text
+    without case. Missing, deleted, foreign or unnamed spawners are unavailable,
+    including for inequality. Respawn creates a new live object while keeping
+    its authored spawner relationship; an old captured Object never silently
+    becomes that replacement. A shared name intentionally matches multiple
+    spawners. This small gameplay relationship is not a general provenance API.
+14. **Physical NPCs are players, not connected clients.** Bot-caused inputs
+    supply Player and MiniGame when the input declares them, through the same
+    canonical context path as human actions. Bot/Driver and real account quota
+    attribution remain intact. Client is absent for an NPC; bot touch remains
+    onBotTouch. This deliberately changes the earlier v20-style absence of
+    Player/MiniGame for bots. Test existing bot events rather than assuming
+    legacy quirks define the experimental model.
+15. **Bot prediction is conservative and disposable.** The internal provider
+    composes supported activation/region/bot-touch rows, typed scalar progress,
+    canonical scoring/round effects and known cosmetic effects. Unknown relevant
+    collateral or reaction semantics reject a candidate. A bounded plan only
+    chooses ordinary movement/activation; the scheduler alone executes rules.
+    Delays wait for observed real progress, and inaccessible sources temporarily
+    cool down so alternatives can be tried. Explain includes brief related NPC
+    status. This is neither a public goal format nor inference of opaque Add-Ons.
+    Inventory tactics similarly use native mechanical descriptors and actual
+    launch-time checks, leaving unsupported script-driven mechanics on their
+    existing path. See the [v0.2.1 checklist](V0.2.1-PLAYTEST.md) for limits.
 
 ## Awkward seams and deliberate limits
 
@@ -177,6 +202,15 @@ attribution, context permissions, trace presentation and the recipe generator.
 They should be redesigned or removed freely if playtesting finds them awkward.
 The data shape and protocol increments exist to deliver this build, not to
 become an obligation for the real architecture.
+
+The NPC split has a useful reusable shape: a bounded planner predicts known
+effects, normal controls attempt them, and canonical observations decide what
+actually happened. Native trajectory/ammo queries and temporary seat claims
+also reuse mechanisms already owned by the game. The current rule-effect
+whitelist, failure cooldowns, objective utility, search/flight horizons and
+capability ranking remain experimental tuning and adapters. Unknown reaction
+closures expose a real awkward seam; they should be grounded before adding
+more vocabulary, rather than hidden behind successful example names.
 
 The most valuable next work is your mutation evidence. If basic rows become
 harder, optional complexity needs a UI rethink. If games mostly need arithmetic,

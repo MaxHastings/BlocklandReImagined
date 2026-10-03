@@ -38,7 +38,12 @@ pub(super) struct Events {
     base: Option<ev::Catalog>,
     bindings: ev::Bindings,
     sounds: BTreeSet<String>,
-    installed: BTreeSet<BrickId>,
+    pub(in crate::session) installed: BTreeSet<BrickId>,
+    /// Grounded objective/reaction sources, indexed by creator during install.
+    pub(in crate::session) objective_sources: BTreeMap<OwnerId, BTreeSet<BrickId>>,
+    pub(in crate::session) objective_reactions: BTreeMap<OwnerId, BTreeSet<BrickId>>,
+    /// Actual admitted physical bot inputs, bounded diagnostics/lifecycle data.
+    pub(in crate::session) objective_inputs: BTreeMap<(BrickId, OwnerId, String), (u64, u64)>,
     scanned: bool,
     origin: u64,
     /// Projectile outputs of zero-delay `onProjectileHit` rows, applied by the
@@ -295,6 +300,19 @@ impl Session {
         let Some(world) = self.events.world.as_mut() else {
             return;
         };
+        if let Some(previous) = world.program(id(brick_id)) {
+            for index in [
+                &mut self.events.objective_sources,
+                &mut self.events.objective_reactions,
+            ] {
+                if let Some(ids) = index.get_mut(&previous.owner_scope) {
+                    ids.remove(&brick_id);
+                    if ids.is_empty() {
+                        index.remove(&previous.owner_scope);
+                    }
+                }
+            }
+        }
         let brick = self
             .simulation
             .state()
@@ -302,6 +320,9 @@ impl Session {
             .get(&brick_id)
             .filter(|b| !b.events.is_empty() || b.name.is_some());
         let Some(brick) = brick else {
+            self.events
+                .objective_inputs
+                .retain(|(source, _, _), _| *source != brick_id);
             if self.events.installed.remove(&brick_id) {
                 world.remove_brick(id(brick_id));
             }
@@ -356,9 +377,59 @@ impl Session {
             print_count,
             implicit_cancel_relays: false,
         };
+        if world.program(id(brick_id)).is_none_or(|previous| {
+            previous.rows != program.rows
+                || previous.owner_scope != program.owner_scope
+                || previous.name != program.name
+        }) {
+            self.events
+                .objective_inputs
+                .retain(|(source, _, _), _| *source != brick_id);
+        }
+        let has_objectives = program.rows.iter().any(|r| {
+            r.enabled
+                && matches!(
+                    r.input.as_str(),
+                    "onActivate" | "onBotTouch" | "onRegionEnter"
+                )
+        });
+        let reaction_rows: Vec<_> = program
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r.enabled
+                    && matches!(
+                        r.input.as_str(),
+                        "onRuleScoreChanged" | "onRuleTimer" | "onRuleRoundEnd"
+                    )
+            })
+            .map(|(i, _)| i as u16)
+            .collect();
         match world.install_brick(program) {
             Ok(()) => {
                 self.events.installed.insert(brick_id);
+                let has_reactions = reaction_rows.into_iter().any(|row| {
+                    !matches!(
+                        world.row_intent(id(brick_id), row),
+                        Some(Intent::Brick(BrickOp::PlaySound(_)))
+                            | Some(Intent::Rule(ev::rules::RuleOp::Explain))
+                    )
+                });
+                if has_reactions {
+                    self.events
+                        .objective_reactions
+                        .entry(brick.owner)
+                        .or_default()
+                        .insert(brick_id);
+                }
+                if has_objectives {
+                    self.events
+                        .objective_sources
+                        .entry(brick.owner)
+                        .or_default()
+                        .insert(brick_id);
+                }
             }
             Err(error) => {
                 if self.events.installed.remove(&brick_id) {
@@ -422,30 +493,73 @@ impl Session {
         if !self.events.installed.contains(&brick) {
             return;
         }
-        let Some(definition) = self
-            .events
-            .world
-            .as_ref()
-            .and_then(|w| w.catalog().input(input))
+        if self.schedules_exceeded(brick, input, player) {
+            return;
+        }
+        self.events.origin += 1;
+        let Some(trigger) = self.input_context(brick, input, player, extra, self.events.origin)
         else {
             return;
         };
+        let observed_bot = player.filter(|o| self.is_bot(*o));
+        let observed_origin = trigger.origin;
+        let world = self.events.world.as_mut().unwrap();
+        let admitted = world.trigger(trigger);
+        if admitted.as_ref().is_ok_and(|count| *count > 0)
+            && matches!(input, "onActivate" | "onRegionEnter" | "onBotTouch")
+            && let Some(bot) = observed_bot
+        {
+            if self.events.objective_inputs.len() >= 1024
+                && let Some(old) = self
+                    .events
+                    .objective_inputs
+                    .iter()
+                    .min_by_key(|(key, value)| (value.1, *key))
+                    .map(|(key, _)| key.clone())
+            {
+                self.events.objective_inputs.remove(&old);
+            }
+            self.events.objective_inputs.insert(
+                (brick, bot, input.into()),
+                (observed_origin, self.simulation.state().tick),
+            );
+        }
+        if let Err(error) = admitted {
+            note(
+                &mut self.events.diagnostics,
+                format!("Brick {brick} {input}: {error:#}"),
+            );
+        }
+        if let Some(owner) = player.filter(|o| !self.is_bot(*o)) {
+            self.follow_input(brick, input, owner);
+        }
+    }
+    /// Canonical read-only input context shared by actual dispatch and grounded
+    /// observation. Building a context never schedules or executes an input.
+    pub(in crate::session) fn input_context(
+        &self,
+        brick: BrickId,
+        input: &str,
+        player: Option<OwnerId>,
+        extra: InputExtra,
+        origin: u64,
+    ) -> Option<Trigger> {
+        let definition = self
+            .events
+            .world
+            .as_ref()
+            .and_then(|w| w.catalog().input(input))?;
         let slots: BTreeSet<Slot> = definition
             .targets
             .iter()
             .filter_map(|(slot, _)| Slot::parse(slot))
             .collect();
-        if self.schedules_exceeded(brick, input, player) {
-            return;
-        }
-        self.events.origin += 1;
-        let mut trigger = Trigger::new(id(brick), input, self.events.origin);
+        let mut trigger = Trigger::new(id(brick), input, origin);
         if let Some(bot) = player.filter(|o| self.is_bot(*o) && self.peers.contains_key(o)) {
-            // `fxDTSBrickData::onPlayerTouch` for a bot (allGameScripts.cs:
-            // 17157-17234): Bot is the toucher, Driver whoever rides in its
-            // first seat, and Client and MiniGame stay empty (the bot has no
-            // client). The rows run as the bot's spawn brick owner, else its
-            // rider, else on LAN the first player; with none they do not run.
+            // Physical actors use the same Player/MiniGame authoring universe.
+            // Classic Bot/Driver remain, and the captured real account owns
+            // quotas. An NPC has no GameConnection/Client target. This
+            // deliberately replaces v20's absent Player/MiniGame bot slots.
             if slots.contains(&Slot::Bot) {
                 trigger
                     .targets
@@ -474,10 +588,16 @@ impl Session {
                         .then(|| self.peers.keys().copied().find(player))
                         .flatten()
                 });
-            let Some(client) = client else {
-                return;
-            };
+            let client = client?;
             trigger.client = Some(entity(Class::Client, client));
+            // Reuse authoritative MiniGame selection, but never fabricate an
+            // NPC Client. Captured quota client above remains a real account.
+            let physical_slots = slots
+                .iter()
+                .copied()
+                .filter(|s| *s != Slot::Client)
+                .collect();
+            self.player_targets(brick, &physical_slots, bot, &mut trigger);
         } else if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
             self.player_targets(brick, &slots, owner, &mut trigger);
         }
@@ -520,16 +640,7 @@ impl Session {
                     .insert(Slot::KillerClient, entity(Class::Client, killer));
             }
         }
-        let world = self.events.world.as_mut().unwrap();
-        if let Err(error) = world.trigger(trigger) {
-            note(
-                &mut self.events.diagnostics,
-                format!("Brick {brick} {input}: {error:#}"),
-            );
-        }
-        if let Some(owner) = player.filter(|o| !self.is_bot(*o)) {
-            self.follow_input(brick, input, owner);
-        }
+        Some(trigger)
     }
     /// The targets an input set off by `owner` offers: their player and
     /// client, and the minigame v20 picks for the brick and them.

@@ -18,12 +18,24 @@ missing is listed in `FEATURES.md`.
   another way. Combat remains scoped to the bot's mini-game. See the release
   notes for the supported vehicle and physics interactions. Autonomous piloting
   covers ground vehicles; aircraft and boats remain future work. Chassis routes
-  are conservative, and shot safety checks a local straight segment rather than
-  planning a complete ballistic or portal trajectory.
+  are conservative. Supported native hand weapons use bounded ballistic
+  checks; mounted, portal and script-driven mechanics still use their existing
+  narrower behavior. Objective planning covers supported activation/region/
+  bot-touch rules, not arbitrary Add-On scripts, ball delivery, hookshot routes
+  or coordinated stacking. See `V0.2.1-PLAYTEST.md` in the release folder.
+- **Firefight crash:** a Windows v0.2.0 main-thread NaN panic during a mixed
+  Zombie/Blockhead battle remains unreproduced. The headless reproduction passes,
+  but does not cover Windows rendering/audio. v0.2.1 improves crash reports and
+  retains matching build symbols; it does not claim a causal fix. Please retain
+  the complete crash/session files if it happens again.
+- **Shark:** model reload is repaired, but authored collision dimensions and
+  some original behaviors/animation selection still need porting. Zombie special
+  infection markings/name prefixes also remain incomplete.
 - **Gamepads** work while playing; menus and building need a keyboard and
   mouse.
-- **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their bricks,
-  weapons and vehicles, not their custom behaviour.
+- **Unported old Add-On scripts don't run.** Imported v20 Add-Ons bring their
+  bricks, weapons and vehicles. Supported ports provide specific native behavior;
+  this is not a general TorqueScript interpreter.
 - **Block faces** from Add-Ons that generate worlds aren't drawn yet.
 - **The Kitchen's main floor** sits slightly off the brick grid.
 - **The Tutorial** runs in single player only.

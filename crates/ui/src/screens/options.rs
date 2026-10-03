@@ -1163,6 +1163,28 @@ impl Options {
                 v.set_visible(n, false);
             }
         }
+        // The authored Apply control is a flat GuiButtonCtrl and stands out
+        // beside the stock bitmap Done button. Keep its command and location,
+        // while using the same native button artwork as the rest of the UI.
+        if let Some(n) = v.by_command("optionsDlg.applyGraphics();") {
+            let old = v.node(n).ctrl.clone();
+            let mut apply = button(
+                "BlockButtonProfile",
+                Rect::new(
+                    old.position[0],
+                    old.position[1] + (old.extent[1] - 30).max(0) / 2,
+                    old.extent[0],
+                    30,
+                ),
+                "base/client/ui/button1",
+                "Apply",
+                old.command
+                    .as_deref()
+                    .unwrap_or("optionsDlg.applyGraphics();"),
+            );
+            apply.name = old.name;
+            v.nodes[n].ctrl = apply;
+        }
         // The patched v20 FOV row (`SliderFOV`), in Advanced Graphics
         // Options below Anisotropy; close_rows moves it up with the rest.
         let aniso = v.id("SliderGraphicsAnisotropy");
@@ -3478,13 +3500,11 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn authored_options_save_players_offscreen() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(
-            Pack::load(&bri_package::testing::pack_dir(
-                &root.join("content"),
-                "ui_pack",
-            ))
-            .unwrap(),
-        );
+        let content = std::env::var_os("BRI_CONTENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("content"));
+        let pack =
+            Rc::new(Pack::load(&bri_package::testing::pack_dir(&content, "ui_pack")).unwrap());
         let output = root.join("artifacts/ui-native-dialogs");
         std::fs::create_dir_all(&output).unwrap();
         options_save_players_offscreen(pack, Some(&output));

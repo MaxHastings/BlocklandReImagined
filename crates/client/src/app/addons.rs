@@ -197,6 +197,7 @@ impl App {
         let PreparedPackages {
             content,
             parts,
+            avatar_assets,
             sounds,
             client,
             server,
@@ -222,6 +223,8 @@ impl App {
         self.item_ui = parts.item_ui;
         self.vehicle_assets = parts.vehicle_assets;
         self.world_items = parts.world_items;
+        self.avatar.avatar_assets = avatar_assets;
+        self.avatar.avatars.clear();
         let casing_problems = self
             .fx
             .weapon_shells
@@ -572,6 +575,7 @@ pub(super) struct ReloadJob {
 struct PreparedPackages {
     content: ClientContent<bri_ui::schema::UiPack>,
     parts: ContentParts,
+    avatar_assets: Arc<crate::avatar::AvatarAssets>,
     sounds: crate::audio::PreparedSounds,
     client: Option<Arc<bri_package_runtime::Catalog>>,
     server: Option<Arc<bri_package_runtime::Catalog>>,
@@ -597,6 +601,14 @@ impl PreparedPackages {
         });
         problems.extend(more);
         let parts = parts?;
+        let (avatar_assets, more) = crate::add_on_health::collecting(|| -> Result<_> {
+            let mut assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
+            assets.load_horse(&content.paths.vehicles)?;
+            assets.load_bodies(&content.paths.root, &content.paths.packages);
+            Ok(Arc::new(assets))
+        });
+        problems.extend(more);
+        let avatar_assets = avatar_assets?;
         let set = &content.paths.packages;
         let (client, mut rules) = crate::packages::load_set(root, set, false);
         let (server, more) = crate::packages::load_set(root, set, true);
@@ -639,6 +651,7 @@ impl PreparedPackages {
         Ok(Self {
             content,
             parts,
+            avatar_assets,
             sounds,
             client,
             server,
@@ -697,6 +710,60 @@ mod tests {
         let mut data: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         data["maps"][0]["name"] = name.into();
         std::fs::write(path, serde_json::to_vec(&data)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn enabling_then_disabling_an_add_on_reloads_body_models() -> Result<()> {
+        let (content, _state, mut app) = app()?;
+        let dir = content.root.join("addons/fish");
+        std::fs::create_dir_all(dir.join("assets/archetypes"))?;
+        let rig = crate::testing::avatar::rig();
+        let mut shape = rig.shape.clone();
+        shape.animations = rig.sequences.values().cloned().collect();
+        std::fs::write(
+            dir.join("assets/fish.shape.json"),
+            serde_json::to_vec(&shape)?,
+        )?;
+        let mut assets = vec![
+            serde_json::json!({"kind":"asset", "id":"fish:asset/fish.dts", "file":"assets/fish.shape.json"}),
+        ];
+        for material in &shape.materials {
+            let file = format!("assets/{}.png", material.name);
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])).save(dir.join(&file))?;
+            assets.push(serde_json::json!({"kind":"asset", "id":format!("fish:asset/{}.png",material.name), "file":file}));
+        }
+        std::fs::write(
+            dir.join("assets/content.json"),
+            serde_json::to_vec(&serde_json::json!({"content":assets}))?,
+        )?;
+        std::fs::write(
+            dir.join("assets/archetypes/fishbot.json"),
+            br#"{"schema_version":1,"name":"Fish","model":"fish:asset/fish.dts"}"#,
+        )?;
+        std::fs::write(
+            dir.join("package.json"),
+            br#"{"schema_version":1,"id":"fish","version":"1.0.0","api":1,"name":"Fish","license":"CC0-1.0"}"#,
+        )?;
+        let original = app.content.paths.packages.clone();
+        let mut selected = original.clone();
+        selected.packages.push(serde_json::from_value(
+            serde_json::json!({"id":"fish","version":"1.0.0","side":"shared","dir":"addons/fish"}),
+        )?);
+        assert!(!app.avatar.avatar_assets.has_body("fish:asset/fish.dts"));
+        app.apply_packages(&selected)?;
+        assert!(app.avatar.avatar_assets.has_body("fish:asset/fish.dts"));
+        let mesh = app.avatar.avatar_assets.body_mesh(
+            "fish:asset/fish.dts",
+            app.avatar.avatar_assets.package.defaults.clone(),
+        )?;
+        app.avatar.avatars.insert(100, mesh);
+        app.apply_packages(&original)?;
+        assert!(!app.avatar.avatar_assets.has_body("fish:asset/fish.dts"));
+        assert!(
+            app.avatar.avatars.is_empty(),
+            "old body meshes cannot survive reload"
+        );
         Ok(())
     }
 

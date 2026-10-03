@@ -182,8 +182,8 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         window.children.push(named(
             button(
                 "BlockButtonProfile",
-                Rect::new(14, height - 95, x - 36, 22),
-                "base/client/ui/button1",
+                Rect::new(14, height - 96, 185.min(x - 36), 30),
+                "base/client/ui/button2",
                 if expanded {
                     "Hide detection region"
                 } else {
@@ -731,7 +731,7 @@ fn condition_properties(
             Property::Color | Property::Occupants | Property::Opponents => {
                 subject == Subject::SelfBrick
             }
-            Property::Kind | Property::Speed => subject == Subject::Object,
+            Property::Kind | Property::SpawnedBy | Property::Speed => subject == Subject::Object,
         })
         .collect()
 }
@@ -769,7 +769,7 @@ fn reset_condition_property(c: &mut Condition, p: Property) {
     };
     c.value = if boolean_property(p) {
         Datum::Bool(true)
-    } else if p == Property::Kind {
+    } else if matches!(p, Property::Kind | Property::SpawnedBy) {
         Datum::Text(String::new())
     } else {
         Datum::Number(0)
@@ -997,12 +997,16 @@ impl WrenchEvents {
         {
             let (name, label, command, x, w) =
                 ("Rule_Explain", "Explain saved", "rules.explain", 11, 100);
-            let mut button = named(
-                ctrl("GuiButtonCtrl", "GuiButtonProfile", Rect::new(x, 28, w, 22)),
+            let button = named(
+                button(
+                    "BlockButtonProfile",
+                    Rect::new(x, 26, w, 26),
+                    "base/client/ui/button2",
+                    label,
+                    command,
+                ),
                 name,
             );
-            button.text = Some(label.into());
-            button.command = Some(command.into());
             self.view.add(win, button);
         }
         let bw = width - 35;
@@ -1280,18 +1284,22 @@ impl WrenchEvents {
                             } else {
                                 format!("rules.{suffix}.{row}")
                             };
-                            let mut button = named(
-                                ctrl("GuiButtonCtrl", "GuiButtonProfile", Rect::new(x, y, w, 22)),
+                            let button = named(
+                                button(
+                                    "BlockButtonProfile",
+                                    Rect::new(x, y, w, 26),
+                                    "base/client/ui/button2",
+                                    label,
+                                    &command,
+                                ),
                                 format!("Rule_{row}_{suffix}"),
                             );
-                            button.text = Some(label.into());
-                            button.command = Some(command);
                             let n = self.view.add(body, button);
                             if suffix == "add_if" && e.conditions.len() >= rules::MAX_CONDITIONS {
                                 self.view.set_active(n, false);
                             }
                         }
-                        y += 25;
+                        y += 30;
                     }
                     if let Some(output) = e
                         .output
@@ -1375,7 +1383,8 @@ impl WrenchEvents {
         let x = 88;
         let subject_w = 100;
         let prop_x = x + subject_w + 4;
-        let prop_w = (bw - prop_x - 78).max(95);
+        // Leave the comparison and its arrow clear of the remove button.
+        let prop_w = (bw - prop_x - 90).max(60);
         let compare_x = prop_x + prop_w + 4;
         self.view.add(
             body,
@@ -1443,7 +1452,8 @@ impl WrenchEvents {
             Binding::ConditionCompare(row, index),
         );
         let comparisons = rules::COMPARISONS.iter().filter(|(_, v)| {
-            !boolean_property(c.property) && c.property != Property::Kind
+            !boolean_property(c.property)
+                && !matches!(c.property, Property::Kind | Property::SpawnedBy)
                 || matches!(v, rules::Compare::Equal | rules::Compare::NotEqual)
         });
         self.menu(
@@ -1455,16 +1465,16 @@ impl WrenchEvents {
                 .map(|(s, _)| *s),
             false,
         );
-        let mut remove = named(
-            ctrl(
-                "GuiButtonCtrl",
-                "GuiButtonProfile",
-                Rect::new(bw - 27, y, 23, 18),
+        let remove = named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(bw - 27, y + 17, 23, 24),
+                "base/client/ui/button2",
+                "X",
+                &format!("rules.remove.{row}.{index}"),
             ),
             format!("Rule_{row}_if{index}_remove"),
         );
-        remove.text = Some("X".into());
-        remove.command = Some(format!("rules.remove.{row}.{index}"));
         self.view.add(body, remove);
         let vy = y + 47;
         let value_x = if c.property == Property::Variable {
@@ -1485,7 +1495,11 @@ impl WrenchEvents {
         } else {
             88
         };
-        let label = "Value:";
+        let label = if c.property == Property::SpawnedBy {
+            "Brick:"
+        } else {
+            "Value:"
+        };
         let label_x = if c.property == Property::Variable {
             216
         } else {
@@ -1498,7 +1512,7 @@ impl WrenchEvents {
         let class = if boolean_property(c.property)
             || matches!(
                 c.property,
-                Property::Kind | Property::Team | Property::Color
+                Property::Kind | Property::SpawnedBy | Property::Team | Property::Color
             ) {
             "GuiPopUpMenuCtrl"
         } else {
@@ -1521,6 +1535,21 @@ impl WrenchEvents {
                 let ids =
                     resource_menu(&mut self.view, n, &choices(core, "Vehicle", true), current);
                 self.resources.insert(n, ids);
+            }
+            Property::SpawnedBy => {
+                let current = match &c.value {
+                    Datum::Text(t) => Some(t.as_str()),
+                    _ => None,
+                };
+                let mut names = self.model.as_ref().unwrap().named_choices();
+                if let Some(name) = current.filter(|n| !n.is_empty())
+                    && !names.iter().any(|n| n == name)
+                {
+                    names.push(name.to_owned());
+                }
+                self.menu(n, names.clone(), current, false);
+                self.resources
+                    .insert(n, names.into_iter().map(Some).collect());
             }
             p if boolean_property(p) => {
                 self.menu(
@@ -1628,7 +1657,7 @@ impl WrenchEvents {
             Property::Team | Property::Color => {
                 Datum::Number(self.view.selected(node).ok_or("Choose a value")?)
             }
-            Property::Kind => Datum::Text(
+            Property::Kind | Property::SpawnedBy => Datum::Text(
                 self.view
                     .selected(node)
                     .and_then(|i| usize::try_from(i).ok())
@@ -3037,6 +3066,34 @@ mod tests {
     }
 
     #[test]
+    fn spawned_by_uses_named_bricks_and_preserves_missing_names_for_editing() {
+        let mut ui = fixture();
+        let mut s = WrenchEvents::new(&ui.core);
+        s.model.as_mut().unwrap().named_targets = vec!["MatchBall".into(), "PracticeBall".into()];
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Object", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_0_if0_property",
+            "Spawned by",
+            &mut ui.core,
+        );
+        choose(&mut s, "WrenchEvent_0_if0_value", "MatchBall", &mut ui.core);
+        s.accept_parameters().unwrap();
+        assert_eq!(
+            s.condition_mut(0, 0).unwrap().value,
+            Datum::Text("MatchBall".into())
+        );
+        let op = s.view.id("WrenchEvent_0_if0_compare").unwrap();
+        assert_eq!(s.view.node(op).state.items.len(), 2);
+        s.model.as_mut().unwrap().named_targets.clear();
+        s.build(&ui.core);
+        let value = s.view.id("WrenchEvent_0_if0_value").unwrap();
+        assert_eq!(s.view.selected_text(value).as_deref(), Some("MatchBall"));
+    }
+
+    #[test]
     fn guard_menus_follow_the_subject_and_boolean_choices_send_real_bools() {
         let mut ui = fixture();
         let mut s = WrenchEvents::new(&ui.core);
@@ -3162,34 +3219,58 @@ mod tests {
         let gpu = crate::gpu::Headless::new().unwrap();
         let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
         let mut render = |name: &str, screen: &mut dyn Screen, core: &mut Core| {
-            screen.layout(640, 480, core);
-            let mut list = DrawList::new(Rect::new(0, 0, 640, 480));
-            screen.draw(&pack, &mut list, core);
-            assert!(list.glyph_count() > 20, "{name}");
-            let rgba = gpu
-                .render_rgba(
-                    &mut renderer,
-                    &pack,
-                    &list,
-                    (640, 480),
-                    1.0,
-                    [0.15, 0.15, 0.18, 1.0],
-                )
-                .unwrap();
-            assert!(
-                renderer.missing_textures().next().is_none(),
-                "missing texture in {name}"
-            );
-            if let Some(output) = output {
-                image::save_buffer(
-                    output.join(format!("{name}.png")),
-                    &rgba,
-                    640,
-                    480,
-                    image::ColorType::Rgba8,
-                )
-                .unwrap();
+            for (physical, scale) in [
+                ((640, 480), 1),
+                ((1024, 768), 1),
+                ((1024, 768), 2),
+                ((1920, 1080), 1),
+                ((1920, 1080), 2),
+            ] {
+                let mut prefs = core.prefs.clone();
+                prefs.set(crate::ui::UI_SCALE, (scale * 100).to_string());
+                let effective =
+                    crate::ui::preferred_scale(&prefs, (physical.0 as u32, physical.1 as u32))
+                        .unwrap();
+                core.logical = (
+                    (physical.0 as f32 / effective).floor() as i32,
+                    (physical.1 as f32 / effective).floor() as i32,
+                );
+                screen.layout(core.logical.0, core.logical.1, core);
+                let mut list = DrawList::new(Rect::new(0, 0, core.logical.0, core.logical.1));
+                screen.draw(&pack, &mut list, core);
+                assert!(list.glyph_count() > 20, "{name}");
+                let rgba = gpu
+                    .render_rgba(
+                        &mut renderer,
+                        &pack,
+                        &list,
+                        (physical.0 as u32, physical.1 as u32),
+                        effective,
+                        [0.15, 0.15, 0.18, 1.0],
+                    )
+                    .unwrap();
+                assert!(
+                    renderer.missing_textures().next().is_none(),
+                    "missing texture in {name}"
+                );
+                if let Some(output) = output {
+                    let filename = if physical == (640, 480) {
+                        format!("{name}.png")
+                    } else {
+                        format!("{name}-{}x{}-{scale}x.png", physical.0, physical.1)
+                    };
+                    image::save_buffer(
+                        output.join(filename),
+                        &rgba,
+                        physical.0 as u32,
+                        physical.1 as u32,
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
+                }
             }
+            core.logical = (640, 480);
+            screen.layout(640, 480, core);
         };
         for variant in [
             WrenchVariant::Normal,
@@ -3489,13 +3570,11 @@ mod tests {
     #[ignore = "requires generated v20 content"]
     fn authored_wrench_offscreen() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(
-            Pack::load(&bri_package::testing::pack_dir(
-                &root.join("content"),
-                "ui_pack",
-            ))
-            .unwrap(),
-        );
+        let content = std::env::var_os("BRI_CONTENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("content"));
+        let pack =
+            Rc::new(Pack::load(&bri_package::testing::pack_dir(&content, "ui_pack")).unwrap());
         let output = root.join("artifacts/ui-native-wrench");
         std::fs::create_dir_all(&output).unwrap();
         wrench_offscreen(pack, Some(&output));

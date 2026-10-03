@@ -270,6 +270,7 @@ impl Session {
     pub(super) fn step_weapons(&mut self) -> Result<()> {
         self.end_gun_slows()?;
         let tick = self.simulation.state().tick;
+        let mut prepared_triggers = Vec::with_capacity(self.peers.len());
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
             let expired = tick.saturating_sub(peer.last_input_tick) > 60;
@@ -345,10 +346,18 @@ impl Session {
                     ..Frame::default()
                 },
             )?;
+            prepared_triggers.push((*owner, expired, trigger, direction));
+        }
+        for (owner, expired, trigger, direction) in prepared_triggers {
+            if self.bot_hand_fire_gate(owner, direction, tick) == Some(false) {
+                self.weapon_triggers.remove(&owner);
+                self.bot_abort_unsafe_hand_fire(owner)?;
+                continue;
+            }
             if expired {
-                self.weapons.trigger(actor, false)?;
+                self.weapons.trigger(ActorId(owner), false)?;
             } else if let Some(trigger) = trigger {
-                self.weapons.trigger(actor, trigger.down)?;
+                self.weapons.trigger(ActorId(owner), trigger.down)?;
             }
         }
         // Player and vehicle damage follow minigame policy, asked pair by

@@ -20,6 +20,14 @@ pub fn build_world_scene(
     build_world_scene_materials(world, meshes, max_triangles, None)
 }
 
+/// Reveal an unplanted preview without changing the blueprint sent for planting.
+pub fn show_placement_ghost(brick: &mut bri_world::Brick) {
+    brick.visible = true;
+    // Transparent palette colors must also be legible in the temp-brick pass.
+    brick.color_effect = 0;
+    brick.shape_effect = 0;
+}
+
 pub fn build_world_scene_materials(
     world: &PublicWorld,
     meshes: &BTreeMap<String, BrickMesh>,
@@ -399,6 +407,38 @@ pub(crate) mod tests {
 
     /// An invalid brick is named once per reason, not on every rebuild,
     /// and again after it was valid.
+    #[test]
+    fn invisible_noncolliding_bricks_get_visible_placement_geometry() {
+        let mut original = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("preview".into()),
+            [0.0; 3],
+            1,
+        );
+        original.visible = false;
+        original.colliding = false;
+        let mut preview = original.clone();
+        show_placement_ghost(&mut preview);
+        assert!(preview.visible);
+        assert!(!preview.colliding);
+        assert!(
+            !original.visible,
+            "the planted blueprint keeps Rendering off"
+        );
+        let meshes = [("preview".into(), mesh())].into();
+        let world = bri_net::protocol::PublicWorld {
+            name: "Preview".into(),
+            map_id: "test".into(),
+            palette: vec![[1.0; 4]],
+            bricks: [(1_u64, preview)].into_iter().collect(),
+        };
+        assert!(
+            !build_world_scene(&world, &meshes, 100)
+                .unwrap()
+                .vertices
+                .is_empty()
+        );
+    }
+
     #[test]
     fn an_invalid_brick_is_logged_once_per_reason() {
         let mut logged = BTreeMap::new();

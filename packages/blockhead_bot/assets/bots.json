@@ -13,7 +13,7 @@
       "memory_seconds": 8,
       "fights_bots": true,
       "alerts_allies": true,
-      "behaviours": { "interact": 1 },
+      "behaviours": { "interact": 1, "objective": 1 },
       "first_names": [
         "Alex",
         "Ben",

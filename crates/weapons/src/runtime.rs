@@ -788,17 +788,47 @@ fn key_item(key: &str) -> &str {
 /// The rounds `key`'s magazine holds: one counted from its reserve
 /// ([`crate::Magazine::from_reserve`]) holds what the reserve does.
 fn rounds_in(a: &Actor, key: &str, magazine: &crate::Magazine) -> u32 {
+    magazine_rounds(
+        magazine,
+        a.rounds.get(key).copied().unwrap_or(0),
+        a.reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(0)),
+    )
+}
+fn magazine_rounds(magazine: &crate::Magazine, stored: u32, reserve: Reserve) -> u32 {
     if magazine.counts_reserve() {
-        match a.reserve.get(&magazine.ammo) {
-            Some(Reserve::Endless) => u32::MAX,
-            Some(Reserve::Rounds(n)) => *n,
-            None => 0,
+        match reserve {
+            Reserve::Endless => u32::MAX,
+            Reserve::Rounds(n) => n,
         }
     } else if magazine.supply == crate::Supply::Unlimited {
         // Never used: always full.
         magazine.size
     } else {
-        a.rounds.get(key).copied().unwrap_or(0)
+        stored
+    }
+}
+fn ammo_view(
+    key: &str,
+    magazine: crate::Magazine,
+    rounds: u32,
+    reserve: Reserve,
+    reloading: bool,
+) -> AmmoView {
+    AmmoView {
+        rounds: rounds.min(100_000),
+        counted: magazine.counts_reserve(),
+        supply: magazine.supply,
+        shown: magazine.displayed(),
+        item: key_item(key).to_string(),
+        size: magazine.size,
+        name: magazine.name().to_string(),
+        reserve,
+        ammo: magazine.ammo,
+        reloading,
+        display_ticks: magazine.display_ticks,
     }
 }
 /// Whether a reload of `magazine` has something to fill it from: reserve,
@@ -1700,23 +1730,40 @@ impl WeaponsWorld {
     pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
         let a = self.actors.get(&id)?;
         let (item, magazine) = self.magazine_of(a).or_else(|| self.stowed(a))?;
-        Some(AmmoView {
-            rounds: rounds_in(a, &item, &magazine).min(100_000),
-            counted: magazine.counts_reserve(),
-            supply: magazine.supply,
-            shown: magazine.displayed(),
-            item: key_item(&item).to_string(),
-            size: magazine.size,
-            name: magazine.name().to_string(),
-            reserve: a
-                .reserve
-                .get(&magazine.ammo)
-                .copied()
-                .unwrap_or(Reserve::Rounds(0)),
-            ammo: magazine.ammo,
-            reloading: a.reload.is_some(),
-            display_ticks: magazine.display_ticks,
-        })
+        let rounds = rounds_in(a, &item, &magazine);
+        let reserve = a
+            .reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(0));
+        Some(ammo_view(
+            &item,
+            magazine,
+            rounds,
+            reserve,
+            a.reload.is_some(),
+        ))
+    }
+    /// Read the magazine that equipping this inventory slot would provide.
+    /// A never-drawn slot starts full, and the first magazine of an ammo
+    /// kind supplies its authored starting reserve. Existing empty magazines
+    /// and shared reserves stay empty. This projection changes no state and
+    /// does not promise that a busy image can switch immediately.
+    pub fn ammo_on_equip(&self, id: ActorId, slot: usize) -> Option<AmmoView> {
+        let a = self.actors.get(&id)?;
+        let item = a.inventory.get(slot)?.as_ref()?;
+        let image = &self.pack.items.get(item)?.image;
+        let magazine = self.pack.images.get(image)?.magazine.clone()?;
+        let key = slot_key(item, slot);
+        let reserve = a
+            .reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
+        let stored = a.rounds.get(&key).copied().unwrap_or(magazine.size);
+        let rounds = magazine_rounds(&magazine, stored, reserve);
+        let reloading = a.reload.as_ref().is_some_and(|r| r.item == key);
+        Some(ammo_view(&key, magazine, rounds, reserve, reloading))
     }
     /// Every reserve a holder has, by ammo name.
     pub fn reserves(&self, id: ActorId) -> Option<&BTreeMap<String, Reserve>> {

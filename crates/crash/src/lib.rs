@@ -268,6 +268,9 @@ impl State {
             self.program,
             env!("CARGO_PKG_VERSION")
         )?;
+        if let Ok(executable) = std::env::current_exe() {
+            writeln!(file, "executable: {}", executable.display())?;
+        }
         writeln!(file, "time: {stamp}")?;
         writeln!(file, "thread: {}", thread.name().unwrap_or("unnamed"))?;
         if let Some(location) = info.location() {
@@ -280,11 +283,14 @@ impl State {
             )?;
         }
         writeln!(file, "message: {message}\n")?;
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        writeln!(file, "backtrace status: {:?}", backtrace.status())?;
         writeln!(
             file,
-            "backtrace:\n{}",
-            std::backtrace::Backtrace::force_capture()
+            "symbolication: use native module offsets with matching build symbols; native IPs are return addresses"
         )?;
+        write_native_backtrace(&mut file)?;
+        writeln!(file, "backtrace:\n{backtrace}")?;
         self.append_log_tail(&mut file)?;
         file.sync_all()?;
         Ok(path)
@@ -303,6 +309,63 @@ impl State {
         }
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn write_native_backtrace(out: &mut impl Write) -> io::Result<()> {
+    windows::write_native_backtrace(out)
+}
+
+/// Independent of Rust's symbol resolver: retain addresses even when the
+/// executable was stripped. `dladdr` identifies the loaded image and its slide.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn write_native_backtrace(out: &mut impl Write) -> io::Result<()> {
+    use std::ffi::{CStr, c_char, c_int, c_void};
+    #[repr(C)]
+    struct DlInfo {
+        filename: *const c_char,
+        base: *mut c_void,
+        symbol: *const c_char,
+        symbol_address: *mut c_void,
+    }
+    #[cfg_attr(target_os = "linux", link(name = "dl"))]
+    unsafe extern "C" {
+        fn backtrace(buffer: *mut *mut c_void, size: c_int) -> c_int;
+        fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_int;
+    }
+    let mut frames = [std::ptr::null_mut(); 128];
+    // SAFETY: the fixed buffer has space for exactly the requested frames.
+    let count = unsafe { backtrace(frames.as_mut_ptr(), frames.len() as c_int) };
+    writeln!(out, "native frames (up to 128):")?;
+    for (index, &frame) in frames.iter().take(count.max(0) as usize).enumerate() {
+        let ip = frame as usize;
+        let mut info = DlInfo {
+            filename: std::ptr::null(),
+            base: std::ptr::null_mut(),
+            symbol: std::ptr::null(),
+            symbol_address: std::ptr::null_mut(),
+        };
+        // SAFETY: address is only queried, and the output is a valid Dl_info.
+        if unsafe { dladdr(frame, &mut info) } != 0 && !info.filename.is_null() {
+            // SAFETY: successful dladdr supplies a NUL-terminated image name.
+            let module = unsafe { CStr::from_ptr(info.filename) }.to_string_lossy();
+            let base = info.base as usize;
+            if let Some(offset) = ip.checked_sub(base) {
+                writeln!(
+                    out,
+                    "  {index}: ip=0x{ip:016x} module={module:?} base=0x{base:016x} offset=0x{offset:x}"
+                )?;
+                continue;
+            }
+        }
+        writeln!(out, "  {index}: ip=0x{ip:016x} module=<unknown>")?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+fn write_native_backtrace(out: &mut impl Write) -> io::Result<()> {
+    writeln!(out, "native frames: unsupported on this platform")
 }
 
 fn writable(dir: &Path) -> bool {

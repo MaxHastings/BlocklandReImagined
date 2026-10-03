@@ -547,9 +547,121 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     #[ignore = "requires generated v20 content"]
+    fn creator_authority_offscreen() -> anyhow::Result<()> {
+        use crate::models::admin::{
+            AdminFeature, AdminPlayer, AdminRole, AdminSnapshot, AdminUpdate,
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let content = std::env::var_os("BRI_CONTENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("content"));
+        let pack = Rc::new(Pack::load(&bri_package::testing::pack_dir(
+            &content, "ui_pack",
+        ))?);
+        let gpu = crate::gpu::Headless::new()?;
+        let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+        let out = root.join("artifacts/creator-authority-ui");
+        std::fs::create_dir_all(&out)?;
+        for (physical, scale) in [
+            ((1024, 768), 1),
+            ((1024, 768), 2),
+            ((1920, 1080), 1),
+            ((1920, 1080), 2),
+        ] {
+            let mut ui = fixture();
+            ui.core.pack = pack.clone();
+            ui.core
+                .prefs
+                .set(crate::ui::UI_SCALE, (scale * 100).to_string());
+            let effective =
+                crate::ui::preferred_scale(&ui.core.prefs, (physical.0 as u32, physical.1 as u32))
+                    .unwrap();
+            ui.core.logical = (
+                (physical.0 as f32 / effective).floor() as i32,
+                (physical.1 as f32 / effective).floor() as i32,
+            );
+            println!(
+                "creator capture {}x{} requested={scale}x effective={effective}x logical={:?}",
+                physical.0, physical.1, ui.core.logical
+            );
+            ui.apply(crate::api::UiUpdate::Admin(AdminUpdate::State(
+                AdminSnapshot {
+                    revision: 1,
+                    role: AdminRole::SuperAdmin,
+                    local_host: true,
+                    legacy_lan: false,
+                    supported: [
+                        AdminFeature::Kick,
+                        AdminFeature::Ban,
+                        AdminFeature::Unban,
+                        AdminFeature::Spy,
+                        AdminFeature::Wand,
+                        AdminFeature::Maps,
+                        AdminFeature::ClearBricks,
+                        AdminFeature::HostOptions,
+                        AdminFeature::AdminPassword,
+                        AdminFeature::Ranks,
+                        AdminFeature::Environment,
+                    ]
+                    .into_iter()
+                    .collect(),
+                    players: vec![AdminPlayer {
+                        connection: 7,
+                        name: "Builder".into(),
+                        identity_label: "Native identity".into(),
+                        role: AdminRole::Player,
+                        owner: false,
+                        local: false,
+                        bot: false,
+                        persistent_identity: true,
+                    }],
+                    options: Some(crate::models::admin::AdminOptions::default()),
+                },
+            )));
+            ui.core.admin.selected_player = Some(7);
+            for id in [ScreenId::Admin, ScreenId::RuleWorkshop] {
+                let mut screen = crate::screens::make(id, &mut ui.core);
+                let logical = ui.core.logical;
+                screen.layout(logical.0, logical.1, &mut ui.core);
+                if id == ScreenId::Admin {
+                    let view = screen.view();
+                    let players = view.id("lstAdminPlayerList").unwrap();
+                    assert_eq!(view.node(players).state.items.len(), 1);
+                    for name in ["NativeEnvironment", "NativeMakeAdmin", "NativeHostOptions"] {
+                        assert!(view.node(view.id(name).unwrap()).state.active, "{name}");
+                    }
+                }
+                let mut dl = DrawList::new(Rect::new(0, 0, logical.0, logical.1));
+                screen.draw(&pack, &mut dl, &ui.core);
+                let rgba = gpu.render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &dl,
+                    (physical.0 as u32, physical.1 as u32),
+                    effective,
+                    [0.15, 0.15, 0.18, 1.],
+                )?;
+                assert!(renderer.missing_textures().next().is_none());
+                image::save_buffer(
+                    out.join(format!("{id:?}-{}x{}-{scale}x.png", physical.0, physical.1)),
+                    &rgba,
+                    physical.0 as u32,
+                    physical.1 as u32,
+                    image::ColorType::Rgba8,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires generated v20 content"]
     fn workshop_offscreen() -> anyhow::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004"))?);
+        let content = std::env::var_os("BRI_CONTENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("content"));
+        let pack = Rc::new(Pack::load(&content.join("ui-pack-004"))?);
         let gpu = crate::gpu::Headless::new()?;
         let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
         let out = root.join("artifacts/workshop-ui");
@@ -686,6 +798,132 @@ mod tests {
         )?;
         image::save_buffer(
             out.join("Explain.png"),
+            &rgba,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )?;
+
+        // These screens do not belong to the runtime probe's first-impression
+        // flow. Capture their actual layouts here so style review covers the
+        // native administration and package-management paths too.
+        let mut admin = crate::screens::admin::AdminScreen::new(ScreenId::Admin, &ui.core);
+        admin.layout(640, 480, &mut ui.core);
+        let mut dl = DrawList::new(Rect::new(0, 0, 640, 480));
+        admin.draw(&pack, &mut dl, &ui.core);
+        let rgba = gpu.render_rgba(
+            &mut renderer,
+            &pack,
+            &dl,
+            (640, 480),
+            1.,
+            [0.15, 0.15, 0.18, 1.],
+        )?;
+        assert!(renderer.missing_textures().next().is_none());
+        image::save_buffer(
+            out.join("Admin.png"),
+            &rgba,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )?;
+
+        let mut environment = crate::screens::environment::Environment::new(&mut ui.core);
+        environment.layout(640, 480, &mut ui.core);
+        let mut dl = DrawList::new(Rect::new(0, 0, 640, 480));
+        environment.draw(&pack, &mut dl, &ui.core);
+        let rgba = gpu.render_rgba(
+            &mut renderer,
+            &pack,
+            &dl,
+            (640, 480),
+            1.,
+            [0.15, 0.15, 0.18, 1.],
+        )?;
+        assert!(renderer.missing_textures().next().is_none());
+        image::save_buffer(
+            out.join("Environment-Simple.png"),
+            &rgba,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )?;
+        let advanced = environment.view().id("EnvTabAdvanced").unwrap();
+        environment.on_event(
+            &crate::view::ViewEvent {
+                node: advanced,
+                kind: crate::view::EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        let mut dl = DrawList::new(Rect::new(0, 0, 640, 480));
+        environment.draw(&pack, &mut dl, &ui.core);
+        let rgba = gpu.render_rgba(
+            &mut renderer,
+            &pack,
+            &dl,
+            (640, 480),
+            1.,
+            [0.15, 0.15, 0.18, 1.],
+        )?;
+        assert!(renderer.missing_textures().next().is_none());
+        image::save_buffer(
+            out.join("Environment-Advanced.png"),
+            &rgba,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )?;
+
+        ui.apply(crate::api::UiUpdate::AddOns(crate::api::AddOnsView {
+            rows: vec![
+                crate::api::AddOnRow {
+                    id: "base-game".into(),
+                    name: "Base Game".into(),
+                    category: "Base Game".into(),
+                    enabled: true,
+                    locked: true,
+                    runs: "Everyone".into(),
+                    description: "Core Blockland gameplay".into(),
+                    ..Default::default()
+                },
+                crate::api::AddOnRow {
+                    id: "workshop-toys".into(),
+                    name: "Workshop Toys".into(),
+                    category: "Game Modes".into(),
+                    version: "1.0".into(),
+                    enabled: true,
+                    runs: "Server and players".into(),
+                    description: "Switches, doors, races and other examples".into(),
+                    ..Default::default()
+                },
+            ],
+            notice: String::new(),
+        }));
+        let mut addons = crate::screens::addons::AddOns::new(&ui.core);
+        addons.layout(640, 480, &mut ui.core);
+        let list = addons.view().id("AO_List").unwrap();
+        addons.view_mut().select(list, Some(1));
+        addons.on_event(
+            &crate::view::ViewEvent {
+                node: list,
+                kind: crate::view::EventKind::Changed,
+            },
+            &mut ui.core,
+        );
+        let mut dl = DrawList::new(Rect::new(0, 0, 640, 480));
+        addons.draw(&pack, &mut dl, &ui.core);
+        let rgba = gpu.render_rgba(
+            &mut renderer,
+            &pack,
+            &dl,
+            (640, 480),
+            1.,
+            [0.15, 0.15, 0.18, 1.],
+        )?;
+        assert!(renderer.missing_textures().next().is_none());
+        image::save_buffer(
+            out.join("AddOns.png"),
             &rgba,
             640,
             480,

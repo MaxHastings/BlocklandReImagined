@@ -27,6 +27,64 @@ pub(super) struct Opportunity {
 }
 
 impl Session {
+    /// A passenger may have boarded the reachable lower seat of a tall vehicle.
+    /// Fill its useful empty role through the same seat keys players use.
+    pub(super) fn promote_bot_seat(&mut self, bot: OwnerId) -> Result<()> {
+        if !self.is_alive(bot)
+            || self.bots.brains.get(&bot).is_none_or(|b| {
+                b.resting || b.kind.behaviours.get("interact").copied().unwrap_or(0.0) <= 0.0
+            })
+        {
+            return Ok(());
+        }
+        let Some((vehicle, seat)) = self.mounted(bot) else {
+            return Ok(());
+        };
+        let Some(world) = &self.vehicles.world else {
+            return Ok(());
+        };
+        let Some(v) = world.vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle)) else {
+            return Ok(());
+        };
+        let Some(d) = world.definition(&v.definition) else {
+            return Ok(());
+        };
+        let role = &d.seats[usize::from(seat)];
+        if v.destroyed || role.controls || role.weapon || d.family != Family::Wheeled {
+            return Ok(());
+        }
+        let tick = self.simulation.state().tick;
+        let free = |s: usize| {
+            world.seat_occupant(v.id, s).is_none()
+                && !self.bot_claimed(
+                    Resource::Seat {
+                        vehicle,
+                        seat: s as u8,
+                    },
+                    bot,
+                    tick,
+                )
+        };
+        let target = d.control_seat().filter(|s| free(*s)).or_else(|| {
+            d.weapon_seat().filter(|s| {
+                free(*s)
+                    && world.weapon_available(v.id)
+                    && d.control_seat()
+                        .and_then(|driver| world.seat_occupant(v.id, driver))
+                        .is_some_and(|driver| self.bot_allies(bot, driver.owner.0))
+            })
+        });
+        let Some(target) = target else { return Ok(()) };
+        let count = d.seats.len();
+        for _ in 0..count {
+            self.switch_seat(bot, 1)?;
+            if self.mounted(bot) == Some((vehicle, target as u8)) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn observe_bot_objects(&mut self) {
         self.bots.objects = self
             .vehicles

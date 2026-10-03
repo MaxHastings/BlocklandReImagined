@@ -26,6 +26,8 @@ pub struct NativeScreen {
     /// Join Server's sort: v20's `JS_serverList.sortedBy` column and
     /// `sortedAsc`. None keeps the host's order.
     server_sort: Option<(usize, bool)>,
+    /// Extra room inserted for the admin-only Rule Workshop row.
+    escape_workshop_layout_delta: i32,
 }
 
 /// One Join Server row's text in v20's sort column `col` (`JS_sortList`
@@ -96,6 +98,7 @@ impl NativeScreen {
             request: None,
             shown_mode: None,
             server_sort: None,
+            escape_workshop_layout_delta: 0,
             history: None,
         };
         // Preferences are data; script strings are never evaluated.
@@ -190,9 +193,13 @@ impl NativeScreen {
                 .walk()
                 .find(|n| s.view.node(*n).ctrl.class == "GuiWindowCtrl")
                 .unwrap_or(s.view.root);
+
+            // The authored pause menu's first gap is only 24 px. Reflow only
+            // when this admin-only action is available; hidden clients keep
+            // the original native positions and window size.
             let mut b = button(
                 "BlockButtonProfile",
-                Rect::new(10, 70, 200, 22),
+                Rect::new(10, 75, 200, 38),
                 "base/client/ui/button1",
                 "Rule Workshop",
                 "ruleworkshop",
@@ -200,6 +207,9 @@ impl NativeScreen {
             b.name = Some("EM_RuleWorkshop".into());
             let n = s.view.add(parent, b);
             s.view.set_visible(n, core.in_game() && core.is_admin());
+        }
+        if id == ScreenId::EscapeMenu {
+            s.reflow_escape_workshop(core.in_game() && core.is_admin());
         }
         s.refresh(core);
         s
@@ -373,6 +383,9 @@ impl NativeScreen {
         }
     }
     fn refresh(&mut self, core: &Core) {
+        if self.id == ScreenId::EscapeMenu {
+            self.reflow_escape_workshop(core.in_game() && core.is_admin());
+        }
         match self.id {
             ScreenId::MainMenu => {
                 if let Some(i) = core.menu_backgrounds.first() {
@@ -512,6 +525,33 @@ impl NativeScreen {
             }
             _ => {}
         }
+    }
+    fn reflow_escape_workshop(&mut self, visible: bool) {
+        let Some(window) = self
+            .view
+            .walk()
+            .find(|&n| self.view.node(n).ctrl.class == "GuiWindowCtrl")
+        else {
+            return;
+        };
+        let desired = if visible { 26 } else { 0 };
+        let delta = desired - self.escape_workshop_layout_delta;
+        if delta == 0 {
+            return;
+        }
+        for &child in &self.view.node(window).children.clone() {
+            let control = &mut self.view.nodes[child].ctrl;
+            if control
+                .name
+                .as_deref()
+                .is_some_and(|name| name.starts_with("EM_") && name != "EM_RuleWorkshop")
+                && control.position[1] >= 93
+            {
+                control.position[1] += delta;
+            }
+        }
+        self.view.nodes[window].ctrl.extent[1] += delta;
+        self.escape_workshop_layout_delta = desired;
     }
     fn map_preview(&mut self, core: &Core) {
         let map = self
@@ -1150,6 +1190,92 @@ impl Screen for MessageScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_workshop_row_has_native_gaps_and_window_fits_canvas() {
+        use crate::api::Settings;
+        use crate::binds::Platform;
+        use crate::schema::UiPack;
+        use crate::ui::{Ui, UiConfig};
+
+        let button_at = |name: &str, y: i32| {
+            let mut c = button(
+                "BlockButtonProfile",
+                Rect::new(7, y, 207, 36),
+                "base/client/ui/button1",
+                name,
+                "",
+            );
+            c.name = Some(format!("EM_{name}"));
+            c
+        };
+        let mut window = ctrl(
+            "GuiWindowCtrl",
+            "GuiWindowProfile",
+            Rect::new(209, 29, 221, 421),
+        );
+        window.h_sizing = crate::schema::HSizing::Center;
+        window.v_sizing = crate::schema::VSizing::Center;
+        window.children = [
+            button_at("Options", 33),
+            button_at("PlayerList", 93),
+            button_at("MiniGames", 133),
+            button_at("AdminMenu", 173),
+            button_at("SaveBricks", 233),
+            button_at("LoadBricks", 273),
+            button_at("Disconnect", 333),
+            button_at("Quit", 373),
+        ]
+        .into();
+        let mut root = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
+        root.children.push(window);
+        let mut data = UiPack::default();
+        data.layouts.insert("escapeMenu".into(), root);
+        let mut ui = Ui::new(
+            crate::testing::pack(data),
+            UiConfig {
+                size: (640, 480),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        let mut screen = NativeScreen::new(ScreenId::EscapeMenu, &ui.core);
+        screen.layout(640, 480, &mut ui.core);
+
+        let rect = |screen: &NativeScreen, name: &str| {
+            let id = screen.view.id(name).unwrap();
+            screen.view.node(id).rect
+        };
+        screen.reflow_escape_workshop(false);
+        screen.layout(640, 480, &mut ui.core);
+        let native_players = rect(&screen, "EM_PlayerList");
+        let window = screen
+            .view
+            .walk()
+            .find(|&n| screen.view.node(n).ctrl.class == "GuiWindowCtrl")
+            .unwrap();
+        let native_window = screen.view.node(window).rect;
+        assert_eq!(native_players.y, 122);
+        assert_eq!(native_window.h, 421);
+
+        screen.reflow_escape_workshop(true);
+        screen.layout(640, 480, &mut ui.core);
+        let options = rect(&screen, "EM_Options");
+        let workshop = rect(&screen, "EM_RuleWorkshop");
+        let players = rect(&screen, "EM_PlayerList");
+        let window_rect = screen.view.node(window).rect;
+        let quit = rect(&screen, "EM_Quit");
+        assert_eq!(workshop.h, 38);
+        assert_eq!(workshop.y - options.bottom(), 6);
+        assert_eq!(players.y - workshop.bottom(), 6);
+        assert_eq!(window_rect.h, 447);
+        assert!(window_rect.bottom() <= 480);
+        assert_eq!(window_rect.bottom() - quit.bottom(), 12);
+    }
 
     #[test]
     fn join_server_headers_sort_like_js_sort_list() {

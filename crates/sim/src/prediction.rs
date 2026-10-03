@@ -283,6 +283,97 @@ impl CollisionMirror {
     pub fn physics(&self) -> &PhysicsWorld {
         &self.physics
     }
+    /// Camera volume in the same open/closed portal geometry as the walking
+    /// motor. In particular, a wall behind a live opening is cut away, while
+    /// the frame and the destination room still stop the camera.
+    pub fn portal_camera_position(&self, eye: Vec3, forward: Vec3, distance: f32) -> Result<Vec3> {
+        ensure!(
+            distance.is_finite() && (0.0..=40.0).contains(&distance),
+            "Invalid portal camera distance"
+        );
+        let hit = self.portal_camera_hit(eye, forward, distance)?;
+        let travel = hit.map_or(distance, |(travel, _)| (travel - 0.02).max(0.0));
+        Ok(eye - forward.normalize() * travel)
+    }
+    /// First camera-volume hit in one portal-clipped space. The returned
+    /// surface normal lets vehicle cameras keep their authored wall back-off.
+    /// Their ray extends past the eye and can exceed the player boom's 40 units.
+    pub fn portal_camera_hit(
+        &self,
+        eye: Vec3,
+        forward: Vec3,
+        distance: f32,
+    ) -> Result<Option<(f32, Vec3)>> {
+        use bri_motor::torque::{Box3, Soup};
+        use rapier3d::parry::query::{ShapeCastOptions, cast_shapes};
+        ensure!(
+            eye.is_finite()
+                && forward.is_finite()
+                && forward.length_squared() > 0.1
+                && distance.is_finite()
+                && (0.0..=2000.0).contains(&distance),
+            "Invalid portal camera sweep"
+        );
+        let backward = -forward.normalize();
+        let end = eye + backward * distance;
+        let radius = 0.15;
+        let region = Box3 {
+            min: eye.min(end) - Vec3::splat(radius),
+            max: eye.max(end) + Vec3::splat(radius),
+        };
+        let query = self
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().exclude_sensors());
+        let mut soup = Soup::gather(&query, &self.physics.bodies, region, eye, &self.chunks);
+        // A doorway has two faces on one plane. The body's overlap margin
+        // admits both very close to it; a camera point occupies one side,
+        // so only that side may replace the backing geometry.
+        let mut passages = self.links.passages().clone();
+        passages.list.retain(|p| p.side(eye) >= 0.0);
+        soup.open_passages(
+            &query,
+            &self.physics.bodies,
+            &passages,
+            eye,
+            region,
+            &self.chunks,
+        );
+        let shape = Ball::new(radius);
+        let options = ShapeCastOptions {
+            max_time_of_impact: distance,
+            ..Default::default()
+        };
+        let velocity = Vector::from_array(backward.to_array());
+        let mut nearest = None;
+        // Soup vertices are relative to the camera, preserving precision far
+        // from the origin. Fan triangles retain the clipped polygon's edges.
+        for poly in &soup.polys {
+            let points = soup.verts(poly);
+            for i in 1..points.len().saturating_sub(1) {
+                let triangle = Triangle::new(
+                    Vector::from_array(points[0].to_array()),
+                    Vector::from_array(points[i].to_array()),
+                    Vector::from_array(points[i + 1].to_array()),
+                );
+                if let Some(hit) = cast_shapes(
+                    &Pose::IDENTITY,
+                    velocity,
+                    &shape,
+                    &Pose::IDENTITY,
+                    Vector::ZERO,
+                    &triangle,
+                    options,
+                )
+                .map_err(|_| anyhow::anyhow!("Unsupported portal camera polygon"))?
+                    && hit.time_of_impact < distance
+                    && nearest.is_none_or(|(travel, _)| hit.time_of_impact < travel)
+                {
+                    nearest = Some((hit.time_of_impact, Vec3::from_array(hit.normal2.to_array())));
+                }
+            }
+        }
+        Ok(nearest)
+    }
     /// Stream the map's terrain collision around the predicted body, exactly
     /// like the server's `Simulation`.
     pub fn attach_terrain(

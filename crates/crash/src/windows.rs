@@ -29,6 +29,60 @@ pub(crate) fn attach_parent_console() {
     unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
 }
 
+/// Capture instruction pointers without requiring a PDB beside the game.
+pub(crate) fn write_native_backtrace(out: &mut impl Write) -> io::Result<()> {
+    use windows_sys::Win32::System::{
+        Diagnostics::Debug::RtlCaptureStackBackTrace,
+        Memory::{MEM_IMAGE, MEMORY_BASIC_INFORMATION, VirtualQuery},
+    };
+    // The workspace's windows-sys feature set does not enable LibraryLoader;
+    // these signatures match its kernel32 declarations without a new dependency.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleFileNameW(module: HANDLE, filename: *mut u16, size: u32) -> u32;
+    }
+    let mut frames = [std::ptr::null_mut(); 128];
+    // SAFETY: writable buffer sized to the requested frame count; hash optional.
+    let count = unsafe {
+        RtlCaptureStackBackTrace(
+            0,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    writeln!(out, "native frames (up to 128):")?;
+    for (index, &frame) in frames.iter().take(count as usize).enumerate() {
+        let ip = frame as usize;
+        // SAFETY: zero is a valid initial representation for the output struct.
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: only queries a captured address; valid output buffer and size.
+        let queried = unsafe { VirtualQuery(frame, &mut info, std::mem::size_of_val(&info)) };
+        if queried != 0 && info.Type == MEM_IMAGE {
+            let base = info.AllocationBase as usize;
+            let mut name = [0u16; 32_768];
+            // SAFETY: MEM_IMAGE allocation base identifies its loaded module;
+            // name is writable and the requested length equals its capacity.
+            let count = unsafe {
+                GetModuleFileNameW(info.AllocationBase, name.as_mut_ptr(), name.len() as u32)
+            } as usize;
+            if count > 0
+                && count < name.len()
+                && let Some(offset) = ip.checked_sub(base)
+            {
+                let module = String::from_utf16_lossy(&name[..count]);
+                writeln!(
+                    out,
+                    "  {index}: ip=0x{ip:016x} module={module:?} base=0x{base:016x} offset=0x{offset:x}"
+                )?;
+                continue;
+            }
+        }
+        writeln!(out, "  {index}: ip=0x{ip:016x} module=<unknown>")?;
+    }
+    Ok(())
+}
+
 /// The stderr tee, kept so `finish` can drain it before the process exits.
 /// Handles are stored as integers: raw handles are not `Send`.
 struct Tee {

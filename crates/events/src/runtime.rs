@@ -349,6 +349,47 @@ impl EventWorld {
     pub fn program(&self, id: Id) -> Option<&BrickProgram> {
         self.bricks.get(&id)
     }
+    /// Read-only semantic inspection for grounded providers. Outputs without a
+    /// native Intent deliberately have no inferred semantics.
+    pub fn row_intent(&self, source: Id, row: u16) -> Option<&Intent> {
+        let compiled = self
+            .compiled
+            .get(&source)?
+            .get(usize::from(row))?
+            .as_ref()?;
+        match compiled.action.as_ref() {
+            Action::Intent(intent) => Some(intent),
+            _ => None,
+        }
+    }
+    /// Resolve exactly the targets the installed row uses, without admission,
+    /// scheduling or execution. Context validation matches normal dispatch.
+    pub fn row_targets(&self, source: Id, context: &Trigger, row: u16) -> Result<Vec<Entity>> {
+        ensure!(source == context.source, "Source/context mismatch");
+        self.validate_context(context)?;
+        let program = self
+            .bricks
+            .get(&source)
+            .context("Missing source generation")?;
+        let compiled = self
+            .compiled
+            .get(&source)
+            .and_then(|rows| rows.get(usize::from(row)))
+            .and_then(Option::as_ref)
+            .context("Missing compiled row")?;
+        ensure!(
+            self.catalog
+                .input(&context.input)
+                .is_some_and(|i| i.id == compiled.input),
+            "Row/input mismatch"
+        );
+        let targets = self.targets(program, context, &compiled.row.target)?;
+        ensure!(
+            targets.iter().all(|t| t.class == compiled.class),
+            "Compiled target class mismatch"
+        );
+        Ok(targets)
+    }
     pub fn install_brick(&mut self, mut brick: BrickProgram) -> Result<()> {
         ensure!(
             brick.id.index > 0 && brick.id.generation > 0 && brick.print_count < 10,
@@ -1537,5 +1578,104 @@ impl EventWorld {
             );
         }
         Ok(w)
+    }
+}
+
+#[cfg(test)]
+mod semantic_inspection_tests {
+    use super::*;
+    fn id(index: u64) -> Id {
+        Id {
+            index,
+            generation: 1,
+        }
+    }
+    fn program(index: u64, name: Option<&str>, target: Target) -> BrickProgram {
+        BrickProgram {
+            id: id(index),
+            owner_scope: 7,
+            name: name.map(str::to_string),
+            rows: vec![Row {
+                enabled: true,
+                input: "onActivate".into(),
+                output: "setColor".into(),
+                target,
+                params: vec![Value::Color(1)],
+                conditions: vec![],
+                delay_ms: 0,
+                preserved: None,
+            }],
+            print_count: 0,
+            implicit_cancel_relays: false,
+        }
+    }
+    #[test]
+    fn inspection_has_no_admission_side_effect_and_resolves_real_missing_named_derived_targets() {
+        let catalog = crate::testing::catalog()
+            .with_targets(&[crate::catalog::TargetDef {
+                id: "inspection:target/self".into(),
+                name: "CreatorSelf".into(),
+                class_name: "CreatorBrick".into(),
+                from: "Self".into(),
+                package: "inspection".into(),
+                source: "test".into(),
+                source_line: 1,
+            }])
+            .unwrap();
+        let mut output = catalog.output(Class::Brick, "setColor").unwrap().clone();
+        output.id = "inspection:output/color".into();
+        output.class_name = "CreatorBrick".into();
+        output.package = Some("inspection".into());
+        let catalog = catalog.with_outputs(&[output]).unwrap();
+        let mut world = EventWorld::new(
+            catalog,
+            Bindings {
+                palette_len: 8,
+                ..Default::default()
+            },
+            Limits::default(),
+        )
+        .unwrap();
+        world
+            .install_brick(program(1, None, Target::Slot(Slot::SelfBrick)))
+            .unwrap();
+        let mut cx = Trigger::new(id(1), "onActivate", 1);
+        assert!(matches!(
+            world.row_intent(id(1), 0),
+            Some(Intent::Brick(BrickOp::Color(1)))
+        ));
+        assert_eq!(
+            world.row_targets(id(1), &cx, 0).unwrap(),
+            vec![Entity::brick(id(1))]
+        );
+        assert_eq!(world.pending(), 0, "inspection cannot schedule effects");
+        world
+            .install_brick(program(1, None, Target::Slot(Slot::Player)))
+            .unwrap_err(); // Brick-only output cannot lie about class.
+        let mut missing = program(1, None, Target::Slot(Slot::Player));
+        missing.rows[0].output = "kill".into();
+        missing.rows[0].params.clear();
+        world.install_brick(missing).unwrap();
+        assert!(world.row_targets(id(1), &cx, 0).unwrap().is_empty());
+        world
+            .install_brick(program(1, None, Target::Named("marker".into())))
+            .unwrap();
+        world
+            .install_brick(program(2, Some("Marker"), Target::Slot(Slot::SelfBrick)))
+            .unwrap();
+        assert_eq!(
+            world.row_targets(id(1), &cx, 0).unwrap(),
+            vec![Entity::brick(id(2))]
+        );
+        world
+            .install_brick(program(1, None, Target::Derived("CreatorSelf".into())))
+            .unwrap();
+        assert_eq!(
+            world.row_targets(id(1), &cx, 0).unwrap(),
+            vec![Entity::brick(id(1))]
+        );
+        cx.source = id(99);
+        assert!(world.row_targets(id(1), &cx, 0).is_err());
+        assert_eq!(world.pending(), 0);
     }
 }

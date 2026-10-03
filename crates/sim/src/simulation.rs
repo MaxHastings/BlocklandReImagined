@@ -1575,7 +1575,10 @@ impl Simulation {
         nearest: &mut Option<Hit>,
         accept: impl Fn(BrickId, &Brick) -> bool,
     ) -> Result<()> {
-        let mut tested = std::collections::HashSet::new();
+        // This set is only a per-ray duplicate guard for bricks registered in
+        // more than one spatial bucket. A fast non-cryptographic hasher keeps
+        // sight queries from paying for randomized SipHash on every candidate.
+        let mut tested = rustc_hash::FxHashSet::default();
         for (bucket, exit) in
             grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
         {
@@ -1583,10 +1586,11 @@ impl Simulation {
                 if !tested.insert(id) {
                     continue;
                 }
-                if !accept(id, &self.state().bricks[&id]) {
+                let brick = &self.state().bricks[&id];
+                if !accept(id, brick) {
                     continue;
                 }
-                self.ray_brick(id, origin, direction, max_distance, nearest)?;
+                self.ray_brick(id, brick, origin, direction, max_distance, nearest)?;
             }
             if nearest
                 .as_ref()
@@ -1600,12 +1604,14 @@ impl Simulation {
     fn ray_brick(
         &self,
         id: BrickId,
+        brick: &Brick,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
         nearest: &mut Option<Hit>,
     ) -> Result<()> {
-        let brick = &self.state().bricks[&id];
+        // The caller already fetched this brick for the acceptance check;
+        // keep it instead of repeating the persistent world-map lookup.
         // Cheap slab test against the padded grid bounds first.
         let bounds = self.index.bounds(id);
         let low = Vec3::from_array(std::array::from_fn(|a| {

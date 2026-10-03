@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Blockhead Bot",
-  "description": "Adds Blockhead Bot to the Vehicle Spawn brick's list. In its builder's mini-game it arms itself and fights, searches dated sightings shared by allies, and may crew eligible ground vehicles as a driver, gunner or passenger. It can push eligible loose hazards through walking contact and use grabbing tools such as the Gravity Gun. Roles are opportunistic: bots leave human seats alone and abandon unsafe or blocked actions. Bots of the same builder are allies. Outside mini-games it strolls harmlessly near its brick.",
+  "description": "Adds Blockhead Bot to the Vehicle Spawn brick's list. In its builder's mini-game it fights with available weapons and can pursue supported activation and checkpoint rules; Explain saved shows its objective or a reason it cannot plan. It searches dated sightings shared by allies and may crew eligible ground vehicles as a driver, gunner or passenger. It can push eligible loose hazards through walking contact and use grabbing tools such as the Gravity Gun. Roles are opportunistic: bots leave human seats alone and abandon unsafe or blocked actions. Bots of the same builder are allies. Outside mini-games it strolls harmlessly near its brick.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

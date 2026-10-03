@@ -24,6 +24,7 @@ const ROVER: &str = "test:vehicle/survey-rover";
 const CARRIER: &str = "test:vehicle/field-carrier";
 const CHARGED: &str = "test:vehicle/charged-rover";
 const UNARMED: &str = "test:vehicle/utility-chassis";
+const TALL_GUNNER: &str = "test:vehicle/elevated-gunner";
 const CHARGE_TICKS: u64 = 24;
 const CHARGE_STEPS: u8 = 3;
 const ENEMY: Vec3 = Vec3::new(-12.0, 0.05, 8.0);
@@ -47,12 +48,18 @@ fn session(interact: f32) -> Session {
         (CARRIER, [1, 0, 2], [3.0, 1.4, 5.0]),
         (CHARGED, [2, 1, 0], [2.6, 1.0, 4.8]),
         (UNARMED, [2, 1, 0], [2.6, 1.0, 4.8]),
+        (TALL_GUNNER, [0, 1, 2], [3.0, 1.4, 5.0]),
     ] {
         let mut d = bri_vehicles::testing::car();
         let seats = bri_vehicles::testing::tank().seats;
         d.id = id.into();
         d.name = id.into();
         d.seats = order.map(|i| seats[i].clone()).into();
+        if id == TALL_GUNNER {
+            // Ground-level players can board the lower passenger seat, but
+            // the gunner is too high to click directly. Players use Next Seat.
+            d.seats[2].transform.position[1] = 6.0;
+        }
         d.bounds_min = [-dimensions[0] * 0.5, 0.4, -dimensions[2] * 0.5];
         d.bounds_max = [
             dimensions[0] * 0.5,
@@ -96,7 +103,7 @@ fn session(interact: f32) -> Session {
     kinds[0].behaviours.insert("interact".into(), interact);
     s.set_vehicle_pack(pack, kinds).unwrap();
     s.set_tool_catalog(ToolCatalog {
-        vehicles: [fixture::BOT, ROVER, CARRIER, CHARGED, UNARMED]
+        vehicles: [fixture::BOT, ROVER, CARRIER, CHARGED, UNARMED, TALL_GUNNER]
             .map(String::from)
             .into(),
         vehicle_bricks: [fixture::PLATE.into()].into(),
@@ -321,6 +328,34 @@ impl Game {
             self.diagnostics()
         );
     }
+}
+
+#[test]
+fn a_passenger_switches_to_the_elevated_empty_gunner_seat() {
+    let mut g = Game::new(TALL_GUNNER, 2, 1.0, false);
+    let (driver, gunner) = g.crew(0, 2);
+    assert_eq!(
+        g.occupants()[1],
+        None,
+        "passenger moved into the useful role"
+    );
+    assert_ne!(driver, gunner);
+    let mut fired = false;
+    for _ in 0..120 * 8 {
+        g.steps(1);
+        if g.s
+            .weapon_view()
+            .fired()
+            .any(|shot| shot.source.0 == gunner)
+        {
+            fired = true;
+            break;
+        }
+    }
+    assert!(
+        fired,
+        "the promoted gunner must use the actual mounted weapon"
+    );
 }
 
 #[test]

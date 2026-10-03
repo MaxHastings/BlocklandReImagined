@@ -1020,6 +1020,7 @@ impl App {
                     bri_sim::session::AdminData::BrickGroups(_)
                         | bri_sim::session::AdminData::BanList { .. }
                         | bri_sim::session::AdminData::AutoRoles(_)
+                        | bri_sim::session::AdminData::Maps(_)
                 ) {
                     ensure!(
                         reply.snapshot.revision >= self.ui.core.admin.revision,

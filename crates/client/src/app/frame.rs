@@ -1193,6 +1193,7 @@ impl App {
                 &self.controls,
                 presented,
                 building,
+                self.motion.collision(),
                 &self.vehicle_assets,
                 &self.vehicles,
                 view,

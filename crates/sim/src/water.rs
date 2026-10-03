@@ -59,8 +59,10 @@ pub fn deepest(waters: &[Water], feet: [f32; 3], height: f32) -> Option<(usize, 
 pub fn swim_point(water: &Water, point: Vec3, height: f32) -> Vec3 {
     let mut to = point;
     if water.footprint(to.x, to.z).is_none() && water.repeat_period.is_none() {
-        to.x = to.x.clamp(water.min[0] + 0.5, water.max[0] - 0.5);
-        to.z = to.z.clamp(water.min[2] + 0.5, water.max[2] - 0.5);
+        for axis in [0, 2] {
+            let inset = 0.5_f32.min((water.max[axis] - water.min[axis]) * 0.5);
+            to[axis] = to[axis].clamp(water.min[axis] + inset, water.max[axis] - inset);
+        }
     }
     let low = water.min[1] + 0.1;
     to.y = to.y.clamp(low, (water.max[1] - height - 0.1).max(low));
@@ -169,6 +171,32 @@ pub fn froth_rate(speed: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swim_target_uses_valid_insets_in_thin_authored_water() {
+        for (width, depth) in [(0.25, 0.5), (1.0, 1.0), (4.0, 6.0)] {
+            let water = Water::volume([2.0, -4.0, 3.0], [2.0 + width, 4.0, 3.0 + depth]);
+            water.validate().unwrap();
+            for outside in [Vec3::new(-20., 0., -20.), Vec3::new(20., 0., 20.)] {
+                let target = swim_point(&water, outside, 2.65);
+                assert!(target.is_finite());
+                assert!(water.footprint(target.x, target.z).is_some());
+                for axis in [0, 2] {
+                    assert!((water.min[axis]..=water.max[axis]).contains(&target[axis]));
+                }
+                if width >= 1.0 && depth >= 1.0 {
+                    assert_eq!(
+                        target.x,
+                        outside.x.clamp(water.min[0] + 0.5, water.max[0] - 0.5)
+                    );
+                    assert_eq!(
+                        target.z,
+                        outside.z.clamp(water.min[2] + 0.5, water.max[2] - 0.5)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn splash_needs_arming_speed_and_partial_coverage() {
