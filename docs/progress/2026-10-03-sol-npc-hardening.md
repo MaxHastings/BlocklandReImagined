@@ -733,3 +733,12 @@ provenance/rebuild and a new provider-enabled activity pilot precede long runs.
 Without authored flag sources these city fights measure empty-offer discovery,
 not populated CarryReturn action grounding. Imported CTF/package acceptance
 proves that separate actual-control path; total VM duration is not a query count.
+
+The first explicit-provider attempt correctly refused before timing because the
+new selector incorrectly guessed package version1.0.0; installed Slayer is4.1.5,
+so ordinary validation excluded it and its dependents. No provider-enabled
+measurement was recorded. The selector now reads installed `PackageInfo`,
+checks its exact ID, uses its actual version and canonical `side()` derivation,
+then retains ordinary loader validation/companion following and the loaded
+provider requirement. Root approved the narrow correction and checkpoint
+rebuild; snapshot and production code remain unchanged.

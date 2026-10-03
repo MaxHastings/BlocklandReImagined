@@ -629,10 +629,20 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
         // declared server companions follow through the ordinary loader below.
         for id in ["gamemode_slayer", "gamemode_slayer_ctf"] {
             if !packages.packages.iter().any(|p| p.id == id) {
+                let manifest: bri_package::library::PackageInfo = serde_json::from_slice(
+                    &std::fs::read(root.join(format!("addons/{id}/package.json")))?,
+                )?;
+                ensure!(
+                    manifest.id == id,
+                    "selected package manifest must identify {id}"
+                );
+                let side = manifest.side().ok_or_else(|| {
+                    anyhow::anyhow!("selected package {id} has mixed loading sides")
+                })?;
                 packages.packages.push(bri_package::packages::PackageEntry {
                     id: id.into(),
-                    version: "1.0.0".into(),
-                    side: bri_package::packages::Side::Shared,
+                    version: manifest.version,
+                    side,
                     dir: format!("addons/{id}"),
                     role: None,
                 });
