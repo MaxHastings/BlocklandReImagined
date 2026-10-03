@@ -466,8 +466,8 @@ impl Catalog {
         }
         let (class, output) = self.row_output(&row.input, &row.target, &row.output)?;
         ensure!(
-            class != Class::Projectile || row.conditions.is_empty(),
-            "Projectile reflection actions do not yet support IF conditions"
+            class != Class::Projectile || row.delay_ms > 0 || row.conditions.is_empty(),
+            "Immediate projectile reflection actions do not support IF conditions"
         );
         ensure!(
             row.params.len() == output.params.len(),

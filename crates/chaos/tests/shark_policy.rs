@@ -44,12 +44,13 @@ fn catalog_fixture(declared: bool, watch_all: bool) -> Arc<Catalog> {
         .replace("{{namespace}}", "bot_shark")
         .replace("{{palette|text}}", &serde_json::to_string(palette).unwrap())
         .replace("{{fins|text}}", "\"1 1 1 1\"");
-    script.push_str("\nfn cmd_rest_probe(p, b, on) { rest_bot(b, on); }\n");
+    script.push_str("\nfn cmd_rest_probe(p, b, on) { rest_bot(b, on); }\nfn cmd_harm_probe(p, b) { damage(b, 100.0, p); }\n");
     let behaviour = std::fs::read_to_string(source.join("behaviour.json"))
         .unwrap()
         .replace("{{namespace}}", "bot_shark");
     let mut behaviour: serde_json::Value = serde_json::from_str(&behaviour).unwrap();
-    behaviour["commands"] = json!([{"name":"rest_probe","args":["int","bool"]}]);
+    behaviour["commands"] =
+        json!([{"name":"rest_probe","args":["int","bool"]},{"name":"harm_probe","args":["int"]}]);
     if watch_all {
         behaviour["on_brick"] = json!(["*"]);
     }
@@ -166,6 +167,7 @@ impl Policy {
             state: Namespace {
                 global: BTreeMap::from([
                     ("grabs".into(), json!({})),
+                    ("restarts".into(), json!({})),
                     ("known".into(), json!({"1":{"white":true,"cool":false}})),
                 ]),
                 ..Default::default()
@@ -346,7 +348,116 @@ fn a_large_hit_releases_after_the_short_capture_grace() {
         true,
     );
     assert!(ops.iter().any(|o| matches!(o, Op::UnmountObject(_))));
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::RestBot(b) if !b.rest)),
+        "harm release keeps the already-resting holder asleep"
+    );
     assert_eq!(p.state.global["grabs"], json!({}));
+    assert_eq!(p.state.global["restarts"]["1"]["at"], 264);
+    p.snapshot.players[0].mount = None;
+    p.snapshot.tick = 263;
+    assert!(!p.capture().iter().any(|o| matches!(o, Op::MountObject(_))));
+    assert!(p.call("on_tick", vec![], true).is_empty());
+    p.snapshot.tick = 264;
+    let ops = p.call("on_tick", vec![], true);
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::RestBot(b) if b.bot == 1 && !b.rest))
+    );
+    assert_eq!(p.state.global["restarts"], json!({}));
+    p.snapshot.players[0].mounted = false;
+    assert!(p.capture().iter().any(|o| matches!(o, Op::MountObject(_))));
+}
+
+#[test]
+fn interrupted_restart_is_cancelled_by_lifecycle_identity_and_permission_changes() {
+    for scenario in 0..15 {
+        let mut p = Policy::new();
+        p.capture();
+        p.snapshot.players[0].mount = Some(1);
+        p.snapshot.tick = 24;
+        let info = bri_package_runtime::rhai::Map::from_iter([
+            ("kind".into(), Dynamic::from("weapon")),
+            ("type".into(), Dynamic::from("Gun")),
+        ]);
+        p.call(
+            "on_damage",
+            vec![1_i64.into(), 2_i64.into(), 50.0.into(), info.into()],
+            true,
+        );
+        assert_eq!(p.state.global["restarts"]["1"]["at"], 264);
+        p.snapshot.tick = 25;
+        let ops = match scenario {
+            0 => p.call("on_death", vec![1_i64.into(), ().into()], true),
+            1 => p.call("on_death", vec![2_i64.into(), ().into()], true),
+            2 => p.call("on_leave", vec![1_i64.into()], true),
+            3 => p.call("on_spawn", vec![1_i64.into()], true),
+            4 => p.call("on_spawn", vec![2_i64.into()], true),
+            5..=7 => {
+                let e = bri_package_runtime::rhai::Map::from_iter([
+                    (
+                        "kind".into(),
+                        Dynamic::from(match scenario {
+                            5 => "reset",
+                            6 => "team",
+                            _ => "configured",
+                        }),
+                    ),
+                    ("game".into(), 7_i64.into()),
+                    ("player".into(), 2_i64.into()),
+                ]);
+                p.call("on_minigame", vec![e.into()], true)
+            }
+            8 => {
+                p.snapshot.bots[0].minigame = Some(8);
+                p.call("on_tick", vec![], true)
+            }
+            9 => {
+                p.snapshot.players[0].minigame = Some(8);
+                p.call("on_tick", vec![], true)
+            }
+            10 => p.call("on_tick", vec![], false),
+            11 => {
+                p.snapshot.bots[0].alive = false;
+                p.call("on_tick", vec![], true)
+            }
+            12 => {
+                p.snapshot.players.clear();
+                p.call("on_tick", vec![], true)
+            }
+            14 => {
+                p.snapshot.bots[0].model = "v20.shape.m".into();
+                p.call("on_tick", vec![], true)
+            }
+            _ => {
+                p.snapshot.bots[0].bot_kind = "foreign:bot/borrower".into();
+                p.call("on_tick", vec![], true)
+            }
+        };
+        assert_eq!(p.state.global["restarts"], json!({}), "scenario {scenario}");
+        assert!(
+            !ops.iter().any(|o| matches!(o, Op::Damage(_))),
+            "scenario {scenario}"
+        );
+        if scenario == 13 {
+            assert!(
+                !ops.iter().any(|o| matches!(o, Op::RestBot(_))),
+                "foreign kinds receive no rest operation"
+            );
+        } else {
+            assert!(
+                ops.iter()
+                    .any(|o| matches!(o, Op::RestBot(b) if b.bot == 1 && !b.rest)),
+                "scenario {scenario}"
+            );
+        }
+        p.snapshot.bots.clear();
+        p.snapshot.tick = 264;
+        assert!(
+            p.call("on_tick", vec![], true).is_empty(),
+            "no stale deferred wake: scenario {scenario}"
+        );
+    }
 }
 
 /// Actual actor approach with the authored collision dimensions. The scene
@@ -369,6 +480,103 @@ fn an_authored_large_shark_reaches_a_human_and_finishes_a_real_capture() {
     );
     kind.out_of_water_seconds = Some(9.0);
     physical_capture(catalog(), pack.bots.remove(0), 1);
+}
+
+#[test]
+fn real_harm_releases_the_rider_and_delays_the_brain_restart() {
+    use bri_sim::{
+        player::MoveInput,
+        session::{Command, PackageArg, PackageCommand},
+    };
+    let mut kind = bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots
+    .remove(0);
+    kind.id = "bot_shark:bot/sharkholebot".into();
+    kind.name = "Cool Shark".into();
+    kind.body = Some("bot_shark:archetype/sharkholebot".into());
+    kind.moves = bri_sim::bot_kind::Moves::Swim;
+    kind.side = Some("shark".into());
+    kind.melee = Some(
+        serde_json::from_value(json!({"damage":35,"reach":2.5,"seconds":1,"name":"Bite"})).unwrap(),
+    );
+    let (mut s, human) = physical_scene(catalog(), kind);
+    for sequence in 11..=2_000 {
+        s.movement(human, sequence, MoveInput::default()).unwrap();
+        s.step().unwrap();
+        if s.vitals()[&human].ride.is_some() {
+            break;
+        }
+    }
+    assert!(
+        s.vitals()[&human].ride.is_some(),
+        "ordinary approach must first capture the swimmer"
+    );
+    let bot = s.names().keys().copied().find(|id| s.is_bot(*id)).unwrap();
+    for _ in 0..24 {
+        s.step().unwrap();
+    }
+    let interrupted_at = s.simulation().state().tick;
+    let health_before = s.vitals()[&bot].health;
+    // This fixture command submits ordinary attributed damage; it never sets
+    // the brain, mount relationship or package state to manufacture a release.
+    // Indirect harm is scaled to 75% on a crouched swimmer before the hook;
+    // 100 raw damage remains above the source's 50-point release threshold.
+    s.command(
+        human,
+        3,
+        Command::Package(PackageCommand {
+            package: PACKAGE.into(),
+            command: "harm_probe".into(),
+            args: vec![PackageArg::Int(bot as i64)],
+        }),
+    )
+    .unwrap();
+    assert!(
+        health_before - s.vitals()[&bot].health >= 50.0 && s.is_alive(bot),
+        "nonlethal harm passed the capture grace, canonical scaling and source release threshold"
+    );
+    assert!(
+        s.vitals()[&human].ride.is_none(),
+        "harm unmounts the actual rider"
+    );
+    while s.simulation().state().tick < interrupted_at + 240 {
+        s.step().unwrap();
+        assert!(
+            s.vitals()[&human].ride.is_none(),
+            "no early recapture during the two-second pause"
+        );
+        let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+        assert!(
+            thought.goal.is_none() && thought.visible.is_none(),
+            "rest retains ordinary zero controls until restart: {thought:?}"
+        );
+    }
+    // Session::step runs controller(t), package hooks(t), then advances the
+    // public simulation tick to t+1. At public deadline, the most recent hook
+    // therefore observed deadline-1. This step runs the last resting control
+    // at deadline and then wakes via the exact-deadline package hook.
+    s.step().unwrap();
+    let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+    assert!(
+        thought.goal.is_none() && thought.visible.is_none() && s.vitals()[&human].ride.is_none(),
+        "the deadline hook follows its resting controller phase: {thought:?}"
+    );
+    // The very next controller turn, at deadline+1, must observe the swimmer
+    // again without injected targets or an arbitrary perception grace period.
+    s.step().unwrap();
+    let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+    assert!(
+        thought.visible == Some(human) || s.vitals()[&human].ride.is_some(),
+        "the real brain resumes from observed controls after its deadline: {thought:?}"
+    );
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:?}",
+        s.package_diagnostics()
+    );
 }
 
 fn physical_capture(catalog: Arc<Catalog>, kind: bri_sim::bot_kind::BotKind, max_lives: u64) {
@@ -744,11 +952,35 @@ fn a_smaller_shark_body_remains_a_valid_victim_without_owning_its_kind() {
     victim.bot_kind = "unfamiliar:bot/small".into();
     victim.scale = 0.4;
     p.snapshot.bots.push(victim);
+    let ops = p.capture();
     assert!(
-        p.capture()
-            .iter()
+        ops.iter()
             .any(|o| matches!(o, Op::MountObject(m) if m.node == 3))
     );
+    assert!(ops.iter().any(|o| matches!(o, Op::PlayThread(t) if t.player == 1 && t.thread == 1 && t.sequence == "biteReady")));
+    assert!(ops.iter().any(|o| matches!(o, Op::PlayThread(t) if t.player == 2 && t.thread == 0 && t.sequence == "biteFix")));
+    assert!(
+        !ops.iter()
+            .any(|o| matches!(o, Op::PlayThread(t) if t.thread == 2))
+    );
+    p.snapshot.bots[1].mount = Some(1);
+    p.snapshot.bots[1].mounted = true;
+    let ops = p.call("on_leave", vec![2_i64.into()], true);
+    assert!(ops.iter().any(
+        |o| matches!(o, Op::PlayThread(t) if t.player == 1 && t.thread == 1 && t.sequence == "root")
+    ));
+    assert!(ops.iter().any(
+        |o| matches!(o, Op::PlayThread(t) if t.player == 2 && t.thread == 0 && t.sequence == "root")
+    ));
+    assert!(
+        !ops.iter()
+            .any(|o| matches!(o, Op::PlayThread(t) if t.thread == 2))
+    );
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::UnmountObject(u) if u.rider == 2))
+    );
+    assert_eq!(p.state.global["grabs"], json!({}));
 }
 
 #[test]

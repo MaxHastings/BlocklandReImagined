@@ -997,6 +997,42 @@ impl WeaponsWorld {
     pub fn projectiles(&self) -> impl Iterator<Item = &Projectile> {
         self.projectiles.values()
     }
+    pub fn projectile(&self, id: u64) -> Option<&Projectile> {
+        self.projectiles.get(&id)
+    }
+    /// A scheduled output on the still-live original projectile. Bounce uses
+    /// the activation's normal and current velocity; normalized redirect uses
+    /// its current speed. Retired IDs are never substituted.
+    pub fn respond_projectile(
+        &mut self,
+        id: u64,
+        normal: Vec3,
+        response: ContactResponse,
+    ) -> Result<bool> {
+        if !self.projectiles.contains_key(&id) {
+            return Ok(false);
+        }
+        match response {
+            ContactResponse::Delete => Ok(self.remove_projectile(id)),
+            ContactResponse::Explode => {
+                ensure!(
+                    self.explosions.len() < MAX_EXPLOSIONS_PER_TICK && self.events.len() < 8192,
+                    "Explosion budget for this tick"
+                );
+                // Explicit explosions already run at the next weapon phase.
+                let p = self.projectiles.remove(&id).unwrap();
+                self.explosions.push(p);
+                self.events.push(Event::Removed { projectile: id });
+                Ok(true)
+            }
+            ContactResponse::Bounce(_) | ContactResponse::Redirect { .. } => {
+                let p = self.projectiles.get_mut(&id).unwrap();
+                self.events.push(redirect_projectile(p, normal, response)?);
+                Ok(true)
+            }
+            ContactResponse::Continue => anyhow::bail!("No projectile output"),
+        }
+    }
     /// [`fall_per_tick`] of every projectile that falls, by definition.
     pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
         self.pack
@@ -3620,17 +3656,9 @@ impl WeaponsWorld {
                     self.explode(p, &d, q, Some(normal));
                     return false;
                 }
-                response => match redirected_velocity(&contact, response) {
-                    Ok(velocity) => {
-                        p.velocity = velocity;
-                        p.position += velocity.normalize_or_zero() * 0.002;
-                        p.age = 0;
-                        p.stuck = false;
-                        self.events.push(Event::Bounced {
-                            projectile: p.id,
-                            position: p.position,
-                            velocity,
-                        });
+                response => match redirect_projectile(p, contact.normal, response) {
+                    Ok(event) => {
+                        self.events.push(event);
                         return true;
                     }
                     Err(error) => self.events.push(Event::Diagnostic {
@@ -4575,11 +4603,28 @@ mod persistence;
 pub use persistence::{SAVE_SCHEMA, WeaponsSave};
 
 /// Source Bounce/Redirect preserve incident speed when normalized and cap new speed at 200.
+fn redirect_projectile(
+    p: &mut Projectile,
+    normal: Vec3,
+    response: ContactResponse,
+) -> Result<Event> {
+    let velocity = response_velocity(p.velocity, normal, response)?;
+    p.velocity = velocity;
+    p.position += velocity.normalize_or_zero() * 0.002;
+    p.age = 0;
+    p.stuck = false;
+    Ok(Event::Bounced {
+        projectile: p.id,
+        position: p.position,
+        velocity,
+    })
+}
 pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse) -> Result<Vec3> {
+    response_velocity(impact.velocity, impact.normal, response)
+}
+fn response_velocity(current: Vec3, normal: Vec3, response: ContactResponse) -> Result<Vec3> {
     ensure!(
-        impact.velocity.is_finite()
-            && impact.normal.is_finite()
-            && impact.normal.length_squared() > 0.1,
+        current.is_finite() && normal.is_finite() && normal.length_squared() > 0.1,
         "Invalid impact"
     );
     let velocity = match response {
@@ -4588,8 +4633,8 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
                 factor.is_finite() && factor.abs() <= 1000.0,
                 "Invalid bounce factor"
             );
-            let normal = impact.normal.normalize();
-            (impact.velocity - normal * impact.velocity.dot(normal) * 2.0) * factor
+            let normal = normal.normalize();
+            (current - normal * current.dot(normal) * 2.0) * factor
         }
         ContactResponse::Redirect { vector, normalized } => {
             ensure!(
@@ -4597,7 +4642,7 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
                 "Invalid redirect vector"
             );
             if normalized {
-                vector.normalize_or_zero() * impact.velocity.length()
+                vector.normalize_or_zero() * current.length()
             } else {
                 vector
             }

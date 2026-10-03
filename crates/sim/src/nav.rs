@@ -30,6 +30,8 @@ use std::collections::BinaryHeap;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
+/// Horizontal distance within which a grid node completes its search.
+pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 /// New ground samples all bots together may take in one tick.
 pub const SAMPLES_PER_TICK: u32 = 96;
 /// Nodes all searches together expand in one tick, remembered ground or not.
@@ -510,7 +512,7 @@ impl Search {
     }
     fn arrived(&self, node: Node) -> bool {
         let d = node.feet() - self.goal;
-        Vec3::new(d.x, 0.0, d.z).length() <= CELL * 1.5 && d.y.abs() <= 2.0
+        Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS && d.y.abs() <= 2.0
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {

@@ -9,6 +9,8 @@
 //! `BRI_BATTLE_REQUIRE_ACTIVE=1` enable the sustained hardening diagnostic.
 //! `BRI_BATTLE_RANGED_SIDES=1` uses the same published Blockhead policy for
 //! both sides, with two ordinary creator owners joined to the MiniGame.
+//! `BRI_BATTLE_BRICK_DAMAGE=0` explicitly disables ordinary MiniGame brick
+//! damage for a stable-world diagnostic; the default remains enabled.
 //! Default retains the stock Blockhead-versus-converting-Zombie encounter.
 //! `BRI_BATTLE_RELOADS=1..4` repeats data/collision/session construction in the
 //! same process, reporting sampled RSS. This is not a network map-change test.
@@ -160,6 +162,9 @@ fn report_auxiliary(phase: &str, label: &str, samples: &mut [u128]) {
 
 fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
     eprintln!("phase_begin={phase} ticks={ticks}");
+    // Existing VM telemetry is included in Session::step; draining outside
+    // timing gives this phase's totals without counting earlier setup calls.
+    drop(s.take_package_script_time());
     let mut result = Profile::default();
     let mut health = BTreeMap::new();
     let mut counters = BTreeMap::new();
@@ -264,6 +269,37 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
     if let Some(rss) = resident_kib() {
         result.rss_kib.push(rss);
     }
+    let package_vm_ms: BTreeMap<_, _> = s
+        .take_package_script_time()
+        .into_iter()
+        .map(|(package, duration)| (package, duration.as_secs_f64() * 1000.0))
+        .collect();
+    eprintln!(
+        "{phase} package_vm_ms={package_vm_ms:?}; included_in_step=true; excludes_native_snapshot_state_and_query_setup=true"
+    );
+    let snapshot = s.snapshot();
+    eprintln!(
+        "{phase} phase_end bricks={} vehicle_spawners={} minigames={:?}",
+        snapshot.world.bricks.len(),
+        snapshot
+            .world
+            .bricks
+            .values()
+            .filter(|b| b.vehicle.is_some())
+            .count(),
+        s.minigame_views(),
+    );
+    let vitals = s.vitals();
+    for thought in s.bot_thoughts() {
+        eprintln!(
+            "{phase} phase_end bot={} state={:?} vitals={:?} tools={:?} mounts={:?} thought={thought:?}",
+            thought.bot,
+            snapshot.players.iter().find(|p| p.owner == thought.bot),
+            vitals.get(&thought.bot),
+            snapshot.tools.get(&thought.bot),
+            snapshot.weapons.images.get(&thought.bot),
+        );
+    }
     if std::env::var("BRI_BATTLE_REQUIRE_ACTIVE").is_ok_and(|v| v == "1")
         && matches!(
             phase,
@@ -296,6 +332,7 @@ fn profile(s: &mut Session, phase: &str, ticks: usize) -> Result<()> {
 
 fn loadout(s: &mut Session, owner: u64, command_id: u64, item: &str) -> Result<f64> {
     let settings = bri_minigames::Settings {
+        brick_damage: brick_damage(),
         loadout: [Some(item.to_owned()), None, None, None, None],
         ..Default::default()
     };
@@ -443,6 +480,7 @@ fn run_battle(
 
     profile(&mut s, "quiet wander", 120 * 5)?;
     let gun = bri_minigames::Settings {
+        brick_damage: brick_damage(),
         loadout: [Some("v20.weapon.gunitem".into()), None, None, None, None],
         ..Default::default()
     };
@@ -484,6 +522,7 @@ fn run_battle(
     }
     if std::env::var("BRI_BATTLE_MIXED").is_ok_and(|v| v == "1") {
         let settings = bri_minigames::Settings {
+            brick_damage: brick_damage(),
             loadout: [
                 Some("v20.weapon.gunitem".into()),
                 Some("v20.weapon.rocketlauncheritem".into()),
@@ -509,6 +548,10 @@ fn stop_after(phase: &str) -> bool {
 
 fn ranged_sides() -> bool {
     std::env::var("BRI_BATTLE_RANGED_SIDES").is_ok_and(|v| v == "1")
+}
+
+fn brick_damage() -> bool {
+    !std::env::var("BRI_BATTLE_BRICK_DAMAGE").is_ok_and(|v| v == "0")
 }
 
 fn saved_world(root: &std::path::Path, wanted: &str) -> Result<Option<World>> {
@@ -600,6 +643,34 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
         .find(|(_, name)| name == "Zombie")
         .map(|(id, _)| id.clone())
         .expect("Zombie enabled");
+    let query_providers = initial
+        .setup
+        .add_ons
+        .as_ref()
+        .map(|host| {
+            host.server
+                .behaviours()
+                .filter(|(_, behaviour)| behaviour.bot_objectives)
+                .map(|(package, _)| package.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let objective_weights: Vec<_> = initial
+        .setup
+        .content
+        .bot_kinds
+        .iter()
+        .filter(|kind| kind.id == blockhead || kind.id == zombie)
+        .map(|kind| {
+            (
+                kind.id.clone(),
+                kind.behaviours.get("objective").copied().unwrap_or(0.0),
+            )
+        })
+        .collect();
+    eprintln!(
+        "loaded_objective_query_providers={query_providers:?} actual_bot_objective_weights={objective_weights:?}; populated_package_objective_actions_not_implied=true"
+    );
     let plate = "v20/brick/brickvehiclespawndata".to_owned();
     let mesh = &initial.session.simulation().definitions.entries[&plate].mesh;
     let size = [

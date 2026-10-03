@@ -69,8 +69,9 @@ v20's spawn brick bots have no brain). Blockhead Bots from Vehicle Spawn
 bricks stroll near their brick and walk round and over builds to get where
 they are going. In their builder's mini-game they arm themselves and fight:
 they turn their aim like a person, keep the distance their weapon wants,
-turn on whoever hurts them and search where they last saw you. One
-builder's bots are on one side.
+turn on whoever hurts them and search where they last saw you. Explicit teams
+in the same MiniGame determine allies and opponents; unassigned bots fall back
+to their builder and kind policy.
 Allied ground crews coordinate driver, gunner and passenger seats, share dated
 observations and abandon actions that stop making progress. Human occupants
 keep their seats. Bots and players push loose physical bodies by walking into
@@ -122,18 +123,21 @@ colour and flash settings, Auto Light, the two steering settings, Render
 Items and Jets in first person, and all 81 of v20's remappable actions
 with its default keys. Windows move, resize, minimize and maximize where
 v20's did, and the F1 help pages keep v20's headings and coloured keys.
+Screenshots default to high-quality JPEG; Options → Advanced → Gui Options
+also offers lossless PNG. The host's Music Files selection controls the
+wrench's offered music, including after reconnecting or changing maps.
+
+**Saving while visiting.** Guests can save the server's build, including
+events and brick ownership. Loading a build remains a host/admin action.
+
+**Projectile events.** Delete, bounce, redirect and explode work through delayed
+rows on the original live projectile. An impact or lifetime can retire it before
+the row becomes due; that row then skips rather than affecting a newer shot.
 
 ## v20: partly done
 
 - **Graphics quality.** v20's separate lighting, particle, texture,
   physics and brick FX radios are replaced by Low, Medium and High presets.
-- **Event outputs.** Projectile outputs on delayed event rows aren't
-  applied yet. The immediate ones work.
-- **Music Files.** The host's choice limits music bricks, but a player
-  joining still sees every track listed in the wrench.
-- **Saving on someone else's server.** Guests can't save the host's
-  world. v20's warning text for this isn't shown.
-- **Screenshots** are always PNG.
 
 ## v20: still missing
 

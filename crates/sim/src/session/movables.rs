@@ -359,6 +359,31 @@ impl Session {
     pub fn held_by(&self, player: OwnerId) -> Option<ObjectRef> {
         self.movables.holds.get(&player).map(|h| h.target)
     }
+    /// Derived native grip geometry for bot controls. Portal-transformed holds
+    /// require an executor that understands that transform and are excluded.
+    pub(in crate::session) fn bot_hold_geometry(
+        &self,
+        player: OwnerId,
+    ) -> Option<(ObjectRef, f32, Vec3, f32)> {
+        let hold = self.movables.holds.get(&player)?;
+        if !hold.through.abs_diff_eq(Affine3A::IDENTITY, 1e-5) {
+            return None;
+        }
+        Some((
+            hold.target,
+            hold.distance,
+            self.hold_point_of(hold.target, hold.anchor)?,
+            self.object_radius(hold.target),
+        ))
+    }
+    /// Capability feasibility from the native hold's force/acceleration limits.
+    /// A provider can reject an impossible lift without its own integrator.
+    pub(in crate::session) fn bot_hold_can_lift(&self, target: ObjectRef, force: f32) -> bool {
+        force.is_finite()
+            && force > 0.0
+            && self.target_alive(target)
+            && (force / self.object_mass(target).max(1.0)).min(MAX_HOLD_ACCEL) > GRAVITY
+    }
     pub(super) fn object_held(&self, target: ObjectRef) -> bool {
         self.movables.holds.values().any(|h| h.target == target)
     }

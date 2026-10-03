@@ -40,7 +40,18 @@ fn game(bricks: Vec<Brick>) -> (Session, OwnerId, u64) {
     game_with_spawner(bricks, true)
 }
 fn game_with_spawner(bricks: Vec<Brick>, spawner: bool) -> (Session, OwnerId, u64) {
+    game_with_loadout(bricks, spawner, [None, None, None, None, None], None)
+}
+fn game_with_loadout(
+    bricks: Vec<Brick>,
+    spawner: bool,
+    loadout: [Option<String>; 5],
+    weapons: Option<bri_weapons::Pack>,
+) -> (Session, OwnerId, u64) {
     let mut s = fixture::synthetic().unwrap().session;
+    if let Some(weapons) = weapons {
+        s.set_weapon_pack(weapons).unwrap();
+    }
     s.set_spawn_points(vec![Vec3::new(-40.0, 0.05, -40.0)])
         .unwrap();
     s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())
@@ -93,7 +104,7 @@ fn game_with_spawner(bricks: Vec<Brick>, spawner: bool) -> (Session, OwnerId, u6
         Command::MiniGame(MiniGameRequest::Create {
             color: 0,
             settings: Settings {
-                loadout: [None, None, None, None, None],
+                loadout,
                 ..Default::default()
             },
         }),
@@ -268,7 +279,27 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
             row("onActivate", "winRound", Slot::Player, vec![], vec![], 0),
         ],
     );
-    let (mut s, owner, mut sequence) = game(vec![finish, round_observer()]);
+    // A genuine native attack remains useful throughout the long interruption.
+    // Author small positive damage rather than replacing health/behavior after
+    // setup or relying on an unarmed bot staring at an opponent.
+    let mut weapons = bri_weapons::testing::pack();
+    weapons
+        .projectiles
+        .get_mut(bri_weapons::testing::GUN_PROJECTILE)
+        .unwrap()
+        .damage = 0.01;
+    let (mut s, owner, mut sequence) = game_with_loadout(
+        vec![finish, round_observer()],
+        true,
+        [
+            Some(bri_weapons::testing::GUN_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
+        Some(weapons),
+    );
     let bot = s.bot_thoughts()[0].bot;
     for _ in 0..240 {
         if s.bot_thoughts()[0].objective.is_some() {
@@ -295,6 +326,7 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
     s.command(enemy, 1, Command::MiniGame(MiniGameRequest::Join { game }))
         .unwrap();
     let mut interruptions = 0;
+    let mut actual_hit = false;
     for n in 0..120 * 34 {
         let snapshot = s.snapshot();
         let at = |o| Vec3::from(snapshot.players.iter().find(|p| p.owner == o).unwrap().feet);
@@ -314,6 +346,7 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
         )
         .unwrap();
         ticks(&mut s, owner, &mut sequence, 1);
+        actual_hit |= s.vitals()[&enemy].health < 100.0;
         interruptions += usize::from(
             s.bot_thoughts()
                 .iter()
@@ -323,6 +356,10 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
     assert!(
         interruptions > 120 * 30,
         "did not suspend objective approach for longer than its ordinary 30-second approach budget: {interruptions}"
+    );
+    assert!(
+        actual_hit,
+        "a real native attack must occur during combat preemption"
     );
     assert_eq!(
         s.vitals()[&bot].score,
@@ -777,7 +814,7 @@ fn named_target_fanout_hits_the_grounding_budget_before_per_target_projection() 
     assert!(
         s.bot_thoughts()
             .iter()
-            .any(|t| t.objective_diagnostic == Some("objective planning budget/model limit")),
+            .any(|t| t.objective_diagnostic == Some("objective model/grounding budget exceeded")),
         "fanout diagnosed before projection: {:?}",
         s.bot_thoughts()
     );

@@ -558,8 +558,10 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::MusicTracks(music) => {
-                            self.build.tool_ui.offer_music(&music);
-                            continue;
+                            let Some(update) = self.build.tool_ui.offer_music(&music) else {
+                                continue;
+                            };
+                            update
                         }
                         bri_sim::session::Notice::TempBrickColor(color) => {
                             if let Some(building) = self.build.building.as_mut() {

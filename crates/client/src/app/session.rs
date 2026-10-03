@@ -167,6 +167,9 @@ impl App {
         self.ui.core.admin = Default::default();
         self.ui.core.minigames = Default::default();
         self.build.tool_ui.invalidate();
+        if let Some(update) = self.build.tool_ui.reset_music_offer() {
+            self.ui.apply(update);
+        }
         self.scene.query_source = None;
         self.scene.query_log = None;
         self.net.dialog_epoch = self.net.dialog_epoch.wrapping_add(1);

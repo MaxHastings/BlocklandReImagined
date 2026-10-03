@@ -1048,7 +1048,7 @@ impl Session {
         Ok(())
     }
     /// A blast's or a shot's push: the vehicle's `blast_scale` times it.
-    pub(super) fn blast_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
+    pub(super) fn blast_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) -> bool {
         let scale = self
             .vehicles
             .world
@@ -1056,17 +1056,25 @@ impl Session {
             .and_then(|w| w.definition_of(VehicleId(vehicle)))
             .and_then(|d| d.blast_scale)
             .unwrap_or(1.0);
-        self.push_vehicle(vehicle, position, impulse * scale);
+        self.push_vehicle(vehicle, position, impulse * scale)
     }
-    pub(super) fn push_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
-        if let Some(world) = &mut self.vehicles.world {
-            let _ = world.apply_impulse(
-                &mut self.simulation.physics,
-                VehicleId(vehicle),
-                position.to_array(),
-                impulse.to_array(),
-            );
+    pub(super) fn push_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) -> bool {
+        if !position.is_finite() || !impulse.is_finite() || impulse.length_squared() <= 0.0 {
+            return false;
         }
+        if let Some(world) = &mut self.vehicles.world
+            && world.is_alive(VehicleId(vehicle))
+        {
+            return world
+                .apply_impulse(
+                    &mut self.simulation.physics,
+                    VehicleId(vehicle),
+                    position.to_array(),
+                    impulse.to_array(),
+                )
+                .is_ok();
+        }
+        false
     }
     /// Mounted players drive instead of walking, as their seat allows: the
     /// strafe keys or the mouse steer, a player-type mount faces where its

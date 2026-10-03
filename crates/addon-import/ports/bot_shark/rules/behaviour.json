@@ -11,6 +11,7 @@
   "state": {
     "global": {
       "grabs": {"default": {}, "persist": false},
+      "restarts": {"default": {}, "persist": false},
       "known": {"default": {}, "persist": false}
     }
   }

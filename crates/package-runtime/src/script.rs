@@ -33,6 +33,7 @@ pub enum Budget {
     Think,
     Tick,
     Generate,
+    Objective,
 }
 impl Budget {
     pub fn operations(self) -> u64 {
@@ -42,6 +43,7 @@ impl Budget {
             Self::Tick => 400_000,
             // One chunk is generated per tick, so its budget fits a tick.
             Self::Generate => 400_000,
+            Self::Objective => 20_000,
         }
     }
 }
@@ -563,6 +565,8 @@ struct Invocation {
     written: EntityVars,
     ops: Vec<Op>,
     output: Vec<String>,
+    read_only: bool,
+    write_attempted: bool,
     /// The call's [`World`], valid only while the call runs (see
     /// [`Runtime::call`]).
     ///
@@ -667,6 +671,7 @@ fn id(value: &Dynamic) -> Fallible<u64> {
 }
 fn push(op: Op) -> Fallible<()> {
     with(|i| {
+        permit_write(i)?;
         if i.ops.len() >= MAX_OPS_PER_CALL {
             return fail(format!(
                 "more than {MAX_OPS_PER_CALL} operations in one call"
@@ -675,6 +680,13 @@ fn push(op: Op) -> Fallible<()> {
         i.ops.push(op);
         Ok(())
     })
+}
+fn permit_write(i: &mut Invocation) -> Fallible<()> {
+    if i.read_only {
+        i.write_attempted = true;
+        return fail("objective discovery is read-only");
+    }
+    Ok(())
 }
 fn to_json(value: &Dynamic) -> Fallible<serde_json::Value> {
     let json: serde_json::Value = rhai::serde::from_dynamic(value)?;
@@ -1391,6 +1403,7 @@ fn register_api(engine: &mut Engine) {
     });
     engine.register_fn("set", |key: &str, value: Dynamic| {
         with(|i| {
+            permit_write(i)?;
             i.state.global.insert(key.into(), to_json(&value)?);
             Ok(())
         })
@@ -1409,6 +1422,7 @@ fn register_api(engine: &mut Engine) {
         "set_player",
         |player: Dynamic, key: &str, value: Dynamic| {
             with(|i| {
+                permit_write(i)?;
                 let k = player_key(i, &player)?;
                 let v = to_json(&value)?;
                 i.state.players.entry(k).or_default().insert(key.into(), v);
@@ -1420,6 +1434,7 @@ fn register_api(engine: &mut Engine) {
         "add_player",
         |player: Dynamic, key: &str, amount: Dynamic| {
             with(|i| {
+                permit_write(i)?;
                 let k = player_key(i, &player)?;
                 let values = i.state.players.entry(k).or_default();
                 let current = values
@@ -1457,6 +1472,7 @@ fn register_api(engine: &mut Engine) {
         "entity_set",
         |entity: Dynamic, key: &str, value: Dynamic| {
             with(|i| {
+                permit_write(i)?;
                 let e = id(&entity)?;
                 if !i.written.contains_key(&e) {
                     let Some(vars) = i.entity_vars.get(&e) else {
@@ -3528,6 +3544,9 @@ impl Runtime {
             if behaviour.on_pickup {
                 need("on_pickup".into(), 3, "on_pickup");
             }
+            if behaviour.bot_objectives {
+                need("bot_objectives".into(), 1, "bot_objectives");
+            }
             if behaviour.on_drop {
                 need("on_drop".into(), 3, "on_drop");
             }
@@ -3626,6 +3645,19 @@ impl Runtime {
     }
     /// Run one function. On error nothing of the call is kept.
     pub fn call(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
+        self.call_impl(package, call, false)
+    }
+    /// The same sandbox/budget, with attempted operations/state writes rejected.
+    /// A script cannot hide a denied write by catching its error or restoring it.
+    pub fn query(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
+        self.call_impl(package, call, true)
+    }
+    fn call_impl(
+        &self,
+        package: &str,
+        call: Call<'_>,
+        read_only: bool,
+    ) -> Result<Outcome, Diagnostic> {
         let ast =
             self.scripts.get(package).cloned().ok_or_else(|| {
                 Diagnostic::error("script.none", "package has no script").at(package)
@@ -3653,6 +3685,8 @@ impl Runtime {
                 written: BTreeMap::new(),
                 ops: Vec::new(),
                 output: Vec::new(),
+                read_only,
+                write_attempted: false,
                 world,
                 rays: 0,
             })
@@ -3672,6 +3706,13 @@ impl Runtime {
             .with(|c| std::mem::replace(&mut *c.borrow_mut(), previous))
             .expect("set above");
         LIMIT.with(|l| l.set(previous_limit));
+        if read_only && (invocation.write_attempted || !invocation.output.is_empty()) {
+            return Err(Diagnostic::error(
+                "script.read_only",
+                "objective discovery attempted a state/operation/output write",
+            )
+            .at(package));
+        }
         match result {
             Ok(returned) => Ok(Outcome {
                 returned,
@@ -3748,4 +3789,78 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
         out.push(item);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod objective_queries {
+    use super::*;
+    fn runtime(source: &str) -> Runtime {
+        let mut runtime = Runtime::default();
+        let ast = runtime.engine.compile(source).unwrap();
+        runtime.scripts.insert("unfamiliar".into(), Arc::new(ast));
+        runtime
+            .sources
+            .insert("unfamiliar".into(), "test.rhai".into());
+        runtime
+    }
+    fn call() -> Call<'static> {
+        Call {
+            function: "bot_objectives",
+            args: vec![Dynamic::from_int(1)],
+            budget: Budget::Objective,
+            snapshot: Arc::new(Snapshot::default()),
+            caller: Some(1),
+            aim: None,
+            entity: None,
+            state: Namespace {
+                global: [("counter".into(), serde_json::json!(0))].into(),
+                ..Default::default()
+            },
+            entity_vars: Arc::new(EntityVars::default()),
+            world: None,
+        }
+    }
+    #[test]
+    fn read_only_discovery_can_observe_but_never_commit() {
+        let runtime = runtime("fn bot_objectives(p) { get(\"counter\") }");
+        let before = call().state;
+        let result = runtime.query("unfamiliar", call()).unwrap();
+        assert_eq!(result.returned.as_int().unwrap(), 0);
+        crate::bot_objectives::read_only(&before, &result).unwrap();
+    }
+    #[test]
+    fn state_operations_and_output_are_denied_even_if_caught() {
+        for write in [
+            "set(\"counter\", 1)",
+            "set_player(p, \"counter\", 1)",
+            "add_player(p, \"counter\", 1)",
+            "entity_set(1, \"counter\", 1)",
+            "add_score(p, 1)",
+            "print(\"side effect\")",
+        ] {
+            let runtime = runtime(&format!(
+                "fn bot_objectives(p) {{ try {{ {write}; }} catch(e) {{ }} [] }}"
+            ));
+            assert!(runtime.query("unfamiliar", call()).is_err(), "{write}");
+        }
+    }
+    #[test]
+    fn restoring_state_is_still_a_denied_attempt_and_normal_calls_keep_working() {
+        let guarded = runtime(
+            "fn bot_objectives(p) { try { set(\"counter\", 1); } catch(e) {} try { set(\"counter\", 0); } catch(e) {} [] }",
+        );
+        assert!(guarded.query("unfamiliar", call()).is_err());
+        let normal = runtime("fn bot_objectives(p) { set(\"counter\", 2); [] }");
+        assert_eq!(
+            normal.call("unfamiliar", call()).unwrap().state.global["counter"],
+            serde_json::json!(2)
+        );
+    }
+    #[test]
+    fn objective_queries_use_the_same_bounded_script_work_accounting() {
+        let runtime = runtime("fn bot_objectives(p) { loop {} }");
+        assert!(runtime.query("unfamiliar", call()).is_err());
+        assert!(runtime.last_operations() > 0);
+        assert!(runtime.last_operations() <= Budget::Objective.operations() + 1);
+    }
 }

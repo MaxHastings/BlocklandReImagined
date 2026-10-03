@@ -38,6 +38,9 @@ fn flag(key: &str, value: i64) -> Condition {
     }
 }
 fn session(flags: usize) -> Result<(Session, u64, Vec<u64>)> {
+    // This fixture authors native rule models; it intentionally installs no
+    // package runtime, so it does not measure populated CarryReturn grounding.
+    eprintln!("combined_fixture=synthetic_native_rules declared_package_query_providers=[]");
     let mut s = fixture::synthetic()?.session;
     s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())?;
     s.set_tool_catalog(ToolCatalog {
@@ -160,6 +163,9 @@ fn profile(
     label: &str,
     count: usize,
 ) -> Result<Evidence> {
+    // Phase-local existing VM counters; native query/snapshot setup remains
+    // part of total step time but is outside this VM telemetry.
+    drop(s.take_package_script_time());
     let mut nanos = Vec::with_capacity(count);
     let mut projectiles = BTreeSet::new();
     let mut diagnostic = BTreeMap::<String, usize>::new();
@@ -248,6 +254,14 @@ fn profile(
         .iter()
         .filter_map(|b| s.vitals().get(b).map(|v| v.score))
         .collect::<Vec<_>>();
+    let package_vm_ms: BTreeMap<_, _> = s
+        .take_package_script_time()
+        .into_iter()
+        .map(|(package, duration)| (package, duration.as_secs_f64() * 1000.0))
+        .collect();
+    eprintln!(
+        "{label} package_vm_ms={package_vm_ms:?}; included_in_step=true; excludes_native_snapshot_state_and_query_setup=true"
+    );
     eprintln!(
         "{label}: ticks={count} ms[p50={:.3},p95={:.3},p99={:.3},max={:.3}] max_tick={max_tick} >5ms={} >50ms={} distinct_live_projectile_ids={} fight_controller_ticks={fight_ticks} objective_controller_ticks={objective_ticks} scores={scores:?} diagnostics={diagnostic:?}",
         p(0.5),

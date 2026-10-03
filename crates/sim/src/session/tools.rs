@@ -327,11 +327,31 @@ impl Session {
     /// source references may remain unresolved; new assignments may not.
     pub fn set_tool_catalog(&mut self, catalog: ToolCatalog) -> Result<()> {
         catalog.validate(&self.simulation)?;
+        let music_changed = catalog.sounds != self.tool_catalog.sounds;
         self.tool_catalog = catalog;
         for peer in self.peers.values_mut() {
             peer.inspection = None;
         }
-        self.refresh_event_bindings()
+        self.refresh_event_bindings()?;
+        if music_changed {
+            let owners: Vec<_> = self
+                .peers
+                .keys()
+                .copied()
+                .filter(|owner| !self.bots.is_bot(*owner))
+                .collect();
+            for owner in owners {
+                self.notify_music_tracks(owner);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn notify_music_tracks(&mut self, owner: OwnerId) {
+        self.notify(
+            owner,
+            super::Notice::MusicTracks(self.tool_catalog.sounds.clone()),
+        );
     }
 
     /// Trusted host edit with a player's own brick authority, for scripted

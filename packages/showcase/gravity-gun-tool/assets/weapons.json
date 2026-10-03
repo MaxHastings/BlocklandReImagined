@@ -50,7 +50,14 @@
       "bot": {
         "fire": "hold",
         "reach": 30,
-        "near": 2.5
+        "near": 2.5,
+        "manipulation": {
+          "kind": "hold",
+          "near": 2.5,
+          "reach": 60,
+          "force": 90000,
+          "turn": true
+        }
       },
       "states": [
         {

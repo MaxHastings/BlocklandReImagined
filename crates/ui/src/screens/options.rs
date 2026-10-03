@@ -11,6 +11,35 @@ use crate::ui::Callback;
 use crate::view::EventKind;
 use std::collections::HashMap;
 
+/// Local screenshot encoding. JPEG uses the client's high-quality encoder;
+/// PNG keeps exact pixels. Unset or invalid preferences use JPEG.
+pub const SCREENSHOT_FORMAT: &str = "$pref::Screenshot::Format";
+const SCREENSHOT_FORMAT_MENU: &str = "OptScreenshotFormatMenu";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenshotFormat {
+    Jpeg,
+    Png,
+}
+impl ScreenshotFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpg",
+            Self::Png => "png",
+        }
+    }
+}
+pub fn screenshot_format(prefs: &Prefs) -> ScreenshotFormat {
+    if prefs
+        .str_or(SCREENSHOT_FORMAT, "jpg")
+        .trim()
+        .eq_ignore_ascii_case("png")
+    {
+        ScreenshotFormat::Png
+    } else {
+        ScreenshotFormat::Jpeg
+    }
+}
+
 const FULLSCREEN: &str = "$pref::Video::fullScreen";
 const NO_VSYNC: &str = "$pref::Video::disableVerticalSync";
 const RESOLUTION: &str = "$pref::Video::resolution";
@@ -1138,6 +1167,18 @@ impl Options {
             .map(|&(t, mode)| (t.to_string(), mode))
             .collect();
         s.menu(LIGHTING_MENU, items, lighting(&core.prefs));
+        s.menu(
+            SCREENSHOT_FORMAT_MENU,
+            vec![
+                ("JPEG (high quality)".into(), 0),
+                ("PNG (lossless)".into(), 1),
+            ],
+            if screenshot_format(&core.prefs) == ScreenshotFormat::Png {
+                1
+            } else {
+                0
+            },
+        );
         s.refresh_quality();
         s.refresh_readouts();
         s.pane("Graphics");
@@ -1256,6 +1297,40 @@ impl Options {
                     v.nodes[section].ctrl.extent[1] += grow;
                 }
             }
+        }
+        // Local capture settings belong beside the other GUI preferences,
+        // in Advanced's existing scroll page. Reuse the native popup styling.
+        if let Some(section) = find_section(v, "Gui Options") {
+            let y = v
+                .node(section)
+                .children
+                .iter()
+                .filter(|&&n| v.node(n).state.visible)
+                .map(|&n| v.node(n).ctrl.position[1] + v.node(n).ctrl.extent[1])
+                .max()
+                .unwrap_or(24)
+                + 6;
+            let x = 10;
+            let mut label = ctrl("GuiTextCtrl", "GuiTextProfile", Rect::new(x, y, 100, 22));
+            label.text = Some("Screenshots:".into());
+            let mut menu = v
+                .id("OptGraphicsResolutionMenu")
+                .map(|n| v.node(n).ctrl.clone())
+                .unwrap_or_else(|| {
+                    ctrl(
+                        "GuiPopUpMenuCtrl",
+                        "GuiPopUpMenuProfile",
+                        Rect::new(0, 0, 200, 22),
+                    )
+                });
+            menu.name = Some(SCREENSHOT_FORMAT_MENU.into());
+            menu.position = [x + 110, y];
+            menu.extent = [200, 22];
+            menu.command = None;
+            menu.variable = None;
+            menu.children.clear();
+            v.add(section, label);
+            v.add(section, menu);
         }
         let sections: Vec<NodeId> = v.walk().filter(|&n| is_section(v, n)).collect();
         for &n in &sections {
@@ -1678,6 +1753,14 @@ impl Options {
             let fov = v.round().clamp(FOV_RANGE.0, FOV_RANGE.1);
             self.draft.set(DEFAULT_FOV, fov.to_string());
             self.view.set_num(n, fov);
+        }
+        if let Some(value) = self
+            .view
+            .id(SCREENSHOT_FORMAT_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft
+                .set(SCREENSHOT_FORMAT, if value == 1 { "png" } else { "jpg" });
         }
         if let Some(fps) = self
             .view
@@ -3095,6 +3178,214 @@ mod tests {
         change(&mut s, &mut ui, n);
         click(&mut s, "done", &mut ui);
         assert!(saved_prefs(&mut ui).bool_or(MUTE_IN_BACKGROUND, false));
+    }
+
+    fn screenshot_menu_fit(pack: Rc<Pack>) {
+        for size in [(400, 300), (1024, 768)] {
+            let mut ui = Ui::new(
+                pack.clone(),
+                UiConfig {
+                    size,
+                    scale: None,
+                    platform: Platform::Windows,
+                },
+                Settings {
+                    binds: Some(vec![]),
+                    ..Default::default()
+                },
+            );
+            let mut screen = Options::new(&ui.core);
+            screen.pane("AdvGraphics");
+            screen.layout(ui.core.logical.0, ui.core.logical.1, &mut ui.core);
+            let menu = screen.view.id(SCREENSHOT_FORMAT_MENU).unwrap();
+            let section = screen.view.node(menu).parent.unwrap();
+            let bounds = screen.view.node(section).rect;
+            let rect = screen.view.node(menu).rect;
+            assert!(rect.x >= bounds.x && rect.right() <= bounds.right());
+            assert!(rect.y >= bounds.y && rect.bottom() <= bounds.bottom());
+            let label = screen
+                .view
+                .node(section)
+                .children
+                .iter()
+                .copied()
+                .find(|&n| screen.view.node(n).ctrl.text.as_deref() == Some("Screenshots:"))
+                .unwrap();
+            assert!(screen.view.node(label).state.visible);
+            assert!(screen.view.node(label).rect.right() <= rect.x);
+            assert_eq!(screen.view.node(menu).state.items.len(), 2);
+        }
+    }
+
+    #[test]
+    fn screenshot_menu_fits_small_and_normal_options() {
+        screenshot_menu_fit(crate::testing::screens_pack());
+    }
+
+    #[test]
+    #[ignore = "requires generated original UI content; bounded offscreen render, no window"]
+    #[cfg(feature = "gpu")]
+    fn native_screenshot_menu_fit_and_capture() {
+        let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let pack =
+            crate::testing::content_pack(&bri_package::testing::pack_dir(&content, "ui_pack"));
+        screenshot_menu_fit(pack.clone());
+        let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/ui-native-screenshot-format");
+        std::fs::create_dir_all(&output).unwrap();
+        let gpu = crate::gpu::Headless::new().unwrap();
+        let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+        for size in [(400, 300), (1024, 768)] {
+            let mut ui = Ui::new(
+                pack.clone(),
+                UiConfig {
+                    size,
+                    scale: None,
+                    platform: Platform::Windows,
+                },
+                Settings {
+                    binds: Some(vec![]),
+                    ..Default::default()
+                },
+            );
+            let mut screen = Options::new(&ui.core);
+            screen.pane("AdvGraphics");
+            screen.layout(ui.core.logical.0, ui.core.logical.1, &mut ui.core);
+            let menu = screen.view.id(SCREENSHOT_FORMAT_MENU).unwrap();
+            let mut parent = screen.view.node(menu).parent;
+            while let Some(n) = parent {
+                if screen.view.node(n).ctrl.class == "GuiScrollCtrl" {
+                    for _ in 0..100 {
+                        let viewport = screen.view.scroll_content_rect(&pack, n);
+                        let rect = screen.view.node(menu).rect;
+                        if rect.y >= viewport.y && rect.bottom() <= viewport.bottom() {
+                            break;
+                        }
+                        screen
+                            .view
+                            .mouse_move(viewport.x + 2, viewport.y + 2, &mut vec![]);
+                        assert!(screen.view.wheel(if rect.y < viewport.y { 1 } else { -1 }));
+                    }
+                    break;
+                }
+                parent = screen.view.node(n).parent;
+            }
+            let rect = screen.view.node(menu).rect;
+            let (x, y) = (rect.x + rect.w / 2, rect.y + rect.h / 2);
+            let mut events = vec![];
+            screen.view.mouse_move(x, y, &mut events);
+            screen
+                .view
+                .mouse_down(MouseButton::Left, x, y, &pack, &mut events);
+            screen
+                .view
+                .mouse_up(MouseButton::Left, x, y, &pack, &mut events);
+            assert_eq!(screen.view.open_popup_node(), Some(menu));
+            let mut list = DrawList::new(Rect::new(0, 0, ui.core.logical.0, ui.core.logical.1));
+            screen.draw(&pack, &mut list, &ui.core);
+            let rgba = gpu
+                .render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &list,
+                    size,
+                    ui.scale(),
+                    [0.15, 0.15, 0.18, 1.0],
+                )
+                .unwrap();
+            assert!(renderer.missing_textures().next().is_none());
+            image::save_buffer(
+                output.join(format!("Options-Screenshots-{}x{}.png", size.0, size.1)),
+                &rgba,
+                size.0,
+                size.1,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn screenshot_format_defaults_and_invalid_values_use_jpeg() {
+        let mut prefs = Prefs::default();
+        assert_eq!(screenshot_format(&prefs), ScreenshotFormat::Jpeg);
+        assert_eq!(ScreenshotFormat::Jpeg.extension(), "jpg");
+        assert_eq!(ScreenshotFormat::Png.extension(), "png");
+        for (text, format) in [
+            ("png", ScreenshotFormat::Png),
+            (" PNG ", ScreenshotFormat::Png),
+            ("jpeg", ScreenshotFormat::Jpeg),
+            ("jpg", ScreenshotFormat::Jpeg),
+            ("unexpected", ScreenshotFormat::Jpeg),
+        ] {
+            prefs.set(SCREENSHOT_FORMAT, text);
+            assert_eq!(screenshot_format(&prefs), format);
+        }
+    }
+
+    #[test]
+    fn screenshot_format_is_a_labeled_draft_saved_only_on_done() {
+        let mut ui = Ui::new(
+            crate::testing::screens_pack(),
+            UiConfig {
+                size: (1024, 768),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        ui.drain_actions();
+        let mut screen = Options::new(&ui.core);
+        screen.pane("AdvGraphics");
+        let menu = screen.view.id(SCREENSHOT_FORMAT_MENU).unwrap();
+        assert_eq!(screen.view.selected(menu), Some(0));
+        assert!(
+            screen
+                .view
+                .walk()
+                .any(
+                    |n| screen.view.node(n).ctrl.text.as_deref() == Some("Screenshots:")
+                        && screen.view.node(n).state.visible
+                )
+        );
+        screen.view.select(menu, Some(1));
+        change(&mut screen, &mut ui, menu);
+        assert_eq!(screenshot_format(&ui.core.prefs), ScreenshotFormat::Jpeg);
+        screen.on_sleep(&mut ui.core);
+        assert!(
+            !ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::SaveSettings(_)))
+        );
+        let mut screen = Options::new(&ui.core);
+        screen.pane("AdvGraphics");
+        let menu = screen.view.id(SCREENSHOT_FORMAT_MENU).unwrap();
+        screen.view.select(menu, Some(1));
+        let done = screen
+            .view
+            .by_command("Canvas.popDialog(optionsDlg);")
+            .unwrap();
+        screen.on_event(
+            &ViewEvent {
+                node: done,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        assert_eq!(
+            screenshot_format(&saved_prefs(&mut ui)),
+            ScreenshotFormat::Png
+        );
+        let reopened = Options::new(&ui.core);
+        assert_eq!(
+            reopened
+                .view
+                .selected(reopened.view.id(SCREENSHOT_FORMAT_MENU).unwrap()),
+            Some(1)
+        );
     }
 
     #[test]

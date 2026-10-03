@@ -11,9 +11,9 @@ current changes. Focused headless/offscreen checks do not replace your playtest.
 - **Unsigned builds:** Windows SmartScreen warns on the first start. The Apple
   silicon Mac app uses an ad-hoc signature; see `PLAYTEST-MAC.md` for opening it.
   Linux builds target x86-64 systems with glibc 2.35 or newer.
-- **Wrench events:** projectile outputs on delayed event rows aren't applied
-  yet. Immediate `Delete`, `Bounce` and `Redirect` work. Rows using them are
-  kept and shown read-only.
+- **Delayed projectile events:** commands apply to the original live projectile.
+  If it has already impacted or expired, the row skips it rather than creating
+  a replacement. Explain reports the missing projectile.
 - **Vehicles:** handling is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
 - **Bots** find paths over bricks and map shapes, but moving obstacles and
@@ -23,8 +23,10 @@ current changes. Focused headless/offscreen checks do not replace your playtest.
   are conservative. Supported native hand weapons use bounded ballistic
   checks; mounted, portal and script-driven mechanics still use their existing
   narrower behavior. Objective planning covers supported activation/region/
-  bot-touch rules, not arbitrary Add-On scripts, ball delivery, hookshot routes
-  or coordinated stacking. Complex rule arrangements can exceed the planner's
+  bot-touch rules, exact spawned-object contact/hold/ground-seat delivery,
+  native elimination and declared Add-On pickup/return goals. It does not infer
+  arbitrary scripts, plan throws into hoops, discover hookshot routes or organize
+  coordinated stacking. Complex rule arrangements can exceed the planner's
   finite depth/work limits even when a human can solve them. Resting pauses an
   approach's travel deadline; scheduled event delays keep passing in real time.
 - **Firefight crash:** a Windows v0.2.0 main-thread NaN panic during a mixed
@@ -34,7 +36,8 @@ current changes. Focused headless/offscreen checks do not replace your playtest.
   the complete crash/session files if it happens again.
 - **Shark/Zombie ports remain partial.** Shark's original body, swim,
   mouth capture/five-second hold and hidden hole now have focused checks using
-  actual imported content. Its original escape loop, restart delay, forced
+  actual imported content. Harm release observes the original two-second restart
+  delay with lifecycle checks. Its original escape loop, forced
   vehicle ejection, full white-Shark aggression/no-strafe behavior and bite
   death icon remain incomplete. Zombie infection markings/name prefixes also
   remain incomplete. Visual feel still needs your playtest.

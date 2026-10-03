@@ -480,6 +480,14 @@ fn typing_into_an_open_popup_filters_completes_and_keys_pick() {
     v.key(Key::Backspace, Modifiers::NONE, &mut out);
     assert_eq!(v.popup_query(), Some("ve"));
     typed(&mut v, "hicle s");
+    assert_eq!(
+        row_texts(&v),
+        [" NONE", "Vehicle Smoke", "Vehicle Bubbles"],
+        "exact phrase first, then every query word anywhere in the label"
+    );
+    assert_eq!(v.popup_highlight().map(|(_, id)| id), Some(4));
+    assert_eq!(v.popup_ghost().as_deref(), Some("moke"));
+    typed(&mut v, "mo");
     assert_eq!(row_texts(&v), [" NONE", "Vehicle Smoke"]);
     assert!(v.key(Key::Escape, Modifiers::NONE, &mut out));
     assert_eq!(v.popup_query(), Some(""), "Escape clears the query first");
@@ -543,7 +551,15 @@ fn popup_filter_stays_fast_on_long_lists() {
     click(&mut v, &pack, 20, 185);
     let start = std::time::Instant::now();
     typed(&mut v, "emitter 1999");
-    assert_eq!(v.popup_rows().len(), 10);
+    assert_eq!(
+        v.popup_rows()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect::<Vec<_>>(),
+        (19_990..20_000).chain([1_999, 11_999]).collect::<Vec<_>>(),
+        "ten exact-phrase matches precede the two token-only matches"
+    );
+    assert_eq!(v.popup_highlight().map(|(_, id)| id), Some(19_990));
     assert!(
         start.elapsed().as_millis() < 500,
         "12 refilters of 20k rows took {:?}",
@@ -552,5 +568,9 @@ fn popup_filter_stays_fast_on_long_lists() {
     let mut out = Vec::new();
     v.key(Key::End, Modifiers::NONE, &mut out);
     v.key(Key::Return, Modifiers::NONE, &mut out);
-    assert_eq!(v.selected(pop), Some(19_999));
+    assert_eq!(
+        v.selected(pop),
+        Some(11_999),
+        "End selects the final ranked token match's authored ID"
+    );
 }

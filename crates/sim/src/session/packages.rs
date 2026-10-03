@@ -26,6 +26,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod bot_objectives;
 mod brick_events;
 mod brick_fields;
 mod brick_hooks;
@@ -42,6 +43,7 @@ mod item_hooks;
 mod reports;
 mod saved_games;
 mod settings;
+mod state_defaults;
 pub(in crate::session) use settings::Editor;
 pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
 
@@ -655,13 +657,15 @@ impl Session {
         }
         let save = save.unwrap_or_default();
         let mut store = save.store;
+        let mut default_state_bytes = store.stored_size();
         for (id, behaviour) in catalog.behaviours() {
-            let ns = store.namespace_mut(id);
-            for (key, def) in &behaviour.state.global {
-                ns.global
-                    .entry(key.clone())
-                    .or_insert_with(|| def.default.clone());
-            }
+            state_defaults::initialize_global(
+                &mut store,
+                &mut default_state_bytes,
+                id,
+                &behaviour.state.global,
+            )
+            .map_err(|diagnostic| anyhow::anyhow!("{id}: {}", diagnostic.message))?;
         }
         let world = match catalog.world() {
             Some((package, provider, def)) => {
@@ -1172,6 +1176,33 @@ impl Session {
             tethers: self.tether_views(),
         }
     }
+    /// Initialize declared per-player state for an actual participant without
+    /// running connection hooks or replacing authored/persisted values.
+    pub(in crate::session) fn ensure_package_player_defaults(&mut self, owner: OwnerId) {
+        if self.packages.is_none() || !self.peers.contains_key(&owner) {
+            return;
+        }
+        let key = self.player_key(owner);
+        let host = self.packages.as_mut().expect("checked");
+        let catalog = host.catalog.clone();
+        let mut changed = false;
+        for (id, behaviour) in catalog.behaviours() {
+            match state_defaults::initialize(
+                &mut host.store,
+                &mut host.state_bytes,
+                id,
+                &key,
+                &behaviour.state.player,
+            ) {
+                Ok(initialized) => changed |= initialized,
+                Err(diagnostic) => note(host, diagnostic),
+            }
+        }
+        if changed {
+            self.package_revision += 1;
+        }
+    }
+
     /// Give a joining player every package's player defaults and run
     /// `on_join` hooks. State saved under the player's durable key is kept.
     pub(super) fn packages_joined(&mut self, owner: OwnerId) {
@@ -1179,29 +1210,16 @@ impl Session {
             return;
         }
         self.package_revision += 1;
-        let key = self.player_key(owner);
-        let hooks: Vec<String> = {
-            let host = self.packages.as_mut().expect("checked");
-            let catalog = host.catalog.clone();
-            let mut hooks = Vec::new();
-            for (id, behaviour) in catalog.behaviours() {
-                let values = host
-                    .store
-                    .namespace_mut(id)
-                    .players
-                    .entry(key.clone())
-                    .or_default();
-                for (k, def) in &behaviour.state.player {
-                    values
-                        .entry(k.clone())
-                        .or_insert_with(|| def.default.clone());
-                }
-                if behaviour.on_join {
-                    hooks.push(id.clone());
-                }
-            }
-            hooks
-        };
+        self.ensure_package_player_defaults(owner);
+        let hooks: Vec<String> = self
+            .packages
+            .as_ref()
+            .expect("checked")
+            .catalog
+            .behaviours()
+            .filter(|(_, behaviour)| behaviour.on_join)
+            .map(|(id, _)| id.clone())
+            .collect();
         for package in hooks {
             let _ = self.run_package(
                 &package,
@@ -2866,14 +2884,17 @@ impl Session {
         }
         host.deaths.push_back((victim, killer));
     }
-    /// `on_death(victim, killer)` for every death since the last tick, in
-    /// order. Deaths the hooks cause are delivered next tick, so a hook can
-    /// never recurse.
+    /// MiniGame membership gives spawned bots the same package hooks as
+    /// other participants. Free-build creatures retain their authored loadout.
+    pub(in crate::session) fn package_participant(&self, owner: OwnerId) -> bool {
+        !self.bots.is_brick_bot(owner) || self.game_of(owner).is_some()
+    }
+
     /// A player's items were set afresh: `on_loadout` hooks hear of it next
     /// tick.
     pub(super) fn package_loadout(&mut self, owner: OwnerId) {
-        if let Some(host) = self.packages.as_mut()
-            && !self.bots.is_brick_bot(owner)
+        if self.package_participant(owner)
+            && let Some(host) = self.packages.as_mut()
             && host.loadouts.len() < 1024
             && !host.loadouts.contains(&owner)
         {
@@ -2890,8 +2911,8 @@ impl Session {
     /// A player came to life (joined, respawned): `on_spawn` hooks hear of
     /// it next tick, after `on_loadout`.
     pub(super) fn package_spawn(&mut self, owner: OwnerId) {
-        if let Some(host) = self.packages.as_mut()
-            && !self.bots.is_brick_bot(owner)
+        if self.package_participant(owner)
+            && let Some(host) = self.packages.as_mut()
             && host.spawns.len() < 1024
             && !host.spawns.contains(&owner)
         {
@@ -3007,7 +3028,7 @@ impl Session {
     }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
-        if self.bots.is_brick_bot(owner) {
+        if !self.package_participant(owner) {
             return;
         }
         self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
@@ -3351,10 +3372,9 @@ impl Session {
             return;
         }
         for owner in owners {
-            // Player hooks are for connected players and the bots the rules
-            // added, who play as members. A brick's bot queued while it
-            // joined, before it was registered as one, is left out here.
-            if !self.peers.contains_key(&owner) || self.bots.is_brick_bot(owner) {
+            // All actual MiniGame participants share the policy hooks. Outside
+            // games, anchored creatures keep their source-defined equipment.
+            if !self.peers.contains_key(&owner) || !self.package_participant(owner) {
                 continue;
             }
             for package in &hooks {

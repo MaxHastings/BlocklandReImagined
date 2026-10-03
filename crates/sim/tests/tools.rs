@@ -2119,13 +2119,36 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixt
 on_both! {
 fn a_joining_player_learns_the_music_the_host_offers(f: &Fixture) {
     let mut s = session(f, vec![], false);
+    let mut first = catalog();
+    first.sounds.insert("music/first".into());
+    s.set_tool_catalog(first).unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
         .unwrap();
-    assert!(
-        s.take_private_notices()
-            .iter()
-            .any(|(to, n)| *to == owner && matches!(n, bri_sim::session::Notice::MusicTracks(_)))
-    );
+    let offered = |s: &mut Session| {
+        s.take_private_notices().into_iter().filter_map(|(to, n)| {
+            match n {
+                bri_sim::session::Notice::MusicTracks(tracks) if to == owner => Some(tracks),
+                _ => None,
+            }
+        }).collect::<Vec<_>>()
+    };
+    assert_eq!(offered(&mut s), vec![["music/first".into()].into()]);
+    s.disconnect(owner).unwrap();
+    s.take_private_notices();
+    let mut second = catalog();
+    second.sounds.insert("music/second".into());
+    s.set_tool_catalog(second.clone()).unwrap();
+    assert!(offered(&mut s).is_empty());
+    s.resume(owner, Vec3::new(0.0, 0.05, 0.0)).unwrap();
+    assert_eq!(offered(&mut s), vec![["music/second".into()].into()]);
+    s.set_tool_catalog(catalog()).unwrap();
+    assert_eq!(offered(&mut s), vec![Default::default()]);
+    s.set_tool_catalog(catalog()).unwrap();
+    assert!(offered(&mut s).is_empty(), "unchanged catalogs do not resend");
+    let mut next = session_on(f, vec![], false, "next-map");
+    next.set_tool_catalog(second).unwrap();
+    next.adopt(s, owner).unwrap();
+    assert_eq!(offered(&mut next), vec![["music/second".into()].into()]);
 }
 }

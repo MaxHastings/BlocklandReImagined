@@ -70,7 +70,22 @@ fn pack() -> Pack {
         .damage = 10.0;
     p
 }
-fn game(mut pack: Pack, loadout: &[&str], distance: f32) -> (Session, u64, u64, u64) {
+fn game(pack: Pack, loadout: &[&str], distance: f32) -> (Session, u64, u64, u64) {
+    game_scene(
+        pack,
+        loadout,
+        Vec3::new(-25.0, 0.05, 35.0),
+        [-24.75, 0.1, 35.25 - distance],
+        vec![],
+    )
+}
+fn game_scene(
+    mut pack: Pack,
+    loadout: &[&str],
+    spawn: Vec3,
+    bot_spawn: [f32; 3],
+    geometry: Vec<Brick>,
+) -> (Session, u64, u64, u64) {
     let mut s = fixture::synthetic().unwrap().session;
     // A generous stationary test bot can acquire, charge and fire while the
     // actual aim model still retains its reaction and normal turn limits.
@@ -88,11 +103,8 @@ fn game(mut pack: Pack, loadout: &[&str], distance: f32) -> (Session, u64, u64, 
         ..Default::default()
     })
     .unwrap();
-    s.set_spawn_points(vec![Vec3::new(-25.0, 0.05, 35.0)])
-        .unwrap();
-    let human = s
-        .join("Observer".into(), Vec3::new(-25.0, 0.05, 35.0), true)
-        .unwrap();
+    s.set_spawn_points(vec![spawn]).unwrap();
+    let human = s.join("Observer".into(), spawn, true).unwrap();
     let mut world = World::new(
         "Unfamiliar equipment".into(),
         "chaos/map".into(),
@@ -100,7 +112,7 @@ fn game(mut pack: Pack, loadout: &[&str], distance: f32) -> (Session, u64, u64, 
     );
     let mut brick = Brick::new(
         ContentRef::Resolved(fixture::PLATE.into()),
-        [-24.75, 0.1, 35.25 - distance],
+        bot_spawn,
         human,
     );
     brick.vehicle = Some(Box::new(VehicleSpawn {
@@ -109,6 +121,11 @@ fn game(mut pack: Pack, loadout: &[&str], distance: f32) -> (Session, u64, u64, 
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
+    for mut brick in geometry {
+        brick.owner = human;
+        world.bricks.insert(world.next_brick_id, brick);
+        world.next_brick_id += 1;
+    }
     s.command(
         human,
         100,
@@ -251,6 +268,76 @@ fn nearby_blast_risk_selects_the_safe_second_inventory_slot() {
         "the first real damage must be the useful direct weapon's authored10, even if its projectile expires within its spawn tick"
     );
     assert!(s.vitals()[&human].health < 100.0);
+}
+
+#[test]
+fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
+    let geometry = vec![
+        Brick::new(
+            ContentRef::Resolved(fixture::TALL.into()),
+            [-24.75, 1.5, 35.25],
+            1,
+        ),
+        Brick::new(
+            ContentRef::Resolved(fixture::BASEPLATE.into()),
+            [-24.75, 6.3, 31.25],
+            1,
+        ),
+    ];
+    let (mut s, human, bot, mut seq) = game_scene(
+        pack(),
+        &[B],
+        Vec3::new(-24.75, 3.05, 35.25),
+        [-24.75, 0.1, 31.25],
+        geometry,
+    );
+    let mut saw_close_fly = false;
+    let mut saw_released_lift = false;
+    let mut escaped = false;
+    let mut observed = BTreeSet::new();
+    for _ in 0..120 * 25 {
+        ticks(&mut s, human, &mut seq, 1);
+        let distance = feet(&s, bot).distance(feet(&s, human));
+        let flying = s
+            .bot_thoughts()
+            .iter()
+            .any(|t| t.bot == bot && t.behaviour == "fly");
+        if flying && distance < 7.0 {
+            saw_close_fly = true;
+            saw_released_lift |= s
+                .snapshot()
+                .players
+                .iter()
+                .any(|p| p.owner == bot && !p.jetting);
+        }
+        escaped |= saw_close_fly && distance >= 7.0;
+        for p in s.weapon_view().fired().filter(|p| p.source.0 == bot) {
+            if observed.insert(p.id) {
+                assert!(
+                    p.origin.distance(feet(&s, human)) > 7.0,
+                    "unsafe blast during flight recovery"
+                );
+            }
+        }
+        if s.vitals()[&human].health < 100.0 {
+            break;
+        }
+    }
+    assert!(saw_close_fly, "authored scene never exercised close Fly");
+    assert!(saw_released_lift, "kept jetting in close blast range");
+    assert!(escaped, "never regained blast clearance");
+    assert!(
+        s.vitals()[&human].health < 100.0,
+        "no actual delivery after recovery: {:?}",
+        s.bot_thoughts()
+    );
+    eprintln!(
+        "ranged flight recovery: human={:?} bot={:?} health={} observed_live_projectile_ids={}",
+        feet(&s, human),
+        feet(&s, bot),
+        s.vitals()[&human].health,
+        observed.len(),
+    );
 }
 
 #[test]

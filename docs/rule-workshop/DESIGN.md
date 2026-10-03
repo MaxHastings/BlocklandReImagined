@@ -116,14 +116,19 @@ briefs informed the experiment; they do not define mandatory infrastructure.
     onBotTouch. This deliberately changes the earlier v20-style absence of
     Player/MiniGame for bots. Test existing bot events rather than assuming
     legacy quirks define the experimental model.
-15. **Bot prediction is conservative and disposable.** The internal provider
-    composes supported activation/region/bot-touch rows, typed scalar progress,
-    canonical scoring/round effects and known cosmetic effects. Unknown relevant
-    collateral or reaction semantics reject a candidate. A bounded plan only
-    chooses ordinary movement/activation; the scheduler alone executes rules.
-    Delays wait for observed real progress, and inaccessible sources temporarily
-    cool down so alternatives can be tried. Explain includes brief related NPC
-    status. This is neither a public goal format nor inference of opaque Add-Ons.
+15. **Bot prediction is conservative and disposable.** Creator rules supply
+    supported activation/region/bot-touch, exact spawned-object entry and native
+    elimination causes. Opt-in typed package queries may declare pickup/return
+    goals; querying them cannot commit gameplay writes. Grounded actions use
+    ordinary movement, activation, contact, declared holding, ground-seat
+    driving, combat or package pickup/zone controls through one bounded lifecycle.
+    The scheduler and native package callbacks alone execute their effects.
+    Unknown relevant collateral or reaction semantics reject a candidate.
+    Real input, physical state and canonical result observations establish
+    progress; package completion alone does not imply a round winner. Failed
+    methods cool down so alternatives can be tried. Explain includes desired
+    state, selected action/provider, phase, proposed route and failure details.
+    This is neither a public goal format nor inference of opaque Add-Ons.
     Inventory tactics similarly use native mechanical descriptors and actual
     launch-time checks, leaving unsupported script-driven mechanics on their
     existing path. A paused approach excludes time spent fighting/resting/riding,
@@ -132,7 +137,9 @@ briefs informed the experiment; they do not define mandatory infrastructure.
     only against an equivalent live model; changed facts/authority invalidate it.
     Supported native attacks retain aim/valid non-firing charge holds but wait
     for canonical spawn protection to end before spending ammunition or releasing.
-    See the [v0.2.2 checklist](V0.2.2-PLAYTEST.md) for limits.
+    See the [current pipeline audit](../audits/npc-pipeline-current.md) and
+    [v0.2.2 checklist](V0.2.2-PLAYTEST.md) for evidence and limits; focused passes
+    do not establish all fourteen journeys or replace human playtests.
 
 ## Awkward seams and deliberate limits
 
@@ -158,9 +165,11 @@ briefs informed the experiment; they do not define mandatory infrastructure.
   proof for a finished mod platform.
 - Object context currently means vehicles/balls with spawn bricks. Other native
   entities, projectiles, bots as objects, and arbitrary assembly selection are
-  outside the demonstrated path. Existing Projectile reflection outputs reject
+  outside the demonstrated path. Immediate Projectile reflection outputs reject
   IF because their specialized contact cache does not execute normal guarded
-  rows. This is an explicit limitation rather than silently ignoring guards.
+  rows. Delayed projectile operations use normal due-time guards and affect only
+  the original projectile while it is still live; disappearance is an explained
+  skip. The editor disables + IF on immediate projectile rows.
 - Region dimensions are directly authored in the wrench, with a live preview.
   Building tools reveal detection outlines using the invisible-brick convention.
   The server observer and client renderer share bounds; disabled rows and the

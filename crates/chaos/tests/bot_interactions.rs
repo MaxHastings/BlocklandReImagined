@@ -786,14 +786,17 @@ fn a_charged_mounted_weapon_is_held_until_ready_then_released_and_rearmed() {
     let mut shot_ids = std::collections::BTreeSet::new();
     let mut first_shot = None;
     let mut heard_charge = false;
+    let mut charge_trace = Vec::new();
     for tick in 1..=120 * 10 {
         g.steps(1);
-        heard_charge |=
-            g.s.take_private_notices()
-                .into_iter()
-                .any(|(owner, notice)| {
-                    owner == gunner && matches!(notice, bri_sim::session::Notice::Bottom { .. })
-                });
+        for (owner, notice) in g.s.take_private_notices() {
+            if owner == gunner && matches!(notice, bri_sim::session::Notice::Bottom { .. }) {
+                heard_charge = true;
+                if charge_trace.len() < 16 {
+                    charge_trace.push((tick, format!("{notice:?}")));
+                }
+            }
+        }
         for p in g.s.weapon_view().fired() {
             if p.source.0 == gunner
                 && p.definition == bri_weapons::testing::GUN_PROJECTILE
@@ -811,7 +814,8 @@ fn a_charged_mounted_weapon_is_held_until_ready_then_released_and_rearmed() {
     assert!(
         first_shot
             .is_some_and(|tick| tick >= (CHARGE_TICKS * u64::from(CHARGE_STEPS - 1)) as usize),
-        "the gunner held for the weapon's authored charge stages: {first_shot:?}"
+        "the gunner held for the weapon's authored charge stages: {first_shot:?}; charge notices {charge_trace:?}; {}",
+        g.diagnostics()
     );
     assert!(
         shot_ids.len() >= 2,

@@ -1288,6 +1288,7 @@ mod tests {
             fire: bri_weapons::BotFire::Hold,
             reach: None,
             near: None,
+            manipulation: None,
         });
         image.states = vec![
             bri_weapons::State {

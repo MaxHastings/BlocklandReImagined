@@ -622,6 +622,20 @@ impl Screen for Wrench {
                 return;
             }
             let data = core.wrench.values(self.variant);
+            if op == Operation::Send
+                && self.variant == WrenchVariant::Sound
+                && let Some(sound) = &data.sound
+                && core.datablocks.contains_key("Music")
+                && !choices(core, "Music", false)
+                    .iter()
+                    .any(|choice| &choice.id == sound)
+            {
+                core.message_ok(
+                    "Music unavailable",
+                    "This server does not offer the selected track. Choose another track or NONE.",
+                );
+                return;
+            }
             let action = match op {
                 Operation::Send if core.wrench.filling() => UiAction::SendFillWrench {
                     data,
@@ -1582,6 +1596,21 @@ impl WrenchEvents {
         }
     }
 
+    fn condition_allowed(&self, row: usize) -> bool {
+        let Some(RowState::Editable(e)) = self.model.as_ref().and_then(|m| m.rows.get(row)) else {
+            return false;
+        };
+        !self
+            .target_class(row)
+            .is_some_and(|class| class.eq_ignore_ascii_case("Projectile"))
+            || events::clamp_delay(&e.delay_text) > 0
+    }
+
+    fn can_add_condition(&self, row: usize) -> bool {
+        self.condition_allowed(row) && self.model.as_ref().and_then(|m| m.rows.get(row))
+            .is_some_and(|r| matches!(r, RowState::Editable(e) if e.conditions.len() < rules::MAX_CONDITIONS))
+    }
+
     fn target_class(&self, row: usize) -> Option<String> {
         let RowState::Editable(e) = self.model.as_ref()?.rows.get(row)? else {
             return None;
@@ -2085,7 +2114,10 @@ impl WrenchEvents {
         let ready = self.current(core) && self.request.is_none();
         let nodes: Vec<_> = self.view.walk().collect();
         for n in nodes {
-            let can_add=command_of(&self.view,n).strip_prefix("rules.if.").and_then(|r|r.parse::<usize>().ok()).is_none_or(|row|self.model.as_ref().and_then(|m|m.rows.get(row)).is_some_and(|r|matches!(r,RowState::Editable(e) if e.conditions.len()<rules::MAX_CONDITIONS)));
+            let can_add = command_of(&self.view, n)
+                .strip_prefix("rules.if.")
+                .and_then(|row| row.parse::<usize>().ok())
+                .is_none_or(|row| self.can_add_condition(row));
             self.view.set_active(n, ready && can_add);
             if self.view.node(n).ctrl.name.as_deref() == Some("WrenchEvents_LoadingWindow") {
                 self.view.set_visible(n, self.model.is_none());
@@ -2130,16 +2162,23 @@ impl WrenchEvents {
                 }
                 ParamValue::Vector([values[0], values[1], values[2]])
             }
-            ParamSpec::Datablock { .. } => {
+            ParamSpec::Datablock { class } => {
                 let i = usize::try_from(self.view.selected(node).ok_or_else(bad)?)
                     .map_err(|_| bad())?;
-                ParamValue::Datablock(
-                    self.resources
-                        .get(&node)
-                        .and_then(|v| v.get(i))
-                        .cloned()
-                        .ok_or_else(bad)?,
-                )
+                let value = self
+                    .resources
+                    .get(&node)
+                    .and_then(|v| v.get(i))
+                    .cloned()
+                    .ok_or_else(bad)?;
+                if class.eq_ignore_ascii_case("Music")
+                    && let Some(id) = &value
+                    && let Some(offered) = self.datablocks.get("Music")
+                    && !offered.iter().any(|choice| &choice.id == id)
+                {
+                    return Err("This server does not offer the selected music. Choose another track or NONE.".into());
+                }
+                ParamValue::Datablock(value)
             }
             ParamSpec::List { items } => {
                 let id = self.view.selected(node).ok_or_else(bad)?;
@@ -2213,6 +2252,12 @@ impl WrenchEvents {
                 if self.copied_unavailable(e) {
                     return Err(format!(
                         "Row {}: copied event unavailable here; choose available events or remove this row.",
+                        index + 1
+                    ));
+                }
+                if !e.conditions.is_empty() && !self.condition_allowed(index) {
+                    return Err(format!(
+                        "Row {}: add a delay for a projectile IF.",
                         index + 1
                     ));
                 }
@@ -2356,6 +2401,9 @@ impl Screen for WrenchEvents {
             if let Some(rest) = command.strip_prefix("rules.") {
                 let parts: Vec<_> = rest.split('.').collect();
                 if let Some(row) = parts.get(1).and_then(|s| s.parse::<usize>().ok()) {
+                    if parts[0] == "if" && !self.can_add_condition(row) {
+                        return;
+                    }
                     if parts[0] != "remove"
                         && let Err(error) =
                             self.accept_parameters_except((parts[0] == "delete").then_some(row))
@@ -2637,8 +2685,11 @@ impl Screen for WrenchEvents {
         self.save_draft(core);
         if rebuild {
             self.build(core);
-        } else if let Some(n) = self.view.id("WrenchEvents_Status") {
-            self.view.set_text(n, self.error.as_deref().unwrap_or(""));
+        } else {
+            self.refresh(core);
+            if let Some(n) = self.view.id("WrenchEvents_Status") {
+                self.view.set_text(n, self.error.as_deref().unwrap_or(""));
+            }
         }
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
@@ -3271,6 +3322,139 @@ mod tests {
         assert!(ui.drain_actions().iter().any(
             |(_, a)| matches!(a,UiAction::SendWrench {data,..} if data.item_respawn_ms==2000)
         ));
+    }
+
+    #[test]
+    fn live_music_event_choices_preserve_the_row_until_explicit_recovery() {
+        let mut ui = fixture();
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "Blockland".into(),
+            class: "fxDTSBrick".into(),
+            name: "setMusic".into(),
+            supported: true,
+            params: vec![ParamSpec::Datablock {
+                class: "Music".into(),
+            }],
+        });
+        ui.core.wrench.open_events(
+            10,
+            vec![EventRow::Editable(crate::api::EventLine {
+                conditions: vec![],
+                enabled: true,
+                delay_ms: 50,
+                input: "onActivate".into(),
+                target: "Self".into(),
+                named_target: None,
+                output: "setMusic".into(),
+                params: vec![ParamValue::Datablock(Some("Music:alpha".into()))],
+            })],
+            vec![],
+            true,
+            &ui.core.events,
+        );
+        let mut events = WrenchEvents::new(&ui.core);
+        ui.apply(UiUpdate::Datablocks(
+            [(
+                "Music".into(),
+                vec![Choice {
+                    id: "Music:beta".into(),
+                    name: "Beta".into(),
+                }],
+            )]
+            .into(),
+        ));
+        events.on_update(&mut ui.core);
+        let node = events.view.id("WrenchEvent_0_param0").unwrap();
+        assert_eq!(
+            events.view.selected_text(node).as_deref(),
+            Some("Unavailable: Music:alpha")
+        );
+        click(&mut events, "Events_Send", &mut ui.core);
+        assert!(
+            !ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::SendEvents { .. }))
+        );
+        assert!(events.error.as_deref().unwrap().contains("does not offer"));
+        let RowState::Editable(row) = &events.model.as_ref().unwrap().rows[0] else {
+            panic!("keep the original editable row")
+        };
+        assert_eq!(
+            row.params,
+            vec![ParamValue::Datablock(Some("Music:alpha".into()))]
+        );
+        choose(&mut events, "WrenchEvent_0_param0", "Beta", &mut ui.core);
+        click(&mut events, "Events_Send", &mut ui.core);
+        let actions = ui.drain_actions();
+        assert!(actions.iter().any(|(_, action)| matches!(action, UiAction::SendEvents { rows, .. } if matches!(&rows[0], EventRow::Editable(line) if line.delay_ms == 50 && line.params == vec![ParamValue::Datablock(Some("Music:beta".into()))]))));
+    }
+
+    #[test]
+    fn live_music_choices_preserve_the_draft_and_require_an_available_selection() {
+        let mut ui = fixture();
+        ui.core.wrench.open(
+            15,
+            WrenchVariant::Sound,
+            "Owner".into(),
+            WrenchData {
+                sound: Some("Music:alpha".into()),
+                ..Default::default()
+            },
+            false,
+            true,
+        );
+        let mut sound = Wrench::new(&ui.core, WrenchVariant::Sound);
+        edit(&mut sound, "WrenchSound_Name", "music_room", &mut ui.core);
+        ui.apply(UiUpdate::Datablocks(
+            [(
+                "Music".into(),
+                vec![Choice {
+                    id: "Music:beta".into(),
+                    name: "Beta".into(),
+                }],
+            )]
+            .into(),
+        ));
+        sound.on_update(&mut ui.core);
+        let menu = sound.view.id("WrenchSound_Sounds").unwrap();
+        assert_eq!(
+            sound
+                .view
+                .node(menu)
+                .state
+                .items
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            [" NONE", "Beta", "Unavailable: Music:alpha"]
+        );
+        assert_eq!(
+            ui.core.wrench.values(WrenchVariant::Sound).sound.as_deref(),
+            Some("Music:alpha")
+        );
+        assert_eq!(
+            sound
+                .view
+                .edit_text(sound.view.id("WrenchSound_Name").unwrap()),
+            "music_room"
+        );
+        click(&mut sound, "WrenchSound_Send", &mut ui.core);
+        assert!(
+            !ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::SendWrench { .. }))
+        );
+        assert!(sound.request.is_none());
+        choose(&mut sound, "WrenchSound_Sounds", "Beta", &mut ui.core);
+        click(&mut sound, "WrenchSound_Send", &mut ui.core);
+        assert!(ui.drain_actions().iter().any(|(_, action)| matches!(action, UiAction::SendWrench { data, .. } if data.sound.as_deref() == Some("Music:beta") && data.name == "music_room")));
+        let (request, _) = sound.request.unwrap();
+        sound.on_result(request, None, &Err("try again".into()), &mut ui.core);
+        ui.apply(UiUpdate::Datablocks([("Music".into(), vec![])].into()));
+        sound.on_update(&mut ui.core);
+        choose(&mut sound, "WrenchSound_Sounds", " NONE", &mut ui.core);
+        click(&mut sound, "WrenchSound_Send", &mut ui.core);
+        assert!(ui.drain_actions().iter().any(|(_, action)| matches!(action, UiAction::SendWrench { data, .. } if data.sound.is_none())));
     }
 
     #[test]
@@ -4136,6 +4320,73 @@ mod tests {
                 .active
         );
     }
+    #[test]
+    fn projectile_if_is_available_after_delay_and_invalid_edits_stay_local() {
+        let mut ui = fixture();
+        ui.core.events.inputs.push(EventInputInfo {
+            name: "onProjectileHit".into(),
+            targets: vec![
+                ("Self".into(), "fxDTSBrick".into()),
+                ("Projectile".into(), "Projectile".into()),
+            ],
+            supported: true,
+        });
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "Blockland".into(),
+            class: "Projectile".into(),
+            name: "delete".into(),
+            params: vec![],
+            supported: true,
+        });
+        let mut screen = WrenchEvents::new(&ui.core);
+        choose(
+            &mut screen,
+            "WrenchEvent_0_input",
+            "onProjectileHit",
+            &mut ui.core,
+        );
+        choose(
+            &mut screen,
+            "WrenchEvent_0_target",
+            "Projectile",
+            &mut ui.core,
+        );
+        choose(&mut screen, "WrenchEvent_0_output", "delete", &mut ui.core);
+        let button = screen.view.id("Rule_0_add_if").unwrap();
+        assert!(!screen.view.node(button).state.active);
+        click(&mut screen, "Rule_0_add_if", &mut ui.core);
+        assert!(screen.condition_mut(0, 0).is_none());
+        edit(&mut screen, "WrenchEvent_0_delay", "25", &mut ui.core);
+        assert!(screen.view.node(button).state.active);
+        click(&mut screen, "Rule_0_add_if", &mut ui.core);
+        choose(
+            &mut screen,
+            "WrenchEvent_0_if0_property",
+            "Exists",
+            &mut ui.core,
+        );
+        assert!(screen.ready_to_send().is_ok());
+        edit(&mut screen, "WrenchEvent_0_delay", "0", &mut ui.core);
+        assert!(
+            !screen
+                .view
+                .node(screen.view.id("Rule_0_add_if").unwrap())
+                .state
+                .active
+        );
+        assert!(
+            screen.condition_mut(0, 0).is_some(),
+            "retain the author's guard"
+        );
+        click(&mut screen, "Events_Send", &mut ui.core);
+        assert!(
+            !ui.drain_actions()
+                .iter()
+                .any(|(_, action)| matches!(action, UiAction::SendEvents { .. }))
+        );
+        assert!(screen.error.as_deref().unwrap().contains("add a delay"));
+    }
+
     #[test]
     fn changing_input_normalizes_conditions_for_the_new_default_target() {
         let mut ui = fixture();

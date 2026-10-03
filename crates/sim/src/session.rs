@@ -14,11 +14,15 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod bots;
-pub use bots::{BotEvidence, BotTask, BotThought};
+pub use bots::{BotEvidence, BotObjectiveDetail, BotTask, BotThought};
 mod breakables;
 mod build_load;
 pub use build_load::LoadPace;
 mod combat;
+mod death_results;
+pub use death_results::DeathResult;
+mod round_results;
+pub use round_results::RoundResult;
 mod control;
 pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera, SeatSince};
 pub mod camera_path;
@@ -872,6 +876,8 @@ pub struct Session {
     vehicles: vehicles::Vehicles,
     riding: riding::Riding,
     minigames: bri_minigames::MinigamesWorld,
+    round_results: VecDeque<RoundResult>,
+    death_results: VecDeque<DeathResult>,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
     private_notices: VecDeque<(OwnerId, Notice)>,
@@ -1018,6 +1024,8 @@ impl Session {
                 bri_minigames::Catalog::minimal_vanilla(),
                 &Default::default(),
             ),
+            round_results: VecDeque::new(),
+            death_results: VecDeque::new(),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
@@ -1456,8 +1464,7 @@ impl Session {
         }
         self.join_server_game(owner)?;
         if !is_bot {
-            let music = self.tool_catalog.sounds.clone();
-            self.notify(owner, Notice::MusicTracks(music));
+            self.notify_music_tracks(owner);
         }
         Ok(owner)
     }
@@ -1671,6 +1678,7 @@ impl Session {
         self.refresh_trust();
         self.packages_joined(owner);
         self.join_server_game(owner)?;
+        self.notify_music_tracks(owner);
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the

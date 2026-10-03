@@ -26,6 +26,17 @@ datablock PlayerData(SharkHoleBot : PlayerStandardArmor)
 	hAttackDamage = 0;
 };
 
+// The original package declares buoyancy variants of the same body. These
+// stand-ins exercise conversion and porting of inherited helper archetypes.
+datablock PlayerData(SharkHoleBotTop : SharkHoleBot)
+{
+	density = 0.1;
+};
+datablock PlayerData(SharkHoleBotBottom : SharkHoleBot)
+{
+	density = 10;
+};
+
 function SharkHoleBot::onAdd(%this,%obj)
 {
 	armor::onAdd(%this,%obj);

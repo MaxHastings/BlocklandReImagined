@@ -30,6 +30,9 @@ pub(super) fn entity(class: Class, index: u64) -> Entity {
     }
 }
 
+type ObjectiveInputKey = (BrickId, OwnerId, String, Option<u64>);
+type ObjectiveInputObservation = (u64, u64);
+
 #[derive(Default)]
 pub(super) struct Events {
     pub(super) rules: super::rules::RuleState,
@@ -41,14 +44,18 @@ pub(super) struct Events {
     pub(in crate::session) installed: BTreeSet<BrickId>,
     /// Grounded objective/reaction sources, indexed by creator during install.
     pub(in crate::session) objective_sources: BTreeMap<OwnerId, BTreeSet<BrickId>>,
+    pub(in crate::session) objective_deaths: BTreeMap<OwnerId, BTreeSet<BrickId>>,
     pub(in crate::session) objective_reactions: BTreeMap<OwnerId, BTreeSet<BrickId>>,
     /// Actual admitted physical bot inputs, bounded diagnostics/lifecycle data.
-    pub(in crate::session) objective_inputs: BTreeMap<(BrickId, OwnerId, String), (u64, u64)>,
+    pub(in crate::session) objective_inputs: BTreeMap<ObjectiveInputKey, ObjectiveInputObservation>,
     scanned: bool,
     origin: u64,
     /// Projectile outputs of zero-delay `onProjectileHit` rows, applied by the
     /// weapon runtime at the moment of contact.
     pub(super) projectile_responses: BTreeMap<BrickId, bri_weapons::ContactResponse>,
+    /// Contact normal for each admitted activation, retained only while that
+    /// existing scheduler origin has jobs. A later hit cannot replace it.
+    projectile_activations: BTreeMap<u64, ProjectileActivation>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
     pub(super) respawns: BTreeMap<BrickId, u64>,
     /// Projectiles events spawned, by the owner of the brick whose quota
@@ -79,10 +86,16 @@ pub(super) struct Events {
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct InputExtra {
     pub(super) object: Option<u64>,
+    pub(super) projectile: Option<ProjectileActivation>,
     /// The mini-game the input is about (`onMinigameRoundStart`).
     pub(super) game: Option<mg::GameId>,
     /// Whoever killed the player it is about (`onMinigameDeath`).
     pub(super) killer: Option<OwnerId>,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ProjectileActivation {
+    pub(super) projectile: u64,
+    pub(super) normal: Vec3,
 }
 /// Most inputs rules may fire from inside one event phase.
 const MAX_DEFERRED_INPUTS: usize = 256;
@@ -221,6 +234,7 @@ impl Session {
                 world.cancel_source(id(*brick), ev::CancelMode::All);
             }
         }
+        self.events.projectile_activations.clear();
     }
     /// `ClearEventObjects`: remove the projectiles the owner's bricks spawned.
     pub(super) fn clear_event_projectiles(&mut self, owner: OwnerId) {
@@ -304,6 +318,7 @@ impl Session {
             for index in [
                 &mut self.events.objective_sources,
                 &mut self.events.objective_reactions,
+                &mut self.events.objective_deaths,
             ] {
                 if let Some(ids) = index.get_mut(&previous.owner_scope) {
                     ids.remove(&brick_id);
@@ -322,7 +337,7 @@ impl Session {
         let Some(brick) = brick else {
             self.events
                 .objective_inputs
-                .retain(|(source, _, _), _| *source != brick_id);
+                .retain(|(source, _, _, _), _| *source != brick_id);
             if self.events.installed.remove(&brick_id) {
                 world.remove_brick(id(brick_id));
             }
@@ -384,15 +399,19 @@ impl Session {
         }) {
             self.events
                 .objective_inputs
-                .retain(|(source, _, _), _| *source != brick_id);
+                .retain(|(source, _, _, _), _| *source != brick_id);
         }
         let has_objectives = program.rows.iter().any(|r| {
             r.enabled
                 && matches!(
                     r.input.as_str(),
-                    "onActivate" | "onBotTouch" | "onRegionEnter"
+                    "onActivate" | "onBotTouch" | "onRegionEnter" | "onObjectEnter"
                 )
         });
+        let has_deaths = program
+            .rows
+            .iter()
+            .any(|r| r.enabled && r.input == "onRulePlayerDied");
         let reaction_rows: Vec<_> = program
             .rows
             .iter()
@@ -419,6 +438,13 @@ impl Session {
                 if has_reactions {
                     self.events
                         .objective_reactions
+                        .entry(brick.owner)
+                        .or_default()
+                        .insert(brick_id);
+                }
+                if has_deaths {
+                    self.events
+                        .objective_deaths
                         .entry(brick.owner)
                         .or_default()
                         .insert(brick_id);
@@ -501,13 +527,31 @@ impl Session {
         else {
             return;
         };
-        let observed_bot = player.filter(|o| self.is_bot(*o));
+        let observed_actor = if input == "onRulePlayerDied" {
+            player
+        } else {
+            player.filter(|o| self.is_bot(*o))
+        };
         let observed_origin = trigger.origin;
         let world = self.events.world.as_mut().unwrap();
         let admitted = world.trigger(trigger);
         if admitted.as_ref().is_ok_and(|count| *count > 0)
-            && matches!(input, "onActivate" | "onRegionEnter" | "onBotTouch")
-            && let Some(bot) = observed_bot
+            && let Some(contact) = extra.projectile
+        {
+            self.events
+                .projectile_activations
+                .insert(observed_origin, contact);
+        }
+        if admitted.as_ref().is_ok_and(|count| *count > 0)
+            && matches!(
+                input,
+                "onActivate"
+                    | "onRegionEnter"
+                    | "onBotTouch"
+                    | "onObjectEnter"
+                    | "onRulePlayerDied"
+            )
+            && let Some(bot) = observed_actor
         {
             if self.events.objective_inputs.len() >= 1024
                 && let Some(old) = self
@@ -520,7 +564,7 @@ impl Session {
                 self.events.objective_inputs.remove(&old);
             }
             self.events.objective_inputs.insert(
-                (brick, bot, input.into()),
+                (brick, bot, input.into(), extra.object),
                 (observed_origin, self.simulation.state().tick),
             );
         }
@@ -613,6 +657,14 @@ impl Session {
             trigger
                 .targets
                 .insert(Slot::Object, entity(Class::Vehicle, object));
+        }
+        if slots.contains(&Slot::Projectile)
+            && let Some(contact) = extra.projectile
+        {
+            trigger.targets.insert(
+                Slot::Projectile,
+                entity(Class::Projectile, contact.projectile),
+            );
         }
         if let Some(game) = extra.game.filter(|_| slots.contains(&Slot::MiniGame)) {
             trigger
@@ -787,6 +839,9 @@ impl Session {
                 );
             }
         });
+        self.events
+            .projectile_activations
+            .retain(|origin, _| world.pending_origin(*origin));
         self.events.world = Some(world);
         for (brick, input, player, extra) in std::mem::take(&mut self.events.deferred) {
             self.fire_input_with(brick, &input, player, extra);
@@ -1072,6 +1127,7 @@ fn set_projectile_response(
     let response = rows.iter().find_map(|row| {
         let immediate = row.enabled
             && row.preserved.is_none()
+            && row.conditions.is_empty()
             && row.delay_ms == 0
             && row.input.eq_ignore_ascii_case("onProjectileHit")
             && row.target == ev::Target::Slot(Slot::Projectile);
@@ -1138,6 +1194,46 @@ pub(super) fn clamp_relay_delays(rows: &mut [ev::Row]) {
 }
 
 impl EventHost<'_> {
+    fn projectile_op(&mut self, d: &Dispatch, op: &ev::ProjectileOp) -> Result<Apply> {
+        let Some(contact) = self
+            .session
+            .events
+            .projectile_activations
+            .get(&d.origin)
+            .copied()
+            .filter(|c| c.projectile == d.target.id.index)
+        else {
+            return Ok(Apply::Rejected(
+                "missing original projectile contact".into(),
+            ));
+        };
+        // The contact query already ran the zero-delay response. Work-budget
+        // postponement must not reflect or delete that original twice.
+        if d.delay_ms == 0 {
+            return Ok(Apply::Applied);
+        }
+        use bri_weapons::ContactResponse as R;
+        let response = match op {
+            ev::ProjectileOp::Delete => R::Delete,
+            ev::ProjectileOp::Explode => R::Explode,
+            ev::ProjectileOp::Bounce(factor) => R::Bounce(*factor),
+            ev::ProjectileOp::Redirect { vector, normalized } => R::Redirect {
+                vector: *vector,
+                normalized: *normalized,
+            },
+        };
+        Ok(
+            if self.session.weapons.respond_projectile(
+                contact.projectile,
+                contact.normal,
+                response,
+            )? {
+                Apply::Applied
+            } else {
+                Apply::Rejected("original projectile has expired".into())
+            },
+        )
+    }
     fn edit(&mut self, brick: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.session.simulation.mutate(brick, change)?;
         self.session.dirty.insert(brick);
@@ -1839,7 +1935,7 @@ impl ev::Host for EventHost<'_> {
                     entity.id.index,
                 ))
                 .is_some(),
-            Class::Projectile => false,
+            Class::Projectile => s.weapons.projectile(entity.id.index).is_some(),
         }
     }
     fn permitted(&self, context: &Trigger, target: Entity, _output: &str) -> bool {
@@ -1862,7 +1958,13 @@ impl ev::Host for EventHost<'_> {
                 .vehicle_spawn_brick(bri_vehicles::VehicleId(target.id.index))
                 .and_then(|b| bricks.get(&b))
                 .is_some_and(|b| b.owner == owner),
-            Class::Projectile => false,
+            Class::Projectile => {
+                context.targets.get(&Slot::Projectile) == Some(&target)
+                    && s.events
+                        .projectile_activations
+                        .get(&context.origin)
+                        .is_some_and(|contact| contact.projectile == target.id.index)
+            }
         }
     }
     fn relay_neighbors(
@@ -1896,9 +1998,7 @@ impl ev::Host for EventHost<'_> {
             Intent::Player(op) => self.player_op(dispatch, op),
             Intent::Client(op) => self.client_op(dispatch, op),
             Intent::MiniGame(op) => self.minigame_op(dispatch, op),
-            Intent::Projectile(_) => Ok(Apply::Rejected(
-                "projectile outputs are not available yet".into(),
-            )),
+            Intent::Projectile(op) => self.projectile_op(dispatch, op),
             Intent::Package(call) => Ok(self.session.package_output(dispatch, call)),
         };
         result.unwrap_or_else(|error| Apply::Rejected(format!("{error:#}")))

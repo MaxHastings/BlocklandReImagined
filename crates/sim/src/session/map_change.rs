@@ -177,6 +177,7 @@ impl Session {
         let owners: Vec<_> = self.peers.keys().copied().collect();
         for owner in owners {
             self.packages_joined(owner);
+            self.notify_music_tracks(owner);
         }
         Ok(())
     }

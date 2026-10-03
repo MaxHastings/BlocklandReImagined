@@ -1,7 +1,8 @@
 // Rotondo's pinned Bot_Shark policy. The engine supplies actor mechanics;
 // this companion chooses appearance, buoyancy, contact capture and release.
 fn shark(p) { p != () && p.model == "{{namespace}}:asset/shark.dts" }
-fn owned_shark(p) { shark(p) && p.bot_kind.starts_with("{{namespace}}:") }
+fn owned_bot(p) { p != () && p.bot && p.bot_kind.starts_with("{{namespace}}:") }
+fn owned_shark(p) { shark(p) && owned_bot(p) }
 fn carries(id) {
     for p in players() { if p.mount == id { return true; } }
     for p in bots() { if p.mount == id { return true; } }
@@ -43,7 +44,7 @@ fn initialize(p) {
     }
     #{white: choice == 0, cool: cool}
 }
-fn release_grab(id) {
+fn release_grab(id, interrupted) {
     let grabs = get("grabs");
     let key = `${id}`;
     if !(key in grabs) { return; }
@@ -54,19 +55,39 @@ fn release_grab(id) {
     if victim != () {
         if victim.mount == id { unmount_object(victim.id); }
         orbit_camera(victim.id, ());
-        if victim.alive { play_thread(victim.id, 2, "root"); }
+        if victim.alive { play_thread(victim.id, 0, "root"); }
     }
     let holder = player(id);
-    if holder != () && holder.bot {
-        rest_bot(id, false);
-        if holder.alive { play_thread(id, 2, "root"); }
+    if owned_bot(holder) {
+        // The source delays startHoleLoop by 2000ms after a harm release.
+        // Keep the existing resting adaptation through that exact interval.
+        if interrupted && holder.alive {
+            let restarts = get("restarts");
+            restarts[key] = #{at: tick() + 240, game: grab.game, victim: grab.victim};
+            set("restarts", restarts);
+        } else { rest_bot(id, false); }
+        if holder.alive { play_thread(id, 1, "root"); }
     }
 }
+fn cancel_restart(id) {
+    let restarts = get("restarts");
+    let key = `${id}`;
+    if !(key in restarts) { return; }
+    restarts.remove(key);
+    set("restarts", restarts);
+    let holder = player(id);
+    if owned_bot(holder) { rest_bot(id, false); }
+}
 fn release_actor(id) {
+    cancel_restart(id);
+    let restarts = get("restarts");
+    for key in restarts.keys() {
+        if restarts[key].victim == id { cancel_restart(parse_int(key)); }
+    }
     let grabs = get("grabs");
     for key in grabs.keys() {
         let grab = grabs[key];
-        if grab.holder == id || grab.victim == id { release_grab(grab.holder); }
+        if grab.holder == id || grab.victim == id { release_grab(grab.holder, false); }
     }
 }
 fn on_spawn(id) {
@@ -84,9 +105,13 @@ fn on_minigame(event) {
         set("known", known);
     }
     if event.kind in ["reset", "ended", "round_end", "configured", "loaded", "teams"] {
+        let restarts = get("restarts");
+        for key in restarts.keys() {
+            if restarts[key].game == event.game { cancel_restart(parse_int(key)); }
+        }
         let grabs = get("grabs");
         for key in grabs.keys() {
-            if grabs[key].game == event.game { release_grab(grabs[key].holder); }
+            if grabs[key].game == event.game { release_grab(grabs[key].holder, false); }
         }
     } else if event.kind in ["joined", "left", "team", "kicked"] && event.player != () {
         release_actor(event.player);
@@ -104,7 +129,7 @@ fn on_damage(victim_id, attacker, amount, info) {
         // Source's 200ms grace prevents the captured victim's contact from
         // immediately cancelling the bite. Damage beyond it may free them.
         if tick() - grab.at < 24 { return 0.0; }
-        if amount >= 50.0 || roll(victim_id, 31, 4) == 0 { release_grab(victim_id); }
+        if amount >= 50.0 || roll(victim_id, 31, 4) == 0 { release_grab(victim_id, true); }
     }
     if attacker == () || info.kind != "weapon" || info.type != "Bite" { return (); }
     let holder = player(attacker);
@@ -114,6 +139,8 @@ fn on_damage(victim_id, attacker, amount, info) {
     // v20 miniGameCanDamage returns -1 outside a mini-game; the source
     // collision policy refuses that case rather than creating a sandbox bite.
     if holder.minigame == () { return 0.0; }
+    let restarts = get("restarts");
+    if `${attacker}` in restarts { return 0.0; }
     if `${attacker}` in grabs { return 0.0; }
     if victim.mounted || victim.minigame != holder.minigame || !can_damage(attacker, victim_id) {
         return ();
@@ -144,7 +171,7 @@ fn on_damage(victim_id, attacker, amount, info) {
     mount_object(attacker, victim_id, node, false, 0.0);
     if !victim.bot { orbit_camera(victim_id, attacker, 1.0, 10.0, 10.0); }
     rest_bot(attacker, true);
-    if node == 3 { play_thread(attacker, 2, "biteReady"); play_thread(victim_id, 2, "biteFix"); }
+    if node == 3 { play_thread(attacker, 1, "biteReady"); play_thread(victim_id, 0, "biteFix"); }
     grabs[`${attacker}`] = #{holder: attacker, victim: victim_id, game: holder.minigame, at: tick()};
     set("grabs", grabs);
     0.0
@@ -161,21 +188,30 @@ fn on_tick() {
         }
     }
     set("known", live);
+    let restarts = get("restarts");
+    for key in restarts.keys() {
+        let holder = player(parse_int(key));
+        let victim = player(restarts[key].victim);
+        if !owned_shark(holder) || !holder.alive || holder.minigame != restarts[key].game ||
+           victim == () || !victim.alive || victim.minigame != restarts[key].game ||
+           !can_damage(holder.id, victim.id) ||
+           tick() >= restarts[key].at { cancel_restart(parse_int(key)); }
+    }
     let grabs = get("grabs");
     for key in grabs.keys() {
         let grab = grabs[key];
         let holder = player(grab.holder);
         let victim = player(grab.victim);
-        if !shark(holder) || !holder.alive || victim == () || !victim.alive ||
+        if !owned_shark(holder) || !holder.alive || victim == () || !victim.alive ||
            victim.mount != grab.holder || holder.minigame != grab.game ||
            victim.minigame != grab.game || !can_damage(grab.holder, grab.victim) {
-            release_grab(grab.holder);
+            release_grab(grab.holder, false);
         } else if tick() - grab.at >= 600 {
             // Permission and actual mount were observed just above. Ordinary
             // attributed damage retains score/death policy and cannot recurse.
             // Release first: ordinary lethal damage itself clears mounts,
             // so a later unmount would target an already-cleared relationship.
-            release_grab(grab.holder);
+            release_grab(grab.holder, false);
             damage(grab.victim, 1000.0, grab.holder);
         }
     }

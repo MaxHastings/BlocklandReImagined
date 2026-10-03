@@ -474,6 +474,24 @@ pub struct BotUse {
     /// as the Gravity Gun, grabs from right up close).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub near: Option<f32>,
+    /// Grounded mechanics supplied by this image's package. Unknown script
+    /// effects are never inferred from an item's name or command string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manipulation: Option<BotManipulation>,
+}
+/// Experimental bot affordances for ordinary image-trigger mechanics.
+/// This describes the executor's limits; it is not an object-transport action.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BotManipulation {
+    /// Trigger down acquires/maintains a native physical hold; trigger up
+    /// releases it. Force is the existing hold's force ceiling.
+    Hold {
+        near: f32,
+        reach: f32,
+        force: f32,
+        turn: bool,
+    },
 }
 /// How a bot pulls an image's trigger.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2650,6 +2668,25 @@ impl Pack {
                     && b.near.is_none_or(|n| b.reach.is_none_or(|r| n < r))),
                 "Invalid image bot reach or near"
             );
+            if let Some(BotManipulation::Hold {
+                near, reach, force, ..
+            }) = image.bot.and_then(|b| b.manipulation)
+            {
+                ensure!(
+                    near.is_finite()
+                        && reach.is_finite()
+                        && force.is_finite()
+                        && near > 0.0
+                        && near < reach
+                        && reach <= 2000.0
+                        && force > 0.0
+                        && image.bot.is_some_and(|b| b.fire == BotFire::Hold)
+                        && (image.command.is_some() || !image.commands.states.is_empty())
+                        && image.projectile.is_none()
+                        && !image.melee,
+                    "Invalid image bot hold manipulation"
+                );
+            }
             ensure!(
                 image.command.as_deref().is_none_or(is_image_command)
                     && image.commands.states.len() <= 16

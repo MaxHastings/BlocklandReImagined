@@ -197,6 +197,84 @@ fn capability(
     Some(cap)
 }
 
+/// Cheap conservative availability for utility arbitration, not an aim or
+/// safety decision. Unknown attack mechanisms retain the ordinary fallback.
+pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
+    let Some(actor) = session.weapons.actor(ActorId(bot)) else {
+        return false;
+    };
+    if actor.inventory.len() > tactics::MAX_CANDIDATES {
+        return true;
+    }
+    let scale = session
+        .peers
+        .get(&bot)
+        .map_or(1.0, |p| p.player.state().scale);
+    for (slot, item) in actor.inventory.iter().enumerate() {
+        let Some(item) = item else {
+            continue;
+        };
+        let Some(image) = session
+            .weapons
+            .pack
+            .items
+            .get(item)
+            .and_then(|i| session.weapons.pack.images.get(&i.image))
+        else {
+            return true;
+        };
+        let projectile = image
+            .projectile
+            .as_ref()
+            .and_then(|id| session.weapons.pack.projectiles.get(id));
+        if let Some(cap) = capability(image, projectile, scale) {
+            if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 {
+                continue;
+            }
+            let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
+            if ammo.as_ref().is_none_or(|a| {
+                available_rounds(a) >= cap.rounds_per_attack
+                    || matches!(a.reserve, bri_weapons::Reserve::Endless)
+                    || matches!(a.reserve,bri_weapons::Reserve::Rounds(n) if n > 0)
+            }) {
+                return true;
+            }
+            continue;
+        }
+        // Only an explicit manipulation descriptor with no native attack
+        // metadata identifies a noncombat tool. No IDs or command-name guesses.
+        if !known_noncombat_manipulation(image) {
+            return true;
+        }
+    }
+    false
+}
+
+fn known_noncombat_manipulation(image: &bri_weapons::Image) -> bool {
+    image.bot.and_then(|b| b.manipulation).is_some()
+        && image.projectile.is_none()
+        && !image.melee
+        && image.shot.is_none()
+        && image.volleys.is_empty()
+        && image.last_shot.is_none()
+        && image.state_shots.is_empty()
+        && image.scripts.is_empty()
+        && image.left_image.is_none()
+        && image.cook.is_none()
+}
+
+fn available_rounds(a: &bri_weapons::runtime::AmmoView) -> u32 {
+    if a.supply == bri_weapons::Supply::Both && !matches!(a.reserve, bri_weapons::Reserve::Endless)
+    {
+        match a.reserve {
+            bri_weapons::Reserve::Rounds(n) => a.rounds.min(n),
+            _ => a.rounds,
+        }
+    } else {
+        a.rounds
+    }
+}
+
 fn movement_weapon(cap: Capability) -> Weapon {
     let (speed, fall) = match cap.delivery {
         Delivery::Projectile(f) => (f.speed, f.fall_per_tick * bri_weapons::TICK_HZ as f32),
@@ -290,18 +368,7 @@ pub(super) fn choose(
             continue;
         }
         let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
-        let ready_rounds = ammo.as_ref().map(|a| {
-            if a.supply == bri_weapons::Supply::Both
-                && !matches!(a.reserve, bri_weapons::Reserve::Endless)
-            {
-                match a.reserve {
-                    bri_weapons::Reserve::Rounds(n) => a.rounds.min(n),
-                    _ => a.rounds,
-                }
-            } else {
-                a.rounds
-            }
-        });
+        let ready_rounds = ammo.as_ref().map(available_rounds);
         if ready_rounds.is_some_and(|n| n < cap.rounds_per_attack) {
             continue;
         }
@@ -963,5 +1030,33 @@ mod tests {
         assert!(!trigger(&image, armed, true, true, true).down);
         let abandoned = trigger(&image, armed, true, false, false);
         assert!(!abandoned.down && abandoned.abort_charge);
+    }
+
+    #[test]
+    fn typed_hold_with_an_independent_native_script_attack_keeps_combat_fallback() {
+        let pack = bri_weapons::Pack::from_json(include_bytes!(
+            "../../../../../packages/showcase/gravity-gun-tool/assets/weapons.json"
+        ))
+        .unwrap();
+        let mut image = pack.images.values().next().unwrap().clone();
+        assert!(known_noncombat_manipulation(&image));
+        image.id = "unfamiliar:image/hybrid".into();
+        image.scripts.insert(
+            "onsecondary".into(),
+            bri_weapons::Script {
+                arm: String::new(),
+                fire: true,
+                projectile: Some("unfamiliar:projectile/attack".into()),
+                use_up: false,
+            },
+        );
+        assert!(image.projectile.is_none());
+        assert!(!known_noncombat_manipulation(&image));
+        image.scripts.clear();
+        image.bot = None;
+        assert!(
+            !known_noncombat_manipulation(&image),
+            "an opaque command tool needs explicit capability semantics"
+        );
     }
 }

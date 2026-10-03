@@ -75,7 +75,7 @@ impl Session {
             Class::Player | Class::Client => self.peers.contains_key(&e.id.index),
             Class::MiniGame => self.minigames.game(mg::GameId(e.id.index)).is_ok(),
             Class::Vehicle => self.object_centre(ObjectRef::Vehicle(e.id.index)).is_some(),
-            Class::Projectile => false,
+            Class::Projectile => self.weapons.projectile(e.id.index).is_some(),
         };
         if !exists {
             return None;
@@ -136,7 +136,7 @@ impl Session {
                 Class::Player | Class::Client => self.peers.contains_key(&e.id.index),
                 Class::MiniGame => self.minigames.game(mg::GameId(e.id.index)).is_ok(),
                 Class::Vehicle => self.object_centre(ObjectRef::Vehicle(e.id.index)).is_some(),
-                Class::Projectile => false,
+                Class::Projectile => self.weapons.projectile(e.id.index).is_some(),
             })));
         }
         let e = entity?;
@@ -396,10 +396,20 @@ impl Session {
                     .objective_diagnostic
                     .map(str::to_string)
                     .unwrap_or_else(|| {
-                        format!(
-                            "{}; objective brick {}",
-                            thought.behaviour,
-                            thought.objective.unwrap_or(brick)
+                        thought.objective_detail.as_ref().map_or_else(
+                            || {
+                                format!(
+                                    "{}; objective brick {}",
+                                    thought.behaviour,
+                                    thought.objective.unwrap_or(brick)
+                                )
+                            },
+                            |detail| {
+                                format!(
+                                    "{}; {} via {}: {}",
+                                    detail.desired, detail.action, detail.provider, detail.phase
+                                )
+                            },
                         )
                     });
                 format!("[NPC {name}] {status}")
@@ -669,6 +679,7 @@ impl Session {
                     game: Some(game),
                     killer,
                     object: None,
+                    ..Default::default()
                 },
             );
         }
@@ -1654,6 +1665,13 @@ mod tests {
         setup_vehicles(addons, pack)
     }
     fn setup_vehicles(addons: bool, pack: bri_vehicles::Pack) -> (Session, OwnerId, OwnerId) {
+        setup_vehicle_weapons(addons, pack, None)
+    }
+    fn setup_vehicle_weapons(
+        addons: bool,
+        pack: bri_vehicles::Pack,
+        weapons: Option<bri_weapons::Pack>,
+    ) -> (Session, OwnerId, OwnerId) {
         let definitions = Definitions {
             entries: [
                 (
@@ -1677,6 +1695,9 @@ mod tests {
         )
         .unwrap();
         let mut s = Session::new(simulation);
+        if let Some(weapons) = weapons {
+            s.set_weapon_pack(weapons).unwrap();
+        }
         s.set_lan_host(true);
         s.set_event_catalog(ev::testing::catalog_extended(), Vec::new())
             .unwrap();
@@ -2095,6 +2116,119 @@ mod tests {
             "reset remains scheduled independently of who scored"
         );
     }
+    #[test]
+    fn native_projectile_push_credits_real_object_entry_but_zero_impulse_does_not() {
+        use crate::player::MoveInput;
+        for impulse in [1800.0, 0.0] {
+            let pack = bri_vehicles::testing::pack_with(|d| {
+                if d.id == bri_vehicles::testing::BALL {
+                    d.name = "Steel Ball".into();
+                }
+            });
+            let mut weapons = bri_weapons::testing::pack();
+            let shot = weapons
+                .projectiles
+                .get_mut(bri_weapons::testing::GUN_PROJECTILE)
+                .unwrap();
+            shot.damage = 0.0;
+            shot.impulse = impulse;
+            shot.brick.direct = false;
+            let (mut s, owner, _) = setup_vehicle_weapons(false, pack, Some(weapons));
+            let ids = s.create_rule_lab(owner, "soccer").unwrap();
+            // Author a single unambiguous shooting lane before simulation.
+            s.simulation
+                .mutate(ids[3], |b| b.position = [-30.0, 1.1, -30.0])
+                .unwrap();
+            s.respawn_vehicle_brick(ids[2]).unwrap();
+            s.respawn_vehicle_brick(ids[3]).unwrap();
+            let object = s
+                .vehicle_infos()
+                .into_iter()
+                .find(|v| s.vehicle_spawn_brick(VehicleId(v.id)) == Some(ids[2]))
+                .unwrap()
+                .id;
+            let spawn_name = s.simulation.state().bricks[&ids[2]].name.clone().unwrap();
+            let conditions = vec![
+                Condition {
+                    subject: Subject::Object,
+                    property: Property::SpawnedBy,
+                    key: String::new(),
+                    compare: ev::rules::Compare::Equal,
+                    value: Datum::Text(spawn_name),
+                },
+                Condition {
+                    subject: Subject::Instigator,
+                    property: Property::Exists,
+                    key: String::new(),
+                    compare: ev::rules::Compare::Equal,
+                    value: Datum::Bool(true),
+                },
+            ];
+            let start = s.object_centre(ObjectRef::Vehicle(object)).unwrap();
+            let goal = start + Vec3::X * 6.0;
+            let mut win = lab_programs("soccer")[0].1[0].clone();
+            win.output = "winRound".into();
+            win.target = ev::Target::Slot(Slot::Instigator);
+            win.params.clear();
+            win.conditions = conditions;
+            s.simulation
+                .mutate(ids[0], |b| {
+                    b.position = goal.to_array();
+                    b.rule_region = Some([2.0, 12.0, 8.0]);
+                    b.colliding = false;
+                    b.events = vec![win];
+                })
+                .unwrap();
+            s.simulation.mutate(ids[1], |b| b.events.clear()).unwrap();
+            s.dirty.extend(ids.iter().copied());
+            let slot = s.give_item(owner, bri_weapons::testing::GUN_ITEM).unwrap();
+            s.equip_tool(owner, Some(slot)).unwrap();
+            let mut sequence = 0;
+            for _ in 0..60 {
+                sequence += 1;
+                s.movement(owner, sequence, MoveInput::default()).unwrap();
+                s.step().unwrap();
+            }
+            let start = s.object_centre(ObjectRef::Vehicle(object)).unwrap();
+            let eye = Vec3::from(s.peers[&owner].player.state().feet) + Vec3::Y * 2.4;
+            let direction = (start - eye).normalize();
+            let look = MoveInput {
+                yaw: direction.x.atan2(-direction.z),
+                pitch: direction.y.asin(),
+                ..Default::default()
+            };
+            sequence += 1;
+            s.movement(owner, sequence, look).unwrap();
+            s.step().unwrap();
+            s.command(owner, 1, Command::WeaponTrigger { down: true })
+                .unwrap();
+            for tick in 0..600 {
+                if tick == 1 {
+                    s.command(owner, 2, Command::WeaponTrigger { down: false })
+                        .unwrap();
+                }
+                sequence += 1;
+                s.movement(owner, sequence, look).unwrap();
+                s.step().unwrap();
+            }
+            let end = s.object_centre(ObjectRef::Vehicle(object)).unwrap();
+            if impulse > 0.0 {
+                assert!(
+                    end.x - start.x > 5.0,
+                    "native projectile moved body: {start:?} -> {end:?}"
+                );
+                assert!(
+                    s.round_results().any(|r| r.owners == vec![owner]),
+                    "actual object entry must name its shooter as the canonical winner"
+                );
+            } else {
+                assert!((end.x - start.x).abs() < 0.1);
+                assert_eq!(s.mover_credit(ObjectRef::Vehicle(object)), None);
+                assert_eq!(s.round_results().count(), 0);
+            }
+        }
+    }
+
     #[test]
     fn object_region_credits_the_authored_driver_in_a_reordered_seat_layout() {
         let pack = bri_vehicles::testing::pack_with(|d| {

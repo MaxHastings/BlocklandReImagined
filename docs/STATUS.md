@@ -20,7 +20,19 @@ verified body/swim/mouth-capture behavior, and bounded NPC planning/recovery has
 focused real-control coverage. Blast debris lasts 10 seconds plus a 3-second
 fade. See the [short mutation guide](rule-workshop/V0.2.2-PLAYTEST.md) and
 [integration evidence](progress/2026-10-03-v022-root-integration-and-cleanup.md).
-Sustained measurements, full gate, Windows CI and publication remain pending.
+The [delivery contract](v022-delivery-contract.md) now includes the objective
+pipeline integration and all fourteen real-control journeys plus a held-out
+composition. The [current architecture audit](audits/npc-pipeline-current.md)
+records the initial gaps and current linked implementation. Physical contact,
+declared hold, control-seat delivery, elimination/search, package pickup/return
+and a held-out composition have focused real-control evidence. The independent
+tool-loss and revoked-guard causal tests now pass. Renamed/reordered variants
+pass, and independent source/headless review signs off the fourteen journeys
+plus held-out composition. Sustained active measurements, full gate, Windows
+CI and publication remain pending. The same release also
+requires the reported duplicator render-budget crash fix and modern Dynamic
+lighting, now under isolated implementation/review. Classic and Unified retain
+their existing appearance. No v0.2.2 build is published yet.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in

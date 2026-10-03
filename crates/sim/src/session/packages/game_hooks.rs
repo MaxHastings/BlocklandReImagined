@@ -311,7 +311,7 @@ impl Session {
     /// drop points, past every spawn brick.
     pub(in crate::session) fn package_pick_spawn(&mut self, owner: OwnerId) -> Option<(Vec3, f32)> {
         let host = self.packages.as_ref()?;
-        if self.bots.is_brick_bot(owner) || host.game_hooks.picking {
+        if !self.package_participant(owner) || host.game_hooks.picking {
             return None;
         }
         let hooks = declaring(host, |b| b.on_pick_spawn);
@@ -426,7 +426,7 @@ impl Session {
         let bodies: Vec<(OwnerId, Vec3, Vec3)> = self
             .peers
             .iter()
-            .filter(|(o, p)| p.combat.alive && !self.bots.is_brick_bot(**o))
+            .filter(|(o, p)| p.combat.alive && self.package_participant(**o))
             .map(|(o, p)| {
                 let state = p.player.state();
                 let tuning = p.player.tuning();

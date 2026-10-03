@@ -21,6 +21,7 @@ then what players are asked to trust when your Add-On runs code on their PC
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations ([Game rules](rules.md)), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write ([Other content kinds](content-kinds.md)) |
 | A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write ([Other content kinds](content-kinds.md)) |
+| A package-owned bot pickup/return objective | [Experimental bot objectives](bot-objectives.md) | a bounded read-only declaration of existing pickup, carriage, zone and completion policy |
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows ([Other content kinds](content-kinds.md)) |
 | New bricks | a v20-style brick Add-On you import ([Old v20 Add-Ons and new bricks](old-addons.md)) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |

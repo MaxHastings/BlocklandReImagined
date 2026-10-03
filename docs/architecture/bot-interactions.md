@@ -16,6 +16,14 @@ handover have different meanings.
 
 ## Small set of rules
 
+**Bots know affordances, not content. Games expose objectives, not bot scripts.**
+An authoritative rule or package describes the desired state; capability
+providers describe grounded actions that can change it. Planning composes them,
+ordinary gameplay executes them, and actual observations determine progress.
+The current integration acceptance contract is
+[objective-driven-integration.md](../audits/objective-driven-integration.md).
+Its open items are requirements, not claims of implemented competence.
+
 1. **Observe before deciding.** Nearby objects provide opportunities through
    their existing capabilities and geometry. Expensive geometry observations are
    shared for a tick; occupancy is read live so one bot boarding cannot leave

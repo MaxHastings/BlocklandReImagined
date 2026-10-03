@@ -90,6 +90,12 @@ Use explicit versioned content/save schemas, stable authored IDs, and independen
 physics/render identities. World state owns the game; adapters derive views.
 Do not implement structural fracture/collapse or a general TorqueScript VM.
 
+Bots know affordances, not content. Games expose objectives, not bot scripts.
+Discover success through authoritative rules/provider semantics, compose only
+grounded capabilities, execute ordinary controls, and replan from observed
+outcomes. Content names never stand in for mechanics; unknown semantics remain
+explicitly unsupported. See `docs/audits/objective-driven-integration.md`.
+
 Record meaningful decisions, evidence, commands, failures and next work as a
 new file in `docs/progress/` (one file per entry; see its README).
 `docs/progress.md` holds the history before 2026-10-01. Check off acceptance items only with evidence. Keep the

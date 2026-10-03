@@ -467,6 +467,7 @@ impl App {
                 Ok(())
             }
             UiAction::Game(GameAction::Screenshot { kind }) => {
+                let format = bri_ui::screens::options::screenshot_format(&self.ui.core.prefs);
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis());
@@ -474,7 +475,7 @@ impl App {
                     path: self
                         .state_dir
                         .join("screenshots")
-                        .join(format!("Blockland_{stamp}.png")),
+                        .join(format!("Blockland_{stamp}.{}", format.extension())),
                     hud: kind == ScreenshotKind::Normal,
                 });
                 Ok(())

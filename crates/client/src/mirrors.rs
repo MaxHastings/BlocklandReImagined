@@ -474,13 +474,13 @@ mod tests {
         )]));
         super::debris(&debris, &other, Vec3::ZERO, &mut none);
         assert!(none.is_empty());
-        // The hammered brick fades within a second or two; its mirror
-        // fades with it, then goes.
+        // The hammered brick fades within a second or two. Blast debris
+        // keeps its mirror through the longer solid/fade interval.
         debris_tests_run(&mut debris, &building, 0.8);
         out.clear();
         super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
         assert!(out.iter().any(|m| m.strength < 1.0 && m.strength > 0.0));
-        debris_tests_run(&mut debris, &building, 6.0);
+        debris_tests_run(&mut debris, &building, 14.0);
         out.clear();
         super::debris(&debris, &mirrored, Vec3::ZERO, &mut out);
         assert!(out.is_empty() && !debris_reflects(&debris, &mirrored));

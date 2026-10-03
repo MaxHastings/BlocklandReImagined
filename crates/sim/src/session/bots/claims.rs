@@ -16,6 +16,12 @@ pub(super) enum Resource {
 }
 
 impl Resource {
+    fn conflicts(self, other: Self) -> bool {
+        self == other
+            || self.vehicle() == other.vehicle()
+                && (matches!(self, Self::Body { .. }) || matches!(other, Self::Body { .. }))
+    }
+
     pub(super) fn vehicle(self) -> u64 {
         match self {
             Self::Seat { vehicle, .. } | Self::Body { vehicle } => vehicle,
@@ -55,7 +61,7 @@ impl Claims {
         self.active
             .values()
             .copied()
-            .find(|c| c.resource == resource && tick < c.deadline)
+            .find(|c| c.resource.conflicts(resource) && tick < c.deadline)
     }
 
     pub(super) fn cooling_down(&self, owner: OwnerId, resource: Resource, tick: u64) -> bool {
@@ -187,6 +193,34 @@ impl Claims {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn body_manipulation_and_vehicle_crew_conflict_but_distinct_seats_do_not() {
+        use super::*;
+        let body = Resource::Body { vehicle: 17 };
+        let driver = Resource::Seat {
+            vehicle: 17,
+            seat: 0,
+        };
+        let gunner = Resource::Seat {
+            vehicle: 17,
+            seat: 2,
+        };
+        let elsewhere = Resource::Seat {
+            vehicle: 18,
+            seat: 0,
+        };
+        let mut claims = Claims::default();
+        assert!(claims.acquire(1, 1, body, 5.0, 10));
+        assert!(!claims.acquire(2, 2, driver, 5.0, 10));
+        assert!(!claims.acquire(3, 3, gunner, 5.0, 10));
+        assert!(claims.acquire(4, 4, elsewhere, 5.0, 10));
+        claims.release_owner(1);
+        assert!(claims.acquire(2, 2, driver, 5.0, 11));
+        assert!(claims.acquire(3, 3, gunner, 5.0, 11));
+        assert!(!claims.acquire(1, 1, body, 5.0, 11));
+        assert_eq!(claims.resource_claim(body, 11).unwrap().owner, 2);
+    }
+
     use super::*;
 
     fn seat(vehicle: u64) -> Resource {

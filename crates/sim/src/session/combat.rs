@@ -1154,10 +1154,20 @@ impl Session {
         let killer_player = killer
             .and_then(|k| self.peers.get(&k))
             .map(|p| p.combat.player);
+        let game = self.game_of(victim);
+        let round = game.and_then(|g| self.minigames.game(g).ok().map(|g| g.round));
         let effects = self
             .minigames
             .died(player, life, killer_player)
             .map_err(|e| anyhow::anyhow!("Death rejected: {e}"))?;
+        let death = super::DeathResult {
+            victim,
+            life,
+            killer: killer.filter(|k| self.peers.contains_key(k)),
+            game: game.map(|g| g.0),
+            round,
+            tick,
+        };
         // Radius deaths within 0.1 s of a direct hit report the direct type.
         let kind = match (&kind, &peer.combat.last_direct) {
             (
@@ -1197,6 +1207,7 @@ impl Session {
             peer.inputs.clear();
             peer.control = super::ControlObject::Corpse;
         }
+        self.observe_death_result(death);
         self.weapons.trigger(ActorId(victim), false)?;
         self.weapon_triggers.remove(&victim);
         // `armor::onDisabled` drops a held ball before the body goes limp.
@@ -1883,6 +1894,17 @@ impl Session {
     pub(super) fn apply_minigame_effects(&mut self, effects: Vec<mg::Effect>) -> Result<()> {
         let tick = self.simulation.state().tick;
         for effect in effects {
+            self.observe_round_result(&effect);
+            if let mg::Effect::Membership {
+                player,
+                game: Some(_),
+                ..
+            } = &effect
+                && let Some(owner) = self.owner_of(*player)
+                && self.is_bot(owner)
+            {
+                self.ensure_package_player_defaults(owner);
+            }
             self.rule_minigame_effect(&effect);
             self.note_minigame_effect(&effect);
             match effect {

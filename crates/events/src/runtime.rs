@@ -321,6 +321,12 @@ impl EventWorld {
     pub fn pending(&self) -> usize {
         self.pending
     }
+    /// Whether this activation still owns queued or held work. Hosts use this
+    /// bounded origin index to retire transient activation observations.
+    pub fn pending_origin(&self, origin: u64) -> bool {
+        self.queues.get(&origin).is_some_and(|q| !q.is_empty())
+            || self.held_origins.contains_key(&origin)
+    }
     /// The per-phase and per-owner work limits this world runs under.
     pub fn limits(&self) -> Limits {
         self.limits
@@ -1031,7 +1037,14 @@ impl EventWorld {
                 host.trace(
                     job.context.source,
                     job.row,
-                    "Skipped: source, target or triggering client no longer exists".into(),
+                    if job.target.class == Class::Projectile && !host.alive(job.target) {
+                        format!(
+                            "Skipped: original projectile {} no longer exists",
+                            job.target.id.index
+                        )
+                    } else {
+                        "Skipped: source, target or triggering client no longer exists".into()
+                    },
                 );
                 r.stale += 1;
                 self.charge(&mut r, &mut spent, charge);
@@ -1344,6 +1357,7 @@ impl EventWorld {
             },
             scheduled_us: j.due,
             now_us: self.now,
+            delay_ms: j.row_snapshot.delay_ms,
             intent,
         };
         let applied = host.apply(&dispatch);

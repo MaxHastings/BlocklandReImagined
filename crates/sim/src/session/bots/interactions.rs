@@ -12,6 +12,77 @@ const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 
+#[derive(Clone, Copy)]
+struct PushApproach {
+    point: Vec3,
+    pushing: bool,
+}
+
+pub(super) fn push_point(
+    feet: Vec3,
+    centre: Vec3,
+    toward: Vec3,
+    radius: f32,
+    width: f32,
+) -> Option<Vec3> {
+    push_approach(feet, centre, toward, radius, width).map(|approach| approach.point)
+}
+
+/// Static navigation cannot see this moving body. An intermediate arc keeps
+/// ordinary approach chords outside its expanded hull before pushing from the
+/// actual rear axis. Work is constant and collision remains the motor's owner.
+fn push_approach(
+    feet: Vec3,
+    centre: Vec3,
+    toward: Vec3,
+    radius: f32,
+    width: f32,
+) -> Option<PushApproach> {
+    if !feet.is_finite()
+        || !centre.is_finite()
+        || !toward.is_finite()
+        || !radius.is_finite()
+        || radius <= 0.0
+        || !width.is_finite()
+        || width <= 0.0
+    {
+        return None;
+    }
+    let toward = flat(toward).try_normalize()?;
+    let back = -toward;
+    let offset = flat(feet - centre);
+    let distance = offset.length();
+    if !distance.is_finite() {
+        return None;
+    }
+    let along = offset.dot(back);
+    let lateral = (offset - back * along).length();
+    let path_radius = radius + 0.35;
+    let pushing = along > 0.0 && lateral < (width * 0.2).max(0.1) && distance < path_radius + 0.5;
+    let point = if pushing {
+        centre + toward * (radius + 1.5)
+    } else {
+        let radial = offset.try_normalize().unwrap_or(back);
+        if distance <= radius {
+            centre + radial * path_radius
+        } else {
+            let angle = radial.dot(back).clamp(-1.0, 1.0).acos();
+            let safe = ((radius / distance).clamp(0.0, 1.0).acos()
+                + (radius / path_radius).clamp(0.0, 1.0).acos())
+                * 0.8;
+            let turn = angle.min(safe);
+            let sign = if radial.x * back.z - radial.z * back.x >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let side = Vec3::new(-radial.z, 0.0, radial.x);
+            centre + (radial * turn.cos() + side * (sign * turn.sin())) * path_radius
+        }
+    };
+    point.is_finite().then_some(PushApproach { point, pushing })
+}
+
 fn object_centre(v: &VehicleSnapshot, d: &bri_vehicles::Definition) -> Vec3 {
     Vec3::from(v.transform.position)
         + glam::Quat::from_array(v.transform.rotation)
@@ -101,7 +172,16 @@ impl Session {
                     .release_resource(Resource::Body { vehicle: v.id.0 });
             }
             for s in &v.seats {
-                if v.destroyed || s.occupant.is_some() {
+                let retained_objective_seat = s.occupant.is_some_and(|occupant| {
+                    self.bots
+                        .brains
+                        .get(&occupant.owner.0)
+                        .is_some_and(|brain| {
+                            brain.objective.drive(self, occupant.owner.0)
+                                == Some((v.id.0, s.index as u8))
+                        })
+                });
+                if v.destroyed || s.occupant.is_some() && !retained_objective_seat {
                     self.bots.claims.release_resource(Resource::Seat {
                         vehicle: v.id.0,
                         seat: s.index as u8,
@@ -113,7 +193,11 @@ impl Session {
             .bots
             .brains
             .iter()
-            .filter(|(owner, b)| b.resting || !self.is_alive(**owner) || self.seated(**owner))
+            .filter(|(owner, b)| {
+                b.resting
+                    || !self.is_alive(**owner)
+                    || self.seated(**owner) && b.objective.drive(self, **owner).is_none()
+            })
             .map(|(o, _)| *o)
             .collect();
         for o in invalid {
@@ -146,6 +230,52 @@ impl Session {
         })
     }
 
+    /// The same oriented hull-side approach for all ordinary boarding intents.
+    pub(super) fn bot_seat_approach(
+        &self,
+        bot: OwnerId,
+        v: &VehicleSnapshot,
+        seat: u8,
+    ) -> Option<Vec3> {
+        let peer = self.peers.get(&bot)?;
+        let feet = Vec3::from(peer.player.state().feet);
+        let d = self.vehicles.world.as_ref()?.definition(&v.definition)?;
+        let s = v.seats.get(usize::from(seat))?;
+        let rotation = glam::Quat::from_array(v.transform.rotation);
+        let local_seat = rotation.inverse()
+            * (Vec3::from(s.transform.position) - Vec3::from(v.transform.position));
+        let margin = peer.player.tuning().width * 0.5 + 0.2;
+        let min = Vec3::from(d.bounds_min) * v.scale;
+        let max = Vec3::from(d.bounds_max) * v.scale;
+        let x = local_seat.x.clamp(min.x, max.x);
+        let z = local_seat.z.clamp(min.z, max.z);
+        let candidates = [
+            Vec3::new(min.x - margin, 0.0, z),
+            Vec3::new(max.x + margin, 0.0, z),
+            Vec3::new(x, 0.0, min.z - margin),
+            Vec3::new(x, 0.0, max.z + margin),
+        ];
+        candidates
+            .into_iter()
+            .map(|p| {
+                let p = Vec3::from(v.transform.position) + rotation * p;
+                Vec3::new(
+                    p.x,
+                    Vec3::from(v.transform.position).y
+                        + d.wheels
+                            .iter()
+                            .map(|w| (w.position[1] - w.radius - w.rest_length) * v.scale)
+                            .fold(d.bounds_min[1] * v.scale, f32::min),
+                    p.z,
+                )
+            })
+            .filter(|p| p.distance(Vec3::from(s.transform.position)) <= d.mount_distance * v.scale)
+            .min_by(|a, b| {
+                feet.distance_squared(*a)
+                    .total_cmp(&feet.distance_squared(*b))
+            })
+    }
+
     /// A currently legal opportunity from observed object capabilities.
     /// Occupancy and authority are rechecked when the action is executed.
     fn bot_opportunity(
@@ -169,7 +299,7 @@ impl Session {
         }
         match resource {
             Resource::Seat { seat, .. } => {
-                let s = v.seats.get(usize::from(seat))?;
+                v.seats.get(usize::from(seat))?;
                 let role = d.seats.get(usize::from(seat))?;
                 if world.seat_occupant(v.id, usize::from(seat)).is_some()
                     || d.family != Family::Wheeled
@@ -209,41 +339,7 @@ impl Session {
                 if !crew && feet.distance(enemy) < 8.0 && d.weapon.is_none() {
                     return None;
                 }
-                let rotation = glam::Quat::from_array(v.transform.rotation);
-                let local_seat = rotation.inverse()
-                    * (Vec3::from(s.transform.position) - Vec3::from(v.transform.position));
-                let margin = peer.player.tuning().width * 0.5 + 0.2;
-                let min = Vec3::from(d.bounds_min) * v.scale;
-                let max = Vec3::from(d.bounds_max) * v.scale;
-                let x = local_seat.x.clamp(min.x, max.x);
-                let z = local_seat.z.clamp(min.z, max.z);
-                let candidates = [
-                    Vec3::new(min.x - margin, 0.0, z),
-                    Vec3::new(max.x + margin, 0.0, z),
-                    Vec3::new(x, 0.0, min.z - margin),
-                    Vec3::new(x, 0.0, max.z + margin),
-                ];
-                let point = candidates
-                    .into_iter()
-                    .map(|p| {
-                        let p = Vec3::from(v.transform.position) + rotation * p;
-                        Vec3::new(
-                            p.x,
-                            Vec3::from(v.transform.position).y
-                                + d.wheels
-                                    .iter()
-                                    .map(|w| (w.position[1] - w.radius - w.rest_length) * v.scale)
-                                    .fold(d.bounds_min[1] * v.scale, f32::min),
-                            p.z,
-                        )
-                    })
-                    .filter(|p| {
-                        p.distance(Vec3::from(s.transform.position)) <= d.mount_distance * v.scale
-                    })
-                    .min_by(|a, b| {
-                        feet.distance_squared(*a)
-                            .total_cmp(&feet.distance_squared(*b))
-                    })?;
+                let point = self.bot_seat_approach(bot, v, seat)?;
                 Some(Opportunity {
                     resource,
                     point,
@@ -279,10 +375,16 @@ impl Session {
                         (inverse * axis).abs().dot(half)
                     }
                 };
-                let behind =
-                    at - direction * (extent(direction) + peer.player.tuning().width * 0.5 + 0.4);
+                let width = peer.player.tuning().width;
+                let approach = push_approach(
+                    feet,
+                    at,
+                    direction,
+                    half.length() + width * 0.5 + 0.15,
+                    width,
+                )?;
                 let radius = extent(Vec3::new(-direction.z, 0.0, direction.x));
-                let point = Vec3::new(behind.x, feet.y, behind.z);
+                let point = Vec3::new(approach.point.x, feet.y, approach.point.z);
                 if self.bot_ally_corridor(bot, at, toward.normalize(), toward.length(), radius) {
                     return None;
                 }
@@ -471,6 +573,44 @@ impl Session {
         })
     }
 
+    /// Common ordinary boarding executor for combat opportunities and plans.
+    /// Approaching is not success; native seat admission remains authoritative.
+    pub(super) fn try_bot_board(
+        &mut self,
+        bot: OwnerId,
+        vehicle: u64,
+        seat: u8,
+        tick: u64,
+    ) -> Result<bool> {
+        if self.mounted(bot) == Some((vehicle, seat)) {
+            return Ok(true);
+        }
+        if !self
+            .bots
+            .objects
+            .iter()
+            .find(|v| v.id.0 == vehicle)
+            .is_some_and(|v| Vec3::from(v.velocity).length() <= 2.0)
+            || !self.vehicle_board_reach(bot, vehicle, seat)
+        {
+            return Ok(false);
+        }
+        match self.board_vehicle(bot, vehicle, seat) {
+            Ok(()) => {
+                let brain = self.bots.brains.get_mut(&bot).unwrap();
+                brain.set_goal(None);
+                brain.vehicle_stuck = 0;
+                Ok(true)
+            }
+            Err(_) => {
+                self.bots
+                    .claims
+                    .fail(bot, Resource::Seat { vehicle, seat }, tick);
+                Ok(false)
+            }
+        }
+    }
+
     pub(super) fn act_bot_interaction(
         &mut self,
         bot: OwnerId,
@@ -482,25 +622,8 @@ impl Session {
         };
         match claim.resource {
             Resource::Seat { vehicle, seat } => {
-                // Approach errors are temporary. Once physically within reach,
-                // action rejection is a failed resource, not an endless retry.
-                if self
-                    .bots
-                    .objects
-                    .iter()
-                    .find(|v| v.id.0 == vehicle)
-                    .is_some_and(|v| Vec3::from(v.velocity).length() <= 2.0)
-                    && self.vehicle_board_reach(bot, vehicle, seat)
-                {
-                    match self.board_vehicle(bot, vehicle, seat) {
-                        Ok(()) => {
-                            self.bots.claims.release_owner(bot);
-                            let brain = self.bots.brains.get_mut(&bot).unwrap();
-                            brain.set_goal(None);
-                            brain.vehicle_stuck = 0;
-                        }
-                        Err(_) => self.bots.claims.fail(bot, claim.resource, tick),
-                    }
+                if self.try_bot_board(bot, vehicle, seat, tick)? {
+                    self.bots.claims.release_owner(bot);
                 }
                 Ok(None)
             }
@@ -538,9 +661,10 @@ impl Session {
                         .progress(bot, feet.distance(o.point), true, tick);
                     brain.push_anchor = Some((vehicle, at));
                 }
-                let behind = flat(feet - at);
-                if flat(feet - o.point).length() < 1.0
-                    && behind.normalize_or_zero().dot(-toward) > 0.85
+                let width = self.peers[&bot].player.tuning().width;
+                let half = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * (v.scale * 0.5);
+                if push_approach(feet, at, toward, half.length() + width * 0.5 + 0.15, width)
+                    .is_some_and(|approach| approach.pushing)
                 {
                     Ok(Some(toward))
                 } else {
@@ -838,7 +962,29 @@ impl Session {
                 .filter(|p| p.through.is_none())
                 .map(|p| flat(p.feet - at));
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
-            let desired_steer = (error * 1.5).clamp(-d.max_steering, d.max_steering);
+            let reversing = error.abs() > 1.8
+                || self.bots.brains[&bot].vehicle_stuck > 360
+                    && self.bots.brains[&bot].vehicle_stuck < 480;
+            let travel_sign = if reversing { -1.0 } else { 1.0 };
+            let heading_error = if reversing {
+                wrap(error + std::f32::consts::PI)
+            } else {
+                error
+            };
+            let hull_forward = flat(glam::Quat::from_array(v.transform.rotation) * Vec3::NEG_Z)
+                .normalize_or_zero();
+            let signed_speed = flat(Vec3::from(v.velocity)).dot(hull_forward);
+            // Reversing changes both the desired hull heading and the tyres'
+            // yaw response. During a direction change, brake first and steer
+            // according to the direction the chassis is actually rolling.
+            let response_sign = if signed_speed.abs() > 0.5 {
+                signed_speed.signum()
+            } else {
+                travel_sign
+            };
+            let yaw_rate = -v.angular_velocity[1];
+            let desired_steer = (response_sign * (heading_error * 1.5 - yaw_rate * 0.25))
+                .clamp(-d.max_steering, d.max_steering);
             let previous = self.peers[&bot].input.yaw;
             // Mouse steering accumulates turn. Close its loop against the
             // actual steering angle rather than feeding enemy aim into it.
@@ -854,16 +1000,6 @@ impl Session {
                         .owner_claim(*other, tick)
                         .is_some_and(|c| c.resource.vehicle() == vehicle)
             });
-            let hull_forward = flat(glam::Quat::from_array(v.transform.rotation) * Vec3::NEG_Z)
-                .normalize_or_zero();
-            let travel_sign = if error.abs() > 1.8
-                || self.bots.brains[&bot].vehicle_stuck > 360
-                    && self.bots.brains[&bot].vehicle_stuck < 480
-            {
-                -1.0
-            } else {
-                1.0
-            };
             let braking = (d.brake_force / d.mass).max(1.0);
             let stopping = speed * 0.3 + speed * speed / (2.0 * braking) + 1.0;
             let travel = hull_forward * travel_sign;
@@ -871,18 +1007,22 @@ impl Session {
             let hazard = self.bot_ally_corridor(bot, at, travel, stopping + 2.0, radius)
                 || !self.bot_vehicle_clear(bot, &v, travel, stopping);
             let waiting = crew_waiting && tick < since + CREW_WAIT && speed < 2.0;
-            input.forward = if toward.is_none() || hazard || waiting {
+            let distance = toward.map_or(0.0, |delta| delta.length());
+            let corner_speed = (d.max_speed * 0.6 / (1.0 + heading_error.abs() * 2.0)).max(2.0);
+            let arrival_speed = (2.0 * braking * distance).sqrt().max(2.0);
+            let brake =
+                signed_speed * travel_sign < -0.5 || speed > corner_speed.min(arrival_speed);
+            input.forward = if toward.is_none() || hazard || waiting || brake {
                 0.0
-            } else if error.abs() > 1.8 {
-                -0.4
             } else {
-                (1.0 - error.abs() * 0.3).clamp(0.25, 0.8)
+                travel_sign * (1.0 - heading_error.abs() * 0.3).clamp(0.25, 0.8)
             };
             input.jump = input.forward == 0.0;
             // Crew claims are bounded independently of steering. A stuck
             // chassis also gives up instead of permanently holding a seat.
             let brain = self.bots.brains.get_mut(&bot).unwrap();
-            let pursuing = brain.memory.is_some() || behaviour == Behaviour::Return;
+            let pursuing = brain.memory.is_some()
+                || matches!(behaviour, Behaviour::Return | Behaviour::Objective);
             let progressed = brain
                 .vehicle_anchor
                 .is_none_or(|old| flat(at - old).length() >= 0.5);
@@ -918,7 +1058,7 @@ impl Session {
                 .is_some_and(|s| w.seat_occupant(v.id, s).is_some());
             let needs_travel = matches!(
                 behaviour,
-                Behaviour::Chase | Behaviour::Search | Behaviour::Return
+                Behaviour::Chase | Behaviour::Search | Behaviour::Return | Behaviour::Objective
             );
             let unusable_gun = role.weapon && !w.weapon_available(v.id);
             input.forward = 0.0;

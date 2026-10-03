@@ -33,7 +33,7 @@ bot does through the same code.
    | Chase | an enemy in sight out of its band | paths to them |
    | Search | an enemy remembered | goes where they were, looks around |
    | Return | strayed from its brick | walks home |
-   | Objective | a supported, worthwhile authored rule goal | plans bounded steps, approaches a source and uses ordinary activation/touch controls |
+   | Objective | a supported, worthwhile rule or declared package goal | plans bounded steps through ordinary brick, contact/hold/drive, combat or pickup/return controls |
    | Wander | otherwise | strolls near its brick (a rules bot near itself) |
 
    A weight of 0 turns a behaviour off (`"chase": 0` makes a guard that
@@ -75,15 +75,28 @@ bot does through the same code.
 
 ## Bounded rule and weapon adapters
 
-The objective adapter summarizes supported rule facts/actions, then executes
-through normal movement and inputs. The existing event scheduler alone applies
-effects. It has finite grounding, search and depth limits; it does not reason
-about arbitrary scripts, ball delivery, hookshot routes or cooperative stacking.
+Objective discovery reads supported creator rules and opt-in typed package
+queries. The bounded planner composes grounded brick inputs, exact spawned-object
+contact/declared hold/ground-seat delivery, native elimination and declared
+pickup/return actions. They share selection, interruption and live validation;
+each executor requests normal controls. The existing event scheduler and native
+package callbacks alone apply their gameplay effects. Real input admission,
+physical state and canonical death/round observations decide what happened;
+a package completion counter does not claim a round winner.
+
+Grounding, search and depth remain finite. Unknown script semantics, thrown-object
+trajectories, hookshot routes, cooperative stacking and aircraft/watercraft
+delivery remain unsupported. Search uses dated enemy evidence, not unseen live
+positions. Source, object incarnation, tool, permission and game/round/team
+changes invalidate assumptions. Explain exposes desired state, selected
+action/provider, phase, proposed route and bounded failure diagnostics.
 An interrupted approach excludes time spent in another behavior, while an event
 that was already scheduled keeps its absolute due time. Failed search reuse
 revalidates the authoritative model, game, round and team before accepting it.
-See [the objective audit](../audits/bot-objective-spike.md) and
+See [the current pipeline and verification limits](../audits/npc-pipeline-current.md),
+[the frozen acceptance contract](../audits/objective-driven-integration.md) and
 [the v0.2.2 evidence](../progress/2026-10-03-sol-npc-hardening.md).
+The [initial objective spike](../audits/bot-objective-spike.md) is historical.
 
 Supported native hand weapons supply mechanical attack descriptors for bounded
 ballistic choice and launch-time safety checks. Unsupported script/mounted
@@ -124,8 +137,9 @@ of a moving target infallible or change damage permissions.
   and death on land). A bot's body may be drawn with its Add-On's own
   model: Import Add-On sets an archetype's `model` to the package's
   converted `shapeFile` (`bot_shark:asset/shark.dts`), and the client draws
-  it in place of the Blockhead, painting each object named as a colour
-  slot (`chest` the torso's) and hiding the rest
+  it in place of the Blockhead, painting objects named as colour slots
+  (`chest` the torso's), showing the selected named avatar accessories,
+  and hiding unselected objects
   (`AvatarAssets::load_bodies`, `body_mesh`).
 - A weapon image's `bot` (`BotUse`): `fire` `tap` (pressed again and
   again, for semi-automatics) or `hold` (held on target: a tool that

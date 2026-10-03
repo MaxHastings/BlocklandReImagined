@@ -175,10 +175,12 @@ a single-player or LAN game (`$Server::LAN`).
 
 **Bots** are players without a connection. `players()` lists only people;
 `bots()` lists the bots, as the same maps, and `player(id)` reads either.
-Bots from bot bricks hear no player hooks. Bots a mini-game's rules add
-(`add_bot`, below) are members like players: `on_spawn`, `on_loadout`,
-`on_leave`, `on_pick_spawn`, zones, `on_death` and `on_minigame` hear them,
-and they keep player state keys while they play (gone when they leave).
+Bots participating in a MiniGame use its package loadout, spawn, leave and
+zone hooks, whether spawned by a brick or by `add_bot` below. Brick bots keep
+their authored home as their first spawn choice; rules-added bots use the
+game's `on_pick_spawn` choice. Free-build brick creatures keep their authored
+equipment. Death and MiniGame callbacks observe canonical changes, and bots
+keep player state keys while they play (gone when they leave).
 `on_join`, input hooks and policies stay for people.
 
 **Bots for a mini-game** (the `bots` capability, v20 Slayer's

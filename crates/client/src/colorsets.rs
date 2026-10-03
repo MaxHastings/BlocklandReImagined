@@ -280,7 +280,9 @@ mod tests {
         assert_eq!(selected(&content, &state, "").unwrap(), None);
     }
 
-    #[cfg(unix)]
+    // macOS rejects these filenames at creation (EILSEQ); Linux accepts them
+    // and exercises the real discovery collision rather than a mock path.
+    #[cfg(target_os = "linux")]
     #[test]
     fn non_utf8_filenames_cannot_alias_a_selectable_palette() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};

@@ -544,7 +544,18 @@ impl Session {
                         self.paint_contact(&impact)?;
                         self.special_projectile_hit(impact.source.0, brick, &impact.definition)?;
                         let source = Some(impact.source.0).filter(|o| self.peers.contains_key(o));
-                        self.fire_input(brick, "onProjectileHit", source);
+                        self.fire_input_with(
+                            brick,
+                            "onProjectileHit",
+                            source,
+                            super::events::InputExtra {
+                                projectile: Some(super::events::ProjectileActivation {
+                                    projectile: impact.projectile,
+                                    normal: impact.normal,
+                                }),
+                                ..Default::default()
+                            },
+                        );
                     }
                 }
                 WeaponEvent::Effect {
@@ -731,11 +742,20 @@ impl Session {
                     },
                 )?,
                 WeaponEvent::Impulse {
+                    source,
                     target: TargetId::Vehicle(vehicle),
                     impulse,
                     position,
-                    ..
-                } => self.blast_vehicle(vehicle, position, impulse),
+                } => {
+                    // Native hits use the same finite mover-credit window as
+                    // walking/holding. Anonymous package shots do not become
+                    // player credit, and a rejected/zero impulse credits nobody.
+                    if self.blast_vehicle(vehicle, position, impulse)
+                        && let Some(owner) = shooter(source)
+                    {
+                        self.credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle), owner);
+                    }
+                }
                 WeaponEvent::Key {
                     actor,
                     brick,

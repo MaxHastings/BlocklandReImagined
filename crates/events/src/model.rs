@@ -349,6 +349,8 @@ pub struct Dispatch {
     pub derived: Option<String>,
     pub scheduled_us: u64,
     pub now_us: u64,
+    /// Authored delay, preserved even if the work budget postpones dispatch.
+    pub delay_ms: u32,
     pub intent: Intent,
 }
 /// Deferred must have NO side effects. Applied mutations must be visible synchronously.
