@@ -6,6 +6,13 @@ Revised 2026-10-02. It summarises; the linked docs are the evidence, and
 
 ## Release state
 
+Current public release: [v0.2.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.0),
+source `28b3e3248fa2da23ffe9e87a802f61daa7bcf21b`, with verified Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives. See the
+[publication evidence and open playtest reports](progress/2026-10-02-v0.2.0-published.md).
+The full alpha contract remains open; the current playtest fixes are being
+prepared on the v0.2.1 branch.
+
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in
 [progress.md](progress.md) with its commit and protocol version. The first
@@ -47,8 +54,8 @@ Don't reopen these without Max.
   The shelved join-codes patch lives in the project's shared files, not
   the repo. See [architecture/hosting.md](architecture/hosting.md).
 - **Release platforms:** Maxwell authorized Windows x86-64, macOS Apple silicon
-  and Linux x86-64 releases on 2026-10-02. The coordinator is preparing v0.2.0
-  from the reviewed bot, content reload and Rule Workshop work. All interactive
+  and Linux x86-64 releases on 2026-10-02. v0.2.0 Alpha is published from the
+  reviewed bot, content reload and Rule Workshop work. All interactive
   acceptance remains Maxwell's; the full alpha roadmap is still open.
 - **Players see "Add-Ons".** "Package" is an internal word.
 - **Add-On client code is sandboxed, with trust tiers.** Data needs no
