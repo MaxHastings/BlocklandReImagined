@@ -539,6 +539,65 @@ pub(crate) fn finite_lamp_faces(position: Vec3, outer: f32) -> bool {
             .all(|face| face.to_cols_array().iter().all(|value| value.is_finite()))
 }
 
+/// Freshness is distinct from availability. A geometry change schedules new
+/// faces but the previous runtime geometry cubes remain usable for the same
+/// lamp projectors until their replacements are drawn. A source change has no
+/// such history: its missing faces are explicitly unavailable.
+#[derive(Default)]
+struct CubeCache {
+    key: Vec<usize>,
+    projectors: Vec<Option<(Vec3, f32)>>,
+    drawn: Vec<Option<Mat4>>,
+    available: bool,
+}
+impl CubeCache {
+    fn refresh(
+        &mut self,
+        settings: ShadowSettings,
+        key: &[usize],
+        lights: &[Option<(Vec3, f32)>],
+        budget: usize,
+    ) -> (Vec<(usize, usize, Mat4)>, bool) {
+        if key.is_empty() {
+            *self = Self::default();
+            return (Vec::new(), false);
+        }
+        let lights = &lights[..lights.len().min(crate::map_lighting::MAX_LIGHTS)];
+        if self.projectors.as_slice() != lights {
+            self.drawn.clear();
+            self.available = false;
+            self.projectors = lights.to_vec();
+        }
+        if self.key.as_slice() != key {
+            self.drawn.clear();
+            self.key = key.to_vec();
+        }
+        self.drawn.resize(lights.len() * FACES, None);
+        self.drawn.truncate(lights.len() * FACES);
+        let mut stale = Vec::new();
+        let mut fresh = true;
+        for (light, cube) in lights.iter().enumerate() {
+            let Some((position, reach)) = *cube else {
+                continue;
+            };
+            let faces = lamp_faces(position, reach, settings.cube_resolution());
+            for (face, matrix) in faces.iter().enumerate() {
+                let index = light * FACES + face;
+                if self.drawn[index] != Some(*matrix) {
+                    if stale.len() < budget {
+                        self.drawn[index] = Some(*matrix);
+                        stale.push((light, face, *matrix));
+                    } else {
+                        fresh = false;
+                    }
+                }
+            }
+        }
+        self.available |= fresh;
+        (stale, self.available)
+    }
+}
+
 /// Shadow map textures, uniforms and caster pipelines. Disabled shadows keep
 /// a 1x1 map and a zero cascade count so receivers need no variant.
 pub(crate) struct ShadowMaps {
@@ -581,7 +640,7 @@ pub(crate) struct ShadowMaps {
     map_faces: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
     /// Per map light face (Dynamic mode): the matrix its cube face was
     /// drawn with, and the map it was drawn from.
-    cubes: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
+    cubes: std::cell::RefCell<CubeCache>,
 }
 impl ShadowMaps {
     pub fn new(
@@ -1164,11 +1223,12 @@ impl ShadowMaps {
     /// Forgets the drawn map faces (a new map or new map lighting).
     pub fn forget_map_faces(&self) {
         self.map_faces.borrow_mut().1.clear();
-        self.cubes.borrow_mut().1.clear();
+        *self.cubes.borrow_mut() = CubeCache::default();
     }
     /// The map lights' cube faces to draw this frame from `map` (identified
     /// by `key`), at most `budget`, lights in order, marking them drawn; and
-    /// whether every cube is then whole. `lights` are each light's position
+    /// whether a whole runtime cube cohort is available (including the last
+    /// geometry version during a bounded refresh). `lights` are each light's position
     /// and reach, or `None` for an inactive light. Without cubes or a map, none.
     pub fn stale_cube_faces(
         &self,
@@ -1179,38 +1239,9 @@ impl ShadowMaps {
         let Some(settings) = self.settings.filter(|s| s.light_cubes) else {
             return (Vec::new(), false);
         };
-        let mut state = self.cubes.borrow_mut();
-        let (drawn_key, drawn) = &mut *state;
-        if key.is_empty() || drawn_key.as_slice() != key {
-            drawn.clear();
-            *drawn_key = key.to_vec();
-        }
-        if key.is_empty() {
-            return (Vec::new(), false);
-        }
-        let lights = &lights[..lights.len().min(crate::map_lighting::MAX_LIGHTS)];
-        drawn.resize(lights.len() * FACES, None);
-        drawn.truncate(lights.len() * FACES);
-        let mut stale = Vec::new();
-        let mut ready = true;
-        for (light, cube) in lights.iter().enumerate() {
-            let Some((position, reach)) = *cube else {
-                continue;
-            };
-            let faces = lamp_faces(position, reach, settings.cube_resolution());
-            for (face, matrix) in faces.iter().enumerate() {
-                let index = light * FACES + face;
-                if drawn[index] != Some(*matrix) {
-                    if stale.len() < budget {
-                        drawn[index] = Some(*matrix);
-                        stale.push((light, face, *matrix));
-                    } else {
-                        ready = false;
-                    }
-                }
-            }
-        }
-        (stale, ready)
+        self.cubes
+            .borrow_mut()
+            .refresh(settings, key, lights, budget)
     }
 }
 impl ShadowUniform {
@@ -1357,6 +1388,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn geometry_cube_refresh_preserves_available_lighting_and_bounded_work() {
+        let settings = ShadowSettings {
+            light_cubes: true,
+            ..ShadowSettings::BEST
+        };
+        let lights = vec![Some((Vec3::new(0.0, 12.0, 0.0), 40.0)); 24];
+        let mut cache = CubeCache::default();
+        for frame in 0..6 {
+            let (drawn, available) = cache.refresh(settings, &[1], &lights, 24);
+            assert_eq!(drawn.len(), 24);
+            assert_eq!(
+                available,
+                frame == 5,
+                "first-use cohort has no valid history"
+            );
+        }
+        for _ in 0..6 {
+            let (drawn, available) = cache.refresh(settings, &[2], &lights, 24);
+            assert_eq!(drawn.len(), 24);
+            assert!(available, "geometry invalidation must not zero every lamp");
+        }
+        assert!(cache.refresh(settings, &[2], &lights, 24).0.is_empty());
+        let mut moved = lights.clone();
+        moved[23] = Some((Vec3::new(1.0, 12.0, 0.0), 40.0));
+        assert!(
+            !cache.refresh(settings, &[2], &moved, 24).1,
+            "new projector identities cannot reuse an old source's cohort"
+        );
+        assert!(!cache.refresh(settings, &[], &moved, 24).1);
     }
 
     #[test]

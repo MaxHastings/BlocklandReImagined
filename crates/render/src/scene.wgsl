@@ -306,10 +306,8 @@ fn face_point(index:u32,matrix:mat4x4<f32>,p:vec3<f32>)->LampFace {
     let uv=clamp(ndc.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5),vec2<f32>(0.0),vec2<f32>(1.0));
     return LampFace(index,uv,ndc.z);
 }
-// Dynamic mode: how much of map light `i`'s light reaches an object past
-// the map's own walls, for a light without a visibility channel, from its
-// cube (drawn once from the map's surfaces, like a lamp's map faces, at any
-// eye distance); -1 until the cubes are drawn.
+// Dynamic mode: how much of recovered light `i` reaches past current map
+// geometry, at any eye distance. -1 until a runtime cube cohort is available.
 fn cube_seen(i:u32,position:vec3<f32>,n:vec3<f32>)->f32 {
     if map_lights.cube_atlas.x<0.5 {return -1.0;}
     let center=map_lights.values[i].position_inner.xyz;
@@ -563,7 +561,13 @@ fn dynamic_light_sum(position:vec3<f32>,normal:vec3<f32>,power:f32)->LocalLight 
         let facing=max(dot(n,delta)/max(distance,0.0001),0.0);
         if distance>=light.color_outer.w || facing<=0.0 {continue;}
         var seen=1.0;
-        if shadows.params.x>0.0 {seen=max(cube_seen(i,position,n),0.0);}
+        if shadows.params.x>0.0 {
+            let cube=cube_seen(i,position,n);
+            // A first-use cube has no geometry result yet. Keep the current
+            // lamp explicitly unshadowed instead of converting -1 to darkness.
+            // Geometry refreshes reuse only previously rendered runtime cubes.
+            if cube>=0.0 {seen=cube;}
+        }
         let slot=lamp_slot(i);
         if slot>=0 {seen*=lamp_lit(u32(slot),position,n);}
         let rgb=light_given(light,position)*light_tint(light)*seen;

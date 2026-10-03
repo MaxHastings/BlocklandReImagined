@@ -1221,6 +1221,82 @@ fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
     Ok(())
 }
 
+/// A warmed 24-lamp geometry cache needs six frames to refresh. Invalidating
+/// unrelated geometry must not remove those lamps from final illumination.
+/// A new source has no compatible history and lights immediately while its
+/// current geometry cubes warm, without sampling any legacy lighting input.
+#[test]
+fn dynamic_cube_refresh_never_blacks_out_current_lamps() -> Result<()> {
+    use bri_render::map_lighting::MapLight;
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = color_target(&device, format, 128, 128);
+    let settings = ShadowSettings {
+        lamps: 0,
+        light_cubes: true,
+        ..ShadowSettings::BEST
+    };
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+    let lights = vec![
+        MapLight {
+            position: [0.0, 12.0, 0.0],
+            color: [0.8 / 24.0; 3],
+            inner: 0.0,
+            outer: 40.0,
+            channel: None,
+        };
+        24
+    ];
+    renderer.set_dynamic_lights(&device, &queue, &lights)?;
+    let floor = renderer.upload(&device, &queue, &floor(Vec3::NEG_Y, 0.0))?;
+    // Outside every lamp's reach: hiding this batch changes the exact map
+    // cache key, but cannot change the illumination at the floor's center.
+    let mut unrelated = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(80.0, 0.0, -2.0), Vec3::new(81.0, 2.0, 2.0)),
+    )?;
+    let mut camera = Camera::perspective([0., 22., 0.1], [0.; 3], 1.0, 1.4, 0.05, 400.0);
+    camera.sun_direction = Vec3::NEG_Y.extend(0.0).to_array();
+    camera.sun_color = [0.; 4];
+    camera.ambient = [0., 0., 0., 3.];
+    let frame = |renderer: &mut SceneRenderer, unrelated: &GpuScene| -> Result<i32> {
+        renderer.update_camera(&queue, &camera);
+        let pixels = render_with_map(
+            &device,
+            &queue,
+            renderer,
+            &target,
+            &[&floor],
+            &[],
+            &[],
+            &[&floor, unrelated],
+        )?;
+        Ok(i32::from(pixels[(64 * 128 + 64) * 4 + 1]))
+    };
+    let mut baseline = 0;
+    for _ in 0..6 {
+        baseline = frame(&mut renderer, &unrelated)?;
+    }
+    assert!(baseline > 80, "warmed lamp illumination: {baseline}");
+    unrelated.hide_indices(std::slice::from_ref(&(0..36)));
+    for refresh in 0..6 {
+        let value = frame(&mut renderer, &unrelated)?;
+        assert!(
+            (value - baseline).abs() <= 3,
+            "geometry refresh frame {refresh}: {value}, warmed {baseline}"
+        );
+    }
+    // Rebinding creates a new source buffer and discards the old projectors.
+    // Its unavailable cube sentinel must mean temporarily unshadowed lamps.
+    renderer.set_dynamic_lights(&device, &queue, &lights)?;
+    for warmup in 0..6 {
+        let value = frame(&mut renderer, &unrelated)?;
+        assert!(value > 80, "new source warmup frame {warmup}: {value}");
+    }
+    Ok(())
+}
+
 /// Poisoned legacy sun masks cannot shadow Dynamic. Current geometry does,
 /// on both originally bright and originally dark texels. Night is live too.
 #[test]

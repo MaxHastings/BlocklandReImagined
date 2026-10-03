@@ -1899,7 +1899,8 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// tint flag between), then each light's position and inner radius, colour
 /// and outer radius, and visibility channel (-1 for none) with its tint;
 /// each `MapLighting::lights` index's place among them (-1 for none); then
-/// the Dynamic mode's light cubes: 1 once every cube is drawn, first layer, faces
+/// the Dynamic mode's light cubes: 1 when a valid runtime cohort exists (kept
+/// during geometry refresh), first layer, faces
 /// per row and a face's share of a layer; face resolution and world texel
 /// per unit of distance; and each light's six face matrices.
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
@@ -2084,7 +2085,8 @@ impl MapLightBinding {
         queue.write_buffer(&self.lights, 36, bytemuck::bytes_of(&any));
         self.tints = tints;
     }
-    /// Tells the shader whether the lights' cubes are all drawn (`ready`),
+    /// Tells the shader whether the lights have a valid runtime cube cohort
+    /// (`ready`), retained while the same projectors refresh changed geometry,
     /// where their faces lie in the shadow map array and
     /// the face matrices drawn this frame (`drawn`: light, face, matrix).
     fn set_cubes(
@@ -3593,8 +3595,8 @@ impl SceneRenderer {
         };
         let stale_map = self.shadows.stale_map_faces(&map_key);
         // The Dynamic mode's light cubes: the view of the map's surfaces from
-        // each map light without a visibility channel (what lights objects
-        // there), drawn once, a few lights a frame.
+        // every recovered map light. Same-projector geometry refreshes keep
+        // their previous runtime results available until replacement faces draw.
         let cube_lights: Vec<Option<(Vec3, f32)>> = self
             .map_lights
             .lamps
