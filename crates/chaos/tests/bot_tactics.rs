@@ -80,13 +80,26 @@ fn game(pack: Pack, loadout: &[&str], distance: f32) -> (Session, u64, u64, u64)
     )
 }
 fn game_scene(
-    mut pack: Pack,
+    pack: Pack,
     loadout: &[&str],
     spawn: Vec3,
     bot_spawn: [f32; 3],
     geometry: Vec<Brick>,
 ) -> (Session, u64, u64, u64) {
+    game_scene_kind(pack, loadout, spawn, bot_spawn, geometry, None)
+}
+fn game_scene_kind(
+    mut pack: Pack,
+    loadout: &[&str],
+    spawn: Vec3,
+    bot_spawn: [f32; 3],
+    geometry: Vec<Brick>,
+    kind: Option<bri_sim::bot_kind::BotKind>,
+) -> (Session, u64, u64, u64) {
     let mut s = fixture::synthetic().unwrap().session;
+    if let Some(kind) = kind {
+        s.set_bot_kinds(vec![kind]).unwrap();
+    }
     // A generous stationary test bot can acquire, charge and fire while the
     // actual aim model still retains its reaction and normal turn limits.
     for image in pack.images.values_mut() {
@@ -155,6 +168,277 @@ fn game_scene(
     )
     .unwrap();
     (s, human, bot, seq)
+}
+
+fn charged_scene() -> (Session, u64, u64, u64) {
+    charged_scene_with_release_chain(false)
+}
+
+fn charged_scene_with_release_chain(indirect: bool) -> (Session, u64, u64, u64) {
+    let mut p = pack();
+    let image = p.images.get_mut("tactics:image/zenith").unwrap();
+    for state in &mut image.states {
+        if state.script.eq_ignore_ascii_case("oncharge") {
+            state.ticks = 84;
+        } else if state.script.eq_ignore_ascii_case("onfire") {
+            state.ticks = 60;
+        }
+    }
+    if indirect {
+        let armed = image
+            .states
+            .iter()
+            .position(|s| image.fires_on_release(s))
+            .unwrap();
+        let relay = image.states.len();
+        let mut state = image.states[armed].clone();
+        state.name = "ReleaseRelay".into();
+        state.ticks = 0;
+        state.wait = false;
+        image.states.push(state);
+        image.states[armed].up = Some(relay);
+    }
+    p.projectiles
+        .get_mut("tactics:projectile/zenith")
+        .unwrap()
+        .damage = 10.0;
+    game_scene_kind(
+        p,
+        &[C],
+        Vec3::new(-25.0, 0.05, 35.0),
+        [-24.75, 0.1, 47.25],
+        vec![],
+        Some(bri_sim::bot_kind::BotKind {
+            id: fixture::BOT.into(),
+            name: "Patient unfamiliar thrower".into(),
+            turn_degrees: 10.0,
+            aim_error_degrees: 0.0,
+            reaction_seconds: 0.05,
+            ..Default::default()
+        }),
+    )
+}
+
+fn mounted_hand_state(s: &Session, bot: u64) -> Option<(String, String)> {
+    s.weapon_view()
+        .images
+        .get(&bot)?
+        .iter()
+        .find(|i| i.hand == 0)
+        .map(|i| (i.image.clone(), i.state.clone()))
+}
+
+fn wait_for_charge(s: &mut Session, human: u64, bot: u64, seq: &mut u64) {
+    for _ in 0..120 * 25 {
+        ticks(s, human, seq, 1);
+        if mounted_hand_state(s, bot).is_some_and(|(_, state)| state == "Charge") {
+            return;
+        }
+    }
+    panic!("no real wind-up: {:?}", s.bot_thoughts());
+}
+
+#[test]
+fn a_moving_target_keeps_native_windup_until_a_valid_throw() {
+    let (mut s, human, bot, mut seq) = charged_scene();
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    let start = feet(&s, human);
+    let mut armed_ticks = 0;
+    let mut fired = BTreeSet::new();
+    let mut saw_fire = false;
+    let mut trace = Vec::new();
+    for tick in 0..120 * 20 {
+        seq += 1;
+        s.movement(
+            human,
+            seq,
+            MoveInput {
+                right: if tick < 120 { 1.0 } else { 0.0 },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+        let (_, state) = mounted_hand_state(&s, bot).expect("charged image remains mounted");
+        if trace.last().is_none_or(|(_, before)| before != &state) && trace.len() < 16 {
+            trace.push((tick, state.clone()));
+        }
+        for p in s.weapon_view().fired().filter(|p| p.source.0 == bot) {
+            fired.insert(p.id);
+        }
+        if state == "Fire" {
+            saw_fire = true;
+        }
+        if !saw_fire {
+            assert!(
+                matches!(state.as_str(), "Charge" | "Armed"),
+                "moving-target tracking restarted the native wind-up: {trace:?} thoughts={:?}",
+                s.bot_thoughts()
+            );
+            armed_ticks += usize::from(state == "Armed");
+        }
+        if s.vitals()[&human].health < 100.0 {
+            break;
+        }
+    }
+    assert!(feet(&s, human).distance(start) > 2.0, "target really moved");
+    assert!(
+        armed_ticks >= 12,
+        "no meaningful native held wait: {trace:?}"
+    );
+    assert!(saw_fire && !fired.is_empty(), "no actual throw: {trace:?}");
+    assert!(
+        s.vitals()[&human].health < 100.0,
+        "no real delivery: {trace:?}"
+    );
+    eprintln!(
+        "moving native throw: trace={trace:?} held_armed_ticks={armed_ticks} actual_observed_projectile_ids={fired:?}"
+    );
+}
+
+#[test]
+fn replacing_the_charged_equipment_cancels_without_throwing() {
+    let (mut s, human, bot, mut seq) = charged_scene();
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    s.command(
+        human,
+        102,
+        Command::MiniGame(MiniGameRequest::Configure {
+            settings: Settings {
+                loadout: [Some(A.into()), None, None, None, None],
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    let mut saw_replacement = false;
+    for _ in 0..120 * 15 {
+        ticks(&mut s, human, &mut seq, 1);
+        saw_replacement |=
+            mounted_hand_state(&s, bot).is_some_and(|(image, _)| image == "tactics:image/orbit");
+        assert!(
+            s.weapon_view()
+                .fired()
+                .all(|p| { p.source.0 != bot || p.definition != "tactics:projectile/zenith" }),
+            "replacing a real charged tool released its old attack"
+        );
+        if s.vitals()[&human].health < 100.0 {
+            break;
+        }
+    }
+    assert!(saw_replacement, "replacement was actually equipped");
+    assert!(
+        s.vitals()[&human].health < 100.0,
+        "normal attack control did not recover"
+    );
+}
+
+#[test]
+fn disconnecting_the_charge_target_cancels_without_a_stale_throw() {
+    let (mut s, human, bot, mut seq) = charged_scene();
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    s.disconnect(human).unwrap();
+    for _ in 0..120 * 4 {
+        s.step().unwrap();
+        assert!(
+            s.weapon_view()
+                .fired()
+                .all(|p| { p.source.0 != bot || p.definition != "tactics:projectile/zenith" }),
+            "disconnected participant's held attack launched"
+        );
+        assert!(s.bot_thoughts().iter().all(|t| t.visible != Some(human)));
+    }
+    assert!(
+        mounted_hand_state(&s, bot).is_none_or(|(_, state)| state != "Charge" && state != "Armed")
+    );
+}
+
+#[test]
+fn a_queued_release_cannot_fire_while_native_charge_admission_waits() {
+    let (mut s, human, bot, mut seq) = charged_scene();
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    let mut armed = false;
+    for _ in 0..120 * 3 {
+        ticks(&mut s, human, &mut seq, 1);
+        if mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Armed") {
+            armed = true;
+            break;
+        }
+    }
+    assert!(armed, "actual native charge never reached Armed");
+    assert!(
+        s.simulation().state().tick - s.spawn_tick(human).unwrap() < 300,
+        "this admission wait requires the real never-fired target's initial protection"
+    );
+    // Ordinary queued trigger-up can arrive independently of the brain's
+    // current hold. The actual post-movement admission must override it.
+    s.command(bot, 1 << 48, Command::WeaponTrigger { down: false })
+        .unwrap();
+    ticks(&mut s, human, &mut seq, 1);
+    assert!(mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Armed"));
+    assert!(s.weapon_view().fired().all(|p| p.source.0 != bot));
+}
+
+#[test]
+fn an_indirect_queued_release_still_checks_the_actual_shot_direction() {
+    let (mut s, human, bot, mut seq) = charged_scene_with_release_chain(true);
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    // The relay graph keeps the brain's direct-release cadence held, so the
+    // ordinary external release below tests the actual-frame safety boundary.
+    while s.simulation().state().tick - s.spawn_tick(human).unwrap() < 360 {
+        ticks(&mut s, human, &mut seq, 1);
+    }
+    assert!(mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Armed"));
+    let before = feet(&s, human);
+    for _ in 0..60 {
+        seq += 1;
+        s.movement(
+            human,
+            seq,
+            MoveInput {
+                right: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    assert!(feet(&s, human).distance(before) > 2.0);
+    assert!(
+        s.bot_thoughts()
+            .iter()
+            .any(|t| t.bot == bot && t.visible == Some(human))
+    );
+    s.command(bot, 1 << 48, Command::WeaponTrigger { down: false })
+        .unwrap();
+    s.step().unwrap();
+    assert!(mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Armed"));
+    assert!(s.weapon_view().fired().all(|p| p.source.0 != bot));
+    assert_eq!(s.vitals()[&human].health, 100.0);
+}
+
+#[test]
+fn an_already_released_charge_cancels_when_its_target_disconnects() {
+    let (mut s, human, bot, mut seq) = charged_scene();
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    for _ in 0..120 * 3 {
+        if mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Armed") {
+            break;
+        }
+        ticks(&mut s, human, &mut seq, 1);
+    }
+    assert!(mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Armed"));
+    // Trusted host release changes the native button immediately, before
+    // weapon advancement. Participant removal must cancel that pending shot.
+    s.release_trigger(bot).unwrap();
+    s.disconnect(human).unwrap();
+    for _ in 0..120 * 4 {
+        s.step().unwrap();
+        assert!(s.weapon_view().fired().all(|p| p.source.0 != bot));
+    }
+    assert!(
+        mounted_hand_state(&s, bot).is_none_or(|(_, state)| state != "Charge" && state != "Armed")
+    );
 }
 fn ticks(s: &mut Session, human: u64, seq: &mut u64, n: usize) {
     for _ in 0..n {

@@ -25,7 +25,8 @@ current changes. Focused headless/offscreen checks do not replace your playtest.
   narrower behavior. Objective planning covers supported activation/region/
   bot-touch rules, exact spawned-object contact/hold/ground-seat delivery,
   native elimination and declared Add-On pickup/return goals. It does not infer
-  arbitrary scripts, plan throws into hoops, discover hookshot routes or organize
+  arbitrary scripts, plan throws into hoops, plan jet-assisted object transport,
+  discover hookshot routes or organize
   coordinated stacking. Complex rule arrangements can exceed the planner's
   finite depth/work limits even when a human can solve them. Resting pauses an
   approach's travel deadline; scheduled event delays keep passing in real time.

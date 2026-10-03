@@ -151,6 +151,22 @@ impl Session {
             self.simulation.state(),
             build.world.bricks.values().chain(&build.world.unloaded),
         )?;
+        // Query the existing named-target index; no scan/copy of the live
+        // world, and no automatic rename of deliberately connected builds.
+        let shared_names = self.events.world.as_ref().is_some_and(|events| {
+            build
+                .world
+                .bricks
+                .values()
+                .chain(&build.world.unloaded)
+                .any(|brick| {
+                    brick.name.as_deref().is_some_and(|name| {
+                        mapping
+                            .owner(brick.owner)
+                            .is_ok_and(|scope| events.has_named_brick(scope, name))
+                    })
+                })
+        });
         // The saved builders' numbers are claimed now; their bricks follow
         // in slices.
         for (number, record) in mapping.take_owners() {
@@ -216,6 +232,15 @@ impl Session {
             Some(MessageTag::UploadStart),
             "Loading bricks. Please wait.".into(),
         );
+        if shared_names {
+            self.notify(
+                owner,
+                Notice::Center {
+                    text: "Shared brick names: events can affect both builds.".into(),
+                    seconds: 8.0,
+                },
+            );
+        }
         if let Some(skipped) = skipped {
             self.system_chat(skipped);
         }

@@ -35,6 +35,8 @@ use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
 
 mod behaviour;
+mod charged_control;
+pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
 #[path = "bots/combat.rs"]
@@ -229,6 +231,9 @@ struct Brain {
     native_combat_tick: Option<u64>,
     /// The selected objective owns the ordinary hand trigger this tick.
     objective_tool: bool,
+    /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
+    /// someone damageable does not make them more urgent than winning.
+    objective_threat: Option<Knowledge>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -330,6 +335,7 @@ impl Brain {
             combat: hand_combat::State::default(),
             native_combat_tick: None,
             objective_tool: false,
+            objective_threat: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -823,8 +829,17 @@ impl Session {
         {
             return Ok(false);
         }
+        let release_can_fire = self
+            .weapons
+            .image_state(ActorId(bot), 0)
+            .is_some_and(|(image, state)| charged_control::release_may_fire(image, state));
         self.release_trigger(bot)?;
-        self.weapons.cancel_charge(ActorId(bot))
+        if release_can_fire {
+            self.weapons.cancel_charge(ActorId(bot))
+        } else {
+            // A released shot's native Fire/cooldown must finish normally.
+            Ok(true)
+        }
     }
     pub(super) fn rest_rules_bot(&mut self, package: &str, bot: OwnerId, rest: bool) -> Result<()> {
         let own_kind = self.bots.brains.get(&bot).is_some_and(|brain| {
@@ -844,6 +859,7 @@ impl Session {
         );
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
         if rest && !brain.resting {
+            brain.objective_threat = None;
             brain.set_goal(None);
             brain.target = None;
             brain.memory = None;
@@ -1357,6 +1373,8 @@ impl Session {
             && brain.evidence_context != context
         {
             brain.evidence_context = context;
+            brain.objective_threat = None;
+            self.bots.hurt.remove(&bot);
             brain.memory = None;
             brain.target = None;
             brain.evidence_search.clear();
@@ -1387,6 +1405,8 @@ impl Session {
                 brain.evidence_search.clear();
                 brain.posed = false;
                 brain.objective = objectives::State::default();
+                brain.objective_threat = None;
+                self.bots.hurt.remove(&bot);
                 brain.dry = 0;
                 brain.rehome = brain.brick.is_none();
                 brain.leash = brain.home;
@@ -1559,6 +1579,12 @@ impl Session {
             brain.memory = None;
             brain.evidence_search.clear();
         }
+        let threat = hurt_by
+            .or(self.bots.brains[&bot].objective_threat)
+            .filter(|k| {
+                tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+            });
+        self.bots.brains.get_mut(&bot).unwrap().objective_threat = threat;
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
@@ -1581,7 +1607,28 @@ impl Session {
                 flat(feet - self.bots.brains[&bot].leash).length()
                     <= self.bots.brains[&bot].kind.chase_radius
             });
+        let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
+        let can_retaliate = vehicle_weapon
+            || self.bots.brains[&bot]
+                .kind
+                .melee
+                .as_ref()
+                .is_some_and(|melee| melee.damage > 0.0)
+            || hand_combat::has_possible_attack(self, bot);
+        let retaliating = threat.is_some()
+            && can_retaliate
+            && flat(feet - self.bots.brains[&bot].leash).length()
+                <= self.bots.brains[&bot].kind.chase_radius;
+        let mut pausing_delivery = false;
         let objective = self.bot_objective(bot, tick).filter(|view| {
+            // Keep the selected action and its completion baseline, but let
+            // ordinary chase/search resolve a dated real injury even outside
+            // the weapon band. Objective's utility otherwise beats pursuit.
+            // account_control suspends its approach clock during this pause.
+            if view.enemy.is_none() && retaliating {
+                pausing_delivery = true;
+                return false;
+            }
             // A different visible hostile is an ordinary combat interruption,
             // not execution of the retained intended-participant action.
             view.enemy
@@ -1605,18 +1652,18 @@ impl Session {
         }
         // A live objective reservation is not a combat opportunity. Both use
         // the same advisory leases, occupancy and native action admission.
-        let opportunity = if objective.is_some_and(|view| view.resource.is_some()) {
-            None
-        } else {
-            self.bot_interaction(bot, interaction_enemy, tick)
-        };
+        let opportunity =
+            if pausing_delivery || objective.is_some_and(|view| view.resource.is_some()) {
+                None
+            } else {
+                self.bot_interaction(bot, interaction_enemy, tick)
+            };
         let objective_holding = objective
             .and_then(|view| view.held)
             .is_some_and(|target| self.held_by(bot) == Some(target));
         let objective_hold_control = objective.is_some_and(|view| {
             view.trigger.is_some() && matches!(view.resource, Some(claims::Resource::Body { .. }))
         });
-        let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
         let crew_ready = self.bot_crew_ready(bot, tick);
         let attack_clear = sight.target.is_none_or(|seen| {
             self.bot_fire_clear(
@@ -1650,14 +1697,10 @@ impl Session {
         // A known noncombat body/tool cannot resolve a threat by staring at
         // it. Keep its useful objective; unknown scripted attacks retain their
         // existing behavior rather than being silently classified as harmless.
-        let objective_without_attack = objective.is_some_and(|view| view.enemy.is_none())
-            && !vehicle_weapon
-            && !self.bots.brains[&bot]
-                .kind
-                .melee
-                .as_ref()
-                .is_some_and(|melee| melee.damage > 0.0)
-            && !hand_combat::has_possible_attack(self, bot);
+        let peaceful_objective =
+            objective.is_some_and(|view| view.enemy.is_none()) && threat.is_none();
+        let objective_without_attack = peaceful_objective
+            || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2314,15 +2357,24 @@ impl Session {
         let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down;
         if !matches!(native, hand_combat::Decision::Unsupported) {
             if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
+                let tracking_charge = last_down
+                    && native_choice.is_some()
+                    && image.charges()
+                    && charged_control::release_only(image)
+                    && (matches!(
+                        behaviour,
+                        Behaviour::Fight | Behaviour::Chase | Behaviour::Fly
+                    ) || behaviour == Behaviour::Objective
+                        && selected_objective.is_some_and(|view| view.enemy.is_some()));
                 let decision = hand_combat::trigger(
                     image,
                     image_state,
                     last_down,
-                    fire && native_choice.is_some(),
-                    matches!(native, hand_combat::Decision::Ready(_)),
+                    fire && native_choice.is_some() || tracking_charge,
+                    fire && matches!(native, hand_combat::Decision::Ready(_)),
                 );
                 desired_down = decision.down;
-                cancel_hand_charge |= decision.abort_charge;
+                cancel_hand_charge = decision.abort_charge;
             } else {
                 desired_down = false;
             }
@@ -2445,7 +2497,7 @@ impl Session {
         bot: OwnerId,
         direction: Vec3,
         tick: u64,
-    ) -> Option<bool> {
+    ) -> Option<FireAdmission> {
         let brain = self.bots.brains.get(&bot)?;
         let plan_tick = tick.checked_sub(1)?;
         if brain.native_combat_tick != Some(plan_tick) {
@@ -2453,11 +2505,20 @@ impl Session {
         }
         let intent = brain.combat.intent(plan_tick);
         let mut budget = std::mem::take(&mut self.bots.combat_budget);
-        let allowed = intent.as_ref().is_some_and(|intent| {
+        let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
             hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
         });
         self.bots.combat_budget = budget;
         Some(allowed)
+    }
+    /// Replace a speculative release with a safe native hold, without a
+    /// re-press (which itself would release/restart a charged image).
+    pub(super) fn bot_hold_hand_charge(&mut self, bot: OwnerId) -> Result<()> {
+        self.weapon_triggers.remove(&bot);
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.fire_down = true;
+        }
+        self.weapons.trigger(ActorId(bot), true)
     }
     pub(super) fn bot_abort_unsafe_hand_fire(&mut self, bot: OwnerId) -> Result<()> {
         if let Some(brain) = self.bots.brains.get_mut(&bot) {
@@ -2553,6 +2614,7 @@ impl Session {
         let brain = self.bots.brains.get_mut(&target).unwrap();
         let born = std::mem::replace(&mut brain.kind, kind.clone());
         brain.born.get_or_insert(born);
+        brain.objective_threat = None;
         brain.posed = false;
         brain.target = None;
         brain.memory = None;

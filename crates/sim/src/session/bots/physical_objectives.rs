@@ -4,7 +4,7 @@
 //! dispatches an event nor predicts that reaching a point completed the rule.
 //! The objective owner observes the canonical captured-object input and effects.
 use super::claims::Resource;
-use super::interactions::push_point;
+use super::interactions::push_approach;
 use super::*;
 use bri_vehicles::{Definition, Family, VehicleId, VehicleSnapshot};
 use bri_weapons::BotManipulation;
@@ -42,6 +42,10 @@ pub(super) struct Goal {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Method {
     Push,
+    Hammer {
+        slot: usize,
+        image: String,
+    },
     Hold {
         slot: usize,
         image: String,
@@ -282,8 +286,17 @@ pub(super) fn candidates(
         // Walking contact cannot deliberately raise a loose body to an elevated
         // sensor. It stays eligible for ground-height regions; terrain and wall
         // reachability remain the existing navigation executor's responsibility.
-        if movable && d.seats.is_empty() && bounds.0.y <= at.y + 0.5 && bounds.1.y >= at.y - 0.5 {
-            let speed = 4.0 / (1.0 + d.mass.max(0.0) / combat::PLAYER_MASS);
+        if movable
+            && (d.seats.is_empty()
+                || session.can_ride(bot, v.owner.0) && v.seats.iter().all(|s| s.occupant.is_none()))
+            && bounds.0.y <= at.y + 0.5
+            && bounds.1.y >= at.y - 0.5
+        {
+            let speed = if session.can_ride(bot, v.owner.0) {
+                4.0 / v.scale.max(0.1)
+            } else {
+                4.0 / (1.0 + d.mass.max(0.0) / combat::PLAYER_MASS)
+            };
             budget
                 .reserve(
                     0,
@@ -300,6 +313,42 @@ pub(super) fn candidates(
                 observed_distance: initial_distance,
                 progressed: false,
             });
+        }
+        if movable
+            && v.seats.iter().all(|s| s.occupant.is_none())
+            && bounds.0.y <= at.y + 0.5
+            && bounds.1.y >= at.y - 0.5
+            && session.hammer_vehicle_allowed(bot, v.id.0)
+            && let Some(actor) = session.weapons.actor(ActorId(bot))
+        {
+            for (slot, image) in actor
+                .inventory
+                .iter()
+                .enumerate()
+                .take(super::super::inventory::TOOL_SLOTS)
+                .filter_map(|(slot, item)| {
+                    item.as_ref()
+                        .and_then(|id| session.weapons.pack.items.get(id))
+                        .and_then(|item| session.weapons.pack.images.get(&item.image))
+                        .map(|i| (slot, i))
+                })
+                .filter(|(_, image)| super::super::tools::native_hammer(image))
+            {
+                budget
+                    .reserve(0, 1, goal.object.definition.len() + image.id.len())
+                    .map_err(|_| Rejection::Budget)?;
+                choices.push(Choice {
+                    goal: goal.clone(),
+                    method: Method::Hammer {
+                        slot,
+                        image: image.id.clone(),
+                    },
+                    cost: effort(approach, 4.0, 0.4) + effort(travel, 5.0, 0.0),
+                    rearm,
+                    observed_distance: initial_distance,
+                    progressed: false,
+                });
+            }
         }
         if movable
             && v.seats.iter().all(|s| s.occupant.is_none())
@@ -423,9 +472,93 @@ impl Choice {
         }
         let distance = at.distance(self.rearm.unwrap_or(destination));
         self.progressed = distance.is_finite()
-            && distance < self.observed_distance - 0.0001
+            && distance < self.observed_distance - 0.25
             && session.mover_credit(object) == Some(bot);
-        self.observed_distance = distance;
+        if self.progressed {
+            self.observed_distance = distance;
+        }
+    }
+    /// Native hand activation is a control, not an invented body force. Only
+    /// click from the delivery side, after actual aim reaches this same body.
+    pub(super) fn execute(&self, session: &mut Session, bot: OwnerId) -> Result<&'static str> {
+        if !matches!(self.method, Method::Push) {
+            return Ok("approach");
+        }
+        self.directive(session, bot)
+            .map_err(|r| anyhow::anyhow!(r.diagnostic()))?;
+        let peer = &session.peers[&bot];
+        let world = session.vehicles.world.as_ref().unwrap();
+        let v = world
+            .vehicle_snapshot(
+                &session.simulation.physics,
+                VehicleId(self.goal.object.vehicle),
+            )
+            .unwrap();
+        if v.seats.iter().any(|s| s.occupant.is_some())
+            || Vec3::from(v.velocity).length() > 2.0
+            || !session.can_ride(bot, v.owner.0)
+        {
+            return Ok("contact");
+        }
+        let centre = session.object_centre(ObjectRef::Vehicle(v.id.0)).unwrap();
+        let destination = self
+            .rearm
+            .unwrap_or((self.goal.bounds.0 + self.goal.bounds.1) * 0.5);
+        let d = world.definition(&v.definition).unwrap();
+        let width = peer.player.tuning().width;
+        let radius = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)).length() * v.scale * 0.5
+            + width * 0.5
+            + 0.15;
+        if !push_approach(
+            Vec3::from(peer.player.state().feet),
+            centre,
+            destination - centre,
+            radius,
+            width,
+        )
+        .is_some_and(|a| a.pushing)
+        {
+            return Ok("approach");
+        }
+        let state = peer.player.state();
+        let direction = Vec3::new(
+            state.yaw.sin() * state.pitch.cos(),
+            state.pitch.sin(),
+            -state.yaw.cos() * state.pitch.cos(),
+        );
+        let eye = peer.player.eye();
+        let brick = session
+            .simulation
+            .target_through(eye, direction, 5.0)?
+            .and_then(|(hit, _)| hit.brick.map(|_| hit.distance));
+        if session
+            .vehicle_click_target(bot, eye, direction, brick)
+            .map(|x| x.0.0)
+            != Some(v.id.0)
+            || peer
+                .last_activate
+                .is_some_and(|at| session.simulation.state().tick.saturating_sub(at) < 30)
+        {
+            return Ok("contact");
+        }
+        if session
+            .weapons
+            .actor(ActorId(bot))
+            .is_some_and(|a| a.selected.is_some())
+        {
+            session.abort_bot_hand_charge(bot)?;
+            session.equip_tool(bot, None)?;
+            return Ok("preparing");
+        }
+        let sequence = session.peers[&bot].last_sequence.saturating_add(1);
+        session.command(bot, sequence, Command::Activate)?;
+        let sequence = session.peers[&bot].last_sequence.saturating_add(1);
+        session.command(bot, sequence, Command::ActivateRelease)?;
+        session.bots.brains.get_mut(&bot).unwrap().fire_down = false;
+        Ok("native click")
+    }
+    pub(super) fn progressed(&self) -> bool {
+        self.progressed
     }
     pub(super) fn resource(&self) -> Resource {
         match self.method {
@@ -442,6 +575,7 @@ impl Choice {
     pub(super) fn key(&self) -> String {
         let method = match &self.method {
             Method::Push => "contact".into(),
+            Method::Hammer { slot, image } => format!("hammer/{slot}/{image}"),
             Method::Hold { slot, image, .. } => format!("hold/{slot}/{image}"),
             Method::Drive { seat } => format!("drive/{seat}"),
         };
@@ -499,12 +633,39 @@ impl Choice {
             physical_progress: self.progressed,
         };
         match &self.method {
-            Method::Push => {
+            Method::Push | Method::Hammer { .. } => {
                 let extents = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale * 0.5;
                 let width = peer.player.tuning().width;
                 let radius = extents.length() + width * 0.5 + 0.15;
-                out.point = push_point(feet, centre, toward, radius, width)
+                let approach = push_approach(feet, centre, toward, radius, width)
                     .ok_or(Rejection::Unsupported)?;
+                out.point = approach.point;
+                if let Method::Hammer { slot, image } = &self.method {
+                    let live = session
+                        .weapons
+                        .actor(ActorId(bot))
+                        .and_then(|a| a.inventory.get(*slot))
+                        .and_then(Option::as_ref)
+                        .and_then(|i| session.weapons.pack.items.get(i))
+                        .and_then(|i| session.weapons.pack.images.get(&i.image));
+                    if live.is_none_or(|i| i.id != *image || !super::super::tools::native_hammer(i))
+                    {
+                        return Err(Rejection::Changed);
+                    }
+                    if !session.hammer_vehicle_allowed(bot, v.id.0) {
+                        return Err(Rejection::Forbidden);
+                    }
+                    out.equip = Some(*slot);
+                    let state = peer.player.state();
+                    let direction = Vec3::new(
+                        state.yaw.sin() * state.pitch.cos(),
+                        state.pitch.sin(),
+                        -state.yaw.cos() * state.pitch.cos(),
+                    );
+                    out.trigger = approach.pushing
+                        && session.native_hammer_target(bot, direction).ok().flatten()
+                            == Some(bri_weapons::TargetId::Vehicle(v.id.0));
+                }
                 out.point.y = feet.y;
             }
             Method::Hold {
@@ -611,6 +772,10 @@ impl Choice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn push_point(feet: Vec3, centre: Vec3, toward: Vec3, radius: f32, width: f32) -> Option<Vec3> {
+        push_approach(feet, centre, toward, radius, width).map(|a| a.point)
+    }
 
     #[test]
     fn region_origin_inclusion_and_effort_are_finite() {

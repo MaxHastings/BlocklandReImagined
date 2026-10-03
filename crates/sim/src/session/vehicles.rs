@@ -1358,39 +1358,50 @@ impl Session {
         direction: Vec3,
         brick: Option<f32>,
     ) -> bool {
-        let Some(world) = &self.vehicles.world else {
+        let Some((id, distance)) = self.vehicle_click_target(owner, eye, direction, brick) else {
             return false;
         };
-        let direction = direction.normalize_or_zero();
-        let is_vehicle = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == VEHICLE_TAG >> 64;
-        let Some((collider, distance)) = self
-            .simulation
-            .physics
-            .query_pipeline_with_filter(QueryFilter::default().predicate(&is_vehicle))
-            .cast_ray(&Ray::new(eye, direction), 10.0, true)
-        else {
-            return false;
-        };
-        if brick.is_some_and(|brick| brick < distance) {
-            return false;
-        }
-        let id = VehicleId(self.simulation.physics.colliders[collider].user_data as u64);
-        let Some(v) = world
+        let world = self.vehicles.world.as_ref().unwrap();
+        let v = world
             .vehicle_snapshot(&self.simulation.physics, id)
-            .filter(|v| !v.destroyed)
-        else {
-            return false;
-        };
+            .unwrap();
         let Some(mass) = world.definition(&v.definition).map(|d| d.mass) else {
             return false;
         };
         if Vec3::from(v.velocity).length() > 2.0 || !self.can_ride(owner, v.owner.0) {
             return true;
         }
+        let direction = direction.normalize_or_zero();
         let impulse = (direction + Vec3::Y).normalize_or_zero() * mass * 5.0 / v.scale;
         self.push_vehicle(id.0, eye + direction * distance, impulse);
         self.credit(bri_package_runtime::ops::ObjectRef::Vehicle(id.0), owner);
         true
+    }
+    /// The native activation ray, shared by its executor and bot preflight.
+    /// A nearer brick consumes the click; no bot ray or permission substitutes
+    /// for the ordinary player command.
+    pub(super) fn vehicle_click_target(
+        &self,
+        _owner: OwnerId,
+        eye: Vec3,
+        direction: Vec3,
+        brick: Option<f32>,
+    ) -> Option<(VehicleId, f32)> {
+        let world = self.vehicles.world.as_ref()?;
+        let is_vehicle = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == VEHICLE_TAG >> 64;
+        let (collider, distance) = self
+            .simulation
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&is_vehicle))
+            .cast_ray(&Ray::new(eye, direction.normalize_or_zero()), 10.0, true)?;
+        if brick.is_some_and(|brick| brick < distance) {
+            return None;
+        }
+        let id = VehicleId(self.simulation.physics.colliders[collider].user_data as u64);
+        world
+            .vehicle_snapshot(&self.simulation.physics, id)
+            .filter(|v| !v.destroyed)?;
+        Some((id, distance))
     }
     /// `GameConnection::resetVehicles`: fresh vehicles on the owner's spawn bricks.
     pub(super) fn reset_owned_vehicles(&mut self, owner: OwnerId) {

@@ -128,9 +128,15 @@ impl Claims {
         if closer {
             c.best_distance = distance;
         }
-        c.deadline = tick
-            .saturating_add(LEASE)
-            .min(c.started.saturating_add(MAX_AGE));
+        c.deadline = if physical_progress {
+            // Confirmed, new distance reduction by this mover is continuing
+            // useful work. A fixed age must not evict a long delivery.
+            c.started = tick;
+            tick.saturating_add(LEASE)
+        } else {
+            tick.saturating_add(LEASE)
+                .min(c.started.saturating_add(MAX_AGE))
+        };
         true
     }
 
@@ -260,14 +266,16 @@ mod tests {
     }
 
     #[test]
-    fn physical_progress_has_a_hard_age_limit() {
+    fn useful_physical_progress_survives_old_age_but_idle_claims_expire() {
         let mut c = Claims::default();
-        assert!(c.acquire(1, 9, Resource::Body { vehicle: 10 }, 0.0, 0));
-        for tick in (100..MAX_AGE).step_by(100) {
-            assert!(c.progress(1, 0.0, true, tick));
-            assert!(c.owner_claim(1, tick).unwrap().deadline <= MAX_AGE);
+        assert!(c.acquire(1, 9, Resource::Body { vehicle: 10 }, 100.0, 0));
+        for tick in (100..MAX_AGE * 3).step_by(100) {
+            assert!(c.progress(1, 100.0, true, tick));
+            assert_eq!(c.owner_claim(1, tick).unwrap().deadline, tick + LEASE);
         }
-        assert!(!c.progress(1, 0.0, true, MAX_AGE));
+        let last = MAX_AGE * 3 - 100;
+        assert!(c.owner_claim(1, last + LEASE - 1).is_some());
+        assert!(c.owner_claim(1, last + LEASE).is_none());
     }
 
     #[test]

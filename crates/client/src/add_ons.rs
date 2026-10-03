@@ -307,6 +307,14 @@ fn palette_only(library: &Library, entry: &LibraryEntry) -> bool {
     let Ok(dir) = bri_package::packages::package_dir(library.root(), &entry.package) else {
         return false;
     };
+    // The chooser discovers direct folders in addons, not arbitrary library
+    // locations. Never hide a palette it cannot discover there.
+    let Ok(addons) = library.root().join("addons").canonicalize() else {
+        return false;
+    };
+    if dir.parent() != Some(addons.as_path()) {
+        return false;
+    }
     if crate::colorsets::read(&dir.join("colorSet.txt")).is_err() {
         return false;
     }
@@ -653,8 +661,15 @@ mod tests {
             ("mixed_assets", true, false, "0 255 0 255"),
             ("with_client", false, true, "0 0 255 255"),
             ("broken_palette", false, false, "not a palette"),
+            ("external_palette", false, false, "255 255 0 255"),
         ] {
-            let dir = root.join("addons").join(id);
+            let dir = root
+                .join(if id == "external_palette" {
+                    "mods"
+                } else {
+                    "addons"
+                })
+                .join(id);
             std::fs::create_dir_all(dir.join("assets")).unwrap();
             let mut info = json!({"schema_version": 1, "id": id, "version": "1.0.0",
                 "api": 1, "name": id, "provides": [], "capabilities": []});
@@ -673,9 +688,23 @@ mod tests {
             )
             .unwrap();
         }
+        // Nonstandard library locations can be listed but are not discovered
+        // by the Colorsets chooser, so their Add-On row must remain visible.
+        std::fs::write(
+            root.join("packages.json"),
+            json!({"schema_version": 1, "packages": [{"id": "external_palette",
+                "version": "1.0.0", "side": "shared", "dir": "mods/external_palette"}]})
+            .to_string(),
+        )
+        .unwrap();
         let rows = view(&root).rows;
         assert!(!rows.iter().any(|r| r.id == "unfamiliar_palette"));
-        for id in ["mixed_assets", "with_client", "broken_palette"] {
+        for id in [
+            "mixed_assets",
+            "with_client",
+            "broken_palette",
+            "external_palette",
+        ] {
             assert!(rows.iter().any(|r| r.id == id), "missing {id}");
         }
         let choices = crate::colorsets::discover(&root, &root.join("player"));

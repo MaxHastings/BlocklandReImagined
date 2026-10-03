@@ -5,7 +5,7 @@ use bri_events::rules::{Compare, Condition, Datum, Property, Subject};
 use bri_events::{Row, Slot, Target, Value};
 use bri_sim::player::MoveInput;
 use bri_sim::session::{Command, MiniGameRequest, Session, ToolCatalog};
-use bri_world::{Brick, ContentRef, VehicleSpawn, World, build::SavedBuild};
+use bri_world::{Brick, ContentRef, ItemSpawn, VehicleSpawn, World, build::SavedBuild};
 use glam::Vec3;
 use serde_json::json;
 use std::sync::{
@@ -102,6 +102,11 @@ struct Scene {
     delay_ms: u32,
     repeated_entry: bool,
     initially_inside: bool,
+    weapon: Option<String>,
+    goal_shift: [f32; 3],
+    object_mass: Option<f32>,
+    wide_rearm: bool,
+    ranged_attacker: bool,
 }
 
 impl Game {
@@ -131,6 +136,11 @@ impl Game {
             delay_ms,
             repeated_entry,
             initially_inside,
+            weapon,
+            goal_shift,
+            object_mass,
+            wide_rearm,
+            ranged_attacker,
         } = scene;
         let mut s = fixture::synthetic().unwrap().session;
         if bodies > 0 {
@@ -142,6 +152,18 @@ impl Game {
             s.set_server_settings(settings).unwrap();
         }
         let mut loadout = [None, None, None, None, None];
+        if let Some(mut weapon) = weapon {
+            if weapon == bri_weapons::HAMMER && offset != 0.0 {
+                let mut pack = bri_weapons::testing::pack();
+                let mut item = pack.items.remove(bri_weapons::HAMMER).unwrap();
+                item.id = format!("{namespace}:weapon/mallet");
+                item.name = "Unfamiliar workshop mallet".into();
+                weapon = item.id.clone();
+                pack.items.insert(item.id.clone(), item);
+                s.set_weapon_pack(pack).unwrap();
+            }
+            loadout[0] = Some(weapon);
+        }
         if hold {
             let (weapons, catalog) = hold_content(namespace, offset != 0.0);
             let mut combined = bri_weapons::testing::pack();
@@ -168,6 +190,16 @@ impl Game {
             )];
             object.mass = if offset == 0.0 { 60.0 } else { 85.0 };
             object.restitution = 0.1;
+            if let Some(mass) = object_mass {
+                object.mass = mass;
+                object.bounds_min = [-1.25; 3];
+                object.bounds_max = [1.25; 3];
+                object.collision_hulls = vec![bri_vehicles::testing::box_hull(
+                    object.bounds_min,
+                    object.bounds_max,
+                )];
+                object.friction = 0.8;
+            }
         } else if offset != 0.0 {
             object.bounds_min[2] -= 1.0;
             object.bounds_max[2] += 1.0;
@@ -190,6 +222,11 @@ impl Game {
         s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())
             .unwrap();
         s.set_tool_catalog(ToolCatalog {
+            items: if ranged_attacker {
+                [bri_weapons::testing::GUN_ITEM.into()].into()
+            } else {
+                Default::default()
+            },
             vehicles: [fixture::BOT.to_string(), object_kind.clone()].into(),
             vehicle_bricks: [fixture::PLATE.into()].into(),
             ..Default::default()
@@ -224,7 +261,13 @@ impl Game {
             [
                 offset + 0.25,
                 0.1,
-                if initially_inside { 56.25 } else { 47.25 },
+                if initially_inside {
+                    56.25
+                } else if wide_rearm {
+                    37.25
+                } else {
+                    47.25
+                },
             ],
             &spawn_name,
         );
@@ -234,13 +277,19 @@ impl Game {
         world.bricks.insert(2, object_spawner);
         let mut goal = Brick::new(
             ContentRef::Resolved(fixture::PLATE.into()),
-            [offset + 0.25, goal_height, 57.25],
+            [
+                offset + 0.25 + goal_shift[0],
+                goal_height + goal_shift[1],
+                57.25 + goal_shift[2],
+            ],
             human,
         );
         goal.name = Some(format!("{namespace}_destination"));
         goal.colliding = false;
         goal.raycast = false;
-        goal.rule_region = Some(if drive {
+        goal.rule_region = Some(if wide_rearm {
+            [20.0, 8.0, 20.0]
+        } else if drive {
             [6.0, 8.0, 5.0]
         } else {
             [3.0, 4.0, 3.0]
@@ -311,7 +360,25 @@ impl Game {
                 spawner(&object_kind, [x, 0.1, z], &format!("decor_{i}")),
             );
         }
-        world.next_brick_id = 4 + bodies as u64;
+        if ranged_attacker {
+            // The human walks to this ordinary item after joining the game.
+            // A long native respawn prevents the pursuing Hammer-only bot
+            // from acquiring a Gun when it eventually reaches the attacker.
+            let mut supply = Brick::new(
+                ContentRef::Resolved(fixture::PLATE.into()),
+                // A 1x1 plate needs half-stud-centered x/z coordinates,
+                // just like the other ordinary loaded bricks in this scene.
+                [offset - 10.25, 0.1, 43.25],
+                human,
+            );
+            supply.item_spawn = ItemSpawn {
+                item: Some(ContentRef::Resolved(bri_weapons::testing::GUN_ITEM.into())),
+                respawn_ms: 60_000,
+                ..Default::default()
+            };
+            world.bricks.insert(4 + bodies as u64, supply);
+        }
+        world.next_brick_id = 4 + bodies as u64 + u64::from(ranged_attacker);
         s.command(
             human,
             100,
@@ -430,16 +497,23 @@ impl Game {
         self.s.step().unwrap();
     }
 
-    fn delivery(&mut self, method: &str) {
+    fn delivery(&mut self, method: &str) -> u64 {
         let mut selected = false;
         let mut boarded = false;
         let mut held = false;
         let mut moved = false;
+        let mut clicked = false;
+        let initial_health = self.s.vitals()[&self.human].health;
         let mut transitions = Vec::new();
         let mut previous = String::new();
+        let began = self.s.simulation().state().tick;
         for _ in 0..120 * 40 {
             self.step();
             if let Some(thought) = self.s.bot_thoughts().iter().find(|b| b.bot == self.bot) {
+                clicked |= thought
+                    .objective_detail
+                    .as_ref()
+                    .is_some_and(|d| d.phase == "native click");
                 let detail = format!(
                     "{} {:?} {:?}",
                     thought.behaviour, thought.objective_detail, thought.objective_diagnostic
@@ -476,13 +550,24 @@ impl Game {
                     "canonical win without observing selected {method}"
                 );
                 assert!(moved, "delivery requires actual object displacement");
+                if method == "native physical contact" {
+                    assert!(
+                        clicked,
+                        "hand delivery must use an actual ordinary activation, not walking alone"
+                    );
+                }
+                assert_eq!(
+                    self.s.vitals()[&self.human].health,
+                    initial_health,
+                    "a passive visible creator must not distract delivery into combat"
+                );
                 if method == "native control seat" {
                     assert!(boarded, "actual control-seat occupancy required");
                 }
                 if method == "declared physical hold" {
                     assert!(held, "actual exact-object native grip required");
                 }
-                return;
+                return self.s.simulation().state().tick - began;
             }
         }
         panic!(
@@ -498,9 +583,299 @@ impl Game {
 
 #[test]
 fn contact_delivery_uses_actual_motion_and_credited_round_outcome_across_renamed_layouts() {
-    for (namespace, offset) in [("copper-yard", 0.0), ("violet-lab", 24.0)] {
-        Game::new(namespace, offset, false).delivery("native physical contact");
+    for (namespace, offset, mass) in [("copper-yard", 0.0, 900.0), ("violet-lab", 24.0, 1200.0)] {
+        Game::configured(
+            namespace,
+            offset,
+            false,
+            false,
+            0.1,
+            Scene {
+                object_mass: Some(mass),
+                ..Default::default()
+            },
+        )
+        .delivery("native physical contact");
     }
+}
+
+#[test]
+fn native_hammer_delivery_uses_real_tool_swings_and_credited_round_outcome() {
+    for (namespace, offset) in [("swing-yard", 0.0), ("renamed-forge", 24.0)] {
+        Game::configured(
+            namespace,
+            offset,
+            false,
+            false,
+            0.1,
+            Scene {
+                weapon: Some(bri_weapons::HAMMER.into()),
+                object_mass: Some(if offset == 0.0 { 900.0 } else { 1200.0 }),
+                ..Default::default()
+            },
+        )
+        .delivery("native hammer");
+    }
+}
+
+#[test]
+fn an_armed_bot_retains_delivery_instead_of_attacking_a_passive_visible_creator() {
+    Game::configured(
+        "quiet-delivery",
+        0.0,
+        false,
+        false,
+        0.1,
+        Scene {
+            weapon: Some(bri_weapons::testing::GUN_ITEM.into()),
+            ..Default::default()
+        },
+    )
+    .delivery("native physical contact");
+}
+
+#[test]
+fn an_actual_attacker_can_interrupt_a_retained_delivery() {
+    let mut g = Game::configured(
+        "threatened-yard",
+        0.0,
+        false,
+        false,
+        0.1,
+        Scene {
+            weapon: Some(bri_weapons::testing::GUN_ITEM.into()),
+            goal_shift: [-75.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    );
+    g.seq += 1;
+    g.s.command(g.human, g.seq, Command::EquipTool { slot: Some(0) })
+        .unwrap();
+    let mut wounded = false;
+    let mut interrupted = false;
+    let mut returned_damage = false;
+    let mut trace = Vec::new();
+    for n in 0..120 * 8 {
+        let snap = g.s.snapshot();
+        let bot = snap.players.iter().find(|p| p.owner == g.bot).unwrap();
+        let human = snap.players.iter().find(|p| p.owner == g.human).unwrap();
+        let delta = Vec3::from(bot.feet) - Vec3::from(human.feet);
+        g.seq += 1;
+        g.s.movement(
+            g.human,
+            g.seq,
+            MoveInput {
+                yaw: delta.x.atan2(-delta.z),
+                pitch: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // The native Gun is semi-automatic. Press after ordinary movement
+        // has applied the authored aim, release, then make another real click.
+        // Holding a single press never constitutes repeated human shooting.
+        if (n % 30 == 2 || n % 30 == 10) && g.s.vitals()[&g.human].alive {
+            g.seq += 1;
+            g.s.command(g.human, g.seq, Command::WeaponTrigger { down: n % 30 == 2 })
+                .unwrap();
+        }
+        g.s.step().unwrap();
+        wounded |= g.s.vitals()[&g.bot].health < 100.0;
+        if trace.len() < 20 && n % 60 == 0 {
+            trace.push(format!(
+                "n={n} players={:?} images={:?} shots={:?} vitals={:?} thought={:?}",
+                g.s.snapshot().players,
+                g.s.weapon_view().images,
+                g.s.weapon_view().fired().collect::<Vec<_>>(),
+                g.s.vitals(),
+                g.s.bot_thoughts()
+            ));
+        }
+        if wounded {
+            if let Some(thought) = g.s.bot_thoughts().iter().find(|b| b.bot == g.bot) {
+                interrupted |= matches!(thought.behaviour, "fight" | "chase" | "fly");
+                if trace.len() < 20 && n % 30 == 0 {
+                    trace.push(format!("{thought:?}"));
+                }
+            }
+            returned_damage |= g.s.vitals()[&g.human].health < 100.0;
+        }
+        if !g.s.vitals()[&g.human].alive {
+            break;
+        }
+    }
+    assert!(
+        wounded,
+        "the ordinary human weapon must actually damage the bot: {trace:?}"
+    );
+    assert!(
+        interrupted
+            && returned_damage
+            && (!g.s.vitals()[&g.human].alive
+                && g.s
+                    .death_results()
+                    .any(|d| d.victim == g.human && d.killer == Some(g.bot))),
+        "real threat must preempt delivery and receive ordinary return fire: {trace:?}; {:?}",
+        g.s.vitals()
+    );
+}
+
+#[test]
+fn an_injured_hammer_bot_pursues_a_ranged_attacker_outside_its_attack_band() {
+    let mut g = Game::configured(
+        "hammer-retaliation",
+        0.0,
+        false,
+        false,
+        0.1,
+        Scene {
+            weapon: Some(bri_weapons::HAMMER.into()),
+            goal_shift: [60.0, 0.0, 0.0],
+            ranged_attacker: true,
+            ..Default::default()
+        },
+    );
+    let gun_slot = (0..120)
+        .find_map(|_| {
+            let picked = g.s.tool_inventories()[&g.human]
+                .slots
+                .iter()
+                .position(|item| item.as_deref() == Some(bri_weapons::testing::GUN_ITEM));
+            if picked.is_some() {
+                return picked;
+            }
+            g.seq += 1;
+            g.s.movement(
+                g.human,
+                g.seq,
+                MoveInput {
+                    yaw: -std::f32::consts::FRAC_PI_2,
+                    forward: 1.0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            g.s.step().unwrap();
+            None
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "ordinary human movement must pick up the authored Gun; players={:?} tools={:?} items={:?} bricks={:?}",
+                g.s.snapshot().players,
+                g.s.tool_inventories(),
+                g.s.weapon_view().static_items,
+                g.s.simulation().state().bricks
+            )
+        });
+    g.seq += 1;
+    g.s.command(
+        g.human,
+        g.seq,
+        Command::EquipTool {
+            slot: Some(gun_slot),
+        },
+    )
+    .unwrap();
+    let mut wounded_at = None;
+    let mut pursued = false;
+    let mut hammer_fired = false;
+    let mut closest = f32::INFINITY;
+    let mut trace = Vec::new();
+    let mut trigger_down = false;
+    for n in 0..120 * 14 {
+        let snap = g.s.snapshot();
+        let bot = snap.players.iter().find(|p| p.owner == g.bot).unwrap();
+        let human = snap.players.iter().find(|p| p.owner == g.human).unwrap();
+        let delta = Vec3::from(bot.feet) - Vec3::from(human.feet);
+        let across = Vec3::new(delta.x, 0.0, delta.z).length();
+        g.seq += 1;
+        g.s.movement(
+            g.human,
+            g.seq,
+            MoveInput {
+                yaw: delta.x.atan2(-delta.z),
+                pitch: delta.y.atan2(across),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // A genuine ranged hit occurs beyond Hammer reach. Stop shooting
+        // after the injury so its dated threat must cause the subsequent
+        // ordinary approach; repeated damage cannot refresh that evidence.
+        let down = wounded_at.is_none() && across > 8.0 && n % 30 == 2;
+        if trigger_down || down {
+            g.seq += 1;
+            g.s.command(g.human, g.seq, Command::WeaponTrigger { down })
+                .unwrap();
+            trigger_down = down;
+        }
+        g.s.step().unwrap();
+        if wounded_at.is_none() && g.s.vitals()[&g.bot].health < 100.0 {
+            assert!(
+                across > 8.0,
+                "actual injury must occur outside Hammer reach"
+            );
+            wounded_at = Some(across);
+        }
+        if wounded_at.is_some() {
+            closest = closest.min(across);
+            if let Some(thought) = g.s.bot_thoughts().iter().find(|b| b.bot == g.bot) {
+                pursued |= matches!(thought.behaviour, "chase" | "fly");
+            }
+            hammer_fired |= g.s.weapon_view().images.get(&g.bot).is_some_and(|images| {
+                images.iter().any(|image| {
+                    image.image == bri_weapons::testing::HAMMER_IMAGE && image.state == "Fire"
+                })
+            });
+        }
+        assert!(
+            !g.s.tool_inventories()[&g.bot]
+                .slots
+                .iter()
+                .any(|item| item.as_deref() == Some(bri_weapons::testing::GUN_ITEM)),
+            "retaliation must remain Hammer-only"
+        );
+        if n % 120 == 0 && trace.len() < 14 {
+            trace.push(format!(
+                "n={n} range={across} hurt={wounded_at:?} vitals={:?} images={:?} thoughts={:?}",
+                g.s.vitals(),
+                g.s.weapon_view().images,
+                g.s.bot_thoughts()
+            ));
+        }
+        if !g.s.vitals()[&g.human].alive {
+            break;
+        }
+    }
+    assert!(
+        wounded_at.is_some_and(|distance| closest < distance - 4.0)
+            && pursued
+            && hammer_fired
+            && g.s
+                .death_results()
+                .any(|d| d.victim == g.human && d.killer == Some(g.bot)),
+        "dated injury must pause delivery, close range, and cause a credited native Hammer kill: {trace:?}"
+    );
+}
+
+#[test]
+fn a_long_hold_delivery_keeps_credited_progress_beyond_the_old_fifteen_second_lease() {
+    let elapsed = Game::configured(
+        "distant-cradle",
+        85.0,
+        false,
+        true,
+        6.1,
+        Scene {
+            goal_shift: [-170.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .delivery("declared physical hold");
+    assert!(
+        elapsed > 1800,
+        "actual delivery must outlast the original fifteen-second lease: {elapsed} ticks"
+    );
 }
 
 #[test]
@@ -723,6 +1098,11 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
                 Scene {
                     repeated_entry: true,
                     initially_inside,
+                    // Longer actual exit/reentry travel makes the authored
+                    // powered seat / hold competitive with native hand clicks.
+                    // Hands remain an available physical method, never disabled
+                    // just to force this coverage.
+                    wide_rearm: drive || hold,
                     ..Default::default()
                 },
             );
@@ -802,7 +1182,10 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
                 g.s.bot_thoughts(),
                 g.s.vehicle_poses()
             );
-            assert!(selected, "the selected ordinary method must execute");
+            assert!(
+                selected,
+                "the selected ordinary method {method} must execute ({namespace}, initially_inside={initially_inside}): {transitions:?}"
+            );
             if initially_inside {
                 assert!(rearmed, "an initially occupied region must rearm first");
             }

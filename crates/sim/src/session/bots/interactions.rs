@@ -13,25 +13,15 @@ const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 
 #[derive(Clone, Copy)]
-struct PushApproach {
-    point: Vec3,
-    pushing: bool,
-}
-
-pub(super) fn push_point(
-    feet: Vec3,
-    centre: Vec3,
-    toward: Vec3,
-    radius: f32,
-    width: f32,
-) -> Option<Vec3> {
-    push_approach(feet, centre, toward, radius, width).map(|approach| approach.point)
+pub(super) struct PushApproach {
+    pub point: Vec3,
+    pub pushing: bool,
 }
 
 /// Static navigation cannot see this moving body. An intermediate arc keeps
 /// ordinary approach chords outside its expanded hull before pushing from the
 /// actual rear axis. Work is constant and collision remains the motor's owner.
-fn push_approach(
+pub(super) fn push_approach(
     feet: Vec3,
     centre: Vec3,
     toward: Vec3,

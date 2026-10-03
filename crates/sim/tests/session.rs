@@ -1116,6 +1116,68 @@ fn loading_over_a_build_skips_overlapping_bricks_like_v20() {
     let expected: Vec<f32> = (0..15).map(|i| 0.5 + i as f32).collect();
     assert_eq!(xs, expected, "One brick in each spot");
 }
+
+#[test]
+fn loading_shared_brick_names_warns_only_for_the_same_builder_group() {
+    use bri_sim::session::Notice;
+    use bri_world::{Brick, ContentRef, build::SavedBuild};
+    let mut s = session();
+    s.set_event_catalog(
+        bri_events::testing::catalog_extended(),
+        Vec::<String>::new(),
+    )
+    .unwrap();
+    let host = s.join("Host".into(), Vec3::Y, true).unwrap();
+    let other = s
+        .join("Other".into(), Vec3::new(20.0, 1.0, 0.0), true)
+        .unwrap();
+    let save = |x| {
+        let mut world = World::new("Build".into(), "source".into(), vec![[1.0; 4]]);
+        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [x, 0.1, -3.25], 0);
+        brick.name = Some("shared_target".into());
+        world.bricks.insert(1, brick);
+        world.next_brick_id = 2;
+        SavedBuild::capture(&world, true, false).unwrap()
+    };
+    let load = |s: &mut Session, owner, sequence, x| {
+        s.command(
+            owner,
+            sequence,
+            Command::LoadBuild {
+                build: Box::new(save(x)),
+                ownership: false,
+            },
+        )
+        .unwrap();
+        while s.build_loading() {
+            s.step().unwrap();
+        }
+        s.take_private_notices().into_iter().filter(|(_, notice)| {
+            matches!(notice, Notice::Center { text, .. } if text.starts_with("Shared brick names:"))
+        }).collect::<Vec<_>>()
+    };
+    assert!(load(&mut s, other, 1, 0.5).is_empty());
+    assert!(
+        load(&mut s, host, 1, 4.5).is_empty(),
+        "another builder's group is separate"
+    );
+    let warnings = load(&mut s, host, 2, 8.5);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].0, host);
+    assert_eq!(
+        s.simulation().state().bricks.len(),
+        3,
+        "load remains ordinary"
+    );
+    assert!(
+        s.simulation()
+            .state()
+            .bricks
+            .values()
+            .all(|b| b.name.as_deref() == Some("shared_target")),
+        "authored names retain their meaning"
+    );
+}
 #[test]
 fn a_brick_that_cannot_be_planted_is_skipped_and_the_load_carries_on_like_v20() {
     use bri_world::{Brick, ContentRef, build::SavedBuild};

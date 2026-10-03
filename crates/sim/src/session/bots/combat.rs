@@ -98,6 +98,8 @@ pub(super) struct Intent {
     pub(super) tick: u64,
     pub(super) image: String,
     release_authorized: bool,
+    shooter_spawn: u64,
+    target_spawn: u64,
 }
 pub(super) enum Decision {
     Unsupported,
@@ -146,22 +148,7 @@ fn cadence(image: &Image) -> u32 {
 /// reached via up; checking each finite authored edge proves this for all
 /// current states, including recovery cycles, without speculative execution.
 fn charge_release_only(image: &Image) -> bool {
-    !image.charges()
-        || image
-            .states
-            .first()
-            .is_none_or(|s| !s.script.eq_ignore_ascii_case("onfire"))
-            && image.states.iter().all(|s| {
-                [s.timeout, s.down, s.ammo, s.no_ammo, s.loaded, s.not_loaded]
-                    .into_iter()
-                    .flatten()
-                    .all(|to| {
-                        image
-                            .states
-                            .get(to)
-                            .is_none_or(|next| !next.script.eq_ignore_ascii_case("onfire"))
-                    })
-            })
+    super::charged_control::release_only(image)
 }
 
 fn capability(
@@ -169,6 +156,24 @@ fn capability(
     projectile: Option<&bri_weapons::ProjectileDef>,
     scale: f32,
 ) -> Option<Capability> {
+    if super::super::tools::native_hammer(image) {
+        if !scale.is_finite() || !(0.01..=100.0).contains(&scale) {
+            return None;
+        }
+        return Some(Capability {
+            family: Family::Melee,
+            delivery: Delivery::Contact,
+            trigger: tactics::Trigger::default(),
+            reach: 5.0 * scale,
+            near: 0.0,
+            direct_damage: 10.0,
+            splash_damage: 0.0,
+            splash_radius: 0.0,
+            arm_ticks: 0,
+            cadence_ticks: cadence(image),
+            rounds_per_attack: 1,
+        });
+    }
     if !charge_release_only(image) {
         return None;
     }
@@ -308,7 +313,7 @@ pub(super) fn choose(
     budget: &mut Budget,
 ) -> Decision {
     state.movement = None;
-    state.intent = None;
+    let previous = state.intent.take();
     let turn = budget.register(bot, tick);
     if seen.way.carry.is_some() || session.mounted(bot).is_some() {
         return Decision::Unsupported;
@@ -330,6 +335,7 @@ pub(super) fn choose(
     let selected = actor.selected;
     let mut supported = false;
     let mut pending = false;
+    let mut charge_continuation = None;
     let mut candidates = Vec::with_capacity(actor.inventory.len().min(tactics::MAX_CANDIDATES));
     let mut choices = Vec::with_capacity(candidates.capacity());
     // The held slot is first; remaining slots rotate when the global solver
@@ -359,17 +365,54 @@ pub(super) fn choose(
         let Some(cap) = capability(image, projectile, scale) else {
             continue;
         };
+        if Some(slot) == selected
+            && image.charges()
+            && actor.trigger_held()
+            && previous.as_ref().is_some_and(|intent| {
+                intent.seen.owner != seen.owner
+                    || intent.shooter_spawn != peer.combat.spawn_tick
+                    || intent.target_spawn != target.combat.spawn_tick
+                    || intent.image != image.id
+                    || intent.choice.slot != slot
+            })
+        {
+            return Decision::Unsafe; // This is a different attack participant/equipment.
+        }
         supported = true;
         if state.movement.is_none() {
             state.movement = Some(movement_weapon(cap));
         }
         let distance = origin.distance(target_point);
-        if distance < cap.near || distance > cap.reach {
-            continue;
-        }
         let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
         let ready_rounds = ammo.as_ref().map(available_rounds);
         if ready_rounds.is_some_and(|n| n < cap.rounds_per_attack) {
+            continue;
+        }
+        if Some(slot) == selected
+            && image.charges()
+            && actor.trigger_held()
+            && previous.as_ref().is_some_and(|intent| {
+                intent.tick.saturating_add(1) == tick
+                    && intent.image == image.id
+                    && intent.choice.slot == slot
+                    && intent.choice.capability == cap
+                    && intent.seen.owner == seen.owner
+                    && intent.shooter_spawn == peer.combat.spawn_tick
+                    && intent.target_spawn == target.combat.spawn_tick
+            })
+        {
+            // A transient missed intercept, blocked path or range boundary
+            // is not loss of this live participant/equipment. Keep the
+            // native wind-up while tracking; this intent cannot release.
+            charge_continuation = Some(Choice {
+                slot,
+                weapon: movement_weapon(cap),
+                capability: cap,
+                direction: (target_point - origin).normalize_or_zero(),
+                aim: None,
+            });
+        }
+        if distance < cap.near || distance > cap.reach {
             continue;
         }
         let input = Intercept {
@@ -427,6 +470,8 @@ pub(super) fn choose(
                     tick,
                     image: image.id.clone(),
                     release_authorized: false,
+                    shooter_spawn: peer.combat.spawn_tick,
+                    target_spawn: target.combat.spawn_tick,
                 });
                 return Decision::Charging(choice);
             }
@@ -507,12 +552,33 @@ pub(super) fn choose(
                 tick,
                 image,
                 release_authorized: !session.spawn_protected(seen.owner),
+                shooter_spawn: peer.combat.spawn_tick,
+                target_spawn: target.combat.spawn_tick,
             });
             if choice.capability.trigger.charge_on_release && session.spawn_protected(seen.owner) {
                 Decision::Charging(choice)
             } else {
                 Decision::Ready(choice)
             }
+        }
+        _ if charge_continuation.is_some() => {
+            let choice = charge_continuation.unwrap();
+            state.movement = Some(choice.weapon);
+            let image = actor.inventory[choice.slot]
+                .as_ref()
+                .and_then(|i| session.weapons.pack.items.get(i))
+                .map(|i| i.image.clone())
+                .expect("validated held item");
+            state.intent = Some(Intent {
+                choice,
+                seen,
+                tick,
+                image,
+                release_authorized: false,
+                shooter_spawn: peer.combat.spawn_tick,
+                target_spawn: target.combat.spawn_tick,
+            });
+            Decision::Charging(choice)
         }
         _ if !supported => Decision::Unsupported,
         _ if pending => Decision::Pending,
@@ -565,6 +631,20 @@ fn clear_path(
     budget: &mut Budget,
     critical: bool,
 ) -> Option<bool> {
+    if choice.capability.delivery == Delivery::Contact {
+        if !budget.ray(false, critical) {
+            return None;
+        }
+        // Hammer's native callback traces all bricks, including non-raycast
+        // ones. WeaponQuery is a different ray and cannot authorize its swing.
+        return Some(
+            session
+                .native_hammer_target(bot, choice.direction)
+                .ok()
+                .flatten()
+                == Some(TargetId::Actor(ActorId(enemy))),
+        );
+    }
     let curved =
         matches!(choice.capability.delivery, Delivery::Projectile(f) if f.fall_per_tick > 0.0);
     let shapes = session.tutorial_shape_targets();
@@ -737,41 +817,44 @@ pub(super) fn validate_intent(
     intent: &Intent,
     actual_direction: Vec3,
     budget: &mut Budget,
-) -> bool {
+) -> FireAdmission {
     if session.simulation.state().tick != intent.tick.saturating_add(1) {
-        return false;
+        return FireAdmission::Abort;
     }
     let Some(brain) = session.bots.brains.get(&bot) else {
-        return false;
+        return FireAdmission::Abort;
     };
     if brain.resting
-        || !session.peers.get(&bot).is_some_and(|p| p.combat.alive)
+        || !session
+            .peers
+            .get(&bot)
+            .is_some_and(|p| p.combat.alive && p.combat.spawn_tick == intent.shooter_spawn)
         || !session
             .peers
             .get(&intent.seen.owner)
-            .is_some_and(|p| p.combat.alive)
+            .is_some_and(|p| p.combat.alive && p.combat.spawn_tick == intent.target_spawn)
         || !session.bot_enemy(bot, &brain.kind, intent.seen.owner)
     {
-        return false;
+        return FireAdmission::Abort;
     }
     let Some(actor) = session.weapons.actor(ActorId(bot)) else {
-        return false;
+        return FireAdmission::Abort;
     };
     if actor.selected != Some(intent.choice.slot) {
-        return false;
+        return FireAdmission::Abort;
     }
     let Some((image, current)) = session.weapons.image_state(ActorId(bot), 0) else {
-        return false;
+        return FireAdmission::Abort;
     };
     if image.id != intent.image {
-        return false;
+        return FireAdmission::Abort;
     }
     let projectile = image
         .projectile
         .as_ref()
         .and_then(|p| session.weapons.pack.projectiles.get(p));
     if capability(image, projectile, actor.frame.scale) != Some(intent.choice.capability) {
-        return false; // A package changed launch scale or native metadata after planning.
+        return FireAdmission::Abort; // Launch metadata changed after planning.
     }
     if let Some(ammo) = session.weapons.ammo(ActorId(bot)) {
         let usable = match (ammo.supply, ammo.reserve) {
@@ -779,28 +862,40 @@ pub(super) fn validate_intent(
             _ => ammo.rounds,
         };
         if usable < intent.choice.capability.rounds_per_attack {
-            return false;
+            return FireAdmission::Abort;
         }
     }
-    // Charge holding and recovery cannot launch a shot. Only the actual
-    // charged release needs a critical trajectory pass; this keeps a long
-    // charge from exhausting the shared ray budget on every fighter tick.
-    if image.charges() && (!intent.release_authorized || !image.fires_on_release(current)) {
-        return true;
+    // An unauthorized release stays held. A proven harmless recovery can
+    // advance normally; indirect trigger-up paths need the same critical
+    // trajectory pass as a direct release into Fire.
+    if image.charges() && !intent.release_authorized {
+        return FireAdmission::HoldCharge;
+    }
+    if image.charges() && !super::charged_control::release_may_fire(image, current) {
+        return FireAdmission::Allow;
     }
     // Keep aim/movement and proven non-firing charge holds while immunity
     // runs out. Reject only an attack which could spend rounds on no damage.
-    if session.spawn_protected(intent.seen.owner) {
-        return false;
+    if !session.spawn_protected(intent.seen.owner)
+        && validate_fire(
+            session,
+            bot,
+            intent.seen,
+            intent.choice,
+            actual_direction,
+            budget,
+        )
+    {
+        FireAdmission::Allow
+    } else if image.charges() && super::charged_control::release_only(image) && actor.trigger_held()
+    {
+        // Live participant/equipment remain valid. The actual direction or
+        // shared validation allowance is temporarily unsuitable for release;
+        // preserve its authored wind-up rather than remounting it.
+        FireAdmission::HoldCharge
+    } else {
+        FireAdmission::Abort
     }
-    validate_fire(
-        session,
-        bot,
-        intent.seen,
-        intent.choice,
-        actual_direction,
-        budget,
-    )
 }
 
 pub(super) struct TriggerDecision {

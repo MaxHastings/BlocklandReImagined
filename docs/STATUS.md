@@ -28,10 +28,14 @@ declared hold, control-seat delivery, elimination/search, package pickup/return
 and a held-out composition have focused real-control evidence. The independent
 tool-loss and revoked-guard causal tests now pass. Renamed/reordered variants
 pass, and independent source/headless review signs off the fourteen journeys
-plus held-out composition. Sustained active measurements, full gate, Windows
-CI and publication remain pending. The same release also
-requires the reported duplicator render-budget crash fix and modern Dynamic
-lighting, now under isolated implementation/review. Classic and Unified retain
+plus held-out composition. The sustained battle produced real damage and deaths but failed four strict
+activity windows; further measurements stopped on Max's finalization instruction.
+The duplicator render-budget crash fix and modern Dynamic lighting are integrated
+and have focused render/content evidence. Max's candidate feedback additionally
+led to colorset pointer fixes, restored native Wrench buttons, real hand/Hammer
+delivery, retained charged-weapon windup, lamp-cache blackout prevention and
+stronger bounded cosmetic blast response. The final source gate, Windows CI and
+three-platform publication remain pending. Classic and Unified retain
 their existing appearance. No v0.2.2 build is published yet.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)
@@ -216,10 +220,9 @@ IP.
   game.
 - Try the skis, and Demo Pong in Bedroom: load it, click the ramp, and use
   the + and - buttons.
-- Upload the content for release builds once (`python tools/ci_content.py
-  upload`, see [release-builds.md](release-builds.md)), then push a version
-  tag. GitHub Actions builds and publishes the release the update check
-  reads.
+- Original content access authorizes private CI bundle refreshes. The release
+  coordinator performs upload, checks and publication within Max's authorization;
+  see [release-builds.md](release-builds.md).
 - Buy a code-signing certificate, if wanted. Optional; signing is already
   behind a parameter.
 

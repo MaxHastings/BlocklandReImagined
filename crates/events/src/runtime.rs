@@ -355,6 +355,10 @@ impl EventWorld {
     pub fn program(&self, id: Id) -> Option<&BrickProgram> {
         self.bricks.get(&id)
     }
+    /// Whether this builder's named-target group already contains this name.
+    pub fn has_named_brick(&self, owner_scope: u64, name: &str) -> bool {
+        self.names.contains_key(&(owner_scope, name.to_owned()))
+    }
     /// Read-only semantic inspection for grounded providers. Outputs without a
     /// native Intent deliberately have no inferred semantics.
     pub fn row_intent(&self, source: Id, row: u16) -> Option<&Intent> {

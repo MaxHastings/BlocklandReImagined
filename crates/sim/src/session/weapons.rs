@@ -349,10 +349,17 @@ impl Session {
             prepared_triggers.push((*owner, expired, trigger, direction));
         }
         for (owner, expired, trigger, direction) in prepared_triggers {
-            if self.bot_hand_fire_gate(owner, direction, tick) == Some(false) {
-                self.weapon_triggers.remove(&owner);
-                self.bot_abort_unsafe_hand_fire(owner)?;
-                continue;
+            match self.bot_hand_fire_gate(owner, direction, tick) {
+                Some(super::bots::FireAdmission::Abort) => {
+                    self.weapon_triggers.remove(&owner);
+                    self.bot_abort_unsafe_hand_fire(owner)?;
+                    continue;
+                }
+                Some(super::bots::FireAdmission::HoldCharge) => {
+                    self.bot_hold_hand_charge(owner)?;
+                    continue;
+                }
+                _ => {}
             }
             if expired {
                 self.weapons.trigger(ActorId(owner), false)?;

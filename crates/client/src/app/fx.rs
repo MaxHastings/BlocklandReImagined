@@ -148,6 +148,9 @@ impl App {
         self.fx.actor_effects.cue(&cue);
         self.fx.explosion_shapes.cue(&cue);
         self.fx.explosion_debris.cue(&cue);
+        self.fx
+            .brick_debris
+            .explosion_cue(&cue, &self.content.weapons.pack);
         if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
             && self.fx.brick_kills.len() < bri_sim::presentation::MAX_CUES
         {

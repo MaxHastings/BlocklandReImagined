@@ -338,6 +338,14 @@ impl Step {
             self.executor.view(session, bot)?
         };
         view.waiting = self.waiting.is_some();
+        if view.waiting
+            && matches!(&self.executor,Executor::Physical(action)
+            if matches!(action.method,super::physical_objectives::Method::Hammer{..}))
+        {
+            // The native grip must keep holding through due-time guards, but
+            // a completed swing must not keep hitting the delivered body.
+            view.trigger = Some(false);
+        }
         Some(view)
     }
     fn progress(&self, session: &Session, bot: OwnerId, tick: u64) -> Option<Progress> {
@@ -1572,6 +1580,11 @@ impl Session {
         if let Some(step) = state.step.as_mut() {
             step.executor.observe_controls(self, bot);
             if step.waiting.is_none()
+                && matches!(&step.executor,Executor::Physical(action) if action.progressed())
+            {
+                step.deadline = tick.saturating_add(APPROACH_TIMEOUT);
+            }
+            if step.waiting.is_none()
                 && let Some((_, when)) = step.admitted(self, bot)
             {
                 step.wait_for(when);
@@ -1886,6 +1899,7 @@ impl Executor {
                 trigger: matches!(
                     action.method,
                     super::physical_objectives::Method::Hold { .. }
+                        | super::physical_objectives::Method::Hammer { .. }
                 )
                 .then_some(d.trigger),
                 board: d.board,
@@ -1926,6 +1940,7 @@ impl Executor {
             Self::Enemy(_) => "native combat/death rules",
             Self::Physical(action) => match action.method {
                 super::physical_objectives::Method::Push => "native physical contact",
+                super::physical_objectives::Method::Hammer { .. } => "native hammer",
                 super::physical_objectives::Method::Hold { .. } => "declared physical hold",
                 super::physical_objectives::Method::Drive { .. } => "native control seat",
             },
@@ -1974,10 +1989,11 @@ impl Executor {
     }
 
     fn execute(&self, session: &mut Session, bot: OwnerId) -> Result<&'static str> {
-        if let Self::Physical(action) = self
-            && action.rearming()
-        {
-            return Ok("rearm");
+        if let Self::Physical(action) = self {
+            let phase = action.execute(session, bot)?;
+            // Rearm still uses the selected method's ordinary controls. Keep
+            // its diagnostic phase until a real region exit is observed.
+            return Ok(if action.rearming() { "rearm" } else { phase });
         }
         let Self::Brick(action) = self else {
             return Ok("approach");
