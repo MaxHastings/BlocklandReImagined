@@ -361,7 +361,14 @@ impl EffectsRenderer {
                     && p.size >= 0.
                     && p.axis.is_finite()
                     && p.spin.is_finite(),
-                "Invalid effects instance"
+                "Invalid effects instance {i}: texture={} layers={} position={:?} color={:?} size={} axis={:?} spin={}",
+                p.texture,
+                self.layers.len(),
+                p.position,
+                p.color,
+                p.size,
+                p.axis,
+                p.spin
             );
             let mut image = self.layers[p.texture as usize];
             image[3] = match p.blend {

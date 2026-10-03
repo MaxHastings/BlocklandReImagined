@@ -1082,6 +1082,26 @@ impl Session {
                 way,
             })
         };
+        // Real injury takes priority over a previously visible bystander.
+        // Resolve only through the same authoritative visibility test; when
+        // the attacker is unseen during a retained objective, ordinary dated
+        // hurt/search evidence must guide pursuit instead of a fresh passive
+        // target. Never renew that evidence from an unseen live position.
+        let tick = self.simulation.state().tick;
+        let valid_threat = |k: &Knowledge| tick < k.expires && self.bot_enemy(bot, kind, k.subject);
+        let threat = self
+            .bots
+            .hurt
+            .get(&bot)
+            .copied()
+            .filter(valid_threat)
+            .or(brain.objective_threat.filter(valid_threat));
+        if let Some(threat) = threat {
+            let target = visible(threat.subject);
+            if target.is_some() || brain.objective.detail().is_some() {
+                return Sight { target };
+            }
+        }
         // Keep fighting the same enemy while it stays in view.
         if let Some(seen) = brain.target.and_then(visible) {
             return Sight { target: Some(seen) };

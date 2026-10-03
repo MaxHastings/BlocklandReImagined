@@ -34,8 +34,11 @@ The duplicator render-budget crash fix and modern Dynamic lighting are integrate
 and have focused render/content evidence. Max's candidate feedback additionally
 led to colorset pointer fixes, restored native Wrench buttons, real hand/Hammer
 delivery, retained charged-weapon windup, lamp-cache blackout prevention and
-stronger bounded cosmetic blast response. The final source gate, Windows CI and
-three-platform publication remain pending. Classic and Unified retain
+stronger bounded cosmetic blast response. The `9650a6b1` source gate failed
+two objective-controller fixtures; their diagnosis and a newly reported
+duplicator effects crash are [tracked here](progress/2026-10-03-v022-final-gate-and-effects-crash.md).
+The corrected final source gate, Windows CI and three-platform publication
+remain pending. Classic and Unified retain
 their existing appearance. No v0.2.2 build is published yet.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)

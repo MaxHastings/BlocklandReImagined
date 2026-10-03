@@ -216,6 +216,9 @@ impl App {
         };
         self.fx.weapon_effects = parts.weapon_effects;
         self.fx.actor_effects = parts.actor_effects;
+        // Texture indices belong to this exact pack. Even an equally sized
+        // replacement can reorder textures or change their pixels.
+        self.gpu.effects_renderer = None;
         self.fx.explosion_shapes = parts.explosion_shapes;
         self.fx.explosion_debris = parts.explosion_debris;
         self.build.tool_ui = parts.tool_ui;
@@ -710,6 +713,196 @@ mod tests {
         let mut data: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         data["maps"][0]["name"] = name.into();
         std::fs::write(path, serde_json::to_vec(&data)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn installed_effects_replace_the_atlas_but_failed_and_cancelled_reloads_do_not() -> Result<()> {
+        let (_content, _state, mut app) = app()?;
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        assert!(app.gpu.effects_renderer.is_none());
+        app.rebuild_effects_renderer(&device, &queue, format)?;
+        let old_pack = app.fx.weapon_effects.world().pack().clone();
+
+        let tx = held_job(&mut app, None);
+        tx.send(Err("failed preparation".into())).ok();
+        app.poll_package_reload();
+        assert!(app.gpu.effects_renderer.is_some());
+        assert!(Arc::ptr_eq(&old_pack, app.fx.weapon_effects.world().pack()));
+
+        let set = app.content.paths.packages.clone();
+        let prepared = || {
+            PreparedPackages::load(
+                &app.content.paths.root,
+                &set,
+                &app.state_dir,
+                app.audio.sound_bank(),
+            )
+        };
+        let cancelled = prepared()?;
+        let mut replacement = prepared()?;
+        let id = app.ui.core.request(UiAction::JoinServer {
+            address: "localhost:28000".into(),
+            password: String::new(),
+        });
+        let tx = held_job(
+            &mut app,
+            Some(ReloadResume::Downloaded {
+                id,
+                address: "localhost:28000".into(),
+            }),
+        );
+        app.ui.core.request(UiAction::CancelConnect);
+        tx.send(Ok(cancelled)).ok();
+        app.poll_package_reload();
+        assert!(app.gpu.effects_renderer.is_some());
+        assert!(Arc::ptr_eq(&old_pack, app.fx.weapon_effects.world().pack()));
+
+        // A decoded Add-On texture appended to the base pack has a valid CPU
+        // index which the already initialized GPU atlas cannot contain.
+        let base = bri_fx_runtime::EffectsPack::load(&app.content.paths.effects_runtime)?;
+        let mut library = base.library.clone();
+        library
+            .textures
+            .insert("reload-icon".into(), "reload-icon.png".into());
+        let mut textures: Vec<_> = base
+            .textures
+            .iter()
+            .map(|t| bri_fx_runtime::pack::TextureImage {
+                id: t.id.clone(),
+                width: t.width,
+                height: t.height,
+                rgba: t.rgba.clone(),
+            })
+            .collect();
+        textures.push(bri_fx_runtime::pack::TextureImage {
+            id: "reload-icon".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+        });
+        let pack =
+            bri_fx_runtime::EffectsPack::from_parts(library, base.manifest.clone(), textures)?;
+        let augmented_base = pack.clone();
+        replacement.parts.weapon_effects = crate::weapon_effects::WeaponEffects::new(
+            pack,
+            Arc::new(replacement.content.weapons.pack.clone()),
+            Default::default(),
+        )?;
+        let texture = replacement
+            .parts
+            .weapon_effects
+            .world()
+            .pack()
+            .textures
+            .iter()
+            .position(|t| t.id == "reload-icon")
+            .unwrap() as u32;
+        assert!(texture as usize >= old_pack.textures.len());
+        let camera = bri_fx_runtime::Camera {
+            view_projection: glam::Mat4::IDENTITY,
+            position: Vec3::Z * 2.,
+            right: Vec3::X,
+            up: Vec3::Y,
+        };
+        let effects = bri_fx_runtime::FrameEffects {
+            particles: vec![bri_fx_runtime::ParticleInstance {
+                position: Vec3::ZERO,
+                size: 1.,
+                color: glam::Vec4::ONE,
+                spin: 0.,
+                axis: Vec3::ZERO,
+                texture,
+                blend: bri_fx_runtime::BlendMode::Alpha,
+                depth_test: true,
+            }],
+            lights: Vec::new(),
+        };
+        let stale = app
+            .gpu
+            .effects_renderer
+            .as_mut()
+            .unwrap()
+            .prepare(&queue, &camera, &effects)
+            .unwrap_err();
+        assert!(stale.to_string().contains("Invalid effects instance"));
+        app.install_packages(&set, replacement);
+        assert!(
+            app.gpu.effects_renderer.is_none(),
+            "successful installation must invalidate the exact old atlas"
+        );
+        app.rebuild_effects_renderer(&device, &queue, format)?;
+        assert_eq!(
+            app.gpu
+                .effects_renderer
+                .as_mut()
+                .unwrap()
+                .prepare(&queue, &camera, &effects)?
+                .instances,
+            1
+        );
+
+        // Equal layer counts are not a proof of texture identity. A normal
+        // reimport/install must invalidate even when the pack list is unchanged.
+        let mut replacement = PreparedPackages::load(
+            &app.content.paths.root,
+            &set,
+            &app.state_dir,
+            app.audio.sound_bank(),
+        )?;
+        let mut textures: Vec<_> = augmented_base
+            .textures
+            .iter()
+            .map(|t| bri_fx_runtime::pack::TextureImage {
+                id: t.id.clone(),
+                width: t.width,
+                height: t.height,
+                rgba: t.rgba.clone(),
+            })
+            .collect();
+        let icon = textures.iter_mut().find(|t| t.id == "reload-icon").unwrap();
+        assert_eq!(icon.rgba, [255; 4]);
+        icon.rgba = vec![64, 128, 32, 255];
+        let changed_pixels = bri_fx_runtime::EffectsPack::from_parts(
+            augmented_base.library.clone(),
+            augmented_base.manifest.clone(),
+            textures,
+        )?;
+        replacement.parts.weapon_effects = crate::weapon_effects::WeaponEffects::new(
+            changed_pixels,
+            Arc::new(replacement.content.weapons.pack.clone()),
+            Default::default(),
+        )?;
+        assert_eq!(
+            replacement
+                .parts
+                .weapon_effects
+                .world()
+                .pack()
+                .textures
+                .len(),
+            app.fx.weapon_effects.world().pack().textures.len()
+        );
+        app.install_packages(&set, replacement);
+        assert!(app.gpu.effects_renderer.is_none());
+        assert_eq!(
+            app.fx.weapon_effects.world().pack().textures[texture as usize].rgba,
+            [64, 128, 32, 255]
+        );
+        app.rebuild_effects_renderer(&device, &queue, format)?;
+        assert_eq!(
+            app.gpu
+                .effects_renderer
+                .as_mut()
+                .unwrap()
+                .prepare(&queue, &camera, &Default::default())?
+                .instances,
+            0
+        );
         Ok(())
     }
 

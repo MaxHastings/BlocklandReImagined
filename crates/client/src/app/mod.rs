@@ -566,7 +566,26 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
         .map_err(|error| anyhow::anyhow!("Could not use the clipboard: {error}"))
 }
 
-impl App {}
+impl App {
+    fn rebuild_effects_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> Result<()> {
+        let limits = bri_fx_runtime::EffectsLimits::default();
+        self.gpu.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
+            device,
+            queue,
+            self.fx.weapon_effects.world().pack(),
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            self.graphics.samples,
+            limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
+        )?);
+        Ok(())
+    }
+}
 /// How long a load or map change must stop changing the world before later
 /// changes count as unsaved.
 const SETTLE: Duration = Duration::from_secs(3);
@@ -1562,16 +1581,7 @@ impl PlatformApp for App {
         ));
         self.shapes_uploaded = None;
         self.gpu.hidden_uploaded = None;
-        let limits = bri_fx_runtime::EffectsLimits::default();
-        self.gpu.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
-            device,
-            queue,
-            self.fx.weapon_effects.world().pack(),
-            format,
-            bri_render::scene::DEPTH_FORMAT,
-            samples,
-            limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
-        )?);
+        self.rebuild_effects_renderer(device, queue, format)?;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.gpu.gpu_palette = None;

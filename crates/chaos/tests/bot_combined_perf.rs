@@ -95,7 +95,30 @@ fn session(flags: usize) -> Result<(Session, u64, Vec<u64>)> {
             0,
         ));
         if n + 1 == flags {
-            let guards = keys.iter().map(|k| flag(k, 1)).collect::<Vec<_>>();
+            // Keep every independent latch prerequisite without exceeding
+            // the creator's per-row condition limit. These ordinary own-
+            // player facts also leave room for due-time round admission.
+            let mut guards = Vec::new();
+            for (group, keys) in keys.chunks(bri_events::rules::MAX_CONDITIONS).enumerate() {
+                let ready = format!("completionGroup{group}");
+                b.events.push(row(
+                    "setVariable",
+                    vec![Value::Int(1), Value::Text(ready.clone()), Value::Int(1)],
+                    keys.iter().map(|k| flag(k, 1)).collect(),
+                    0,
+                ));
+                guards.push(flag(&ready, 1));
+            }
+            // Concurrent real controllers can satisfy their own latches
+            // within the 450ms delay. Only a still-running round admits each
+            // terminal output; a later winner request is skipped by policy.
+            guards.push(Condition {
+                subject: Subject::MiniGame,
+                property: Property::RoundOver,
+                key: String::new(),
+                compare: Compare::Equal,
+                value: Datum::Bool(false),
+            });
             b.events.push(row(
                 "addPlayerScore",
                 vec![Value::Int(17)],
@@ -179,6 +202,8 @@ fn profile(
     let mut previous_counters = BTreeMap::new();
     let mut windows = Vec::<(usize, usize, f64)>::new();
     let mut previous_health = BTreeMap::new();
+    let mut event_error_count = 0;
+    let mut event_error_samples = Vec::new();
     for tick in 0..count {
         if tick % 1200 == 0 {
             windows.push((0, 0, 0.0));
@@ -210,6 +235,14 @@ fn profile(
             max_tick = tick;
         }
         nanos.push(elapsed);
+        // Outside the timed step, retain bounded details without consuming
+        // or hiding a genuine event error from the phase acceptance check.
+        for error in s.take_event_diagnostics() {
+            event_error_count += 1;
+            if event_error_samples.len() < 16 {
+                event_error_samples.push((tick, error.chars().take(1000).collect::<String>()));
+            }
+        }
         projectiles.extend(
             s.weapon_view()
                 .fired()
@@ -290,8 +323,8 @@ fn profile(
         );
     }
     ensure!(
-        s.take_event_diagnostics().is_empty(),
-        "ordinary creator events remain valid"
+        event_error_count == 0,
+        "ordinary creator events remain valid: phase={label}, count={event_error_count}, first_relative_ticks_and_errors={event_error_samples:?}"
     );
     Ok(Evidence {
         objective_ticks,

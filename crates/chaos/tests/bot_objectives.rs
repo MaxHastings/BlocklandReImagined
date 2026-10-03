@@ -321,12 +321,21 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
     };
     let at = Vec3::from(bot_feet()) + Vec3::X * 1.5;
     s.set_spawn_points(vec![at]).unwrap();
-    let enemy = s.join("Unarmed opponent".into(), at, false).unwrap();
+    let enemy = s.join("Armed attacker".into(), at, false).unwrap();
     let game = s.minigame_views()[0].id;
     s.command(enemy, 1, Command::MiniGame(MiniGameRequest::Join { game }))
         .unwrap();
+    let mut enemy_command = 2;
+    s.command(enemy, enemy_command, Command::EquipTool { slot: Some(0) })
+        .unwrap();
     let mut interruptions = 0;
     let mut actual_hit = false;
+    let mut actual_injury = false;
+    let mut attacker_selected = false;
+    let author_health = s.vitals()[&owner].health;
+    let mut trace = Vec::new();
+    let mut previous_health = s.vitals()[&bot].health;
+    let mut last_injury = None;
     for n in 0..120 * 34 {
         let snapshot = s.snapshot();
         let at = |o| Vec3::from(snapshot.players.iter().find(|p| p.owner == o).unwrap().feet);
@@ -336,8 +345,15 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
             100000 + n,
             MoveInput {
                 yaw: delta.x.atan2(-delta.z),
-                forward: if delta.x.hypot(delta.z) > 1.6 {
+                pitch: delta.y.atan2(delta.x.hypot(delta.z)),
+                // Native Gun movement prefers at least five units. This
+                // ranged opponent maintains a firing standoff with ordinary
+                // forward/back controls instead of continuously crowding and
+                // driving a retreat past the bot's real 48-unit leash.
+                forward: if delta.x.hypot(delta.z) > 6.5 {
                     1.0
+                } else if delta.x.hypot(delta.z) < 5.5 {
+                    -1.0
                 } else {
                     0.0
                 },
@@ -345,21 +361,61 @@ fn an_objective_resumes_after_an_ordinary_combat_interruption_and_disconnect() {
             },
         )
         .unwrap();
+        // The shared loadout supplies this opponent's real low-damage Gun.
+        // Aim arrives through ordinary movement; semi-automatic clicks then
+        // keep inflicting genuine injuries without rewriting health or hurt
+        // evidence. A passive nearby player should not suspend delivery.
+        if n % 30 == 2 || n % 30 == 10 {
+            enemy_command += 1;
+            s.command(
+                enemy,
+                enemy_command,
+                Command::WeaponTrigger { down: n % 30 == 2 },
+            )
+            .unwrap();
+        }
         ticks(&mut s, owner, &mut sequence, 1);
         actual_hit |= s.vitals()[&enemy].health < 100.0;
+        actual_injury |= s.vitals()[&bot].health < 100.0;
+        if s.vitals()[&bot].health < previous_health {
+            last_injury = Some(n);
+        }
+        previous_health = s.vitals()[&bot].health;
+        attacker_selected |= actual_injury
+            && s.bot_thoughts().iter().any(|t| {
+                t.bot == bot
+                    && t.visible == Some(enemy)
+                    && matches!(t.behaviour, "fight" | "fly" | "chase")
+            });
         interruptions += usize::from(
             s.bot_thoughts()
                 .iter()
                 .any(|t| t.bot == bot && matches!(t.behaviour, "fight" | "fly" | "chase")),
         );
+        if let Some(thought) = s.bot_thoughts().iter().find(|t| t.bot == bot)
+            && n % 120 == 0
+            && trace.len() < 64
+        {
+            trace.push(format!(
+                "n={n} last_injury={last_injury:?} hits=({actual_injury},{actual_hit}) interrupted={interruptions} vitals={:?} players={:?} images={:?} thought={thought:?}",
+                s.vitals(),
+                s.snapshot().players.iter().map(|p| (p.owner, p.feet)).collect::<Vec<_>>(),
+                s.weapon_view().images,
+            ));
+        }
     }
     assert!(
         interruptions > 120 * 30,
-        "did not suspend objective approach for longer than its ordinary 30-second approach budget: {interruptions}"
+        "did not suspend objective approach for longer than its ordinary 30-second approach budget: {interruptions}; trace={trace:#?}"
     );
     assert!(
-        actual_hit,
-        "a real native attack must occur during combat preemption"
+        actual_hit && actual_injury && attacker_selected,
+        "both ordinary weapons must actually damage their opponents during combat preemption"
+    );
+    assert_eq!(
+        s.vitals()[&owner].health,
+        author_health,
+        "a real attacker must not redirect retaliation onto the passive author"
     );
     assert_eq!(
         s.vitals()[&bot].score,

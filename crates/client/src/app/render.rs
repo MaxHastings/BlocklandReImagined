@@ -1344,6 +1344,12 @@ impl App {
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
         }
+        // A successful Add-On reload replaces the CPU effects worlds without
+        // restarting the device or unrelated scene pipelines. Rebuild their
+        // matching atlas before any main, mirror or portal view prepares it.
+        if self.gpu.effects_renderer.is_none() {
+            self.rebuild_effects_renderer(frame.device, frame.queue, frame.format)?;
+        }
         self.item_ui.register_icons(frame);
         // Until its pipelines finish compiling, the preview stays due.
         if self.avatar.preview_dirty

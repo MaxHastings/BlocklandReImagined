@@ -144,3 +144,43 @@ this lane: vertical jet transport is still unsupported; arbitrary renamed
 image callbacks still need a truthful native/tool semantic provider. The
 shared ordinary native controls own every tested impulse, hit, pickup and
 outcome; no score/win/pose/force shortcut was added.
+
+Full gate `9650a6b19178` later exposed a stale interruption fixture that expected
+over 30 seconds of combat against a passive opponent. Giving that opponent its
+authored low-damage Gun through ordinary equip/aim/press/release controls exposed
+an actual integration defect: the visible-target retention still preferred the
+passive Author over the actor that had genuinely injured the bot. The bounded
+trace shows attacker 3 damaging bot 2 at tick 33, followed by the bot pursuing
+and damaging Author 1 until reaching its existing 48-unit leash. This explains
+the interrupted duration shortfall without changing the leash or acceptance.
+
+The root-approved correction changes only the existing sight-selection helper:
+current incoming or retained dated injury prefers that exact canonical enemy
+through the existing visibility test. An unseen attacker during a retained
+objective provides no fresh passive target; ordinary dated hurt/memory/search
+remains responsible, with unchanged expiry and no hidden live-position update.
+The same fixture now requires actual attacker selection and return damage,
+unchanged passive-author health, more than 3600 combat ticks, disconnect, and
+canonical score/round resumption. Source-only checkpoint formatting and diff
+whitespace pass; root's focused compiled rerun is pending. No charge execution,
+damage, geometry, score or win shortcut was introduced.
+
+The shared injury-priority correction passes the full physical suite **14/14**
+and tactics suite **11/11** in
+`/tmp/bri-v022-injury-priority-physical-tactics.log`; independent source review
+also passed. A second interruption-fixture issue was then measured: its human
+controller relentlessly followed to 1.6 units, forcing the Gun bot to retreat
+past its unchanged 48-unit leash. Late samples show distance 45.57 at tick 1800,
+48.10 at tick 1920, and repeated Objective/Fight alternation at that boundary
+despite fresh actual injuries. No leash or runtime guard was relaxed.
+
+The opponent now maintains a legitimate ranged standoff with ordinary forward
+movement beyond 6.5 units, backward movement below 5.5, and idle movement between;
+native Gun movement already prefers at least five units. The run remains 34
+seconds and still requires **more than 3600 actual combat ticks**, bilateral
+native damage, visible selection of the real attacker, unchanged passive-author
+health, disconnect, retained objective resumption, and the canonical score/round
+observer. Full `bot_objectives` **11/11 PASS, 0.85 seconds**, recorded in
+`/tmp/bri-v022-objectives-valid-standoff-retry.log`. This supersedes the pending
+injury-priority checkpoint above. NPC source and fixtures are frozen again;
+the separate full gate/release remains root-owned and incomplete at this record.
