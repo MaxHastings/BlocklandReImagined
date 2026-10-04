@@ -528,15 +528,17 @@ async fn forged_or_malformed_hellos_are_rejected() -> Result<()> {
 }
 
 /// Requests: A joins with key A (gets token T). While A is connected:
-/// resume T with key A. A disconnects. Resume T with key B; resume T with
-/// no key. A second fresh join with key A while A is connected (by design
-/// allowed, but never an administrator). Control: resume T with key A.
+/// resume T with key B; resume T with no key (both refused, A stays). A
+/// second fresh join with key A (by design allowed, but never an
+/// administrator). Resume T with key A while A is connected: a reconnect
+/// whose old connection the host has not timed out yet, which replaces it.
+/// Everyone leaves; control: resume T with key A.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Result<()> {
     let server = server::start(session(), options())?;
     let dir = tempfile::tempdir()?;
     let (key_a, key_b) = (key(&dir, "a.key"), key(&dir, "b.key"));
-    let first = Client::connect_with_identity(
+    let mut first = Client::connect_with_identity(
         server.address,
         &server.certificate,
         "Ann".into(),
@@ -549,13 +551,25 @@ async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Resul
     let token = first.resume.clone();
     let owner = first.owner;
     let certificate = server.certificate.clone();
-    let (_raw, answer) = raw_join(&server, |nonce| {
-        resume_hello(nonce, token.clone(), Some(&key_a), &certificate)
-    })
-    .await?;
+    // The ticket alone, or with another key, never takes over the player.
+    for key in [Some(&key_b), None] {
+        let (_raw, answer) = raw_join(&server, |nonce| {
+            resume_hello(nonce, token.clone(), key, &certificate)
+        })
+        .await?;
+        assert!(
+            rejected(&answer).is_some_and(|r| r.contains("identity")),
+            "{answer:?}"
+        );
+    }
     assert!(
-        rejected(&answer).is_some_and(|r| r.contains("still connected")),
-        "{answer:?}"
+        command_within(
+            &mut first,
+            Command::Chat("Still here".into()),
+            Duration::from_secs(5)
+        )
+        .await?,
+        "a refused resume closed the live connection"
     );
     // Same key, fresh join: a distinct, unprivileged owner.
     let twin = Client::connect_with_identity(
@@ -571,8 +585,35 @@ async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Resul
     assert_ne!(twin.owner, owner);
     assert!(!twin.administrator);
     drop(twin);
+    // Ticket and key together: the reconnect replaces the stale connection.
+    let (raw, answer) = raw_join(&server, |nonce| {
+        resume_hello(nonce, token.clone(), Some(&key_a), &certificate)
+    })
+    .await?;
+    match answer {
+        Message::Welcome {
+            owner: resumed,
+            administrator,
+            ..
+        } => {
+            assert_eq!(resumed, owner);
+            assert!(!administrator);
+        }
+        other => panic!("reconnect over a stale connection failed: {other:?}"),
+    }
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Err(error) = first.receive().await {
+                break format!("{error:#}");
+            }
+        }
+    })
+    .await
+    .context("the replaced connection stayed open")?;
+    assert!(closed.contains("closed by peer"), "{closed}");
+    drop(raw);
     drop(first);
-    // Wait until the host has processed both departures.
+    // Wait until the host has processed every departure.
     tokio::time::timeout(Duration::from_secs(5), async {
         while server.players.load(std::sync::atomic::Ordering::Relaxed) != 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -581,14 +622,6 @@ async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Resul
     .await?;
     let (_raw, answer) = raw_join(&server, |nonce| {
         resume_hello(nonce, token.clone(), Some(&key_b), &certificate)
-    })
-    .await?;
-    assert!(
-        rejected(&answer).is_some_and(|r| r.contains("identity")),
-        "{answer:?}"
-    );
-    let (_raw, answer) = raw_join(&server, |nonce| {
-        resume_hello(nonce, token.clone(), None, &certificate)
     })
     .await?;
     assert!(
@@ -610,6 +643,39 @@ async fn resume_tickets_are_bound_to_identity_and_one_live_connection() -> Resul
         }
         other => panic!("control resume failed: {other:?}"),
     }
+    server.stop().await?;
+    Ok(())
+}
+
+/// The game's own rejoin after a lost connection
+/// (`Client::connect_fetching_resuming`): Ann's ticket brings her back as
+/// herself while her old connection is still open, and a ticket the host
+/// does not know (it restarted) is a fresh join rather than a failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rejoin_with_its_ticket_comes_back_as_the_same_player() -> Result<()> {
+    let server = server::start(session(), options())?;
+    let dir = tempfile::tempdir()?;
+    let key_a = key(&dir, "a.key");
+    let cache = bri_package::sync::Cache::open(&dir.path().join("cache"))?;
+    let rejoin = |resume| {
+        Client::connect_fetching_resuming(
+            server.address,
+            bri_net::client::HostPin::from(&server.certificate[..]),
+            "Ann".into(),
+            Vec::new(),
+            resume,
+            None,
+            &key_a,
+            &cache,
+            Default::default(),
+            |fetched, _| Ok(fetched.iter().map(|f| f.package.clone()).collect()),
+        )
+    };
+    let (first, _, _) = rejoin(None).await?;
+    let (again, _, _) = rejoin(Some(first.resume.clone())).await?;
+    assert_eq!(again.owner, first.owner, "the rejoin is a new player");
+    let (unknown, _, _) = rejoin(Some(ResumeToken([7; 32]))).await?;
+    assert_ne!(unknown.owner, first.owner);
     server.stop().await?;
     Ok(())
 }

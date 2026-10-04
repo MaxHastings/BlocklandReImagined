@@ -140,6 +140,10 @@ pub(super) struct Combat {
     pub player: mg::PlayerId,
     pub health: f32,
     pub alive: bool,
+    /// Which body this is, from 1 on joining: each spawn is a new `Player`
+    /// object in v20, and what was scheduled on the old one went with it.
+    /// Event targets of class Player carry it as their generation.
+    pub body: u64,
     pub died_tick: u64,
     pub respawn_tick: u64,
     pub spawn_tick: u64,
@@ -809,6 +813,7 @@ impl Session {
             player,
             health: MAX_HEALTH,
             alive: true,
+            body: 1,
             died_tick: 0,
             respawn_tick: 0,
             spawn_tick: tick,
@@ -1988,6 +1993,14 @@ impl Session {
                     };
                     let name = self.peers[&owner].name.clone();
                     let previous = self.last_membership.insert(owner, game);
+                    // A rule's respawn time is for this player in that
+                    // game (`setRespawnTime`): it ends as they leave it,
+                    // whichever way, and a new game's rules set their own.
+                    if previous.flatten() != game
+                        && let Some(peer) = self.peers.get_mut(&owner)
+                    {
+                        peer.respawn_ms = None;
+                    }
                     // A bot the rules add comes and goes unannounced
                     // (Slayer's `addMember` greets only connections).
                     let quiet = self.bots.rules_package(owner).is_some();
@@ -2042,6 +2055,9 @@ impl Session {
                             Notice::Chat(format!("{}The mini-game ended.", color_code(5))),
                         );
                         self.last_membership.insert(owner, None);
+                        if let Some(peer) = self.peers.get_mut(&owner) {
+                            peer.respawn_ms = None;
+                        }
                     }
                 }
                 mg::Effect::Message {
@@ -2212,6 +2228,7 @@ impl Session {
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
+            peer.combat.body += 1;
             peer.combat.spawn_tick = tick;
             peer.look_limits = None;
             peer.combat.shot_once = false;

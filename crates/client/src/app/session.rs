@@ -646,6 +646,7 @@ impl App {
             worker,
             scene,
             name: local_name,
+            join_target: None,
             max_players,
             local: true,
             single,
@@ -712,6 +713,18 @@ impl App {
         saved.save(&path)
     }
     pub(super) fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
+        self.join_resuming(id, address, password, None)
+    }
+    /// [`App::join`] presenting `resume`, the lost connection's ticket, so
+    /// the host gives the player back their number (and so their bricks)
+    /// even before it has timed the old connection out.
+    pub(super) fn join_resuming(
+        &mut self,
+        id: RequestId,
+        address: String,
+        password: String,
+        resume: Option<bri_net::protocol::ResumeToken>,
+    ) -> Result<()> {
         ensure!(
             self.addons.reload.is_none(),
             "Add-On loading is still in progress"
@@ -807,11 +820,12 @@ impl App {
             let cache = bri_package::sync::Cache::open(&package_cache)?;
             let local = identity.client_packages();
             let mut mods = None;
-            let joined = Client::connect_fetching(
+            let joined = Client::connect_fetching_resuming(
                 address,
                 pin,
                 player,
                 local.clone(),
+                resume,
                 None,
                 &native_identity,
                 &cache,
@@ -930,6 +944,7 @@ impl App {
             worker,
             scene,
             name: typed.clone(),
+            join_target: Some(address.trim().to_string()),
             max_players: 64,
             local: false,
             single: false,

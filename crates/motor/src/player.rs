@@ -686,6 +686,9 @@ pub struct Player {
     mount: bool,
     /// v20's crouch thread: the eye follows it, not the crouch flag.
     crouch: crate::crouch::CrouchThread,
+    /// Jumps the body made without travelling between: server teleports
+    /// and openings that carried it to their partner ([`Player::relocations`]).
+    relocations: u64,
 }
 pub struct MotionEvents {
     /// A 32 ms Torque tick ran this step; the other events come only with one.
@@ -822,6 +825,7 @@ impl Player {
             contacts: BTreeSet::new(),
             mount: false,
             crouch: Default::default(),
+            relocations: 0,
         })
     }
     /// Drive a player-type mount (horse, rowboat, cannon, turret) with the
@@ -864,6 +868,7 @@ impl Player {
             contacts: BTreeSet::new(),
             mount: true,
             crouch: Default::default(),
+            relocations: 0,
         })
     }
     /// Restored or scripted motion (`setVelocity`, checkpoints).
@@ -917,6 +922,7 @@ impl Player {
             contacts: BTreeSet::new(),
             mount: false,
             crouch: Default::default(),
+            relocations: 0,
         };
         player.restore(physics, state, tuning)?;
         Ok(player)
@@ -1088,7 +1094,18 @@ impl Player {
         state.crouched = false;
         state.jetting = false;
         state.tether = None;
-        self.restore(physics, state, self.tuning.clone())
+        self.restore(physics, state, self.tuning.clone())?;
+        self.relocations += 1;
+        Ok(())
+    }
+    /// How many times the body jumped instead of travelling: each server
+    /// teleport and each opening it passed through counts one. Whoever
+    /// follows its path between two looks (swept region tests) treats a
+    /// change as a jump to the new place, never as the line between.
+    /// Riding a seat ([`Player::place`]) and authoritative corrections
+    /// ([`Player::restore`]) are travel and do not count.
+    pub fn relocations(&self) -> u64 {
+        self.relocations
     }
     /// Ride a vehicle seat: position and facing come from the seat node.
     pub fn place(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32, velocity: Vec3) {
@@ -1207,7 +1224,10 @@ impl Player {
                 self.torque_tick_among(physics, input, waters, TORQUE_TICK, parts, passages)?;
             // Drawn between the ticks on the side it came out of.
             let before = match &events.passed {
-                Some(carry) => carry_feet(carry, Vec3::from(before), self.middle()).to_array(),
+                Some(carry) => {
+                    self.relocations += 1;
+                    carry_feet(carry, Vec3::from(before), self.middle()).to_array()
+                }
                 None => before,
             };
             let tick = &mut self.state.tick;

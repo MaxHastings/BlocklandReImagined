@@ -1368,3 +1368,45 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     assert!(app.scene.liquid_cache.is_none());
     Ok(())
 }
+
+/// A joined game whose network drops is rejoined at the address it was
+/// joined at, even after the host's listing named the server.
+#[test]
+fn a_lost_connection_rejoins_the_address_not_the_server_name() -> anyhow::Result<()> {
+    use super::*;
+    let content = ContentRoot::synthetic()?;
+    let state = content.state()?;
+    let mut app = App::load(&content.root, state.path(), (320, 240))?;
+    let id = app.ui.core.request(UiAction::JoinServer {
+        address: "127.0.0.1:28000".into(),
+        password: String::new(),
+    });
+    app.join(id, "127.0.0.1:28000".into(), String::new())?;
+    let attempt = app
+        .net
+        .attempt
+        .as_mut()
+        .context("join started no attempt")?;
+    // In the game, with the host's listing name shown in place of the
+    // address, when the connection is lost.
+    attempt.entered = true;
+    attempt.name = "Blockland Server".into();
+    attempt.worker =
+        network::Worker::start(app.runtime.handle(), bri_progress::Progress::new(), async {
+            Err(anyhow::anyhow!(bri_net::client::CONNECTION_LOST))
+        });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app
+        .net
+        .attempt
+        .as_ref()
+        .is_some_and(|a| a.worker.events.is_empty())
+    {
+        assert!(std::time::Instant::now() < deadline, "no failure arrived");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.poll_network()?;
+    assert!(app.net.attempt.is_some(), "the lost game was not rejoined");
+    assert_eq!(app.net.reconnects, 1);
+    Ok(())
+}

@@ -54,8 +54,9 @@ briefs informed the experiment; they do not define mandatory infrastructure.
    ball/vehicle point is its center. Inclusive axis-aligned bounds, centered on
    the brick. Custom dimensions persist/copy with the brick, and width/depth
    rotate on a quarter-turned copy. A swept line test detects complete fast
-   passages, delivering Enter then Leave. Teleports and portal jumps currently count as
-   straight swept segments too; intermediate sensors can fire. Stay/timers fire every 120 ticks on
+   passages, delivering Enter then Leave. Teleports, respawns and portal jumps
+   are jumps, not travel: only the region the object lands in sees it enter,
+   never the sensors on the straight line between. Stay/timers fire every 120 ticks on
    the shared 120 Hz clock, not one second after each individual entry.
    Occupancy is updated before the event phase, so IF sees current occupancy
    for that tick. Opponents excludes the actor and same-team players; without
