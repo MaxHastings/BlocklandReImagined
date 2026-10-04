@@ -158,7 +158,7 @@ impl App {
                 selection_lines: None,
                 selection_uploaded: None,
                 hidden_uploaded: None,
-                hidden_fading: Vec::new(),
+                hidden_outlines: Default::default(),
                 effects_renderer: None,
                 gpu_scene: None,
                 gpu_broken: BTreeSet::new(),

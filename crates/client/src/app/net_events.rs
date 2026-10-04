@@ -228,7 +228,6 @@ impl App {
             self.scene.query_log = Some((view.world_log.clone(), view.world_revision));
             self.gpu.ghost_uploaded = u64::MAX;
             self.fx.brick_debris.sync_world(&view.world);
-            self.gpu.hidden_uploaded = None;
         }
         if let Some(view) = &a.view {
             self.scene.mirror_index.follow(

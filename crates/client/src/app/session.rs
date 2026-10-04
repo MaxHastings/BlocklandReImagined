@@ -107,6 +107,7 @@ impl App {
             lines.clear();
         }
         self.gpu.hidden_uploaded = None;
+        self.gpu.hidden_outlines.clear();
         if let Some(lines) = &mut self.gpu.region_lines {
             lines.clear();
         }

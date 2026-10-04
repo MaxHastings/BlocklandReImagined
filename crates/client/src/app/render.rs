@@ -390,51 +390,23 @@ impl App {
             {
                 lines.set_lines(frame.device, &vertices)?;
             }
-            if (self.gpu.hidden_uploaded != Some(show) || self.gpu.hidden_fading != fading)
-                && let Some(lines) = &mut self.gpu.hidden_lines
+            let debris = &self.fx.brick_debris;
+            if let Some(lines) = &mut self.gpu.hidden_lines
+                && let Some(vertices) = self.gpu.hidden_outlines.update(
+                    &view.world.bricks,
+                    &view.world.palette,
+                    show,
+                    &fading,
+                    |id| debris.is_dead(id),
+                    |brick| {
+                        crate::brick_cover::mesh(brick, meshes)
+                            .map(|mesh| hidden_brick_box(brick, mesh))
+                    },
+                    self.gpu.hidden_uploaded != Some(show),
+                )
             {
-                let mut vertices = vec![];
-                if show {
-                    // Hidden bricks, and any fading in or out drawn under
-                    // alpha 0.1 (`brick_fade::OUTLINE_ALPHA`).
-                    let faint: BTreeSet<u64> = fading
-                        .iter()
-                        .filter(|(_, faint)| *faint)
-                        .map(|(id, _)| *id)
-                        .collect();
-                    let easing: BTreeSet<u64> = fading.iter().map(|(id, _)| *id).collect();
-                    let bricks = view
-                        .world
-                        .bricks
-                        .iter()
-                        .filter(|(id, b)| !b.visible && !easing.contains(*id))
-                        .chain(
-                            faint
-                                .iter()
-                                .filter_map(|id| Some((id, view.world.bricks.get(id)?))),
-                        );
-                    for (id, brick) in bricks {
-                        if self.fx.brick_debris.is_dead(*id) {
-                            continue;
-                        }
-                        let Some(mesh) = crate::brick_cover::mesh(brick, meshes) else {
-                            continue;
-                        };
-                        let Some(color) = view.world.palette.get(usize::from(brick.color)) else {
-                            continue;
-                        };
-                        let (low, high) = hidden_brick_box(brick, mesh);
-                        bri_render::lines::box_edges(
-                            low,
-                            high,
-                            [color[0], color[1], color[2]],
-                            &mut vertices,
-                        );
-                    }
-                }
                 lines.set_lines(frame.device, &vertices)?;
                 self.gpu.hidden_uploaded = Some(show);
-                self.gpu.hidden_fading = fading;
             }
             let selection = self.build.building.as_ref().and_then(|b| b.outline());
             if self.gpu.selection_uploaded != Some(selection)
