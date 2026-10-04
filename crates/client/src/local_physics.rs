@@ -34,14 +34,21 @@ pub fn new_world() -> PhysicsWorld {
     world
 }
 
-/// A player or vehicle as this client draws it this frame: a box that
-/// shoves bodies out of its way. `id` must stay the same between frames.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A player or vehicle as this client draws it this frame: a box, or the
+/// body's own collision `shape`, that shoves bodies out of its way. `id`
+/// must stay the same between frames.
+#[derive(Clone, Debug)]
 pub struct Pusher {
     pub id: u64,
     pub center: Vec3,
     pub rotation: Quat,
+    /// Half its size each way: the box, or the box round `shape`.
     pub half: Vec3,
+    /// The shape it collides with as it does on the host (a vehicle's
+    /// [`bri_vehicles::body_shape`]: a Steel Ball's sphere, a hull), posed
+    /// at `center` and `rotation`; None for the box. A rolling ball shoved
+    /// debris as a spinning box would fling it like a paddle wheel.
+    pub shape: Option<SharedShape>,
 }
 /// A projectile as this client draws it this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -227,9 +234,13 @@ impl Pushers {
                 }
                 None => {
                     let h = p.half.max(Vec3::splat(0.05));
+                    let collider = match &p.shape {
+                        Some(shape) => ColliderBuilder::new(shape.clone()),
+                        None => ColliderBuilder::cuboid(h.x, h.y, h.z),
+                    };
                     let (handle, _) = world.insert(
                         RigidBodyBuilder::kinematic_position_based().pose(to),
-                        ColliderBuilder::cuboid(h.x, h.y, h.z).friction(0.3),
+                        collider.friction(0.3),
                     );
                     self.bodies.insert(
                         p.id,

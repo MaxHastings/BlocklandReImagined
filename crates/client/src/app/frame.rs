@@ -1515,7 +1515,7 @@ impl App {
                     .filter(|p| {
                         p.id & 1 << 63 != 0 || view.vitals.get(&p.id).is_none_or(|v| v.alive)
                     })
-                    .copied()
+                    .cloned()
                     .collect();
                 let moved = self.addons.client_code.advance_physics(
                     game_elapsed.as_secs_f32().min(0.25),
