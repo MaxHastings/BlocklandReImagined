@@ -808,6 +808,8 @@ impl App {
             self.scene.materials = Some(prepared.materials);
             self.scene.palette = Some(prepared.palette);
             self.gpu.gpu_palette = None;
+            // Easing bricks bind the old palette's materials.
+            self.fx.fade_models.clear();
             let old = self.build.building.replace(prepared.building);
             // The new controller has not seen any world or palette yet.
             // The replica can be unchanged while the background map load finishes.
