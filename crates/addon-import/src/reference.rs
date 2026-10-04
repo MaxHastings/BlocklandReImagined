@@ -53,6 +53,10 @@ pub struct Reference {
     /// Lower-case Add-On name to the Add-Ons it loads first
     /// (`ForceRequiredAddOn`, `LoadRequiredAddOn`), lower-case.
     pub requires: BTreeMap<String, Vec<String>>,
+    /// Brick geometry (`.blb`) of the reference's Add-Ons, by lower-case
+    /// virtual path: an Add-On whose brick uses another Add-On's shape
+    /// gets a copy, so it loads without that Add-On.
+    pub blbs: BTreeMap<String, Vec<u8>>,
 }
 
 /// The Add-Ons a script loads before its own datablocks
@@ -365,6 +369,9 @@ impl Reference {
             .insert(src.name.to_ascii_lowercase(), src.name.clone());
         for (key, file) in &src.files {
             self.files.insert(key.clone());
+            if key.ends_with(".blb") {
+                self.blbs.insert(key.clone(), file.bytes.clone());
+            }
             if key.ends_with(".cs") {
                 let text = String::from_utf8_lossy(&file.bytes);
                 self.requires

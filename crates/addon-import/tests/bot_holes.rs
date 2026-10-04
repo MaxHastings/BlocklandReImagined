@@ -111,5 +111,20 @@ fn the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land() {
     )
     .unwrap();
     assert_eq!(body["movement"]["underwater_forward"], 10.0);
+    // Max, v0.1.15: joining failed with "its shape
+    // v20/add-ons/bot_hole/8xspawn.blb is not a loaded brick's". Its hole
+    // brick uses Bot_Hole's pad shape; the package carries a copy, so its
+    // bricks load on their own, with Bot_Hole off or on.
+    let catalog = out.join("assets/brick-catalog");
+    let bricks = bri_sim::definitions::Definitions::load(&catalog, &catalog)
+        .expect("its bricks load without Bot_Hole");
+    assert!(
+        bricks
+            .entries
+            .keys()
+            .any(|id| id == "bot_shark:brick/bricksharkbot_holespawndata"),
+        "{:?}",
+        bricks.entries.keys().collect::<Vec<_>>()
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

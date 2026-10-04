@@ -1,6 +1,6 @@
 datablock fxDTSBrickData (BrickSharkBot_HoleSpawnData)
 {
-	brickFile = "./hole.blb";
+	brickFile = "Add-Ons/Bot_Hole/8xSpawn.blb";
 	category = "Special";
 	subCategory = "Holes";
 	uiName = "Shark Hole";

@@ -216,6 +216,9 @@ struct Ctx<'a> {
     ported: BTreeMap<String, String>,
     /// Bot_Hole bots as bot kinds (`assets/bots.json`).
     bots: Vec<serde_json::Value>,
+    /// Other Add-Ons' brick geometry copied in: mesh id to package-relative
+    /// output file.
+    borrowed: BTreeMap<String, String>,
 }
 
 impl Ctx<'_> {
@@ -383,6 +386,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         dependency_projectiles: BTreeMap::new(),
         ported: BTreeMap::new(),
         bots: Vec::new(),
+        borrowed: BTreeMap::new(),
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
@@ -2672,9 +2676,16 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     } else if let Some(found) = cx.reference.has_file(&mesh) {
                         let addon = cx.reference.addon_of(&found).unwrap_or_default();
                         cx.used(&addon, found.clone());
-                        // The base game's own id for that geometry, so the
-                        // brick reuses the loaded shape (`Definitions::load_with`).
-                        format!("v20/{found}")
+                        match cx.reference.blbs.get(&found).cloned() {
+                            // Another Add-On's shape: a copy of it here, so
+                            // this package loads whether that one is on or
+                            // not, and on every player's game.
+                            Some(bytes) => borrow_brick(cx, &found, &bytes),
+                            // The base game's own id for that geometry, so
+                            // the brick reuses the loaded shape
+                            // (`Definitions::load_with`).
+                            None => format!("v20/{found}"),
+                        }
                     } else {
                         let o = cx.owned.get(&key);
                         let at = o.map(|o| Location::new(&o.path, o.d.line));
@@ -2789,6 +2800,31 @@ fn door_swap(b: &bri_content::brick::CatalogEntry) -> Option<bri_content::brick:
     })
 }
 
+/// Converts another Add-On's brick geometry at `path` into this package
+/// (once) and gives its mesh id; empty when it does not convert.
+fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
+    let id = content_id(&cx.ns, "brick_geometry", path);
+    if cx.borrowed.contains_key(&id) {
+        return id;
+    }
+    let rel = format!("bricks/{}.brick.json", &hash(bytes)[..24]);
+    let written = bri_convert::brick::read(bytes, id.clone())
+        .and_then(|(brick, _)| cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&brick)?));
+    match written {
+        Ok(()) => {
+            cx.id("brick_geometry", path, path, &format!("assets/{rel}"));
+            cx.borrowed.insert(id.clone(), rel);
+            id
+        }
+        Err(e) => {
+            cx.report
+                .diagnostics
+                .push(format!("brick geometry {path}: {e:#}"));
+            String::new()
+        }
+    }
+}
+
 /// The bricks whose geometry converted, in the base game's brick catalog
 /// layout under `assets/brick-catalog/`, so `Definitions::load` reads them
 /// like the stock catalog: `stock-catalog.json`, `catalog-audit.json` (mesh
@@ -2805,6 +2841,7 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
                 rel.clone(),
             ))
         })
+        .chain(cx.borrowed.clone())
         .collect();
     let (mut bricks, mut resolved, mut bodies) = (vec![], vec![], vec![]);
     let mut icons = serde_json::Map::new();
