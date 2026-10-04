@@ -23,6 +23,10 @@ pub(crate) enum Behaviour {
     /// An enemy in sight within its weapon's band: stand its ground,
     /// strafe and shoot.
     Fight,
+    /// Nothing to attack with, an enemy about and no peaceful objective:
+    /// go and pick up a weapon it sees lying in reach before anything but
+    /// carrying (`arming`).
+    Arm,
     /// An enemy in sight out of its band: go after them.
     Chase,
     /// An enemy it lost from sight, or one that hurt it: go where they
@@ -49,6 +53,8 @@ pub(crate) struct Situation {
     pub interaction: f32,
     /// A grounded objective is available.
     pub objective: bool,
+    /// It has no attack, and sees an item that would give it one.
+    pub arm: bool,
     /// The enemy in sight within its chase radius: how far across, and how
     /// much higher.
     pub enemy: Option<(f32, f32)>,
@@ -73,11 +79,12 @@ const RISE_SLACK: f32 = 1.0;
 
 impl Behaviour {
     /// Every behaviour, most urgent first.
-    pub(crate) const ALL: [Behaviour; 9] = [
+    pub(crate) const ALL: [Behaviour; 10] = [
         Behaviour::Carry,
         Behaviour::Fly,
         Behaviour::Interact,
         Behaviour::Fight,
+        Behaviour::Arm,
         Behaviour::Chase,
         Behaviour::Search,
         Behaviour::Return,
@@ -109,6 +116,9 @@ impl Behaviour {
                 }),
                 0.8,
             ),
+            // Before going after an enemy or an objective that wants one
+            // beaten, which it cannot do empty-handed.
+            Behaviour::Arm => fits(s.arm, 0.95),
             Behaviour::Chase => fits(s.enemy.is_some(), 0.6),
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
@@ -242,6 +252,61 @@ mod tests {
         };
         assert_eq!(pick(Fight, &jumped), Fight);
         assert_eq!(pick(Chase, &jumped), Chase);
+    }
+
+    /// With nothing to attack with and a weapon in sight, it arms itself
+    /// before it goes after an enemy or an objective that wants one beaten;
+    /// a carry still comes first.
+    #[test]
+    fn an_empty_handed_bot_arms_before_its_objective() {
+        let unarmed = Situation {
+            arm: true,
+            objective: true,
+            ..Default::default()
+        };
+        assert_eq!(pick(Wander, &unarmed), Arm);
+        assert_eq!(pick(Objective, &unarmed), Arm);
+        // An enemy in its bare hands' band, or out of it, waits.
+        assert_eq!(
+            pick(
+                Fight,
+                &Situation {
+                    arm: true,
+                    ..enemy(2.0)
+                }
+            ),
+            Arm
+        );
+        assert_eq!(
+            pick(
+                Chase,
+                &Situation {
+                    arm: true,
+                    ..enemy(20.0)
+                }
+            ),
+            Arm
+        );
+        assert_eq!(
+            pick(
+                Arm,
+                &Situation {
+                    holding: true,
+                    ..unarmed
+                }
+            ),
+            Carry
+        );
+        assert_eq!(
+            pick(
+                Arm,
+                &Situation {
+                    arm: false,
+                    ..unarmed
+                }
+            ),
+            Objective
+        );
     }
 
     /// A long band's slack is proportional: a sniper at 40 keeps fighting

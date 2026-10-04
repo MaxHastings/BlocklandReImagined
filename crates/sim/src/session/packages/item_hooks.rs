@@ -59,6 +59,12 @@ impl Session {
             .collect()
     }
 
+    /// A package's script decides what picking up `item` means: its rules
+    /// may leave it, use it up or make it part of a game.
+    pub(in crate::session) fn pickup_scripted(&self, item: &str) -> bool {
+        !self.hooked(|b| b.on_pickup, item).is_empty()
+    }
+
     /// `on_pickup(player, item, info)` as a living player touches `item`,
     /// lying as world drop `drop` or on spawn brick `spawner`. The first
     /// package to answer `false` or `"take"` decides.

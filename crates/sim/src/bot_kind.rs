@@ -15,11 +15,12 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_FIRST_NAMES: usize = 256;
 /// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
 /// order (`session::bots::behaviour::Behaviour`).
-pub const BEHAVIOURS: [&str; 9] = [
+pub const BEHAVIOURS: [&str; 10] = [
     "carry",
     "fly",
     "interact",
     "fight",
+    "arm",
     "chase",
     "search",
     "return",

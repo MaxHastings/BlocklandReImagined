@@ -34,6 +34,7 @@ use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
 
+mod arming;
 mod behaviour;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
@@ -229,6 +230,9 @@ struct Brain {
     behaviour: Behaviour,
     /// Tick it took up `behaviour`.
     behaviour_since: u64,
+    /// The weapon it is going to pick up, with nothing to attack with
+    /// (`arming`).
+    arming: arming::Arming,
     /// The way a ranged fighter strafes (+1 right, -1 left), and the tick
     /// it turns back.
     strafe: (f32, u64),
@@ -299,6 +303,8 @@ enum Goal {
     Carry(Vec3),
     Interact(Vec3),
     Objective(Vec3),
+    /// Where a weapon lies that it goes to pick up.
+    Arm(Vec3),
     Home,
 }
 impl Goal {
@@ -309,7 +315,8 @@ impl Goal {
             | Self::Search(p)
             | Self::Carry(p)
             | Self::Interact(p)
-            | Self::Objective(p) => p,
+            | Self::Objective(p)
+            | Self::Arm(p) => p,
             Self::Home => home,
         }
     }
@@ -358,6 +365,7 @@ impl Brain {
             fire_down: false,
             behaviour: Behaviour::default(),
             behaviour_since: 0,
+            arming: Default::default(),
             strafe: (1.0, 0),
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
@@ -1948,6 +1956,26 @@ impl Session {
         let cover = objective.and_then(|view| {
             contest::cover(self, bot, view.resource?, feet, view.heading).map(|point| (point, view))
         });
+        // Nothing to attack with (a driver has its chassis), an enemy about
+        // and no peaceful objective: it arms itself from a weapon in sight
+        // before it goes after anyone.
+        let arm = if !can_retaliate
+            && driving.is_none()
+            && !peaceful_objective
+            && (sight.target.is_some()
+                || threat.is_some()
+                || self.bots.brains[&bot].memory.is_some())
+            && self.bots.brains[&bot]
+                .kind
+                .behaviours
+                .get("arm")
+                .is_none_or(|w| *w > 0.0)
+        {
+            arming::arm_point(self, bot, feet, tick)
+        } else {
+            self.bots.brains.get_mut(&bot).unwrap().arming.clear();
+            None
+        };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2040,6 +2068,7 @@ impl Session {
                 && air.is_some_and(|a| !walks_up(a.to)),
             interaction: opportunity.map_or(0.0, |o| o.utility),
             objective: objective.is_some(),
+            arm: arm.is_some(),
             // A swimmer reaches any depth: only how far counts.
             enemy: enemy
                 .filter(|_| !objective_without_attack)
@@ -2140,6 +2169,14 @@ impl Session {
 
         // Goal.
         let (hold, back_off) = match behaviour {
+            Behaviour::Arm => {
+                if let Some(at) = arm
+                    && !matches!(brain.goal, Some(Goal::Arm(p)) if p.distance(at) < 0.2)
+                {
+                    brain.set_goal(Some(Goal::Arm(at)));
+                }
+                (false, false)
+            }
             Behaviour::Interact => {
                 if let Some(o) = opportunity
                     && !matches!(brain.goal, Some(Goal::Interact(p)) if p.distance(o.point) < 0.2)
@@ -2332,7 +2369,7 @@ impl Session {
             // those tolerances and an unrelated fixed one-unit cutoff.
             if wanted.is_none()
                 && brain.search.is_none()
-                && matches!(goal, Goal::Interact(_) | Goal::Objective(_))
+                && matches!(goal, Goal::Interact(_) | Goal::Objective(_) | Goal::Arm(_))
                 && flat(point - feet).length()
                     < crate::nav::ARRIVAL_RADIUS + if body.conservative { 1.2 } else { 0.4 } + 0.2
                 && flat(point - feet).length() > 0.1

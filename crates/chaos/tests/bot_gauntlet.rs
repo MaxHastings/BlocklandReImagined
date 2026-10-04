@@ -453,9 +453,17 @@ fn weapons_lying_on_the_ground() {
         report.progress.insert("armed_bots".into(), best.max(armed));
     });
     // Measured at the merge: circling 91% (unarmed bots strafe round each
-    // other doing nothing), no bot ever armed. Now none strafes: circling
-    // 0%, 1 change a bot-minute. TARGET armed_bots > 0.
-    within(&r, 0.01, 0.01, 0.05, 4.0);
+    // other doing nothing), no bot ever armed, no kills. Now a bot with
+    // nothing to attack with does not fight; it arms itself from a weapon
+    // in sight: all 4 armed, 31 kills, circling 4.4%, 36 changes a
+    // bot-minute (arm, fight, and arm again after each respawn).
+    within(&r, 0.01, 0.01, 0.08, 45.0);
+    assert!(
+        r.progress["armed_bots"] == 4 * rounds() as i64,
+        "every bot armed itself: {:?}",
+        r.progress
+    );
+    assert!(r.kills > 0, "armed, they fought: {}", r.kills);
 }
 
 #[test]
