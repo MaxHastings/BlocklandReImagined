@@ -66,7 +66,7 @@ impl App {
             self.ui.apply_session(
                 attempt.id,
                 UiUpdate::Admin(bri_ui::models::admin::AdminUpdate::State(
-                    crate::admin_ui::state(snapshot),
+                    crate::admin_ui::refresh_state(snapshot, self.ui.core.admin.snapshot.as_ref()),
                 )),
             );
             self.answer(id, Ok(()));
