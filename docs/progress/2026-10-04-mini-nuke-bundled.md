@@ -63,8 +63,8 @@ Causes and fixes:
 3. **Fade models uploaded every brick surface image each.** A brick easing
    in or out (a respawn, `setRendering`, a repaint) built a scene with its
    own copy of the brick textures: about 10 ms each, 512 at once on a
-   respawn. They now draw with the chunk palette's textures, as debris does
-   (`FadeModels::upload`, `upload_palette_model`).
+   respawn. The v0.2.4 integration branch made the same fix independently
+   (fade meshes bind the chunk palette's textures); this branch takes it.
 4. **Brick index updates shifted buckets per brick.** `grid::Index` gained
    `remove_many` and `insert_many`; the client's three building indexes
    take a whole update in one pass.
