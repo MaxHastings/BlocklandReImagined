@@ -152,6 +152,85 @@ fn wrench_send_recolors_the_existing_vehicle_without_respawning(f: &Fixture) -> 
 }
 }
 
+on_both! {
+/// Spraying a recolouring spawn brick repaints the vehicle it owns at once,
+/// wherever it is, without a Send or a respawn; turning Re-Color Vehicle off
+/// and on by an ordinary brick edit (no wrench Send) does the same.
+fn painting_a_spawn_brick_recolors_its_live_vehicle(f: &Fixture) -> anyhow::Result<()> {
+    use bri_sim::{player::PlayerTuning, session::{ActionAim, ToolCatalog, WrenchProperties}};
+    use bri_world::authority::Edit;
+    let (mut s, _driver) = session(f)?;
+    s.set_tool_catalog(ToolCatalog {
+        vehicles: [f.vehicle(Vehicle::Car).to_string()].into(),
+        vehicle_bricks: [f.vehicle_spawn_brick().to_string()].into(),
+        ..Default::default()
+    })?;
+    let (min, max) = s.simulation().brick_box(1).unwrap();
+    let edge = Vec3::new(max.x - 0.3, max.y - 0.05, max.z - 0.3);
+    assert!(edge.x > min.x && edge.z > min.z);
+    let painter = s.join("Painter".into(), Vec3::new(edge.x, 0.05, max.z + 1.5), true)?;
+    for _ in 0..120 {
+        common::hold_still(&mut s, painter);
+        s.step()?;
+    }
+    let red = Some([1.0, 0.0, 0.0, 1.0]);
+    let blue = Some([0.0, 0.0, 1.0, 1.0]);
+    let parked = s.vehicle_infos();
+    assert_eq!(parked.len(), 1);
+    assert_eq!(parked[0].color, red, "spawned in the brick's colour");
+    let id = parked[0].id;
+    let pose = s.vehicle_poses()[0].position;
+    // An ordinary spray: blue can, aim at the spawn's exposed corner, fire.
+    s.command(painter, 1, Command::UseSprayCan { color: 1 })?;
+    let player = s.snapshot().players.into_iter().find(|p| p.owner == painter).unwrap();
+    let d = edge - player.eye(&PlayerTuning::default());
+    let aim = ActionAim { yaw: d.x.atan2(-d.z), pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()) };
+    s.command_with_aim(painter, 2, Command::WeaponTrigger { down: true }, Some(aim))?;
+    let mut painted_at = None;
+    for tick in 0..60 {
+        common::hold_still(&mut s, painter);
+        s.step()?;
+        if painted_at.is_none() && s.simulation().state().bricks[&1].color == 1 {
+            painted_at = Some(tick);
+        }
+        if let Some(at) = painted_at
+            && tick > at
+        {
+            break;
+        }
+    }
+    s.command(painter, 3, Command::WeaponTrigger { down: false })?;
+    assert!(painted_at.is_some(), "the spray can painted the spawn brick");
+    let infos = s.vehicle_infos();
+    assert_eq!((infos.len(), infos[0].id), (1, id), "the same vehicle, not a respawn");
+    assert_eq!(infos[0].color, blue, "the live vehicle took the brick's new colour within a tick");
+    let moved = Vec3::from(s.vehicle_poses()[0].position).distance(Vec3::from(pose));
+    assert!(moved < 0.05, "painting left the vehicle where it was ({moved})");
+    // Re-Color Vehicle off and on again through an ordinary brick edit.
+    let properties = |recolor_vehicle| WrenchProperties {
+        vehicle: Some(f.vehicle(Vehicle::Car).into()), recolor_vehicle,
+        raycast: true, colliding: true, visible: true, ..Default::default()
+    };
+    for (recolor, color) in [(false, None), (true, blue)] {
+        s.edit_brick(painter, 1, Edit::Properties(properties(recolor)))?;
+        common::hold_still(&mut s, painter);
+        s.step()?;
+        let infos = s.vehicle_infos();
+        assert_eq!((infos.len(), infos[0].id), (1, id));
+        assert_eq!(infos[0].color, color, "Re-Color Vehicle {recolor}");
+    }
+    // With it off, brick paint leaves the vehicle's own appearance alone.
+    s.edit_brick(painter, 1, Edit::Properties(properties(false)))?;
+    s.edit_brick(painter, 1, Edit::Color(0))?;
+    s.step()?;
+    assert_eq!(s.vehicle_infos()[0].color, None);
+    let replicated: Vec<bri_sim::session::VehicleInfo> =
+        serde_json::from_slice(&serde_json::to_vec(&s.vehicle_infos())?)?;
+    assert_eq!(replicated, s.vehicle_infos());
+    Ok(())
+}
+}
+
 /// The Blockhead Bot sample package's bot kinds.
 fn bots() -> Vec<bri_sim::bot_kind::BotKind> {
     bri_sim::bot_kind::BotPack::from_json(include_bytes!(
