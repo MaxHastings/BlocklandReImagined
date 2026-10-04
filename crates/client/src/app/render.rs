@@ -469,7 +469,11 @@ impl App {
                     &view.world.palette,
                 )?;
             }
-            if let Some(world) = &self.scene.world_source {
+            if let (Some(world), Some(palette), Some(gpu_palette)) = (
+                &self.scene.world_source,
+                &self.scene.palette,
+                &self.gpu.gpu_palette,
+            ) {
                 self.fx.fade_models.upload(
                     &self.fx.brick_fades,
                     &self.scene.chunks_left_out,
@@ -478,6 +482,8 @@ impl App {
                     frame.device,
                     frame.queue,
                     meshes,
+                    palette,
+                    gpu_palette,
                     materials,
                 )?;
             }
