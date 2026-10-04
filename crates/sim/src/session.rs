@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod bots;
-pub use bots::{BotEvidence, BotObjectiveDetail, BotTask, BotThought};
+pub use bots::{
+    BotCandidate, BotDecision, BotDrive, BotEvidence, BotObjectiveDetail, BotSurpriseView, BotTask,
+    BotThought,
+};
 mod breakables;
 mod build_load;
 pub use build_load::LoadPace;

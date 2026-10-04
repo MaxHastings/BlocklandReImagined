@@ -90,6 +90,9 @@ pub(super) struct Choice {
     pub(super) direction: Vec3,
     pub(super) capability: Capability,
     pub(super) aim: Option<Aim>,
+    /// Aimed at a surface beside the target that its splash reaches
+    /// (`surprise`), rather than at the target itself.
+    pub(super) surface: bool,
 }
 #[derive(Clone)]
 pub(super) struct Intent {
@@ -327,10 +330,21 @@ pub(super) fn choose(
     tick: u64,
     state: &mut State,
     budget: &mut Budget,
+    mind: &mut super::surprise::Mind,
 ) -> Decision {
+    // The guard as of the last tick: the gate is set later in the tick.
+    let gate = mind.gate;
     state.movement = None;
     let previous = state.intent.take();
     let turn = budget.register(bot, tick);
+    let surprise = session
+        .bots
+        .brains
+        .get(&bot)
+        .map(|b| &b.kind.surprise)
+        .filter(|s| s.strength > 0.0);
+    // Splash aims a varying bot may take instead, by slot.
+    let mut variants: Vec<(usize, u32, Choice, f32)> = Vec::new();
     if seen.way.carry.is_some() || session.mounted(bot).is_some() {
         return Decision::Unsupported;
     }
@@ -429,6 +443,7 @@ pub(super) fn choose(
                 capability: cap,
                 direction: (target_point - origin).normalize_or_zero(),
                 aim: None,
+                surface: false,
             });
         }
         if distance < cap.near || distance > cap.reach {
@@ -479,6 +494,7 @@ pub(super) fn choose(
             direction,
             capability: cap,
             aim: solutions[0],
+            surface: false,
         };
         if curved && !turn {
             if Some(slot) == selected && image.charges() && safe_blast(session, bot, choice, origin)
@@ -547,6 +563,37 @@ pub(super) fn choose(
                 context,
             });
             choices.push(choice);
+            // A varying bot may aim a splash weapon at the feet, or at a
+            // surface beside the target, where its real blast still hurts.
+            if surprise.is_some()
+                && gate == super::surprise::Gate::default()
+                && cap.splash_radius > 0.0
+                && cap.splash_damage > 0.0
+            {
+                let feet = seen.feet + Vec3::Y * 0.15;
+                let centre = target_point;
+                let surface =
+                    session.surprise_surface(seen.owner, centre, origin, cap.splash_radius);
+                for (aim, point, moving) in [
+                    (super::surprise::AIM_FEET, Some(feet), target_velocity),
+                    (super::surprise::AIM_SURFACE, surface, Vec3::ZERO),
+                ] {
+                    let Some(point) = point else { continue };
+                    let solve = Solve {
+                        slot,
+                        origin,
+                        velocity,
+                        point,
+                        moving,
+                        surface: aim == super::surprise::AIM_SURFACE,
+                    };
+                    if let Some((c, score)) =
+                        variant(session, bot, seen.owner, cap, solve, context, budget)
+                    {
+                        variants.push((slot, aim, c, score));
+                    }
+                }
+            }
             break;
         }
     }
@@ -555,10 +602,50 @@ pub(super) fn choose(
     }
     match tactics::select(&candidates, selected.map(|s| s as u8), SWITCH_MARGIN) {
         Ok(Some(selection)) => {
-            let choice = choices
+            use super::surprise::{AIM_TORSO, Domain};
+            let cfg = &session.bots.brains[&bot].kind.surprise;
+            let scores: Vec<(u32, f32)> = candidates
+                .iter()
+                .filter_map(|c| {
+                    tactics::suitability(c.capability, c.context)
+                        .ok()
+                        .map(|s| (u32::from(c.slot), s))
+                })
+                .collect();
+            // The chooser picks among weapons on the planning turn, when
+            // every slot is weighed (`surprise`); otherwise the plain pick.
+            let mut slot = usize::from(selection.slot);
+            if turn && charge_continuation.is_none() {
+                slot = mind
+                    .pick(
+                        cfg,
+                        Domain::Weapon,
+                        &scores,
+                        u32::from(selection.slot),
+                        selected.map(|s| s as u32),
+                        gate,
+                        tick,
+                    )
+                    .option as usize;
+            }
+            let mut choice = choices
                 .into_iter()
-                .find(|c| c.slot == usize::from(selection.slot))
+                .find(|c| c.slot == slot)
                 .expect("candidate choice");
+            let torso = scores
+                .iter()
+                .find(|(s, _)| *s as usize == slot)
+                .map_or(0.0, |(_, score)| *score);
+            let aims: Vec<(u32, f32)> = std::iter::once((AIM_TORSO, torso))
+                .chain(variants.iter().filter(|v| v.0 == slot).map(|v| (v.1, v.3)))
+                .collect();
+            let current = mind.chosen(Domain::Aim);
+            let aim = mind
+                .pick(cfg, Domain::Aim, &aims, AIM_TORSO, current, gate, tick)
+                .option;
+            if let Some(v) = variants.iter().find(|v| v.0 == slot && v.1 == aim) {
+                choice = v.2;
+            }
             state.movement = Some(choice.weapon);
             let image = actor.inventory[choice.slot]
                 .as_ref()
@@ -603,6 +690,93 @@ pub(super) fn choose(
         _ if pending => Decision::Pending,
         _ => Decision::Unsafe,
     }
+}
+
+/// Where a splash aim goes ([`variant`]).
+#[derive(Clone, Copy)]
+struct Solve {
+    slot: usize,
+    origin: Vec3,
+    velocity: Vec3,
+    /// The point aimed at, and how it moves (the feet move with the body).
+    point: Vec3,
+    moving: Vec3,
+    surface: bool,
+}
+/// A splash aim at `solve.point` instead of the body: a solved intercept
+/// whose blast still reaches the body where it will be, safe and clear
+/// like any shot, and scored by its splash alone.
+fn variant(
+    session: &Session,
+    bot: OwnerId,
+    enemy: OwnerId,
+    cap: Capability,
+    solve: Solve,
+    context: Context,
+    budget: &mut Budget,
+) -> Option<(Choice, f32)> {
+    let Delivery::Projectile(f) = cap.delivery else {
+        return None;
+    };
+    let mut search = tactics::InterceptSearch::new(
+        f,
+        Intercept {
+            muzzle: solve.origin,
+            target: solve.point,
+            target_velocity: solve.moving,
+            shooter_velocity: solve.velocity,
+        },
+    )
+    .ok()?;
+    let limit = PATH_TICKS.min(f.lifetime_ticks);
+    while search.result().low.is_none()
+        && search.result().examined_segments < limit
+        && budget.solves > 0
+    {
+        let count = 16
+            .min(limit - search.result().examined_segments)
+            .min(budget.solves);
+        budget.solves -= count;
+        search.advance(count);
+    }
+    let aim = search.result().low?;
+    let body = session.peers.get(&enemy)?;
+    let centre = Vec3::from(body.player.state().feet)
+        + Vec3::Y * body.player.tuning().stand_height * 0.5
+        + Vec3::from(body.player.state().velocity) * aim.time_seconds as f32;
+    if aim.impact.distance(centre) > cap.splash_radius * 0.9 {
+        return None;
+    }
+    let choice = Choice {
+        slot: solve.slot,
+        weapon: movement_weapon(cap),
+        direction: aim.direction,
+        capability: cap,
+        aim: Some(aim),
+        surface: solve.surface,
+    };
+    if !safe_blast(session, bot, choice, solve.origin)
+        || clear_path(session, bot, enemy, choice, solve.origin, budget, false) != Some(true)
+    {
+        return None;
+    }
+    let (self_clearance, ally_clearance) =
+        clearances(session, bot, aim.impact, aim.time_seconds as f32);
+    let splash = Capability {
+        direct_damage: 0.0,
+        ..cap
+    };
+    let score = tactics::suitability(
+        splash,
+        Context {
+            aim: Some(aim),
+            self_clearance,
+            ally_clearance,
+            ..context
+        },
+    )
+    .ok()?;
+    Some((choice, score))
 }
 
 fn clearances(session: &Session, bot: OwnerId, impact: Vec3, seconds: f32) -> (f32, Option<f32>) {
@@ -740,7 +914,13 @@ fn clear_path(
         };
         if let Some(hit) = q.sweep(start, end, filter) {
             if hit.target != TargetId::Actor(ActorId(enemy)) {
-                return Some(false);
+                // A surface shot that reaches its surface goes off there.
+                let surface = choice.surface
+                    && !matches!(hit.target, TargetId::Actor(_))
+                    && choice
+                        .aim
+                        .is_some_and(|a| hit.position.distance(a.impact) < 0.75);
+                return Some(surface);
             }
             if choice.capability.delivery == Delivery::Ray {
                 return Some(true);
@@ -820,7 +1000,12 @@ pub(super) fn validate_fire(
         let (min, max) = target.player.world_bounds();
         let min = Vec3::from(min) + travel;
         let max = Vec3::from(max) + travel;
-        if !aim.impact.cmpge(min).all() || !aim.impact.cmple(max).all() {
+        if choice.surface {
+            // A surface shot lands beside the body: its blast must reach it.
+            if aim.impact.distance((min + max) * 0.5) > choice.capability.splash_radius {
+                return false;
+            }
+        } else if !aim.impact.cmpge(min).all() || !aim.impact.cmple(max).all() {
             return false;
         }
     }
@@ -1069,6 +1254,7 @@ mod tests {
             capability: cap,
             direction: (target - origin).normalize(),
             aim: None,
+            surface: false,
         };
         let seen = Seen {
             owner: enemy,

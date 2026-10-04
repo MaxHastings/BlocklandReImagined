@@ -154,6 +154,93 @@ canonical spawn protection withholds ammunition-spending attacks and charge
 release, retaining aim and proven non-firing holds. It does not make prediction
 of a moving target infallible or change damage permissions.
 
+## Surprise
+
+Bots that always do the single best thing are predictable. Surprise is
+variation among a bot's choices that changes over time, built from plain
+mechanisms over the choices the brain already scores: no personality,
+emotion or mood, and no item, vehicle or game names
+(`crates/sim/src/session/bots/surprise.rs`).
+
+**One chooser.** Each choice point asks the same chooser (`Mind::pick`)
+once a tick, with the options the brain scored and its own plain pick:
+
+| Choice point | Options and scores | Plain pick |
+|---|---|---|
+| Behaviour | Interact, Fight, Chase, Search, Objective, Wander, by their weighted scores (`behaviour::scores`) | the highest (`behaviour::best`) |
+| Weapon | each inventory slot the hand-combat planner found usable now, by `tactics::suitability` | `tactics::select`, on the bot's planning turn |
+| Aim | the body; with a splash weapon (real `splash_radius` and `splash_damage`) also its feet, and a brick, vehicle or terrain face beside it within 0.7 of the radius, each scored by splash alone | the body |
+| Route | for a chase: straight at the enemy, or `flank_distance` to either side where there is floor | straight |
+
+Carrying a catch, arming, flying and walking home are never traded away.
+An option's score counts with its *effectiveness* (1 working, lower after
+failures): options whose adjusted score is within `band` of the best are
+eligible, so an option that keeps failing drops out of the band and
+another takes over. Each eligible option weighs (adjusted / best)^4,
+times e^drift, divided by 1 + boredom; one is drawn from the bot's own
+seeded random stream, so a seed always plays the same.
+
+- *Drift*: every option a bot has met carries a slow random walk
+  (Ornstein-Uhlenbeck, a step a second, reverting over `drift_seconds`,
+  bounded by `drift`), so each bot's preferences wander apart over time.
+- *Boredom*: an option in use gains `boredom` a second; it halves every
+  `boredom_seconds` once out of use.
+- *Effectiveness*: a shot is judged after its flight plus 0.6 s (the
+  target lost health or died, or not) for the weapon, aim and behaviour
+  that fired it; getting stuck fails the behaviour and chase route. A
+  failure takes `failure` of it away, a success restores `success` of the
+  gap, and it recovers on its own over `effectiveness_seconds`. A spear
+  that keeps missing gives way to the sword; torso shots that keep being
+  dodged give way to the feet or a wall beside the target.
+
+**Guards.** A pick is held at least `commit_seconds` (up to half again),
+unless it falls out of the band (the situation changed). Nothing varies
+while the bot carries an objective (a body its tool holds, a mount to
+deliver, a loose body it pushes, or a picked-up item on its way to a
+destination) or is urgent (under `urgent_health`, or hurt by an enemy
+within `urgent_range` in the last `urgent_seconds`): the plain pick, every
+time. Only options the brain scored above zero are options: what cannot
+work now is never picked. A switch of behaviour or weapon that the
+variation causes is preceded by a tell: the old one is held and the bot
+stands still with its fire held for `tell_seconds`, then switches.
+
+**Splash aims** are solved and checked like any shot: an intercept for
+the aimed point, the blast clear of itself and allies (`safe_blast`), the
+path clear. A surface aim counts its path clear when it reaches that
+surface, and at the firing gate its impact must lie within the splash
+radius of the body rather than inside it.
+
+**Flavour interrupts.** At a natural pause (wandering, no enemy seen or
+remembered, no threat, no objective, on its own feet, not carrying), now
+and then (`interrupts_per_minute`, then `interrupt_cooldown_seconds` of
+rest) a bot does something idle for `interrupt_seconds` (up to half
+again), each an ordinary player action through the player's own path:
+look at a player in sight, strike an emote (`Command::Emote`: love, hate,
+confusion, alarm), hop, run a small circle, walk a short detour, look
+round, crouch, paint the floor toward a player with the spray can
+(`Command::UseSprayCan`, then the trigger, only once the can is in hand),
+take out another tool and put it back, drop the weapon in hand
+(`Command::DropTool`, only with a second attack in inventory), or flick
+the light (`Command::ToggleLight`). Each weighs by `interrupts`; an
+interrupt ends at once if an enemy, a threat or an objective turns up.
+
+**Strength.** `strength` (0 to 1) scales the band, the drift, boredom,
+effectiveness failures and the interrupt rate. At 0, the default, every
+choice is the plain pick and no random number is drawn: the brain plays
+exactly as without surprise (the gauntlet's mixed-arsenal numbers are
+identical). The mind still records plain decisions for the readout.
+
+**Why.** `BotThought::surprise` (`BotSurpriseView`) gives the strength,
+the guard in force, a tell or interrupt under way, every drive (drift,
+boredom, effectiveness) and the last decision at each choice point: the
+plain and chosen options, the reason (off, carrying, urgent, plain,
+committed, picked, telling, switched) and each candidate's score, adjusted
+score, eligibility, drift, boredom, effectiveness and weight.
+
+The gauntlet's `surprise_by_strength` reports variety (distinct choices in
+effect per bot-minute), goof share, longest goof and switches away from
+the plain pick at strengths 0, 0.5 and 1; bands come later.
+
 ## Data
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
@@ -167,6 +254,9 @@ of a moving target infallible or change damage permissions.
     working, and how it covers one a teammate works (above). A
     `cover_distance` of 0 stands down as before, and a `clear_degrees` of
     0 meets a drive head on.
+  - `surprise`: every tunable of the chooser and the interrupts (above),
+    each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
+    comments outside strings.
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.
