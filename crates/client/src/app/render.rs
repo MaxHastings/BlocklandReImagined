@@ -1448,16 +1448,7 @@ impl App {
         }
         // Unified's switchable fixtures retain their exact legacy per-texel
         // light shares. Dynamic never equips or patches these images.
-        let rules = self
-            .net
-            .attempt
-            .as_ref()
-            .and_then(|a| a.view.as_ref())
-            .is_some_and(|v| !v.map_lights.is_empty());
-        let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
-        if (effective.lighting == 2 && switchable)
-            && !self.lighting.light_volume.switchable_equipped
-            && self.lighting.light_volume.map.is_some()
+        if self.switchable_sheets_due()
             && let Some(scene) = self.scene.cpu_scene.as_mut()
         {
             bri_render::map_lighting::DynamicSheet::equip(
@@ -1468,5 +1459,24 @@ impl App {
             self.gpu.gpu_scene = None;
         }
         Ok(())
+    }
+    /// The map bake's switchable sheets wait for the map's images: taking
+    /// them uploads the whole scene again (`prepare_render`).
+    pub(super) fn switchable_sheets_due(&self) -> bool {
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
+        let rules = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.view.as_ref())
+            .is_some_and(|v| !v.map_lights.is_empty());
+        let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
+        effective.lighting == 2
+            && switchable
+            && !self.lighting.light_volume.switchable_equipped
+            && self.lighting.light_volume.map.is_some()
+            && self.scene.cpu_scene.is_some()
     }
 }

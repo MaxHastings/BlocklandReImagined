@@ -37,7 +37,10 @@ use std::{
 mod support;
 use support::{content_root::ContentRoot, wait};
 
-synthetic_and_content!(ContentRoot: steady_play_builds_and_uploads_nothing_whole);
+synthetic_and_content!(
+    ContentRoot: steady_play_builds_and_uploads_nothing_whole,
+    a_tap_inside_one_frame_still_fires
+);
 
 const SIZE: (u32, u32) = (320, 240);
 /// Bricks blown out by each rocket: 6 wide, 6 high, in front of the player.
@@ -231,12 +234,37 @@ impl Run<'_> {
             |a| held_in(a, slot),
         )
     }
+    fn trigger(&mut self, down: bool) -> Result<()> {
+        self.action(UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down,
+        }))
+    }
+    /// Fire the tool in hand as a player does: hold the trigger until the
+    /// image takes the press, then let go. A press the image never takes
+    /// fails here, naming it, not as a missing blast later. On a slow
+    /// machine one frame can span a whole fire cycle (back to "Ready"), so
+    /// a shot in flight or bricks it knocked out count as taken too.
     fn fire(&mut self) -> Result<()> {
+        self.trigger(true)?;
+        self.until(
+            "the image in hand to take the press (leave \"Ready\")",
+            Duration::from_secs(2),
+            |a| {
+                a.network_view().is_some_and(|v| {
+                    v.weapons.images.get(&v.owner).is_some_and(|images| {
+                        images.iter().any(|m| m.hand == 0 && m.state != "Ready")
+                    }) || v.weapons.fired().any(|p| p.source.0 == v.owner)
+                }) || knocked_out(a) > 0
+            },
+        )?;
+        self.trigger(false)?;
+        self.run_for(0.1)
+    }
+    /// A click with nothing to fire: a dead player's click to respawn.
+    fn click(&mut self) -> Result<()> {
         for down in [true, false] {
-            self.action(UiAction::Game(GameAction::Held {
-                control: HeldControl::Fire,
-                down,
-            }))?;
+            self.trigger(down)?;
             self.run_for(0.1)?;
         }
         Ok(())
@@ -280,7 +308,11 @@ fn alive(app: &App) -> Option<(bool, u64)> {
 struct Phase {
     name: &'static str,
     frames: u64,
-    seconds: f32,
+    /// Game ticks the phase ran, which every machine runs alike.
+    ticks: u64,
+    /// Wall time, reported only: a slow machine takes longer.
+    wall_seconds: f32,
+    counted: bool,
     scenes: u64,
     textures: u64,
     worst_scenes: u64,
@@ -301,13 +333,21 @@ fn phase(
     run.soak.frame(&run.app);
     let before = run.app.work_counters();
     let started = Instant::now();
+    let first_tick = run.tick();
     body(run)?;
     let after = run.app.work_counters();
     let uploads = |w: &WorkCounters| w.uploads.unwrap_or_default();
     let p = Phase {
         name,
         frames: run.soak.frames,
-        seconds: started.elapsed().as_secs_f32(),
+        ticks: run.tick().saturating_sub(first_tick),
+        wall_seconds: started.elapsed().as_secs_f32(),
+        // One scene renderer counted the phase from end to end: a renderer
+        // still compiling, or rebuilt during it, would hide its uploads.
+        counted: matches!(
+            (before.uploads, after.uploads),
+            (Some(b), Some(a)) if a.scenes >= b.scenes && a.textures >= b.textures
+        ),
         scenes: uploads(&after)
             .scenes
             .saturating_sub(uploads(&before).scenes),
@@ -476,9 +516,36 @@ fn long_soak_builds_and_uploads_nothing_whole() -> Result<()> {
     soak(&ContentRoot::synthetic()?, rounds)
 }
 
-fn soak(f: &ContentRoot, rounds: usize) -> Result<()> {
+/// A tap shorter than a frame: on a slow machine or in a hitch, the press
+/// and the release reach the game in one frame, so they leave in one send
+/// and can reach the host inside one of its ticks. The host takes each
+/// edge on its own tick (`Session::step_weapons`), so the press is held
+/// for at least one tick, as v20 registers a click: the rocket flies.
+fn a_tap_inside_one_frame_still_fires(f: &ContentRoot) -> Result<()> {
     let state = f.state()?;
-    let mut app = App::load(&f.root, state.path(), SIZE)?;
+    let (mut run, bricks) = start(f, state.path())?;
+    run.use_tool(ROCKET_SLOT)?;
+    for down in [true, false] {
+        run.app.ui.core.request(UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down,
+        }));
+    }
+    run.step(Duration::ZERO)?;
+    run.until(
+        "the tap's rocket to knock bricks out",
+        Duration::from_secs(5),
+        |a| knocked_out(a) >= bricks / 2,
+    )?;
+    run.app.gpu_stopped();
+    Ok(())
+}
+
+/// A hosted Brick Damage mini-game with the soak's tools, the player
+/// standing still before a wall of bricks (their count returned), the
+/// map's lighting finished.
+fn start<'a>(f: &'a ContentRoot, state: &std::path::Path) -> Result<(Run<'a>, usize)> {
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     let screen = Screen::new()?;
     app.gpu_ready(
@@ -491,7 +558,7 @@ fn soak(f: &ContentRoot, rounds: usize) -> Result<()> {
         screen,
         soak: Soak::default(),
         content: f,
-        state: state.path().to_path_buf(),
+        state: state.to_path_buf(),
     };
     run.action(UiAction::HostGame {
         map: f.map.0.clone(),
@@ -551,6 +618,15 @@ fn soak(f: &ContentRoot, rounds: usize) -> Result<()> {
             .is_some_and(|(p, _)| p.grounded && Vec3::from(p.velocity).length() < 0.01)
     })?;
     let bricks = load_wall(&mut run, "soak")?;
+    // The map's lighting bake re-uploads its scene when it lands, on its
+    // worker's time: it must not land in a phase.
+    lighting_settled(&mut run)?;
+    Ok((run, bricks))
+}
+
+fn soak(f: &ContentRoot, rounds: usize) -> Result<()> {
+    let state = f.state()?;
+    let (mut run, bricks) = start(f, state.path())?;
 
     // The first of each action warms up (models, looks, uploads); the
     // same again must build and upload nothing whole.
@@ -591,6 +667,11 @@ fn soak(f: &ContentRoot, rounds: usize) -> Result<()> {
     // Steady play: nothing built or uploaded whole, no whole-world passes.
     for p in steady.iter().map(|&i| &phases[i]) {
         ensure!(p.frames > 10, "{}: only {} frames", p.name, p.frames);
+        ensure!(
+            p.counted,
+            "{}: no one scene renderer counted the whole phase",
+            p.name
+        );
         ensure!(
             p.scenes == 0 && p.textures == 0,
             "{}: {} whole scene uploads with {} textures ({} in one frame)",
@@ -662,7 +743,7 @@ fn deaths_and_switches(run: &mut Run) -> Result<()> {
         })
     })?;
     // Click to respawn, as a player does.
-    run.fire()?;
+    run.click()?;
     run.until("respawned", Duration::from_secs(10), |a| {
         alive(a).is_some_and(|(alive, at)| alive && at != spawned)
     })?;
@@ -710,5 +791,17 @@ fn change_map(run: &mut Run) -> Result<()> {
                 .is_some_and(|t| t.slots[ROCKET_SLOT].is_some())
         })
     })?;
+    // The new map's lighting finishes in this phase, not the next.
+    lighting_settled(run)?;
     run.run_for(1.0)
+}
+
+/// Wait for the map's lighting to finish loading (a completed load, not a
+/// span of time).
+fn lighting_settled(run: &mut Run) -> Result<()> {
+    run.until(
+        "the map's lighting to finish loading",
+        Duration::from_secs(120),
+        |a| a.map_lighting_settled(),
+    )
 }

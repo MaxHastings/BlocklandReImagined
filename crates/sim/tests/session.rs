@@ -353,6 +353,55 @@ fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound(f: &Fixt
 }
 }
 
+on_both! {
+fn a_held_trigger_fires_again_once_a_stalled_clients_movement_returns(f: &Fixture) {
+    // A hitch longer than the input lease lets go of the button; the player
+    // never did, so once movement renews the lease the gun fires on.
+    let mut s = session();
+    s.set_weapon_pack(f.weapons.clone()).unwrap();
+    let actor = s
+        .join("Holder".into(), Vec3::new(0., 0.05, 0.), false)
+        .unwrap();
+    let slot = s.give_item(actor, "v20.weapon.gunitem").unwrap();
+    s.command(actor, 1, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    let mut sequence = 0;
+    let mut moving = |s: &mut Session| {
+        sequence += 1;
+        s.movement(actor, sequence, MoveInput::default()).unwrap();
+    };
+    for _ in 0..40 {
+        moving(&mut s);
+        s.step().unwrap();
+    }
+    s.command(actor, 2, Command::WeaponTrigger { down: true })
+        .unwrap();
+    // The stall: no movement for well past the lease.
+    for _ in 0..200 {
+        s.step().unwrap();
+    }
+    let fired = |s: &Session| {
+        s.weapon_view()
+            .projectiles
+            .iter()
+            .filter(|p| p.source.0 == actor)
+            .map(|p| p.id)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let before = fired(&s);
+    let mut after = std::collections::BTreeSet::new();
+    for _ in 0..240 {
+        moving(&mut s);
+        s.step().unwrap();
+        after.extend(fired(&s));
+    }
+    assert!(
+        after.difference(&before).next().is_some(),
+        "the held trigger stayed up after the stall"
+    );
+}
+}
+
 #[test]
 fn host_loadouts_preserve_empty_slots_and_reject_live_or_unknown_changes() {
     let mut s = session();

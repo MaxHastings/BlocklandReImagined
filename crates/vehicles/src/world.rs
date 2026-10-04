@@ -2409,6 +2409,56 @@ fn weapon_step(
     }
 }
 
+/// A vehicle's body as it collides, at `scale`: its shape and where that
+/// sits in the vehicle's frame. Everything that stands for the body in a
+/// physics world (the host's, a client's cosmetic debris) uses this one.
+pub fn body_shape(d: &Definition, scale: f32) -> Result<(SharedShape, Pose)> {
+    let mut parts = vec![];
+    for hull in &d.collision_hulls {
+        let points: Vec<_> = hull.iter().map(|p| Vec3::from_array(*p) * scale).collect();
+        parts.push((
+            Pose::IDENTITY,
+            SharedShape::convex_hull(&points).context("degenerate vehicle hull")?,
+        ));
+    }
+    let mut offset = Pose::IDENTITY;
+    let shape = if d.family == Family::Skis {
+        // The box around skivehicle.dts's collision hulls (the main hull is
+        // a box with a slightly tapered, not quite flat base). Rapier gave
+        // those near-degenerate faces sideways contact normals that kicked
+        // sliding skis into spins; the box slides true.
+        let (min, max) = d
+            .collision_hulls
+            .iter()
+            .flatten()
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+            });
+        offset = Pose::from_translation((min + max) * 0.5 * scale);
+        let half = (max - min) * 0.5 * scale;
+        SharedShape::cuboid(half.x, half.y, half.z)
+    } else if d.family == Family::Ball {
+        let min = Vec3::from_array(d.bounds_min);
+        let max = Vec3::from_array(d.bounds_max);
+        SharedShape::ball((max - min).max_element() * 0.5 * scale)
+    } else if d.is_actor() {
+        // A player's box, as the character controller sweeps it.
+        let (min, max) = d
+            .collision_hulls
+            .iter()
+            .flatten()
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+            });
+        offset = Pose::from_translation((min + max) * 0.5 * scale);
+        let half = (max - min) * 0.5 * scale;
+        SharedShape::cuboid(half.x, half.y, half.z)
+    } else {
+        SharedShape::compound(parts)
+    };
+    Ok((shape, offset))
+}
+
 fn prepare_spawn(
     s: &Spawn,
     d: &Definition,
@@ -2438,52 +2488,7 @@ fn prepare_spawn(
         s.transform.position.iter().all(|x| x.abs() < 1e7),
         "spawn position outside native bounds"
     );
-    let mut parts = vec![];
-    for hull in &d.collision_hulls {
-        let points: Vec<_> = hull
-            .iter()
-            .map(|p| Vec3::from_array(*p) * s.scale)
-            .collect();
-        parts.push((
-            Pose::IDENTITY,
-            SharedShape::convex_hull(&points).context("degenerate vehicle hull")?,
-        ));
-    }
-    let mut offset = Pose::IDENTITY;
-    let shape = if d.family == Family::Skis {
-        // The box around skivehicle.dts's collision hulls (the main hull is
-        // a box with a slightly tapered, not quite flat base). Rapier gave
-        // those near-degenerate faces sideways contact normals that kicked
-        // sliding skis into spins; the box slides true.
-        let (min, max) = d
-            .collision_hulls
-            .iter()
-            .flatten()
-            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
-                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
-            });
-        offset = Pose::from_translation((min + max) * 0.5 * s.scale);
-        let half = (max - min) * 0.5 * s.scale;
-        SharedShape::cuboid(half.x, half.y, half.z)
-    } else if d.family == Family::Ball {
-        let min = Vec3::from_array(d.bounds_min);
-        let max = Vec3::from_array(d.bounds_max);
-        SharedShape::ball((max - min).max_element() * 0.5 * s.scale)
-    } else if d.is_actor() {
-        // A player's box, as the character controller sweeps it.
-        let (min, max) = d
-            .collision_hulls
-            .iter()
-            .flatten()
-            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
-                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
-            });
-        offset = Pose::from_translation((min + max) * 0.5 * s.scale);
-        let half = (max - min) * 0.5 * s.scale;
-        SharedShape::cuboid(half.x, half.y, half.z)
-    } else {
-        SharedShape::compound(parts)
-    };
+    let (shape, offset) = body_shape(d, s.scale)?;
     let mut builder = if d.is_actor() {
         RigidBodyBuilder::kinematic_position_based()
     } else {

@@ -184,24 +184,13 @@ impl App {
                     center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
                     rotation: glam::Quat::IDENTITY,
                     half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
+                    shape: None,
                 }
             })
             .collect();
-        for (id, info) in &view.vehicles {
-            let (Some(frame), Some(d)) = (
-                vehicles.frame(*id),
-                vehicle_assets.definition(&info.definition),
-            ) else {
-                continue;
-            };
-            let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
-            pushers.push(crate::local_physics::Pusher {
-                id: id | 1 << 63,
-                center: frame.position + frame.rotation * ((min + max) * 0.5),
-                rotation: frame.rotation,
-                half: (max - min) * 0.5,
-            });
-        }
+        pushers.extend(view.vehicles.values().filter_map(|info| {
+            vehicles.pusher(info, vehicle_assets.definition(&info.definition)?)
+        }));
         pushers
     }
     /// The local rider's first-person eye, from their posed `eye` node

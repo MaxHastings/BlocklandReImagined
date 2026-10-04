@@ -636,6 +636,7 @@ mod tests {
                 center: Vec3::new(x, 1.2, 0.0),
                 rotation: Quat::IDENTITY,
                 half: Vec3::new(0.6, 1.2, 0.6),
+                shape: None,
             };
             physics
                 .advance(1.0 / 60.0, &building, &[pusher], &[])

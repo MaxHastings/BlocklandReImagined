@@ -225,6 +225,16 @@ impl App {
                 .is_some_and(|source| Arc::ptr_eq(source, &view.world))
         })
     }
+    /// The map's lighting has finished loading and is on the GPU. A
+    /// lighting source or bake landing later uploads the whole map scene
+    /// again with all its textures, whenever its worker finishes: waits
+    /// that measure steady play wait for this, not for the clock.
+    pub fn map_lighting_settled(&self) -> bool {
+        self.world_render_ready()
+            && self.lighting.light_volume.settled()
+            && !self.switchable_sheets_due()
+            && self.gpu.gpu_scene.is_some()
+    }
     /// Presented (predicted and interpolated) local state and camera eye.
     pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
         let view = self.network_view()?;

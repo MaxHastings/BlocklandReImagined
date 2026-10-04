@@ -126,6 +126,10 @@ const CLICK_AIM_TICKS: u64 = 60;
 pub(super) struct Triggers {
     queue: VecDeque<Trigger>,
     click_aim: Option<(Vec3, u64)>,
+    /// The fire button as the player last set it: the last edge taken.
+    button: bool,
+    /// The input lease lapsed and let go of the button for them.
+    lapsed: bool,
 }
 
 impl Session {
@@ -284,7 +288,18 @@ impl Session {
             // commands can arrive before the movement datagrams that renew
             // the lease, and a click must not be lost to that order.
             let trigger = if expired {
+                triggers.lapsed = triggers.button;
                 None
+            } else if std::mem::take(&mut triggers.lapsed) && triggers.queue.is_empty() {
+                // The lease let go of a button the player never released:
+                // with movement back, hold it again, as automatic fire was.
+                Some(Trigger {
+                    down: true,
+                    direction: peer.player.state().forward(),
+                    aimed: false,
+                    repress: false,
+                    ready_by: None,
+                })
             } else {
                 match triggers.queue.front().copied() {
                     // Let go now; the press waits until the image takes one.
@@ -304,6 +319,9 @@ impl Session {
                     _ => triggers.queue.pop_front(),
                 }
             };
+            if let Some(t) = trigger {
+                triggers.button = t.down;
+            }
             match trigger {
                 Some(t) if t.down && t.aimed => {
                     triggers.click_aim = Some((t.direction, tick + CLICK_AIM_TICKS));

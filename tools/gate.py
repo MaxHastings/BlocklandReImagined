@@ -488,6 +488,20 @@ def prepare_worktree(root, sha):
     return worktree
 
 
+def gate_env(environ, content):
+    """The environment every gate step runs in.
+
+    Content-backed tests find generated v20 content through BRI_CONTENT.
+    Without it they panic asking for it, so the gate points it at the main
+    checkout's real folder (not the worktree's junction, which the game
+    refuses to load packages through) unless the caller already set one.
+    """
+    env = dict(environ, CARGO_TERM_COLOR="never", CARGO_INCREMENTAL="0")
+    env.pop("CARGO_TARGET_DIR", None)
+    env.setdefault("BRI_CONTENT", str(content))
+    return env
+
+
 def tree_intact(worktree, sha):
     """The gate worktree still holds exactly sha, with no tracked changes."""
     head = git("rev-parse", "HEAD", cwd=worktree).strip()
@@ -575,8 +589,7 @@ def full_gate(sha, root, changed=()):
         # The target dir goes on the command line, never in CARGO_TARGET_DIR:
         # sccache hashes every CARGO_* variable, so that variable alone made
         # every gate compile miss the cache the lanes fill.
-        env = dict(os.environ, CARGO_TERM_COLOR="never", CARGO_INCREMENTAL="0")
-        env.pop("CARGO_TARGET_DIR", None)
+        env = gate_env(os.environ, main_checkout() / "content")
         target = ["--target-dir", str(root / "target")]
         started = time.time()
         steps = [

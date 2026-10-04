@@ -667,6 +667,29 @@ fn walking_through_a_doorway_never_changes_the_picture() {
     }
 }
 
+/// Max's video: walk through, turn round and walk back. Each of the pair's
+/// four faces, walked into from its own side, never changes the picture
+/// either, so the way back is as seamless as the way there.
+#[test]
+fn walking_back_through_every_face_of_the_pair_never_changes_the_picture() {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let scene = Scene::new(&[(DOOR, [0.0, 1.5, -4.25], 0), (DOOR, [10.25, 1.5, -4.0], 1)]);
+    let faces = [
+        ("A from the north", Vec3::new(0.0, 0.05, -8.5), PI),
+        ("B from the east", Vec3::new(14.5, 0.05, -4.0), -FRAC_PI_2),
+        ("B from the west", Vec3::new(6.0, 0.05, -4.0), FRAC_PI_2),
+    ];
+    for (name, feet, yaw) in faces {
+        for camera in [Camera::FirstPerson, Camera::Chase] {
+            let walk = walk(&scene, feet, (yaw, -0.1), 1.0, 1.4, camera);
+            match camera {
+                Camera::FirstPerson => assert_seamless(name, &walk, None),
+                Camera::Chase => assert_seamless(name, &walk, Some(CHASE_REACH)),
+            }
+        }
+    }
+}
+
 /// Falling into a portal in the floor while looking ahead and down comes
 /// out of its partner's top flying up, the view turned over with the body:
 /// the picture is the same, then the roll eases back upright.
