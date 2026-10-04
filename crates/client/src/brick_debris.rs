@@ -665,6 +665,9 @@ impl BrickDebris {
             ghost.left -= dt;
         }
         self.ghosts.retain(|g| g.left > 0.0);
+        // Lifetimes run on frame time, not simulated steps: a slow frame
+        // drops steps, and debris must not outlive its time because of it.
+        self.age(dt);
         if self.bodies.is_empty() {
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
@@ -698,7 +701,6 @@ impl BrickDebris {
             };
             self.world.step();
             crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
-            self.age(STEP);
         }
         self.pushers.settle();
         Ok(())
@@ -1867,6 +1869,24 @@ pub(crate) mod tests {
         debris.advance(5.0, &building).unwrap();
         assert!(debris.diagnostics.dropped_steps > 0);
         assert!(debris.positions().iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn debris_expires_on_frame_time_even_when_slow_frames_drop_steps() {
+        let (building, _) = building(&[]);
+        let cues = blast(24, 1, 4.0);
+        let mut debris = BrickDebris::new();
+        debris.cues(&cues, &building).unwrap();
+        assert!(!debris.is_empty());
+        // A slow machine: 5 frames a second, each over the step budget.
+        let frame = 0.2;
+        let mut elapsed = 0.0;
+        while elapsed < SOLID_SECONDS + FADE_SECONDS + frame {
+            debris.advance(frame, &building).unwrap();
+            elapsed += frame;
+        }
+        assert!(debris.diagnostics.dropped_steps > 0);
+        assert_eq!(debris.len(), 0, "debris outlived its {elapsed} s");
     }
 
     fn blast(n: u64, first: u64, radius: f32) -> Vec<Cue> {
