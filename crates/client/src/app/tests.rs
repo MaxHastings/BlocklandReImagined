@@ -1625,10 +1625,13 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
     // The compile finishes only when the test says so.
     let (release, held) = std::sync::mpsc::channel::<()>();
     let device = gpu.device.clone();
-    app.gpu.renderer = Some(crate::gpu_build::Building::spawn("held scene pipelines", move || {
-        let _ = held.recv();
-        SceneRenderer::new(&device, format)
-    }));
+    app.gpu.renderer = Some(crate::gpu_build::Building::spawn(
+        "held scene pipelines",
+        move || {
+            let _ = held.recv();
+            SceneRenderer::new(&device, format)
+        },
+    ));
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("held pipelines frame"),
         size: wgpu::Extent3d {
@@ -1686,8 +1689,8 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
         if let ConnectionState::Failed { reason } = &app.ui.core.conn {
             anyhow::bail!("hosting failed: {reason}");
         }
-        let built = app.scene.world_source.is_some()
-            && app.net.attempt.as_ref().is_some_and(|a| a.ready);
+        let built =
+            app.scene.world_source.is_some() && app.net.attempt.as_ref().is_some_and(|a| a.ready);
         if release.is_some() {
             if built {
                 ensure!(

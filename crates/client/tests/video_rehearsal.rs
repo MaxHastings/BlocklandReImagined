@@ -11,12 +11,12 @@
 //!   cargo test -p bri-client --release --test video_rehearsal -- --ignored --nocapture
 //! Optional: BRI_REHEARSAL_SIZE ("1920x1080"), BRI_CONTENT (content root).
 use anyhow::{Context, Result, bail, ensure};
-use bri_console::Clamp;
 use bri_client::{
     app::App,
     perf::GpuFrameTimer,
     platform::{PlatformApp, RenderContext},
 };
+use bri_console::Clamp;
 use bri_ui::{api::*, gpu::UiRenderer, screens::ScreenId};
 use glam::Vec3;
 use serde::Serialize;
@@ -216,12 +216,17 @@ impl Rehearsal {
     /// the GPU as a synchronized present would.
     fn frame(&mut self) -> Result<()> {
         let start = Instant::now();
-        let dt = start.duration_since(self.previous).min(Duration::from_millis(250));
+        let dt = start
+            .duration_since(self.previous)
+            .min(Duration::from_millis(250));
         self.previous = start;
         self.app.tick(dt)?;
         self.app.ui.update(dt.as_millis() as u64);
         let commands = self.app.pump()?;
-        ensure!(commands.is_empty(), "Unexpected window command {commands:?}");
+        ensure!(
+            commands.is_empty(),
+            "Unexpected window command {commands:?}"
+        );
         if let ConnectionState::Failed { reason } = &self.app.ui.core.conn {
             bail!("Connection failed: {reason}");
         }
@@ -266,7 +271,10 @@ impl Rehearsal {
             timeout: Some(Duration::from_secs(30)),
         })?;
         let done = Instant::now();
-        let measured = self.timer.as_mut().and_then(|t| t.collect(&self.gpu.device));
+        let measured = self
+            .timer
+            .as_mut()
+            .and_then(|t| t.collect(&self.gpu.device));
         if measured != self.last_gpu
             && let Some(g) = measured
         {
@@ -277,10 +285,7 @@ impl Rehearsal {
         self.beat.frames.push(frame);
         self.beat.updates.push(ms(updated - start));
         if frame > HITCH_MS {
-            let at = self
-                .beat
-                .started
-                .map_or(0.0, |s| s.elapsed().as_secs_f64());
+            let at = self.beat.started.map_or(0.0, |s| s.elapsed().as_secs_f64());
             self.beat.hitches.push((at, frame, ms(updated - start)));
         }
         Ok(())
@@ -318,7 +323,10 @@ impl Rehearsal {
     fn request(&mut self, action: UiAction) -> Result<()> {
         self.app.ui.core.request(action);
         let commands = self.app.pump()?;
-        ensure!(commands.is_empty(), "Unexpected window command {commands:?}");
+        ensure!(
+            commands.is_empty(),
+            "Unexpected window command {commands:?}"
+        );
         self.app.ui.update(0);
         Ok(())
     }
@@ -670,7 +678,10 @@ impl Rehearsal {
     }
     fn brick_position(&self, brick: u64) -> Option<Vec3> {
         let view = self.app.network_view()?;
-        view.world.bricks.get(&brick).map(|b| Vec3::from(b.position))
+        view.world
+            .bricks
+            .get(&brick)
+            .map(|b| Vec3::from(b.position))
     }
     /// Hit `brick` with the wrench, as a player does, and send `data` from
     /// the dialog it opens. Returns whether the dialog opened.
@@ -691,7 +702,13 @@ impl Rehearsal {
         self.aim_at(at)?;
         self.press(HeldControl::Fire)?;
         let start = Instant::now();
-        while !self.app.ui.stack().iter().any(|s| matches!(s, ScreenId::Wrench(_))) {
+        while !self
+            .app
+            .ui
+            .stack()
+            .iter()
+            .any(|s| matches!(s, ScreenId::Wrench(_)))
+        {
             if start.elapsed() > Duration::from_secs(3) {
                 self.note(format!("the wrench opened nothing on brick {brick}"));
                 self.request(UiAction::UnUseTool)?;
@@ -1014,9 +1031,7 @@ impl Rehearsal {
         self.app.presented_local().map(|p| Vec3::from(p.feet))
     }
     fn bricks(&self) -> usize {
-        self.app
-            .network_view()
-            .map_or(0, |v| v.world.bricks.len())
+        self.app.network_view().map_or(0, |v| v.world.bricks.len())
     }
 
     /// Hold a brick, aim at the floor ahead and plant it. Returns whether a
@@ -1155,9 +1170,16 @@ fn bedroom_building() -> Result<()> {
     r.aim(yaw, 0.6)?;
     let mut planted = usize::from(r.plant(BRICK, (0, 0, 0))?);
     // A little wall: the ghost stays where it was planted, so shift it.
-    for (i, shift) in [(0, 0, 3), (0, 4, -3), (0, 0, 3), (0, -8, -3), (0, 0, 3), (0, 0, 3)]
-        .into_iter()
-        .enumerate()
+    for (i, shift) in [
+        (0, 0, 3),
+        (0, 4, -3),
+        (0, 0, 3),
+        (0, -8, -3),
+        (0, 0, 3),
+        (0, 0, 3),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let before = r.bricks();
         let (x, y, z) = shift;
@@ -1222,7 +1244,11 @@ fn bedroom_building() -> Result<()> {
         r.run(0.6)?;
         r.press(HeldControl::Fire)?;
         r.run(0.8)?;
-        let short = item.rsplit(['.', '/', ':']).next().unwrap_or("tool").to_string();
+        let short = item
+            .rsplit(['.', '/', ':'])
+            .next()
+            .unwrap_or("tool")
+            .to_string();
         r.shot(&format!("tool-{short}"))?;
         if r.app.ui.screen(ScreenId::PrintSelector).is_some() {
             r.note("printer opened the print selector");
@@ -1256,7 +1282,9 @@ fn bedroom_building() -> Result<()> {
     let pick = |r: &Rehearsal, list: &str, want: &str| -> Option<String> {
         r.app.ui.core.datablocks.get(list).and_then(|c| {
             c.iter()
-                .find(|c| c.id.to_lowercase().contains(want) || c.name.to_lowercase().contains(want))
+                .find(|c| {
+                    c.id.to_lowercase().contains(want) || c.name.to_lowercase().contains(want)
+                })
                 .map(|c| c.id.clone())
         })
     };
@@ -1265,7 +1293,9 @@ fn bedroom_building() -> Result<()> {
         .or_else(|| pick(&r, "ParticleEmitterData", "emitter"));
     let item = pick(&r, "ItemData", "sword");
     let music = pick(&r, "Music", "rock").or_else(|| pick(&r, "Music", ""));
-    r.note(format!("light {light:?} emitter {emitter:?} item {item:?} music {music:?}"));
+    r.note(format!(
+        "light {light:?} emitter {emitter:?} item {item:?} music {music:?}"
+    ));
     let ids: Vec<u64> = r
         .app
         .network_view()
@@ -1284,10 +1314,7 @@ fn bedroom_building() -> Result<()> {
         r.wrench(a, WrenchVariant::Normal, data.clone())?;
         r.run(1.0)?;
         r.shot("light")?;
-        let mut data = WrenchData {
-            emitter,
-            ..data
-        };
+        let mut data = WrenchData { emitter, ..data };
         data.light = None;
         r.wrench(b, WrenchVariant::Normal, data.clone())?;
         r.run(1.5)?;
@@ -1312,20 +1339,20 @@ fn bedroom_building() -> Result<()> {
         r.aim(yaw + 0.5, 0.6)?;
         r.plant("v20/brick/brickmusicdata", (0, 0, 0))?;
         r.game(GameAction::CancelBrick)?;
-        let music_brick = r.app.network_view().and_then(|v| {
-            v.world
-                .bricks
-                .keys()
-                .copied()
-                .find(|b| !ids.contains(b))
-        });
-        r.note(format!("music brick {music_brick:?} ({before} bricks before)"));
+        let music_brick = r
+            .app
+            .network_view()
+            .and_then(|v| v.world.bricks.keys().copied().find(|b| !ids.contains(b)));
+        r.note(format!(
+            "music brick {music_brick:?} ({before} bricks before)"
+        ));
         if let Some(d) = music_brick {
             r.wrench(d, WrenchVariant::Sound, data)?;
             r.run(2.0)?;
-            let music = r.app.network_view().and_then(|v| {
-                v.world.bricks.get(&d).map(|b| format!("{:?}", b.sound))
-            });
+            let music = r
+                .app
+                .network_view()
+                .and_then(|v| v.world.bricks.get(&d).map(|b| format!("{:?}", b.sound)));
             r.note(format!("music brick plays {music:?}"));
             r.shot("music")?;
         }
@@ -1351,10 +1378,10 @@ fn bedroom_building() -> Result<()> {
     r.run(1.0)?;
     let slots = r.slots();
     r.note(format!("tools after /dup {slots:?}"));
-    if let Some(slot) = slots
-        .iter()
-        .position(|s| s.as_deref().is_some_and(|s| s.to_lowercase().contains("dup")))
-    {
+    if let Some(slot) = slots.iter().position(|s| {
+        s.as_deref()
+            .is_some_and(|s| s.to_lowercase().contains("dup"))
+    }) {
         r.request(UiAction::UseTool { slot })?;
         r.run(0.6)?;
         r.aim(yaw, 0.6)?;
@@ -1387,11 +1414,7 @@ fn bedroom_building() -> Result<()> {
     r.shot("avatar")?;
     for n in 0..4 {
         let top = r.app.ui.top_id();
-        let Some((x, y)) = r
-            .app
-            .ui
-            .control_center(top, "Randomize!")
-        else {
+        let Some((x, y)) = r.app.ui.control_center(top, "Randomize!") else {
             r.note("no Randomize control on the avatar screen");
             break;
         };
@@ -1489,9 +1512,10 @@ fn city_vehicles_weapons() -> Result<()> {
     r.minigame(&["rocket", "sword", "hammer", "spear", "sniper"])?;
     let slots = r.slots();
     let slot_of = |want: &str| {
-        slots
-            .iter()
-            .position(|s| s.as_deref().is_some_and(|s| s.to_lowercase().contains(want)))
+        slots.iter().position(|s| {
+            s.as_deref()
+                .is_some_and(|s| s.to_lowercase().contains(want))
+        })
     };
     // Rockets at the city's bricks.
     if let Some(rocket) = slot_of("rocket") {
@@ -1538,10 +1562,10 @@ fn city_vehicles_weapons() -> Result<()> {
     }
     r.minigame(&["grenade", "rocket"])?;
     let slots = r.slots();
-    if let Some(slot) = slots
-        .iter()
-        .position(|s| s.as_deref().is_some_and(|s| s.to_lowercase().contains("grenade")))
-    {
+    if let Some(slot) = slots.iter().position(|s| {
+        s.as_deref()
+            .is_some_and(|s| s.to_lowercase().contains("grenade"))
+    }) {
         r.aim(yaw, -0.2)?;
         r.fire(slot, 1, 0.8)?;
         r.run(3.0)?;
@@ -1668,11 +1692,10 @@ fn maps_lighting_big_build() -> Result<()> {
     r.change_map("v20/add-ons/map_slopes/slopes.mis")?;
     r.shot("slopes")?;
     r.minigame(&["ski"])?;
-    if let Some(slot) = r
-        .slots()
-        .iter()
-        .position(|s| s.as_deref().is_some_and(|s| s.to_lowercase().contains("ski")))
-    {
+    if let Some(slot) = r.slots().iter().position(|s| {
+        s.as_deref()
+            .is_some_and(|s| s.to_lowercase().contains("ski"))
+    }) {
         r.fire(slot, 1, 0.1)?;
         r.held(HeldControl::Forward, true)?;
         r.watch("skiing", 6.0, 2.0)?;
@@ -1779,7 +1802,14 @@ fn credits_three_players() -> Result<()> {
     r.pan(std::f32::consts::PI, 1.5)?;
     r.shot("facing-guests")?;
     r.beat("emotes");
-    for (i, emote) in [(0, "love"), (1, "hug"), (0, "hate"), (1, "alarm"), (0, "confusion"), (1, "wtf")] {
+    for (i, emote) in [
+        (0, "love"),
+        (1, "hug"),
+        (0, "hate"),
+        (1, "alarm"),
+        (0, "confusion"),
+        (1, "wtf"),
+    ] {
         r.other(
             i,
             UiAction::ChatCommand {
@@ -1795,26 +1825,67 @@ fn credits_three_players() -> Result<()> {
     r.shot("host-hug")?;
     r.beat("jumping-and-tools");
     for i in 0..r.others.len() {
-        r.other(i, UiAction::Game(GameAction::Held { control: HeldControl::Jump, down: true }))?;
+        r.other(
+            i,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Jump,
+                down: true,
+            }),
+        )?;
     }
     r.run(1.5)?;
     r.shot("guests-jumping")?;
     for i in 0..r.others.len() {
-        r.other(i, UiAction::Game(GameAction::Held { control: HeldControl::Jump, down: false }))?;
-        r.other(i, UiAction::UseSprayCan { color: 3 + i as u32 })?;
-        r.other(i, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
+        r.other(
+            i,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Jump,
+                down: false,
+            }),
+        )?;
+        r.other(
+            i,
+            UiAction::UseSprayCan {
+                color: 3 + i as u32,
+            },
+        )?;
+        r.other(
+            i,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: true,
+            }),
+        )?;
     }
     r.run(1.0)?;
     r.shot("guests-spray")?;
     for i in 0..r.others.len() {
-        r.other(i, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        r.other(
+            i,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: false,
+            }),
+        )?;
         r.other(i, UiAction::UseTool { slot: 0 })?;
-        r.other(i, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: true }))?;
+        r.other(
+            i,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: true,
+            }),
+        )?;
     }
     r.run(1.2)?;
     r.shot("guests-hammer")?;
     for i in 0..r.others.len() {
-        r.other(i, UiAction::Game(GameAction::Held { control: HeldControl::Fire, down: false }))?;
+        r.other(
+            i,
+            UiAction::Game(GameAction::Held {
+                control: HeldControl::Fire,
+                down: false,
+            }),
+        )?;
     }
     r.run(2.0)?;
     r.note(format!("chat {:?}", r.chat_lines(8)));
