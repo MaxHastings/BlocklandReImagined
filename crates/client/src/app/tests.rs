@@ -1590,3 +1590,126 @@ fn a_lost_connection_rejoins_the_address_not_the_server_name() -> anyhow::Result
     assert_eq!(app.net.reconnects, 1);
     Ok(())
 }
+
+/// The world's pipelines can take many seconds to compile (FXC on Windows,
+/// about 20 s on an RTX 4070). Hosting before they finish keeps the loading
+/// screen up, drawing and responsive, and enters once they have compiled,
+/// instead of entering and stalling a frame on the compile.
+#[test]
+fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen()
+-> anyhow::Result<()> {
+    use super::*;
+    let f = ContentRoot::synthetic()?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (320, 240))?;
+    let gpu = bri_ui::gpu::Headless::new()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    app.gpu_ready(&gpu.device, &gpu.queue, format)?;
+    // The compile finishes only when the test says so.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let device = gpu.device.clone();
+    app.gpu.renderer = Some(crate::gpu_build::Building::spawn("held scene pipelines", move || {
+        let _ = held.recv();
+        SceneRenderer::new(&device, format)
+    }));
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("held pipelines frame"),
+        size: wgpu::Extent3d {
+            width: 320,
+            height: 240,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let mut ui = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+    // A frame as the platform draws it; how long it took.
+    let mut frame = |app: &mut App| -> anyhow::Result<(bool, Duration)> {
+        let start = std::time::Instant::now();
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        let drew = app.render_scene(&mut RenderContext {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder: &mut encoder,
+            target: &view,
+            format,
+            size: (320, 240),
+            ui_renderer: &mut ui,
+        })?;
+        gpu.queue.submit([encoder.finish()]);
+        Ok((drew, start.elapsed()))
+    };
+    app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Held pipelines test".into(),
+        password: String::new(),
+        admin_password: "held-pipelines-admin".into(),
+        super_admin_password: "held-pipelines-super".into(),
+    });
+    // Load until the world is built; it would have been entered by now.
+    let start = std::time::Instant::now();
+    let mut previous = start;
+    let mut release = Some(release);
+    let mut held_frames = 0;
+    loop {
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("hosting failed: {reason}");
+        }
+        let built = app.scene.world_source.is_some()
+            && app.net.attempt.as_ref().is_some_and(|a| a.ready);
+        if release.is_some() {
+            if built {
+                ensure!(
+                    !matches!(app.ui.core.conn, ConnectionState::InGame { .. }),
+                    "entered before the world's pipelines compiled"
+                );
+            }
+            let (drew, took) = frame(&mut app)?;
+            ensure!(
+                took < Duration::from_secs(2),
+                "a frame waited {took:?} on the compile"
+            );
+            ensure!(!drew, "drew the world without its pipelines");
+            if built {
+                held_frames += 1;
+                if held_frames == 20
+                    && let Some(release) = release.take()
+                {
+                    // Compiled: the game enters and draws.
+                    release.send(())?;
+                }
+            }
+        } else if matches!(app.ui.core.conn, ConnectionState::InGame { .. }) {
+            break;
+        }
+        ensure!(
+            start.elapsed() < Duration::from_secs(300),
+            "never entered: {:?}",
+            app.ui.core.conn
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let start = std::time::Instant::now();
+    while !frame(&mut app)?.0 {
+        ensure!(
+            start.elapsed() < Duration::from_secs(60),
+            "never drew the world once entered"
+        );
+        app.tick(Duration::from_millis(16))?;
+    }
+    Ok(())
+}

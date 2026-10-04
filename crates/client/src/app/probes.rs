@@ -2,6 +2,21 @@
 use super::*;
 
 impl App {
+    /// Whether the world's pipelines have compiled, so entering a game or
+    /// a new map draws it at once instead of stalling the window on the
+    /// compile. Without a GPU (headless) there is nothing to wait for.
+    pub fn scene_pipelines_ready(&mut self) -> bool {
+        if !self.gpu.opened {
+            return true;
+        }
+        // A map change rebuilds the renderers before its next frame.
+        !self.gpu.gpu_restart
+            && self
+                .gpu
+                .renderer
+                .as_mut()
+                .is_some_and(|r| r.ready().is_some())
+    }
     pub fn work_counters(&self) -> crate::perf::WorkCounters {
         crate::perf::WorkCounters {
             chunk_jobs: self.scene.chunk_jobs,

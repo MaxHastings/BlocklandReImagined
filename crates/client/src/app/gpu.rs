@@ -42,6 +42,9 @@ pub(super) struct GpuState {
     pub(super) ghost_look: Option<GhostLook>,
     pub(super) ghost_uploaded: u64,
     pub(super) gpu_name: String,
+    /// A device has been given (`gpu_ready`): the world waits for its
+    /// pipelines. Headless Apps never draw and never wait.
+    pub(super) opened: bool,
     /// GPU time per world pass, in ms, from the latest timed frame: while
     /// the expanded performance overlay shows, or always once
     /// `time_gpu_passes` asks.
