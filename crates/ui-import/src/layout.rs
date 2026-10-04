@@ -1,5 +1,6 @@
 //! Convert parsed GUI objects into native `Control` trees and flattened
 //! `Style`s.
+use bri_console::Clamp;
 
 use crate::torque::{Object, Value};
 use bri_ui::schema::{Control, HSizing, Justify, Rgba, Style, VSizing};
@@ -39,7 +40,7 @@ pub fn color(v: &str) -> Option<Rgba> {
     let float = v.contains('.') && parts.iter().all(|x| *x <= 1.0);
     let conv = |x: f32| {
         let y = if float { x * 255.0 } else { x };
-        y.round().clamp(0.0, 255.0) as u8
+        y.round().clamped(0.0, 255.0) as u8
     };
     Some([
         conv(parts[0]),

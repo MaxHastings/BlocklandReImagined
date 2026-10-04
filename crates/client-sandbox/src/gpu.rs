@@ -15,6 +15,7 @@
 use crate::host::{AddOn, Blend, Budgets, Frame, Layer, Space, Stopped, VERTEX_BYTES, Vertex};
 use crate::shader::{DEFAULT_LOOP_LIMIT, MAX_LOOP_LIMIT, Shader};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -64,7 +65,7 @@ impl Camera {
     /// Each space's view-projection, in [`Space::ALL`] order.
     fn projections(&self) -> [Mat4; 3] {
         let aspect = self.aspect();
-        let fov = self.normal_fov.clamp(5.0, 140.0).to_radians();
+        let fov = self.normal_fov.clamped(5.0, 140.0).to_radians();
         let fov_y = 2.0 * ((fov / 2.0).tan() / aspect).atan();
         [
             self.view_proj,
@@ -131,7 +132,7 @@ pub fn loop_limit(
     };
     let work = base_work(cost, pixels, vertices).max(1.0);
     let iterations = speed.work_per_ms * f64::from(target_ms) / work * scale - 1.0;
-    iterations.clamp(0.0, f64::from(MAX_LOOP_LIMIT)) as u32
+    iterations.clamped(0.0, f64::from(MAX_LOOP_LIMIT)) as u32
 }
 
 /// Timestamps around an Add-On's draws, read back a few frames later.

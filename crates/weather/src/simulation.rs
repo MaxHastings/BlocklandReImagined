@@ -1,5 +1,6 @@
 use crate::{Definition, Placement, WeatherPack};
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use glam::Vec3;
 use std::sync::Arc;
 
@@ -600,7 +601,7 @@ impl WeatherWorld {
         for s in &self.splashes {
             let d = &self.pack.manifest.definitions[s.definition];
             let age = ((self.time + self.remainder - s.created) / f64::from(d.splash_seconds))
-                .clamp(0., 1.);
+                .clamped(0., 1.);
             if age >= 1. {
                 continue;
             }

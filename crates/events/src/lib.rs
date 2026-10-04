@@ -1,7 +1,3 @@
-#![allow(
-    clippy::disallowed_methods,
-    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
-)]
 mod catalog;
 mod model;
 mod runtime;

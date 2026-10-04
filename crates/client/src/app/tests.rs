@@ -607,7 +607,6 @@ fn a_save_covers_the_world_as_the_host_took_it(f: &ContentRoot) -> anyhow::Resul
     Ok(())
 }
 
-
 /// A fault in the local player's movement (here, a look that is not a
 /// number, which the predictor refuses) ends the session with its reason,
 /// as a network fault does; the frame itself succeeds, so the game window

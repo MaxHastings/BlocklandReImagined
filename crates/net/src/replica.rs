@@ -1,5 +1,6 @@
 use crate::protocol::*;
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_world::OwnerId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Poses kept per player: over six seconds at the slowest remote rate.
@@ -615,7 +616,7 @@ impl Replica {
         for (a, b) in history.iter().zip(history.iter().skip(1)) {
             if tick <= b.tick as f64 {
                 let blend =
-                    ((tick - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
+                    ((tick - a.tick as f64) / (b.tick - a.tick) as f64).clamped(0.0, 1.0) as f32;
                 let mut out = b.player.clone();
                 for i in 0..3 {
                     out.feet[i] = a.player.feet[i] + (b.player.feet[i] - a.player.feet[i]) * blend;

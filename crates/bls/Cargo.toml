@@ -6,6 +6,7 @@ publish.workspace = true
 description = "Reads v20 .bls save files into native worlds. Plain save text only: no Torque asset readers, and source scripts are never executed."
 
 [dependencies]
+bri-console = { path = "../console" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }

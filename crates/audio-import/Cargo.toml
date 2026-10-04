@@ -11,6 +11,7 @@ name = "bri-audio-import"
 path = "src/main.rs"
 
 [dependencies]
+bri-console = { path = "../console" }
 bri-audio = { path = "../audio" }
 serde.workspace = true
 serde_json.workspace = true

@@ -1,3 +1,4 @@
+use bri_console::Clamp;
 use bri_sim::{
     player::{MoveInput, PlayerState},
     session::{CameraView, ChatLine, Command, Reply, SeatSince, Session},
@@ -435,7 +436,7 @@ const LOOK_UNITS: f32 = 10_000.0;
 fn quantize(value: f32, scale: f32) -> i16 {
     (value * scale)
         .round()
-        .clamp(i16::MIN as f32, i16::MAX as f32) as i16
+        .clamped(i16::MIN as f32, i16::MAX as f32) as i16
 }
 impl RemotePose {
     pub const GROUNDED: u8 = 1;
