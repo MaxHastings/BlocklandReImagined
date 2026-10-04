@@ -326,13 +326,22 @@ fn recipe_rows(scoring: u32) -> Vec<Row> {
     ]
 }
 
+/// The Vehicle Spawn's footprint and height in these tests: v20's 8x8
+/// plate is assumed; the real one comes with the generated content.
+const PAD_SIZE: ([u8; 2], u16) = ([8, 8], 1);
+
 /// The bricks the field uses, as boxes of their stock sizes.
 fn definitions() -> Definitions {
+    definitions_with(PAD_SIZE)
+}
+
+/// [`definitions`] with a Vehicle Spawn of another footprint and height.
+fn definitions_with((footprint, plates): ([u8; 2], u16)) -> Definitions {
     use bri_sim::definitions::Special;
     let mut d = bri_sim::testing::definitions();
     for def in [
         definition(CUBE, [4, 4], 10, Special::None, false),
-        definition(PAD, [8, 8], 1, Special::None, true),
+        definition(PAD, footprint, plates, Special::None, true),
         definition(MARK, [4, 4], 1, Special::None, false),
         bri_sim::testing::ramp(RAMP, [8, 8], 3),
     ] {
@@ -400,11 +409,15 @@ impl Match {
     /// A session on the Slate with the field's bricks, the Blockhead Bot
     /// and the Steel Ball Kit, and the host in the stands; no game yet.
     fn base() -> Self {
+        Self::base_with(definitions())
+    }
+    /// [`Self::base`] on bricks of the given sizes.
+    fn base_with(definitions: Definitions) -> Self {
         let world = World::new("Soccer".into(), SLATE.into(), PALETTE.to_vec());
         let floor = vec![
             ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
         ];
-        let mut s = Session::new(Simulation::new(world, definitions(), floor).unwrap());
+        let mut s = Session::new(Simulation::new(world, definitions, floor).unwrap());
         s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
         let mut vehicles = bri_vehicles::testing::pack();
         let kit_pack = bri_vehicles::Pack::load(
@@ -1132,8 +1145,8 @@ fn other_line_ups_and_an_obstacle_field_play_on() {
 /// the match plays cleanly.
 #[test]
 fn the_shipped_soccer_save_loads_a_ready_match() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../saves/Soccer 2v2.world.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../saves/Slate/Soccer 2v2.world.json");
     let setup = Setup::new(Kit::Hands, 2, 2);
     if std::env::var_os("BRI_BLESS").is_some() {
         let mut m = Match::new(&setup);
@@ -1167,6 +1180,100 @@ fn the_shipped_soccer_save_loads_a_ready_match() {
     let r = play_match(m, &setup, seconds);
     println!("shipped save: {r:?}");
     assert_clean("shipped save", &setup, &r);
+}
+
+/// What a placed or saved brick of the field is, for comparing the two:
+/// its brick, name, spawn and team, event rows and detection region.
+fn identity(b: &Brick) -> String {
+    format!(
+        "{:?} {:?} {:?} {} {:?} {:?}",
+        b.definition,
+        b.name,
+        b.vehicle.as_ref().map(|v| (&v.vehicle, v.team)),
+        b.events.len(),
+        b.rule_region,
+        b.colliding
+    )
+}
+
+/// The shipped field read as Load Bricks reads it (`Store::read` decodes
+/// the file) and loaded with the host's Load Bricks command, on a Vehicle
+/// Spawn of whatever size the installed game has. Every brick survives,
+/// within half a stud and half a plate of where it was saved: each pad
+/// with its bot or ball and team, both goals with their events and
+/// regions, and the game with its teams. Before loads moved a brick saved
+/// off its grid onto it, an odd-stud or even-plate Vehicle Spawn lost
+/// every pad.
+#[test]
+fn the_shipped_field_survives_load_bricks_whatever_the_pads_size() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../saves/Slate/Soccer 2v2.world.json");
+    let bytes = std::fs::read(&path).expect("the shipped save exists (BRI_BLESS=1 writes it)");
+    let saved = bri_world::build::decode(&bytes).unwrap();
+    let mut expected: Vec<String> = saved.world.bricks.values().map(identity).collect();
+    expected.sort();
+    assert_eq!(
+        saved
+            .world
+            .bricks
+            .values()
+            .filter(|b| b.vehicle.is_some())
+            .count(),
+        5,
+        "the ball pad and four bot pads"
+    );
+    assert_eq!(
+        saved
+            .world
+            .bricks
+            .values()
+            .filter(|b| !b.events.is_empty())
+            .count(),
+        2,
+        "two goals"
+    );
+    for size in [
+        ([8, 8], 1),
+        ([8, 8], 2),
+        ([7, 7], 3),
+        ([6, 6], 1),
+        ([5, 3], 2),
+    ] {
+        let mut m = Match::base_with(definitions_with(size));
+        m.run(Command::LoadBuild {
+            build: Box::new(bri_world::build::decode(&bytes).unwrap()),
+            ownership: false,
+        });
+        m.steps(TICKS_PER_SECOND);
+        let state = m.s.simulation().state();
+        let mut placed: Vec<String> = state.bricks.values().map(identity).collect();
+        placed.sort();
+        assert_eq!(
+            placed,
+            expected,
+            "pad {size:?}: every brick placed: {:?}",
+            m.s.snapshot().chat
+        );
+        for b in saved.world.bricks.values() {
+            let near = state.bricks.values().any(|p| {
+                identity(p) == identity(b)
+                    && (0..3).all(|a| {
+                        (p.position[a] - b.position[a]).abs() <= [0.25, 0.1, 0.25][a] + 1e-4
+                    })
+            });
+            assert!(near, "pad {size:?}: {:?} stays where it was saved", b.name);
+        }
+        let teams: Vec<_> = m.s.minigame_views()[0]
+            .teams
+            .iter()
+            .map(|t| (t.name.clone(), t.id.0))
+            .collect();
+        assert_eq!(
+            teams,
+            [("Blue".to_string(), BLUE), ("Red".to_string(), RED)],
+            "pad {size:?}: the game and its teams"
+        );
+    }
 }
 
 /// Short runs with a rocket launcher, a spear, and jeeps parked at the

@@ -1,14 +1,25 @@
 //! Convert an original saves directory without touching its contents.
+//! Builds made for this game (a `bundled-dir` laid out as
+//! `<Map folder>/<name>.world.json`, the repository's `saves/`) are checked
+//! and copied in beside them as they are, listed under `bundled`.
 use anyhow::{Context, Result, ensure};
 use bri_content::brick::Catalog;
 use bri_world::{ContentRef, persistence};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::PathBuf};
 fn main() -> Result<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let bundled_dir = match args.iter().position(|a| a == "--bundled") {
+        Some(at) if at + 1 < args.len() => {
+            let dir = PathBuf::from(args.remove(at + 1));
+            args.remove(at);
+            Some(dir)
+        }
+        _ => None,
+    };
     ensure!(
         (3..=4).contains(&args.len()),
-        "Usage: import_saves <saves-dir> <stock-catalog.json> <new-output-dir> [native-effects.json]"
+        "Usage: import_saves <saves-dir> <stock-catalog.json> <new-output-dir> [native-effects.json] [--bundled <dir>]"
     );
     let root = PathBuf::from(&args[0]);
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(&args[1])?)?;
@@ -91,10 +102,14 @@ fn main() -> Result<()> {
             }
         }
     }
+    let bundled = match &bundled_dir {
+        Some(dir) => bundled_builds(dir, &catalog, &output)?,
+        None => Vec::new(),
+    };
     std::fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"schema_version":1,"saves":reports,"bricks":total,"errors":errors,"scope":"offline world conversion and exact native state roundtrip; unresolved content and unsupported behaviors remain diagnostic, no gameplay equivalence claim"}),
+            &serde_json::json!({"schema_version":1,"saves":reports,"bundled":bundled,"bricks":total,"errors":errors,"scope":"offline world conversion and exact native state roundtrip; unresolved content and unsupported behaviors remain diagnostic, no gameplay equivalence claim"}),
         )?,
     )?;
     println!(
@@ -104,6 +119,56 @@ fn main() -> Result<()> {
     ensure!(errors == 0, "Some saves failed; see report.json");
     Ok(())
 }
+/// Each native build under `root` (`<Map folder>/<name>.world.json`): it
+/// decodes, and every brick it holds is a stock brick, so it loads on any
+/// copy of the game. Copied in under its hash, with its picture.
+fn bundled_builds(
+    root: &std::path::Path,
+    catalog: &Catalog,
+    output: &std::path::Path,
+) -> Result<Vec<serde_json::Value>> {
+    let stock: std::collections::BTreeSet<&str> =
+        catalog.bricks.iter().map(|b| b.id.as_str()).collect();
+    let mut out = Vec::new();
+    for entry in walkdir::WalkDir::new(root).sort_by_file_name() {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy();
+        if !entry.file_type().is_file() || !name.ends_with(".world.json") {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        ensure!(
+            relative.matches('/').count() == 1,
+            "A bundled build sits in its map's folder: {relative}"
+        );
+        let bytes = std::fs::read(entry.path())?;
+        let build = bri_world::build::decode(&bytes).with_context(|| relative.clone())?;
+        for brick in build.world.bricks.values() {
+            let ContentRef::Resolved(id) = &brick.definition else {
+                anyhow::bail!("{relative} holds an unresolved brick");
+            };
+            ensure!(
+                stock.contains(id.as_str()),
+                "{relative} holds {id}, which is not a stock brick"
+            );
+        }
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let file = format!("{sha}.world.json");
+        std::fs::write(output.join(&file), &bytes)?;
+        let picture = picture_beside(entry.path())?;
+        if let Some(picture) = &picture {
+            std::fs::copy(picture, output.join(format!("{sha}.jpg")))?;
+        }
+        out.push(serde_json::json!({"source":relative,"sha256":sha,"file":file,"picture":picture.is_some(),"bricks":build.world.bricks.len()}));
+    }
+    println!("{} bundled builds", out.len());
+    Ok(out)
+}
+
 /// The `.jpg` with the save's name beside it, in any case.
 fn picture_beside(save: &std::path::Path) -> Result<Option<PathBuf>> {
     let stem = save

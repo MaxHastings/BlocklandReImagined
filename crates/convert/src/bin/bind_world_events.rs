@@ -56,6 +56,12 @@ fn main() -> Result<()> {
         if !name.ends_with(".world.json") {
             continue;
         }
+        // A bundled build (`import_saves`) was made with this game's own
+        // events: it travels as it is.
+        if std::fs::read(&path)?.starts_with(bri_world::build::MAGIC) {
+            std::fs::copy(&path, output.join(&name))?;
+            continue;
+        }
         let mut value = json(&path)?;
         if value["schema_version"] == 1 {
             let object = value.as_object_mut().context("World is not an object")?;

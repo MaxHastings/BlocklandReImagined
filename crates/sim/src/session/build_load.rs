@@ -308,7 +308,7 @@ impl Session {
             .collect();
         let bricks: Result<Vec<Brick>> = Ok(mapped
             .into_iter()
-            .filter(|brick| self.simulation.fits_grid(brick))
+            .filter_map(|brick| self.simulation.on_grid(brick))
             .collect());
         let loader = loading.loader;
         let palette = std::mem::take(&mut loading.mapping.palette);

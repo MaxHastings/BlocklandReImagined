@@ -216,15 +216,16 @@ New unit tests in `bots/contest.rs` and `physical_objectives.rs` cover:
 
 ### Loading the field (for Maxwell)
 
-The save is `saves/Soccer 2v2.world.json` in the repository. It holds only
-stock bricks (4x Cube, 4x4 flat plate, Vehicle Spawn), the game and its
-teams, the goals' wrench events, the ball pad and four bot pads. To load
-it:
+The save is `saves/Slate/Soccer 2v2.world.json` in the repository. It
+holds only stock bricks (4x Cube, 4x4 flat plate, Vehicle Spawn), the game
+and its teams, the goals' wrench events, the ball pad and four bot pads.
+It ships the way the stock saves do: the `worlds` pack carries it
+(`import_saves --bundled saves`), so a packaged build lists it in Load
+Bricks under Slate as a "Bundled build". Nothing is copied by hand. To
+load it:
 
-1. Copy it to
-   `%LOCALAPPDATA%\BlocklandReImagined\saves\map-5454d29ffa78cfa5e10309f6db488267e5788a9f0c7c60bbd40651c0f84e148b\Soccer 2v2.world.json`.
-   That folder is the Slate's save folder (`map-` plus the SHA-256 of
-   `v20/add-ons/map_slate/slate.mis`); create it if it is missing.
+1. Rerun `python tools/bootstrap.py` once after pulling: the worlds pack
+   is rebuilt because its inputs changed.
 2. In Add-Ons, turn on **Blockhead Bot** and **Steel Ball Kit**, and the
    Steel Ball if you want /clearballs.
 3. Start a server on **Slate**. Do not be in a mini-game: the save brings
@@ -242,10 +243,25 @@ Mini-Game window.
 
 ### Limits
 
-- The Vehicle Spawn brick is assumed to be 8x8 studs and 1 plate. With no
-  generated content here, its real size is unverified. If it differs,
-  Load Bricks may drop the pads as off-grid. The 4x Cube and the 4x4 plate
-  sizes are known.
+- **Load Bricks no longer drops a brick saved off its grid.** The field
+  was authored against stand-in sizes of the stock bricks (the real Vehicle
+  Spawn's size comes only with the generated content). A load placed only
+  bricks whose saved position fits their definition's stud and plate grid
+  (`fits_grid` in `publish_load_slice`), so a Vehicle Spawn of an odd stud
+  count or an even plate count would have lost all five pads. v20 plants a
+  saved brick wherever the save put it. Now a loaded brick off its grid moves
+  to the nearest grid position, under half a cell (`Simulation::on_grid`,
+  `Bounds::snapped`); one on it is placed as saved, as before.
+  `the_shipped_field_survives_load_bricks_whatever_the_pads_size` decodes the
+  shipped file as `Store::read` does and loads it with the host's Load Bricks
+  command under five Vehicle Spawn sizes (8x8x1, 8x8x2, 7x7x3, 6x6x1, 5x3x2).
+  Every brick survives within half a cell of its saved position: each pad
+  with its bot or ball and team, both goals with their events and regions,
+  and the game with its teams. With the old filter it fails.
+  The gate's `bundled_soccer_field` test (real content, `--include-ignored`)
+  lists the field under Slate from the worlds pack through `Store::new`, reads
+  it as Load Bricks does, loads it on the real bricks and checks the same.
+  It could not run here (no generated content).
 - Own goals are credited by the engine to the last body that moved the
   ball. A defender blocking on its line is credited with a ball driven in
   off it, so a lone 1v1 defender concedes "own goals" (4 of 26). In 2v2 the
