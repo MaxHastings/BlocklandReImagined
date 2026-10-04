@@ -696,7 +696,7 @@ fn clear_path(
         if q.passage(start, end).is_some() {
             return Some(false);
         }
-        if !session.bot_fire_clear(bot, start, end, 0.0) {
+        if !session.bot_fire_clear(bot, start, end, 0.0, 0.0) {
             return Some(false);
         }
         // Future ally movement is conservatively enclosed about today's body.

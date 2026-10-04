@@ -92,6 +92,43 @@ pub struct BotKind {
     pub contest: BotContest,
     /// How it pursues while it drives a mount.
     pub mounted: BotMounted,
+    /// How it moves while it fights.
+    pub fighting: BotFighting,
+}
+/// How a bot moves in a fight: when a fight turns into a chase and back,
+/// and how a ranged fighter strafes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotFighting {
+    /// Leeway past the band's far edge (and in height) before a fighting
+    /// bot gives chase, as a share of that far edge...
+    pub band_slack: f32,
+    /// ...and at least this many world units.
+    pub min_band_slack: f32,
+    /// A fight keeps fighting at least this long before it gives chase,
+    /// while the enemy is still in sight.
+    pub dwell_seconds: f32,
+    /// A ranged fighter strafes one way about this long before turning
+    /// back. It stands at a ledge or a wall until then, and turns away from
+    /// an ally at once. A melee fighter does not strafe: it closes to its
+    /// band.
+    pub strafe_seconds: f32,
+}
+impl Default for BotFighting {
+    fn default() -> Self {
+        Self {
+            band_slack: 0.15,
+            min_band_slack: 1.5,
+            dwell_seconds: 0.5,
+            strafe_seconds: 3.5,
+        }
+    }
+}
+impl BotFighting {
+    /// The leeway past a band whose far edge is `far`.
+    pub fn slack(&self, far: f32) -> f32 {
+        (far * self.band_slack).max(self.min_band_slack)
+    }
 }
 /// Contesting one body with opponents (each pushing it toward its own
 /// goal): both sides keep their intentions and the physics decides. While
@@ -246,6 +283,7 @@ impl Default for BotKind {
             objective_radius: 24.0,
             contest: BotContest::default(),
             mounted: BotMounted::default(),
+            fighting: BotFighting::default(),
         }
     }
 }
@@ -374,6 +412,25 @@ impl BotKind {
                 0.0,
                 90.0,
             ),
+            ("fighting.band_slack", self.fighting.band_slack, 0.0, 1.0),
+            (
+                "fighting.min_band_slack",
+                self.fighting.min_band_slack,
+                0.0,
+                16.0,
+            ),
+            (
+                "fighting.dwell_seconds",
+                self.fighting.dwell_seconds,
+                0.0,
+                5.0,
+            ),
+            (
+                "fighting.strafe_seconds",
+                self.fighting.strafe_seconds,
+                0.1,
+                30.0,
+            ),
             (
                 "mounted.chase_radius",
                 self.mounted.chase_radius,
@@ -468,6 +525,27 @@ mod tests {
             BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"x","name":"X","speed":2}]}"#)
                 .is_err()
         );
+    }
+    #[test]
+    fn fight_slack_scales_with_the_band_and_is_limited() {
+        let fighting = BotFighting::default();
+        assert_eq!(fighting.slack(4.0), 1.5);
+        assert!((fighting.slack(40.0) - 6.0).abs() < 1e-4);
+        let pack = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","fighting":{"band_slack":0.3,"dwell_seconds":1}}]}"#,
+        )
+        .unwrap();
+        let read = &pack.bots[0].fighting;
+        assert_eq!((read.band_slack, read.dwell_seconds), (0.3, 1.0));
+        assert_eq!(read.strafe_seconds, fighting.strafe_seconds);
+        for bad in [
+            r#""fighting":{"band_slack":2}"#,
+            r#""fighting":{"strafe_seconds":0}"#,
+            r#""fighting":{"dwell_seconds":-1}"#,
+        ] {
+            let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
+            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");
+        }
     }
     #[test]
     fn body_melee_and_swimming_are_read_and_limited() {

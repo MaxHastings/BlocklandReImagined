@@ -54,6 +54,10 @@ pub(crate) struct Situation {
     pub enemy: Option<(f32, f32)>,
     /// The far edge of its weapon's band.
     pub far: f32,
+    /// Leeway past `far`, and in height, before a fighting bot gives chase
+    /// (`BotFighting::slack`): an enemy that jumps or steps back a little
+    /// is still fought.
+    pub slack: f32,
     /// How high it steps.
     pub step: f32,
     /// It remembers where an enemy was.
@@ -64,8 +68,6 @@ pub(crate) struct Situation {
     pub home: bool,
 }
 
-/// Leeway past its band's far edge before a fighting bot gives chase.
-pub(crate) const BAND_SLACK: f32 = 1.0;
 /// Leeway in height before a fighting bot gives chase, beyond a step.
 const RISE_SLACK: f32 = 1.0;
 
@@ -99,11 +101,11 @@ impl Behaviour {
             Behaviour::Fight => fits(
                 s.enemy.is_some_and(|(distance, rise)| {
                     let slack = if current == Behaviour::Fight {
-                        BAND_SLACK
+                        s.slack
                     } else {
                         0.0
                     };
-                    distance <= s.far + slack && rise.abs() <= s.step + RISE_SLACK
+                    distance <= s.far + slack && rise.abs() <= s.step + RISE_SLACK + slack
                 }),
                 0.8,
             ),
@@ -147,6 +149,7 @@ mod tests {
         Situation {
             enemy: Some((distance, 0.0)),
             far: 6.0,
+            slack: 1.0,
             step: 0.6,
             ..Default::default()
         }
@@ -232,6 +235,28 @@ mod tests {
         assert_eq!(pick(Fight, &enemy(6.5)), Fight);
         assert_eq!(pick(Fight, &enemy(7.5)), Chase);
         assert_eq!(pick(Chase, &enemy(5.5)), Fight);
+        // Nor as it jumps: a little above is still fought once fighting.
+        let jumped = Situation {
+            enemy: Some((4.0, 2.2)),
+            ..enemy(4.0)
+        };
+        assert_eq!(pick(Fight, &jumped), Fight);
+        assert_eq!(pick(Chase, &jumped), Chase);
+    }
+
+    /// A long band's slack is proportional: a sniper at 40 keeps fighting
+    /// an enemy that steps a few units past it.
+    #[test]
+    fn a_long_band_holds_its_fight_further_out() {
+        let fighting = crate::bot_kind::BotFighting::default();
+        let sniper = |distance: f32| Situation {
+            far: 40.0,
+            slack: fighting.slack(40.0),
+            ..enemy(distance)
+        };
+        assert_eq!(pick(Fight, &sniper(45.0)), Fight);
+        assert_eq!(pick(Fight, &sniper(47.0)), Chase);
+        assert_eq!(pick(Chase, &sniper(41.0)), Chase);
     }
 
     /// Once walking home it walks all the way, not just back inside the

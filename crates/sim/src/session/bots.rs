@@ -227,6 +227,11 @@ struct Brain {
     fire_down: bool,
     /// What it is doing ([`behaviour`]).
     behaviour: Behaviour,
+    /// Tick it took up `behaviour`.
+    behaviour_since: u64,
+    /// The way a ranged fighter strafes (+1 right, -1 left), and the tick
+    /// it turns back.
+    strafe: (f32, u64),
     objective: objectives::State,
     combat: hand_combat::State,
     native_combat_tick: Option<u64>,
@@ -352,6 +357,8 @@ impl Brain {
             next_error: 0,
             fire_down: false,
             behaviour: Behaviour::default(),
+            behaviour_since: 0,
+            strafe: (1.0, 0),
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
@@ -1763,6 +1770,17 @@ impl Session {
             && (!matches!(native, hand_combat::Decision::Unsupported)
                 || (sight.target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some()));
         self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);
+        // Fighting empty-handed with an enemy in sight (just respawned
+        // mid-fight, say), it takes out its weapon now, so it keeps the band
+        // of that weapon and does not drop into a chase for a tick.
+        if matches!(native, hand_combat::Decision::Unsupported)
+            && sight.target.is_some()
+            && self.bots.brains[&bot].behaviour == Behaviour::Fight
+            && !self.vehicles.weapon_seat(bot)
+            && self.bot_weapon(bot).is_none()
+        {
+            self.bot_arm(bot)?;
+        }
         // Empty-handed, a kind that hits with its body fights with that.
         let held = native_choice
             .map(|c| c.weapon)
@@ -1883,6 +1901,13 @@ impl Session {
                 eye,
                 seen.eye - Vec3::Y * 0.5,
                 weapon.map_or(0.0, |w| w.splash),
+                weapon.map_or(0.0, |w| {
+                    if w.melee {
+                        0.0
+                    } else {
+                        interactions::MISS_CARRIES
+                    }
+                }),
             )
         });
         let mounted_charging = self
@@ -2023,12 +2048,13 @@ impl Session {
                     None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
                 }),
             far,
+            slack: kind.fighting.slack(far),
             step: body.step,
             remembers: brain.memory.is_some(),
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
         };
-        let behaviour = choose(brain.behaviour, &situation, |b| {
+        let mut behaviour = choose(brain.behaviour, &situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
                     0.0
@@ -2037,6 +2063,20 @@ impl Session {
                 },
             )
         });
+        // A fight just taken up holds a moment before it turns into a
+        // chase while the enemy is still in sight: no flip-flop at the
+        // band's edge as either steps back and forth. (A chase that
+        // reaches the band fights at once.)
+        let dwell = (kind.fighting.dwell_seconds * 120.0) as u64;
+        if situation.enemy.is_some()
+            && (brain.behaviour, behaviour) == (Behaviour::Fight, Behaviour::Chase)
+            && tick < brain.behaviour_since + dwell
+        {
+            behaviour = brain.behaviour;
+        }
+        if behaviour != brain.behaviour {
+            brain.behaviour_since = tick;
+        }
         brain.behaviour = behaviour;
         let mut selected_objective = objective.filter(|_| behaviour == Behaviour::Objective);
         let objective_resource = selected_objective
@@ -2270,6 +2310,20 @@ impl Session {
                 }
             }
             wanted = brain.plan.first().copied();
+            // Standing over a drop's landing, at the very edge: heading for
+            // the landing itself just wobbles on the edge, so walk on
+            // toward what comes after it until the drop carries it down.
+            if let Some(next) = wanted.as_mut()
+                && next.through.is_none()
+                && state.grounded
+                && next.feet.y < feet.y - body.step - 0.05
+                && flat(next.feet - feet).length() < 0.6
+            {
+                let beyond = brain.plan.get(1).map_or(point, |w| w.feet);
+                if flat(beyond - feet).length() > 0.6 {
+                    next.through = Some(beyond);
+                }
+            }
             // A grid route ends at a cell, not necessarily at the authored
             // interaction point. Finish a nearby approach with the ordinary
             // motor; the action's physical reach decides when it succeeds.
@@ -2299,6 +2353,16 @@ impl Session {
         };
         let walk_direction =
             wanted.map(|p| self.bot_walk_direction(bot, flat(p.feet - feet).normalize_or_zero()));
+        // Allies close by, which a strafe does not walk into.
+        let allies_near: Vec<Vec3> = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                **o != bot && p.combat.alive && !self.seated(**o) && self.bot_allies(bot, **o)
+            })
+            .map(|(_, p)| Vec3::from(p.player.state().feet))
+            .filter(|at| flat(*at - feet).length() < 3.0)
+            .collect();
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -2429,15 +2493,78 @@ impl Session {
             direction = push;
         }
         match behaviour {
-            // In its band: strafe so it is not a still target, and give
-            // ground if too close.
-            Behaviour::Fight | Behaviour::Objective if wanted.is_none() && hold => {
+            // In its band at an objective, or a swimmer fighting (no floor
+            // to probe, its water all round): weave so it is not a still
+            // target, and give ground if too close.
+            Behaviour::Objective | Behaviour::Fight
+                if wanted.is_none()
+                    && hold
+                    && (behaviour == Behaviour::Objective || kind.moves == Moves::Swim) =>
+            {
                 let side = if (tick / 90 + bot).is_multiple_of(2) {
                     0.7
                 } else {
                     -0.7
                 };
                 direction = right * side;
+                if back_off {
+                    direction -= forward;
+                }
+            }
+            Behaviour::Fight if wanted.is_none() && hold => {
+                let melee = weapon.is_none_or(|w| w.melee);
+                let gap = enemy.map(|seen| flat(seen.feet - feet).length());
+                if melee {
+                    // A melee fighter closes to its band rather than
+                    // circling its target.
+                    if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
+                        direction = forward;
+                    }
+                } else {
+                    // A ranged fighter strafes one way for a while, but
+                    // not where the floor ends or a wall or an ally stands
+                    // that way.
+                    let floor = |side: f32| {
+                        let probe = feet + right * side * 0.9 + Vec3::Y * 0.5;
+                        let under = super::admin_players::world_ray(
+                            &self.simulation,
+                            probe,
+                            Vec3::NEG_Y,
+                            0.5 + body.step + body.drop,
+                        );
+                        let wall = super::admin_players::world_ray(
+                            &self.simulation,
+                            feet + Vec3::Y * 0.5,
+                            right * side,
+                            0.9,
+                        );
+                        under.is_some() && wall.is_none()
+                    };
+                    let ally = |side: f32| {
+                        allies_near.iter().any(|at| {
+                            let d = flat(*at - feet);
+                            d.dot(right * side) > 0.0 && d.length() < 1.5
+                        })
+                    };
+                    let ground = |side: f32| floor(side) && !ally(side);
+                    // Each leg turns back the other way, unless only this
+                    // way is open. One that reaches an edge stands there
+                    // until the leg is up; one that meets an ally turns
+                    // away from it at once.
+                    let (mut side, mut until) = brain.strafe;
+                    let parted = ally(side) && ground(-side);
+                    if tick >= until || parted {
+                        if parted || ground(-side) || !ground(side) {
+                            side = -side;
+                        }
+                        let seconds = kind.fighting.strafe_seconds * (0.75 + 0.5 * brain.random());
+                        until = tick + (seconds * 120.0) as u64;
+                    }
+                    brain.strafe = (side, until);
+                    if ground(side) {
+                        direction = right * side * 0.7;
+                    }
+                }
                 if back_off {
                     direction -= forward;
                 }

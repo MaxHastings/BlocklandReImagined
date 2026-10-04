@@ -87,6 +87,10 @@ pub(super) struct Opportunity {
     pub utility: f32,
 }
 
+/// How far past its target a ranged shot that misses is still dangerous
+/// to an ally standing there.
+pub(super) const MISS_CARRIES: f32 = 8.0;
+
 impl Session {
     /// A passenger may have boarded the reachable lower seat of a tall vehicle.
     /// Fill its useful empty role through the same seat keys players use.
@@ -832,12 +836,15 @@ impl Session {
         )
     }
 
+    /// No ally stands in the line of fire from `origin` to `target`, nor
+    /// within `past` beyond the target, where a miss carries on.
     pub(super) fn bot_fire_clear(
         &self,
         bot: OwnerId,
         origin: Vec3,
         target: Vec3,
         splash: f32,
+        past: f32,
     ) -> bool {
         let delta = target - origin;
         let length = delta.length();
@@ -856,7 +863,7 @@ impl Session {
             }
             let centre =
                 Vec3::from(p.player.state().feet) + Vec3::Y * p.player.tuning().stand_height * 0.5;
-            let along = (centre - origin).dot(direction).clamp(0.0, length);
+            let along = (centre - origin).dot(direction).clamp(0.0, length + past);
             centre.distance(origin + direction * along)
                 < p.player.tuning().stand_height * 0.5 + splash
         })

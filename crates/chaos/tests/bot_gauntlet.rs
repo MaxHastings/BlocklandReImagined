@@ -216,9 +216,12 @@ fn deathmatch_open_field() {
     let r = b.play(0.0, 60, |_, _| {});
     assert!(r.kills >= 50 * rounds() as u64, "a real fight: {}", r.kills);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
-    // Measured: circling 18% (strafing in its band), 55 changes a
-    // bot-minute (chase/fight at the band's edge), 66 kills.
-    within(&r, 0.01, 0.01, 0.22, 62.0);
+    // Measured at the merge: circling 18% (strafing in its band), 55
+    // changes a bot-minute (a respawned bot chased for a tick before it
+    // took out its gun), 66 kills. With long strafe legs and the gun out on
+    // respawn: circling 8.8%, 20 changes (a side wiped out, wandering until
+    // it respawns), reversals 62 -> 14 a bot-minute, 65 kills.
+    within(&r, 0.01, 0.01, 0.12, 26.0);
 }
 
 #[test]
@@ -233,9 +236,10 @@ fn deathmatch_mixed_arsenal() {
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
     assert!(r.kills >= 50 * rounds() as u64, "a real fight: {}", r.kills);
-    // Measured: circling 24% (strafing), 44 changes a bot-minute, 69
-    // kills, no suicide by splash.
-    within(&r, 0.01, 0.01, 0.28, 50.0);
+    // Measured at the merge: circling 24% (strafing), 44 changes a
+    // bot-minute, 69 kills, no suicide by splash. Now: circling 4.5%, 21
+    // changes, reversals 66 -> 11, 67 kills.
+    within(&r, 0.01, 0.01, 0.10, 28.0);
     assert_eq!(r.self_kills, 0, "no bot blew itself up");
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }
@@ -255,10 +259,12 @@ fn rooftop_brawl_without_rails() {
     let mut b = battle(spec, |_| {});
     let r = b.play(6.0, 60, |_, _| {});
     assert!(r.kills >= 40 * rounds() as u64, "a real fight: {}", r.kills);
-    // Measured: idle 21% (bots that strafed off the deck wander below it),
-    // 8 falls, 58 changes a bot-minute, 53 kills: TARGET fell = 0.
-    within(&r, 0.01, 0.24, 0.08, 65.0);
-    assert!(r.fell <= 10 * rounds() as u64, "falls: {}", r.fell);
+    // Measured at the merge: idle 21% (bots that strafed off the deck
+    // wander below it), 8 falls, 58 changes a bot-minute, 53 kills. Now the
+    // strafe stops at the edge: no falls, idle 0.2%, circling 7%, 46
+    // changes (nearly all a side wiped out and respawning), 80 kills.
+    within(&r, 0.01, 0.01, 0.08, 58.0);
+    assert_eq!(r.fell, 0, "no bot strafed off the deck");
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }
 
@@ -327,9 +333,14 @@ fn stairs_to_a_deck() {
     spec.bricks = bricks;
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
-    // Measured: stuck 3.6%, circling 12.7%, 40 changes a bot-minute
-    // (melee chase/fight flip-flop), 21 kills.
-    within(&r, 0.05, 0.01, 0.16, 46.0);
+    // Measured at the merge: stuck 3.6%, circling 12.7%, 40 changes a
+    // bot-minute (melee chase/fight flip-flop), 21 kills. Now melee closes
+    // instead of strafing round its target: circling 1.5-2.7%, 18-26
+    // changes, 17-22 kills over the runs while these fixes landed. Stuck
+    // moved between 3.5% and 7.2% from run to run (a chase that settles
+    // short of an enemy on the deck, or a bot stood on another's head), so
+    // its bound has that headroom.
+    within(&r, 0.08, 0.01, 0.04, 30.0);
     assert!(
         r.kills >= 15 * rounds() as u64,
         "the deck was taken: {}",
@@ -361,9 +372,13 @@ fn water_between_the_sides() {
     spec.bricks = bricks;
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
-    // Measured: stuck 94% (walkers float in deep water with no route),
-    // no kills: TARGET stuck < 5%, kills > 0.
-    within(&r, 0.97, 0.01, 0.02, 4.0);
+    // Measured at the merge: stuck 94% (walkers float in deep water with
+    // no route), no kills, 2 changes a bot-minute. Now a brawler in its
+    // band walks at its enemy rather than strafing, and some cross: stuck
+    // 13-30%, 6-15 kills, 7-15 changes (the chase/fight of a real fight)
+    // over the runs while these fixes landed. TARGET stuck < 5%.
+    within(&r, 0.35, 0.01, 0.02, 20.0);
+    assert!(r.kills > 0, "the water was crossed");
 }
 
 #[test]
@@ -437,9 +452,10 @@ fn weapons_lying_on_the_ground() {
         let best = report.progress.get("armed_bots").copied().unwrap_or(0);
         report.progress.insert("armed_bots".into(), best.max(armed));
     });
-    // Measured: circling 91% (unarmed bots strafe round each other doing
-    // nothing), no bot ever armed: TARGET armed_bots > 0, circling < 10%.
-    within(&r, 0.01, 0.01, 0.95, 15.0);
+    // Measured at the merge: circling 91% (unarmed bots strafe round each
+    // other doing nothing), no bot ever armed. Now none strafes: circling
+    // 0%, 1 change a bot-minute. TARGET armed_bots > 0.
+    within(&r, 0.01, 0.01, 0.05, 4.0);
 }
 
 #[test]
@@ -480,9 +496,10 @@ fn zombie_survival() {
         "the horde and the survivors fought: {}",
         r.kills
     );
-    // Measured: circling 22% (melee circles its target), 33 changes a
-    // bot-minute (chase/fly flip-flop), 47 kills.
-    within(&r, 0.01, 0.01, 0.26, 38.0);
+    // Measured at the merge: circling 22% (melee circles its target), 33
+    // changes a bot-minute (chase/fly flip-flop), 47 kills. Now melee
+    // closes: circling 5%, 25 changes, 48 kills.
+    within(&r, 0.01, 0.01, 0.08, 32.0);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }
 
@@ -616,10 +633,13 @@ fn bot_objectives(p) {
             .count() as i64;
         *report.progress.entry("carry_ticks".into()).or_default() += carrying;
     });
-    // Measured: stuck 34.5% (opposing runners deadlock head-on), circling
-    // 1%, 39 changes a bot-minute, 34 kills, 1656 ticks carrying, and no
-    // capture in 90 s: TARGET captures > 0.
-    within(&r, 0.40, 0.01, 0.03, 45.0);
+    // Measured at the merge: stuck 34.5% (opposing runners deadlock
+    // head-on), circling 1%, 39 changes a bot-minute, 34 kills, 1656 ticks
+    // carrying, and no capture in 90 s. Now, with fights held through a
+    // jump: stuck 0.4-20%, 43-53 kills. The changes a bot-minute rose with
+    // the fighting, to 44-60 (each fight is an objective/fight change and
+    // back). TARGET captures > 0.
+    within(&r, 0.25, 0.01, 0.03, 65.0);
     assert!(
         r.progress["carry_ticks"] >= 1000 * rounds() as i64,
         "flags were taken: {:?}",

@@ -4,6 +4,34 @@ use super::*;
 use bri_minigames as mg;
 use rapier3d::prelude::*;
 
+/// Nearest terrain, interior or brick along a ray in `simulation`.
+pub(super) fn world_ray(
+    simulation: &crate::simulation::Simulation,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+) -> Option<f32> {
+    // Players (1) and vehicles (2) are not world geometry.
+    let predicate = |_: ColliderHandle, c: &Collider| !matches!(c.user_data >> 64, 1 | 2);
+    let ray = Ray::new(
+        Vector::from_array(start.to_array()),
+        Vector::from_array(dir.to_array()),
+    );
+    let bricks = simulation
+        .physics
+        .query_pipeline_with_filter(
+            QueryFilter::default()
+                .exclude_sensors()
+                .predicate(&predicate),
+        )
+        .cast_ray(&ray, range, true)
+        .map(|(_, distance)| distance);
+    let terrain = simulation
+        .terrain_ray(start, dir, range)
+        .map(|(distance, _)| distance);
+    bricks.into_iter().chain(terrain).min_by(f32::total_cmp)
+}
+
 /// `serverCmdWarp` scans 1000 units along the eye vector.
 const WARP_RANGE: f32 = 1000.0;
 /// After an admin teleport, minigame weapons stay quiet for 3 s
@@ -88,27 +116,7 @@ impl Session {
     }
     /// Nearest terrain, interior or brick along a ray.
     pub(super) fn world_ray(&self, start: Vec3, dir: Vec3, range: f32) -> Option<f32> {
-        // Players (1) and vehicles (2) are not world geometry.
-        let predicate = |_: ColliderHandle, c: &Collider| !matches!(c.user_data >> 64, 1 | 2);
-        let ray = Ray::new(
-            Vector::from_array(start.to_array()),
-            Vector::from_array(dir.to_array()),
-        );
-        let bricks = self
-            .simulation
-            .physics
-            .query_pipeline_with_filter(
-                QueryFilter::default()
-                    .exclude_sensors()
-                    .predicate(&predicate),
-            )
-            .cast_ray(&ray, range, true)
-            .map(|(_, distance)| distance);
-        let terrain = self
-            .simulation
-            .terrain_ray(start, dir, range)
-            .map(|(distance, _)| distance);
-        bricks.into_iter().chain(terrain).min_by(f32::total_cmp)
+        world_ray(&self.simulation, start, dir, range)
     }
     /// `serverCmdDropPlayerAtCamera` (F7). `view` is the client's camera at
     /// the key press; otherwise the camera is wherever it was last left, so
