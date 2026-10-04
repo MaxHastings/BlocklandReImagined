@@ -365,3 +365,66 @@ fn a_round_ends_once_until_a_reset() {
     );
     assert!(w.end_round(game, vec![], vec![]).is_ok(), "nobody won");
 }
+
+/// Team ids are the game's team slots, 1 to `MAX_TEAMS`: 0 is what a Team
+/// condition reads for a player on no team, so no team may have it, and a
+/// re-added team takes the lowest free slot so ids stay inside the range
+/// rules can name. A team named by a slot it does not have yet (a saved
+/// build's) comes back with that same id.
+#[test]
+fn team_ids_are_slots_from_one_that_never_read_as_no_team() {
+    let (mut w, game, [a, ..], [red, blue]) = red_blue();
+    assert_eq!((red, blue), (TeamId(1), TeamId(2)));
+    for round in 0..(MAX_TEAMS * 2) {
+        let (ids, _) = w
+            .set_teams(
+                game,
+                vec![
+                    TeamSpec {
+                        id: Some(blue),
+                        name: "Blue".into(),
+                        color: 3,
+                    },
+                    spec(&format!("New {round}"), 1),
+                ],
+                false,
+                false,
+            )
+            .unwrap();
+        assert_eq!(ids, vec![blue, TeamId(1)], "round {round}");
+    }
+    let (ids, _) = w
+        .set_teams(
+            game,
+            vec![TeamSpec {
+                id: Some(TeamId(7)),
+                name: "Restored".into(),
+                color: 2,
+            }],
+            false,
+            false,
+        )
+        .unwrap();
+    assert_eq!(ids, vec![TeamId(7)]);
+    w.assign_team(a, Some(TeamId(7))).unwrap();
+    assert_eq!(w.team_of(a), Some(TeamId(7)));
+    let saved = w.save().unwrap();
+    let back = MinigamesWorld::restore(&saved, Catalog::minimal_vanilla()).unwrap();
+    assert_eq!(back.team_of(a), Some(TeamId(7)));
+    for bad in [0, MAX_TEAMS as u32 + 1] {
+        assert_eq!(
+            w.set_teams(
+                game,
+                vec![TeamSpec {
+                    id: Some(TeamId(bad)),
+                    name: "Out of range".into(),
+                    color: 0,
+                }],
+                false,
+                false,
+            )
+            .map(|_| ()),
+            Err(Error::StaleTeam)
+        );
+    }
+}

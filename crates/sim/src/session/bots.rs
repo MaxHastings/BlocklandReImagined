@@ -667,6 +667,44 @@ impl Session {
         }
         Ok(())
     }
+    /// A spawn brick's bot comes back fresh at its brick (`spawnVehicle`,
+    /// a mini-game reset): a new brain and a new life for the same player,
+    /// so its mini-game membership and team stay as they were set. Only a
+    /// missing bot, or one of another kind, is made again.
+    pub(super) fn respawn_brick_bot(&mut self, brick_id: BrickId, kind: &str) -> Result<()> {
+        let current = self.bots.by_brick.get(&brick_id).copied().filter(|bot| {
+            self.peers.contains_key(bot)
+                && self
+                    .bots
+                    .brains
+                    .get(bot)
+                    .is_some_and(|b| b.born.as_ref().unwrap_or(&b.kind).id == kind)
+        });
+        let (Some(bot), Some(brick), Some(kind)) = (
+            current,
+            self.simulation.state().bricks.get(&brick_id),
+            self.bots.kind(kind).cloned(),
+        ) else {
+            self.reconcile_bot_brick(brick_id, None)?;
+            return self.reconcile_bot_brick(brick_id, Some(kind));
+        };
+        let home = Vec3::from(brick.position) + Vec3::Y * 0.3;
+        let crossed = self.crossings.count();
+        self.bots.claims.release_owner(bot);
+        self.bots.hurt.remove(&bot);
+        let mut brain = Brain::new(Some(brick_id), kind, home, bot, crossed);
+        if let Some(old) = self.bots.brains.get(&bot) {
+            // Its movement sequence only moves forward.
+            brain.sequence = old.sequence;
+        }
+        self.bots.brains.insert(bot, brain);
+        let player = self.peers[&bot].combat.player;
+        let effects = self
+            .minigames
+            .execute(bri_minigames::Command::ForceRespawn { target: player })
+            .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
+        self.apply_minigame_effects(effects)
+    }
     /// A new bot takes its kind's body, and keeps it through respawns and
     /// mini-games as a body an Add-On chose does (`set_archetype`).
     fn embody_bot(&mut self, bot: OwnerId, kind: &BotKind) -> Result<()> {

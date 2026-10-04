@@ -277,8 +277,10 @@ points_kill_player }`, each team `#{ id, name, color }`; `player_type`,
 `loadout` (five item ids, `""` for an empty slot) and `points_kill_player`
 are the game's own (`playerDatablock`, `startEquip`, `Points_KillPlayer`).
 `set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
-teams: a team map with an `id` keeps that team and its members, one
-without is new, and a team left out is removed. `set_team(p, team)` puts a
+teams: a team map with an `id` keeps that team and its members (an `id`
+the game has not got makes the team in that slot), one without is new in
+the lowest free slot, and a team left out is removed. Team ids are slots,
+1 to 64; 0 is never a team (a Team condition reads 0 for none). `set_team(p, team)` puts a
 member on a team (or `()` for none), `set_score` and `add_score` change
 their score, and `reset_minigame(game)` resets the game. The engine keeps
 teammates from hurting each other while `friendly_fire` is off, sends team
