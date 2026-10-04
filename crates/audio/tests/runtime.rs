@@ -116,6 +116,43 @@ fn attenuation_follows_torque_linear_rolloff() {
     assert!(table_half > 0.0 && table_half < half);
 }
 
+/// Max's video: a crash seen through a portal is heard as near as it
+/// shows, and from that side, not from wherever it really is (here 100
+/// units off, past LoopSound's 30 unit reach).
+#[test]
+fn a_sound_seen_through_a_window_is_heard_from_where_it_shows() {
+    // A window ahead in the plane z = -2 leads 100 along x, the same way
+    // round: the far face is at x = 100, facing -z.
+    let window = Window {
+        ear: Listener {
+            position: [100.0, 0.0, 0.0],
+            ..Listener::default()
+        },
+        centre: [100.0, 0.0, -2.0],
+        normal: [0.0, 0.0, -1.0],
+        u: [1.0, 0.0, 0.0],
+        v: [0.0, 1.0, 0.0],
+        half: [2.0, 2.0],
+    };
+    let level = |at: Vec3, windows: &[Window]| {
+        let mut rt = offline(linear);
+        rt.set_windows(windows).unwrap();
+        rt.play("LoopSound", Placement::World(at)).unwrap();
+        rms_lr(&seconds(&mut rt, 0.5)[9600..])
+    };
+    let (dl, dr) = level([1.0, 0.0, -8.0], &[]);
+    // The same source past the far face, a little to the right.
+    let (l, r) = level([101.0, 0.0, -8.0], &[window]);
+    assert!(
+        (l - dl).abs() < 0.02 * dl && (r - dr).abs() < 0.02 * dr,
+        "through {l}/{r}, direct {dl}/{dr}"
+    );
+    assert!(r > l, "heard from its right");
+    // Without the window, too far to hear.
+    let (l, r) = level([101.0, 0.0, -8.0], &[]);
+    assert_eq!(l + r, 0.0);
+}
+
 #[test]
 fn panning_uses_listener_orientation_y_up() {
     let mut rt = offline(|_| {});

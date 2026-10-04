@@ -252,6 +252,44 @@ pub struct SeenAt {
     pub through: Option<(Vec3, Vec3)>,
 }
 
+/// How far from an opening the listener hears through it.
+const HEARING: f32 = 150.0;
+
+/// The windows the `listener` hears through ([`bri_audio::Window`]): each
+/// opening it stands in front of, nearest first, with the listener carried
+/// to its partner's side as the camera's view is. A sound seen through a
+/// portal is then heard as near as it shows, and from that side.
+pub fn hearing(passages: &Passages, listener: &bri_audio::Listener) -> Vec<bri_audio::Window> {
+    let at = Vec3::from(listener.position);
+    let mut near: Vec<_> = passages
+        .list
+        .iter()
+        .filter(|p| p.side(at) > 0.0)
+        .map(|p| (p.centre.distance(at), p))
+        .filter(|(d, _)| *d < HEARING)
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.into_iter()
+        .take(bri_audio::spatial::MAX_WINDOWS)
+        .map(|(_, p)| {
+            let point = |v: [f32; 3]| p.carry.transform_point3(Vec3::from(v)).to_array();
+            let vector = |v: Vec3| p.carry.transform_vector3(v).to_array();
+            bri_audio::Window {
+                ear: bri_audio::Listener {
+                    position: point(listener.position),
+                    forward: vector(Vec3::from(listener.forward)),
+                    up: vector(Vec3::from(listener.up)),
+                },
+                centre: point(p.centre.to_array()),
+                normal: vector(-p.normal),
+                u: vector(p.u),
+                v: vector(p.v),
+                half: p.half.to_array(),
+            }
+        })
+        .collect()
+}
+
 /// Two doorways linked as the Portal Add-On's bricks are, for tests of
 /// bodies drawn going through.
 #[cfg(test)]
@@ -567,6 +605,45 @@ mod tests {
         assert!(eye.abs_diff_eq(Vec3::new(11.5, 1.0, 0.0), 1e-4), "{eye}");
         assert_eq!(turned, Some(carry));
         assert_eq!(along(&through, 0.5, Vec3::ZERO), (Vec3::ZERO, None));
+    }
+
+    /// A sound past a portal's partner is heard as far off as it shows
+    /// through the portal (the way sight and reach measure it), and from
+    /// the side it shows on; one off to the side of the partner is not.
+    #[test]
+    fn a_sound_seen_through_a_doorway_is_heard_where_it_shows() {
+        let (passages, carry) = doorways::pair();
+        let listener = bri_audio::Listener {
+            position: [0.3, 1.5, 6.0],
+            forward: [0.0, 0.0, -1.0],
+            up: [0.0, 1.0, 0.0],
+        };
+        let windows = hearing(&passages, &listener);
+        // In front of A's +z face, nearest first (and of B's -x face, far off).
+        assert!(
+            windows.len() == 2
+                && windows[0].ear.position
+                    == carry
+                        .transform_point3(Vec3::from(listener.position))
+                        .to_array(),
+            "{windows:?}"
+        );
+        let eye = Vec3::from(listener.position);
+        // Four past B's -z face, a little to the left as seen through A.
+        let source = carry.transform_point3(Vec3::new(-1.0, 1.5, -4.0));
+        let (ear, d) = bri_audio::spatial::heard(&listener, &windows, source.to_array());
+        let (shortest, through) = passages.shortest(eye, source);
+        assert!(
+            through.is_some() && (d - shortest).abs() < 1e-3,
+            "{d} {shortest}"
+        );
+        let (left, right) = bri_audio::spatial::pan_gains(ear, source.to_array());
+        assert!(left > right, "heard from its left: {left} {right}");
+        // Beside B, out of A's view: straight across, 30 off.
+        let beside = carry.transform_point3(Vec3::new(8.0, 1.5, -4.0));
+        let (ear, d) = bri_audio::spatial::heard(&listener, &windows, beside.to_array());
+        assert_eq!(ear.position, listener.position);
+        assert!((d - eye.distance(beside)).abs() < 1e-4);
     }
 
     #[test]

@@ -178,6 +178,8 @@ pub struct ClientAudio {
     /// Sounds Add-On weapons packs ship, by lower-case profile, with their
     /// volume: played in place of a bank sound of the same name.
     pack_sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
+    /// The portals the listener hears through, as last sent.
+    windows: Vec<bri_audio::Window>,
 }
 /// How near an Add-On weapon sound plays at full volume, and how far it
 /// carries, in world units: v20's `AudioClose3d`/`AudioDefault3d` range.
@@ -260,6 +262,7 @@ impl ClientAudio {
             focused: true,
             last_break: None,
             pack_sounds: BTreeMap::new(),
+            windows: Vec::new(),
         };
         audio.apply_settings(settings);
         Ok(audio)
@@ -601,7 +604,17 @@ impl ClientAudio {
             self.record(result);
         }
     }
+    /// The portals the listener hears through this frame
+    /// (`portal_view::hearing`), sent when they change.
+    pub fn hear_through(&mut self, windows: Vec<bri_audio::Window>) {
+        if windows != self.windows {
+            let result = self.runtime.set_windows(&windows);
+            self.record(result);
+            self.windows = windows;
+        }
+    }
     pub fn clear(&mut self) {
+        self.hear_through(Vec::new());
         self.music.clear();
         self.music_bricks = MusicBricks::default();
         self.projectiles.clear();

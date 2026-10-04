@@ -79,6 +79,8 @@ pub(crate) enum Command {
         position: Vec3,
     },
     SetListener(Listener),
+    /// At most `spatial::MAX_WINDOWS`.
+    SetWindows(Box<[crate::spatial::Window]>),
     SetMaster(f32),
     SetChannel {
         channel: u8,

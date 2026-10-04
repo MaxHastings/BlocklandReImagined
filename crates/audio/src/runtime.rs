@@ -299,6 +299,19 @@ impl AudioRuntime {
         self.send(Command::SetListener(listener))
     }
 
+    /// The windows (portals) the listener also hears through
+    /// ([`crate::spatial::Window`]): the first [`crate::spatial::MAX_WINDOWS`]
+    /// valid ones are kept, replacing the last set. Send only on change.
+    pub fn set_windows(&mut self, windows: &[crate::spatial::Window]) -> Result<(), AudioError> {
+        let kept: Box<[_]> = windows
+            .iter()
+            .filter(|w| w.is_valid())
+            .take(crate::spatial::MAX_WINDOWS)
+            .copied()
+            .collect();
+        self.send(Command::SetWindows(kept))
+    }
+
     pub fn set_volume(&mut self, control: VolumeControl, value: f32) -> Result<(), AudioError> {
         let cmd = match control {
             VolumeControl::Master => Command::SetMaster(value),

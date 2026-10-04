@@ -11,9 +11,7 @@ use crate::bank::{ClipData, SoundAsset};
 use crate::command::{AudioEvent, Command, CullReason, EntityKey, Placement, SoundHandle};
 use crate::decode::StreamDecoder;
 use crate::schema::Bus;
-use crate::spatial::{
-    GainCurve, Listener, Vec3, finite3, length, pan_gains, sub, torque_attenuation,
-};
+use crate::spatial::{GainCurve, Listener, Vec3, finite3, pan_gains, torque_attenuation};
 
 const SQRT_HALF: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
@@ -144,6 +142,8 @@ pub(crate) struct Engine {
     stats: Arc<SharedStats>,
     voices: Vec<Voice>,
     listener: Listener,
+    /// What the listener also hears through (`Command::SetWindows`).
+    windows: Vec<crate::spatial::Window>,
     master: f32,
     channel_gain: [f32; 9],
     music_gain: f32,
@@ -171,6 +171,7 @@ impl Engine {
             declick_frames,
             voices: Vec::with_capacity(capacity),
             listener: Listener::default(),
+            windows: Vec::with_capacity(crate::spatial::MAX_WINDOWS),
             master: sanitize_gain(master),
             channel_gain: channel_gain.map(sanitize_gain),
             music_gain: 1.0,
@@ -351,10 +352,10 @@ impl Engine {
         let (att, pan) = match (pb.spatial, position) {
             // OpenAL does not spatialise multi-channel buffers.
             (Some(sp), Some(pos)) if mono => {
-                let d = length(sub(pos, self.listener.position));
+                let (ear, d) = crate::spatial::heard(&self.listener, &self.windows, pos);
                 (
                     torque_attenuation(d, sp.reference_distance, sp.max_distance),
-                    pan_gains(&self.listener, pos),
+                    pan_gains(ear, pos),
                 )
             }
             _ => (1.0, (SQRT_HALF, SQRT_HALF)),
@@ -532,6 +533,15 @@ impl Engine {
                 if l.is_valid() {
                     self.listener = l;
                 }
+            }
+            Command::SetWindows(windows) => {
+                self.windows.clear();
+                self.windows.extend(
+                    windows
+                        .iter()
+                        .filter(|w| w.is_valid())
+                        .take(crate::spatial::MAX_WINDOWS),
+                );
             }
             Command::SetMaster(g) => self.master = sanitize_gain(g),
             Command::SetChannel { channel, gain } => {

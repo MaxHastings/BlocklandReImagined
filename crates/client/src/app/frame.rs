@@ -1234,6 +1234,11 @@ impl App {
                 forward: forward.to_array(),
                 up: view_up.to_array(),
             };
+            // What is seen through a portal is heard through it.
+            self.audio.hear_through(crate::portal_view::hearing(
+                &self.motion.passages(),
+                listener,
+            ));
             // v20 tints the screen with the liquid the camera is in, and
             // colours player splashes and froth with the liquid they touch.
             self.ui
