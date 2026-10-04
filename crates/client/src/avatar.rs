@@ -1641,6 +1641,12 @@ impl AvatarMesh {
         }
         Ok(())
     }
+    /// Forget everything this mesh holds on the GPU (the device is gone):
+    /// the next [`Self::upload`] sends it all to the new one.
+    pub fn gpu_stopped(&mut self) {
+        self.gpu = None;
+        self.instance = None;
+    }
     /// Send the vertices to the GPU: only positions and normals while the
     /// structure holds.
     pub fn upload(

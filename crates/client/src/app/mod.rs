@@ -1669,11 +1669,7 @@ impl PlatformApp for App {
         self.fx.beams.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
-        for avatar in self.avatar.avatars.values_mut() {
-            avatar.gpu = None;
-            avatar.instance = None;
-        }
-        self.avatar.avatar_preview = None;
+        self.avatar.gpu_stopped();
         self.gpu.renderer = None;
         self.lighting.reflections = None;
         self.lighting.environment_probe = None;
