@@ -1,3 +1,4 @@
+use anyhow::Context;
 use bri_ui::{
     api::*,
     binds::Platform,
@@ -1551,7 +1552,7 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
         "ui_pack",
     ))?);
     let out = workspace.join("artifacts/v022-minigame-ui");
-    std::fs::create_dir_all(&out)?;
+    std::fs::create_dir_all(&out).with_context(|| format!("Creating {}", out.display()))?;
     let gpu = Headless::new()?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for (width, height, scale) in [
@@ -1613,13 +1614,9 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
                 ui.scale(),
                 [0.12, 0.16, 0.22, 1.0],
             )?;
-            image::save_buffer(
-                out.join(format!("{page}-{width}x{height}-{scale}x.png")),
-                &pixels,
-                width,
-                height,
-                image::ColorType::Rgba8,
-            )?;
+            let png = out.join(format!("{page}-{width}x{height}-{scale}x.png"));
+            image::save_buffer(&png, &pixels, width, height, image::ColorType::Rgba8)
+                .with_context(|| format!("Writing {}", png.display()))?;
             assert!(!draw.cmds.is_empty());
             assert_eq!(pixels.len(), (width * height * 4) as usize);
         }
@@ -1627,9 +1624,11 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
     // Read generated Slayer definitions directly. This test-only adapter
     // mirrors client minigame_ui's typed metadata mapping, without a runtime
     // dependency or a product-side Add-On-name branch.
-    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(
-        workspace.join("content/addons/gamemode_slayer-rules/behaviour.json"),
-    )?)?;
+    let behaviour = workspace.join("content/addons/gamemode_slayer-rules/behaviour.json");
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&behaviour).with_context(|| format!("Reading {}", behaviour.display()))?,
+    )
+    .with_context(|| format!("Parsing {}", behaviour.display()))?;
     let value = |v: &serde_json::Value| {
         if let Some(v) = v.as_bool() {
             MiniGameSettingValue::Bool(v)
@@ -1770,13 +1769,9 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
                 ui.scale(),
                 [0.12, 0.16, 0.22, 1.0],
             )?;
-            image::save_buffer(
-                out.join(format!("Slayer-{page}-{width}x{height}-1x.png")),
-                &pixels,
-                width,
-                height,
-                image::ColorType::Rgba8,
-            )?;
+            let png = out.join(format!("Slayer-{page}-{width}x{height}-1x.png"));
+            image::save_buffer(&png, &pixels, width, height, image::ColorType::Rgba8)
+                .with_context(|| format!("Writing {}", png.display()))?;
             assert!(!draw.cmds.is_empty());
         }
     }
