@@ -96,6 +96,12 @@ impl App {
     /// interface, and write it as the save picture at `path` (v20's
     /// `screenShot` after `Canvas.setContent(noHudGui)`). Waits for a frame
     /// with a scene to draw.
+    ///
+    /// The picture is drawn in an encoder of its own and submitted before
+    /// the frame's own drawing begins. A frame's buffer writes all land at
+    /// its submit, so sharing the frame's encoder let the frame's camera,
+    /// lights and indirect draw arguments overwrite the picture's: its world
+    /// chunks drew with another pass's arguments and bricks went missing.
     pub(super) fn take_save_picture(
         &mut self,
         frame: &mut RenderContext<'_>,
@@ -116,21 +122,35 @@ impl App {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
+        let mut encoder = frame
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Save picture"),
+            });
         let drawn = self.render_scene(&mut RenderContext {
             device: frame.device,
             queue: frame.queue,
-            encoder: frame.encoder,
+            encoder: &mut encoder,
             target: &view,
             format: frame.format,
             size: frame.size,
             ui_renderer: frame.ui_renderer,
         })?;
-        if !drawn {
+        let capture = if drawn {
+            Some(crate::platform::capture_copy(
+                frame.device,
+                &mut encoder,
+                &texture,
+                frame.format,
+            )?)
+        } else {
+            None
+        };
+        frame.queue.submit([encoder.finish()]);
+        let Some(capture) = capture else {
             self.files.save_picture = Some(path);
             return Ok(());
-        }
-        let capture =
-            crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
+        };
         self.files.save_shots.copied(
             crate::platform::Shot {
                 path,
@@ -138,6 +158,7 @@ impl App {
             },
             capture,
         );
+        self.files.save_shots.submitted();
         Ok(())
     }
     pub(super) fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
