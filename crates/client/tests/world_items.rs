@@ -60,7 +60,86 @@ synthetic_and_content!(
     an_effect_streams_from_a_held_image_without_a_muzzle_point,
     a_lying_item_loops_its_idle_sequence_on_the_world_clock,
     a_held_item_part_way_through_a_portal_draws_on_both_sides,
+    a_model_missing_for_a_frame_is_not_built_again,
 );
+
+/// A weapon put away for a frame (a switch, a death and respawn, first
+/// person toggled) or a projectile fired again finds its model still
+/// built: it is not meshed, textured and uploaded a second time. Only the
+/// model budget evicts it, least recently drawn first.
+fn a_model_missing_for_a_frame_is_not_built_again(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let held = WeaponView {
+        images: BTreeMap::from([(7, vec![mounted(&f.right_image, "Ready")])]),
+        static_items: vec![static_item(f, 1, [0., 0., 0.])],
+        ..Default::default()
+    };
+    let pose = |_| {
+        Some(MountPose {
+            eye: Mat4::IDENTITY,
+            mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
+            velocity: Vec3::ZERO,
+            straddle: None,
+        })
+    };
+    adapter.sync(&held, frame(), pose)?;
+    let built = adapter.diagnostics.model_builds;
+    let drawn = adapter.diagnostics.cached_models;
+    assert!(built >= 1 && drawn >= 1);
+    for _ in 0..3 {
+        // Nothing held or lying for a frame, then both again.
+        adapter.sync(&WeaponView::default(), frame(), pose)?;
+        assert_eq!(
+            adapter.instances().count(),
+            0,
+            "an idle model draws nothing"
+        );
+        assert_eq!(adapter.diagnostics.cached_models, 0);
+        let idle = adapter.diagnostics.idle_models;
+        adapter.sync(&held, frame(), pose)?;
+        assert_eq!(adapter.instances().count(), 2);
+        assert_eq!(
+            adapter.diagnostics.model_builds, built,
+            "a model missing for one frame was built again"
+        );
+        assert_eq!(idle, drawn);
+    }
+    let gpu = gpu::turn()?;
+    let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    let uploads = adapter.diagnostics.model_uploads;
+    adapter.sync(&WeaponView::default(), frame(), pose)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    assert!(adapter.draws().is_empty());
+    adapter.sync(&held, frame(), pose)?;
+    adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
+    assert_eq!(adapter.draws().len(), drawn);
+    assert_eq!(adapter.diagnostics.model_uploads, uploads, "textures kept");
+    drop(gpu);
+
+    // A budget of one keeps only the model drawn most recently.
+    let (assets, weapons) = packs(f)?;
+    let mut small = WorldItems::new(
+        assets,
+        weapons,
+        WorldItemLimits {
+            models: 1,
+            ..Default::default()
+        },
+    )?;
+    let lying = WeaponView {
+        static_items: held.static_items.clone(),
+        ..Default::default()
+    };
+    small.sync(&lying, frame(), pose)?;
+    small.sync(&WeaponView::default(), frame(), pose)?;
+    assert_eq!(small.diagnostics.idle_models, 1);
+    small.sync(&lying, frame(), pose)?;
+    assert_eq!(small.diagnostics.model_builds, 1);
+    Ok(())
+}
 
 fn a_held_item_part_way_through_a_portal_draws_on_both_sides(f: &ItemFixture) -> Result<()> {
     let (assets, weapons) = packs(f)?;
