@@ -657,12 +657,26 @@ impl AddOnSettings {
         s.server == self.server && !s.team
     }
     /// The host's revision of what the window shows.
+    /// What the window shows changed when this does. For a mini-game, the
+    /// listing's own revision also counts every score: a point scored
+    /// while the player edits must not rebuild the rows under their mouse.
     fn revision(&self, core: &Core) -> u64 {
+        use std::hash::{Hash, Hasher};
         if self.server {
-            core.admin.revision
-        } else {
-            core.minigames.revision
+            return core.admin.revision;
         }
+        // The status line is this client's own request text, not the host's.
+        let mut shown = core.minigames.clone();
+        shown.revision = 0;
+        shown.status.clear();
+        for m in &mut shown.members {
+            m.score = 0;
+        }
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_vec(&shown)
+            .unwrap_or_default()
+            .hash(&mut hash);
+        hash.finish()
     }
     /// The host's server-wide values, when it shows them to this player.
     fn server_values(core: &Core) -> Option<&BTreeMap<String, MiniGameSettingValue>> {

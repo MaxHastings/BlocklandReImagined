@@ -22,7 +22,8 @@ impl MinigamesWorld {
         }
     }
     /// Set a game's teams and team rules, as its Add-On's policy asks.
-    /// Teams named by an existing id keep their members; teams left out are
+    /// Teams named by an existing id keep their members (an id the game
+    /// has not got makes that slot's team); teams left out are
     /// removed and their members are left with no team. Returns each
     /// spec's team id, in order.
     pub fn set_teams(
@@ -42,14 +43,10 @@ impl MinigamesWorld {
                 return Err(Error::InvalidSettings);
             }
             if let Some(id) = spec.id
-                && (g.teams.get(id).is_none() || !kept.insert(id))
+                && (!TeamId::valid(id) || !kept.insert(id))
             {
                 return Err(Error::StaleTeam);
             }
-        }
-        let new_count = specs.iter().filter(|s| s.id.is_none()).count() as u32;
-        if g.teams.next.checked_add(new_count).is_none() {
-            return Err(Error::Capacity);
         }
         let orphans: Vec<_> = g
             .members
@@ -62,15 +59,18 @@ impl MinigamesWorld {
             .into_iter()
             .map(|t| (t.id, t))
             .collect();
+        // New teams take the lowest slots no spec names; there are at most
+        // MAX_TEAMS specs, so one is always free.
+        let mut free = (1..=MAX_TEAMS as u32)
+            .map(TeamId)
+            .filter(|id| !kept.contains(id));
         let mut ids = Vec::with_capacity(specs.len());
         teams.list = specs
             .into_iter()
             .map(|spec| {
-                let id = spec.id.unwrap_or_else(|| {
-                    let id = TeamId(teams.next);
-                    teams.next += 1;
-                    id
-                });
+                let id = spec
+                    .id
+                    .unwrap_or_else(|| free.next().expect("a free team slot"));
                 ids.push(id);
                 Team {
                     id,

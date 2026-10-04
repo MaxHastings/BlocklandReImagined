@@ -33,6 +33,10 @@ struct SavedMiniGame {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SavedTeam {
+    /// Its slot, which the build's rules name it by (`Team` conditions,
+    /// `setTeam`); a build saved without one takes the lowest free slot.
+    #[serde(default)]
+    id: Option<u32>,
     name: String,
     color: u8,
     #[serde(default)]
@@ -90,6 +94,7 @@ impl Session {
                 .list
                 .iter()
                 .map(|t| SavedTeam {
+                    id: Some(t.id.0),
                     name: t.name.clone(),
                     color: t.color,
                     addon_settings: t.addon_settings.clone(),
@@ -312,12 +317,14 @@ impl Session {
                     value: None,
                 }),
         );
-        let teams = host.settings.has_team_settings().then(|| {
+        // The build's teams replace the game's, each in its saved slot, so
+        // its rules' team references and a kept team's members stay put.
+        let teams = (!saved.teams.is_empty() || !current.teams.list.is_empty()).then(|| {
             saved
                 .teams
                 .iter()
                 .map(|t| TeamEdit {
-                    id: None,
+                    id: t.id,
                     name: t.name.clone(),
                     color: t.color,
                     settings: edits(&t.addon_settings, SettingScope::Team),
@@ -327,7 +334,7 @@ impl Session {
         if settings.is_empty() && teams.is_none() {
             return Ok(());
         }
-        self.edit_settings(editor, game, settings, teams, true)
+        self.edit_settings(editor, game, settings, teams, true, true)
     }
 
     /// Replace the chosen game's declared `per_minigame` entries. Absence
