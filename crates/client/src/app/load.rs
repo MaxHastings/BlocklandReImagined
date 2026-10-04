@@ -250,6 +250,8 @@ impl App {
                 materials: None,
                 query_source: None,
                 query_log: None,
+                chunk_jobs: 0,
+                chunks_rebuilt: 0,
             },
             view: ViewState {
                 crosshair_hidden: false,

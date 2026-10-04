@@ -253,6 +253,7 @@ impl App {
                 // a newer replica is reached by the next incremental update.
                 Ok((chunked, changes)) => {
                     self.scene.chunked = chunked;
+                    self.scene.chunks_rebuilt += changes.len() as u64;
                     for (key, built) in changes {
                         if let Some(built) = built {
                             self.scene.cpu_chunks.insert(key, built.scene);
@@ -337,6 +338,7 @@ impl App {
             let job_left_out = left_out.clone();
             let mut chunked = std::mem::take(&mut self.scene.chunked);
             let (send, receive) = mpsc::sync_channel(1);
+            self.scene.chunk_jobs += 1;
             let load_limit = self.load_limit.clone();
             let task = self.runtime.spawn(async move {
                 let Ok(permit) = load_limit.acquire_owned().await else {

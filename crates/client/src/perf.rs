@@ -297,3 +297,27 @@ pub mod startup {
         bri_console::echo(format!("Startup: {phase} at {} ms", elapsed_ms()));
     }
 }
+
+/// Work the app has done since it loaded, for frame probes and soak tests.
+/// Counts, unlike times, are the same on every machine: in steady play the
+/// costly kinds (whole uploads, model and look builds, passes over the
+/// whole world) must stop growing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct WorkCounters {
+    /// Brick chunk rebuild jobs started and the chunks they rebuilt.
+    pub chunk_jobs: u64,
+    pub chunks_rebuilt: u64,
+    /// What the current scene renderer uploaded (None before the GPU is
+    /// ready). A new renderer (device or map change) starts from zero.
+    pub uploads: Option<bri_render::scene::UploadCounts>,
+    /// World-item (held, lying, thrown) models built and uploaded whole.
+    pub item_model_builds: u64,
+    pub item_model_uploads: u64,
+    /// Debris looks built and uploaded.
+    pub debris_looks_built: u64,
+    /// Music bricks: whole-world passes and bricks examined.
+    pub music_full_scans: u64,
+    pub music_visited: u64,
+    /// Hidden-brick outlines.
+    pub hidden_outlines: crate::hidden_outlines::HiddenOutlineDiagnostics,
+}
