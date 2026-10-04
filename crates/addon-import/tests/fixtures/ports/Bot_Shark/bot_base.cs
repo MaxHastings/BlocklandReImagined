@@ -1,6 +1,6 @@
 datablock fxDTSBrickData (BrickSharkBot_HoleSpawnData)
 {
-	brickFile = "./hole.blb";
+	brickFile = "Add-Ons/Bot_Hole/8xSpawn.blb";
 	category = "Special";
 	subCategory = "Holes";
 	uiName = "Shark Hole";
@@ -23,6 +23,7 @@ datablock PlayerData(SharkHoleBot : PlayerStandardArmor)
 	hSearch = 1;
 	hSearchRadius = 85;
 	hMelee = 1;
+	hMeleeCI = "FixtureSharkBite";
 	hAttackDamage = 0;
 };
 
@@ -36,6 +37,9 @@ datablock PlayerData(SharkHoleBotBottom : SharkHoleBot)
 {
 	density = 10;
 };
+
+// Invented declaration; the source importer must retain type-only policy.
+AddDamageType("FixtureSharkBite", '%1 bitten', '%2 bit %1', 0.5, 1);
 
 function SharkHoleBot::onAdd(%this,%obj)
 {

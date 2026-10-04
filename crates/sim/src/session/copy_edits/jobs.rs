@@ -146,7 +146,8 @@ impl CopyWork for CutWork {
             ..Default::default()
         }
     }
-    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+    fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor.actor = s.live_copy_actor(owner, Some(bri_minigames::BuildAction::Build))?;
         if !self.check.step(s, &self.actor, &self.ids, budget)? {
             return Ok(false);
         }
@@ -285,7 +286,8 @@ impl CopyWork for PaintWork {
             ..Default::default()
         }
     }
-    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+    fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor.actor = s.live_copy_actor(owner, Some(bri_minigames::BuildAction::Paint))?;
         if !self.check.step(s, &self.actor, &self.ids, budget)? {
             return Ok(false);
         }
@@ -418,7 +420,8 @@ impl CopyWork for WrenchWork {
             ..Default::default()
         }
     }
-    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+    fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor.actor = s.live_copy_actor(owner, Some(bri_minigames::BuildAction::Build))?;
         let tick = s.simulation.state().tick;
         let mut changed = Vec::new();
         let mut stocked = Vec::new();

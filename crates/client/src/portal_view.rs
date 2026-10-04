@@ -208,6 +208,20 @@ impl Straddle {
     }
 }
 
+/// A first-person body's copies stay hidden from a virtual camera occupying
+/// that body's eye, just as from the main camera. `eye` is the body's
+/// uncarried camera anchor, not the main camera which may already be through. Other portal and mirror views
+/// still see it. The small tolerance covers the reflection clip-plane clearance;
+/// it is not a distance-based body fade or a portal-wide visibility switch.
+pub fn first_person_body_visible(eye: Vec3, virtual_eye: Vec3, straddle: Option<Straddle>) -> bool {
+    const EYE_CLEARANCE: f32 = 0.02;
+    let at_eye = |at: Vec3| at.distance_squared(virtual_eye) <= EYE_CLEARANCE * EYE_CLEARANCE;
+    if at_eye(eye) {
+        return false;
+    }
+    straddle.is_none_or(|s| !at_eye(s.carry.transform_point3(eye)))
+}
+
 /// Everywhere something at `target` shows to an eye at `eye`, as its body
 /// does: straight on, unless an opening's view covers it there, and in
 /// each opening whose view shows it, with the points the sight goes into
@@ -241,6 +255,124 @@ pub struct SeenAt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portal_views_hide_only_the_first_person_body_at_their_own_eye() {
+        use bri_content::passage::Passage;
+        use bri_render::reflection::{Looks, Mirror, ReflectionSettings, plan};
+        use bri_render::scene::Camera;
+        for turn in [0.0, FRAC_PI_2, PI] {
+            let a = Affine3A::from_translation(Vec3::new(3.0, 2.0, -7.0));
+            let b = Affine3A::from_translation(Vec3::new(23.0, 4.0, 11.0))
+                * Affine3A::from_rotation_y(turn);
+            let half = Affine3A::from_rotation_y(PI);
+            let carry = b * half * a.inverse();
+            let opening = |brick, pose: Affine3A, carry| Passage {
+                brick,
+                centre: pose.transform_point3(Vec3::ZERO),
+                normal: pose.transform_vector3(Vec3::Z),
+                u: pose.transform_vector3(Vec3::X),
+                v: Vec3::Y,
+                half: glam::Vec2::splat(2.0),
+                carry,
+            };
+            let passages = Passages {
+                list: vec![opening(1, a, carry), opening(2, b, carry.inverse())],
+                closed: vec![],
+            };
+            let window = |pose: Affine3A, carry: Affine3A| Mirror {
+                corners: [
+                    Vec3::new(-2.0, -2.0, 0.0),
+                    Vec3::new(2.0, -2.0, 0.0),
+                    Vec3::new(2.0, 2.0, 0.0),
+                    Vec3::new(-2.0, 2.0, 0.0),
+                ]
+                .map(|p| pose.transform_point3(p)),
+                tint: [1.0; 3],
+                strength: 1.0,
+                looks: Looks::Through(glam::Mat4::from(carry.inverse())),
+                fallback: [0.0; 3],
+                recess: 0.2,
+            };
+            let windows = [window(a, carry), window(b, carry.inverse())];
+            for crossed_eye in [false, true] {
+                let middle = a.transform_point3(Vec3::new(0.0, 0.0, 0.15));
+                let raw_eye =
+                    a.transform_point3(Vec3::new(0.0, 0.0, if crossed_eye { -0.1 } else { 0.25 }));
+                let (eye, _) = through(raw_eye, (0.0, 0.0, 0.0), None, middle, &passages);
+                // Once the eye crosses, look back at the still-straddling body.
+                let forward = if crossed_eye {
+                    carry.transform_vector3(Vec3::Z)
+                } else {
+                    Vec3::NEG_Z
+                };
+                let camera = Camera::perspective(
+                    eye.to_array(),
+                    (eye + forward).to_array(),
+                    1.0,
+                    1.0,
+                    0.05,
+                    100.0,
+                );
+                let views = plan(
+                    &windows,
+                    glam::Mat4::from_cols_array(&camera.view_projection),
+                    eye,
+                    &ReflectionSettings::HIGH,
+                    (128, 128),
+                );
+                assert!(
+                    !views.planes.is_empty(),
+                    "crossing must actually render a portal: turn={turn} crossed_eye={crossed_eye} eye={eye:?}"
+                );
+                let straddle =
+                    Straddle::find(&passages, middle, 0.9).expect("body spans the opening");
+                let near_view = views
+                    .planes
+                    .iter()
+                    .find(|v| {
+                        v.eye.distance(raw_eye) < 0.001
+                            || v.eye.distance(carry.transform_point3(raw_eye)) < 0.001
+                    })
+                    .expect("portal camera occupies one of the split body's eyes");
+                assert!(!first_person_body_visible(
+                    raw_eye,
+                    near_view.eye,
+                    Some(straddle)
+                ));
+                // A distant view of this same split body still shows it; so does
+                // an ordinary mirror. Neither depends on the content's name.
+                assert!(first_person_body_visible(
+                    raw_eye,
+                    near_view.eye + Vec3::Y * 2.0,
+                    Some(straddle)
+                ));
+                assert!(first_person_body_visible(eye, eye + Vec3::X * 3.0, None));
+            }
+        }
+    }
+
+    #[test]
+    fn a_portal_cannot_hide_a_body_at_a_nonexistent_inverse_eye_copy() {
+        let eye = Vec3::new(1.0, 2.0, 3.0);
+        let carry = Affine3A::from_translation(Vec3::new(20.0, 0.0, 0.0))
+            * Affine3A::from_rotation_y(FRAC_PI_2);
+        let straddle = Straddle {
+            carry,
+            near: [0.0, 0.0, 1.0, 0.0],
+            far: [1.0, 0.0, 0.0, -20.0],
+        };
+        assert!(!first_person_body_visible(
+            eye,
+            carry.transform_point3(eye),
+            Some(straddle)
+        ));
+        assert!(first_person_body_visible(
+            eye,
+            carry.inverse().transform_point3(eye),
+            Some(straddle)
+        ));
+    }
 
     #[test]
     fn a_name_shows_where_the_portal_shows_its_body() {

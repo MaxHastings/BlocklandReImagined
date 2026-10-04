@@ -14,8 +14,14 @@ main is the only GitHub branch. See the
 The full content-backed local gate passed before publication. Max authorized
 publication while the full Windows CI test suite was still running; its result
 is available in the [Windows check](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37161683721).
+That check subsequently failed one repeated physical-object-entry hold journey
+(13 other physical-objective checks passed). Diagnosis and the current
+[v0.2.3 engineering pass](v023-work-plan.md) are on the local
+`codex/v0.2.3-proactive-hardening` branch; fixes under test are not yet released.
 
-Start with the [short mutation guide](rule-workshop/V0.2.2-PLAYTEST.md).
+For the public v0.2.2 build, use its [mutation guide](rule-workshop/V0.2.2-PLAYTEST.md).
+For the v0.2.3 candidate, use the [player checks](rule-workshop/V0.2.3-PLAYTEST.md)
+and [release notes](rule-workshop/V0.2.3-RELEASE-NOTES.md).
 The [delivery contract](v022-delivery-contract.md),
 [current bot architecture](architecture/bots.md) and
 [objective integration audit](audits/objective-driven-integration.md)
@@ -29,10 +35,26 @@ JPEG screenshots and longer cosmetic destruction debris are integrated.
 The Rule Workshop, objective planning and alpha formats remain experimental.
 Bots do not infer arbitrary scripts or plan jet-assisted object carrying/high
 hoop throws; unfamiliar Add-On mechanisms need declarations. Recovered Dynamic
-lamps approximate lost metadata, and bulb material/model polish is deferred.
+lamps approximate lost metadata, and bulb model/broader lighting polish is deferred.
+The v0.2.3 candidate corrects authored-unlit Dynamic material assignment and
+opaque shadow participation, with [offscreen evidence](progress/2026-10-03-v023-authored-unlit.md);
+bulb models and broader lighting fidelity remain separate work.
 Shark/Zombie fidelity remains partial. The reported Windows firefight NaN crash
 remains unreproduced, and sustained performance coverage is incomplete; no causal
 fix or Windows speedup is claimed. The full alpha contract remains open.
+
+The current candidate also preserves missing favorite resource IDs, tracks combined
+MiniGame/Add-On saves through each acknowledgment, and protects pending drafts.
+See the [creator review](progress/2026-10-03-v023-creator-cohesion-review.md).
+[Stability evidence](progress/2026-10-03-v023-stability-lane-verification.md)
+records saved MiniGame state, persistent Add-On choices, live vehicle recoloring,
+join preparation and mounted portal checks. The
+[admin refresh fix](progress/2026-10-03-v023-admin-refresh.md) closes a demonstrated
+cached-state race. Portal correction refinements, full release gate, Windows CI,
+platform archive verification and Maxwell's acceptance remain separate evidence.
+The reported death/disconnect, destruction/respawn hitches and tank retreat/cover
+behavior have no established causal fix; scoped diagnostic/control results do not
+close those reports.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in

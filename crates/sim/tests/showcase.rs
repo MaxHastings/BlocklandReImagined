@@ -2050,3 +2050,162 @@ fn a_held_thing_carried_through_a_portal_stays_held() {
     let turned = rotation(&g, crate_).angle_between(grip);
     assert!(turned < 0.15, "at the angle they held it: turned {turned}");
 }
+
+/// Trust is granted by two verified humans through ordinary commands. The
+/// actual selected image's trigger (not a direct package command) must catch
+/// both generic vehicle geometry and the shipped heavy ball, then demotion
+/// must end that real grip through the existing live permission recheck.
+#[test]
+fn full_trust_grants_actual_gravity_gun_controls_over_another_players_bodies() {
+    for definition in [CRATE, BALL] {
+        let mut g = Game::new();
+        let a = g.join_verified("Ann", Vec3::new(0.0, 0.05, 0.0), 1);
+        let b = g.join_verified("Bob", Vec3::new(12.0, 0.05, 0.0), 2);
+        let body =
+            g.s.spawn_vehicle_at(b, definition, Vec3::new(0.0, 1.3, -6.0), 0.0, Vec3::ZERO)
+                .unwrap();
+        let target = ObjectRef::Vehicle(body);
+        g.s.give_tool(a, GUN, true).unwrap();
+        g.steps(60);
+        assert!(!g.s.may_move(a, target), "no grant yet: {definition}");
+        trigger(&mut g, a, true);
+        g.steps(15);
+        assert_eq!(
+            g.s.held_by(a),
+            None,
+            "untrusted native trigger: {definition}"
+        );
+        trigger(&mut g, a, false);
+        g.steps(15);
+        g.cmd(
+            a,
+            Command::TrustInvite {
+                target: b,
+                level: 2,
+            },
+        )
+        .unwrap();
+        g.cmd(b, Command::AcceptTrust { from: a }).unwrap();
+        assert!(
+            g.s.may_move(a, target),
+            "Full was actually granted: {definition}"
+        );
+        trigger(&mut g, a, true);
+        g.steps(15);
+        assert_eq!(
+            g.s.held_by(a),
+            Some(target),
+            "native trigger acquired trusted {definition}"
+        );
+        let before = g.vehicle(body).unwrap().0;
+        g.look(a, 0.0, 0.3);
+        g.steps(60);
+        assert_eq!(
+            g.s.held_by(a),
+            Some(target),
+            "live grip retained: {definition}"
+        );
+        assert!(
+            g.vehicle(body).unwrap().0.y > before.y + 0.25,
+            "real heavy body lifted: {definition}"
+        );
+        g.cmd(
+            a,
+            Command::DemoteTrust {
+                target: b,
+                level: 0,
+            },
+        )
+        .unwrap();
+        g.steps(40);
+        assert!(!g.s.may_move(a, target));
+        assert_eq!(
+            g.s.held_by(a),
+            None,
+            "revoked trust ends the actual grip: {definition}"
+        );
+    }
+}
+
+/// The ordinary departure leaves Bob's spawn brick and its live physical
+/// body. Full trust lets Ann's mini-game adopt Bob's absent brick group via
+/// its existing canonical group resolver; the same spawn body must not
+/// continue consulting only the absent account's old mini-game membership.
+#[test]
+fn a_departed_full_trusted_spawn_group_keeps_the_same_gravity_permission_as_its_brick() {
+    let mut g = Game::new();
+    let a = g.join_verified("Ann", Vec3::new(0.0, 0.05, 0.0), 1);
+    let b = g.join_verified("Bob", Vec3::new(12.0, 0.05, 0.0), 2);
+    g.cmd(
+        a,
+        Command::TrustInvite {
+            target: b,
+            level: 2,
+        },
+    )
+    .unwrap();
+    g.cmd(b, Command::AcceptTrust { from: a }).unwrap();
+    let brick = ball_brick(&mut g, b, 0.0);
+    g.steps(60);
+    let body = g
+        .vehicles_of(BALL)
+        .into_iter()
+        .next()
+        .expect("actual spawn body");
+    let independent =
+        g.s.spawn_vehicle_at(b, BALL, Vec3::new(-12.0, 1.3, -6.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.s.disconnect(b).unwrap();
+    g.looks.remove(&b);
+    g.minigame(a, &[]);
+    // The existing trusted setup edit proves the actual grant covers Bob's
+    // retained brick group; no trust/hold state is injected into the fixture.
+    g.s.edit_brick(a, brick, Edit::Color(0)).unwrap();
+    assert!(
+        !g.s.may_move(a, ObjectRef::Vehicle(independent)),
+        "a loose package body does not inherit a different spawn brick's group"
+    );
+    g.s.give_tool(a, GUN, true).unwrap();
+    let centre = g.vehicle(body).unwrap().0;
+    let direction = centre - (g.feet(a) + Vec3::Y * 1.65);
+    g.look(
+        a,
+        direction.x.atan2(-direction.z),
+        direction
+            .y
+            .atan2(Vec3::new(direction.x, 0.0, direction.z).length()),
+    );
+    g.steps(60);
+    trigger(&mut g, a, true);
+    g.steps(15);
+    assert_eq!(
+        g.s.held_by(a),
+        Some(ObjectRef::Vehicle(body)),
+        "same canonical brick-group permission must reach ordinary native grab"
+    );
+    let before = g.vehicle(body).unwrap().0;
+    g.look(a, std::f32::consts::PI, 0.3);
+    g.steps(60);
+    assert_eq!(g.s.held_by(a), Some(ObjectRef::Vehicle(body)));
+    assert!(
+        g.vehicle(body).unwrap().0.y > before.y + 0.25,
+        "actual body moved after permission admission"
+    );
+    let mut settings = g.s.minigame_views()[0].settings.clone();
+    settings.vehicle_damage = false;
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Configure { settings }),
+    )
+    .unwrap();
+    assert!(
+        !g.s.may_move(a, ObjectRef::Vehicle(body)),
+        "canonical group resolution must still honor disabled VehicleDamage"
+    );
+    g.steps(40);
+    assert_eq!(
+        g.s.held_by(a),
+        None,
+        "ordinary live hold permission is rechecked"
+    );
+}

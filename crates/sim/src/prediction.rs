@@ -417,6 +417,13 @@ pub struct DriveSpawn {
 /// (`GameConnection` moves, `Vehicle::processTick` on the ghost) and
 /// corrects it from the server's state; this does the same with the host's
 /// own vehicle code and one input per 120 Hz tick.
+/// One newly simulated trip of the driven body. The entry is observed
+/// from its authoritative motor/physics middle, independent of the model root.
+#[derive(Clone, Copy)]
+pub struct DriveCrossing {
+    pub carry: glam::Affine3A,
+    pub entry: Option<bri_content::passage::Passage>,
+}
 struct Drive {
     world: bri_vehicles::VehiclesWorld,
     id: bri_vehicles::VehicleId,
@@ -431,9 +438,15 @@ struct Drive {
     /// pending input is measured from it, as the host measures it.
     base: Option<MoveInput>,
     restored_tick: Option<u64>,
+    acknowledged: u64,
+    frame: bri_content::passage::PassageFrame,
+    vehicle_origin: bri_content::passage::PassageFrame,
+    rider_origin: bri_content::passage::PassageFrame,
     /// The predicted body before and after the newest step.
     previous: bri_vehicles::Transform,
     current: bri_vehicles::Transform,
+    previous_centre: Vec3,
+    current_centre: Vec3,
 }
 impl Drive {
     fn step(
@@ -441,7 +454,8 @@ impl Drive {
         mirror: &mut CollisionMirror,
         input: &MoveInput,
         last: Option<&MoveInput>,
-    ) -> Result<()> {
+    ) -> Result<Option<DriveCrossing>> {
+        let from = self.world.centre(&mirror.physics, self.id);
         let last = last.map_or((input.yaw, input.pitch), |l| (l.yaw, l.pitch));
         let controls = match self.actor {
             Some(horse) => crate::session::actor_controls(input, false, horse),
@@ -449,30 +463,88 @@ impl Drive {
         };
         self.world
             .set_controls(self.occupant.owner, self.occupant.id, controls)?;
-        self.world.pre_step(&mut mirror.physics, &mirror.waters)?;
+        let actor_passed = self
+            .world
+            .pre_step_through(
+                &mut mirror.physics,
+                &mirror.waters,
+                &mirror.chunks,
+                mirror.links.passages(),
+            )?
+            .into_iter()
+            .find_map(|(id, carry)| (id == self.id).then_some(carry));
         let before = self.world.centre(&mirror.physics, self.id);
         mirror.physics.step();
         self.world.post_step(&mut mirror.physics)?;
         self.world.drain_intents();
         self.previous = self.current.clone();
+        self.previous_centre = self.current_centre;
         // Through an opening of a linked brick, as the host carries it; the
         // step it was drawn from is carried too, so it never slides across.
         let after = self.world.centre(&mirror.physics, self.id);
-        if let (Some(before), Some(after)) = (before, after)
-            && let (_, Some(carry)) = mirror.links.passages().travel(before, after)
-        {
-            self.world.carry(&mut mirror.physics, self.id, &carry)?;
+        let passed = match actor_passed {
+            Some(carry) => Some(carry),
+            None => match (before, after) {
+                (Some(before), Some(after)) => {
+                    let (_, carry) = mirror.links.passages().travel(before, after);
+                    if let Some(carry) = &carry {
+                        self.world.carry(&mut mirror.physics, self.id, carry)?;
+                    }
+                    carry
+                }
+                _ => None,
+            },
+        };
+        if let Some(carry) = passed {
+            self.frame.advance(&carry);
+            self.previous_centre = carry.transform_point3(self.previous_centre);
             let (_, turn, _) = carry.to_scale_rotation_translation();
-            let at = carry.transform_point3(glam::Vec3::from(self.previous.position));
+            let previous = glam::Vec3::from(self.previous.position);
+            let at = if self.actor.is_some() {
+                let snapshot = self
+                    .world
+                    .vehicle_snapshot(&mirror.physics, self.id)
+                    .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))?;
+                let middle = self
+                    .world
+                    .centre(&mirror.physics, self.id)
+                    .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))?
+                    .y
+                    - snapshot.transform.position[1];
+                bri_motor::player::carry_feet(&carry, previous, middle)
+            } else {
+                carry.transform_point3(previous)
+            };
+            let rotation = glam::Quat::from_array(self.previous.rotation);
+            let rotation = if self.actor.is_some() {
+                let forward = rotation * Vec3::NEG_Z;
+                let yaw = forward.x.atan2(-forward.z);
+                glam::Quat::from_rotation_y(-bri_content::passage::carried_yaw(&carry, yaw))
+            } else {
+                turn * rotation
+            };
             self.previous = bri_vehicles::Transform {
                 position: at.to_array(),
-                rotation: (turn * glam::Quat::from_array(self.previous.rotation))
-                    .normalize()
-                    .to_array(),
+                rotation: rotation.normalize().to_array(),
             };
         }
         self.current = self.body(mirror)?;
-        Ok(())
+        self.current_centre = self
+            .world
+            .shown_centre(&mirror.physics, self.id)
+            .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))?;
+        Ok(passed.map(|carry| {
+            let entry = from
+                .zip(self.world.centre(&mirror.physics, self.id))
+                .and_then(|(from, to)| {
+                    mirror
+                        .links
+                        .passages()
+                        .first(from, carry.inverse().transform_point3(to))
+                })
+                .map(|(entry, _)| *entry);
+            DriveCrossing { carry, entry }
+        }))
     }
     fn body(&self, mirror: &CollisionMirror) -> Result<bri_vehicles::Transform> {
         self.world
@@ -486,6 +558,9 @@ pub struct Predictor {
     player: Player,
     /// The vehicle this client drives, predicted like the body is.
     drive: Option<Drive>,
+    /// Newly predicted trips only; correcting/replaying an old pose does
+    /// not announce a trip again to the camera or input frame.
+    drive_passed: Option<DriveCrossing>,
     /// The host's archetype table, from its checkpoint.
     archetypes: Archetypes,
     pending: VecDeque<(u64, MoveInput)>,
@@ -496,6 +571,7 @@ pub struct Predictor {
     tool_jet: bool,
     sequence: u64,
     acknowledged: u64,
+    frame: bri_content::passage::PassageFrame,
     server_tick: Option<u64>,
     /// Other players' bodies at their latest poses: the motor bumps into
     /// and pushes off them as it does on the host.
@@ -515,15 +591,29 @@ impl Predictor {
             world,
             player,
             drive: None,
+            drive_passed: None,
             archetypes,
             pending: VecDeque::new(),
             motor: VecDeque::new(),
             tool_jet: false,
             sequence: 0,
             acknowledged: 0,
+            frame: Default::default(),
             server_tick: None,
             others: BTreeMap::new(),
         })
+    }
+    pub fn passage_frame(&self, driving: bool) -> bri_content::passage::PassageFrame {
+        if driving {
+            self.drive.as_ref().map_or(self.frame, |d| d.frame)
+        } else {
+            self.frame
+        }
+    }
+    pub fn set_passage_frame(&mut self, frame: bri_content::passage::PassageFrame) -> Result<()> {
+        ensure!(frame.valid(), "Invalid passage frame");
+        self.frame = frame;
+        Ok(())
     }
     pub fn state(&self) -> &PlayerState {
         self.player.state()
@@ -629,6 +719,9 @@ impl Predictor {
             self.pending.pop_front();
             self.motor.pop_front();
         }
+        if let Some(carry) = events.passed {
+            self.frame.advance(&carry);
+        }
         self.pending.push_back((sequence, input));
         self.motor.push_back(motor);
         self.sequence = sequence;
@@ -657,8 +750,18 @@ impl Predictor {
             }
             drive.pending.push_back((sequence, input));
             self.world.stream_terrain();
-            if let Err(error) = drive.step(&mut self.world, &input, last.as_ref()) {
-                self.stop_drive(Some(&error));
+            match drive.step(&mut self.world, &input, last.as_ref()) {
+                Ok(Some(crossing)) => {
+                    self.drive_passed = Some(match self.drive_passed {
+                        Some(old) => DriveCrossing {
+                            carry: crossing.carry * old.carry,
+                            entry: old.entry,
+                        },
+                        None => crossing,
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => self.stop_drive(Some(&error)),
             }
         }
         Ok(sequence)
@@ -667,7 +770,13 @@ impl Predictor {
     /// the rider is solid again. Never fails; a copy that is already gone
     /// has nothing left to remove. `why` is logged when prediction failed,
     /// and the vehicle is then shown at the host's poses.
+    /// Consume trips made by newly recorded driving inputs, in order.
+    /// Authoritative correction replays do not publish old trips again.
+    pub fn take_drive_passed(&mut self) -> Option<DriveCrossing> {
+        self.drive_passed.take()
+    }
     fn stop_drive(&mut self, why: Option<&anyhow::Error>) {
+        self.drive_passed = None;
         let Some(mut old) = self.drive.take() else {
             return;
         };
@@ -693,6 +802,7 @@ impl Predictor {
         let Some((pack, setup, motion)) = vehicle else {
             return Ok(());
         };
+        ensure!(motion.passage_frame.valid(), "Invalid driven passage frame");
         let mut world = bri_vehicles::VehiclesWorld::new(pack)?;
         world.set_prediction(true);
         let mut spawn = setup.spawn;
@@ -726,6 +836,9 @@ impl Predictor {
         world.drain_intents();
         // The host's seated riders are sensors, so its vehicle never hits them.
         self.player.set_solid(&mut self.world.physics, false);
+        let centre = world
+            .shown_centre(&self.world.physics, id)
+            .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))?;
         self.drive = Some(Drive {
             world,
             id,
@@ -735,9 +848,32 @@ impl Predictor {
             pending: VecDeque::new(),
             base: None,
             restored_tick: None,
+            acknowledged: 0,
+            frame: self.frame,
+            vehicle_origin: motion.passage_frame,
+            rider_origin: self.frame,
             previous: motion.transform.clone(),
             current: motion.transform,
+            previous_centre: centre,
+            current_centre: centre,
         });
+        Ok(())
+    }
+    /// Anchor a driven body's independent history to the same-tick rider pose.
+    pub fn anchor_drive_frame(
+        &mut self,
+        vehicle: bri_content::passage::PassageFrame,
+        rider: bri_content::passage::PassageFrame,
+        current: bri_content::passage::PassageFrame,
+    ) -> Result<()> {
+        let frame = current
+            .rebased(&vehicle, &rider)
+            .ok_or_else(|| anyhow::anyhow!("Invalid driven frame anchor"))?;
+        if let Some(drive) = &mut self.drive {
+            drive.vehicle_origin = vehicle;
+            drive.rider_origin = rider;
+            drive.frame = frame;
+        }
         Ok(())
     }
     /// The driven vehicle's steering prefs changed.
@@ -757,13 +893,30 @@ impl Predictor {
         driver_input: u64,
         motion: &bri_vehicles::Motion,
     ) -> Result<Option<bri_vehicles::Transform>> {
+        if self
+            .drive
+            .as_ref()
+            .is_some_and(|d| d.restored_tick.is_some_and(|old| old >= tick))
+        {
+            return Ok(None);
+        }
+        if self.drive.is_some() && driver_input > self.sequence {
+            let error = anyhow::anyhow!("Invalid future vehicle movement acknowledgement");
+            self.stop_drive(Some(&error));
+            return Ok(None);
+        }
         let Some(drive) = &mut self.drive else {
             return Ok(None);
         };
         if drive.restored_tick.is_some_and(|old| old >= tick) {
             return Ok(None);
         }
+        if driver_input < drive.acknowledged {
+            return Ok(None);
+        }
+        ensure!(motion.passage_frame.valid(), "Invalid driven passage frame");
         drive.restored_tick = Some(tick);
+        drive.acknowledged = driver_input;
         while drive
             .pending
             .front()
@@ -776,8 +929,17 @@ impl Predictor {
             drive
                 .world
                 .restore_motion(&mut self.world.physics, drive.id, motion)?;
+            drive.frame = motion
+                .passage_frame
+                .rebased(&drive.vehicle_origin, &drive.rider_origin)
+                .ok_or_else(|| anyhow::anyhow!("Invalid driven frame anchor"))?;
             drive.current = motion.transform.clone();
             drive.previous = motion.transform.clone();
+            drive.current_centre = drive
+                .world
+                .shown_centre(&self.world.physics, drive.id)
+                .ok_or_else(|| anyhow::anyhow!("Predicted vehicle is gone"))?;
+            drive.previous_centre = drive.current_centre;
             let inputs: Vec<MoveInput> = drive.pending.iter().map(|(_, i)| *i).collect();
             let mut last = drive.base;
             for input in &inputs {
@@ -798,27 +960,52 @@ impl Predictor {
             .as_ref()
             .map(|d| (d.id.0, &d.previous, &d.current))
     }
+    /// Travel middles at the two shown poses; rendering interpolates these
+    /// to decide when the mounted view has reached a pending crossing.
+    pub fn driven_centres(&self) -> Option<(Vec3, Vec3)> {
+        self.drive
+            .as_ref()
+            .map(|d| (d.previous_centre, d.current_centre))
+    }
+    /// Player-type mounts remain upright and travel by their motor middle.
+    pub fn drive_actor_middle(&self) -> Option<f32> {
+        let d = self.drive.as_ref()?;
+        d.actor.map(|_| d.current_centre.y - d.current.position[1])
+    }
     /// The most recent inputs, oldest first, for redundant datagrams.
     pub fn recent(&self, count: usize) -> impl Iterator<Item = &(u64, MoveInput)> {
         self.pending
             .iter()
             .skip(self.pending.len().saturating_sub(count))
     }
+    /// Read-only admission shared with presentation, which must reject a stale
+    /// body/ack before changing spawn identity or pending passage state.
+    pub fn admits_pose(&self, tick: u64, ack: u64, owner: bri_world::OwnerId) -> Result<bool> {
+        if self.server_tick.is_some_and(|old| old >= tick) {
+            return Ok(false);
+        }
+        ensure!(
+            ack <= self.sequence && owner == self.player.state().owner,
+            "Invalid movement acknowledgement"
+        );
+        Ok(ack >= self.acknowledged)
+    }
     /// Apply an authoritative pose. Returns the visual discontinuity
     /// (old predicted feet minus corrected feet) so the renderer can blend it
     /// out, or `None` when the pose is older than one already applied.
-    pub fn reconcile(&mut self, tick: u64, ack: u64, state: PlayerState) -> Result<Option<Vec3>> {
-        if self.server_tick.is_some_and(|old| old >= tick) {
+    pub fn reconcile(
+        &mut self,
+        tick: u64,
+        ack: u64,
+        state: PlayerState,
+        frame: bri_content::passage::PassageFrame,
+    ) -> Result<Option<Vec3>> {
+        if !self.admits_pose(tick, ack, state.owner)? {
             return Ok(None);
         }
-        ensure!(
-            ack <= self.sequence && state.owner == self.player.state().owner,
-            "Invalid movement acknowledgement"
-        );
-        if ack < self.acknowledged {
-            return Ok(None);
-        }
+        ensure!(frame.valid(), "Invalid passage frame");
         let predicted = self.player.state().clone();
+        self.frame = frame;
         let tuning = self.archetypes.tuning(state.archetype, state.scale);
         self.player
             .restore(&mut self.world.physics, state, tuning)?;
@@ -832,13 +1019,16 @@ impl Predictor {
             self.motor.pop_front();
         }
         for input in &self.motor {
-            self.player.step_through(
+            let events = self.player.step_through(
                 &mut self.world.physics,
                 *input,
                 &self.world.waters,
                 &self.world.chunks,
                 self.world.links.passages(),
             )?;
+            if let Some(carry) = events.passed {
+                self.frame.advance(&carry);
+            }
         }
         self.server_tick = Some(tick);
         self.acknowledged = ack;

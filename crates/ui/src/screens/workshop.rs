@@ -398,7 +398,8 @@ impl Screen for Explain {
             .lines_since(self.cursor)
             .iter()
             .filter_map(|l| l.text.strip_prefix(&prefix).map(str::to_string))
-            .take(16)
+            // Saved count + region + four NPC summaries + twelve row traces.
+            .take(18)
             .collect();
         if !lines.is_empty() && lines != self.lines {
             self.lines = lines;
@@ -517,6 +518,60 @@ mod tests {
             &mut ui.core,
         );
         assert!(s.request.is_none());
+    }
+    #[test]
+    fn native_explain_keeps_scoped_npc_feedback_and_the_newest_trace_at_its_bound() {
+        let mut ui = fixture();
+        ui.core.push(ScreenId::RuleExplain(7));
+        ui.update(0);
+        let request = ui
+            .drain_actions()
+            .into_iter()
+            .find_map(|(id, action)| match action {
+                UiAction::ChatCommand { name, args } if name == "ruleexplain" && args == ["7"] => {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .expect("opening Explain requests saved events through its ordinary command");
+        ui.apply(crate::api::UiUpdate::Chat {
+            text: "[NPC unrelated] unrelated global summary".into(),
+        });
+        ui.apply(crate::api::UiUpdate::Chat {
+            text: "[Events 8] [NPC other] unrelated brick".into(),
+        });
+        for line in [
+            "[Events 7] 1 saved rows",
+            "[Events 7] Region: 1 wide, 4 high, 1 deep; 0 inside",
+        ] {
+            ui.apply(crate::api::UiUpdate::Chat { text: line.into() });
+        }
+        for index in 0..4 {
+            ui.apply(crate::api::UiUpdate::Chat {
+                text: format!("[Events 7] [NPC Author {index}] unsupported rule semantics"),
+            });
+        }
+        for index in 1..=12 {
+            ui.apply(crate::api::UiUpdate::Chat {
+                text: format!("[Events 7] Row {index}: check observed"),
+            });
+        }
+        ui.apply(crate::api::UiUpdate::ActionResult {
+            id: request,
+            result: Ok(()),
+        });
+        let view = ui.screen(ScreenId::RuleExplain(7)).unwrap().view();
+        let shown = view
+            .walk()
+            .map(|node| view.edit_text(node))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("[NPC Author 3] unsupported rule semantics"));
+        assert!(
+            shown.contains("Row 12: check observed"),
+            "last real trace remains visible: {shown}"
+        );
+        assert!(!shown.contains("unrelated"));
     }
     #[test]
     fn explain_reads_only_new_results_for_this_brick_and_keeps_errors_visible() {

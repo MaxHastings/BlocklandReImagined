@@ -388,3 +388,135 @@ mod tests {
         assert!(passages.ways(a, wide, 50.0).all(|w| w.carry.is_none()));
     }
 }
+
+/// A body's passage coordinate frame. The revision records actual trips, while
+/// the cumulative rigid transform distinguishes different routes after relinking.
+/// It survives removal of the openings that produced it.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PassageFrame {
+    pub revision: u64,
+    pub rotation: [f32; 4],
+    pub translation: [f32; 3],
+}
+impl Default for PassageFrame {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            rotation: glam::Quat::IDENTITY.to_array(),
+            translation: [0.; 3],
+        }
+    }
+}
+impl PassageFrame {
+    pub fn transform(&self) -> Affine3A {
+        Affine3A::from_rotation_translation(
+            glam::Quat::from_array(self.rotation),
+            Vec3::from(self.translation),
+        )
+    }
+    pub fn advance(&mut self, carry: &Affine3A) {
+        let (_, turn, _) = carry.to_scale_rotation_translation();
+        self.rotation = (turn * glam::Quat::from_array(self.rotation))
+            .normalize()
+            .to_array();
+        self.translation = carry
+            .transform_point3(Vec3::from(self.translation))
+            .to_array();
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Passage frame revision exhausted");
+    }
+    /// A canonical frame correction, not a distance or plane-side inference.
+    pub fn difference(&self, before: &Self) -> Option<Affine3A> {
+        (*self != *before).then(|| self.transform() * before.transform().inverse())
+    }
+    /// Express a vehicle's travel since boarding in its rider's body frame.
+    pub fn rebased(&self, vehicle: &Self, rider: &Self) -> Option<Self> {
+        let trips = self.revision.checked_sub(vehicle.revision)?;
+        if self == vehicle {
+            return Some(*rider);
+        }
+        let carry = self.transform() * vehicle.transform().inverse();
+        let (_, turn, _) = carry.to_scale_rotation_translation();
+        let frame = Self {
+            revision: rider.revision.checked_add(trips)?,
+            rotation: (turn * glam::Quat::from_array(rider.rotation))
+                .normalize()
+                .to_array(),
+            translation: carry
+                .transform_point3(Vec3::from(rider.translation))
+                .to_array(),
+        };
+        frame.valid().then_some(frame)
+    }
+    pub fn valid(&self) -> bool {
+        let rotation = glam::Quat::from_array(self.rotation);
+        rotation.is_finite()
+            && (rotation.length_squared() - 1.).abs() < 1e-3
+            // Leave arithmetic headroom for replay and frame differences.
+            && self.revision <= u64::MAX / 2
+            && Vec3::from(self.translation).is_finite()
+            && Vec3::from(self.translation).abs().max_element() <= f32::MAX / 16.
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    #[test]
+    fn boarding_rebases_independent_vehicle_history_and_later_carries() {
+        let mut vehicle = PassageFrame::default();
+        vehicle.advance(&Affine3A::from_translation(Vec3::new(200., 0., 50.)));
+        let mut rider = PassageFrame::default();
+        rider.advance(&Affine3A::from_translation(Vec3::new(-30., 0., 2.)));
+        assert_eq!(vehicle.rebased(&vehicle, &rider), Some(rider));
+        let carry = Affine3A::from_rotation_translation(
+            glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            Vec3::new(0.5, 0., 0.),
+        );
+        let mut later = vehicle;
+        later.advance(&carry);
+        let mut actual_rider = rider;
+        actual_rider.advance(&carry);
+        let mapped = later.rebased(&vehicle, &rider).unwrap();
+        assert_eq!(mapped.revision, actual_rider.revision);
+        assert!(
+            mapped
+                .transform()
+                .transform_point3(Vec3::new(1., 2., 3.))
+                .abs_diff_eq(
+                    actual_rider
+                        .transform()
+                        .transform_point3(Vec3::new(1., 2., 3.)),
+                    1e-4
+                )
+        );
+        assert!(vehicle.rebased(&later, &rider).is_none());
+    }
+    #[test]
+    fn an_equal_revision_with_a_changed_route_has_a_real_frame_correction() {
+        let a = Affine3A::from_rotation_translation(glam::Quat::IDENTITY, Vec3::new(0.5, 0., 0.));
+        let b = Affine3A::from_rotation_translation(
+            glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            Vec3::new(0.5, 0., 0.),
+        );
+        let mut predicted = PassageFrame::default();
+        predicted.advance(&a);
+        let mut actual = PassageFrame::default();
+        actual.advance(&b);
+        assert_eq!(predicted.revision, actual.revision);
+        assert_ne!(
+            predicted, actual,
+            "revision alone cannot identify the accepted route"
+        );
+        let correction = actual.difference(&predicted).unwrap();
+        let point = Vec3::new(1., 2., 3.);
+        assert!(
+            correction
+                .transform_point3(predicted.transform().transform_point3(point))
+                .abs_diff_eq(actual.transform().transform_point3(point), 1e-5)
+        );
+        assert!(actual.valid() && predicted.valid());
+    }
+}

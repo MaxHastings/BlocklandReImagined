@@ -180,6 +180,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
         && a.wheel_contact == b.wheel_contact
         && a.jetting == b.jetting
         && a.driver_steering == b.driver_steering
+        && a.passage_frame == b.passage_frame
 }
 
 /// The host's record of what it last sent of each item.
@@ -284,6 +285,8 @@ impl StateStream {
                 Some(last)
                     if player_same(&last.state.player, &pose.player)
                         && last.state.spawn_tick == pose.spawn_tick
+                        && last.state.passage_frame == pose.passage_frame
+                        && last.state.passage_vehicle == pose.passage_vehicle
                         && tick < last.tick + OWN_IDLE =>
                 {
                     false
@@ -523,6 +526,8 @@ mod tests {
     }
     fn pose(owner: OwnerId, tick: u64, x: f32) -> Pose {
         Pose {
+            passage_frame: Default::default(),
+            passage_vehicle: None,
             tick,
             acknowledged_input: tick,
             spawn_tick: 0,
@@ -811,6 +816,7 @@ mod tests {
             let tick = interval * POSE_INTERVAL;
             let noise = if interval % 2 == 0 { 0.0 } else { 1e-5 };
             let vehicle = VehiclePose {
+                passage_frame: Default::default(),
                 id: 7,
                 tick,
                 position: [noise; 3],

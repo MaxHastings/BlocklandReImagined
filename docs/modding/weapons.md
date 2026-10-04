@@ -69,6 +69,9 @@ base game art. Put `<icon>.render.json` beside it:
   "look": { "skin": {} } }
 ```
 
+`clockwise_quarter_turns` optionally rotates the icon on screen by 0 to 3
+clockwise quarter turns (default 0), preserving its model, lighting and skin.
+
 `pose_like` names a stock item: its model is fitted to its own icon's
 outline to find the side profile it was drawn in (which way its nose
 points across the picture, and how far it is tipped and turned). Your model

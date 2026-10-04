@@ -246,6 +246,8 @@ fn main() -> Result<()> {
             let t = Instant::now();
             for (player, acknowledged_input) in session.motion_states() {
                 let bytes = bri_net::codec::encode_datagram(&Datagram::Pose(Pose {
+                    passage_frame: Default::default(),
+                    passage_vehicle: None,
                     tick: now,
                     acknowledged_input,
                     player,

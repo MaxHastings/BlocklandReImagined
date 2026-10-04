@@ -130,6 +130,7 @@ fn validate_vehicles(vehicles: &[bri_sim::session::VehicleInfo]) -> Result<()> {
 fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
     ensure!(
         pose.id > 0
+            && pose.passage_frame.valid()
             && pose
                 .position
                 .iter()
@@ -556,6 +557,13 @@ impl Replica {
         std::mem::take(&mut self.cues)
     }
     pub fn pose(&mut self, pose: Pose) -> Result<()> {
+        ensure!(
+            pose.passage_frame.valid()
+                && pose
+                    .passage_vehicle
+                    .is_none_or(|(id, frame)| id > 0 && frame.valid()),
+            "Invalid passage frame"
+        );
         let p = &pose.player;
         ensure!(
             p.owner > 0

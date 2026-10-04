@@ -19,6 +19,9 @@ pub const MAP_TAG: u128 = u128::MAX;
 /// stock layouts dip up to half a plate in (Kitchen's Town 0.084, a Bedroom
 /// shelf 0.062, Pirate World 0.034) and it never refuses such a placement.
 pub const FLOOR_DIP: f32 = 0.1;
+/// Synchronous placement cannot yield. Refuse pathological support queries
+/// explicitly instead of scanning millions of cells or buckets in one tick.
+const SUPPORT_QUERY_LIMIT: u32 = 256;
 /// Why a brick could not be planted. Clients show the original plant-error
 /// icons for these rather than a generic rejection message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -53,6 +56,150 @@ pub struct Builder<'a> {
     pub position: Vec3,
     pub reach: f32,
 }
+/// Required-support validation shared by direct group placement and sliced
+/// blueprint jobs. Native per-brick checks feed it before any group is published.
+#[derive(Default)]
+pub(crate) struct GroupSupport {
+    // Only identity/rotation/occupancy are needed to inspect stud connections.
+    // Keep gameplay metadata and copied events out of the preflight state.
+    shapes: Vec<(String, u8)>,
+    bounds: Vec<Bounds>,
+    index: Index,
+    roots: Vec<bool>,
+    cut: Vec<bool>,
+    pending: Vec<usize>,
+    current: Option<(usize, grid::QueryCursor)>,
+    connection: Option<(usize, usize, grid::ConnectionCells)>,
+    verify: usize,
+    remaining: usize,
+    supported: bool,
+    obstructed: bool,
+}
+impl GroupSupport {
+    pub(crate) fn check(&mut self, sim: &Simulation, actor: &Actor, brick: &Brick) -> Result<bool> {
+        let (rooted, blocked) = check_placement_support(
+            sim.state(),
+            &sim.definitions,
+            &sim.index,
+            &sim.physics,
+            sim.terrain.as_ref(),
+            actor,
+            brick,
+        )?;
+        let bounds = Bounds::new(brick, &sim.definitions.get(brick)?.mesh)?;
+        let bri_world::ContentRef::Resolved(id) = &brick.definition else {
+            anyhow::bail!("Unresolved brick definition");
+        };
+        let (min, max) = grid::bucket_span(bounds);
+        let buckets = (0..3).fold(1u64, |n, a| {
+            n.saturating_mul((i64::from(max[a]) - i64::from(min[a]) + 1) as u64)
+        });
+        if buckets > SUPPORT_QUERY_LIMIT as u64 {
+            return Err(PlantFailure::Limit.into());
+        }
+        let i = self.shapes.len();
+        self.index.insert(i as BrickId, bounds);
+        self.shapes.push((id.clone(), brick.quarter_turns));
+        self.bounds.push(bounds);
+        self.roots.push(rooted);
+        self.cut.push(blocked);
+        self.supported |= rooted;
+        self.obstructed |= blocked;
+        if rooted {
+            self.pending.push(i);
+        } else {
+            self.remaining += 1;
+        }
+        Ok(rooted)
+    }
+    pub(crate) fn step(&mut self, sim: &Simulation, budget: &mut u32) -> Result<bool> {
+        if self.remaining == 0 {
+            return Ok(true);
+        }
+        if !self.supported {
+            return if self.obstructed {
+                Err(PlantFailure::Buried.into())
+            } else {
+                Ok(true)
+            };
+        }
+        let is_terrain = |handle| {
+            sim.terrain
+                .as_ref()
+                .is_some_and(|t| t.is_terrain_collider(handle))
+        };
+        let map_surface = |handle, c: &Collider| c.user_data == MAP_TAG && !is_terrain(handle);
+        let query = sim
+            .physics
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&map_surface));
+        loop {
+            if self.remaining == 0 {
+                return Ok(true);
+            }
+            if let Some((i, j, cells)) = self.connection.as_mut() {
+                if !spend(budget, work::SEARCH) {
+                    return Ok(false);
+                }
+                let am = &sim.definitions.by_id(&self.shapes[*j].0)?.mesh;
+                let bm = &sim.definitions.by_id(&self.shapes[*i].0)?.mesh;
+                match cells.next(self.shapes[*j].1, am, self.shapes[*i].1, bm) {
+                    Some((cell, neighbor, true)) => {
+                        if map_connector_clear(&query, cell, neighbor) {
+                            self.roots[*j] = true;
+                            self.remaining -= 1;
+                            self.pending.push(*j);
+                            self.connection = None;
+                        } else {
+                            self.cut[*j] = true;
+                        }
+                    }
+                    Some(_) => {}
+                    None => self.connection = None,
+                }
+                continue;
+            }
+            if let Some((i, neighbors)) = self.current.as_mut() {
+                if !spend(budget, work::SCAN) {
+                    return Ok(false);
+                }
+                match neighbors.step(&self.index) {
+                    Some(Some(j)) if !self.roots[j as usize] => {
+                        let j = j as usize;
+                        self.connection = Some((
+                            *i,
+                            j,
+                            grid::ConnectionCells::new(self.bounds[j], self.bounds[*i]),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => self.current = None,
+                }
+                continue;
+            }
+            if let Some(i) = self.pending.last().copied() {
+                if !spend(budget, work::SEARCH) {
+                    return Ok(false);
+                }
+                self.pending.pop();
+                self.current = Some((i, grid::QueryCursor::new(self.bounds[i].expanded(1))));
+                continue;
+            }
+            // A failed connector matters only if no alternate clear route
+            // reached that member. Disconnected-group policy is unchanged.
+            while self.verify < self.roots.len() {
+                if !spend(budget, work::SCAN) {
+                    return Ok(false);
+                }
+                let i = self.verify;
+                self.verify += 1;
+                if !self.roots[i] && self.cut[i] {
+                    return Err(PlantFailure::Buried.into());
+                }
+            }
+            return Ok(true);
+        }
+    }
+}
 /// The surface normal a hit reports, always a unit vector. A ray that
 /// starts inside a shape hits it at distance zero with no normal (the a16
 /// shell-casing crash normalized that into NaN); that surface faces back
@@ -84,6 +231,8 @@ pub struct Simulation {
     /// (address and count); water bricks changing clears it.
     liquids: std::sync::OnceLock<(usize, usize, Liquids)>,
     index: Index,
+    /// Build-support topology, independent of moving bodies and paint/name edits.
+    support_epoch: u64,
     /// Colliders of the bricks that keep one of their own (sensors: not
     /// colliding, or water). Solid bricks are parts of `chunks`.
     handles: BTreeMap<BrickId, ColliderHandle>,
@@ -107,6 +256,14 @@ pub struct Simulation {
     /// Bricks whose stack belongs to someone else than their owner (see
     /// [`Self::stack_owner`]). Not saved, as v20's `stackBL_ID` was not.
     stacks: std::collections::HashMap<BrickId, bri_world::OwnerId>,
+}
+fn support_identity(brick: &Brick) -> (bri_world::ContentRef, [f32; 3], u8, bri_world::OwnerId) {
+    (
+        brick.definition.clone(),
+        brick.position,
+        brick.quarter_turns,
+        brick.owner,
+    )
 }
 fn definition_key(brick: &Brick) -> Option<&str> {
     match &brick.definition {
@@ -272,6 +429,7 @@ impl Simulation {
             brick_waters,
             liquids: std::sync::OnceLock::new(),
             index,
+            support_epoch: 0,
             handles,
             chunks,
             parked: Default::default(),
@@ -322,9 +480,30 @@ impl Simulation {
             self.links.passages(),
         )
     }
+    /// Step vehicle actors against the same current chunks and linked
+    /// openings as `step_body`, before the shared physics step.
+    pub fn step_vehicle_bodies(
+        &mut self,
+        vehicles: &mut bri_vehicles::VehiclesWorld,
+        waters: &[bri_content::water::Water],
+    ) -> Result<Vec<(bri_vehicles::VehicleId, glam::Affine3A)>> {
+        self.flush_chunks();
+        self.links
+            .flush(&self.authority.state().bricks, &self.definitions);
+        vehicles.pre_step_through(
+            &mut self.physics,
+            waters,
+            &self.chunks,
+            self.links.passages(),
+        )
+    }
+    pub(crate) fn support_epoch(&self) -> u64 {
+        self.support_epoch
+    }
     /// Give a brick in the world its collision: a part of its chunk (built
     /// at the next flush) or, for a sensor, a collider of its own.
     fn attach(&mut self, id: BrickId) -> Result<()> {
+        self.support_epoch = self.support_epoch.wrapping_add(1);
         let brick = &self.authority.state().bricks[&id];
         let definition = self.definitions.get(brick)?;
         if definition.link.is_some() {
@@ -343,6 +522,7 @@ impl Simulation {
     /// chunk, waking bodies resting on it, or its own collider handed back
     /// for `parking`.
     fn detach(&mut self, id: BrickId) -> Option<ColliderHandle> {
+        self.support_epoch = self.support_epoch.wrapping_add(1);
         self.note_link(id);
         if let Some(handle) = self.handles.remove(&id) {
             return Some(handle);
@@ -414,7 +594,22 @@ impl Simulation {
                 self.chunks.note_changed(&collider.compute_aabb());
             }
         }
-        set_enabled(&mut self.physics, &self.map_handles, colliders, enabled)
+        let changed = self
+            .map_handles
+            .get(colliders.clone())
+            .unwrap_or_default()
+            .iter()
+            .any(|h| {
+                self.physics
+                    .colliders
+                    .get(*h)
+                    .is_some_and(|c| c.is_enabled() != enabled)
+            });
+        set_enabled(&mut self.physics, &self.map_handles, colliders, enabled)?;
+        if changed {
+            self.support_epoch = self.support_epoch.wrapping_add(1);
+        }
+        Ok(())
     }
     /// Record where fixed collision changes (bricks, map shapes) for
     /// [`Self::take_collision_changes`], or stop.
@@ -440,6 +635,7 @@ impl Simulation {
         let mut stream = crate::map::TerrainStream::new(fields, MAP_TAG, anchors)?;
         stream.update(&mut self.physics);
         self.terrain = Some(stream);
+        self.support_epoch = self.support_epoch.wrapping_add(1);
         Ok(())
     }
     /// Refresh streamed terrain after bodies were added or moved outside a
@@ -807,7 +1003,7 @@ impl Simulation {
         }
         let definition = self.definitions.get(&brick)?;
         let bounds = Bounds::new(&brick, &definition.mesh)?;
-        let supported = check_placement(
+        let (supported, obstructed) = check_placement_support(
             self.authority.state(),
             &self.definitions,
             &self.index,
@@ -817,7 +1013,12 @@ impl Simulation {
             &brick,
         )?;
         if !supported && !free {
-            return Err(PlantFailure::Float.into());
+            return Err(if obstructed {
+                PlantFailure::Buried
+            } else {
+                PlantFailure::Float
+            }
+            .into());
         }
         let id = self.authority.plant(actor, brick, |_, _| Ok(()))?;
         self.attach(id)?;
@@ -871,24 +1072,22 @@ impl Simulation {
         if self.state().bricks.len() + bricks.len() > bri_world::MAX_BRICKS {
             return Err(PlantFailure::Limit.into());
         }
-        let mut supported = false;
-        let mut prepared = Vec::with_capacity(bricks.len());
+        let mut preflight = GroupSupport::default();
         for brick in &bricks {
-            let definition = self.definitions.get(brick)?;
-            supported |= check_placement(
-                self.authority.state(),
-                &self.definitions,
-                &self.index,
-                &self.physics,
-                self.terrain.as_ref(),
-                actor,
-                brick,
-            )?;
-            prepared.push(Bounds::new(brick, &definition.mesh)?);
+            preflight.check(self, actor, brick)?;
         }
-        if !supported && needs_support {
-            return Err(PlantFailure::Float.into());
+        if needs_support {
+            // The direct API drains the same preflight that copy jobs advance
+            // under their existing shared per-tick work budget.
+            let mut budget = SUPPORT_QUERY_LIMIT * work::SEARCH;
+            if !preflight.step(self, &mut budget)? {
+                return Err(PlantFailure::Limit.into());
+            }
+            if !preflight.supported {
+                return Err(PlantFailure::Float.into());
+            }
         }
+        let prepared = preflight.bounds;
         let mut ids = Vec::with_capacity(bricks.len());
         for brick in bricks {
             let placed = if restore {
@@ -1127,7 +1326,11 @@ impl Simulation {
     /// change to the brick's collision refreshes collisions: paint, names
     /// and event rows cost no chunk rebuild or physics pass.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
+        let before = self.state().bricks.get(&id).map(support_identity);
         self.authority.mutate(id, change)?;
+        if self.state().bricks.get(&id).map(support_identity) != before {
+            self.support_epoch = self.support_epoch.wrapping_add(1);
+        }
         self.note_link(id);
         if self.sync_flags(id) {
             self.detect_collisions();
@@ -1143,7 +1346,11 @@ impl Simulation {
     ) -> Result<()> {
         let mut changed = false;
         for &id in ids {
+            let before = self.state().bricks.get(&id).map(support_identity);
             self.authority.mutate(id, &mut change)?;
+            if self.state().bricks.get(&id).map(support_identity) != before {
+                self.support_epoch = self.support_epoch.wrapping_add(1);
+            }
             self.note_link(id);
             changed |= self.sync_flags(id);
         }
@@ -1728,8 +1935,15 @@ fn validate_placement(
     if distance > builder.reach + radius {
         return Err(PlantFailure::TooFar.into());
     }
-    if !check_placement(world, defs, index, physics, terrain, builder.actor, brick)? {
-        return Err(PlantFailure::Float.into());
+    let (supported, obstructed) =
+        check_placement_support(world, defs, index, physics, terrain, builder.actor, brick)?;
+    if !supported {
+        return Err(if obstructed {
+            PlantFailure::Buried
+        } else {
+            PlantFailure::Float
+        }
+        .into());
     }
     Ok(())
 }
@@ -1746,25 +1960,77 @@ fn check_placement(
     actor: &Actor,
     brick: &Brick,
 ) -> Result<bool> {
+    check_placement_support(world, defs, index, physics, terrain, actor, brick)
+        .map(|(supported, _)| supported)
+}
+fn check_placement_support(
+    world: &World,
+    defs: &Definitions,
+    index: &Index,
+    physics: &PhysicsWorld,
+    terrain: Option<&crate::map::TerrainStream>,
+    actor: &Actor,
+    brick: &Brick,
+) -> Result<(bool, bool)> {
     let definition = defs.get(brick)?;
     let bounds = Bounds::new(brick, &definition.mesh)?;
     if overlaps_world(world, defs, index, brick, &definition.mesh, bounds)? {
         return Err(PlantFailure::Overlap.into());
     }
+    // A brick cannot provide support through an authored map surface. Test the
+    // exact matching stud cells rather than inferring a filled volume from an
+    // arbitrary (possibly open or disconnected) triangle mesh.
+    let is_terrain = |handle| terrain.is_some_and(|t| t.is_terrain_collider(handle));
+    let map_surface = |handle, c: &Collider| c.user_data == MAP_TAG && !is_terrain(handle);
+    let support_query =
+        physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_surface));
     let mut supported = false;
-    for id in index.query(bounds.expanded(1)) {
+    let mut obstructed_support = false;
+    let mut work_left = SUPPORT_QUERY_LIMIT;
+    let mut candidates = grid::QueryCursor::new(bounds.expanded(1));
+    loop {
+        if work_left == 0 {
+            return Err(PlantFailure::Limit.into());
+        }
+        work_left -= 1;
+        let Some(candidate) = candidates.step(index) else {
+            break;
+        };
+        let Some(id) = candidate else {
+            continue;
+        };
         let existing = &world.bricks[&id];
         let other = defs.get(existing)?;
-        let ob = index.bounds(id);
-        if grid::connected(
-            (brick, &definition.mesh, bounds),
-            (existing, &other.mesh, ob),
-        ) {
+        let mut cells = grid::ConnectionCells::new(bounds, index.bounds(id));
+        let mut attached = false;
+        let mut clear = false;
+        loop {
+            if work_left == 0 {
+                return Err(PlantFailure::Limit.into());
+            }
+            work_left -= 1;
+            let Some((cell, neighbor, matches)) = cells.next(
+                brick.quarter_turns,
+                &definition.mesh,
+                existing.quarter_turns,
+                &other.mesh,
+            ) else {
+                break;
+            };
+            if !matches {
+                continue;
+            }
+            attached = true;
             if !may_build_on(actor, existing) {
                 return Err(PlantFailure::Forbidden.into());
             }
-            supported = true;
+            if map_connector_clear(&support_query, cell, neighbor) {
+                clear = true;
+                break;
+            }
         }
+        supported |= clear;
+        obstructed_support |= attached && !clear;
     }
     let placement = pose(brick);
     // Some authored hulls extend below their logical build grid (the stock pine
@@ -1776,17 +2042,19 @@ fn check_placement(
         (-(definition.mesh.height_plates as f32) * 0.1 - local_bottom).max(0.0);
     let aabb = definition.shape.compute_aabb(&placement);
     let query = physics.query_pipeline();
-    // Terrain is judged by `buried` below, not by contact: v20 deploys a
+    // Terrain is judged by `buried_bounded` below, not by contact: v20 deploys a
     // ghost aimed at terrain 0.1 into it, and a level brick on a slope dips
     // into the uphill side, so terrain may reach above a brick's bottom.
-    let is_terrain = |handle| terrain.is_some_and(|t| t.is_terrain_collider(handle));
-    for (_, obstacle) in query
-        .intersect_aabb_conservative(aabb)
-        .filter(|(handle, c)| {
-            (c.user_data == MAP_TAG && !is_terrain(*handle))
-                || (!c.is_sensor() && c.parent().is_some_and(|p| !physics.bodies[p].is_fixed()))
-        })
-    {
+    for (handle, obstacle) in query.intersect_aabb_conservative(aabb) {
+        probe_spend(&mut work_left)?;
+        let eligible = (obstacle.user_data == MAP_TAG && !is_terrain(handle))
+            || (!obstacle.is_sensor()
+                && obstacle
+                    .parent()
+                    .is_some_and(|p| !physics.bodies[p].is_fixed()));
+        if !eligible {
+            continue;
+        }
         if let Some(contact) = rapier3d::parry::query::contact(
             &placement,
             definition.shape.as_ref(),
@@ -1811,27 +2079,105 @@ fn check_placement(
             }
         }
     }
-    if terrain.is_some_and(|t| buried(t, bounds)) {
+    if let Some(t) = terrain
+        && buried_bounded(t, bounds, &mut work_left)?
+    {
         return Err(PlantFailure::Buried.into());
     }
-    // The chain-kill root test: a brick the map holds up stays ground.
-    Ok(supported || on_ground(physics, terrain, bounds))
+    // Preserve the normal floor-dip/terrain root rule even when a different
+    // neighboring connection is obstructed. Any clear stud connection suffices.
+    let grounded = !supported && ground_probe(physics, terrain, bounds, Some(&mut work_left))?;
+    Ok((supported || grounded, obstructed_support))
+}
+/// A stud pair is a local physical connection, not a volume classification.
+fn map_connector_clear(query: &QueryPipeline<'_>, cell: [i32; 3], neighbor: [i32; 3]) -> bool {
+    let center = |p: [i32; 3]| {
+        Vector::from_array(std::array::from_fn(|axis| {
+            (p[axis] as f32 + 0.5) * grid::CELL[axis]
+        }))
+    };
+    let origin = center(cell);
+    let delta = center(neighbor) - origin;
+    let reach = delta.length();
+    query
+        .cast_ray_and_get_normal(&Ray::new(origin, delta / reach), reach, true)
+        .is_none_or(|(_, hit)| {
+            // A root plate may dip into an upward map floor by FLOOR_DIP;
+            // its cell centre can lie on that floor. Joining it from above
+            // remains valid. Joining through the floor from below does not.
+            delta.y < 0.0 && hit.normal.y > 0.7 && hit.time_of_impact >= reach - 0.002
+        })
+}
+fn probe_spend(left: &mut u32) -> Result<()> {
+    if *left == 0 {
+        return Err(PlantFailure::Limit.into());
+    }
+    *left -= 1;
+    Ok(())
 }
 /// A brick is buried when the terrain surface stands above its top over its
 /// whole footprint: nothing of it would show. Partly sunk bricks plant, as
 /// v20's own terrain deploy sinks them. (The exact v20 engine test is not
 /// available; this is the documented approximation.)
-fn buried(terrain: &crate::map::TerrainStream, bounds: Bounds) -> bool {
+fn buried_bounded(
+    terrain: &crate::map::TerrainStream,
+    bounds: Bounds,
+    left: &mut u32,
+) -> Result<bool> {
     const ABOVE: f32 = 1000.0;
     let top = bounds.max()[1] as f32 * 0.2;
-    (bounds.min[2]..bounds.max()[2]).all(|z| {
-        (bounds.min[0]..bounds.max()[0]).all(|x| {
+    for z in bounds.min[2]..bounds.max()[2] {
+        for x in bounds.min[0]..bounds.max()[0] {
+            probe_spend(left)?;
             let origin = Vec3::new((x as f32 + 0.5) * 0.5, top + ABOVE, (z as f32 + 0.5) * 0.5);
-            terrain
+            if !terrain
                 .cast_ray(origin, Vec3::NEG_Y, ABOVE * 2.0)
                 .is_some_and(|(distance, _)| top + ABOVE - distance > top + 0.002)
-        })
-    })
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+fn ground_probe(
+    physics: &PhysicsWorld,
+    terrain: Option<&crate::map::TerrainStream>,
+    bounds: Bounds,
+    mut left: Option<&mut u32>,
+) -> Result<bool> {
+    let map_filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
+    let query = physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_filter));
+    let bottom = bounds.min[1] as f32 * 0.2;
+    let top = bounds.max()[1] as f32 * 0.2;
+    for z in bounds.min[2]..bounds.max()[2] {
+        for x in bounds.min[0]..bounds.max()[0] {
+            if let Some(left) = left.as_deref_mut() {
+                probe_spend(left)?;
+            }
+            let origin = Vec3::new((x as f32 + 0.5) * 0.5, top, (z as f32 + 0.5) * 0.5);
+            let reach = top - bottom + 0.1;
+            let floor = query
+                .cast_ray_and_get_normal(
+                    &Ray::new(Vector::from_array(origin.to_array()), -Vector::Y),
+                    reach,
+                    true,
+                )
+                .is_some_and(|(_, h)| h.normal.y > 0.5 && top - h.time_of_impact <= bottom + 0.1);
+            let ground = if let Some(t) = terrain {
+                if let Some(left) = left.as_deref_mut() {
+                    probe_spend(left)?;
+                }
+                t.cast_ray(origin, Vec3::NEG_Y, reach).is_some()
+            } else {
+                false
+            };
+            if floor || ground {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 /// The one "rests on the map" rule, for planting and chain-kill alike.
 /// v20's plant-time ground probe, approximately: a ray from the brick's top
@@ -1844,26 +2190,6 @@ fn on_ground(
     terrain: Option<&crate::map::TerrainStream>,
     bounds: Bounds,
 ) -> bool {
-    let map_filter = |_: ColliderHandle, c: &Collider| c.user_data == MAP_TAG;
-    let query = physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_filter));
-    let bottom = bounds.min[1] as f32 * 0.2;
-    let top = bounds.max()[1] as f32 * 0.2;
-    for z in bounds.min[2]..bounds.max()[2] {
-        for x in bounds.min[0]..bounds.max()[0] {
-            let origin = Vec3::new((x as f32 + 0.5) * 0.5, top, (z as f32 + 0.5) * 0.5);
-            let reach = top - bottom + 0.1;
-            let floor = query
-                .cast_ray_and_get_normal(
-                    &Ray::new(Vector::from_array(origin.to_array()), -Vector::Y),
-                    reach,
-                    true,
-                )
-                .is_some_and(|(_, h)| h.normal.y > 0.5 && top - h.time_of_impact <= bottom + 0.1);
-            let ground = terrain.is_some_and(|t| t.cast_ray(origin, Vec3::NEG_Y, reach).is_some());
-            if floor || ground {
-                return true;
-            }
-        }
-    }
-    false
+    ground_probe(physics, terrain, bounds, None)
+        .expect("Unbounded ground probe cannot exhaust work")
 }

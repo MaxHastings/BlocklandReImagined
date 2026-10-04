@@ -246,6 +246,7 @@ impl Viewer {
 
 fn pose(tick: u64, v: &bri_vehicles::world::VehicleSnapshot) -> VehiclePose {
     VehiclePose {
+        passage_frame: Default::default(),
         id: 1,
         tick,
         position: v.transform.position,
@@ -372,6 +373,7 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
         wire: false,
     };
     let at = |tick: u64, speed: f32| VehiclePose {
+        passage_frame: Default::default(),
         id: 1,
         tick,
         position: [0., 50., -(tick as f32) * speed / 120.],

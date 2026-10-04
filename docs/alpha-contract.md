@@ -1,8 +1,8 @@
 # Playable alpha contract — complete vanilla v20 scope
 
 **Current handoff:** [STATUS.md](STATUS.md) records the public release and
-current decisions; [v022-delivery-contract.md](v022-delivery-contract.md) defines
-the next release. This document remains the complete vanilla roadmap. The
+current decisions; [v022-delivery-contract.md](v022-delivery-contract.md) records
+the v0.2.2 delivery scope. This document remains the complete vanilla roadmap. The
 [first-playtest contract](playtest-contract.md) records the earlier building
 handoff, rather than the current release gate. Unchecked roadmap items do not
 prevent a separately authorized alpha release.

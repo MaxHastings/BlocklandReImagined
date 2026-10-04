@@ -109,28 +109,148 @@ pub fn overlaps(a: (&Brick, &Mesh, Bounds), b: (&Brick, &Mesh, Bounds)) -> bool 
     })
 }
 pub fn connected(a: (&Brick, &Mesh, Bounds), b: (&Brick, &Mesh, Bounds)) -> bool {
-    for direction in [-1, 1] {
-        let shifted = Bounds {
-            min: [b.2.min[0], b.2.min[1] - direction, b.2.min[2]],
-            size: b.2.size,
-        };
-        if a.2.intersection(shifted).is_some_and(|intersection| {
-            intersection.any(|p| {
-                let mut neighbor = p;
-                neighbor[1] += direction;
-                let ca = a.2.cell(p, a.0.quarter_turns, a.1);
-                let cb = b.2.cell(neighbor, b.0.quarter_turns, b.1);
-                if direction == 1 {
-                    b"bu".contains(&ca) && b"bd".contains(&cb)
-                } else {
-                    b"bd".contains(&ca) && b"bu".contains(&cb)
-                }
-            })
-        }) {
+    connected_where(a, b, |_, _| true)
+}
+/// The same rotated authored attachment cells, with a placement-time test for
+/// whether the space between each matching pair actually permits a connection.
+pub(crate) fn connected_where(
+    a: (&Brick, &Mesh, Bounds),
+    b: (&Brick, &Mesh, Bounds),
+    allowed: impl FnMut([i32; 3], [i32; 3]) -> bool,
+) -> bool {
+    connected_shapes_where(
+        (a.0.quarter_turns, a.1, a.2),
+        (b.0.quarter_turns, b.1, b.2),
+        allowed,
+    )
+}
+/// Compact placement preflight uses the identical authored attachment predicate
+/// without retaining a whole gameplay brick or copying its settings/events.
+pub(crate) fn connected_shapes_where(
+    a: (u8, &Mesh, Bounds),
+    b: (u8, &Mesh, Bounds),
+    mut allowed: impl FnMut([i32; 3], [i32; 3]) -> bool,
+) -> bool {
+    let mut cells = ConnectionCells::new(a.2, b.2);
+    while let Some((cell, neighbor, attached)) = cells.next(a.0, a.1, b.0, b.1) {
+        if attached && allowed(cell, neighbor) {
             return true;
         }
     }
     false
+}
+/// One raw attachment cell per step, including authored empty cells. Callers
+/// can charge work before advancing; no large mesh hides an inner scan.
+#[derive(Clone)]
+pub(crate) struct ConnectionCells {
+    a: Bounds,
+    b: Bounds,
+    direction: i32,
+    next: Option<[i32; 3]>,
+    intersection: Option<Bounds>,
+}
+impl ConnectionCells {
+    pub(crate) fn new(a: Bounds, b: Bounds) -> Self {
+        let mut out = Self {
+            a,
+            b,
+            direction: -1,
+            next: None,
+            intersection: None,
+        };
+        out.begin();
+        out
+    }
+    fn begin(&mut self) {
+        let shifted = Bounds {
+            min: [self.b.min[0], self.b.min[1] - self.direction, self.b.min[2]],
+            size: self.b.size,
+        };
+        self.intersection = self.a.intersection(shifted);
+        self.next = self.intersection.map(|b| b.min);
+    }
+    pub(crate) fn next(
+        &mut self,
+        at: u8,
+        am: &Mesh,
+        bt: u8,
+        bm: &Mesh,
+    ) -> Option<([i32; 3], [i32; 3], bool)> {
+        if self.next.is_none() && self.direction == -1 {
+            self.direction = 1;
+            self.begin();
+        }
+        let p = self.next?;
+        let bounds = self.intersection.unwrap();
+        let max = bounds.max();
+        let mut next = p;
+        next[0] += 1;
+        if next[0] == max[0] {
+            next[0] = bounds.min[0];
+            next[1] += 1;
+        }
+        if next[1] == max[1] {
+            next[1] = bounds.min[1];
+            next[2] += 1;
+        }
+        self.next = (next[2] < max[2]).then_some(next);
+        let mut neighbor = p;
+        neighbor[1] += self.direction;
+        let ca = self.a.cell(p, at, am);
+        let cb = self.b.cell(neighbor, bt, bm);
+        let attached = if self.direction == 1 {
+            b"bu".contains(&ca) && b"bd".contains(&cb)
+        } else {
+            b"bd".contains(&ca) && b"bu".contains(&cb)
+        };
+        Some((p, neighbor, attached))
+    }
+}
+/// A bounded spatial query cursor. Each step visits at most one bucket entry
+/// (or one empty bucket), without eagerly collecting a potentially huge set.
+pub(crate) struct QueryCursor {
+    bounds: Bounds,
+    min: [i32; 3],
+    max: [i32; 3],
+    key: Option<[i32; 3]>,
+    entry: usize,
+}
+impl QueryCursor {
+    pub(crate) fn new(bounds: Bounds) -> Self {
+        let (min, max) = bucket_span(bounds);
+        Self {
+            bounds,
+            min,
+            max,
+            key: Some(min),
+            entry: 0,
+        }
+    }
+    pub(crate) fn step(&mut self, index: &Index) -> Option<Option<BrickId>> {
+        let key = self.key?;
+        let entries = index.bucket_bounds((key[0], key[1], key[2]));
+        if let Some(&(id, bounds)) = entries.get(self.entry) {
+            self.entry += 1;
+            let admitted = bounds.intersection(self.bounds).is_some_and(|overlap| {
+                // Report an id only in the first bucket shared by both boxes.
+                bucket_span(overlap).0 == key
+            });
+            return Some(admitted.then_some(id));
+        }
+        self.entry = 0;
+        let mut next = key;
+        next[2] += 1;
+        if next[2] > self.max[2] {
+            next[2] = self.min[2];
+            next[1] += 1;
+        }
+        if next[1] > self.max[1] {
+            next[1] = self.min[1];
+            next[0] += 1;
+        }
+        self.key = (next[0] <= self.max[0]).then_some(next);
+        Some(None)
+    }
 }
 // Eight-unit buckets. All authored cells remain in the templates, not expanded
 // into one hash entry per voxel for every placed brick.
@@ -510,5 +630,101 @@ mod tests {
         assert!(index.query(original).contains(&1));
         index.remove(1);
         assert!(index.query(original).is_empty());
+    }
+    #[test]
+    fn connection_filter_checks_only_rotated_attachment_pairs_and_accepts_any_clear_pair() {
+        let mut m = mesh();
+        m.attachment_rows = vec!["bb".into()];
+        for turn in 0..4 {
+            let position = if turn % 2 == 0 {
+                [0.5, 0.1, 0.25]
+            } else {
+                [0.25, 0.1, 0.5]
+            };
+            let (mut lower, _) = placed(&m, position, turn);
+            lower.quarter_turns = turn;
+            let bounds = Bounds::new(&lower, &m).unwrap();
+            let mut upper = lower.clone();
+            upper.position[1] += 0.2;
+            let above = Bounds::new(&upper, &m).unwrap();
+            let mut visited = Vec::new();
+            assert!(connected_where(
+                (&upper, &m, above),
+                (&lower, &m, bounds),
+                |a, b| {
+                    assert_eq!(a[0], b[0]);
+                    assert_eq!(a[2], b[2]);
+                    assert_eq!(a[1], b[1] + 1);
+                    visited.push((a, b));
+                    visited.len() == 2
+                }
+            ));
+            assert_eq!(
+                visited.len(),
+                2,
+                "a blocked first connector must not hide another clear one"
+            );
+            let mut blocked = 0;
+            assert!(!connected_where(
+                (&upper, &m, above),
+                (&lower, &m, bounds),
+                |_, _| {
+                    blocked += 1;
+                    false
+                }
+            ));
+            assert_eq!(blocked, 2);
+        }
+    }
+    #[test]
+    fn support_query_cursor_visits_only_one_entry_and_deduplicates_spanning_bricks() {
+        let mut index = Index::default();
+        let bounds = Bounds {
+            min: [-1, 0, -1],
+            size: [34, 1, 34],
+        };
+        for id in 1..=200 {
+            index.insert(id, bounds);
+        }
+        let mut cursor = QueryCursor::new(bounds);
+        let mut found = BTreeSet::new();
+        let mut steps = 0;
+        while let Some(candidate) = cursor.step(&index) {
+            steps += 1;
+            if let Some(id) = candidate {
+                assert!(found.insert(id));
+            }
+            if steps == 8 {
+                assert_eq!(found.len(), 8, "one entry per work unit");
+            }
+        }
+        assert_eq!(found.len(), 200);
+        assert!(
+            steps > 200,
+            "duplicate buckets still charge scanned entries"
+        );
+    }
+    #[test]
+    fn attachment_cursor_resumes_inside_a_large_authored_face() {
+        let mut m = mesh();
+        m.footprint_studs = [1000, 1000];
+        m.attachment_rows = vec!["b".repeat(1000); 1000];
+        let lower = Bounds {
+            min: [0, 0, 0],
+            size: [1000, 1, 1000],
+        };
+        let upper = Bounds {
+            min: [0, 1, 0],
+            size: [1000, 1, 1000],
+        };
+        let mut cells = ConnectionCells::new(lower, upper);
+        for x in 0..32 {
+            assert_eq!(cells.next(0, &m, 0, &m), Some(([x, 0, 0], [x, 1, 0], true)));
+        }
+        let mut resumed = cells.clone();
+        assert_eq!(
+            resumed.next(0, &m, 0, &m),
+            Some(([32, 0, 0], [32, 1, 0], true))
+        );
     }
 }

@@ -102,6 +102,11 @@ fn the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land() {
     assert_eq!(kind.out_of_water_seconds, Some(9.0));
     // The bite it makes on contact, not the 0 its datablock says.
     assert_eq!(kind.melee.as_ref().unwrap().damage, 35.0);
+    assert_eq!(kind.melee.as_ref().unwrap().name, "FixtureSharkBite");
+    let weapons =
+        bri_weapons::Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap())
+            .unwrap();
+    assert!(weapons.damage_types.contains_key("fixturesharkbite"));
     let look = kind.look.as_ref().unwrap();
     assert_eq!(look.colors["torso"], [0.8, 0.8, 0.85, 1.0]);
     assert_eq!(look.colors["larm"], [0.95, 0.95, 0.95, 1.0]);
@@ -111,5 +116,20 @@ fn the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land() {
     )
     .unwrap();
     assert_eq!(body["movement"]["underwater_forward"], 10.0);
+    // Max, v0.1.15: joining failed with "its shape
+    // v20/add-ons/bot_hole/8xspawn.blb is not a loaded brick's". Its hole
+    // brick uses Bot_Hole's pad shape; the package carries a copy, so its
+    // bricks load on their own, with Bot_Hole off or on.
+    let catalog = out.join("assets/brick-catalog");
+    let bricks = bri_sim::definitions::Definitions::load(&catalog, &catalog)
+        .expect("its bricks load without Bot_Hole");
+    assert!(
+        bricks
+            .entries
+            .keys()
+            .any(|id| id == "bot_shark:brick/bricksharkbot_holespawndata"),
+        "{:?}",
+        bricks.entries.keys().collect::<Vec<_>>()
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

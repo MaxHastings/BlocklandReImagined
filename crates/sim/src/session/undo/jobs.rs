@@ -136,6 +136,7 @@ impl CopyWork for UndoGroup {
         }
     }
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor = s.live_copy_actor(owner, None)?;
         while let Some(&id) = self.ids.get(self.gathered) {
             if !spend(budget, work::SCAN) {
                 return Ok(false);
@@ -308,6 +309,7 @@ impl CopyWork for UndoCut {
         }
     }
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        let _ = s.live_copy_actor(owner, None)?;
         if let Some(follow) = &mut self.follow {
             return Ok(s.follow_some(owner, follow, budget));
         }
@@ -466,7 +468,8 @@ impl CopyWork for UndoEdits {
             ..Default::default()
         }
     }
-    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+    fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor = s.live_copy_actor(owner, None)?;
         let palette = s.simulation.state().palette.len();
         let mut restored = Vec::new();
         while self.next < self.len() {

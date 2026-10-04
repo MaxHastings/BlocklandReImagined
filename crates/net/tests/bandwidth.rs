@@ -541,6 +541,7 @@ async fn bandwidth_table() -> Result<()> {
     // Vehicles need the converted vehicle pack; their datagram is priced
     // here instead. A parked vehicle settles like a still player.
     let jeep = bri_net::protocol::Datagram::Vehicle(bri_sim::session::VehiclePose {
+        passage_frame: Default::default(),
         id: 1000,
         tick: 1_000_000,
         position: [12.5, 1.25, -40.0],

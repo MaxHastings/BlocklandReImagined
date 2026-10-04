@@ -985,6 +985,7 @@ fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
     prefs.set("$pref::Input::UseStrafeSteering", "1");
     assert_eq!(super::steering_in_use(None, &prefs), (true, false));
     let pose = bri_sim::session::VehiclePose {
+        passage_frame: Default::default(),
         id: 1,
         tick: 3,
         position: [0.0; 3],

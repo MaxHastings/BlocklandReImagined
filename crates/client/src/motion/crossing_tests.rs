@@ -308,6 +308,8 @@ fn walk(
     let mut player = camera_test_player(feet);
     player.yaw = look.0;
     let pose = bri_net::protocol::Pose {
+        passage_frame: Default::default(),
+        passage_vehicle: None,
         tick: 0,
         acknowledged_input: 0,
         spawn_tick: 0,

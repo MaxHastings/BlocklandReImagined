@@ -37,6 +37,40 @@ use crate::schema::{Control, HSizing, VSizing};
 use crate::ui::{Core, Pending};
 use crate::view::{NodeId, View, ViewEvent};
 
+/// Popup indices are presentation only. Retain unavailable stable IDs so
+/// adjacent creator forms never silently replace saved intent with NONE.
+fn resource_choices<'a>(
+    view: &mut View,
+    node: NodeId,
+    choices: impl IntoIterator<Item = (&'a str, &'a str)>,
+    current: Option<&str>,
+    allow_none: bool,
+) -> Vec<Option<String>> {
+    let mut ids = Vec::new();
+    let mut items = Vec::new();
+    if allow_none {
+        ids.push(None);
+        items.push((" NONE".to_string(), 0));
+    }
+    for (id, name) in choices {
+        items.push((name.to_owned(), ids.len() as i64));
+        ids.push(Some(id.to_owned()));
+    }
+    let selected = ids
+        .iter()
+        .position(|id| id.as_deref() == current)
+        .or_else(|| {
+            current.map(|id| {
+                items.push((format!("Unavailable: {id}"), ids.len() as i64));
+                ids.push(Some(id.to_owned()));
+                ids.len() - 1
+            })
+        });
+    view.state(node).items = items;
+    view.select(node, selected.map(|index| index as i64));
+    ids
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenId {
     MainMenu,

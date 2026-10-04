@@ -216,6 +216,9 @@ struct Ctx<'a> {
     ported: BTreeMap<String, String>,
     /// Bot_Hole bots as bot kinds (`assets/bots.json`).
     bots: Vec<serde_json::Value>,
+    /// Other Add-Ons' brick geometry copied in: mesh id to package-relative
+    /// output file.
+    borrowed: BTreeMap<String, String>,
 }
 
 impl Ctx<'_> {
@@ -383,6 +386,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         dependency_projectiles: BTreeMap::new(),
         ported: BTreeMap::new(),
         bots: Vec::new(),
+        borrowed: BTreeMap::new(),
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
@@ -1526,7 +1530,22 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 cx.outputs.contains_key(&file.to_ascii_lowercase())
             })
     });
-    if defs.is_empty() && !has_sounds && !brick_emitters {
+    // A policy-only Add-On may declare kill messages/icons without a weapon
+    // datablock. Keep those declarations through the same ordinary pack path.
+    let texts: Vec<_> = scripts
+        .iter()
+        .filter_map(|s| cx.script_text(&s.path))
+        .collect();
+    let damage_types: Vec<_> = texts
+        .iter()
+        .flat_map(|t| {
+            bri_weapons_import::damage_types(t)
+                .unwrap_or_default()
+                .into_iter()
+                .chain(bri_weapons_import::special_kills(t).unwrap_or_default())
+        })
+        .collect();
+    if defs.is_empty() && !has_sounds && !brick_emitters && damage_types.is_empty() {
         return Ok(());
     }
     // Pull in the dependency datablocks these name, so `lower` can resolve
@@ -1755,18 +1774,9 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             .map(|o| weapon_definition(o, &o.d.fields)),
     );
     // Damage types this Add-On declares.
-    let texts: Vec<_> = scripts
-        .iter()
-        .filter_map(|s| cx.script_text(&s.path))
-        .collect();
     // Special kills (Support_SpecialKills' `addSpecialDamageMsg`) are laid
     // over them when a rule calls a kill special.
-    for t in texts.iter().flat_map(|t| {
-        bri_weapons_import::damage_types(t)
-            .unwrap_or_default()
-            .into_iter()
-            .chain(bri_weapons_import::special_kills(t).unwrap_or_default())
-    }) {
+    for t in damage_types {
         let missing: Vec<_> = t
             .icons()
             .filter(|i| {
@@ -2689,9 +2699,16 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     } else if let Some(found) = cx.reference.has_file(&mesh) {
                         let addon = cx.reference.addon_of(&found).unwrap_or_default();
                         cx.used(&addon, found.clone());
-                        // The base game's own id for that geometry, so the
-                        // brick reuses the loaded shape (`Definitions::load_with`).
-                        format!("v20/{found}")
+                        match cx.reference.blbs.get(&found).cloned() {
+                            // Another Add-On's shape: a copy of it here, so
+                            // this package loads whether that one is on or
+                            // not, and on every player's game.
+                            Some(bytes) => borrow_brick(cx, &found, &bytes),
+                            // The base game's own id for that geometry, so
+                            // the brick reuses the loaded shape
+                            // (`Definitions::load_with`).
+                            None => format!("v20/{found}"),
+                        }
                     } else {
                         let o = cx.owned.get(&key);
                         let at = o.map(|o| Location::new(&o.path, o.d.line));
@@ -2812,6 +2829,32 @@ fn door_swap(b: &bri_content::brick::CatalogEntry) -> Option<bri_content::brick:
     })
 }
 
+/// Converts another Add-On's brick geometry at `path` into this package
+/// (once) and gives its mesh id; empty when it does not convert.
+fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
+    let id = content_id(&cx.ns, "brick_geometry", path);
+    if cx.borrowed.contains_key(&id) {
+        return id;
+    }
+    let fingerprint = hash(format!("{id}\0{}", hash(bytes)).as_bytes());
+    let rel = format!("bricks/{}.brick.json", &fingerprint[..24]);
+    let written = bri_convert::brick::read(bytes, id.clone())
+        .and_then(|(brick, _)| cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&brick)?));
+    match written {
+        Ok(()) => {
+            cx.id("brick_geometry", path, path, &format!("assets/{rel}"));
+            cx.borrowed.insert(id.clone(), rel);
+            id
+        }
+        Err(e) => {
+            cx.report
+                .diagnostics
+                .push(format!("brick geometry {path}: {e:#}"));
+            String::new()
+        }
+    }
+}
+
 /// The bricks whose geometry converted, in the base game's brick catalog
 /// layout under `assets/brick-catalog/`, so `Definitions::load` reads them
 /// like the stock catalog: `stock-catalog.json`, `catalog-audit.json` (mesh
@@ -2828,6 +2871,7 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
                 rel.clone(),
             ))
         })
+        .chain(cx.borrowed.clone())
         .collect();
     let (mut bricks, mut resolved, mut bodies) = (vec![], vec![], vec![]);
     let mut icons = serde_json::Map::new();

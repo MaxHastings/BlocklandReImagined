@@ -5,7 +5,7 @@ v20 as you remember it, with its own art, music and sounds, plus Add-Ons
 that can go much further than v20's ever could. This page says what is
 done, what is partly done, and what is still missing. It was checked
 against the game's own code and focused test reports on 2026-10-03. Use the
-[v0.2.2 creator and bot checks](rule-workshop/V0.2.2-PLAYTEST.md) to try the
+[v0.2.3 creator and bot checks](rule-workshop/V0.2.3-PLAYTEST.md) to try the
 current changes; [known issues](KNOWN-ISSUES.md) records the remaining limits.
 
 ## v20: what's done
@@ -31,7 +31,8 @@ meter.
 
 **Vehicles.** Jeep, Tank, Horse, Magic Carpet, Rowboat, Ball, Skis and
 the Pirate Cannon: seats, weapons, tire spray, splashes, burning wrecks,
-respawn and recolouring from a Vehicle Spawn brick. Steering follows
+respawn and recolouring from a Vehicle Spawn brick. Wrench **Send** recolors
+an existing vehicle without respawning it. Steering follows
 v20's strafe steering and auto-return.
 
 **Building.** The brick selector with tabs, favourites and the brick cart;
@@ -56,7 +57,8 @@ in the Wrench with a live preview and Send; building tools reveal their bounds.
 **+ IF** starts an unfinished check for you to configure before Send;
 **Region...** opens Detection region. Nine editable examples and included
 creator guides explain the behavior.
-Explain saved shows recent conditions, actions and rejection reasons.
+Explain saved shows recent conditions, actions and rejection reasons, with
+NPC feedback scoped to the inspected brick.
 
 **Mini-games.** Create, join, leave, invite, remove, reset and end, with
 all 21 rule settings, ten favourite presets, scores in the player list,
@@ -90,7 +92,8 @@ Your old v20 `.bls` saves load too: drop them into the saves folder (Load
 Bricks > **Saves Folder**) and they convert by themselves.
 
 **Avatar.** Every part, face, decal, pack, hat and accent, part colours,
-the colour picker, and ten favourites.
+the colour picker, and ten favourites. The preview has the native running loop
+and corrected directional lighting.
 
 **Hosting and admin.** Single player, LAN and Internet games. Server name,
 player limit, admin and super admin passwords, Advanced Config (quotas,

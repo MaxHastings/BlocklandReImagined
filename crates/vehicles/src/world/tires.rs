@@ -433,6 +433,7 @@ mod tests {
         let s = host.snapshot(&hw).vehicles.remove(0);
         assert!(s.wheel_tire.iter().any(|t| t.slipping), "full lock slides");
         let motion = Motion {
+            passage_frame: Default::default(),
             transform: s.transform.clone(),
             velocity: s.velocity,
             angular_velocity: s.angular_velocity,

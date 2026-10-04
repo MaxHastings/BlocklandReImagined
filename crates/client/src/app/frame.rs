@@ -42,6 +42,7 @@ impl App {
             .map_or(1.0, |v| v.time_scale);
         let game_elapsed = elapsed.mul_f32(scale);
         self.avatar.animation_time += game_elapsed.as_secs_f64().min(0.25);
+        self.avatar.preview_time += elapsed.as_secs_f64().min(0.25);
         if let Err(error) = self.poll_network() {
             // A fault while following the session (a map's weather, a tool
             // catalog, a closed connection) ends that session with its real
@@ -189,6 +190,32 @@ impl App {
     /// mounts, vehicles, riders, loose models and music.
     fn advance_local_game(&mut self, alive: bool, game_elapsed: Duration) -> Result<()> {
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
+            if let Some(view) = &a.view {
+                let vitals = view.vitals.get(&view.owner);
+                let mounted = vitals.and_then(|v| v.mounted);
+                let ride = vitals.and_then(|v| v.ride);
+                let driving = vitals.is_some_and(|v| {
+                    matches!(v.control, bri_sim::session::ControlObject::Entity(_))
+                });
+                self.motion
+                    .set_mounted(mounted.is_some() || ride.is_some() || driving);
+                let driven = driven_vehicle(mounted, |vehicle, seat| {
+                    view.vehicles
+                        .get(&vehicle)
+                        .and_then(|info| self.vehicle_assets.definition(&info.definition))
+                        .and_then(|d| d.seats.get(seat))
+                        .is_some_and(|s| s.controls)
+                });
+                Self::predict_driven(
+                    &mut self.motion,
+                    &mut self.vehicles,
+                    &self.vehicle_assets,
+                    &self.ui.core.prefs,
+                    &mut self.cosmetic_faults,
+                    view,
+                    driven,
+                );
+            }
             let mounted = a
                 .view
                 .as_ref()
@@ -258,14 +285,8 @@ impl App {
             if let Some(view) = &a.view {
                 let vitals = view.vitals.get(&view.owner);
                 let mounted = vitals.and_then(|v| v.mounted);
-                // Driving a package entity parks the avatar like a seat does.
-                let driving = vitals.is_some_and(|v| {
-                    matches!(v.control, bri_sim::session::ControlObject::Entity(_))
-                });
                 // A player riding another player shows the host's pose too.
                 let ride = vitals.and_then(|v| v.ride);
-                self.motion
-                    .set_mounted(mounted.is_some() || ride.is_some() || driving);
                 self.controls
                     .set_mounted(mounted.is_some() || ride.is_some());
                 let first_person_only = self
@@ -286,15 +307,6 @@ impl App {
                         .and_then(|d| d.seats.get(seat))
                         .is_some_and(|s| s.controls)
                 });
-                Self::predict_driven(
-                    &mut self.motion,
-                    &mut self.vehicles,
-                    &self.vehicle_assets,
-                    &self.ui.core.prefs,
-                    &mut self.cosmetic_faults,
-                    view,
-                    driven,
-                );
                 self.vehicles.update(
                     &view.vehicles,
                     &view.vehicle_poses,

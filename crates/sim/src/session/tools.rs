@@ -1142,6 +1142,7 @@ impl Session {
             _ => None,
         };
         let edited_events = matches!(edit, Edit::Events(_));
+        let sent_wrench = matches!(edit, Edit::Properties(_));
         let sets_item = matches!(&edit, Edit::Properties(p) if p.item_spawn.item.is_some());
         // `serverCmdSetPrint` records a print change for undo.
         let undo = match &edit {
@@ -1177,6 +1178,9 @@ impl Session {
         }
         if let Some(undo) = undo {
             self.push_undo(owner, undo);
+        }
+        if sent_wrench {
+            self.color_vehicle_brick(id);
         }
         Ok(Reply::Accepted)
     }

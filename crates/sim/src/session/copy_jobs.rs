@@ -97,6 +97,19 @@ impl Default for CopyJobs {
 }
 
 impl Session {
+    /// Current authoritative admission for a mutating copy slice. A job never
+    /// retains trust/administrator privileges from its starting tick.
+    pub(super) fn live_copy_actor(
+        &self,
+        owner: OwnerId,
+        action: Option<bri_minigames::BuildAction>,
+    ) -> Result<Actor> {
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        if let Some(action) = action {
+            combat::ensure_may_build(&peer.combat, &self.minigames, action)?;
+        }
+        Ok(peer.actor.clone())
+    }
     /// Set how much copy work a tick allows (at least enough for one
     /// brick): the host's knob, and how tests make a small copy take many
     /// ticks.

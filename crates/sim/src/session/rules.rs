@@ -412,7 +412,7 @@ impl Session {
                             },
                         )
                     });
-                format!("[NPC {name}] {status}")
+                format!("{prefix}[NPC {name}] {status}")
             })
             .collect();
         for summary in bot_summaries {

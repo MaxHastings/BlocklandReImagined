@@ -1720,16 +1720,43 @@ impl Preview {
             depth: bri_render::scene::create_depth(device, Self::SIZE.0, Self::SIZE.1),
         }
     }
+    fn camera(rotation: [f32; 3], distance: f32) -> bri_render::scene::Camera {
+        let target = Vec3::new(0.0, 1.3, 0.0);
+        let eye = target
+            + Vec3::new(
+                rotation[2].sin() * rotation[0].cos(),
+                rotation[0].sin(),
+                rotation[2].cos() * rotation[0].cos(),
+            ) * distance;
+        let mut camera = bri_render::scene::Camera::perspective(
+            eye.to_array(),
+            target.to_array(),
+            Self::SIZE.0 as f32 / Self::SIZE.1 as f32,
+            2.0 * ((35_f32.to_radians() * 0.5).tan() / (Self::SIZE.0 as f32 / Self::SIZE.1 as f32))
+                .atan(),
+            0.05,
+            50.0,
+        );
+        // Authored Avatar_Preview key, Z-up to Y-up. The scene shader stores
+        // light travel, opposite the preview's direction toward its white key.
+        camera.sun_direction = [-0.721277, -0.57735, 0.57735, 0.0];
+        camera.sun_color = [1.0, 1.0, 1.0, 0.0];
+        camera.ambient = [0.5, 0.5, 0.5, 0.0];
+        camera
+    }
     pub fn render(
         &mut self,
         assets: &AvatarAssets,
         appearance: &Appearance,
         rotation: [f32; 3],
         distance: f32,
+        time: f64,
         frame: &mut crate::platform::RenderContext<'_>,
     ) -> Result<()> {
         ensure!(
-            rotation.iter().all(|v| v.is_finite())
+            time.is_finite()
+                && time >= 0.0
+                && rotation.iter().all(|v| v.is_finite())
                 && distance.is_finite()
                 && (1.0..=20.0).contains(&distance),
             "Invalid preview camera"
@@ -1742,7 +1769,7 @@ impl Preview {
             self.mesh = Some(assets.mesh(appearance.clone())?);
         }
         let mesh = self.mesh.as_mut().unwrap();
-        mesh.pose(
+        mesh.pose_with_animation(
             assets,
             &PlayerState {
                 owner: 0,
@@ -1762,29 +1789,22 @@ impl Preview {
                 tick: Default::default(),
                 tether: None,
             },
-            0.0,
+            time * 0.85,
+            &AvatarAnimationInput {
+                // Original AvatarGui sets body thread 1 to run at 0.85.
+                // Head-up remains the outfit's existing accessory layer.
+                body: [
+                    None,
+                    Some(ActionAnimation {
+                        sequence: "run".into(),
+                        started_at: 0.0,
+                    }),
+                ],
+                ..Default::default()
+            },
         )?;
         mesh.upload(&self.renderer, frame.device, frame.queue)?;
-        let target = Vec3::new(0.0, 1.3, 0.0);
-        let eye = target
-            + Vec3::new(
-                rotation[2].sin() * rotation[0].cos(),
-                rotation[0].sin(),
-                rotation[2].cos() * rotation[0].cos(),
-            ) * distance;
-        let mut camera = bri_render::scene::Camera::perspective(
-            eye.to_array(),
-            target.to_array(),
-            Self::SIZE.0 as f32 / Self::SIZE.1 as f32,
-            2.0 * ((35_f32.to_radians() * 0.5).tan() / (Self::SIZE.0 as f32 / Self::SIZE.1 as f32))
-                .atan(),
-            0.05,
-            50.0,
-        );
-        // Authored Avatar_Preview light fields, changed from Z-up to Y-up.
-        camera.sun_direction = [0.721277, 0.57735, -0.57735, 0.0];
-        camera.sun_color = [1.0, 1.0, 1.0, 0.0];
-        camera.ambient = [0.5, 0.5, 0.5, 0.0];
+        let camera = Self::camera(rotation, distance);
         self.renderer.update_camera(frame.queue, &camera);
         self.renderer.render(
             frame.encoder,
@@ -2075,6 +2095,112 @@ mod tests {
         ragdoll_on_the_real_blockhead,
         ragdoll_keeps_accessories_on,
     );
+
+    #[test]
+    #[ignore = "requires generated v20 avatar content and an offscreen adapter"]
+    fn actual_editor_portrait_receives_its_authored_directional_key() -> Result<()> {
+        use bri_ui::{
+            draw::{DrawList, Filter},
+            geom::Rect,
+            gpu::{Headless, UiRenderer},
+            pack::{Pack, TexKey},
+        };
+        let fx = Avatar::content()?;
+        let gpu = Headless::new()?;
+        let mut ui = UiRenderer::new(&gpu.device, &gpu.queue);
+        let pack = Pack::from_parts(Default::default(), Default::default());
+        let mut preview = Preview::new(&gpu.device);
+        let size = Preview::SIZE;
+        let mut draw = DrawList::new(Rect::new(0, 0, size.0 as i32, size.1 as i32));
+        draw.image(
+            TexKey::External(Preview::ID),
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, size.0 as f32, size.1 as f32],
+            [255; 4],
+            Filter::Nearest,
+        );
+        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen avatar editor"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        preview.render(
+            &fx.assets,
+            &fx.assets.package.defaults,
+            [0.3, 0.6, 2.52],
+            4.34,
+            0.0,
+            &mut crate::platform::RenderContext {
+                device: &gpu.device,
+                queue: &gpu.queue,
+                encoder: &mut encoder,
+                target: &view,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                size: (1, 1),
+                ui_renderer: &mut ui,
+            },
+        )?;
+        gpu.queue.submit([encoder.finish()]);
+        let directed = gpu.render_rgba(&mut ui, &pack, &draw, size, 1.0, [0.0; 4])?;
+        // Counterfactual: the same original outfit, exact pose/normals, camera,
+        // renderer and UI texture, with only the white key switched off.
+        let mut camera = Preview::camera([0.3, 0.6, 2.52], 4.34);
+        camera.sun_color = [0.0; 4];
+        preview.renderer.update_camera(&gpu.queue, &camera);
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        preview.renderer.render(
+            &mut encoder,
+            &preview.texture.create_view(&Default::default()),
+            &preview.depth.create_view(&Default::default()),
+            &[preview.mesh.as_ref().unwrap().gpu.as_ref().unwrap()],
+            Some(wgpu::Color::TRANSPARENT),
+        );
+        gpu.queue.submit([encoder.finish()]);
+        let ambient = gpu.render_rgba(&mut ui, &pack, &draw, size, 1.0, [0.0; 4])?;
+        let out = repo().join("artifacts/avatar-editor-preview-light");
+        std::fs::create_dir_all(&out)?;
+        for (label, rgba) in [("directed", &directed), ("ambient-only", &ambient)] {
+            image::save_buffer(
+                out.join(format!("{label}.png")),
+                rgba,
+                size.0,
+                size.1,
+                image::ColorType::Rgba8,
+            )?;
+        }
+        let mut samples = 0;
+        let mut increase = 0.0;
+        for (directed, ambient) in directed.chunks_exact(4).zip(ambient.chunks_exact(4)) {
+            if directed[3] > 250 && ambient[3] > 250 {
+                samples += 1;
+                increase += (0..3)
+                    .map(|c| directed[c] as f64 - ambient[c] as f64)
+                    .sum::<f64>()
+                    / 3.0;
+            }
+        }
+        let mean = increase / samples.max(1) as f64;
+        println!(
+            "native preview white key: opaque pixels={samples}, mean RGB increase={mean}; captures={}",
+            out.display()
+        );
+        ensure!(
+            samples > 100 && mean > 8.0,
+            "the authored source-facing portrait is effectively ambient-only: mean key increase={mean}"
+        );
+        Ok(())
+    }
 
     fn player() -> PlayerState {
         PlayerState {

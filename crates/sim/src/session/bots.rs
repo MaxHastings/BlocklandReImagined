@@ -1548,7 +1548,14 @@ impl Session {
         // Inventory capabilities are grounded only in current sight. The
         // desired path uses a shared budget; actual firing is checked after
         // movement against the live launch frame in step_weapons.
-        let native = if let Some(seen) = sight.target {
+        // An observed native grip is an ordinary held-tool sequence.
+        // Finish its carry/release before considering another hand weapon;
+        // switching would make the package drop the actual held participant.
+        let hold_sequence =
+            self.bot_weapon(bot).is_some_and(|w| w.hold) && self.held_by(bot).is_some();
+        let native = if hold_sequence {
+            hand_combat::Decision::Unsupported
+        } else if let Some(seen) = sight.target {
             let mut combat = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().combat);
             let mut budget = std::mem::take(&mut self.bots.combat_budget);
             budget.begin_tick(tick);
@@ -1563,8 +1570,9 @@ impl Session {
             hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c) => Some(*c),
             _ => None,
         };
-        let native_gate = !matches!(native, hand_combat::Decision::Unsupported)
-            || (sight.target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some());
+        let native_gate = !hold_sequence
+            && (!matches!(native, hand_combat::Decision::Unsupported)
+                || (sight.target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some()));
         self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);
         // Empty-handed, a kind that hits with its body fights with that.
         let held = native_choice
@@ -2380,12 +2388,10 @@ impl Session {
                 let tracking_charge = last_down
                     && native_choice.is_some()
                     && image.charges()
-                    && charged_control::release_only(image)
-                    && (matches!(
-                        behaviour,
-                        Behaviour::Fight | Behaviour::Chase | Behaviour::Fly
-                    ) || behaviour == Behaviour::Objective
-                        && selected_objective.is_some_and(|view| view.enemy.is_some()));
+                    && charged_control::release_only(image);
+                // The unchanged participant/equipment intent owns this live
+                // wind-up even if range temporarily selected Return/Wander.
+                // Objective tool controls below still cancel/preempt it.
                 let decision = hand_combat::trigger(
                     image,
                     image_state,

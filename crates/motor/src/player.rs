@@ -983,27 +983,57 @@ impl Player {
         state: PlayerState,
         tuning: PlayerTuning,
     ) -> Result<()> {
+        // Keep the rejection at its existing boundary, but identify the
+        // authoritative field so a disconnect report can locate its producer.
         ensure!(
-            state.owner == self.state.owner
-                && state
-                    .feet
-                    .iter()
-                    .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
-                && state
-                    .velocity
-                    .iter()
-                    .all(|v| v.is_finite() && v.abs() <= 1000.0)
-                && state.yaw.is_finite()
-                && state.pitch.is_finite()
-                && state.tick.phase < TICK_PARTS
-                && state
-                    .tick
-                    .from
-                    .iter()
-                    .chain(&state.tick.feet)
-                    .all(|v| v.is_finite())
-                && state.tether.is_none_or(|t| t.validate().is_ok()),
-            "Invalid authoritative player correction"
+            state.owner == self.state.owner,
+            "Invalid authoritative player correction: owner {} differs from {}",
+            state.owner,
+            self.state.owner
+        );
+        ensure!(
+            state
+                .feet
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
+            "Invalid authoritative player correction: feet {:?} (finite, magnitude per axis <= 1000000 required)",
+            state.feet
+        );
+        ensure!(
+            state
+                .velocity
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1000.0),
+            "Invalid authoritative player correction: velocity {:?} (finite, magnitude per axis <= 1000 required)",
+            state.velocity
+        );
+        ensure!(
+            state.yaw.is_finite() && state.pitch.is_finite(),
+            "Invalid authoritative player correction: look yaw={} pitch={} (finite required)",
+            state.yaw,
+            state.pitch
+        );
+        ensure!(
+            state.tick.phase < TICK_PARTS,
+            "Invalid authoritative player correction: motor tick phase={} (less than {} required)",
+            state.tick.phase,
+            TICK_PARTS
+        );
+        ensure!(
+            state
+                .tick
+                .from
+                .iter()
+                .chain(&state.tick.feet)
+                .all(|v| v.is_finite()),
+            "Invalid authoritative player correction: motor tick from={:?} feet={:?} (finite required)",
+            state.tick.from,
+            state.tick.feet
+        );
+        ensure!(
+            state.tether.is_none_or(|t| t.validate().is_ok()),
+            "Invalid authoritative player correction: tether {:?}",
+            state.tether
         );
         if tuning != self.tuning {
             tuning.validate()?;

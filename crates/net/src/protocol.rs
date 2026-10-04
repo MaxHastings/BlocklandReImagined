@@ -393,6 +393,11 @@ pub struct Orb {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pose {
+    #[serde(default)]
+    pub passage_frame: bri_content::passage::PassageFrame,
+    /// The mounted vehicle's frame sampled with this body pose, for prediction.
+    #[serde(default)]
+    pub passage_vehicle: Option<(u64, bri_content::passage::PassageFrame)>,
     pub tick: u64,
     pub acknowledged_input: u64,
     pub player: PlayerState,
@@ -460,6 +465,8 @@ impl RemotePose {
             tick: self.tick,
             acknowledged_input: 0,
             spawn_tick: 0,
+            passage_frame: Default::default(),
+            passage_vehicle: None,
             player: PlayerState {
                 owner: self.owner,
                 feet: self.feet.map(|x| x as f32 / CENTIMETRES),
@@ -872,6 +879,8 @@ pub fn poses(session: &Session) -> Vec<Pose> {
             tick: session.simulation().state().tick,
             acknowledged_input,
             spawn_tick: session.spawn_tick(player.owner).unwrap_or_default(),
+            passage_frame: session.passage_frame(player.owner),
+            passage_vehicle: session.passage_vehicle(player.owner),
             player,
         })
         .collect()
