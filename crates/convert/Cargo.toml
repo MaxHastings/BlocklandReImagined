@@ -6,6 +6,7 @@ publish.workspace = true
 default-run = "bri-convert"
 
 [dependencies]
+bri-console = { path = "../console" }
 bri-content = { path = "../content" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }

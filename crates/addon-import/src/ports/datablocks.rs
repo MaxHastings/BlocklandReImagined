@@ -7,6 +7,7 @@
 //! the script bodies for [`ScriptRule`]), so they follow each copy's own
 //! numbers and names.
 use anyhow::{Context, Result, bail, ensure};
+use bri_console::Clamp;
 use bri_weapons::Definition;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1093,9 +1094,9 @@ pub(super) fn kick(weapons: &Value, name: &str) -> Option<Value> {
     let frequency = frequency.iter().sum::<f64>() / frequency.len() as f64;
     Some(json!({
         "amplitude": amplitude.min(1.0),
-        "frequency": frequency.clamp(0.1, 30.0),
-        "seconds": seconds.clamp(0.05, 2.0),
-        "radius": shake["radius"].as_f64().unwrap_or(0.0).clamp(0.0, 100.0),
+        "frequency": frequency.clamped(0.1, 30.0),
+        "seconds": seconds.clamped(0.05, 2.0),
+        "radius": shake["radius"].as_f64().unwrap_or(0.0).clamped(0.0, 100.0),
     }))
 }
 

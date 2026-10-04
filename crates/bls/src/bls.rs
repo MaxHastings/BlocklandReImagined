@@ -1,5 +1,6 @@
 //! BLS import. Original extension text is preserved, never executed.
 use anyhow::{Context, Result, bail, ensure};
+use bri_console::Clamp;
 use bri_content::brick::Catalog;
 use bri_world::*;
 use sha2::{Digest, Sha256};
@@ -190,7 +191,7 @@ fn palette_color(line: &str) -> [f32; 4] {
     if color.iter().any(|c| *c > 1.0) {
         color = color.map(|c| c / 255.0);
     }
-    color.map(|c| c.clamp(0.0, 1.0))
+    color.map(|c| c.clamped(0.0, 1.0))
 }
 /// [`read`], and which brick lines were skipped. As v20's
 /// `ServerLoadSaveFile_Tick` does, a brick line that cannot be read is

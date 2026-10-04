@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.93"
 publish = false
 [dependencies]
+bri-console = { path = "../console" }
 bri-weapons = { path = "../weapons", version = "0.1.0" }
 bri-convert = { path = "../convert", version = "0.1.0" }
 anyhow.workspace = true

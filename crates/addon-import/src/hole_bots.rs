@@ -2,6 +2,7 @@
 //! body (its archetype, converted as any player type) and a bot kind
 //! (`assets/bots.json`) read from the `h` settings Bot_Hole's brain reads.
 //! A hole brick (`isBotHole`, `holeBot`) keeps one of that kind.
+use bri_console::Clamp;
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
@@ -46,13 +47,13 @@ pub(crate) fn kind(
     } else {
         num("hsearchradius").map_or(80.0, brick_to_radius)
     }
-    .clamp(1.0, 400.0);
+    .clamped(1.0, 400.0);
     let wander = if fields.contains_key("hwander") && !on("hwander") {
         0.0
     } else {
         num("hspawndist").map_or(12.0, brick_to_metric)
     }
-    .clamp(0.0, 64.0);
+    .clamped(0.0, 64.0);
     let mut kind = json!({
         "id": id,
         "name": name,
@@ -66,7 +67,7 @@ pub(crate) fn kind(
         // `hAttackDamage`, at most once a second, and the bot swings
         // (`playThread(2, activate2)`).
         kind["melee"] = json!({
-            "damage": num("hattackdamage").unwrap_or(0.0).clamp(0.0, 1000.0),
+            "damage": num("hattackdamage").unwrap_or(0.0).clamped(0.0, 1000.0),
             "seconds": 1.0,
             "action": "activate2",
             "name": "Melee",

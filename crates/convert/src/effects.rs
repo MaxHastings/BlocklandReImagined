@@ -2,6 +2,7 @@
 //! explicit conversion diagnostics, never executable runtime expressions.
 use crate::effect_script::Declaration;
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::effects::*;
 use std::collections::BTreeMap;
 
@@ -207,7 +208,7 @@ pub fn emitter(d: &Declaration, nodes: &BTreeMap<String, f32>) -> Result<(Emitte
         authored_variance
     };
     let authored_theta = [f.number("thetamin", 0.0)?, f.number("thetamax", 90.0)?];
-    let theta_max = authored_theta[1].clamp(0.0, 180.0);
+    let theta_max = authored_theta[1].clamped(0.0, 180.0);
     let theta_min = authored_theta[0].max(0.0).min(theta_max);
     let mut corrected = Vec::new();
     if [theta_min, theta_max] != authored_theta {

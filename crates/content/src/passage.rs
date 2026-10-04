@@ -2,6 +2,7 @@
 //! linked bricks ([`crate::brick::Link`]) as they stand in a world. Players,
 //! vehicles, items and projectiles all move through them with these same
 //! rules, on the host and in each player's prediction alike.
+use bri_console::Clamp;
 use glam::{Affine3A, Vec2, Vec3};
 
 /// One opening in world space. Something crossing it from the front
@@ -242,7 +243,9 @@ impl Leg {
     }
     /// How far `p` is from this leg.
     pub fn off(&self, p: Vec3) -> f32 {
-        let along = (p - self.from).dot(self.direction).clamp(0.0, self.length);
+        let along = (p - self.from)
+            .dot(self.direction)
+            .clamped(0.0, self.length);
         p.distance(self.from + self.direction * along)
     }
 }

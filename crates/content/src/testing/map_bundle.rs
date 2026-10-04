@@ -11,6 +11,7 @@ use crate::{
     scene::{Kind, Node, Scene},
 };
 use anyhow::Result;
+use bri_console::Clamp;
 use glam::{Mat4, Vec3};
 use serde_json::json;
 use std::{collections::BTreeMap, path::Path};
@@ -44,7 +45,8 @@ impl Lamp {
     pub fn reach(&self, position: Vec3, normal: Vec3) -> Vec3 {
         let delta = Vec3::from(self.position) - position;
         let distance = delta.length();
-        let fade = ((self.outer - distance) / (self.outer - self.inner).max(1e-3)).clamp(0.0, 1.0);
+        let fade =
+            ((self.outer - distance) / (self.outer - self.inner).max(1e-3)).clamped(0.0, 1.0);
         let facing = if normal.dot(delta) > 0.0 { 1.0 } else { 0.0 };
         Vec3::from(self.color) * fade * facing
     }

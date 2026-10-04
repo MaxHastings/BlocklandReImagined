@@ -1,9 +1,6 @@
 //! Read-only, bounded literal add-on importer. This does not execute TorqueScript.
-#![allow(
-    clippy::disallowed_methods,
-    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
-)]
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_weapons::*;
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -512,7 +509,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 });
                 Some(bri_weapons::ImageLight {
                     radius: radius.min(bri_weapons::MAX_IMAGE_LIGHT_RADIUS),
-                    color: [r, g, b].map(|c| c.clamp(0.0, 1.0)),
+                    color: [r, g, b].map(|c| c.clamped(0.0, 1.0)),
                 })
             }
         } else {

@@ -1,5 +1,6 @@
 //! Native authored atmosphere. Original formats are read only by the converter.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,7 +80,7 @@ impl Fog {
         let depth = self.density() * (-rise * self.start).exp() * inside * spread;
         let t = ((distance - self.start - 0.75 * (self.end - self.start))
             / (0.25 * (self.end - self.start)).max(0.001))
-        .clamp(0.0, 1.0);
+        .clamped(0.0, 1.0);
         let edge = t * t * (3.0 - 2.0 * t);
         (1.0 - (-depth).exp()).max(edge * self.sky_amount(up, sky_below))
     }

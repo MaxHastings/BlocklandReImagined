@@ -1,8 +1,4 @@
 //! Offline-only legacy readers. Never execute source scripts.
-#![allow(
-    clippy::disallowed_methods,
-    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
-)]
 pub mod archive;
 pub mod avatar;
 pub use bri_bls::{bls, effect_bindings, events};

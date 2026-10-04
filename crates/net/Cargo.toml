@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-console = { path = "../console" }
 mimalloc.workspace = true
 imbl.workspace = true
 bri-files.workspace = true

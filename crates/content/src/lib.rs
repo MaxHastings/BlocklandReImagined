@@ -1,9 +1,4 @@
 //! Editable native content. This crate has no dependency on legacy readers.
-#![allow(
-    clippy::disallowed_methods,
-    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
-)]
-
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 

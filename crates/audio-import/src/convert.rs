@@ -1,4 +1,5 @@
 //! Offline conversion: reference installation + recovered scripts -> native pack.
+use bri_console::Clamp;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -508,7 +509,7 @@ pub fn convert(opts: &Options) -> Result<Converted, String> {
                         },
                         other => (other.as_f64(), format!("literal {}", other.raw())),
                     };
-                    d.channel = v.unwrap_or(0.0).clamp(0.0, 8.0) as u8;
+                    d.channel = v.unwrap_or(0.0).clamped(0.0, 8.0) as u8;
                     channel_src = src;
                 }
                 _ => {}
