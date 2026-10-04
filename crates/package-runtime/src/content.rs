@@ -637,7 +637,13 @@ pub struct BrickTargetDef {
     pub name: String,
     pub class: String,
     pub from: String,
+    /// One line the wrench shows while a row aims at it, saying what it
+    /// stands for ("The teams whose colour this brick is painted").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
+/// Longest brick target description, in characters.
+pub const MAX_TARGET_DESCRIPTION: usize = 160;
 impl BrickTargetDef {
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -682,6 +688,15 @@ impl BrickTargetDef {
             self.name,
             self.from,
             BRICK_INPUT_TARGETS.map(|(s, _)| s).join(", ")
+        );
+        ensure!(
+            self.description.as_ref().is_none_or(|d| {
+                !d.trim().is_empty()
+                    && d.chars().count() <= MAX_TARGET_DESCRIPTION
+                    && !d.chars().any(char::is_control)
+            }),
+            "brick target `{}`: a description is one line of 1 to {MAX_TARGET_DESCRIPTION} characters",
+            self.name
         );
         Ok(())
     }
@@ -2246,6 +2261,7 @@ mod tests {
                 name: name.into(),
                 class: class.into(),
                 from: from.into(),
+                description: None,
             }
             .validate()
         };

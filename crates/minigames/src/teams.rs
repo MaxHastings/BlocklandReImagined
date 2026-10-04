@@ -85,6 +85,9 @@ impl MinigamesWorld {
             .collect();
         teams.friendly_fire = friendly_fire;
         teams.ally_same_color = ally_same_color;
+        let g = self.games.get_mut(&game).expect("validated game");
+        let teams = &g.teams;
+        g.team_points.retain(|t, _| teams.get(*t).is_some());
         let mut out = Vec::new();
         for p in orphans {
             self.clear_team(p, game, &mut out);

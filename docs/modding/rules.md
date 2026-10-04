@@ -282,7 +282,10 @@ the game has not got makes the team in that slot), one without is new in
 the lowest free slot, and a team left out is removed. Team ids are slots,
 1 to 64; 0 is never a team (a Team condition reads 0 for none). `set_team(p, team)` puts a
 member on a team (or `()` for none), `set_score` and `add_score` change
-their score, and `reset_minigame(game)` resets the game. The engine keeps
+their score, `add_team_points(game, team, n)` and `set_team_points(game,
+team, n)` change a team's own points (a team map's `points`; the engine
+counts them with the members' scores wherever a team's score is read, and
+a reset clears them unless scores are kept), and `reset_minigame(game)` resets the game. The engine keeps
 teammates from hurting each other while `friendly_fire` is off, sends team
 chat to the team, and tells `on_minigame` about every change. These need
 the `minigame` capability. A rule set like Slayer's sorts players with
@@ -491,8 +494,12 @@ Rules may add targets as well (`registerEventTarget`; capability
 know, found from one of an input's targets:
 
 ```json
-"brick_targets": [ { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" } ]
+"brick_targets": [ { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client",
+                    "description": "The team of whoever set this row off" } ]
 ```
+
+An optional `description` (one line, up to 160 characters) is what the
+wrench shows under a row aimed at the target.
 
 Every input with the `from` target (`Self`, the brick, or `Player`,
 `Client`, `MiniGame`, `OwnerPlayer`, `OwnerClient`) lists it, the engine's

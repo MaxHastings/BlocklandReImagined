@@ -53,8 +53,10 @@
     { "name": "IncScore", "class": "Slayer_TeamSO", "params": {{out_team_inc_score|event_params}} }
   ],
   "brick_targets": [
-    { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
-    { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
+    { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client",
+      "description": "The team of whoever set this row off" },
+    { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self",
+      "description": "The teams whose colour this brick is painted (or a brick named Team_<colour>)" }
   ],
   "commands": [
     {
@@ -1519,10 +1521,6 @@
         "per_minigame": true
       },
       "controls": {
-        "default": {},
-        "persist": false
-      },
-      "team_points": {
         "default": {},
         "persist": false
       },

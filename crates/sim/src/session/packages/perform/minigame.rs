@@ -116,6 +116,24 @@ impl Perform for ops::SetScore {
         session.apply_minigame_effects(effects)
     }
 }
+impl Perform for ops::SetTeamPoints {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetTeamPoints {
+            game,
+            team,
+            value,
+            add,
+        } = self;
+        let team = u32::try_from(team)
+            .map(mg::TeamId)
+            .context("No such team")?;
+        let effects = session
+            .minigames
+            .event_team_score(mg::GameId(game), team, value, add)
+            .map_err(|e| anyhow::anyhow!("Team points rejected: {e}"))?;
+        session.apply_minigame_effects(effects)
+    }
+}
 impl Perform for ops::ResetMinigame {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::ResetMinigame { game } = self;

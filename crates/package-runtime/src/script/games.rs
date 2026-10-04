@@ -52,6 +52,10 @@ pub struct TeamView {
     pub name: String,
     /// The team's paint palette index.
     pub color: u8,
+    /// The team's own points (`add_team_points`), apart from its members'
+    /// scores.
+    #[serde(default)]
+    pub points: i64,
 }
 /// A brick as scripts see it (`bricks(kind)`, `brick(id)`): #{ id, kind,
 /// x, y, z, turns, min, max, color, owner, game, name, item, ui_name }.
@@ -99,6 +103,7 @@ fn team_map(t: &TeamView) -> Dynamic {
         ("id", Dynamic::from_int(t.id as i64)),
         ("name", t.name.clone().into()),
         ("color", Dynamic::from_int(i64::from(t.color))),
+        ("points", Dynamic::from_int(t.points)),
     ])
 }
 fn minigame_map(g: &MinigameView) -> Dynamic {
@@ -298,6 +303,19 @@ fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
     }))
 }
 
+fn team_points(game: &Dynamic, team: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
+    let value = value.as_int().map_err(|_| "points are a whole number")?;
+    if value.abs() > MAX_SCORE {
+        return fail(format!("points are at most {MAX_SCORE} either way"));
+    }
+    push(Op::SetTeamPoints(ops::SetTeamPoints {
+        game: id(game)?,
+        team: id(team)?,
+        value,
+        add,
+    }))
+}
+
 fn drop_map(d: &DropView) -> Dynamic {
     let [x, y, z] = position(d.position);
     map([
@@ -471,6 +489,14 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("add_score", |player: Dynamic, value: Dynamic| {
         score(&player, &value, true)
     });
+    engine.register_fn(
+        "set_team_points",
+        |game: Dynamic, team: Dynamic, value: Dynamic| team_points(&game, &team, &value, false),
+    );
+    engine.register_fn(
+        "add_team_points",
+        |game: Dynamic, team: Dynamic, value: Dynamic| team_points(&game, &team, &value, true),
+    );
     // Add-On settings (`behaviour.json` `settings`).
     engine.register_fn("setting", |game: Dynamic, key: &str| {
         read_setting(&game, None, key)

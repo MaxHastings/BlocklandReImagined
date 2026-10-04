@@ -428,3 +428,46 @@ fn team_ids_are_slots_from_one_that_never_read_as_no_team() {
         );
     }
 }
+
+/// Max (v0.2.3): a team that won on its own points kept them through the
+/// reset, so the next round was won the moment it began, forever. The
+/// reset itself zeroes the teams' points and members' scores, with no
+/// package's reset handler needed; a game that keeps scores keeps both.
+#[test]
+fn a_reset_starts_team_points_again_unless_scores_are_kept() {
+    let (mut w, game, [a, b, _], [red, blue]) = red_blue();
+    w.assign_team(a, Some(red)).unwrap();
+    w.assign_team(b, Some(blue)).unwrap();
+    w.event_team_score(game, blue, 5, true).unwrap();
+    w.event_score(b, 2, false).unwrap();
+    assert_eq!(w.team_score(game, blue), Ok(7));
+    w.end_round(game, vec![blue], vec![]).unwrap();
+    for _ in 0..600 {
+        w.step().unwrap();
+    }
+    let out = w
+        .execute(Command::Reset {
+            game,
+            authority: EventAuthority::System,
+        })
+        .unwrap();
+    assert!(out.contains(&Effect::TeamScore {
+        game,
+        team: blue,
+        value: 0
+    }));
+    assert_eq!(w.team_score(game, blue), Ok(0), "a new round at nothing");
+    assert_eq!(w.team_score(game, red), Ok(0));
+
+    w.set_keep_scores(game, true).unwrap();
+    w.event_team_score(game, blue, 3, true).unwrap();
+    for _ in 0..600 {
+        w.step().unwrap();
+    }
+    w.execute(Command::Reset {
+        game,
+        authority: EventAuthority::System,
+    })
+    .unwrap();
+    assert_eq!(w.team_score(game, blue), Ok(3), "kept scores stay");
+}

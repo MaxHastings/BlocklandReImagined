@@ -338,6 +338,11 @@ pub struct MiniGame {
     /// (`setShapeNameDistance`; Slayer's Name Distance), or v20's own.
     #[serde(default)]
     pub name_distance: Option<u32>,
+    /// Each team's own points, apart from its members' scores: what a
+    /// rule's MiniGame `addTeamScore` gives a team (Slayer's
+    /// `setArtificialScore`). A reset clears them unless scores are kept.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub team_points: BTreeMap<TeamId, i64>,
 }
 /// Farthest a name may show (v20's default shape name distance).
 pub const MAX_NAME_DISTANCE: u32 = 8192;
@@ -402,6 +407,7 @@ impl MiniGame {
             claims_bricks: false,
             shared: false,
             name_distance: None,
+            team_points: BTreeMap::new(),
         }
     }
 }
@@ -587,6 +593,12 @@ pub enum Effect {
     },
     Score {
         player: PlayerId,
+        value: i64,
+    },
+    /// A team's own points changed (see [`MiniGame::team_points`]).
+    TeamScore {
+        game: GameId,
+        team: TeamId,
         value: i64,
     },
     /// A member's team changed (`None`: no team, as on leaving the game).

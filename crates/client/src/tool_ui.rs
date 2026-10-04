@@ -482,7 +482,7 @@ impl ToolUi {
             InspectMode::Events => {
                 let catalog = self.events.as_ref().context("Events are unavailable")?;
                 (rows, retained) = event_rows(brick, catalog)?;
-                let names: BTreeSet<_> = world
+                let brick_names: BTreeSet<_> = world
                     .bricks
                     .values()
                     .filter(|b| b.owner == brick.owner)
@@ -491,8 +491,17 @@ impl ToolUi {
                 UiUpdate::OpenEvents {
                     brick: *brick_id,
                     builder: Some(brick.owner),
+                    builder_name: (brick.owner != local_owner).then(|| {
+                        names.get(&brick.owner).cloned().unwrap_or_else(|| {
+                            if brick.owner == 0 {
+                                "Public".into()
+                            } else {
+                                format!("BL_ID: {}", brick.owner)
+                            }
+                        })
+                    }),
                     rows: rows.clone(),
-                    named_targets: names.into_iter().collect(),
+                    named_targets: brick_names.into_iter().collect(),
                     allow_named: true,
                 }
             }
@@ -814,6 +823,11 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
         bri_events::Param::List { items } => ParamSpec::List { items },
     };
     EventCatalog {
+        target_notes: catalog
+            .targets
+            .iter()
+            .filter_map(|t| Some((t.name.clone(), t.description.clone()?)))
+            .collect(),
         inputs: catalog
             .inputs
             .iter()
@@ -1118,6 +1132,7 @@ mod tests {
                 package: "slayer".into(),
                 source: "slayer".into(),
                 source_line: 0,
+                description: Some("The team of whoever set this row off".into()),
             }],
             outputs: vec![
                 output(

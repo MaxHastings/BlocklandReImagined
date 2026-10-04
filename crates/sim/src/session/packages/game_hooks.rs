@@ -529,6 +529,7 @@ impl Session {
                         id: u64::from(t.id.0),
                         name: t.name.clone(),
                         color: t.color,
+                        points: g.team_points.get(&t.id).copied().unwrap_or(0),
                     })
                     .collect(),
                 friendly_fire: g.teams.friendly_fire,

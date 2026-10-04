@@ -166,11 +166,12 @@ fn members(g, team) {
     out
 }
 // `Slayer_TeamSO::getArtificialScore`: points the team scored itself
-// (`IncScore`), apart from its members'.
+// (`IncScore`), apart from its members'. The engine keeps them, so a
+// brick's Team Score check counts them too.
 fn team_points(game, team) {
-    let all = get("team_points");
-    let key = `${game}:${team}`;
-    if key in all { all[key] } else { 0 }
+    let g = minigame(game);
+    let t = if g == () { () } else { team_by_id(g, team) };
+    if t == () { 0 } else { t.points }
 }
 // `Slayer_TeamSO::getScore`: its own points and its members' scores
 // together.
@@ -1126,16 +1127,8 @@ fn start_round(g) {
     r.custom = ();
     r.lives = setting(g.id, "lives");
     // `Slayer_TeamSO::onMinigameReset`: teams' own points start again with
-    // Clear Scores or a points limit, as members' scores do.
-    if setting(g.id, "clear_scores") || setting(g.id, "points") > 0 {
-        let points = get("team_points");
-        for key in points.keys() {
-            if key.starts_with(`${g.id}:`) {
-                points.remove(key);
-            }
-        }
-        set("team_points", points);
-    }
+    // Clear Scores or a points limit, as members' scores do. The engine's
+    // reset clears both unless scores are kept (`set_keep_scores`).
     for p in everyone() {
         if p.minigame == g.id {
             set_player(p.id, "out", false);
@@ -3223,19 +3216,20 @@ fn team_event(output, target, params, info) {
             "RespawnAll" => {
                 for m in members(g, t.id) { respawn(m.id); }
             }
-            "IncScore" => add_team_points(g, t.id, params[0]),
+            "IncScore" => inc_team_points(g, t.id, params[0]),
         }
     }
 }
 // `Slayer_TeamSO::incScore`: the team's own points
-// (`setArtificialScore`), then whether they reach the points to win.
-fn add_team_points(g, team, n) {
-    let all = get("team_points");
-    let key = `${g.id}:${team}`;
-    all[key] = team_points(g.id, team) + n;
-    set("team_points", all);
-    if running(g.id) {
-        check_points(minigame(g.id));
+// (`setArtificialScore`), then whether they reach the points to win
+// (`victoryCheck_Points`). The engine keeps the points and adds them when
+// this call returns, so the check counts them in itself.
+fn inc_team_points(g, team, n) {
+    add_team_points(g.id, team, n);
+    let points = setting(g.id, "points");
+    if running(g.id) && points > 0 && uses_teams(g.id) && !spectating(g.id, team)
+        && team_score(g, team) + n >= points {
+        end_round(g.id, #{ teams: [team] });
     }
 }
 // `minigameCanUse(client, brick)`: the brick is of the client's game.
