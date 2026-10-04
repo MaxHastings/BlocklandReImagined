@@ -198,8 +198,20 @@ impl Session {
     fn bot_claimed(&self, resource: Resource, except: OwnerId, tick: u64) -> bool {
         self.bots
             .claims
-            .resource_claim(resource, tick)
+            .contending_claim(resource, tick, |o| {
+                o == except || self.bot_allies(except, o)
+            })
             .is_some_and(|c| c.owner != except)
+    }
+
+    /// Live claimants on `bot`'s side. Claims coordinate allies; opponents'
+    /// intentions on the same loose body are a contest (`claims::contends`).
+    pub(super) fn claim_allies(&self, bot: OwnerId, tick: u64) -> BTreeSet<OwnerId> {
+        self.bots
+            .claims
+            .claimants(tick)
+            .filter(|o| *o == bot || self.bot_allies(bot, *o))
+            .collect()
     }
 
     fn bot_crew(&self, bot: OwnerId, v: &VehicleSnapshot, tick: u64) -> bool {
@@ -488,12 +500,14 @@ impl Session {
         }
         self.bots.brains.get_mut(&bot)?.object_cursor = (start + visited.max(1)) % len;
         let opportunity = best?;
+        let allies = self.claim_allies(bot, tick);
         if self.bots.claims.acquire(
             bot,
             enemy.subject,
             opportunity.resource,
             feet.distance(opportunity.point),
             tick,
+            |o| allies.contains(&o),
         ) {
             let brain = self.bots.brains.get_mut(&bot)?;
             brain.push_contact = None;
@@ -952,9 +966,23 @@ impl Session {
                 .filter(|p| p.through.is_none())
                 .map(|p| flat(p.feet - at));
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
-            let reversing = error.abs() > 1.8
-                || self.bots.brains[&bot].vehicle_stuck > 360
-                    && self.bots.brains[&bot].vehicle_stuck < 480;
+            // Back onto a fixed goal behind (a delivery or a walk home). A
+            // pursued target behind is backed onto only when close; a farther
+            // one is turned toward, so a chase is not driven as a long retreat.
+            let brain = &self.bots.brains[&bot];
+            let remaining = brain
+                .plan
+                .last()
+                .filter(|p| p.through.is_none())
+                .map(|p| flat(p.feet - at).length())
+                .or(toward.map(|d| d.length()))
+                .unwrap_or(0.0);
+            let pursuing = matches!(
+                behaviour,
+                Behaviour::Fight | Behaviour::Chase | Behaviour::Search | Behaviour::Fly
+            );
+            let reversing = reverses(&brain.kind.mounted, error, remaining, pursuing)
+                || brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480;
             let travel_sign = if reversing { -1.0 } else { 1.0 };
             let heading_error = if reversing {
                 wrap(error + std::f32::consts::PI)
@@ -1077,5 +1105,40 @@ impl Session {
             let _ = self.dismount_vehicle(bot);
         }
         Ok(input)
+    }
+}
+
+/// A chassis reverses toward a goal more than the kind's
+/// `mounted.reverse_degrees` off its heading. While pursuing a target it
+/// does so only within `mounted.reverse_distance`; a farther target behind
+/// is turned toward instead.
+fn reverses(
+    policy: &crate::bot_kind::BotMounted,
+    error: f32,
+    remaining: f32,
+    pursuing: bool,
+) -> bool {
+    error.abs() > policy.reverse_degrees.to_radians()
+        && (!pursuing || remaining <= policy.reverse_distance)
+}
+
+#[cfg(test)]
+mod mounted_tests {
+    #[test]
+    fn a_pursuing_chassis_backs_onto_a_near_target_but_turns_toward_a_far_one() {
+        let policy = crate::bot_kind::BotMounted::default();
+        let behind = std::f32::consts::PI * 0.9;
+        assert!(super::reverses(&policy, behind, 3.0, true));
+        assert!(super::reverses(
+            &policy,
+            -behind,
+            policy.reverse_distance,
+            true
+        ));
+        assert!(!super::reverses(&policy, behind, 40.0, true));
+        assert!(!super::reverses(&policy, 0.5, 3.0, true));
+        // A fixed delivery behind the hull is still backed onto.
+        assert!(super::reverses(&policy, behind, 40.0, false));
+        assert!(!super::reverses(&policy, 0.5, 40.0, false));
     }
 }

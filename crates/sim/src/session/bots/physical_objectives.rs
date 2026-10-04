@@ -9,10 +9,20 @@ use super::*;
 use bri_vehicles::{Definition, Family, VehicleId, VehicleSnapshot};
 use bri_weapons::BotManipulation;
 
-// Reuse the interaction discovery envelope. The caller charges every resulting
-// choice against the existing cumulative action/model budget before cloning rows.
+// The caller charges every resulting choice against the existing cumulative
+// action/model budget before cloning rows. The discovery envelope is the
+// kind's `objective_radius`.
 const OBJECTS: usize = 8;
-const DISCOVER: f32 = 24.0;
+
+fn discovery_radius(session: &Session, bot: OwnerId) -> f32 {
+    session
+        .bots
+        .brains
+        .get(&bot)
+        .map_or(BotKind::default().objective_radius, |b| {
+            b.kind.objective_radius
+        })
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ObjectStamp {
@@ -203,10 +213,11 @@ pub(super) fn discover(
 ) -> Result<Discovery, Rejection> {
     let peer = session.peers.get(&bot).ok_or(Rejection::Missing)?;
     let feet = Vec3::from(peer.player.state().feet);
+    let radius = discovery_radius(session, bot);
     let mut bodies = Vec::new();
     for v in &session.bots.objects {
         budget.reserve(1, 0, 0).map_err(|_| Rejection::Budget)?;
-        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > DISCOVER {
+        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > radius {
             continue;
         }
         if bodies.len() >= OBJECTS {
@@ -242,9 +253,10 @@ pub(super) fn candidates(
         .as_ref()
         .ok_or(Rejection::Unsupported)?;
     let destination = (bounds.0 + bounds.1) * 0.5;
+    let radius = discovery_radius(session, bot);
     let mut choices = Vec::new();
     for v in &discovery.bodies {
-        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > DISCOVER {
+        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > radius {
             continue;
         }
         let Some(d) = world.definition(&v.definition) else {
@@ -639,7 +651,11 @@ impl Choice {
         }
         let feet = Vec3::from(peer.player.state().feet);
         let at = Vec3::from(v.transform.position);
-        let centre = session.object_centre(object).ok_or(Rejection::Missing)?;
+        let mut centre = session.object_centre(object).ok_or(Rejection::Missing)?;
+        // Contested by an opponent: meet the body where it is heading.
+        if matches!(self.method, Method::Push | Method::Hammer { .. }) {
+            centre += super::contest::lead(session, bot, object, feet, centre, v.velocity.into());
+        }
         let destination = self
             .rearm
             .unwrap_or((self.goal.bounds.0 + self.goal.bounds.1) * 0.5);

@@ -85,6 +85,73 @@ pub struct BotKind {
     /// 0 turns one off (a guard that never gives chase), more puts it ahead
     /// of others (`docs/architecture/bots.md`).
     pub behaviours: std::collections::BTreeMap<String, f32>,
+    /// How far from itself, in world units, it looks for loose bodies an
+    /// authored object-entry objective can use.
+    pub objective_radius: f32,
+    /// How it plays an object an opponent is also moving.
+    pub contest: BotContest,
+    /// How it pursues while it drives a mount.
+    pub mounted: BotMounted,
+}
+/// Contesting one body with opponents (each pushing it toward its own
+/// goal): both sides keep their intentions and the physics decides. While
+/// an opponent claims or last moved the body, it aims for where the body is
+/// heading rather than where it was.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotContest {
+    /// Seconds of the body's own velocity it leads its approach by.
+    pub lead_seconds: f32,
+    /// The most, in world units, that lead moves the approach.
+    pub max_lead: f32,
+    /// Within this many world units of a contested body it is engaged: its
+    /// intention stays live while it works the body against an opponent.
+    pub engage: f32,
+}
+impl Default for BotContest {
+    fn default() -> Self {
+        Self {
+            lead_seconds: 0.6,
+            max_lead: 4.0,
+            engage: 4.0,
+        }
+    }
+}
+/// Where a driving bot's chase leash is measured from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MountAnchor {
+    /// Where it took the controls.
+    #[default]
+    Mount,
+    /// Its brick, as on foot.
+    Home,
+}
+/// Pursuit while driving: a mount covers ground a walker does not, so its
+/// leash has its own anchor and length, and a chassis turns toward a goal
+/// behind it unless the goal is close enough to back onto.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotMounted {
+    pub anchor: MountAnchor,
+    /// How far from the anchor it follows a fight before giving up.
+    pub chase_radius: f32,
+    /// A goal at least this many degrees off the hull's heading is reached
+    /// in reverse...
+    pub reverse_degrees: f32,
+    /// ...but a pursued target only when it is no farther than this; a
+    /// farther one is turned toward.
+    pub reverse_distance: f32,
+}
+impl Default for BotMounted {
+    fn default() -> Self {
+        Self {
+            anchor: MountAnchor::Mount,
+            chase_radius: 96.0,
+            reverse_degrees: 103.0,
+            reverse_distance: 16.0,
+        }
+    }
 }
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
@@ -163,6 +230,9 @@ impl Default for BotKind {
             out_of_water_seconds: None,
             alerts_allies: false,
             behaviours: Default::default(),
+            objective_radius: 24.0,
+            contest: BotContest::default(),
+            mounted: BotMounted::default(),
         }
     }
 }
@@ -274,6 +344,28 @@ impl BotKind {
             ("turn_degrees", self.turn_degrees, 10.0, 3600.0),
             ("aim_error_degrees", self.aim_error_degrees, 0.0, 45.0),
             ("memory_seconds", self.memory_seconds, 0.0, 60.0),
+            ("objective_radius", self.objective_radius, 1.0, 128.0),
+            ("contest.lead_seconds", self.contest.lead_seconds, 0.0, 5.0),
+            ("contest.max_lead", self.contest.max_lead, 0.0, 32.0),
+            ("contest.engage", self.contest.engage, 0.0, 32.0),
+            (
+                "mounted.chase_radius",
+                self.mounted.chase_radius,
+                0.0,
+                400.0,
+            ),
+            (
+                "mounted.reverse_degrees",
+                self.mounted.reverse_degrees,
+                90.0,
+                180.0,
+            ),
+            (
+                "mounted.reverse_distance",
+                self.mounted.reverse_distance,
+                0.0,
+                64.0,
+            ),
         ];
         for (name, value, min, max) in ranges {
             ensure!(
