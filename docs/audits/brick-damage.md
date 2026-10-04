@@ -144,6 +144,16 @@ other routes.
    are frozen.
 4. **`fakeKillBrick` with time 0 waits 1 s.** v20 passes 0 ms to the engine.
    The engine side was not recovered, so the existing 1 s floor stays.
+5. **A blast throws at most 2048 of its bricks as debris**
+   (`session::MAX_BLAST_DEBRIS`, 2026-10-04). Every brick in reach is knocked
+   out and respawns; at most 2048, spread over the blast, get a `BrickKill`
+   cue. That is the most debris a client keeps at its highest Physics
+   Quality, and a v20 client over its `$pref::Physics::MaxBricks` only hides
+   the rest. The Mini-Nuke takes out about 5,000 bricks of Badspot's
+   Christmas Block Party; one cue each overflowed the presentation queue and
+   pushed out the blast's own explosion and sound. Clients take the
+   unannounced bricks in the blast's reach out at once, as they do the
+   announced ones, rather than fading them.
 
 ## Not verified or not implemented
 

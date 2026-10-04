@@ -1,6 +1,10 @@
 //! Weapon, actor and world effects fed by the session's cues.
 use super::*;
 
+/// How far past a blast's radius a knocked-out brick's centre may lie: the
+/// blast reaches the brick's box, not its centre.
+const BLAST_REACH_MARGIN: f32 = 4.0;
+
 /// Presentation effects: weapon, actor and world effects, debris, fades and the cue queues feeding them.
 pub(super) struct Effects {
     pub(super) effects: crate::effects::WorldEffects,
@@ -29,6 +33,48 @@ pub(super) struct Effects {
     pub(super) weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
     pub(super) weapon_animation_drops: u64,
     pub(super) weapon_animation_cursor: u64,
+}
+
+/// A blast announces at most `MAX_BLAST_DEBRIS` of the bricks it knocks
+/// out; the rest are hidden by the same update with no cue of their
+/// own. Like the announced ones they go at once instead of fading out:
+/// every easing brick that stopped rendering, colliding and taking aim
+/// within reach of one of `cues`' blasts.
+pub(super) fn settle_blasted(
+    fades: &mut crate::brick_fade::BrickFades,
+    bricks: &bri_world::Bricks,
+    cues: &[bri_sim::presentation::Cue],
+) {
+    let mut blasts: Vec<([f32; 3], f32)> = cues
+        .iter()
+        .filter_map(|cue| match cue.kind {
+            bri_sim::presentation::CueKind::BrickKill {
+                death: bri_sim::presentation::BrickDeath::Blast,
+                origin,
+                radius,
+                ..
+            } if radius > 0.5 => Some((origin, radius)),
+            _ => None,
+        })
+        .collect();
+    // One blast's cues name the same origin and radius.
+    blasts.dedup();
+    if blasts.is_empty() {
+        return;
+    }
+    fades.settle_where(|id| {
+        bricks.get(&id).is_some_and(|b| {
+            let at = Vec3::from(b.position);
+            !b.visible
+                && !b.colliding
+                && !b.raycast
+                // The blast reaches a brick's box; its centre lies at
+                // most half a big brick further out.
+                && blasts.iter().any(|(origin, radius)| {
+                    at.distance(Vec3::from(*origin)) <= radius + BLAST_REACH_MARGIN
+                })
+        })
+    });
 }
 
 impl App {
@@ -400,5 +446,63 @@ impl App {
         drop(weapon_effects.take_avatar_animation_requests());
         weapon_effects.advance(elapsed, Vec3::ZERO, |cue| world_items.effect_pose(cue))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bri_net::protocol::PublicWorld;
+    use bri_sim::presentation::{BrickDeath, Cue, CueKind};
+    use bri_world::{Brick, ContentRef};
+
+    fn world(knocked_out: bool) -> PublicWorld {
+        let mut bricks = bri_world::Bricks::default();
+        for (id, x) in [(1, 0.0), (2, 10.0), (3, 60.0)] {
+            let mut brick = Brick::new(ContentRef::Resolved("a".into()), [x, 0.3, 0.0], 1);
+            brick.color = 1;
+            if knocked_out {
+                (brick.visible, brick.raycast, brick.colliding) = (false, false, false);
+            }
+            bricks.insert(id, brick);
+        }
+        PublicWorld {
+            name: "Test".into(),
+            map_id: "map/test".into(),
+            palette: vec![[0.0, 0.0, 0.0, 1.0], [1.0; 4]],
+            bricks,
+        }
+    }
+
+    /// A blast announces one of the bricks it knocks out; the others in its
+    /// reach go at once with it instead of fading out. A brick out of its
+    /// reach that stopped rendering still fades, as v20 eases it.
+    #[test]
+    fn bricks_a_blast_knocks_out_without_a_cue_do_not_fade() {
+        let mut fades = crate::brick_fade::BrickFades::default();
+        let (before, after) = (world(false), world(true));
+        fades.observe(&before, &after, [1, 2, 3]);
+        assert_eq!(fades.left_out(), BTreeSet::from([1, 2, 3]));
+        let cue = Cue {
+            id: 1,
+            tick: 1,
+            position: [0.0, 0.3, 0.0],
+            kind: CueKind::BrickKill {
+                brick: 1,
+                death: BrickDeath::Blast,
+                definition: ContentRef::Resolved("a".into()),
+                quarter_turns: 0,
+                color: 1,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                origin: [0.0, 0.0, 0.0],
+                force: 70.0,
+                radius: 29.0,
+            },
+        };
+        settle_blasted(&mut fades, &after.bricks, &[cue]);
+        // Settled at their target: no longer easing, left to the chunks.
+        assert_eq!(fades.left_out(), BTreeSet::from([3]));
     }
 }

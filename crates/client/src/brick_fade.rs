@@ -110,6 +110,15 @@ impl BrickFades {
             fade.settled = true;
         }
     }
+    /// [`Self::settle`] every easing brick `knocked_out` names.
+    pub fn settle_where(&mut self, mut knocked_out: impl FnMut(u64) -> bool) {
+        for (id, fade) in &mut self.fades {
+            if !fade.settled && knocked_out(*id) {
+                fade.drawn = fade.target;
+                fade.settled = true;
+            }
+        }
+    }
     /// Stop easing `id`: it is drawn at its target (a knocked-out brick:
     /// gone at once, its debris takes its place) until the chunks take it.
     pub fn settle(&mut self, id: u64) {
@@ -251,7 +260,10 @@ impl FadeModels {
         self.models.clear();
     }
     /// Rebuild the meshes of the bricks `fades` draws this frame from the
-    /// drawn `world`'s bricks.
+    /// drawn `world`'s bricks. Like the chunks and brick debris they draw
+    /// with the brick `palette`'s textures (`gpu_palette`), so a respawning
+    /// blast's hundreds of easing bricks upload geometry, not a copy of
+    /// every brick surface image each.
     #[allow(clippy::too_many_arguments)] // GPU context plus the brick catalogs
     pub fn upload(
         &mut self,
@@ -262,6 +274,8 @@ impl FadeModels {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         meshes: &BTreeMap<String, bri_content::brick::Brick>,
+        palette: &crate::world_chunks::BrickPalette,
+        gpu_palette: &GpuScene,
         materials: &crate::materials::BrickMaterials,
     ) -> Result<()> {
         let shown: BTreeMap<u64, [f32; 4]> = fades.shown(left_out).collect();
@@ -270,7 +284,7 @@ impl FadeModels {
             if self.models.get(&id).is_some_and(|m| m.drawn == drawn) {
                 continue;
             }
-            let Some(data) = brick_scene(world, id, drawn, meshes, materials)? else {
+            let Some(data) = brick_scene(world, id, drawn, meshes, palette, materials)? else {
                 self.models.remove(&id);
                 continue;
             };
@@ -282,7 +296,7 @@ impl FadeModels {
                     model.drawn = drawn;
                 }
                 _ => {
-                    let gpu = renderer.upload(device, queue, &data)?;
+                    let gpu = renderer.upload_palette_model(device, &data, gpu_palette)?;
                     self.models.insert(id, FadeModel { gpu, drawn, layout });
                 }
             }
@@ -300,6 +314,7 @@ fn brick_scene(
     id: u64,
     drawn: [f32; 4],
     meshes: &BTreeMap<String, bri_content::brick::Brick>,
+    palette: &crate::world_chunks::BrickPalette,
     materials: &crate::materials::BrickMaterials,
 ) -> Result<Option<SceneData>> {
     let Some(brick) = world.bricks.get(&id) else {
@@ -314,14 +329,9 @@ fn brick_scene(
     brick.recolor(|_| 0);
     // A brick fading out has already stopped rendering.
     brick.visible = true;
-    let one = PublicWorld {
-        name: "Easing brick".into(),
-        map_id: world.map_id.clone(),
-        palette: vec![drawn.map(|v| v.clamp(0.0, 1.0))],
-        bricks: bri_world::Bricks::unit(id, brick),
-    };
+    let colors = [drawn.map(|v| v.clamp(0.0, 1.0))];
     let data =
-        crate::world_scene::build_world_scene_materials(&one, meshes, 200_000, Some(materials))?;
+        crate::world_chunks::build_brick(&brick, &colors, meshes, palette, Some(materials))?;
     Ok((!data.indices.is_empty()).then_some(data))
 }
 
@@ -398,10 +408,14 @@ mod tests {
         let mut world = world(1, true);
         let brick = world.bricks.get_mut(&7).unwrap();
         brick.events = vec![crate::world_scene::tests::set_color(2)];
-        let data = brick_scene(&world, 7, WHITE, &meshes, &materials)
+        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
+        let data = brick_scene(&world, 7, WHITE, &meshes, &palette, &materials)
             .unwrap()
             .unwrap();
         assert!(data.vertices.iter().all(|v| v.color == WHITE));
+        // Drawn with the chunks' palette: geometry only, no images of its own.
+        assert_eq!(data.materials, palette.scene.materials);
+        assert!(data.images.is_empty());
     }
 
     #[test]
@@ -496,13 +510,14 @@ mod tests {
     fn a_faded_out_brick_draws_no_mesh() {
         let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
         let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
         let world = world(1, false);
         let half = [1.0, 1.0, 1.0, 0.5];
-        let data = brick_scene(&world, 7, half, &meshes, &materials).unwrap();
+        let data = brick_scene(&world, 7, half, &meshes, &palette, &materials).unwrap();
         assert!(data.is_some_and(|d| d.vertices.iter().all(|v| v.color == half)));
         let faint = [1.0, 1.0, 1.0, 0.02];
         assert!(
-            brick_scene(&world, 7, faint, &meshes, &materials)
+            brick_scene(&world, 7, faint, &meshes, &palette, &materials)
                 .unwrap()
                 .is_none()
         );

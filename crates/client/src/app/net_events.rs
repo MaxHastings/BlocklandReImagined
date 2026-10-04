@@ -334,6 +334,7 @@ impl App {
                 }
                 _ => self.fx.brick_fades.settle_all(),
             }
+            settle_blasted(&mut self.fx.brick_fades, &world.bricks, &self.fx.brick_kills);
             let left_out = self.fx.brick_fades.left_out();
             let job_left_out = left_out.clone();
             let mut chunked = std::mem::take(&mut self.scene.chunked);
