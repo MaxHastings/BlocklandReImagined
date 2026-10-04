@@ -7,6 +7,22 @@ import sys
 import gate
 
 
+class GateEnvironment(unittest.TestCase):
+    def test_content_backed_tests_get_the_main_content(self):
+        env = gate_env_for({"PATH": "x", "CARGO_TARGET_DIR": "elsewhere"})
+        self.assertEqual(env["BRI_CONTENT"], str(Path("main") / "content"))
+        self.assertNotIn("CARGO_TARGET_DIR", env)
+        self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+
+    def test_a_chosen_content_folder_is_kept(self):
+        env = gate_env_for({"BRI_CONTENT": "mine"})
+        self.assertEqual(env["BRI_CONTENT"], "mine")
+
+
+def gate_env_for(environ):
+    return gate.gate_env(environ, Path("main") / "content")
+
+
 class BinaryDeadline(unittest.TestCase):
     def test_stalled_binary_is_stopped_and_reported_as_failure(self):
         with patch.object(gate, 'BINARY_TIMEOUT', 0.1):
