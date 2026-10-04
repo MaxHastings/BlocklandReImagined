@@ -47,6 +47,9 @@ struct View {
     runs: Vec<Run>,
     stats: RenderStats,
 }
+/// The most sprite instances one renderer accepts: one world at its largest
+/// [`crate::EffectsLimits`] (a million particles and 4096 light flares).
+pub const MAX_INSTANCES: usize = 1_004_096;
 pub struct EffectsRenderer {
     sprites: wgpu::RenderPipeline,
     flares: wgpu::RenderPipeline,
@@ -75,7 +78,7 @@ impl EffectsRenderer {
     ) -> Result<Self> {
         ensure!(
             max_instances > 0
-                && max_instances <= 1_004_096
+                && max_instances <= MAX_INSTANCES
                 && matches!(sample_count, 1 | 2 | 4 | 8 | 16),
             "Invalid effects GPU limits"
         );
@@ -437,6 +440,10 @@ impl EffectsRenderer {
             });
             pass.draw(0..6, run.instances.clone());
         }
+    }
+    /// The most sprites one view draws; a frame must be cut to this first.
+    pub fn max_instances(&self) -> usize {
+        self.max_instances
     }
     /// The player's view.
     pub fn stats(&self) -> RenderStats {

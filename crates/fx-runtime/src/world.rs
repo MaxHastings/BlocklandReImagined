@@ -141,6 +141,14 @@ impl Default for EffectsLimits {
         }
     }
 }
+impl EffectsLimits {
+    /// The most sprites one snapshot of a world with these limits can hold:
+    /// every live particle plus one flare per light source. A renderer that
+    /// draws several worlds is sized from the sum of theirs.
+    pub fn max_sprites(&self) -> usize {
+        self.particles.saturating_add(self.lights)
+    }
+}
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct Diagnostics {
     pub emitted: u64,
@@ -367,6 +375,10 @@ impl EffectsWorld {
             flare_texture,
             passages: Passages::default(),
         })
+    }
+    /// The limits this world was made with.
+    pub fn limits(&self) -> EffectsLimits {
+        self.limits
     }
     pub fn pack(&self) -> &Arc<EffectsPack> {
         &self.pack

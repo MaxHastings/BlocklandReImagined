@@ -25,6 +25,8 @@ pub(super) struct Effects {
     pub(super) fade_models: crate::brick_fade::FadeModels,
     pub(super) brick_kills: Vec<bri_sim::presentation::Cue>,
     pub(super) weapon_light_deferred: usize,
+    /// The farthest sprites the last frame left out past the renderer's budget.
+    pub(super) effect_sprites_cut: usize,
     pub(super) weapon_effect_session: Option<RequestId>,
     pub(super) weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
     pub(super) weapon_animation_drops: u64,

@@ -1059,19 +1059,72 @@ fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {
         lights: vec![],
     };
     let others = [weapon.clone(), actor.clone()];
-    let (combined, deferred) = super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO]);
+    let (combined, cuts) =
+        super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO], usize::MAX);
     assert_eq!(combined.particles[0].texture, 2);
     assert_eq!(combined.particles[1].texture, 7);
     assert_eq!(combined.lights.len(), bri_render::scene::MAX_POINT_LIGHTS);
     assert_eq!(combined.lights[0].handle.0, 9000);
-    assert_eq!(deferred, 1);
+    assert_eq!(cuts.lights, 1);
+    assert_eq!(cuts.sprites, 0);
     // A mirror's eye far down the row keeps the lights beside it: the
     // farthest from the player is kept, the next nearest dropped.
     let mirror = Vec3::new(1000. + bri_render::scene::MAX_POINT_LIGHTS as f32, 0., 0.);
-    let (combined, _) = super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror]);
+    let (combined, _) =
+        super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror], usize::MAX);
     let kept = |id: u64| combined.lights.iter().any(|l| l.handle.0 == id);
     assert!(kept(9000) && kept(bri_render::scene::MAX_POINT_LIGHTS as u64 - 1));
     assert!(!kept(0), "the light nearest neither eye goes");
+}
+/// Busy battles once closed the game: three effect worlds fed a renderer
+/// sized for two, and an over-full frame was a render error. The renderer
+/// is now sized from every world's limits, and a frame past its budget
+/// loses its farthest sprites instead of failing.
+#[test]
+fn three_full_effect_worlds_fit_the_renderer_and_overflow_drops_the_farthest() {
+    use glam::Vec3;
+    let limits = bri_fx_runtime::EffectsLimits::default();
+    let pack = bri_fx_runtime::testing::pack(|_| {});
+    let worlds: Vec<_> = (0..3)
+        .map(|seed| bri_fx_runtime::EffectsWorld::new(pack.clone(), limits, seed).unwrap())
+        .collect();
+    let budget = super::effects_instance_budget([&worlds[0], &worlds[1], &worlds[2]]);
+    // Every world's snapshot at its fullest: all particles and a flare per light.
+    let full = |texture| bri_fx_runtime::FrameEffects {
+        particles: (0..limits.max_sprites())
+            .rev()
+            .map(|i| bri_fx_runtime::ParticleInstance {
+                position: Vec3::new(i as f32, 0., 0.),
+                size: 1.,
+                color: Vec3::ONE.extend(1.),
+                spin: 0.,
+                axis: Vec3::ZERO,
+                texture,
+                blend: bri_fx_runtime::BlendMode::Alpha,
+                depth_test: true,
+            })
+            .collect(),
+        lights: Vec::new(),
+    };
+    let (combined, cuts) =
+        super::combine_effect_frames(full(0), [full(1), full(2)], &[Vec3::ZERO], budget);
+    assert_eq!(combined.particles.len(), 3 * limits.max_sprites());
+    assert_eq!(cuts.sprites, 0, "three full worlds fit the renderer");
+    // A smaller budget (a renderer capped below the worlds) keeps the nearest.
+    let (combined, cuts) =
+        super::combine_effect_frames(full(0), [full(1), full(2)], &[Vec3::ZERO], 10);
+    assert_eq!(
+        (combined.particles.len(), cuts.sprites),
+        (10, 3 * limits.max_sprites() - 10)
+    );
+    let far = |p: &bri_fx_runtime::ParticleInstance| p.position.x;
+    assert!(combined.particles.iter().all(|p| far(p) <= 3.));
+    assert!(
+        combined
+            .particles
+            .windows(2)
+            .all(|w| far(&w[0]) >= far(&w[1]))
+    );
 }
 #[test]
 fn remote_chat_cannot_inject_color_stack_or_markup() {

@@ -877,8 +877,18 @@ impl App {
             .actor_effects
             .world()
             .snapshot_in_view(&effects_camera);
-        let (effects_frame, deferred_lights) =
-            combine_effect_frames(world_frame, [weapon_frame, actor_frame], &eyes);
+        let sprite_budget = self
+            .gpu
+            .effects_renderer
+            .as_ref()
+            .context("Effects GPU not initialized")?
+            .max_instances();
+        let (effects_frame, cuts) = combine_effect_frames(
+            world_frame,
+            [weapon_frame, actor_frame],
+            &eyes,
+            sprite_budget,
+        );
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -928,7 +938,8 @@ impl App {
             fog_start,
             fog_end.max(fog_start + 0.001),
         )?;
-        self.fx.weapon_light_deferred = deferred_lights;
+        self.fx.weapon_light_deferred = cuts.lights;
+        self.fx.effect_sprites_cut = cuts.sprites;
         // Player lights are effect lights too; the nearest to the camera win.
         let lights: Vec<_> = effects_frame
             .lights
