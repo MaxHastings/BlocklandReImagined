@@ -126,12 +126,31 @@ fn log_adapter(adapter: &wgpu::Adapter, failures: &[String]) {
         "GPU: {} ({:?}, {:?}, driver {} {})",
         info.name, info.backend, info.device_type, info.driver, info.driver_info
     ));
+    if info.backend == wgpu::Backend::Dx12 {
+        let beside = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+        bri_console::echo(dx12_shader_compiler(beside.as_deref()));
+    }
     if !failures.is_empty() {
         bri_console::warn(format!(
             "Fell back to {:?} after: {}",
             info.backend,
             failures.join("; ")
         ));
+    }
+}
+
+/// Which compiler DirectX 12 shaders use. A Windows release ships DXC's
+/// dxcompiler.dll beside the game (tools/shader-compiler.json), which
+/// wgpu's default compiler choice loads: about 3 s for the world's shaders.
+/// Without it wgpu falls back to the system's FXC: about 20 s, minutes on a
+/// busy CPU.
+fn dx12_shader_compiler(game_folder: Option<&std::path::Path>) -> &'static str {
+    if game_folder.is_some_and(|dir| dir.join("dxcompiler.dll").is_file()) {
+        "Shader compiler: DXC (dxcompiler.dll beside the game)"
+    } else {
+        "Shader compiler: FXC (no dxcompiler.dll beside the game; the first map's shaders compile slowly)"
     }
 }
 
@@ -1844,6 +1863,16 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_names_dxc_only_when_it_ships_beside_the_game() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        assert!(dx12_shader_compiler(Some(directory.path())).contains("FXC"));
+        assert!(dx12_shader_compiler(None).contains("FXC"));
+        std::fs::write(directory.path().join("dxcompiler.dll"), b"stand-in")?;
+        assert!(dx12_shader_compiler(Some(directory.path())).contains("DXC"));
+        Ok(())
+    }
 
     #[test]
     fn screenshot_jpeg_and_png_use_their_real_formats() -> Result<()> {
