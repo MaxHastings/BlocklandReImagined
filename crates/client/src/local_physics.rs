@@ -286,6 +286,53 @@ impl Pushers {
     }
 }
 
+/// Where `bodies` are now (their origins, which openings carry them by): what [`carry_through_openings`] compares
+/// after the next step.
+pub fn middles(
+    world: &PhysicsWorld,
+    bodies: impl Iterator<Item = RigidBodyHandle>,
+) -> Vec<(RigidBodyHandle, Vec3)> {
+    bodies
+        .filter_map(|h| Some((h, world.bodies.get(h)?.translation())))
+        .collect()
+}
+
+/// Carry each body whose middle went in through an opening of a linked
+/// brick since `before` (each one's middle then) out of its partner, turned
+/// with its velocity and spin, as the host carries players and vehicles:
+/// debris knocked into a portal flies out of the other one instead of out
+/// of the doorway's back. Returns how many were carried.
+pub fn carry_through_openings(
+    world: &mut PhysicsWorld,
+    passages: &bri_content::passage::Passages,
+    before: &[(RigidBodyHandle, Vec3)],
+) -> usize {
+    if passages.list.is_empty() {
+        return 0;
+    }
+    let mut carried = 0;
+    for &(handle, from) in before {
+        let Some(body) = world.bodies.get_mut(handle) else {
+            continue;
+        };
+        let (_, Some(carry)) = passages.travel(from, body.translation()) else {
+            continue;
+        };
+        let (_, turn, _) = carry.to_scale_rotation_translation();
+        let position = *body.position();
+        let moved = Pose::from_parts(
+            carry.transform_point3(position.translation),
+            (turn * position.rotation).normalize(),
+        );
+        let (linear, angular) = (turn * body.linvel(), turn * body.angvel());
+        body.set_position(moved, true);
+        body.set_linvel(linear, true);
+        body.set_angvel(angular, true);
+        carried += 1;
+    }
+    carried
+}
+
 /// Projectiles passing through bodies: each strikes a body once.
 #[derive(Default)]
 pub struct Shots {

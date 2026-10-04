@@ -242,6 +242,8 @@ pub struct BrickDebris {
     threw: bool,
     ghosts: Vec<Ghost>,
     falling: Vec<Falling>,
+    /// The openings of linked bricks (portals) bodies fly through.
+    passages: bri_content::passage::Passages,
     pub diagnostics: BrickDebrisDiagnostics,
 }
 
@@ -271,7 +273,15 @@ impl BrickDebris {
             threw: false,
             ghosts: Vec::new(),
             falling: Vec::new(),
+            passages: Default::default(),
             diagnostics: Default::default(),
+        }
+    }
+    /// The openings of linked bricks: a body knocked into one flies on out
+    /// of its partner, as everything else that moves does.
+    pub fn set_passages(&mut self, passages: &bri_content::passage::Passages) {
+        if self.passages.list != passages.list {
+            self.passages = passages.clone();
         }
     }
     /// Forget everything (disconnect, new server). The limit and what
@@ -679,7 +689,15 @@ impl BrickDebris {
         for step in 1..=steps {
             self.pushers
                 .drive(&mut self.world, step as f32 / steps as f32);
+            let before = match self.passages.list.is_empty() {
+                true => Vec::new(),
+                false => crate::local_physics::middles(
+                    &self.world,
+                    self.bodies.values().map(|b| b.handle),
+                ),
+            };
             self.world.step();
+            crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
             self.age(STEP);
         }
         self.pushers.settle();
@@ -1680,6 +1698,38 @@ pub(crate) mod tests {
             fastest < 2.0 * speed,
             "flung at {fastest} by a ball at {speed}"
         );
+    }
+
+    /// A brick knocked into a doorway portal flies on out of its partner,
+    /// turned with it, instead of tumbling out of the doorway's back.
+    #[test]
+    fn debris_knocked_into_a_portal_flies_out_of_its_partner() {
+        let (passages, carry) = crate::portal_view::doorways::pair();
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.set_passages(&passages);
+        debris
+            .cues(&[lying(1, [0.2, 0.3, 3.0])], &building)
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        let handle = debris.bodies.values().next().unwrap().handle;
+        let thrown = Vec3::new(0.0, 3.0, -12.0);
+        debris.world.bodies[handle].set_linvel(thrown, true);
+        let mut out = None;
+        for _ in 0..60 {
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            let rb = &debris.world.bodies[handle];
+            let at = Vec3::from_array(rb.translation().to_array());
+            if out.is_none() && at.x > 20.0 {
+                out = Some((at, Vec3::from_array(rb.linvel().to_array())));
+            }
+        }
+        let (at, velocity) = out.expect("never came out of the partner");
+        // Out of B's -z face, going on the way B's -z faces.
+        let back = carry.inverse();
+        assert!(back.transform_point3(at).z < 0.0, "at {at}");
+        let along = back.transform_vector3(velocity);
+        assert!(along.z < -8.0, "going {velocity} ({along} as A sees it)");
     }
 
     #[test]

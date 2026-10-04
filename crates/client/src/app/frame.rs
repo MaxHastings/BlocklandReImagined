@@ -1260,6 +1260,7 @@ impl App {
             self.fx.weapon_effects.set_passages(&passages);
             self.fx.effects.world.set_passages(&passages);
             self.fx.actor_effects.set_passages(&passages);
+            self.fx.brick_debris.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
