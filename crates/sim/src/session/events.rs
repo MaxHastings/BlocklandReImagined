@@ -30,19 +30,32 @@ pub(super) fn entity(class: Class, index: u64) -> Entity {
     }
 }
 
+type ObjectiveInputKey = (BrickId, OwnerId, String, Option<u64>);
+type ObjectiveInputObservation = (u64, u64);
+
 #[derive(Default)]
 pub(super) struct Events {
+    pub(super) rules: super::rules::RuleState,
     pub(super) world: Option<EventWorld>,
     /// The host's own catalog, before Add-Ons' inputs are added.
     base: Option<ev::Catalog>,
     bindings: ev::Bindings,
     sounds: BTreeSet<String>,
-    installed: BTreeSet<BrickId>,
+    pub(in crate::session) installed: BTreeSet<BrickId>,
+    /// Grounded objective/reaction sources, indexed by creator during install.
+    pub(in crate::session) objective_sources: BTreeMap<OwnerId, BTreeSet<BrickId>>,
+    pub(in crate::session) objective_deaths: BTreeMap<OwnerId, BTreeSet<BrickId>>,
+    pub(in crate::session) objective_reactions: BTreeMap<OwnerId, BTreeSet<BrickId>>,
+    /// Actual admitted physical bot inputs, bounded diagnostics/lifecycle data.
+    pub(in crate::session) objective_inputs: BTreeMap<ObjectiveInputKey, ObjectiveInputObservation>,
     scanned: bool,
     origin: u64,
     /// Projectile outputs of zero-delay `onProjectileHit` rows, applied by the
     /// weapon runtime at the moment of contact.
     pub(super) projectile_responses: BTreeMap<BrickId, bri_weapons::ContactResponse>,
+    /// Contact normal for each admitted activation, retained only while that
+    /// existing scheduler origin has jobs. A later hit cannot replace it.
+    projectile_activations: BTreeMap<u64, ProjectileActivation>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
     pub(super) respawns: BTreeMap<BrickId, u64>,
     /// Projectiles events spawned, by the owner of the brick whose quota
@@ -50,7 +63,7 @@ pub(super) struct Events {
     pub(super) spawned: BTreeMap<OwnerId, VecDeque<u64>>,
     /// Items events dropped, likewise, for the item quota.
     pub(super) dropped: BTreeMap<OwnerId, VecDeque<u64>>,
-    diagnostics: VecDeque<String>,
+    pub(super) diagnostics: VecDeque<String>,
     /// What the last tick's event phase ran.
     last_work: EventWork,
     slow: SlowEventTicks,
@@ -63,7 +76,7 @@ pub(super) struct Events {
     /// rules fired from inside one (an output that drops a flag fires
     /// `onFlagDropped`): they run once the phase is done
     /// (`fire_package_input`).
-    advancing: bool,
+    pub(super) advancing: bool,
     deferred: Vec<(BrickId, String, Option<OwnerId>, InputExtra)>,
     /// Add-On inputs that follow one of the engine's (`follows`), asked
     /// about when a player sets that one off.
@@ -72,10 +85,17 @@ pub(super) struct Events {
 /// Targets only some inputs have, for `fire_input_with`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct InputExtra {
+    pub(super) object: Option<u64>,
+    pub(super) projectile: Option<ProjectileActivation>,
     /// The mini-game the input is about (`onMinigameRoundStart`).
     pub(super) game: Option<mg::GameId>,
     /// Whoever killed the player it is about (`onMinigameDeath`).
     pub(super) killer: Option<OwnerId>,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ProjectileActivation {
+    pub(super) projectile: u64,
+    pub(super) normal: Vec3,
 }
 /// Most inputs rules may fire from inside one event phase.
 const MAX_DEFERRED_INPUTS: usize = 256;
@@ -138,7 +158,7 @@ pub struct SlowEventTicks {
 /// `bri_weapons::MAX_EXPLOSIONS_PER_TICK`.
 pub const MAX_EVENT_PROJECTILES_PER_TICK: usize = 8;
 
-fn note(queue: &mut VecDeque<String>, text: String) {
+pub(super) fn note(queue: &mut VecDeque<String>, text: String) {
     if queue.len() == 64 {
         queue.pop_front();
     }
@@ -189,6 +209,7 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
+        let catalog = ev::rules::workshop_catalog(&catalog)?;
         let merged = catalog.extended(&self.package_brick_events())?;
         let follows = self.package_followers(&catalog);
         let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
@@ -198,6 +219,7 @@ impl Session {
             bindings,
             sounds: std::mem::take(&mut self.events.sounds),
             follows,
+            rules: std::mem::take(&mut self.events.rules),
             ..Default::default()
         };
         Ok(())
@@ -212,6 +234,7 @@ impl Session {
                 world.cancel_source(id(*brick), ev::CancelMode::All);
             }
         }
+        self.events.projectile_activations.clear();
     }
     /// `ClearEventObjects`: remove the projectiles the owner's bricks spawned.
     pub(super) fn clear_event_projectiles(&mut self, owner: OwnerId) {
@@ -291,6 +314,20 @@ impl Session {
         let Some(world) = self.events.world.as_mut() else {
             return;
         };
+        if let Some(previous) = world.program(id(brick_id)) {
+            for index in [
+                &mut self.events.objective_sources,
+                &mut self.events.objective_reactions,
+                &mut self.events.objective_deaths,
+            ] {
+                if let Some(ids) = index.get_mut(&previous.owner_scope) {
+                    ids.remove(&brick_id);
+                    if ids.is_empty() {
+                        index.remove(&previous.owner_scope);
+                    }
+                }
+            }
+        }
         let brick = self
             .simulation
             .state()
@@ -298,6 +335,9 @@ impl Session {
             .get(&brick_id)
             .filter(|b| !b.events.is_empty() || b.name.is_some());
         let Some(brick) = brick else {
+            self.events
+                .objective_inputs
+                .retain(|(source, _, _, _), _| *source != brick_id);
             if self.events.installed.remove(&brick_id) {
                 world.remove_brick(id(brick_id));
             }
@@ -328,6 +368,7 @@ impl Session {
                             ),
                         );
                         ev::Row {
+                            conditions: vec![],
                             preserved: Some(ev::PreservedRow {
                                 original: format!("{} -> {}", row.input, row.output),
                                 diagnostic: format!("{error:#}").chars().take(1000).collect(),
@@ -351,9 +392,70 @@ impl Session {
             print_count,
             implicit_cancel_relays: false,
         };
+        if world.program(id(brick_id)).is_none_or(|previous| {
+            previous.rows != program.rows
+                || previous.owner_scope != program.owner_scope
+                || previous.name != program.name
+        }) {
+            self.events
+                .objective_inputs
+                .retain(|(source, _, _, _), _| *source != brick_id);
+        }
+        let has_objectives = program.rows.iter().any(|r| {
+            r.enabled
+                && matches!(
+                    r.input.as_str(),
+                    "onActivate" | "onBotTouch" | "onRegionEnter" | "onObjectEnter"
+                )
+        });
+        let has_deaths = program
+            .rows
+            .iter()
+            .any(|r| r.enabled && r.input == "onRulePlayerDied");
+        let reaction_rows: Vec<_> = program
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r.enabled
+                    && matches!(
+                        r.input.as_str(),
+                        "onRuleScoreChanged" | "onRuleTimer" | "onRuleRoundEnd"
+                    )
+            })
+            .map(|(i, _)| i as u16)
+            .collect();
         match world.install_brick(program) {
             Ok(()) => {
                 self.events.installed.insert(brick_id);
+                let has_reactions = reaction_rows.into_iter().any(|row| {
+                    !matches!(
+                        world.row_intent(id(brick_id), row),
+                        Some(Intent::Brick(BrickOp::PlaySound(_)))
+                            | Some(Intent::Rule(ev::rules::RuleOp::Explain))
+                    )
+                });
+                if has_reactions {
+                    self.events
+                        .objective_reactions
+                        .entry(brick.owner)
+                        .or_default()
+                        .insert(brick_id);
+                }
+                if has_deaths {
+                    self.events
+                        .objective_deaths
+                        .entry(brick.owner)
+                        .or_default()
+                        .insert(brick_id);
+                }
+                if has_objectives {
+                    self.events
+                        .objective_sources
+                        .entry(brick.owner)
+                        .or_default()
+                        .insert(brick_id);
+                }
             }
             Err(error) => {
                 if self.events.installed.remove(&brick_id) {
@@ -417,30 +519,91 @@ impl Session {
         if !self.events.installed.contains(&brick) {
             return;
         }
-        let Some(definition) = self
-            .events
-            .world
-            .as_ref()
-            .and_then(|w| w.catalog().input(input))
+        if self.schedules_exceeded(brick, input, player) {
+            return;
+        }
+        self.events.origin += 1;
+        let Some(trigger) = self.input_context(brick, input, player, extra, self.events.origin)
         else {
             return;
         };
+        let observed_actor = if input == "onRulePlayerDied" {
+            player
+        } else {
+            player.filter(|o| self.is_bot(*o))
+        };
+        let observed_origin = trigger.origin;
+        let world = self.events.world.as_mut().unwrap();
+        let admitted = world.trigger(trigger);
+        if admitted.as_ref().is_ok_and(|count| *count > 0)
+            && let Some(contact) = extra.projectile
+        {
+            self.events
+                .projectile_activations
+                .insert(observed_origin, contact);
+        }
+        if admitted.as_ref().is_ok_and(|count| *count > 0)
+            && matches!(
+                input,
+                "onActivate"
+                    | "onRegionEnter"
+                    | "onBotTouch"
+                    | "onObjectEnter"
+                    | "onRulePlayerDied"
+            )
+            && let Some(bot) = observed_actor
+        {
+            if self.events.objective_inputs.len() >= 1024
+                && let Some(old) = self
+                    .events
+                    .objective_inputs
+                    .iter()
+                    .min_by_key(|(key, value)| (value.1, *key))
+                    .map(|(key, _)| key.clone())
+            {
+                self.events.objective_inputs.remove(&old);
+            }
+            self.events.objective_inputs.insert(
+                (brick, bot, input.into(), extra.object),
+                (observed_origin, self.simulation.state().tick),
+            );
+        }
+        if let Err(error) = admitted {
+            note(
+                &mut self.events.diagnostics,
+                format!("Brick {brick} {input}: {error:#}"),
+            );
+        }
+        if let Some(owner) = player.filter(|o| !self.is_bot(*o)) {
+            self.follow_input(brick, input, owner);
+        }
+    }
+    /// Canonical read-only input context shared by actual dispatch and grounded
+    /// observation. Building a context never schedules or executes an input.
+    pub(in crate::session) fn input_context(
+        &self,
+        brick: BrickId,
+        input: &str,
+        player: Option<OwnerId>,
+        extra: InputExtra,
+        origin: u64,
+    ) -> Option<Trigger> {
+        let definition = self
+            .events
+            .world
+            .as_ref()
+            .and_then(|w| w.catalog().input(input))?;
         let slots: BTreeSet<Slot> = definition
             .targets
             .iter()
             .filter_map(|(slot, _)| Slot::parse(slot))
             .collect();
-        if self.schedules_exceeded(brick, input, player) {
-            return;
-        }
-        self.events.origin += 1;
-        let mut trigger = Trigger::new(id(brick), input, self.events.origin);
+        let mut trigger = Trigger::new(id(brick), input, origin);
         if let Some(bot) = player.filter(|o| self.is_bot(*o) && self.peers.contains_key(o)) {
-            // `fxDTSBrickData::onPlayerTouch` for a bot (allGameScripts.cs:
-            // 17157-17234): Bot is the toucher, Driver whoever rides in its
-            // first seat, and Client and MiniGame stay empty (the bot has no
-            // client). The rows run as the bot's spawn brick owner, else its
-            // rider, else on LAN the first player; with none they do not run.
+            // Physical actors use the same Player/MiniGame authoring universe.
+            // Classic Bot/Driver remain, and the captured real account owns
+            // quotas. An NPC has no GameConnection/Client target. This
+            // deliberately replaces v20's absent Player/MiniGame bot slots.
             if slots.contains(&Slot::Bot) {
                 trigger
                     .targets
@@ -469,21 +632,55 @@ impl Session {
                         .then(|| self.peers.keys().copied().find(player))
                         .flatten()
                 });
-            let Some(client) = client else {
-                return;
-            };
+            let client = client?;
             trigger.client = Some(entity(Class::Client, client));
+            // Reuse authoritative MiniGame selection, but never fabricate an
+            // NPC Client. Captured quota client above remains a real account.
+            let physical_slots = slots
+                .iter()
+                .copied()
+                .filter(|s| *s != Slot::Client)
+                .collect();
+            self.player_targets(brick, &physical_slots, bot, &mut trigger);
         } else if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
             self.player_targets(brick, &slots, owner, &mut trigger);
         }
         self.owner_targets(brick, &slots, &mut trigger.targets);
+        if let Some(owner) =
+            player.filter(|o| self.peers.contains_key(o) && slots.contains(&Slot::Instigator))
+        {
+            trigger
+                .targets
+                .insert(Slot::Instigator, entity(Class::Player, owner));
+        }
+        if let Some(object) = extra.object {
+            trigger
+                .targets
+                .insert(Slot::Object, entity(Class::Vehicle, object));
+        }
+        if slots.contains(&Slot::Projectile)
+            && let Some(contact) = extra.projectile
+        {
+            trigger.targets.insert(
+                Slot::Projectile,
+                entity(Class::Projectile, contact.projectile),
+            );
+        }
         if let Some(game) = extra.game.filter(|_| slots.contains(&Slot::MiniGame)) {
             trigger
                 .targets
                 .entry(Slot::MiniGame)
                 .or_insert(entity(Class::MiniGame, game.0));
         }
+        if input == "onRulePlayerDied" {
+            trigger.targets.remove(&Slot::Instigator);
+        }
         if let Some(killer) = extra.killer.filter(|k| self.peers.contains_key(k)) {
+            if slots.contains(&Slot::Instigator) {
+                trigger
+                    .targets
+                    .insert(Slot::Instigator, entity(Class::Player, killer));
+            }
             if slots.contains(&Slot::KillerPlayer) && self.is_alive(killer) {
                 trigger
                     .targets
@@ -495,16 +692,7 @@ impl Session {
                     .insert(Slot::KillerClient, entity(Class::Client, killer));
             }
         }
-        let world = self.events.world.as_mut().unwrap();
-        if let Err(error) = world.trigger(trigger) {
-            note(
-                &mut self.events.diagnostics,
-                format!("Brick {brick} {input}: {error:#}"),
-            );
-        }
-        if let Some(owner) = player.filter(|o| !self.is_bot(*o)) {
-            self.follow_input(brick, input, owner);
-        }
+        Some(trigger)
     }
     /// The targets an input set off by `owner` offers: their player and
     /// client, and the minigame v20 picks for the brick and them.
@@ -651,6 +839,9 @@ impl Session {
                 );
             }
         });
+        self.events
+            .projectile_activations
+            .retain(|origin, _| world.pending_origin(*origin));
         self.events.world = Some(world);
         for (brick, input, player, extra) in std::mem::take(&mut self.events.deferred) {
             self.fire_input_with(brick, &input, player, extra);
@@ -936,6 +1127,7 @@ fn set_projectile_response(
     let response = rows.iter().find_map(|row| {
         let immediate = row.enabled
             && row.preserved.is_none()
+            && row.conditions.is_empty()
             && row.delay_ms == 0
             && row.input.eq_ignore_ascii_case("onProjectileHit")
             && row.target == ev::Target::Slot(Slot::Projectile);
@@ -1002,6 +1194,46 @@ pub(super) fn clamp_relay_delays(rows: &mut [ev::Row]) {
 }
 
 impl EventHost<'_> {
+    fn projectile_op(&mut self, d: &Dispatch, op: &ev::ProjectileOp) -> Result<Apply> {
+        let Some(contact) = self
+            .session
+            .events
+            .projectile_activations
+            .get(&d.origin)
+            .copied()
+            .filter(|c| c.projectile == d.target.id.index)
+        else {
+            return Ok(Apply::Rejected(
+                "missing original projectile contact".into(),
+            ));
+        };
+        // The contact query already ran the zero-delay response. Work-budget
+        // postponement must not reflect or delete that original twice.
+        if d.delay_ms == 0 {
+            return Ok(Apply::Applied);
+        }
+        use bri_weapons::ContactResponse as R;
+        let response = match op {
+            ev::ProjectileOp::Delete => R::Delete,
+            ev::ProjectileOp::Explode => R::Explode,
+            ev::ProjectileOp::Bounce(factor) => R::Bounce(*factor),
+            ev::ProjectileOp::Redirect { vector, normalized } => R::Redirect {
+                vector: *vector,
+                normalized: *normalized,
+            },
+        };
+        Ok(
+            if self.session.weapons.respond_projectile(
+                contact.projectile,
+                contact.normal,
+                response,
+            )? {
+                Apply::Applied
+            } else {
+                Apply::Rejected("original projectile has expired".into())
+            },
+        )
+    }
     fn edit(&mut self, brick: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
         self.session.simulation.mutate(brick, change)?;
         self.session.dirty.insert(brick);
@@ -1670,6 +1902,27 @@ impl EventHost<'_> {
 }
 
 impl ev::Host for EventHost<'_> {
+    fn query(
+        &self,
+        context: &Trigger,
+        target: Entity,
+        condition: &ev::rules::Condition,
+    ) -> Option<ev::rules::Datum> {
+        self.session.rule_query(context, target, condition)
+    }
+    fn condition_value_label(
+        &self,
+        context: &Trigger,
+        target: Entity,
+        condition: &ev::rules::Condition,
+        value: &ev::rules::Datum,
+    ) -> String {
+        self.session
+            .rule_condition_value_label(context, target, condition, value)
+    }
+    fn trace(&mut self, source: Id, row: u16, text: String) {
+        self.session.rule_trace(source.index, row, text);
+    }
     fn alive(&self, entity: Entity) -> bool {
         let s = &self.session;
         match entity.class {
@@ -1677,7 +1930,12 @@ impl ev::Host for EventHost<'_> {
             Class::Player => s.is_alive(entity.id.index),
             Class::Client => s.peers.contains_key(&entity.id.index),
             Class::MiniGame => s.minigames.game(mg::GameId(entity.id.index)).is_ok(),
-            Class::Projectile | Class::Vehicle => false,
+            Class::Vehicle => s
+                .object_centre(bri_package_runtime::ops::ObjectRef::Vehicle(
+                    entity.id.index,
+                ))
+                .is_some(),
+            Class::Projectile => s.weapons.projectile(entity.id.index).is_some(),
         }
     }
     fn permitted(&self, context: &Trigger, target: Entity, _output: &str) -> bool {
@@ -1696,7 +1954,17 @@ impl ev::Host for EventHost<'_> {
             Class::Player | Class::Client => true,
             // The minigame rules check the brick owner's authority.
             Class::MiniGame => true,
-            Class::Projectile | Class::Vehicle => false,
+            Class::Vehicle => s
+                .vehicle_spawn_brick(bri_vehicles::VehicleId(target.id.index))
+                .and_then(|b| bricks.get(&b))
+                .is_some_and(|b| b.owner == owner),
+            Class::Projectile => {
+                context.targets.get(&Slot::Projectile) == Some(&target)
+                    && s.events
+                        .projectile_activations
+                        .get(&context.origin)
+                        .is_some_and(|contact| contact.projectile == target.id.index)
+            }
         }
     }
     fn relay_neighbors(
@@ -1722,13 +1990,15 @@ impl ev::Host for EventHost<'_> {
     }
     fn apply(&mut self, dispatch: &Dispatch) -> Apply {
         let result = match &dispatch.intent {
+            Intent::Rule(op) => self
+                .session
+                .apply_rule(dispatch, op)
+                .map(|()| Apply::Applied),
             Intent::Brick(op) => self.brick_op(dispatch, op),
             Intent::Player(op) => self.player_op(dispatch, op),
             Intent::Client(op) => self.client_op(dispatch, op),
             Intent::MiniGame(op) => self.minigame_op(dispatch, op),
-            Intent::Projectile(_) => Ok(Apply::Rejected(
-                "projectile outputs are not available yet".into(),
-            )),
+            Intent::Projectile(op) => self.projectile_op(dispatch, op),
             Intent::Package(call) => Ok(self.session.package_output(dispatch, call)),
         };
         result.unwrap_or_else(|error| Apply::Rejected(format!("{error:#}")))

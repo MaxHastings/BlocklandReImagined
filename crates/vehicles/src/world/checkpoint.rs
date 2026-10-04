@@ -200,7 +200,11 @@ impl VehiclesWorld {
             if let (Some(handle), Some(mount)) = (turret_collider, &d.attachment_mount) {
                 let mut pose = local_pose(mount, saved.spawn.scale);
                 pose.rotation *= Quat::from_rotation_y(
-                    saved.controls.get(2).copied().unwrap_or_default().aim_yaw,
+                    d.weapon_seat()
+                        .and_then(|i| saved.controls.get(i))
+                        .copied()
+                        .unwrap_or_default()
+                        .aim_yaw,
                 );
                 world.colliders[handle].set_position_wrt_parent(pose);
             }

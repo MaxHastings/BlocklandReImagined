@@ -2746,8 +2746,8 @@ mod tests {
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
             Ok(Self {
                 definitions: Definitions::load(
-                    &root.join("content/stock-catalog-004"),
-                    &root.join("content/maps-pass-008"),
+                    &bri_package::testing::pack_dir(&root.join("content"), "brick_catalog"),
+                    &bri_package::testing::pack_dir(&root.join("content"), "geometry"),
                 )?,
                 count: 170,
                 evidence: Some(root.join("artifacts/native-camera")),

@@ -107,6 +107,7 @@ fn world(limits: Limits) -> EventWorld {
 }
 fn row(input: &str, output: &str, params: Vec<Value>) -> Row {
     Row {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.into(),
@@ -535,8 +536,11 @@ fn source_math_keeps_health_projectile_and_relay_semantics() {
 /// The converted vanilla catalog (`content/events-pack-002`).
 fn content_catalog() -> Catalog {
     Catalog::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/events-pack-002/catalog.json"),
+        bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "events",
+        )
+        .join("catalog.json"),
     )
     .unwrap()
 }
@@ -584,6 +588,7 @@ fn default_row(catalog: &Catalog, output: &OutputDef) -> (Row, Class, Slot) {
     let class = Class::parse(&output.class_name).unwrap();
     let (input, slot) = input_for(catalog, class);
     let row = Row {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.name.clone(),
@@ -626,6 +631,7 @@ fn actual_catalog_has_all_65_outputs_and_16_inputs() {
 fn opaque_rows_keep_indices_and_disabled_source_future_does_not_renumber() {
     let mut w = world(Limits::default());
     let preserved = Row {
+        conditions: vec![],
         preserved: Some(PreservedRow {
             original: "+-EVENT unknown community row".into(),
             diagnostic: "unregistered".into(),

@@ -105,6 +105,8 @@ pub struct Poly {
     pub tag: u128,
     /// The owning collider.
     pub collider: ColliderHandle,
+    /// Portal mapping from the soup world to the owning collider world.
+    frame: Option<usize>,
     min: Vec3,
     max: Vec3,
 }
@@ -162,6 +164,8 @@ pub struct Soup {
     pub origin: Vec3,
     /// The collider whose shape is being added.
     current: ColliderHandle,
+    current_frame: Option<usize>,
+    frames: Vec<glam::Affine3A>,
     points: Vec<Vec3>,
     pub polys: Vec<Poly>,
 }
@@ -251,6 +255,7 @@ impl Soup {
             }
             let corners = pane.corners().map(|p| p - self.origin);
             self.current = ColliderHandle::invalid();
+            self.current_frame = None;
             self.push_relative(&corners, pane.normal, Kind::Static, u128::from(pane.brick));
             let mut back = corners;
             back.reverse();
@@ -261,7 +266,10 @@ impl Soup {
             // coordinates: keep `n . p < offset`.
             let o = passage.centre - self.origin;
             let (n, u, v, half) = (passage.normal, passage.u, passage.v, passage.half);
-            let behind = (n, n.dot(o));
+            // A backing wall can lie exactly on the opening's plane. Give
+            // that coplanar face to the cut, rather than retaining a solid
+            // pane inside a live portal (also important for camera volumes).
+            let behind = (n, n.dot(o) + bri_content::passage::PAST);
             let inside = [
                 (u, u.dot(o) + half.x),
                 (-u, -(u.dot(o) - half.x)),
@@ -295,6 +303,7 @@ impl Soup {
                 for piece in pieces.into_iter().flatten() {
                     let at: Vec<Vec3> = piece.iter().map(|(p, _)| *p).collect();
                     self.current = poly.collider;
+                    self.current_frame = poly.frame;
                     self.push_relative(&at, poly.normal, poly.kind, poly.tag);
                 }
             }
@@ -323,6 +332,8 @@ impl Soup {
                 carry.transform_point3(self.origin),
                 parts,
             );
+            let frame = self.frames.len();
+            self.frames.push(carry);
             for poly in &far.polys {
                 let verts: Vec<(Vec3, bool)> = far
                     .verts(poly)
@@ -330,12 +341,17 @@ impl Soup {
                     .map(|p| (back.transform_point3(*p + far.origin) - self.origin, false))
                     .collect();
                 let mut piece = Some(verts);
-                for (normal, offset) in std::iter::once(behind).chain(inside) {
+                // The copied side starts strictly beyond the plane. Keeping
+                // its coplanar backing face would put the cut-away wall back
+                // as a zero-thickness pane at the exit.
+                let beyond = (n, n.dot(o) - bri_content::passage::PAST);
+                for (normal, offset) in std::iter::once(beyond).chain(inside) {
                     piece = piece.and_then(|p| clip(&p, normal, offset, false));
                 }
                 if let Some(piece) = piece {
                     let at: Vec<Vec3> = piece.iter().map(|(p, _)| *p).collect();
                     self.current = poly.collider;
+                    self.current_frame = Some(frame);
                     self.push_relative(
                         &at,
                         back.transform_vector3(poly.normal),
@@ -455,6 +471,7 @@ impl Soup {
             kind,
             tag,
             collider: self.current,
+            frame: self.current_frame,
             min,
             max,
         });
@@ -541,6 +558,7 @@ fn clip(
 
 #[derive(Debug, Clone, Copy)]
 pub struct Collision {
+    frame: Option<usize>,
     pub normal: Vec3,
     pub face_dot: f32,
     pub point: Vec3,
@@ -639,6 +657,7 @@ fn collide(
                 time,
                 height,
                 Collision {
+                    frame: poly.frame,
                     normal: poly.normal,
                     face_dot,
                     point,
@@ -739,6 +758,17 @@ fn test_poly(face: &Face, verts: &[Vec3]) -> Option<(f32, f32, Vec3)> {
         if p.y > height && dist < face.max_distance {
             height = p.y;
         }
+    }
+    // A flat contact patch has several equally near vertices. Taking the
+    // last corner invents a lever arm (a centred walker spins a parked car).
+    // Its centroid is on the same physical face and keeps the impulse centred.
+    let (sum, count) = clipped
+        .iter()
+        .map(|(p, _)| *p)
+        .filter(|p| (face.normal.dot(*p) - face.offset - bd).abs() <= EQUAL_EPSILON)
+        .fold((Vec3::ZERO, 0), |(sum, count), p| (sum + p, count + 1));
+    if count > 0 {
+        bp = sum / count as f32;
     }
     (bd < face.max_distance).then(|| (bd / face.max_distance, height, bp))
 }
@@ -856,6 +886,18 @@ pub struct Mover {
     pub epsilon: Epsilon,
 }
 
+/// Momentum stopped at a swept contact, before the motor resolves it.
+/// Point, normal and velocity are in the owning collider's world frame,
+/// including contact with a far-side body through a portal.
+/// Consumers may transfer only that stopped motion to a finite-mass body.
+#[derive(Clone, Copy, Debug)]
+pub struct SweepContact {
+    pub collider: ColliderHandle,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub velocity: Vec3,
+    pub removed_speed: f32,
+}
 pub struct Moved {
     pub feet: Vec3,
     /// Tags of every polygon the box hit.
@@ -863,6 +905,7 @@ pub struct Moved {
     /// Each blocking hit's collider and the speed into its surface before
     /// the hit stopped it (`bd`, what v20 passes to `onImpact`), in order.
     pub hit: Vec<(ColliderHandle, f32)>,
+    pub contacts: Vec<SweepContact>,
     /// Whether the last blocking hit's list held a polygon facing straight
     /// down that the box's top met head-on (v20 0x8A2, which `canJump`
     /// refuses on); None without a blocking hit, which leaves v20's flag as
@@ -899,6 +942,7 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
     let mut first_normal = Vec3::ZERO;
     let mut touched = Vec::new();
     let mut colliders = Vec::new();
+    let mut contacts = Vec::new();
     let mut ceiling = None;
     let mut floor = false;
     let mut count = 0;
@@ -972,6 +1016,21 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         touched.extend(list.hits.iter().map(|c| c.tag));
         let into = -velocity.dot(hit.normal);
         colliders.push((hit.collider, into));
+        if into > 0.0 {
+            // Collision resolution stays in the motor's soup. Consumers of
+            // contact momentum need the actual owning collider's world frame,
+            // including far-side surfaces touched before the centre crosses.
+            let carry = hit
+                .frame
+                .map_or(glam::Affine3A::IDENTITY, |i| soup.frames[i]);
+            contacts.push(SweepContact {
+                collider: hit.collider,
+                point: carry.transform_point3(hit.point + soup.origin),
+                normal: carry.transform_vector3(hit.normal),
+                velocity: carry.transform_vector3(*velocity),
+                removed_speed: into,
+            });
+        }
         let dv = hit.normal * (into + m.elasticity);
         *velocity += dv;
         if count == 0 {
@@ -997,6 +1056,7 @@ fn update_local(soup: &Soup, m: &Mover, feet: Vec3, velocity: &mut Vec3, time: f
         feet: start,
         touched,
         hit: colliders,
+        contacts,
         ceiling,
         floor,
     }

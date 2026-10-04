@@ -80,12 +80,22 @@ impl App {
                 })
                 .collect::<Result<_>>()?;
         }
+        let previous_lighting = self.lighting.light_volume.bound_mode;
         self.lighting.light_volume.upload(
             renderer,
             frame.device,
             frame.queue,
             self.graphics.lighting,
         )?;
+        if previous_lighting != self.lighting.light_volume.bound_mode {
+            // A cached reflection/probe must never carry illumination from
+            // another mode into modern pixels (or back into compatibility).
+            self.lighting.reflections = None;
+            self.lighting.environment_probe = None;
+        }
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
         if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
             self.lighting.light_volume.tint(
                 renderer,
@@ -176,6 +186,10 @@ impl App {
                 let anchor = Vec3::from(bricks[0].position);
                 for brick in &mut bricks {
                     brick.position = (Vec3::from(brick.position) - anchor).to_array();
+                    // Placement previews show every copied brick, including invisible
+                    // triggers. Only these local render copies change; planting retains
+                    // the blueprint's authored rendering and collision flags.
+                    crate::world_scene::show_placement_ghost(brick);
                 }
                 let look = GhostLook {
                     bricks,
@@ -208,13 +222,12 @@ impl App {
                         .map(|(i, b)| (i as u64, b))
                         .collect(),
                 };
-                let mut data = crate::world_scene::build_world_scene_materials(
+                let preview = crate::world_scene::build_placement_preview(
                     &world,
                     self.scene
                         .meshes
                         .as_ref()
                         .context("Ghost mesh catalog missing")?,
-                    100_000,
                     Some(
                         self.scene
                             .materials
@@ -222,6 +235,11 @@ impl App {
                             .context("Ghost material catalog missing")?,
                     ),
                 )?;
+                if let Some(text) = preview.notice {
+                    eprintln!("{text}");
+                    self.ui.apply(UiUpdate::Chat { text });
+                }
+                let mut data = preview.scene;
                 // Warn before a plant the server would refuse: the ghost
                 // turns red (not in v20, which only showed the error icon).
                 if look.blocked {
@@ -349,6 +367,29 @@ impl App {
             } else {
                 Vec::new()
             };
+            let preview = self
+                .ui
+                .core
+                .wrench
+                .open
+                .as_ref()
+                .filter(|open| open.fill.is_none())
+                .map(|open| {
+                    (
+                        open.brick,
+                        self.ui.core.wrench.values(open.variant).rule_region,
+                    )
+                });
+            if let Some(vertices) =
+                self.gpu
+                    .region_outlines
+                    .update(&view.world.bricks, show, preview, |brick| {
+                        crate::brick_cover::mesh(brick, meshes)
+                    })
+                && let Some(lines) = &mut self.gpu.region_lines
+            {
+                lines.set_lines(frame.device, &vertices)?;
+            }
             if (self.gpu.hidden_uploaded != Some(show) || self.gpu.hidden_fading != fading)
                 && let Some(lines) = &mut self.gpu.hidden_lines
             {
@@ -538,6 +579,7 @@ impl App {
                 .building
                 .as_ref()
                 .context("Camera collision mirror missing")?,
+            self.motion.collision(),
             &self.vehicle_assets,
             &self.vehicles,
             view,
@@ -857,6 +899,22 @@ impl App {
             &passages,
             |drop| self.world_items.drop_center(drop),
         );
+        // Plants keep their authored tint, scaled by the live outdoor light
+        // relative to the mission's own daylight. All other views share it.
+        let live_up = (-glam::Vec3::from_slice(&camera.sun_direction)
+            .normalize_or_zero()
+            .y)
+            .max(0.0);
+        let baked_up = (-glam::Vec3::from_array(scene.sun_direction)
+            .normalize_or_zero()
+            .y)
+            .max(0.0);
+        let plant_light = std::array::from_fn(|i| {
+            ((camera.ambient[i] + camera.sun_color[i] * live_up)
+                / (scene.ambient[i] + scene.sun_color[i] * baked_up).max(0.001))
+            .clamp(0.0, 4.0)
+        });
+        self.foliage.set_illumination(plant_light)?;
         self.foliage.prepare(
             frame,
             &bri_foliage::Camera {
@@ -892,6 +950,9 @@ impl App {
             .as_mut()
             .context("Weather GPU not initialized")?;
         if let Some(lines) = &self.gpu.hidden_lines {
+            lines.prepare(frame.queue, effects_camera.view_projection);
+        }
+        if let Some(lines) = &self.gpu.region_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
         if let Some(lines) = &self.gpu.selection_lines {
@@ -1031,15 +1092,15 @@ impl App {
             // Players, vehicles and items (dropped and held) cast, like v20's
             // projected shape shadows; bricks only with the BrickShadows pref,
             // and bricks that do not cast still stop shadows passing through
-            // them. The map (interiors and terrain) neither casts nor stops
-            // them: its shadows are baked (see bri_render::shadow).
+            // them. Dynamic includes current bricks and terrain independently
+            // of compatibility preferences, even while a mode switch is pending.
             let chunks: Vec<&GpuScene> = self
                 .gpu
                 .gpu_chunks
                 .values()
                 .chain(self.fx.fade_models.scenes())
                 .collect();
-            let (mut bodies, blockers) = if self.graphics.brick_shadows {
+            let (mut bodies, blockers) = if self.graphics.brick_shadows || effective.lighting == 3 {
                 (chunks, Vec::new())
             } else {
                 (Vec::new(), chunks)
@@ -1066,7 +1127,7 @@ impl App {
             }
             // Debris is bricks, so it follows the same setting as the bricks
             // it broke from; Add-On models cast like items.
-            if self.graphics.brick_shadows {
+            if self.graphics.brick_shadows || effective.lighting == 3 {
                 models.extend(self.fx.debris_models.draws());
             } else {
                 blocking.extend(self.fx.debris_models.draws());
@@ -1076,13 +1137,22 @@ impl App {
             // In the Unified modes the map's own walls shade objects from
             // the sun too (the map layer), so they are sunlit exactly where
             // the walls beside them are.
-            let map: Vec<&GpuScene> = if self.graphics.lighting != 0 {
+            let map: Vec<&GpuScene> = if effective.lighting != 0 {
                 self.gpu.gpu_scene.iter().collect()
             } else {
                 Vec::new()
             };
             renderer.begin_timing(frame.encoder);
-            renderer.render_shadows_with_map(
+            let terrain_map: Vec<_> = if effective.lighting == 3 {
+                self.gpu
+                    .gpu_terrain
+                    .iter()
+                    .flat_map(|t| t.draws())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            renderer.render_shadows_with_geometry(
                 frame.encoder,
                 ShadowCasters {
                     scenes: &bodies,
@@ -1092,7 +1162,10 @@ impl App {
                     scenes: &blockers,
                     instances: &blocking,
                 },
-                &map,
+                ShadowCasters {
+                    scenes: &map,
+                    instances: &terrain_map,
+                },
             );
         }
         let clear = wgpu::Color { r, g, b, a };
@@ -1198,6 +1271,9 @@ impl App {
         if let Some(lines) = &self.gpu.hidden_lines {
             lines.render(&mut pass);
         }
+        if let Some(lines) = &self.gpu.region_lines {
+            lines.render(&mut pass);
+        }
         if let Some(lines) = &self.gpu.selection_lines {
             lines.render(&mut pass);
         }
@@ -1217,6 +1293,33 @@ impl App {
     /// Before the game is drawn: save pictures, renderer rebuilds, icons,
     /// the avatar preview, the splash and the map bake's lightmap patches.
     fn prepare_render(&mut self, frame: &mut RenderContext<'_>) -> Result<()> {
+        if let Some(current) = &self.scene.cpu_scene
+            && let Some((visual, compatibility_source)) = self.lighting.light_volume.poll_source(
+                &self.content.paths.map_bundle,
+                &current.id,
+                self.graphics.lighting == 3,
+            )
+        {
+            self.lighting.light_volume.change_source(
+                compatibility_source,
+                &self.state_dir.join("light-volumes"),
+                visual.modern_lights.as_deref(),
+            );
+            self.scene.cpu_scene = Some(visual.scene);
+            self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
+            self.scene.shape_indices = visual.shape_indices;
+            self.gpu.gpu_scene = None;
+            self.lighting.reflections = None;
+            self.lighting.environment_probe = None;
+        }
+        if self.graphics.lighting != 3 {
+            self.lighting
+                .light_volume
+                .ensure_compatibility(&self.state_dir.join("light-volumes"));
+        }
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
         // The last frame, holding any picture copied then, was submitted.
         // Failures are logged by the writer; success is not news.
         self.files.save_shots.submitted();
@@ -1236,11 +1339,16 @@ impl App {
                 .as_mut()
                 .and_then(|r| r.ready())
                 .is_some_and(|r| {
-                    r.samples() != self.graphics.samples
-                        || r.shadow_settings() != self.graphics.shadows
+                    r.samples() != self.graphics.samples || r.shadow_settings() != effective.shadows
                 })
         {
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
+        }
+        // A successful Add-On reload replaces the CPU effects worlds without
+        // restarting the device or unrelated scene pipelines. Rebuild their
+        // matching atlas before any main, mirror or portal view prepares it.
+        if self.gpu.effects_renderer.is_none() {
+            self.rebuild_effects_renderer(frame.device, frame.queue, frame.format)?;
         }
         self.item_ui.register_icons(frame);
         // Until its pipelines finish compiling, the preview stays due.
@@ -1298,7 +1406,8 @@ impl App {
 
         // The map bake's leak cleanup patches the map's lightmaps once: the
         // scene kept for uploads, and the uploaded textures.
-        if !self.lighting.light_volume.leaks.is_empty()
+        if effective.lighting != 3
+            && !self.lighting.light_volume.leaks.is_empty()
             && let Some(scene) = self.scene.cpu_scene.as_mut()
         {
             let fixes = std::mem::take(&mut self.lighting.light_volume.leaks);
@@ -1307,13 +1416,8 @@ impl App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
-        // The map's lightmaps take the bake's per-texel images (what each
-        // light leaves and how much of it each texel holds) and the scene
-        // uploads again with them, once a mode needs them: Dynamic always;
-        // the Unified modes on a map whose lights can switch (a bulb or tube
-        // to break, an Add-On's rules), so a switched light leaves exactly
-        // the light it baked, the same as in Dynamic. Otherwise no mode
-        // carries them.
+        // Unified's switchable fixtures retain their exact legacy per-texel
+        // light shares. Dynamic never equips or patches these images.
         let rules = self
             .net
             .attempt
@@ -1321,16 +1425,16 @@ impl App {
             .and_then(|a| a.view.as_ref())
             .is_some_and(|v| !v.map_lights.is_empty());
         let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
-        if (self.graphics.lighting == 3 || (self.graphics.lighting > 0 && switchable))
-            && !self.lighting.light_volume.dynamic_equipped
+        if (effective.lighting == 2 && switchable)
+            && !self.lighting.light_volume.switchable_equipped
             && self.lighting.light_volume.map.is_some()
             && let Some(scene) = self.scene.cpu_scene.as_mut()
         {
             bri_render::map_lighting::DynamicSheet::equip(
-                &self.lighting.light_volume.dynamic,
+                &self.lighting.light_volume.switchable_sheets,
                 scene,
             );
-            self.lighting.light_volume.dynamic_equipped = true;
+            self.lighting.light_volume.switchable_equipped = true;
             self.gpu.gpu_scene = None;
         }
         Ok(())

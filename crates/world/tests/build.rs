@@ -14,6 +14,7 @@ fn source() -> World {
     brick.name = Some("trigger".into());
     brick.print = Some(ContentRef::Resolved("Letters/A".into()));
     brick.events.push(EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),

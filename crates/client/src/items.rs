@@ -2511,8 +2511,8 @@ mod add_on_icon_tests {
     fn stock_items_that_looked_different_in_the_world() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         let assets = ItemAssets::load(
-            &root.join("item-presentation-pack-010"),
-            &root.join("weapons-pack-009"),
+            &bri_package::testing::pack_dir(&root, "item_presentation"),
+            &bri_package::testing::pack_dir(&root, "weapons"),
         )?;
         let presentation = &assets.presentation;
         let mut differed = 0;
@@ -3466,16 +3466,16 @@ pub(crate) mod fixture {
             let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
             let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             Ok(Self {
-                presentation: content.join("item-presentation-pack-010"),
-                weapons: content.join("weapons-pack-009"),
+                presentation: bri_package::testing::pack_dir(&content, "item_presentation"),
+                weapons: bri_package::testing::pack_dir(&content, "weapons"),
                 swung_images: strings(&["v20.image.wrenchimage", "v20.image.hammerimage"]),
                 held_detail: "detail9999".into(),
                 world_detail: "detail32".into(),
                 hammer_item: "v20.weapon.hammeritem".into(),
                 hammer_image: "v20.image.hammerimage".into(),
                 spray_packs: (
-                    content.join("item-presentation-pack-009"),
-                    content.join("weapons-pack-008"),
+                    bri_package::testing::pack_dir(&content, "item_presentation"),
+                    bri_package::testing::pack_dir(&content, "weapons"),
                 ),
                 clear_can: (
                     "base/data/shapes/transspraycan.dts".into(),

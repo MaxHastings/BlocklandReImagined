@@ -158,6 +158,30 @@ fn returning_players_appear_where_a_respawn_would_put_them(f: &Fixture) -> anyho
 }
 
 on_both! {
+fn every_spawn_rotation_is_valid_before_the_first_post_spawn_weapon_tick(f: &Fixture) -> anyhow::Result<()> {
+    for turns in 0..4 {
+        let mut h = Harness::new(f)?;
+        let spawn = h.plant(f.brick(BrickRole::SpawnPoint), 10, 10, turns)?;
+        let center = Vec3::from(h.s.simulation().state().bricks[&spawn].position);
+        h.s.disconnect(h.owner)?;
+        h.s.resume(h.owner, Vec3::new(-20.0, 0.05, -20.0))?;
+        let (state, _) = h.s.motion_states().into_iter().find(|(p, _)| p.owner == h.owner).unwrap();
+        let feet = Vec3::from(state.feet);
+        assert!(Vec3::new(feet.x - center.x, 0., feet.z - center.z).length() < 1.);
+        assert!(state.yaw.abs() <= std::f32::consts::PI,
+            "spawn rotation {turns}: heading {} is outside the weapon/input range", state.yaw);
+        let expected = -f32::from(turns) * std::f32::consts::FRAC_PI_2;
+        let facing = Vec3::new(expected.sin(), 0., -expected.cos());
+        assert!(state.forward().distance(facing) < 1e-5,
+            "normalization must preserve the spawn's facing");
+        // No movement/look command may be needed to repair the spawn heading.
+        h.s.step()?;
+    }
+    Ok(())
+}
+}
+
+on_both! {
 fn consecutive_teledoors_pair_and_carry_players_through(f: &Fixture) -> anyhow::Result<()> {
     let mut h = Harness::new(f)?;
     let a = h.plant(f.brick(BrickRole::Teledoor), 0, -8, 0)?;
@@ -283,7 +307,12 @@ fn a_click_swaps_a_brick_by_the_side_it_is_clicked_from() -> anyhow::Result<()> 
     use bri_content::brick::Swap;
     use bri_sim::testing as t;
     let mut definitions = t::definitions();
-    let door = definitions.entries[t::BRICK].clone();
+    let mut door = definitions.entries[t::BRICK].clone();
+    door.mesh.footprint_studs[1] += 2;
+    door.mesh.attachment_rows = vec![
+        "b".repeat(door.mesh.footprint_studs[0] as usize);
+        door.mesh.footprint_studs[1] as usize
+    ];
     for id in ["test/brick/door-front", "test/brick/door-back"] {
         definitions.entries.insert(id.into(), door.clone());
     }
@@ -300,8 +329,14 @@ fn a_click_swaps_a_brick_by_the_side_it_is_clicked_from() -> anyhow::Result<()> 
     tools
         .swaps
         .insert("test/brick/door-back".into(), swap(t::BRICK, t::BRICK));
+    for id in [t::BRICK, "test/brick/door-back"] {
+        tools
+            .swap_sounds
+            .insert(id.into(), "v20/sound/brickchange".into());
+    }
     h.s.set_tool_catalog(tools)?;
     let brick = h.plant(t::BRICK, 0, -4, 0)?;
+    h.s.take_cues();
     let definition = |h: &Harness| match &h.s.simulation().state().bricks[&brick].definition {
         bri_world::ContentRef::Resolved(id) => id.clone(),
         _ => String::new(),
@@ -324,6 +359,7 @@ fn a_click_swaps_a_brick_by_the_side_it_is_clicked_from() -> anyhow::Result<()> 
     // The player stands behind it (+Z of an unturned brick).
     click(&mut h)?;
     assert_eq!(definition(&h), "test/brick/door-back");
+    assert!(h.s.take_cues().iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "v20/sound/brickchange")));
     click(&mut h)?;
     assert_eq!(
         definition(&h),
@@ -333,5 +369,6 @@ fn a_click_swaps_a_brick_by_the_side_it_is_clicked_from() -> anyhow::Result<()> 
     h.run(MoveInput::default(), 40)?;
     click(&mut h)?;
     assert_eq!(definition(&h), t::BRICK, "and back");
+    assert!(h.s.take_cues().iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "v20/sound/brickchange")));
     Ok(())
 }

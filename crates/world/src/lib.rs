@@ -4,4 +4,5 @@ pub mod build;
 pub mod model;
 pub mod packed;
 pub mod persistence;
+pub mod regions;
 pub use model::*;

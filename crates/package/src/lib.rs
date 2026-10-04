@@ -20,6 +20,7 @@ pub mod packages;
 pub mod path;
 pub mod setting;
 pub mod sync;
+pub mod testing;
 
 /// The platform API level this build provides. Packages declare the level
 /// they need (`"api": 1`); it changes only when the package-facing surface

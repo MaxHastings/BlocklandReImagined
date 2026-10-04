@@ -57,7 +57,8 @@ fn red_halves(pixels: &[u8]) -> [usize; 2] {
 /// stands behind the viewer, right of centre, where only the mirror shows it.
 fn frame(mirrored: bool) -> Result<Vec<u8>> {
     let (device, queue) = pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance.request_adapter(&Default::default()).await?;
         anyhow::Ok(adapter.request_device(&Default::default()).await?)
     })?;

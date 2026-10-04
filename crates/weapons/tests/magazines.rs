@@ -398,3 +398,98 @@ fn magazines_and_ammo_commands_are_checked() {
     w.set_rounds(A, "mag:weapon/pistol", 99).unwrap();
     assert_eq!(rounds(&w).0, 3, "up to the magazine's size");
 }
+
+#[test]
+fn next_equipment_ammo_projects_initialization_without_mutating_any_actor() {
+    let mut w = world();
+    let pistol = w.give(A, "mag:weapon/pistol").unwrap();
+    let carbine = w.give(A, "mag:weapon/carbine").unwrap();
+    let before = format!("{:?}", w.actor(A).unwrap());
+    let p = w.ammo_on_equip(A, pistol).unwrap();
+    let c = w.ammo_on_equip(A, carbine).unwrap();
+    assert_eq!((p.rounds, p.reserve), (3, Reserve::Rounds(7)));
+    assert_eq!((c.rounds, c.reserve), (10, Reserve::Rounds(30)));
+    assert_eq!(format!("{:?}", w.actor(A).unwrap()), before);
+    assert!(w.reserve(A, "light").is_none());
+    assert!(w.ammo_on_equip(ActorId(999), 0).is_none());
+    assert!(w.ammo_on_equip(A, 999).is_none());
+    assert!(w.ammo_on_equip(A, 4).is_none());
+    w.equip(A, Some(pistol)).unwrap();
+    step(&mut w, 8);
+    assert_eq!(w.ammo(A), w.ammo_on_equip(A, pistol));
+    w.set_reserve(A, "light", Reserve::Rounds(0)).unwrap();
+    for _ in 0..3 {
+        assert_eq!(click(&mut w).0, 1);
+    }
+    assert_eq!(w.ammo_on_equip(A, pistol).unwrap().rounds, 0);
+    let c = w.ammo_on_equip(A, carbine).unwrap();
+    assert_eq!((c.rounds, c.reserve), (10, Reserve::Rounds(0)));
+    w.equip(A, Some(carbine)).unwrap();
+    step(&mut w, 8);
+    assert_eq!(w.ammo(A), w.ammo_on_equip(A, carbine));
+    assert_eq!(w.ammo_on_equip(A, pistol).unwrap().rounds, 0);
+    assert_eq!(w.reserve(A, "light"), Some(Reserve::Rounds(0)));
+}
+
+#[test]
+fn next_equipment_ammo_preserves_shared_counted_and_unlimited_supply() {
+    for (supply, from_reserve) in [
+        (Supply::Counted, false),
+        (Supply::Reserve, true),
+        (Supply::Unlimited, false),
+    ] {
+        let mut pack = Pack::from_json(GUNS.as_bytes()).unwrap();
+        let m = pack
+            .images
+            .get_mut("mag:image/pistol")
+            .unwrap()
+            .magazine
+            .as_mut()
+            .unwrap();
+        m.supply = supply;
+        m.from_reserve = from_reserve;
+        let mut w = WeaponsWorld::new(pack).unwrap();
+        w.add_actor(A, 5).unwrap();
+        let slot = w.give(A, "mag:weapon/pistol").unwrap();
+        assert_eq!(
+            w.ammo_on_equip(A, slot).unwrap().rounds,
+            if supply == Supply::Unlimited { 3 } else { 7 }
+        );
+        w.set_reserve(A, "light", Reserve::Rounds(0)).unwrap();
+        let before = format!("{:?}", w.actor(A).unwrap());
+        assert_eq!(
+            w.ammo_on_equip(A, slot).unwrap().rounds,
+            if supply == Supply::Unlimited { 3 } else { 0 }
+        );
+        assert_eq!(format!("{:?}", w.actor(A).unwrap()), before);
+        w.equip(A, Some(slot)).unwrap();
+        step(&mut w, 8);
+        assert_eq!(w.ammo(A), w.ammo_on_equip(A, slot));
+        if from_reserve {
+            assert!(
+                w.image_state(A, 0).is_none(),
+                "empty counted throw is stowed"
+            );
+            assert_eq!(w.actor(A).unwrap().selected, Some(slot));
+        }
+        w.set_reserve(A, "light", Reserve::Endless).unwrap();
+        assert_eq!(
+            w.ammo_on_equip(A, slot).unwrap().rounds,
+            if supply == Supply::Unlimited {
+                3
+            } else {
+                100_000
+            }
+        );
+    }
+}
+
+#[test]
+fn held_ammo_keeps_a_custom_mount_while_slot_projection_uses_the_inventory() {
+    let mut w = world();
+    let slot = holding(&mut w, A, "mag:weapon/pistol");
+    w.swap_image(A, Some("mag:image/shotgun")).unwrap();
+    step(&mut w, 8);
+    assert_eq!(w.ammo(A).unwrap().ammo, "shells");
+    assert_eq!(w.ammo_on_equip(A, slot).unwrap().ammo, "light");
+}

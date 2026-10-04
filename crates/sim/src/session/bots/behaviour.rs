@@ -18,6 +18,8 @@ pub(crate) enum Behaviour {
     Carry,
     /// An enemy up where no walk leads: jet up and over to them.
     Fly,
+    /// A useful, reservable opportunity in the environment.
+    Interact,
     /// An enemy in sight within its weapon's band: stand its ground,
     /// strafe and shoot.
     Fight,
@@ -28,6 +30,8 @@ pub(crate) enum Behaviour {
     Search,
     /// Strayed too far from its brick: walk back.
     Return,
+    /// A grounded authored objective, interrupted by immediate combat.
+    Objective,
     /// Nothing to do: stroll about.
     #[default]
     Wander,
@@ -41,6 +45,10 @@ pub(crate) struct Situation {
     /// An enemy it can fly to where its path does not walk up
     /// (`Session::air_chase`).
     pub fly: bool,
+    /// Utility of an available interaction; zero when there is none.
+    pub interaction: f32,
+    /// A grounded objective is available.
+    pub objective: bool,
     /// The enemy in sight within its chase radius: how far across, and how
     /// much higher.
     pub enemy: Option<(f32, f32)>,
@@ -63,13 +71,15 @@ const RISE_SLACK: f32 = 1.0;
 
 impl Behaviour {
     /// Every behaviour, most urgent first.
-    pub(crate) const ALL: [Behaviour; 7] = [
+    pub(crate) const ALL: [Behaviour; 9] = [
         Behaviour::Carry,
         Behaviour::Fly,
+        Behaviour::Interact,
         Behaviour::Fight,
         Behaviour::Chase,
         Behaviour::Search,
         Behaviour::Return,
+        Behaviour::Objective,
         Behaviour::Wander,
     ];
 
@@ -85,6 +95,7 @@ impl Behaviour {
         match self {
             Behaviour::Carry => fits(s.holding, 1.0),
             Behaviour::Fly => fits(s.fly, 0.9),
+            Behaviour::Interact => s.interaction,
             Behaviour::Fight => fits(
                 s.enemy.is_some_and(|(distance, rise)| {
                     let slack = if current == Behaviour::Fight {
@@ -100,6 +111,7 @@ impl Behaviour {
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
             Behaviour::Return => fits(s.strayed || (current == Behaviour::Return && !s.home), 0.3),
+            Behaviour::Objective => fits(s.objective, 0.65),
             Behaviour::Wander => 0.1,
         }
     }

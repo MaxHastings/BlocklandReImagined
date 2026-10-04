@@ -70,6 +70,19 @@ use scene::*;
 use session::*;
 use view::*;
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
+
+/// Supply actual automatic bounds to the editor, so selecting Custom starts
+/// from the inspected brick's current footprint rather than an invented size.
+fn region_defaults(update: &mut UiUpdate, reply: &Reply, meshes: Option<&Meshes>) {
+    if let UiUpdate::OpenWrench { data, .. } = update
+        && let Reply::Inspected { brick, .. } = reply
+        && let Some(mesh) = meshes.and_then(|meshes| crate::brick_cover::mesh(brick, meshes))
+    {
+        let (lo, hi) =
+            bri_world::regions::bounds(None, bri_sim::definitions::brick_box(brick, mesh));
+        data.rule_region_default = Some((hi - lo).to_array());
+    }
+}
 /// One player's script-thread animations by thread number (`playThread`).
 type AvatarThreads = [Option<crate::avatar::ActionAnimation>; 4];
 
@@ -354,19 +367,36 @@ fn packages_for<'a>(
         Some(&view.mods)
     }
 }
+fn load_visual_map(
+    root: &Path,
+    id: &str,
+    lighting: u8,
+) -> Result<bri_render::scene_loader::MapScene> {
+    if lighting == 3 {
+        bri_render::scene_loader::load_map_bundle_dynamic(root, id)
+    } else {
+        load_map_bundle(root, id)
+    }
+}
 fn prepare_map(
     paths: &crate::content::ContentPaths,
     map: &str,
     selected: Vec<(String, u8)>,
     catalog: &bri_sim::session::ToolCatalog,
     light_cache: &std::path::Path,
+    lighting: u8,
 ) -> Result<Prepared> {
     let map = map.to_owned();
-    let visual = load_map_bundle(&paths.map_bundle, &map)?;
-    let mut light_volume = LightVolumeState::start(&visual.scene, light_cache);
+    let visual = load_visual_map(&paths.map_bundle, &map, lighting)?;
+    let mut light_volume =
+        LightVolumeState::start(&visual.scene, light_cache, visual.modern_lights.as_deref());
     // The same definitions the host's session loads, Add-On bricks included.
-    let definitions =
-        Definitions::load_with(&paths.brick_catalog, &paths.geometry, &paths.brick_extras)?;
+    let definitions = Definitions::load_with_geometry(
+        &paths.brick_catalog,
+        &paths.geometry,
+        &paths.brick_extras,
+        &bri_net::content_identity::brick_geometry_assets(&paths.root, &paths.packages)?,
+    )?;
     let meshes = Arc::new(
         definitions
             .entries
@@ -536,7 +566,26 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
         .map_err(|error| anyhow::anyhow!("Could not use the clipboard: {error}"))
 }
 
-impl App {}
+impl App {
+    fn rebuild_effects_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> Result<()> {
+        let limits = bri_fx_runtime::EffectsLimits::default();
+        self.gpu.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
+            device,
+            queue,
+            self.fx.weapon_effects.world().pack(),
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            self.graphics.samples,
+            limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
+        )?);
+        Ok(())
+    }
+}
 /// How long a load or map change must stop changing the world before later
 /// changes count as unsaved.
 const SETTLE: Duration = Duration::from_secs(3);
@@ -813,6 +862,21 @@ fn orbit_drawn_offset(
         _ => None,
     }
 }
+/// Only portal-adjacent segments need the walking mirror's clipped geometry.
+/// Ordinary player and driver booms retain the cheap indexed camera query.
+fn camera_segment_near_portal(
+    passages: &bri_content::passage::Passages,
+    from: Vec3,
+    to: Vec3,
+) -> bool {
+    passages.first(from, to).is_some()
+        || passages.near(from, 0.2).any(|p| p.within(from, 0.15))
+        || passages
+            .closed
+            .iter()
+            .any(|p| p.crossing(from, to).is_some())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn camera_eye(
     controls: &Controls,
@@ -820,12 +884,33 @@ fn camera_eye(
     entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     drawn_offset: Option<Vec3>,
     building: &crate::building::Building,
+    collision: Option<&bri_sim::prediction::CollisionMirror>,
     own_eye: Vec3,
     forward: Vec3,
     chase: Option<(Vec3, f32)>,
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
+    let boom = |from, pivot, distance| {
+        crate::portal_view::boom(
+            from,
+            pivot,
+            forward,
+            distance,
+            passages,
+            |eye, forward, d| {
+                // Use the walking mirror near openings: it cuts the backing wall
+                // and sees the destination geometry. Keep the ordinary indexed
+                // sweep elsewhere so a portal never adds work to unrelated views.
+                let end = eye - forward.normalize() * d;
+                let nearby = camera_segment_near_portal(passages, eye, end);
+                match collision.filter(|_| nearby) {
+                    Some(mirror) => mirror.portal_camera_position(eye, forward, d),
+                    None => building.camera_position(eye, forward, d),
+                }
+            },
+        )
+    };
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position) | ObserverMode::Path(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`,
@@ -836,14 +921,12 @@ fn camera_eye(
                 .orbit_focus(presented, building.archetypes(), entities)
                 .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye);
-            building.camera_boom(focus, focus, forward, controls.orbit_distance(), passages)
+            boom(focus, focus, controls.orbit_distance())
         }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
             // on the body at `from`.
-            Some((from, distance)) => {
-                building.camera_boom(from, own_eye, forward, distance, passages)
-            }
+            Some((from, distance)) => boom(from, own_eye, distance),
             None => Ok((own_eye, None)),
         },
     }
@@ -1135,7 +1218,7 @@ fn driven_vehicle(
     mounted: Option<(u64, u8)>,
     steers: impl FnOnce(u64, usize) -> bool,
 ) -> Option<u64> {
-    let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
+    let (vehicle, seat) = mounted?;
     steers(vehicle, usize::from(seat)).then_some(vehicle)
 }
 
@@ -1375,6 +1458,17 @@ impl PlatformApp for App {
     }
     fn focus_changed(&mut self, focused: bool) {
         self.audio.set_focused(focused);
+        if focused
+            && (self.ui.is_open(bri_ui::screens::ScreenId::StartMission)
+                || self.ui.is_open(bri_ui::screens::ScreenId::HostColorsets))
+        {
+            self.ui
+                .apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+                    &self.content.paths.root,
+                    &self.state_dir,
+                    &self.content.paint,
+                )));
+        }
     }
     fn wants_frame_timing(&self) -> bool {
         self.ui.core.perf.visible()
@@ -1425,7 +1519,10 @@ impl PlatformApp for App {
             &self.ui.core.prefs,
         ));
         let samples = self.graphics.samples;
-        let (scene_device, shadows) = (device.clone(), self.graphics.shadows);
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
+        let (scene_device, shadows) = (device.clone(), effective.shadows);
         self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
             move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),
@@ -1462,6 +1559,13 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.gpu.region_lines = Some(bri_render::lines::LineRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.gpu.region_outlines.clear();
         self.gpu.selection_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -1477,16 +1581,7 @@ impl PlatformApp for App {
         ));
         self.shapes_uploaded = None;
         self.gpu.hidden_uploaded = None;
-        let limits = bri_fx_runtime::EffectsLimits::default();
-        self.gpu.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
-            device,
-            queue,
-            self.fx.weapon_effects.world().pack(),
-            format,
-            bri_render::scene::DEPTH_FORMAT,
-            samples,
-            limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
-        )?);
+        self.rebuild_effects_renderer(device, queue, format)?;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.gpu.gpu_palette = None;
@@ -1551,6 +1646,8 @@ impl PlatformApp for App {
         self.gpu.effects_renderer = None;
         self.gpu.hidden_lines = None;
         self.gpu.selection_lines = None;
+        self.gpu.region_lines = None;
+        self.gpu.region_outlines.clear();
         self.world_shapes = None;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();

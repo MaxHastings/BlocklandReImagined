@@ -132,6 +132,54 @@ fn bot_use_is_read_and_limited() {
     assert!(with(serde_json::json!({"near": -1.0})).is_err());
 }
 
+#[test]
+fn manipulation_requires_explicit_grounded_hold_semantics() {
+    let mut p = pack();
+    let image = p.images.get_mut(IMAGE).unwrap();
+    image.projectile = None;
+    image.melee = false;
+    image.command = Some("unfamiliar:acquire".into());
+    image.bot = Some(BotUse {
+        fire: BotFire::Hold,
+        manipulation: Some(BotManipulation::Hold {
+            near: 2.5,
+            reach: 60.0,
+            force: 90000.0,
+            turn: true,
+        }),
+        ..Default::default()
+    });
+    p.validate().unwrap();
+    let encoded = serde_json::to_value(&p).unwrap();
+    let restored: Pack = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(restored.images[IMAGE].bot, p.images[IMAGE].bot);
+    for (key, value) in [
+        ("near", serde_json::json!(0)),
+        ("reach", serde_json::json!(2.0)),
+        ("force", serde_json::json!(-1)),
+        ("reach", serde_json::json!(2001)),
+        ("unknown", serde_json::json!(true)),
+    ] {
+        let mut bad = encoded.clone();
+        bad["images"][IMAGE]["bot"]["manipulation"][key] = value;
+        assert!(
+            serde_json::from_value::<Pack>(bad)
+                .map(|v| v.validate().is_err())
+                .unwrap_or(true),
+            "{key}"
+        );
+    }
+    p.images.get_mut(IMAGE).unwrap().bot.as_mut().unwrap().fire = BotFire::Tap;
+    assert!(p.validate().is_err());
+    p.images.get_mut(IMAGE).unwrap().bot.as_mut().unwrap().fire = BotFire::Hold;
+    p.images.get_mut(IMAGE).unwrap().command = None;
+    p.images.get_mut(IMAGE).unwrap().commands = Default::default();
+    assert!(
+        p.validate().is_err(),
+        "an opaque image is not a native hold executor"
+    );
+}
+
 /// A charged image (the Spear: held back, thrown on letting go) says so
 /// from its states, so a bot holds it and lets go once letting go fires.
 #[test]

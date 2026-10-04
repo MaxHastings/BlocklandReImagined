@@ -11,7 +11,11 @@ fn content() -> PathBuf {
 
 /// (datablock, sound, indestructable) per breakable, in scene order.
 fn shapes(map: &str) -> Vec<(String, Option<String>, bool, usize)> {
-    let native = NativeMap::load(&content().join("map-bundle-017"), map).unwrap();
+    let native = NativeMap::load(
+        &bri_package::testing::pack_dir(&content(), "map_bundle"),
+        map,
+    )
+    .unwrap();
     native
         .breakables
         .iter()
@@ -82,7 +86,7 @@ fn a_player_thrown_at_each_bedroom_shape_hits_its_glass_hard_enough() {
     };
     use glam::Vec3;
     let native = NativeMap::load(
-        &content().join("map-bundle-017"),
+        &bri_package::testing::pack_dir(&content(), "map_bundle"),
         "v20/add-ons/map_bedroom/bedroom.mis",
     )
     .unwrap();

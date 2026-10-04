@@ -21,6 +21,7 @@ bytemuck = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
+bri-package = { path = "../package" }
 pollster.workspace = true
 
 [[example]]

@@ -57,6 +57,14 @@ fn a_panic_leaves_a_report_with_backtrace_and_the_session_log() {
         report.contains("message: deliberate test panic"),
         "{report}"
     );
+    assert!(report.contains("executable: "), "{report}");
+    assert!(report.contains("backtrace status: Captured"), "{report}");
+    assert!(
+        report.contains("symbolication: use native module offsets with matching build symbols"),
+        "{report}"
+    );
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    assert_native_frames(&report);
     assert!(report.contains("backtrace:"));
     assert!(report.contains("capture.rs"), "panic location recorded");
     let sessions = files(dir.path(), "session-", ".log");
@@ -65,6 +73,51 @@ fn a_panic_leaves_a_report_with_backtrace_and_the_session_log() {
     assert!(log.contains("capture-test"), "session header");
     // The tee still echoes to the original stderr.
     assert!(String::from_utf8_lossy(&out.stderr).contains("line before the crash"));
+}
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+fn assert_native_frames(report: &str) {
+    let native = report
+        .split_once("native frames (up to 128):\n")
+        .expect("native addresses retained")
+        .1
+        .split_once("backtrace:\n")
+        .expect("symbolic backtrace retained")
+        .0;
+    let frames: Vec<_> = native
+        .lines()
+        .filter(|line| line.contains("ip=0x"))
+        .collect();
+    assert!(frames.len() >= 3, "caller chain retained: {report}");
+    let mut modules = 0;
+    for frame in frames {
+        let hex = |label: &str| {
+            let token = frame
+                .split_once(label)
+                .unwrap()
+                .1
+                .split_whitespace()
+                .next()
+                .unwrap();
+            u64::from_str_radix(token.trim_start_matches("0x"), 16).unwrap()
+        };
+        let ip = hex("ip=");
+        assert_ne!(ip, 0, "{frame}");
+        if frame.contains("base=") {
+            modules += 1;
+            let base = hex("base=");
+            let offset = hex("offset=");
+            assert_ne!(base, 0, "{frame}");
+            assert_eq!(base + offset, ip, "ASLR-independent offset: {frame}");
+        }
+    }
+    assert!(modules >= 3, "module mappings retained: {report}");
+    let executable = std::env::current_exe().unwrap();
+    let filename = executable.file_name().unwrap().to_string_lossy();
+    assert!(
+        native.contains(filename.as_ref()),
+        "test executable mapped: {report}"
+    );
 }
 
 #[cfg(windows)]
@@ -82,4 +135,34 @@ fn a_native_crash_leaves_a_minidump_and_a_report() {
         report.contains("line before the crash"),
         "session tail included"
     );
+}
+
+/// Copy just the executable, as a player distribution does. Raw native frames
+/// must survive without a PDB adjacent to this copy. Its embedded original PDB
+/// path may still resolve on the build machine; this does not assert otherwise.
+#[cfg(windows)]
+#[test]
+fn a_copied_executable_retains_native_frames_without_adjacent_symbols() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::env::current_exe().unwrap();
+    let copied = dir.path().join(original.file_name().unwrap());
+    fs::copy(&original, &copied).unwrap();
+    assert!(files(dir.path(), "", ".pdb").is_empty());
+    let out = Command::new(&copied)
+        .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
+        .env(CASE, "panic")
+        .env(DIR, dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let reports = files(dir.path(), "crash-", ".txt");
+    assert_eq!(reports.len(), 1, "{}", String::from_utf8_lossy(&out.stderr));
+    let report = fs::read_to_string(&reports[0]).unwrap();
+    assert_native_frames(&report);
+    let module = format!("module={:?}", copied.to_string_lossy());
+    assert!(
+        report.contains(&module),
+        "copied executable module mapped: {report}"
+    );
+    assert!(files(dir.path(), "", ".pdb").is_empty());
 }

@@ -39,7 +39,7 @@ impl Fixture {
     }
     /// The converted `foliage-pack-003`, traced against map-bundle-017.
     pub fn content() -> Self {
-        let dir = root().join("content/foliage-pack-003");
+        let dir = bri_package::testing::pack_dir(&root().join("content"), "foliage");
         Self {
             pack: FoliagePack::load(dir.join("foliage.json")).unwrap(),
             dir,
@@ -147,7 +147,7 @@ pub fn camera(position: Vec3, target: Vec3) -> Camera {
     }
 }
 pub fn original_world() -> PhysicsWorld {
-    let path = root().join("content/map-bundle-017");
+    let path = bri_package::testing::pack_dir(&root().join("content"), "map_bundle");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path.join("bundle.json")).unwrap()).unwrap();
     let scene_path = std::fs::read_dir(&path)

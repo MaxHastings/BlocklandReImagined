@@ -270,6 +270,7 @@ impl Session {
     pub(super) fn step_weapons(&mut self) -> Result<()> {
         self.end_gun_slows()?;
         let tick = self.simulation.state().tick;
+        let mut prepared_triggers = Vec::with_capacity(self.peers.len());
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
             let expired = tick.saturating_sub(peer.last_input_tick) > 60;
@@ -345,10 +346,25 @@ impl Session {
                     ..Frame::default()
                 },
             )?;
+            prepared_triggers.push((*owner, expired, trigger, direction));
+        }
+        for (owner, expired, trigger, direction) in prepared_triggers {
+            match self.bot_hand_fire_gate(owner, direction, tick) {
+                Some(super::bots::FireAdmission::Abort) => {
+                    self.weapon_triggers.remove(&owner);
+                    self.bot_abort_unsafe_hand_fire(owner)?;
+                    continue;
+                }
+                Some(super::bots::FireAdmission::HoldCharge) => {
+                    self.bot_hold_hand_charge(owner)?;
+                    continue;
+                }
+                _ => {}
+            }
             if expired {
-                self.weapons.trigger(actor, false)?;
+                self.weapons.trigger(ActorId(owner), false)?;
             } else if let Some(trigger) = trigger {
-                self.weapons.trigger(actor, trigger.down)?;
+                self.weapons.trigger(ActorId(owner), trigger.down)?;
             }
         }
         // Player and vehicle damage follow minigame policy, asked pair by
@@ -535,7 +551,18 @@ impl Session {
                         self.paint_contact(&impact)?;
                         self.special_projectile_hit(impact.source.0, brick, &impact.definition)?;
                         let source = Some(impact.source.0).filter(|o| self.peers.contains_key(o));
-                        self.fire_input(brick, "onProjectileHit", source);
+                        self.fire_input_with(
+                            brick,
+                            "onProjectileHit",
+                            source,
+                            super::events::InputExtra {
+                                projectile: Some(super::events::ProjectileActivation {
+                                    projectile: impact.projectile,
+                                    normal: impact.normal,
+                                }),
+                                ..Default::default()
+                            },
+                        );
                     }
                 }
                 WeaponEvent::Effect {
@@ -722,11 +749,20 @@ impl Session {
                     },
                 )?,
                 WeaponEvent::Impulse {
+                    source,
                     target: TargetId::Vehicle(vehicle),
                     impulse,
                     position,
-                    ..
-                } => self.blast_vehicle(vehicle, position, impulse),
+                } => {
+                    // Native hits use the same finite mover-credit window as
+                    // walking/holding. Anonymous package shots do not become
+                    // player credit, and a rejected/zero impulse credits nobody.
+                    if self.blast_vehicle(vehicle, position, impulse)
+                        && let Some(owner) = shooter(source)
+                    {
+                        self.credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle), owner);
+                    }
+                }
                 WeaponEvent::Key {
                     actor,
                     brick,

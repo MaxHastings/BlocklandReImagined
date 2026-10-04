@@ -63,8 +63,11 @@ impl ItemFixture {
         let id = |s: &str| format!("v20.weapon.{s}");
         let image = |s: &str| format!("v20.image.{s}");
         Ok(Self {
-            presentation: root.join("content/item-presentation-pack-010"),
-            weapons: root.join("content/weapons-pack-009"),
+            presentation: bri_package::testing::pack_dir(
+                &root.join("content"),
+                "item_presentation",
+            ),
+            weapons: bri_package::testing::pack_dir(&root.join("content"), "weapons"),
             content: true,
             modelled: [
                 "hammeritem",

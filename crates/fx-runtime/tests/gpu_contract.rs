@@ -5,6 +5,126 @@ use glam::{Mat4, Vec3, Vec4};
 use std::collections::BTreeMap;
 
 #[test]
+fn a_reloaded_pack_needs_its_own_atlas_and_invalid_values_remain_errors() {
+    pollster::block_on(async {
+        let make_pack = |ids: &[&str]| {
+            EffectsPack::from_parts(
+                Library {
+                    schema_version: 1,
+                    lights: Vec::new(),
+                    particles: Vec::new(),
+                    emitters: Vec::new(),
+                    textures: ids
+                        .iter()
+                        .map(|id| ((*id).into(), format!("{id}.png")))
+                        .collect(),
+                },
+                Manifest {
+                    schema_version: 1,
+                    library_sha256: String::new(),
+                    textures: BTreeMap::new(),
+                    emitter_alpha: BTreeMap::new(),
+                    bindings: Vec::new(),
+                    composites: Vec::new(),
+                    unresolved: Vec::new(),
+                },
+                ids.iter()
+                    .map(|id| TextureImage {
+                        id: (*id).into(),
+                        width: 1,
+                        height: 1,
+                        rgba: vec![255; 4],
+                    })
+                    .collect(),
+            )
+            .unwrap()
+        };
+        let base = make_pack(&["base"]);
+        let addon = make_pack(&["base", "addon-icon"]);
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let renderer = |pack: &EffectsPack| {
+            EffectsRenderer::new(
+                &device,
+                &queue,
+                pack,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureFormat::Depth32Float,
+                1,
+                16,
+            )
+            .unwrap()
+        };
+        let camera = Camera {
+            view_projection: Mat4::IDENTITY,
+            position: Vec3::Z * 2.,
+            right: Vec3::X,
+            up: Vec3::Y,
+        };
+        let mut frame = FrameEffects {
+            particles: vec![ParticleInstance {
+                position: Vec3::ZERO,
+                size: 1.,
+                color: Vec4::ONE,
+                spin: 0.,
+                axis: Vec3::ZERO,
+                texture: 1,
+                blend: BlendMode::Alpha,
+                depth_test: true,
+            }],
+            lights: Vec::new(),
+        };
+        let mut stale = renderer(&base);
+        let error = stale
+            .prepare(&queue, &camera, &frame)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Invalid effects instance 0: texture=1 layers=1"),
+            "{error}"
+        );
+        let error = stale
+            .prepare_view(&device, &queue, 1, &camera, &frame)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("texture=1 layers=1"), "{error}");
+        let mut current = renderer(&addon);
+        assert_eq!(
+            current.prepare(&queue, &camera, &frame).unwrap().instances,
+            1
+        );
+        for view in [1, 2] {
+            assert_eq!(
+                current
+                    .prepare_view(&device, &queue, view, &camera, &frame)
+                    .unwrap()
+                    .instances,
+                1
+            );
+        }
+        // Atlas recreation must not hide a genuine geometry/data defect.
+        for size in [-1., f32::NAN, f32::INFINITY] {
+            frame.particles[0].size = size;
+            let error = current
+                .prepare(&queue, &camera, &frame)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("texture=1 layers=2") && error.contains("size="),
+                "{error}"
+            );
+        }
+        frame.particles[0].size = 1.;
+        assert_eq!(
+            current.prepare(&queue, &camera, &frame).unwrap().instances,
+            1
+        );
+    });
+}
+
+#[test]
 fn billboard_blends_and_depth_match_the_host_pass() {
     pollster::block_on(async {
         let pack = EffectsPack::from_parts(
@@ -45,7 +165,8 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             ],
         )
         .unwrap();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
         let mut renderer = EffectsRenderer::new(

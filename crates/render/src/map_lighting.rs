@@ -24,13 +24,12 @@
 //!   geometry) and a residual irradiance volume for the light the fit does
 //!   not explain. Bricks then shade with the same lights, falloff, sun and
 //!   occlusion as the lightmapped surfaces around them.
-//! - The Dynamic lighting mode goes further and lights the map's own
-//!   surfaces live: [`DynamicSheet`]s keep, per lightmap texel, only the
-//!   light no recovered light explains (bounced light, ambient, the fit's
-//!   error), and the shader adds every light (through its light cube, see
-//!   `crate::shadow`) and the sun on top, so switching, dimming or
-//!   recolouring a light changes the walls completely, and shadows are as
-//!   sharp as the shadow maps instead of the lightmaps' texels.
+//! - [`DynamicSheet`] is the historical name for Unified's switchable
+//!   per-texel light shares. It is compatibility data, never modern lighting.
+//!
+//! Modern Dynamic loads `lighting_parameters` descriptors prepared offline
+//! through [`Bake::recover_lights`], then renders current illumination and
+//! geometry shadows. It consumes none of this module's baked outputs.
 use crate::scene::SceneImage;
 use glam::{Vec2, Vec3};
 
@@ -243,7 +242,7 @@ const MIN_GAIN: f64 = 0.002;
 /// Offset off a surface before casting toward a light.
 const LIFT: f32 = 0.05;
 /// Texels this far outside a surface's edges (in texels) take its values in
-/// the Dynamic mode's lightmaps: past a bilinear filter's reach.
+/// the legacy switchable lightmaps: past a bilinear filter's reach.
 const RIM: f32 = 1.5;
 /// A rim texel's samples start this far (world units) inside its surface.
 const RIM_INSET: f32 = 0.05;
@@ -382,7 +381,7 @@ pub struct Bake {
     /// Texels just outside the surfaces (within `RIM` texels of an edge)
     /// that no surface covers, at the nearest point of the surface beside
     /// them: bilinear filtering at a surface's edge reads them, so the
-    /// Dynamic mode's lightmaps give them that surface's own values.
+    /// legacy switchable lightmaps give them that surface's own values.
     rims: Vec<Lexel>,
     sun_direction: Vec3,
     /// The classic volume's input; its lightmaps become the residual.
@@ -402,20 +401,19 @@ pub struct MapLighting {
     pub residual: crate::light_volume::LightVolume,
     /// Lightmap texels to patch where the map compiler's light leaked
     /// through walls (`Bake::leaks`): the drawn lightmaps and their
-    /// decompositions, in every lighting mode.
+    /// decompositions, in compatibility lighting modes.
     pub leaks: Vec<TexelFix>,
-    /// The Dynamic lighting mode's lightmaps, one per decomposed sheet:
+    /// Unified's switchable lightmaps, one per decomposed sheet:
     /// RGB the static light none of the recovered lights explain (bounced
     /// light, the mission ambient, the fit's error), A the baked sun share.
     /// The shader adds every light, and the sun, live on top.
     pub dynamic: Vec<DynamicSheet>,
-    /// The residual volume without any recovered light, for objects in the
-    /// Dynamic mode, where every light (not only those with a visibility
-    /// channel) is live. The same as `residual` when every light has one.
+    /// Historical all-lights residual retained for legacy diagnostics/cache
+    /// layout. Modern Dynamic never prepares, uploads or samples it.
     pub residual_all: crate::light_volume::LightVolume,
 }
 
-/// The Dynamic mode's residual volume, left to bake after the rest
+/// The historical all-lights residual, left to bake after the rest
 /// (`Bake::bake_staged`).
 pub struct ResidualBake(crate::light_volume::Baker);
 impl ResidualBake {
@@ -425,7 +423,7 @@ impl ResidualBake {
     }
 }
 
-/// One decomposed lightmap sheet in the Dynamic mode: the light no
+/// One legacy switchable lightmap sheet (used by Unified): the light no
 /// recovered light explains (RGB; A the baked sun share), and, per light that
 /// reaches the sheet (`lights`, indices into `MapLighting::lights`), the
 /// share of it each texel receives past the map's walls, four lights to an
@@ -462,7 +460,7 @@ struct DynamicLayout {
     lights: Vec<u8>,
 }
 impl DynamicSheet {
-    /// Gives a map scene the Dynamic mode's lightmaps: each sheet's images
+    /// Gives a map scene the legacy switchable lightmaps: each sheet's images
     /// join the scene, and every decomposed material drawing from it reads
     /// them (slot 10 the leftover light, 1..=6 the visibility) with its
     /// light channels in its parameters (`scene.wgsl` `channel_light`).
@@ -752,7 +750,7 @@ impl Bake {
         lighting
     }
 
-    /// `bake`, less the residual volume for the Dynamic mode when it needs
+    /// Legacy diagnostic `bake`, less the all-lights residual when it needs
     /// a bake of its own (some light has no channel): that is returned to
     /// bake next, and `residual_all` holds `residual` until then. The
     /// other modes need not wait for it.
@@ -762,6 +760,30 @@ impl Bake {
         max_cells: usize,
         vis_cell: f32,
         vis_cells: usize,
+    ) -> (MapLighting, Option<ResidualBake>) {
+        self.prepare_compatibility(min_cell, max_cells, vis_cell, vis_cells, true)
+    }
+
+    /// The client compatibility bake, without constructing the obsolete
+    /// all-lights residual input. Classic and Unified retain the same outputs.
+    pub fn bake_compatibility(
+        self,
+        min_cell: f32,
+        max_cells: usize,
+        vis_cell: f32,
+        vis_cells: usize,
+    ) -> MapLighting {
+        self.prepare_compatibility(min_cell, max_cells, vis_cell, vis_cells, false)
+            .0
+    }
+
+    fn prepare_compatibility(
+        self,
+        min_cell: f32,
+        max_cells: usize,
+        vis_cell: f32,
+        vis_cells: usize,
+        historical_residual: bool,
     ) -> (MapLighting, Option<ResidualBake>) {
         let started = std::time::Instant::now();
         let mut lights = self.fit();
@@ -808,16 +830,6 @@ impl Bake {
         report.leak_texels = leaks.len() / 2;
         let visibility = self.visibility(&lights, vis_cell, vis_cells);
         let dynamic = self.dynamic_sheets(&lights, &seen, &leaks);
-        // Without any light: what objects add in the Dynamic mode.
-        let every_light_live = lights.iter().all(|l| l.channel.is_some());
-        let mut residual_all: Vec<SceneImage> = self.bases.iter().map(|b| (**b).clone()).collect();
-        if !every_light_live {
-            for (l, (all, _, _)) in self.lexels.iter().zip(&per_lexel) {
-                let texel = &mut residual_all[l.sheet as usize].rgba[l.index as usize * 4..][..3];
-                let left = (l.base - *all).max(Vec3::ZERO);
-                texel.copy_from_slice(&[byte(left.x), byte(left.y), byte(left.z)]);
-            }
-        }
         let replaced = |images: Vec<SceneImage>,
                         what: &str|
          -> std::collections::BTreeMap<usize, SceneImage> {
@@ -830,7 +842,14 @@ impl Bake {
                 })
                 .collect()
         };
-        let rest = (!every_light_live).then(|| {
+        let rest = (historical_residual && lights.iter().any(|l| l.channel.is_none())).then(|| {
+            let mut residual_all: Vec<SceneImage> =
+                self.bases.iter().map(|b| (**b).clone()).collect();
+            for (l, (all, _, _)) in self.lexels.iter().zip(&per_lexel) {
+                let texel = &mut residual_all[l.sheet as usize].rgba[l.index as usize * 4..][..3];
+                let left = (l.base - *all).max(Vec3::ZERO);
+                texel.copy_from_slice(&[byte(left.x), byte(left.y), byte(left.z)]);
+            }
             ResidualBake(
                 self.residual_input
                     .clone()
@@ -904,7 +923,7 @@ impl Bake {
         out
     }
 
-    /// The Dynamic mode's lightmaps (`DynamicSheet`), from each decomposed
+    /// The legacy switchable lightmaps (`DynamicSheet`), from each decomposed
     /// sheet with its leaks cleaned and the lights each texel sees (`seen`,
     /// a bit per light, from the fit's own rays; rim texels cast theirs).
     ///
@@ -1375,6 +1394,10 @@ impl Bake {
     /// the brightest unexplained texels, keeps the one whose best colour and
     /// falloff remove the most error (visibility cast from every sample to
     /// it), refines it by pattern search, then refits every colour jointly.
+    pub fn recover_lights(&self) -> Vec<MapLight> {
+        self.fit()
+    }
+
     fn fit(&self) -> Vec<MapLight> {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
         let lit: Vec<usize> = (0..self.lexels.len())
@@ -2029,6 +2052,27 @@ mod tests {
             center: [0.0; 3],
         });
         scene.materials.push(material);
+    }
+
+    #[test]
+    fn compatibility_preparation_preserves_legacy_outputs() {
+        let mut scene = crate::scene::SceneData::default();
+        scene.images.push(SceneImage::white());
+        lit_quad(
+            &mut scene,
+            |x, y| Vec3::new(x, y, 0.0),
+            Vec3::Z,
+            |p| Vec3::splat(0.4 * falloff(p.distance(Vec3::new(0.0, 0.0, 2.0)), 0.0, 8.0)),
+        );
+        let (previous, _) = Bake::new(&scene).unwrap().bake_staged(0.5, 128, 1.0, 128);
+        let current = Bake::new(&scene)
+            .unwrap()
+            .bake_compatibility(0.5, 128, 1.0, 128);
+        assert_eq!(previous.lights, current.lights);
+        assert_eq!(previous.visibility, current.visibility);
+        assert_eq!(previous.residual, current.residual);
+        assert_eq!(previous.leaks, current.leaks);
+        assert_eq!(previous.dynamic, current.dynamic);
     }
 
     /// A wall the fit explains all but a little of (the leftover), a light

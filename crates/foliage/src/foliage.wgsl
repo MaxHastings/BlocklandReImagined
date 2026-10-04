@@ -1,4 +1,4 @@
-struct Camera {vp:mat4x4<f32>, position:vec4<f32>, right:vec4<f32>, time_fog:vec4<f32>};
+struct Camera {vp:mat4x4<f32>, position:vec4<f32>, right:vec4<f32>, time_fog:vec4<f32>, illumination:vec4<f32>};
 struct Plant {position_width:vec4<f32>,shape:vec4<f32>,sway:vec4<f32>,light:vec4<f32>,top:vec4<f32>,bottom:vec4<f32>,fade:vec4<f32>,alpha:vec4<f32>};
 @group(0) @binding(0) var<uniform> camera:Camera;
 @group(0) @binding(1) var<storage,read> plants:array<Plant>;
@@ -14,6 +14,6 @@ fn phase(initial:f32,rate:f32)->f32{return floor((initial+rate*camera.time_fog.x
  let distance=length(p.position_width.xyz-camera.position.xyz);var opacity=1.;if distance<p.fade.x{opacity=clamp(1.-(p.fade.x-distance)/max(p.fade.z,0.00001),0.,1.);}else if distance>p.fade.y{opacity=clamp(1.-(distance-p.fade.y)/max(p.fade.w,0.00001),0.,1.);}
  let fog=1.-clamp((distance-camera.time_fog.y)/max(camera.time_fog.z-camera.time_fog.y,0.00001),0.,1.);opacity=min(opacity,fog);
  let luminance=select(1.,(p.light.z+p.light.w)*0.5+(p.light.w-p.light.z)*0.5*cos(phase(p.light.x,p.light.y)),p.alpha.w>0.5);
- let color=mix(p.bottom,p.top,c.y);var out:Output;out.position=camera.vp*vec4(world,1.);out.uv=vec2(select(c.x+0.5,0.5-c.x,p.shape.z>0.5),1.-c.y);out.color=vec4(color.rgb*luminance,color.a*mix(min(p.alpha.x,opacity),opacity,c.y));out.cutoff=p.alpha.y;return out;
+ let color=mix(p.bottom,p.top,c.y);var out:Output;out.position=camera.vp*vec4(world,1.);out.uv=vec2(select(c.x+0.5,0.5-c.x,p.shape.z>0.5),1.-c.y);out.color=vec4(color.rgb*luminance*camera.illumination.rgb,color.a*mix(min(p.alpha.x,opacity),opacity,c.y));out.cutoff=p.alpha.y;return out;
 }
 @fragment fn fs_main(input:Output)->@location(0) vec4<f32>{let texel=textureSample(image,samp,input.uv);let alpha=texel.a*input.color.a;if alpha<=input.cutoff{discard;}return vec4(output_color(display_color(texel.rgb)*input.color.rgb),alpha);}

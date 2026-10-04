@@ -16,7 +16,7 @@ use std::rc::Rc;
 /// Each body runs as `synthetic::<name>` on the made-up screens and as
 /// `content::<name>` (ignored) on the converted pack `content/<id>`.
 macro_rules! synthetic_and_content {
-    ($($body:ident, $pack:literal;)*) => {
+    ($($body:ident;)*) => {
         mod synthetic {
             $(#[test]
             fn $body() {
@@ -27,25 +27,25 @@ macro_rules! synthetic_and_content {
             $(#[test]
             #[ignore = "requires generated v20 content"]
             fn $body() {
-                super::$body(&bri_ui::testing::content_pack($pack));
+                super::$body(&bri_ui::testing::content_pack(&bri_package::testing::pack_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"), "ui_pack")));
             })*
         }
     };
 }
 
 synthetic_and_content! {
-    menu_buttons_are_all_built, "ui-pack-004";
-    advanced_config_saves_the_next_hosts_settings, "ui-pack-004";
-    credits_and_f1_open_the_help_pages, "ui-pack-004";
-    server_list_rows_are_drawn_without_the_profile_outline, "ui-pack-004";
-    options_tabs_fit_short_and_wide_windows, "ui-pack-004";
-    windows_drag_by_their_title_bar_and_stay_on_screen, "ui-pack-004";
-    music_files_turns_tracks_off_for_the_next_hosted_game, "ui-pack-004";
-    press_up_to_repeat_chat_recalls_sent_lines, "ui-pack-003";
-    ml_text_switches_fonts_colours_and_margins_like_the_help_pages, "ui-pack-003";
-    resizable_windows_grow_from_their_edges, "ui-pack-003";
-    maximize_and_minimize_boxes_toggle_the_window, "ui-pack-003";
-    differing_save_colours_ask_to_match_or_add_them, "ui-pack-003";
+    menu_buttons_are_all_built;
+    advanced_config_saves_the_next_hosts_settings;
+    credits_and_f1_open_the_help_pages;
+    server_list_rows_are_drawn_without_the_profile_outline;
+    options_tabs_fit_short_and_wide_windows;
+    windows_drag_by_their_title_bar_and_stay_on_screen;
+    music_files_turns_tracks_off_for_the_next_hosted_game;
+    press_up_to_repeat_chat_recalls_sent_lines;
+    ml_text_switches_fonts_colours_and_margins_like_the_help_pages;
+    resizable_windows_grow_from_their_edges;
+    maximize_and_minimize_boxes_toggle_the_window;
+    differing_save_colours_ask_to_match_or_add_them;
 }
 
 const SCREENS: [ScreenId; 19] = [
@@ -185,7 +185,10 @@ fn an_unhandled_menu_button_is_reported() {
 #[test]
 #[ignore = "diagnostic listing, not a pass/fail check"]
 fn list_inert_buttons() {
-    let pack = &content_pack("ui-pack-004");
+    let pack = &content_pack(&bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "ui_pack",
+    ));
     for screen in SCREENS {
         let mut probe = ui(pack);
         probe.core.push(screen);
@@ -813,7 +816,10 @@ fn differing_save_colours_ask_to_match_or_add_them(pack: &Rc<Pack>) {
 #[ignore = "requires generated v20 content"]
 fn original_color_warning_rows_are_40_apart() {
     use bri_ui::api::UiUpdate;
-    let pack = content_pack("ui-pack-003");
+    let pack = content_pack(&bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "ui_pack",
+    ));
     let mut u = ui(&pack);
     u.apply(UiUpdate::ColorWarning { append: true });
     u.update(0);

@@ -425,7 +425,10 @@ mod tests {
         }
         fn content() -> Result<Self> {
             Ok(Self {
-                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009"),
+                root: bri_package::testing::pack_dir(
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                    "weapons",
+                ),
                 explosion: "rocketExplosion".into(),
                 _scratch: None,
             })

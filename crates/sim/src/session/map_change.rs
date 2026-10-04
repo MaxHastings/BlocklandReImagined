@@ -171,6 +171,14 @@ impl Session {
         self.refresh_trust();
         // A map load is a start: settings read only then take the host's.
         self.start_weapon_settings();
+        // Adopting a player bypasses join(), but the new mission has a fresh
+        // Add-On store. Initialize its player defaults and hooks just as on join.
+        // Otherwise both duplicators receive untyped empty mode/wait values.
+        let owners: Vec<_> = self.peers.keys().copied().collect();
+        for owner in owners {
+            self.packages_joined(owner);
+            self.notify_music_tracks(owner);
+        }
         Ok(())
     }
 }

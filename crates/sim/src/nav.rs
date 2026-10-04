@@ -30,6 +30,8 @@ use std::collections::BinaryHeap;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
+/// Horizontal distance within which a grid node completes its search.
+pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 /// New ground samples all bots together may take in one tick.
 pub const SAMPLES_PER_TICK: u32 = 96;
 /// Nodes all searches together expand in one tick, remembered ground or not.
@@ -57,6 +59,10 @@ pub struct Body {
     pub drop: f32,
     /// Cosine of the steepest floor it stands on.
     pub floor_cos: f32,
+    /// Full footprint for a chassis; pedestrians retain grid alignment slack.
+    pub conservative: bool,
+    /// Lower hull clearance above the support plane (wheels are not walls).
+    pub bottom: f32,
 }
 impl Body {
     pub fn of(tuning: &bri_motor::player::PlayerTuning, scale: f32) -> Self {
@@ -70,6 +76,8 @@ impl Body {
             jump: (rise * 0.8).max(tuning.step_height),
             drop: 4.0,
             floor_cos: tuning.slope_degrees.to_radians().cos(),
+            conservative: false,
+            bottom: 0.0,
         }
     }
     /// The box a clearance test uses: narrower by one cell so a body that
@@ -81,8 +89,15 @@ impl Body {
         } else {
             self.height
         };
-        let half_width = ((self.width - CELL) * 0.5).max(self.width * 0.25);
-        let lift = (self.step * 0.5).min(height * 0.3);
+        let half_width = if self.conservative {
+            self.width * 0.5
+        } else {
+            ((self.width - CELL) * 0.5).max(self.width * 0.25)
+        };
+        let lift = (self.step * 0.5)
+            .min(height * 0.3)
+            .max(self.bottom)
+            .min(height - 0.01);
         (half_width, lift, height - lift)
     }
 }
@@ -274,7 +289,7 @@ impl Nav {
         const AXES: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
         let middle = Vec3::Y * (body.height * 0.5);
         let goes_in = |dx: i32, dz: i32| {
-            if ground.passages.list.is_empty() {
+            if body.conservative || ground.passages.list.is_empty() {
                 return None;
             }
             let a = node.feet() + middle;
@@ -497,7 +512,7 @@ impl Search {
     }
     fn arrived(&self, node: Node) -> bool {
         let d = node.feet() - self.goal;
-        Vec3::new(d.x, 0.0, d.z).length() <= CELL * 1.5 && d.y.abs() <= 2.0
+        Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS && d.y.abs() <= 2.0
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {
@@ -736,6 +751,90 @@ mod tests {
             Found::Path(p) => p,
             other => panic!("no path: {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_chassis_uses_full_width_and_cannot_inherit_a_pedestrian_gap() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-4.0, 0.0, -2.0), Vec3::new(-1.4, 4.0, 2.0)),
+            (Vec3::new(1.4, 0.0, -2.0), Vec3::new(4.0, 4.0, 2.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+        };
+        let mut nav = Nav::default();
+        nav.begin_tick();
+        assert!(nav.node_at(&ground, &body(), Vec3::ZERO).unwrap().is_some());
+        let mut chassis = body();
+        chassis.width = 3.0;
+        chassis.conservative = true;
+        chassis.bottom = 0.7;
+        nav.clear();
+        assert!(
+            nav.node_at(&ground, &chassis, Vec3::ZERO)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_low_spawn_plate_under_the_hull_does_not_imprison_a_chassis() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.2, 0.5)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+        };
+        let mut chassis = body();
+        chassis.width = 4.0;
+        chassis.height = 2.0;
+        chassis.crouch_height = 2.0;
+        chassis.step = 0.2;
+        chassis.jump = 0.2;
+        chassis.conservative = true;
+        chassis.bottom = 0.8;
+        let mut nav = Nav::default();
+        let mut search = Search::new(Vec3::ZERO, Vec3::new(0.0, 0.0, -8.0), 16.0);
+        for _ in 0..100 {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, &chassis) {
+                let p = path(found);
+                assert!(!p.is_empty(), "the chassis must actually leave the plate");
+                assert!(
+                    p.last().unwrap().feet.distance(Vec3::new(0.0, 0.0, -8.0)) < 1.0,
+                    "the simplified route reaches its goal: {p:?}"
+                );
+                assert!(
+                    p.iter()
+                        .all(|p| !p.jump && !p.crouch && p.through.is_none())
+                );
+                // Hull clearance admits a low plate, never a real wall.
+                let tall = world(&[
+                    floor(),
+                    (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5)),
+                ]);
+                let blocked = Ground {
+                    physics: &tall,
+                    terrain: &no_terrain,
+                    passages: &NO_PASSAGES,
+                };
+                nav.clear();
+                nav.begin_tick();
+                assert!(
+                    nav.node_at(&blocked, &chassis, Vec3::ZERO)
+                        .unwrap()
+                        .is_none()
+                );
+                return;
+            }
+        }
+        panic!("chassis route never completed");
     }
 
     #[test]

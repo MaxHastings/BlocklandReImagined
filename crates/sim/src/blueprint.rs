@@ -113,6 +113,8 @@ pub struct CopyExtras {
     pub vehicle: Option<VehicleSpawn>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_region: Option<[f32; 3]>,
 }
 impl CopyExtras {
     /// What `brick` (brick `index` of a copy) carries, if anything.
@@ -123,7 +125,8 @@ impl CopyExtras {
             || brick.item_spawn.item.is_some()
             || brick.sound.is_some()
             || brick.vehicle.is_some()
-            || !brick.events.is_empty();
+            || !brick.events.is_empty()
+            || brick.rule_region.is_some();
         has.then(|| Self {
             brick: index,
             name: brick.name.clone(),
@@ -141,6 +144,7 @@ impl CopyExtras {
             sound: brick.sound.clone(),
             vehicle: brick.vehicle.as_deref().cloned(),
             events: brick.events.clone(),
+            rule_region: brick.rule_region,
         })
     }
 
@@ -158,6 +162,7 @@ impl CopyExtras {
         brick.sound.clone_from(&self.sound);
         brick.vehicle = self.vehicle.clone().map(Box::new);
         brick.events.clone_from(&self.events);
+        brick.rule_region = self.rule_region;
     }
 
     /// These as the copy is placed, turned `turns` and upside down and
@@ -181,6 +186,11 @@ impl CopyExtras {
         if let Some(item) = &mut extras.item {
             item.position = turn_direction(item.position, turns, look);
             item.direction = turn_direction(item.direction, turns, look);
+        }
+        if !turns.is_multiple_of(2)
+            && let Some(size) = &mut extras.rule_region
+        {
+            size.swap(0, 2);
         }
         for row in &mut extras.events {
             if !turns_with_copy(&row.target, &named) {

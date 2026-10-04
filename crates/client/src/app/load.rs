@@ -120,6 +120,11 @@ impl App {
             });
         }
         ui.apply(UiUpdate::Maps(content.maps.clone()));
+        ui.apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+            &content.paths.root,
+            state_dir,
+            &content.paint,
+        )));
         ui.core.music_tracks = content.music.iter().map(|(_, name)| name.clone()).collect();
         ui.apply(UiUpdate::GameModes(crate::packages::modes(
             server_packages.as_ref(),
@@ -147,6 +152,8 @@ impl App {
                 renderer: None,
                 shell_gpu: None,
                 hidden_lines: None,
+                region_lines: None,
+                region_outlines: Default::default(),
                 vignette: None,
                 selection_lines: None,
                 selection_uploaded: None,
@@ -279,6 +286,8 @@ impl App {
             },
             cosmetic_faults: Default::default(),
             addons: AddOns {
+                reload: None,
+                reload_pending: None,
                 package_catalog,
                 client_code,
                 item_skins: Default::default(),

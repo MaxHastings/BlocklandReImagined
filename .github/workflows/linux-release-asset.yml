@@ -1,6 +1,6 @@
 # Adds the Linux zip to an existing release. It builds the client on the
 # oldest supported Ubuntu (glibc 2.35), takes the content from that release's
-# public Windows zip (checked against its MANIFEST.json), packages with
+# Windows zip (including a draft release) (checked against its MANIFEST.json), packages with
 # tools/package_playtest.sh and uploads the zip. It never replaces an asset.
 name: linux-release-asset
 
@@ -75,6 +75,37 @@ jobs:
       - name: Build the game and Add-On importer
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
 
+      - name: Verify release panic capture
+        run: cargo test --release --locked -p bri-crash --test capture
+
+      # The packager strips these executables in place. Keep exact ELF files
+      # with line tables before that step, separately from original content.
+      - name: Retain matching unstripped executables
+        run: |
+          mkdir -p "$RUNNER_TEMP/linux-symbols"
+          for binary in bri-client bri-import-addon bri-server; do
+            cp "target/release/$binary" "$RUNNER_TEMP/linux-symbols/$binary"
+          done
+          python3 - "$RUNNER_TEMP/linux-symbols" <<'PY'
+          import hashlib, json, os, pathlib, subprocess, sys
+          root = pathlib.Path(sys.argv[1])
+          files = [{'path': p.name, 'bytes': p.stat().st_size,
+                    'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                   for p in sorted(root.iterdir()) if p.is_file()]
+          manifest = {'schema_version': 1, 'version': os.environ['BRI_VERSION'],
+                      'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                      'run_id': os.environ['GITHUB_RUN_ID'], 'platform': 'linux',
+                      'rustc': subprocess.check_output(['rustc', '-vV'], text=True), 'files': files}
+          (root / 'SYMBOLS.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-debug-symbols
+          path: ${{ runner.temp }}/linux-symbols/
+          retention-days: 90
+          if-no-files-found: error
+
       - name: Startup check against the content
         run: |
           target/release/bri-client --check content "$RUNNER_TEMP/bri-check-state"
@@ -86,6 +117,11 @@ jobs:
           zip=dist/BlocklandReImagined-linux.zip
           rm -rf "$RUNNER_TEMP/check" && mkdir "$RUNNER_TEMP/check" && unzip -q "$zip" -d "$RUNNER_TEMP/check"
           tools/package_playtest.sh --verify "$RUNNER_TEMP"/check/*
+          roots=("$RUNNER_TEMP/check"/*)
+          test "${#roots[@]}" -eq 1
+          game="${roots[0]}"
+          "$game/bri-client" --check "$game/content" "$RUNNER_TEMP/bri-zip-state"
+          "$game/bri-client" --version
           ls -l "$zip"
           echo "LINUX_ZIP=$zip" >> "$GITHUB_ENV"
 

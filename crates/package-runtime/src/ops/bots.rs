@@ -44,9 +44,10 @@ impl ScriptOp for RemoveBot {
     }
 }
 
-/// Stop or restart the brain of a bot this package added (Slayer's
-/// `stopHoleLoop` and `resetHoleLoop`): a resting bot stands still and
-/// holds its fire.
+/// Stop or restart a bot this package added, or a bot kind this package
+/// provides (including its declared host-rule companion). This supports
+/// `stopHoleLoop` and `resetHoleLoop` without granting deletion of another
+/// package's bot. A resting bot stands still and holds its fire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestBot {
     pub bot: u64,

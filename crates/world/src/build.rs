@@ -486,6 +486,19 @@ impl LoadMapping {
     pub fn take_owners(&mut self) -> BTreeMap<OwnerId, OwnerRecord> {
         std::mem::take(&mut self.new_owners)
     }
+    /// The existing ownership mapping, without copying a saved brick.
+    pub fn owner(&self, saved: OwnerId) -> Result<OwnerId> {
+        if !self.preserve_ownership {
+            Ok(self.load_owner)
+        } else if saved == 0 {
+            Ok(0)
+        } else {
+            self.owners
+                .get(&saved)
+                .copied()
+                .context("Brick owner was not in the save")
+        }
+    }
     /// Validate one saved brick against its save and map its colours and
     /// owner into the target world.
     pub fn brick(&self, mut brick: Brick) -> Result<Brick> {
@@ -493,16 +506,7 @@ impl LoadMapping {
         // merged one.
         brick.validate(self.colors.len())?;
         brick.recolor(|c| self.colors[usize::from(c)]);
-        brick.owner = if !self.preserve_ownership {
-            self.load_owner
-        } else if brick.owner == 0 {
-            0
-        } else {
-            *self
-                .owners
-                .get(&brick.owner)
-                .context("Brick owner was not in the save")?
-        };
+        brick.owner = self.owner(brick.owner)?;
         Ok(brick)
     }
 }

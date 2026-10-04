@@ -359,6 +359,34 @@ impl Session {
     pub fn held_by(&self, player: OwnerId) -> Option<ObjectRef> {
         self.movables.holds.get(&player).map(|h| h.target)
     }
+    /// Derived native grip geometry for bot controls. Portal-transformed holds
+    /// require an executor that understands that transform and are excluded.
+    pub(in crate::session) fn bot_hold_geometry(
+        &self,
+        player: OwnerId,
+    ) -> Option<(ObjectRef, f32, Vec3, f32)> {
+        let hold = self.movables.holds.get(&player)?;
+        if !hold.through.abs_diff_eq(Affine3A::IDENTITY, 1e-5) {
+            return None;
+        }
+        Some((
+            hold.target,
+            hold.distance,
+            self.hold_point_of(hold.target, hold.anchor)?,
+            self.object_radius(hold.target),
+        ))
+    }
+    /// Capability feasibility from the native hold's force/acceleration limits.
+    /// A provider can reject an impossible lift without its own integrator.
+    pub(in crate::session) fn bot_hold_can_lift(&self, target: ObjectRef, force: f32) -> bool {
+        force.is_finite()
+            && force > 0.0
+            && self.target_alive(target)
+            && (force / self.object_mass(target).max(1.0)).min(MAX_HOLD_ACCEL) > GRAVITY
+    }
+    pub(super) fn object_held(&self, target: ObjectRef) -> bool {
+        self.movables.holds.values().any(|h| h.target == target)
+    }
     /// Who a push or throw credits for what `target` hits now.
     pub(super) fn mover_credit(&self, target: ObjectRef) -> Option<OwnerId> {
         let tick = self.simulation.state().tick;
@@ -368,9 +396,42 @@ impl Session {
             .filter(|(owner, until)| tick <= *until && self.peers.contains_key(owner))
             .map(|(owner, _)| *owner)
     }
-    fn credit(&mut self, target: ObjectRef, by: OwnerId) {
+    pub(super) fn credit(&mut self, target: ObjectRef, by: OwnerId) {
         let until = self.simulation.state().tick + CREDIT_TICKS;
         self.movables.credits.insert(target, (by, until));
+    }
+    /// All walking actors exchange the momentum their motor stopped with
+    /// loose vehicle bodies. Attribution follows a real, permitted transfer.
+    pub(super) fn push_contacts(
+        &mut self,
+        contacts: Vec<(OwnerId, bri_motor::torque::SweepContact)>,
+    ) {
+        for (owner, contact) in contacts {
+            let Some(collider) = self.simulation.physics.colliders.get(contact.collider) else {
+                continue;
+            };
+            if collider.user_data >> 64 != super::vehicles::VEHICLE_TAG >> 64 {
+                continue;
+            }
+            let vehicle = collider.user_data as u64;
+            let target = ObjectRef::Vehicle(vehicle);
+            if !self.may_move(owner, target) || self.object_held(target) {
+                continue;
+            }
+            let transferred = self.vehicles.world.as_mut().map_or(0.0, |w| {
+                w.push_contact(
+                    &mut self.simulation.physics,
+                    VehicleId(vehicle),
+                    &contact,
+                    combat::PLAYER_MASS,
+                )
+            });
+            if transferred > 0.0 {
+                self.credit(target, owner);
+                let tick = self.simulation.state().tick;
+                self.bot_push_progress(owner, vehicle, tick);
+            }
+        }
     }
 
     /// The vehicle a player's body is part of: their seat, or their tumble.
@@ -412,7 +473,7 @@ impl Session {
             }
         }
     }
-    fn object_velocity(&self, target: ObjectRef) -> Option<Vec3> {
+    pub(super) fn object_velocity(&self, target: ObjectRef) -> Option<Vec3> {
         match target {
             ObjectRef::Player(p) => {
                 if let Some(v) = self.ridden(p) {
@@ -883,7 +944,7 @@ impl Session {
     }
 
     /// Change an object's velocity by `delta`.
-    fn push_object(&mut self, target: ObjectRef, delta: Vec3) -> Result<()> {
+    pub(super) fn push_object(&mut self, target: ObjectRef, delta: Vec3) -> Result<()> {
         ensure!(delta.is_finite(), "Invalid push");
         match target {
             ObjectRef::Player(p) => {

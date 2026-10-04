@@ -12,7 +12,9 @@ struct Gpu {
 impl Gpu {
     fn new() -> Result<Self> {
         pollster::block_on(async {
-            let i = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let i = wgpu::Instance::new(
+                wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            );
             let a = i
                 .request_adapter(&wgpu::RequestAdapterOptions::default())
                 .await?;
@@ -142,9 +144,23 @@ fn offscreen_gpu_sway_depth_and_upload_bounds(f: &Fixture) -> Result<(Vec<u8>, s
     )?;
     let stats = r.prepare(&gpu.queue, &c, 0., 500., 900.)?;
     assert!(stats.visible > 0 && stats.visible < total, "{stats:?}");
-    assert_eq!(stats.upload_bytes, 112 + stats.visible * 4);
+    assert_eq!(stats.upload_bytes, 128 + stats.visible * 4);
     assert!(stats.draw_calls <= p.definitions.len());
     let first = gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?;
+    r.set_illumination([0.06, 0.08, 0.12])?;
+    r.prepare(&gpu.queue, &c, 0., 500., 900.)?;
+    let night = gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?;
+    let brightness = |pixels: &[u8]| {
+        pixels
+            .chunks_exact(4)
+            .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
+            .sum::<u64>()
+    };
+    assert!(
+        brightness(&night) * 3 < brightness(&first),
+        "plants must darken at night"
+    );
+    r.set_illumination([1.0; 3])?;
     let colored = first
         .chunks_exact(4)
         .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
@@ -172,7 +188,7 @@ fn offscreen_gpu_sway_depth_and_upload_bounds(f: &Fixture) -> Result<(Vec<u8>, s
     );
     let next = r.prepare_elapsed(&gpu.queue, &c, 604800.5, 500., 900.)?;
     assert_eq!(next.phase_rebases, 1);
-    assert_eq!(next.upload_bytes, 112 + next.visible * 4);
+    assert_eq!(next.upload_bytes, 128 + next.visible * 4);
     let start = std::time::Instant::now();
     for n in 0..200 {
         r.prepare(&gpu.queue, &c, n as f32 / 60., 500., 900.)?;
@@ -190,6 +206,7 @@ fn offscreen_gpu_sway_depth_and_upload_bounds_synthetic() -> Result<()> {
 #[ignore = "requires generated v20 content"]
 fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Result<()> {
     let (first, report) = offscreen_gpu_sway_depth_and_upload_bounds(&Fixture::content())?;
+    std::fs::create_dir_all(root().join("artifacts/native-foliage"))?;
     image::save_buffer(
         root().join("artifacts/native-foliage/offscreen.png"),
         &first,

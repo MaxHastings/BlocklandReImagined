@@ -212,11 +212,25 @@ enum TurnedOn {
 
 impl Game {
     fn new(how: TurnedOn) -> Self {
+        // Import every pinned stand-in once per binary. Each scenario still
+        // gets an independent installed folder and its own enabled list.
+        static INSTALLED: std::sync::OnceLock<Game> = std::sync::OnceLock::new();
+        let installed = INSTALLED.get_or_init(|| {
+            let scratch = bri_content::testing::ScratchDir::new("bundled-base").unwrap();
+            let root = scratch.path().to_path_buf();
+            bri_net::testing::write_root(&root, &[MAP]).unwrap();
+            let originals = bundled_originals();
+            install_bundle(&root, &originals);
+            Game {
+                _scratch: scratch,
+                root,
+                originals,
+            }
+        });
         let scratch = bri_content::testing::ScratchDir::new("bundled-in-game").unwrap();
         let root = scratch.path().to_path_buf();
-        bri_net::testing::write_root(&root, &[MAP]).unwrap();
-        let originals = bundled_originals();
-        install_bundle(&root, &originals);
+        copy_fixture(&installed.root, &root);
+        let originals = installed.originals.clone();
         match how {
             TurnedOn::ByAnOldList => {
                 let library = Library::scan(&root).unwrap();
@@ -271,6 +285,25 @@ impl Game {
             }
         }
         rules
+    }
+}
+
+fn copy_fixture(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            copy_fixture(&entry.path(), &target);
+        } else {
+            assert!(
+                kind.is_file(),
+                "unexpected fixture entry {}",
+                entry.path().display()
+            );
+            std::fs::copy(entry.path(), target).unwrap();
+        }
     }
 }
 
@@ -379,16 +412,24 @@ async fn played(game: Game) -> Result<()> {
         None,
     )
     .await?;
-    let mut result = play(&mut client).await;
+    let mut result = play(&mut client).await.context("bundled tool gameplay");
     if result.is_ok() {
-        result = wrench_an_add_on_brick(&mut client, root, &set).await;
+        result = wrench_an_add_on_brick(&mut client, root, &set)
+            .await
+            .context("bundled brick wrench");
     }
     if result.is_ok() {
-        result = a_hole_brick_brings_its_bot(&mut client, root, &set).await;
+        result = a_hole_brick_brings_its_bot(&mut client, root, &set)
+            .await
+            .context("bundled bot hole");
     }
     client.close();
-    server.stop().await?;
-    result
+    let stopped = tokio::time::timeout(Duration::from_secs(30), server.stop())
+        .await
+        .context("timed out stopping bundled Add-On server")?;
+    result?;
+    stopped?;
+    Ok(())
 }
 
 struct Player<'a> {
@@ -524,26 +565,48 @@ async fn play(client: &mut Client) -> Result<()> {
     })
     .await?;
 
-    // The Grapple Rope, struck into the floor ahead, holds its holder on
-    // the rope: turning and walking away, they stay where they hung.
+    // The Grapple Rope catches at the struck spot. Slack permits travel
+    // before it is taut, so check its actual span rather than comparing
+    // total travel to an arbitrary fraction of the unroped walk.
     p.equip(1).await?;
     p.look(0.0, -0.25).await?;
     p.command(Command::WeaponTrigger { down: true }).await?;
+    p.until("the Grapple Rope to catch", |p| {
+        p.me().is_some_and(|m| m.tether.is_some())
+    })
+    .await?;
+    let rope = p.me().unwrap().tether.unwrap();
     p.walk(0.0, -0.25, 0.0, Duration::from_millis(1500)).await?;
-    let roped = p.feet();
     p.walk(PI, 0.0, 1.0, Duration::from_secs(2)).await?;
-    let held = p.feet().distance(roped);
+    let held = p.me().unwrap().tether.expect("still roped while held");
+    assert_eq!(
+        held.anchor, rope.anchor,
+        "the rope stays at the struck spot"
+    );
+    assert_eq!(held.length, rope.length, "it neither reels in nor out");
+    let span = |feet| {
+        bri_sim::player::Tether::grip(feet, &PlayerTuning::default())
+            .distance(Vec3::from(rope.anchor))
+    };
+    assert!(
+        span(p.feet()) <= rope.length + 0.6,
+        "the Grapple Rope did not leash its holder: span {}, length {}",
+        span(p.feet()),
+        rope.length
+    );
     p.command(Command::WeaponTrigger { down: false }).await?;
 
-    // Let go, the same walk carries them away.
-    p.until("landing", |p| p.me().is_some_and(|m| m.grounded))
-        .await?;
-    let free = p.feet();
+    // Let go, the same walk carries them beyond that rope's reach.
+    p.until("release and landing", |p| {
+        p.me().is_some_and(|m| m.tether.is_none() && m.grounded)
+    })
+    .await?;
     p.walk(PI, 0.0, 1.0, Duration::from_secs(2)).await?;
-    let walked = p.feet().distance(free);
     assert!(
-        held < 0.75 * walked,
-        "the Grapple Rope did not hold its holder: moved {held} on the rope, {walked} off it"
+        span(p.feet()) > rope.length + 1.0,
+        "the released holder stayed leashed: span {}, length {}",
+        span(p.feet()),
+        rope.length
     );
 
     // The Fill Can fills a brick planted ahead of it.

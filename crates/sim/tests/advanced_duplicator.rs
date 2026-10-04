@@ -1411,6 +1411,7 @@ fn a_copy_carries_its_bricks_settings_and_turns_them_with_it() {
     )
     .unwrap();
     let row = |target, output: &str, params| EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),

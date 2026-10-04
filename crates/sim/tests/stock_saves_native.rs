@@ -41,10 +41,13 @@ fn floor_gaps(
 #[ignore = "requires generated v20 content (map-bundle-017, worlds-pass-006, or BRI_CONTENT)"]
 fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
     let root = content();
-    let definitions =
-        Definitions::load(&root.join("stock-catalog-004"), &root.join("maps-pass-008"))?;
-    let report: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("worlds-pass-006/report.json"))?)?;
+    let definitions = Definitions::load(
+        &bri_package::testing::pack_dir(&root, "brick_catalog"),
+        &bri_package::testing::pack_dir(&root, "geometry"),
+    )?;
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        bri_package::testing::pack_dir(&root, "worlds").join("report.json"),
+    )?)?;
     let mut saves: Vec<(String, String, World)> = vec![];
     for save in report["saves"].as_array().context("saves")? {
         let source = save["source"]
@@ -64,8 +67,7 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
             other => panic!("unexpected save folder {other}"),
         };
         let world = bri_world::persistence::load(
-            &root
-                .join("worlds-pass-006")
+            &bri_package::testing::pack_dir(&root, "worlds")
                 .join(save["file"].as_str().context("file")?),
         )?;
         assert_eq!(
@@ -76,11 +78,12 @@ fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
         saves.push((source, map.into(), world));
     }
     assert_eq!(saves.len(), 35);
-    let (_, part1, part2) = bri_sim::tutorial::load_pack(&root.join("tutorial-pack-003"))?;
+    let (_, part1, part2) =
+        bri_sim::tutorial::load_pack(&bri_package::testing::pack_dir(&root, "tutorial"))?;
     for (name, world) in [("Tutorial part 1", part1), ("Tutorial part 2", part2)] {
         saves.push((name.into(), bri_sim::tutorial::MAP_ID.into(), world));
     }
-    let bundle = root.join("map-bundle-017");
+    let bundle = bri_package::testing::pack_dir(&root, "map_bundle");
     let mut maps = std::collections::BTreeMap::new();
     for (source, map_id, world) in saves {
         if !maps.contains_key(&map_id) {

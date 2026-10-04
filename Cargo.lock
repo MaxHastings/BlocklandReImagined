@@ -578,6 +578,7 @@ name = "bri-events"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-package",
  "glam 0.33.10",
  "serde",
  "serde_json",
@@ -594,6 +595,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-package",
  "bri-physics",
  "bri-render",
  "bytemuck",
@@ -636,6 +638,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-package",
  "bri-render",
  "bytemuck",
  "glam 0.33.10",
@@ -768,6 +771,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-package",
  "bytemuck",
  "glam 0.33.10",
  "image",
@@ -833,6 +837,8 @@ dependencies = [
  "anyhow",
  "bri-console",
  "bri-content",
+ "bri-events",
+ "bri-package",
  "bytemuck",
  "image",
  "memmap2",
@@ -917,6 +923,7 @@ name = "bri-weather"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-package",
  "bri-render",
  "bytemuck",
  "glam 0.33.10",

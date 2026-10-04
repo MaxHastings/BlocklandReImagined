@@ -107,6 +107,10 @@ impl App {
             lines.clear();
         }
         self.gpu.hidden_uploaded = None;
+        if let Some(lines) = &mut self.gpu.region_lines {
+            lines.clear();
+        }
+        self.gpu.region_outlines.clear();
         if let Some(lines) = &mut self.gpu.selection_lines {
             lines.clear();
         }
@@ -163,6 +167,9 @@ impl App {
         self.ui.core.admin = Default::default();
         self.ui.core.minigames = Default::default();
         self.build.tool_ui.invalidate();
+        if let Some(update) = self.build.tool_ui.reset_music_offer() {
+            self.ui.apply(update);
+        }
         self.scene.query_source = None;
         self.scene.query_log = None;
         self.net.dialog_epoch = self.net.dialog_epoch.wrapping_add(1);
@@ -266,6 +273,15 @@ impl App {
         let admin = bri_admin::Secret::new(admin)?;
         let super_admin = bri_admin::Secret::new(super_admin)?;
         ensure!((1..=64).contains(&max_players), "Invalid player limit");
+        let host_palette = if map.contains("map_tutorial") {
+            None
+        } else {
+            crate::colorsets::selected(
+                &self.content.paths.root,
+                &self.state_dir,
+                self.ui.core.prefs.str_or("$Pref::Server::ColorSet", ""),
+            )?
+        };
         // A host runs its own Add-On list as it is now; a game joined before
         // may have loaded another server's.
         self.disconnect();
@@ -287,6 +303,7 @@ impl App {
             "This map has no usable native bundle yet"
         );
         let paths = self.content.paths.clone();
+        let lighting = self.graphics.lighting;
         let light_cache = self.state_dir.join("light-volumes");
         let paths_for_maps = paths.clone();
         let base_map = hosted.base_map.clone();
@@ -383,6 +400,7 @@ impl App {
             .map(|(id, _)| id.clone())
             .collect();
         let progress = bri_progress::Progress::new();
+        let palette_for_maps = host_palette.clone();
         progress.set_subject(&map);
         let reporting = progress.clone();
         let host_runtime = self.host_runtime.handle().clone();
@@ -412,9 +430,14 @@ impl App {
                 weapon_snapshot.ensure_same(&weapons)?;
                 let item_physics = paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
-                let loaded = paths.load_map(&base_map, None)?;
-                let visual = load_map_bundle(&paths.map_bundle, &base_map)?;
-                let mut light_volume = LightVolumeState::start(&visual.scene, &light_cache);
+                let loaded =
+                    paths.load_map_with_palette(&base_map, None, host_palette.as_deref())?;
+                let visual = load_visual_map(&paths.map_bundle, &base_map, lighting)?;
+                let mut light_volume = LightVolumeState::start(
+                    &visual.scene,
+                    &light_cache,
+                    visual.modern_lights.as_deref(),
+                );
                 light_volume.set_light_shapes(&loaded.breakables);
                 // Every package this host loaded, hashed: what joiners must match.
                 let identity = paths.environment()?;
@@ -531,7 +554,11 @@ impl App {
                 add_ons,
                 load_map: Some({
                     let paths = paths_for_maps.clone();
-                    Arc::new(move |map: &str| Ok(paths.load_map(map, None)?.into_session()))
+                    Arc::new(move |map: &str| {
+                        Ok(paths
+                            .load_map_with_palette(map, None, palette_for_maps.as_deref())?
+                            .into_session())
+                    })
                 }),
             });
             let (session, spawn_points) = setup.session(&hosted, loaded.into_session())?;
@@ -686,6 +713,10 @@ impl App {
     }
     pub(super) fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
         ensure!(
+            self.addons.reload.is_none(),
+            "Add-On loading is still in progress"
+        );
+        ensure!(
             password.is_empty(),
             "Password authentication is not connected yet"
         );
@@ -698,6 +729,7 @@ impl App {
         let servers_file = self.state_dir.join("servers.json");
         let lan_hosts = self.lobby.lan_hosts.clone();
         let paths = self.content.paths.clone();
+        let lighting = self.graphics.lighting;
         let light_cache = self.state_dir.join("light-volumes");
         let player = self.join_name();
         let weapon_snapshot = self.content.weapons.clone();
@@ -880,7 +912,7 @@ impl App {
             let permit = load_limit.acquire_owned().await?;
             let visual = tokio::task::spawn_blocking(move || -> Result<Prepared> {
                 let _permit = permit;
-                prepare_map(&paths, &map, selected, &catalog, &light_cache)
+                prepare_map(&paths, &map, selected, &catalog, &light_cache, lighting)
             })
             .await??;
             scene_tx.send(visual).context("Loading cancelled")?;
@@ -1012,6 +1044,7 @@ impl App {
                     bri_sim::session::AdminData::BrickGroups(_)
                         | bri_sim::session::AdminData::BanList { .. }
                         | bri_sim::session::AdminData::AutoRoles(_)
+                        | bri_sim::session::AdminData::Maps(_)
                 ) {
                     ensure!(
                         reply.snapshot.revision >= self.ui.core.admin.revision,
@@ -1084,7 +1117,8 @@ impl App {
                     .tool_ui
                     .accept_inspection(&reply, mode, expected, &view.world, &view.names, view.owner)
                     .map_err(|e| format!("{e:#}"))?;
-                for update in updates {
+                for mut update in updates {
+                    region_defaults(&mut update, &reply, self.scene.meshes.as_deref());
                     self.ui.apply_session(attempt.id, update);
                 }
             } else if matches!(

@@ -311,7 +311,8 @@ impl ScriptOp for SetBrickColor {
 /// Whether a brick draws, collides and stops rays (`setRendering`,
 /// `setColliding`, `setRayCasting` from a game's script: Slayer's path
 /// nodes hiding as they are planted). The same bricks as
-/// [`SetBrickColor`].
+/// [`SetBrickColor`], plus bricks whose definition belongs to the calling
+/// package or a provider explicitly declaring it as a host-rule companion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetBrickShown {
     pub brick: u64,

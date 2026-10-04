@@ -20,6 +20,138 @@ pub fn build_world_scene(
     build_world_scene_materials(world, meshes, max_triangles, None)
 }
 
+/// Local copy previews are cosmetic, independent of the authoritative world
+/// budget. At 200k source triangles the two temp-brick shells use at most
+/// 57.6 MB of vertices and 4.8 MB of indices (72-byte SceneVertex).
+pub const MAX_PREVIEW_TRIANGLES: usize = 200_000;
+
+pub struct PlacementPreview {
+    pub scene: SceneData,
+    /// Explicitly surfaced to the player when the entire copy is represented
+    /// by its bounds. Planting still uses the complete authoritative blueprint.
+    pub notice: Option<String>,
+}
+
+pub fn build_placement_preview(
+    world: &PublicWorld,
+    meshes: &BTreeMap<String, BrickMesh>,
+    materials: Option<&crate::materials::BrickMaterials>,
+) -> Result<PlacementPreview> {
+    ensure!(
+        world.bricks.len() <= bri_sim::blueprint::MAX_GHOST_BRICKS,
+        "Copy preview exceeds the replicated ghost brick limit"
+    );
+    let mut triangles = 0usize;
+    let mut bounds = BTreeMap::new();
+    let mut min = glam::Vec3::splat(f32::INFINITY);
+    let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+    for brick in world.bricks.values() {
+        brick.validate(world.palette.len())?;
+        let ContentRef::Resolved(definition) = &brick.definition else {
+            bail!("Copy preview has an unresolved brick definition");
+        };
+        let mesh = meshes
+            .get(definition)
+            .context("Copy preview mesh missing")?;
+        triangles = triangles
+            .checked_add(
+                mesh.quads
+                    .len()
+                    .checked_mul(2)
+                    .context("Copy preview triangle overflow")?,
+            )
+            .context("Copy preview triangle overflow")?;
+        let (lo, hi) = if let Some(bounds) = bounds.get(definition) {
+            *bounds
+        } else {
+            mesh.validate()?;
+            let mut lo = glam::Vec3::splat(f32::INFINITY);
+            let mut hi = glam::Vec3::splat(f32::NEG_INFINITY);
+            for vertex in mesh.quads.iter().flat_map(|q| &q.vertices) {
+                let p = glam::Vec3::from(vertex.position);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            bounds.insert(definition.clone(), (lo, hi));
+            (lo, hi)
+        };
+        for i in 0..8 {
+            let corner = glam::Vec3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            );
+            let p = brick.transform().transform_point3(corner);
+            min = min.min(p);
+            max = max.max(p);
+        }
+    }
+    if triangles <= MAX_PREVIEW_TRIANGLES {
+        return Ok(PlacementPreview {
+            scene: build_world_scene_materials(world, meshes, MAX_PREVIEW_TRIANGLES, materials)?,
+            notice: None,
+        });
+    }
+    // A single enclosing shell, never a silently truncated set of bricks.
+    ensure!(
+        min.is_finite() && max.is_finite(),
+        "Copy preview bounds are invalid"
+    );
+    let mut scene = SceneData::default();
+    scene
+        .materials
+        .push(Material::vertex_lit("Copy bounding preview", 0));
+    let corners: [glam::Vec3; 8] = std::array::from_fn(|i| {
+        glam::Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        )
+    });
+    for (face, normal) in [
+        ([0, 4, 6, 2], glam::Vec3::NEG_X),
+        ([1, 3, 7, 5], glam::Vec3::X),
+        ([0, 1, 5, 4], glam::Vec3::NEG_Y),
+        ([2, 6, 7, 3], glam::Vec3::Y),
+        ([0, 2, 3, 1], glam::Vec3::NEG_Z),
+        ([4, 5, 7, 6], glam::Vec3::Z),
+    ] {
+        let base = scene.vertices.len() as u32;
+        scene
+            .vertices
+            .extend(face.map(|i| bri_render::scene::SceneVertex {
+                position: corners[i].to_array(),
+                normal: normal.to_array(),
+                uv: [0.; 2],
+                lightmap_uv: [0.; 2],
+                color: [0.2, 0.5, 1.0, 1.0],
+                fx: [0.; 4],
+            }));
+        scene
+            .indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    scene.batches.push(bri_render::scene::MeshBatch {
+        indices: 0..36,
+        material: 0,
+        center: ((min + max) * 0.5).to_array(),
+    });
+    Ok(PlacementPreview {
+        scene,
+        notice: Some(format!(
+            "Copy preview shows the whole selection's bounds ({triangles} triangles exceed the {MAX_PREVIEW_TRIANGLES} preview budget). All copied bricks are retained for planting."
+        )),
+    })
+}
+
+/// Reveal an unplanted preview without changing the blueprint sent for planting.
+pub fn show_placement_ghost(brick: &mut bri_world::Brick) {
+    brick.visible = true;
+    // Transparent palette colors must also be legible in the temp-brick pass.
+    brick.color_effect = 0;
+    brick.shape_effect = 0;
+}
+
 pub fn build_world_scene_materials(
     world: &PublicWorld,
     meshes: &BTreeMap<String, BrickMesh>,
@@ -372,6 +504,73 @@ pub(crate) mod tests {
             }],
         }
     }
+    #[test]
+    fn permitted_copy_crosses_old_budget_without_losing_any_preview_bricks() {
+        let mut geometry = mesh();
+        geometry.quads = vec![geometry.quads[0].clone(); 12];
+        let meshes = BTreeMap::from([("definition/a".into(), geometry)]);
+        let mut world = world();
+        // A permitted copy crosses the reported 100,000-triangle boundary.
+        for id in 0..4_168 {
+            world.bricks.insert(id, brick([id as f32, 0., 0.]));
+        }
+        assert!(build_world_scene(&world, &meshes, 100_000).is_err());
+        let preview = build_placement_preview(&world, &meshes, None).unwrap();
+        assert!(preview.notice.is_none());
+        assert_eq!(preview.scene.indices.len() / 3, 100_032);
+        assert_eq!(preview.scene.vertices.len(), 4_168 * 12 * 4);
+        let before = world.clone();
+        let mut scene = preview.scene;
+        v20_temp_brick(&mut scene, &Default::default());
+        assert_eq!(scene.indices.len() / 3, 200_064);
+        assert_eq!(
+            world, before,
+            "cosmetic shells never change the copy to plant"
+        );
+    }
+
+    #[test]
+    fn complex_copy_has_explicit_whole_selection_bounds_and_a_finite_budget() {
+        let mut geometry = mesh();
+        geometry.quads = vec![geometry.quads[0].clone(); 20];
+        let meshes = BTreeMap::from([("definition/a".into(), geometry)]);
+        let mut world = world();
+        for id in 0..10_000 {
+            world.bricks.insert(id, brick([id as f32, 0., 0.]));
+        }
+        let before = world.clone();
+        let mut preview = build_placement_preview(&world, &meshes, None).unwrap();
+        assert!(
+            preview
+                .notice
+                .as_ref()
+                .unwrap()
+                .contains("All copied bricks are retained")
+        );
+        assert_eq!(preview.scene.indices.len(), 36);
+        let xs: Vec<_> = preview
+            .scene
+            .vertices
+            .iter()
+            .map(|v| v.position[0])
+            .collect();
+        assert_eq!(xs.iter().copied().fold(f32::INFINITY, f32::min), 1.0);
+        assert_eq!(
+            xs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            10_001.0
+        );
+        v20_temp_brick(&mut preview.scene, &Default::default());
+        assert_eq!(preview.scene.vertices.len(), 48);
+        assert_eq!(preview.scene.indices.len(), 72);
+        assert_eq!(world, before);
+        assert!(
+            build_world_scene(&world, &meshes, 100_000).is_err(),
+            "authoritative world budget remains enforced"
+        );
+        world.bricks.insert(10_000, brick([0.; 3]));
+        assert!(build_placement_preview(&world, &meshes, None).is_err());
+    }
+
     fn world() -> PublicWorld {
         PublicWorld {
             name: "Test".into(),
@@ -386,6 +585,7 @@ pub(crate) mod tests {
 
     pub(crate) fn set_color(color: u8) -> bri_world::EventRow {
         bri_world::EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -398,6 +598,38 @@ pub(crate) mod tests {
 
     /// An invalid brick is named once per reason, not on every rebuild,
     /// and again after it was valid.
+    #[test]
+    fn invisible_noncolliding_bricks_get_visible_placement_geometry() {
+        let mut original = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("preview".into()),
+            [0.0; 3],
+            1,
+        );
+        original.visible = false;
+        original.colliding = false;
+        let mut preview = original.clone();
+        show_placement_ghost(&mut preview);
+        assert!(preview.visible);
+        assert!(!preview.colliding);
+        assert!(
+            !original.visible,
+            "the planted blueprint keeps Rendering off"
+        );
+        let meshes = [("preview".into(), mesh())].into();
+        let world = bri_net::protocol::PublicWorld {
+            name: "Preview".into(),
+            map_id: "test".into(),
+            palette: vec![[1.0; 4]],
+            bricks: [(1_u64, preview)].into_iter().collect(),
+        };
+        assert!(
+            !build_world_scene(&world, &meshes, 100)
+                .unwrap()
+                .vertices
+                .is_empty()
+        );
+    }
+
     #[test]
     fn an_invalid_brick_is_logged_once_per_reason() {
         let mut logged = BTreeMap::new();

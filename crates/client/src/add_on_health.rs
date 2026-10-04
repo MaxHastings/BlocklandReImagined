@@ -98,7 +98,7 @@ pub struct Loaded<'a> {
     pub items: &'a crate::items::ItemAssets,
     /// `None` where no sound is played (a check without an audio device
     /// still has the sound bank, so this is rare).
-    pub audio: Option<&'a crate::audio::ClientAudio>,
+    pub audio: Option<&'a dyn crate::audio::SoundLookup>,
 }
 
 /// Every sound, effect, damage type and model an Add-On's weapons name

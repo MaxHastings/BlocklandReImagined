@@ -27,8 +27,8 @@ use std::{
 };
 
 const DT: f32 = 1.0 / 60.0;
-/// Frames per scenario: the last body lives out its 3 s solid and 2 s fade.
-const FRAMES: usize = 60 * 8;
+/// Frames per scenario: the last body lives out its 10 s solid and 3 s fade.
+const FRAMES: usize = 60 * 16;
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
@@ -211,7 +211,8 @@ struct Gpu {
 }
 
 fn gpu() -> Result<Gpu> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()

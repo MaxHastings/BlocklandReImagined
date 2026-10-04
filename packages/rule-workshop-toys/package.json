@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "rule-workshop-toys",
+  "version": "0.1.0",
+  "api": 1,
+  "name": "Rule Workshop Toys (experimental)",
+  "description": "A three-way switch that contributes one output and three inputs to the ordinary Wrench Events menu. Disposable design-spike example.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["brick_events"],
+  "provides": [
+    { "kind": "behaviour", "id": "rule-workshop-toys:behaviour/main", "file": "behaviour.json" },
+    { "kind": "script", "id": "rule-workshop-toys:script/main", "file": "main.rhai" }
+  ]
+}

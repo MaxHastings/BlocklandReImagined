@@ -470,10 +470,13 @@ mod tests {
     #[test]
     #[ignore = "requires generated v20 content"]
     fn the_v20_tank_turns_as_torques_tyres_do() {
-        let pack = Pack::load(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-012/vehicles.json"
-        ))
+        let pack = Pack::load(
+            bri_package::testing::pack_dir(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                "vehicles",
+            )
+            .join("vehicles.json"),
+        )
         .unwrap();
         check(pack, "v20.vehicle.tankvehicle");
     }

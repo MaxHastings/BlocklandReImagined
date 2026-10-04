@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "script": "shark.rhai",
+  "on_damage": true,
+  "on_death": true,
+  "on_spawn": true,
+  "on_leave": true,
+  "on_minigame": true,
+  "on_brick": ["{{namespace}}:brick/bricksharkbot_holespawndata"],
+  "tick_interval": 1,
+  "state": {
+    "global": {
+      "grabs": {"default": {}, "persist": false},
+      "restarts": {"default": {}, "persist": false},
+      "known": {"default": {}, "persist": false}
+    }
+  }
+}

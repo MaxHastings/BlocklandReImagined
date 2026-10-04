@@ -552,7 +552,7 @@ impl AvatarRig {
     fn content() -> Result<Self> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let rig: bri_content::avatar::Rig = serde_json::from_slice(&std::fs::read(
-            root.join("content/avatar-rig-001/rig.json"),
+            bri_package::testing::pack_dir(&root.join("content"), "avatar").join("rig.json"),
         )?)?;
         rig.validate()?;
         Ok(Self {
@@ -795,8 +795,9 @@ impl Gpu {
     }
     fn new() -> Result<Self> {
         pollster::block_on(async {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let instance = wgpu::Instance::new(
+                wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            );
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::HighPerformance,
@@ -1188,7 +1189,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut reports = vec![];
-    let bundle_path = root.join("content/map-bundle-017");
+    let bundle_path = bri_package::testing::pack_dir(&root.join("content"), "map_bundle");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle_path.join("bundle.json"))?)?;
     let maps = bundle["maps"].as_array().unwrap();

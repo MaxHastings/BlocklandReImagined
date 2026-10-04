@@ -14,10 +14,15 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod bots;
+pub use bots::{BotEvidence, BotObjectiveDetail, BotTask, BotThought};
 mod breakables;
 mod build_load;
 pub use build_load::LoadPace;
 mod combat;
+mod death_results;
+pub use death_results::DeathResult;
+mod round_results;
+pub use round_results::RoundResult;
 mod control;
 pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera, SeatSince};
 pub mod camera_path;
@@ -67,6 +72,7 @@ pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name
 mod movables;
 mod packages;
 mod paint_fill;
+mod rules;
 pub use paint_fill::{Fill, FillRules};
 mod script_world;
 mod spray;
@@ -870,6 +876,8 @@ pub struct Session {
     vehicles: vehicles::Vehicles,
     riding: riding::Riding,
     minigames: bri_minigames::MinigamesWorld,
+    round_results: VecDeque<RoundResult>,
+    death_results: VecDeque<DeathResult>,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
     private_notices: VecDeque<(OwnerId, Notice)>,
@@ -1016,6 +1024,8 @@ impl Session {
                 bri_minigames::Catalog::minimal_vanilla(),
                 &Default::default(),
             ),
+            round_results: VecDeque::new(),
+            death_results: VecDeque::new(),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
@@ -1454,8 +1464,7 @@ impl Session {
         }
         self.join_server_game(owner)?;
         if !is_bot {
-            let music = self.tool_catalog.sounds.clone();
-            self.notify(owner, Notice::MusicTracks(music));
+            self.notify_music_tracks(owner);
         }
         Ok(owner)
     }
@@ -1669,6 +1678,7 @@ impl Session {
         self.refresh_trust();
         self.packages_joined(owner);
         self.join_server_game(owner)?;
+        self.notify_music_tracks(owner);
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the
@@ -2622,6 +2632,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
+        let mut push_contacts = Vec::new();
         let mut crossed = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
@@ -2767,6 +2778,7 @@ impl Session {
                     glass_hits.push((owner, motion.hits));
                 }
                 if peer.combat.alive {
+                    push_contacts.extend(motion.contacts.into_iter().map(|c| (owner, c)));
                     touches.extend(motion.touched.into_iter().map(|brick| (owner, brick)));
                     impacts.push((owner, motion.impact));
                 }
@@ -2786,6 +2798,7 @@ impl Session {
                 Default::default()
             }
         };
+        self.push_contacts(push_contacts);
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
         for (owner, carry) in crossed {
@@ -2830,6 +2843,7 @@ impl Session {
         contain("combat", self.step_combat(impacts));
         contain("breakables", self.step_breakables());
         contain("special bricks", self.step_specials());
+        contain("rule observations", self.step_rule_observations());
         contain("copy jobs", self.step_copy_jobs());
         contain("tutorial", self.step_tutorial());
         contain("build loading", self.step_build_load());

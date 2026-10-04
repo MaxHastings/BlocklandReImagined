@@ -207,7 +207,10 @@ mod tests {
         }
         fn content() -> Result<Self> {
             Ok(Self {
-                dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/tutorial-pack-003"),
+                dir: bri_package::testing::pack_dir(
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                    "tutorial",
+                ),
                 _scratch: None,
             })
         }

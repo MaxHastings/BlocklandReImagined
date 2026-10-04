@@ -197,12 +197,43 @@ impl App {
 
     /// Runs one UI action and answers it, or queues the platform command
     /// it asks for.
-    fn dispatch_action(
+    pub(super) fn dispatch_action(
         &mut self,
         id: RequestId,
         action: UiAction,
         platform: &mut Vec<PlatformCommand>,
     ) -> Result<()> {
+        let session = matches!(
+            action,
+            UiAction::HostGame { .. }
+                | UiAction::JoinServer { .. }
+                | UiAction::TrustNewServerIdentity { .. }
+                | UiAction::StartTutorial
+        );
+        let host_needs_content =
+            matches!(action, UiAction::HostGame { .. } | UiAction::StartTutorial)
+                && !self.addons.packages_from_tools;
+        if session && (host_needs_content || self.addons.reload.is_some()) {
+            if self.ui.session_request() != Some(id) {
+                return Ok(());
+            }
+            self.disconnect();
+            let result = bri_package::packages::PackageSet::load_root(&self.content.paths.root)
+                .and_then(|set| {
+                    self.queue_package_reload(
+                        set,
+                        None,
+                        Some(addons::ReloadResume::Action {
+                            id,
+                            action: Box::new(action),
+                        }),
+                    )
+                });
+            if let Err(error) = result {
+                self.answer(id, Err(error));
+            }
+            return Ok(());
+        }
         let result = match action {
             UiAction::LoadBricksColors(choice) => {
                 self.choose_color_load(choice);
@@ -289,6 +320,25 @@ impl App {
             }
             UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
             UiAction::OpenSavesFolder => show_drop_folder(self.files.old_saves.saves_folder()),
+            UiAction::RefreshHostColorsets => {
+                self.ui
+                    .apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+                        &self.content.paths.root,
+                        &self.state_dir,
+                        &self.content.paint,
+                    )));
+                Ok(())
+            }
+            UiAction::ColorsetsFolder => {
+                let result = show_drop_folder(&self.state_dir.join("colorsets"));
+                self.ui
+                    .apply(UiUpdate::HostColorsets(crate::colorsets::catalog(
+                        &self.content.paths.root,
+                        &self.state_dir,
+                        &self.content.paint,
+                    )));
+                result
+            }
             UiAction::OpenUrl(url) => {
                 // Only web pages, after the player confirmed them.
                 if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())
@@ -417,6 +467,7 @@ impl App {
                 Ok(())
             }
             UiAction::Game(GameAction::Screenshot { kind }) => {
+                let format = bri_ui::screens::options::screenshot_format(&self.ui.core.prefs);
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis());
@@ -424,7 +475,7 @@ impl App {
                     path: self
                         .state_dir
                         .join("screenshots")
-                        .join(format!("Blockland_{stamp}.png")),
+                        .join(format!("Blockland_{stamp}.{}", format.extension())),
                     hud: kind == ScreenshotKind::Normal,
                 });
                 Ok(())
@@ -876,9 +927,13 @@ impl App {
                 Ok(())
             }
             UiAction::ApplyAddOns => {
-                bri_package::packages::PackageSet::load_root(&self.content.paths.root)
-                    .and_then(|set| self.apply_packages(&set))
-                    .context("Your Add-On changes could not be loaded")
+                let result = bri_package::packages::PackageSet::load_root(&self.content.paths.root)
+                    .and_then(|set| self.queue_package_reload(set, Some(id), None))
+                    .context("Your Add-On changes could not be loaded");
+                if let Err(error) = result {
+                    self.answer(id, Err(error));
+                }
+                return Ok(());
             }
             UiAction::ImportAddOn { id: ref row } => {
                 let root = self.content.paths.root.clone();
@@ -894,10 +949,14 @@ impl App {
                 let folder = bri_package::classic::folder(&self.content.paths.root);
                 std::fs::create_dir_all(&folder)
                     .with_context(|| format!("Could not create {}", folder.display()))
-                    .map(|()| {
+                    .and_then(|()| {
                         if !bri_crash::open(&folder.to_string_lossy()) {
-                            bri_console::warn(format!("Could not open {}", folder.display()));
+                            anyhow::bail!(
+                                "Could not open the Add-Ons folder. You can open it manually at {}",
+                                folder.display()
+                            );
                         }
+                        Ok(())
                     })
             }
             UiAction::ToggleFavorite { ref address } => {

@@ -164,8 +164,10 @@ impl Session {
             })
             .collect();
         let extra = InputExtra {
+            object: None,
             game: Some(game),
             killer,
+            ..Default::default()
         };
         for brick in bricks {
             self.fire_package_input(brick, &declared, player, extra);

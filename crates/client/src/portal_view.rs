@@ -47,6 +47,14 @@ pub fn boom(
         eye = carry.transform_point3(through);
         forward = carry.transform_vector3(forward);
         total = Some(carry * total.unwrap_or(Affine3A::IDENTITY));
+        // Doorway faces are back-to-back on one plane. Rounding the carried
+        // intersection can leave it a hair inside the other face, making
+        // this boom immediately return to the original room for one frame.
+        // Continue just past the plane, as player movement and camera rays
+        // do, and charge that hair to the remaining boom length.
+        let past = bri_content::passage::PAST.min(distance.max(0.0));
+        eye -= forward.normalize() * past;
+        distance -= past;
     }
     Ok((eye, total))
 }

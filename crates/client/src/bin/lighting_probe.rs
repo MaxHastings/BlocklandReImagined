@@ -18,8 +18,9 @@
 //! like players), standing there; `BRI_LAMPS=0` turns lamp shadows off and
 //! `BRI_SUN=0` the sun, to see which light casts what; `BRI_LIGHT_SCALE=k`
 //! scales every light, to see shadows where full light saturates.
-//! `BRI_DYNAMIC=1` renders the Dynamic mode alone (`{view}-dynamic.png`,
-//! with its GPU times), for comparison with a run without it.
+//! Modern Dynamic is checked independently by bri-render
+//! `modern_dynamic_real_maps_without_legacy_preparation`; this probe is
+//! deliberately limited to the compatibility modes.
 //! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
 //! or tube does (each "Light shape" line lists its lights); `BRI_BREAK=1`
 //! breaks every bulb and tube by the client's rule. Each recovered light is
@@ -383,6 +384,10 @@ fn read_back(
 }
 
 fn main() -> Result<()> {
+    ensure!(
+        !std::env::var("BRI_DYNAMIC").is_ok_and(|v| v == "1"),
+        "Use bri-render's modern_dynamic_real_maps_without_legacy_preparation test for modern Dynamic; lighting_probe prepares compatibility lighting only"
+    );
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
         args.len() >= 3,
@@ -996,7 +1001,8 @@ fn main() -> Result<()> {
         }
     }
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()
@@ -1059,23 +1065,15 @@ fn main() -> Result<()> {
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
-    // BRI_DYNAMIC=1: the Dynamic lighting mode alone (its light cubes would
-    // change the other modes), to compare with a run without it.
-    let dynamic = std::env::var("BRI_DYNAMIC").is_ok_and(|v| v == "1");
     let settings = ShadowSettings {
         lamps: if lamps { ShadowSettings::BEST.lamps } else { 0 },
-        light_cubes: dynamic,
         ..ShadowSettings::BEST
     };
-    // As the client: the per-texel lightmaps in Dynamic, and in the Unified
-    // modes on a map with bulbs or tubes.
-    if let Some(u) = unified
-        .as_ref()
-        .filter(|_| dynamic || !light_shapes.is_empty())
-    {
+    // Unified's switchable sheets on maps with breakable bulbs or tubes.
+    if let Some(u) = unified.as_ref().filter(|_| !light_shapes.is_empty()) {
         let equipped = bri_render::map_lighting::DynamicSheet::equip(&u.dynamic, &mut scene);
         println!(
-            "Dynamic lightmaps: {} sheets, equipped {equipped}",
+            "Switchable lightmaps: {} sheets, equipped {equipped}",
             u.dynamic.len()
         );
     }
@@ -1140,11 +1138,7 @@ fn main() -> Result<()> {
     // Classic runs again last: the first views after upload run on a GPU
     // still settling its clocks and caches, which alone moved the median by
     // more than any mode.
-    let modes: &[(u8, &str)] = if dynamic {
-        &[(3, "dynamic")]
-    } else {
-        &[(0, "classic"), (2, "unified"), (0, "classic-again")]
-    };
+    let modes: &[(u8, &str)] = &[(0, "classic"), (2, "unified"), (0, "classic-again")];
     for &(mode, label) in modes {
         match (mode, &unified) {
             (0, _) => {
@@ -1171,13 +1165,8 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-                let residual = if mode == 3 {
-                    &u.residual_all
-                } else {
-                    &u.residual
-                };
-                renderer.set_light_volume(&device, &queue, Some(residual))?;
-                renderer.set_map_lighting(&device, &queue, Some(&u), mode == 3)?;
+                renderer.set_light_volume(&device, &queue, Some(&u.residual))?;
+                renderer.set_map_lighting(&device, &queue, Some(&u), false)?;
                 // BRI_OFF=i,j,...: those recovered lights switched off, as a
                 // broken bulb or tube does (the "Light shape" lines name
                 // each shape's lights).

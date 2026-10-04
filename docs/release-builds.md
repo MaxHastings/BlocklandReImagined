@@ -163,3 +163,27 @@ Tags that start with a date (`YYYY-MM-DD-...`) start the workflow. The version
 becomes the release's tag, the dist folder name and what the main menu shows,
 exactly as `BRI_VERSION` does for a hand-made build. The workflow refuses a
 version that already has a release.
+
+
+## Staging one cross-platform release
+
+For a release containing Windows, macOS and Linux, pin the reviewed main commit
+with its version tag first. The three workflows must build that exact commit.
+Semantic version tags such as `v0.2.0` do not trigger the date-tag workflow;
+dispatch `release.yml` at the tag with `version=v0.2.0` and `publish=false`.
+Wait for Windows CI and the full local gate before treating the source as ready.
+
+Download the Windows artifact and verify its package manifest. Create a draft
+GitHub Release at the pinned tag and attach `BlocklandReImagined-windows.zip`.
+Dispatch `mac-release-asset.yml` and `linux-release-asset.yml` with that release
+tag and immutable source commit. Authenticated workflows can read the draft's
+Windows asset. They verify its manifest, carry over its credited original
+Add-Ons, build their platform binaries, verify the package and run a startup
+check from the extracted archive before attaching it to the draft.
+
+Check all three workflow outcomes, archive manifests, binary versions and common
+content hashes. Attach `SHA256SUMS` for the final archives, write the release
+notes and publish the draft only after those checks pass. The Mac archive targets
+Apple silicon and the Linux archive targets x86-64/glibc 2.35 or newer.
+The native Mac app uses an ad-hoc signature unless a signing identity was supplied.
+The creator guides ship in all archives with links to their packaged filenames.

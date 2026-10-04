@@ -18,9 +18,14 @@
       "minigame_only": "getMiniGameFromObject",
       "kills": "%obj\\.kill\\s*\\(",
       "bite": "%obj\\.hAttackDamage\\s*=\\s*([1-9]\\d*)\\s*;"
+    },
+    "SharkHoleBot::onAdd": {
+      "palette": "((?:%color\\[%a\\+\\+\\]\\s*=\\s*\"[^\"]+\"\\s*;\\s*)+)"
     }
   },
   "tests": [
-    "crates/addon-import/tests/bot_holes.rs the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land"
+    "crates/addon-import/tests/bot_holes.rs the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land",
+    "crates/chaos/tests/shark_policy.rs the_imported_shark_approaches_and_uses_its_actual_mouth_node",
+    "crates/addon-import/src/player_types.rs authored_square_boxes_and_static_vector_scale_keep_collision_dimensions"
   ]
 }

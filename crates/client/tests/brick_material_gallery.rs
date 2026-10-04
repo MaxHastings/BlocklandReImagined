@@ -150,7 +150,8 @@ fn surfaces_all_prints_and_sentinels(f: &BrickFixture) -> Result<()> {
     let meshes = &f.meshes;
     let catalog: Option<Catalog> = if f.content {
         Some(serde_json::from_slice(&std::fs::read(
-            repo_root().join("content/stock-catalog-004/stock-catalog.json"),
+            bri_package::testing::pack_dir(&repo_root().join("content"), "brick_catalog")
+                .join("stock-catalog.json"),
         )?)?)
     } else {
         None

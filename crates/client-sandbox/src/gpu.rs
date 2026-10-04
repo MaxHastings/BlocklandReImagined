@@ -806,7 +806,8 @@ pub fn headless_device() -> Result<(String, wgpu::Device, wgpu::Queue)> {
 /// A headless device, with timestamps where the adapter has them when
 /// `timed`, or never when not.
 fn open_device(timed: bool) -> Result<(String, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .context("no GPU adapter")?;

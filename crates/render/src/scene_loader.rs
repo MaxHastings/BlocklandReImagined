@@ -24,6 +24,8 @@ pub struct MapScene {
     /// Index range of each static shape by scene node, so a smashed shape
     /// can stop drawing (`GpuScene::hide_indices`).
     pub shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
+    /// Set only by the modern loader, which never decodes illumination images.
+    pub modern_lights: Option<Vec<crate::map_lighting::MapLight>>,
 }
 
 fn file(root: &Path, name: &str) -> Result<PathBuf> {
@@ -188,6 +190,14 @@ fn rgb(value: Option<&String>, default: [f32; 3]) -> [f32; 3] {
 /// `map_id` is the stable native mission ID from bundle.json, never a display
 /// name or an original install path. Missing bound materials are hard errors.
 pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
+    load_bundle(root, map_id, true)
+}
+/// Dynamic loads material/geometry data and prepared source descriptors only.
+/// Missing/stale descriptors use live sun/ambient, with an actionable diagnostic.
+pub fn load_map_bundle_dynamic(root: &Path, map_id: &str) -> Result<MapScene> {
+    load_bundle(root, map_id, false)
+}
+fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
     let root = root.canonicalize().context("Opening native map bundle")?;
     let bundle: Value = serde_json::from_slice(&read(&root, "bundle.json")?)?;
     ensure!(
@@ -327,6 +337,7 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
                 &scene,
                 field.clone(),
                 out.sun_direction,
+                legacy,
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -336,7 +347,7 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
         match node.kind {
             Kind::Interior=>{
                 let interior = &interiors[node.asset.as_deref().context("Interior placement has no native asset")?];
-                load_interior(&root,&bundle,bindings,&scene,node_index,node,interior,&mut out,&mut cache)?
+                load_interior(&root,&bundle,bindings,&scene,node_index,node,interior,&mut out,&mut cache,legacy)?
             }
             Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>{
                 load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?;
@@ -348,13 +359,27 @@ pub fn load_map_bundle(root: &Path, map_id: &str) -> Result<MapScene> {
             _=>{},
         }
     }
-    out.omissions.push("Storm transitions/fog volumes, dynamic lighting and texture mip/anisotropic filtering remain incomplete".into());
+    out.omissions.push(
+        "Storm transitions/fog volumes and texture mip/anisotropic filtering remain incomplete"
+            .into(),
+    );
     out.omissions.push("Translucent geometry sorts by mesh-batch center; intersecting translucent surfaces need finer sorting".into());
+    let modern_lights = if legacy {
+        None
+    } else {
+        let result =
+            crate::lighting_parameters::Parameters::read(&root).and_then(|p| p.lights(map_id));
+        Some(result.unwrap_or_else(|e| {
+            let warning = format!("Dynamic uses live sun/ambient only: {e:#}. Prepare source lights with prepare_lighting {}",root.display());
+            eprintln!("{warning}"); out.omissions.push(warning); Vec::new()
+        }))
+    };
     out.validate()?;
     Ok(MapScene {
         scene: out,
         terrain,
         shape_indices,
+        modern_lights,
     })
 }
 
@@ -625,6 +650,7 @@ fn load_interior(
     interior: &Interior,
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
+    legacy: bool,
 ) -> Result<()> {
     let id = node
         .asset
@@ -634,90 +660,93 @@ fn load_interior(
     let placement = transform(node)?;
     let normal_transform = placement.inverse().transpose();
     let mirrored = placement.determinant() < 0.0;
-    let baked = bundle["lighting"][&scene.id]["interiors"]
-        .as_array()
-        .context("Map is missing native interior mission-lighting bindings")?;
-    // Each lightmap splits into its static light and baked sun visibility
-    // (`map_lighting::decompose_sheet`), so the sun can be shaded live.
-    let sun = (bundle["lighting"][&scene.id]["status"].as_str() == Some("baked")).then(|| {
-        crate::map_lighting::BakeSun {
-            direction: Vec3::from(out.sun_direction).normalize_or_zero(),
-            color: Vec3::from(out.sun_color).clamp(Vec3::ZERO, Vec3::ONE),
-            ambient: Vec3::from(out.ambient).clamp(Vec3::ZERO, Vec3::ONE),
-        }
-    });
-    let mut sheets = vec![];
-    for (slot, lm) in detail.lightmaps.iter().enumerate() {
-        let replacement = baked.iter().find(|r| {
-            r["node"].as_u64() == Some(node_index as u64)
-                && r["detail"].as_u64() == Some(0)
-                && r["slot"].as_u64() == Some(slot as u64)
-        });
-        let base = decode(&lm.png, &format!("{id}/base-lightmap-{slot}"), false)?;
-        let lightmap = match replacement {
-            Some(record) => texture(
-                root,
-                record["file"]
-                    .as_str()
-                    .context("Baked interior lightmap filename missing")?,
-                false,
-                out,
-                cache,
-            )?,
-            None => {
-                out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));
-                let index = out.images.len();
-                out.images.push(base.clone());
-                index
+    let mut lightmaps = vec![(0, 0); detail.lightmaps.len()];
+    if legacy {
+        let baked = bundle["lighting"][&scene.id]["interiors"]
+            .as_array()
+            .context("Map is missing native interior mission-lighting bindings")?;
+        // Each lightmap splits into its static light and baked sun visibility
+        // (`map_lighting::decompose_sheet`), so the sun can be shaded live.
+        let sun = (bundle["lighting"][&scene.id]["status"].as_str() == Some("baked")).then(|| {
+            crate::map_lighting::BakeSun {
+                direction: Vec3::from(out.sun_direction).normalize_or_zero(),
+                color: Vec3::from(out.sun_color).clamp(Vec3::ZERO, Vec3::ONE),
+                ambient: Vec3::from(out.ambient).clamp(Vec3::ZERO, Vec3::ONE),
             }
-        };
-        sheets.push((
-            base,
-            replacement.is_some().then_some(lightmap),
-            lightmap,
-            Vec::<crate::map_lighting::SheetSurface>::new(),
-        ));
-    }
-    for surface in &detail.surfaces {
-        let Some(slot) = surface.lightmap else {
-            continue;
-        };
-        let Some(first) = surface.vertices.first() else {
-            continue;
-        };
-        let world = |v: &bri_content::interior::Vertex| {
-            (
-                placement
-                    .transform_point3(Vec3::from(v.position))
-                    .to_array(),
-                v.lightmap_uv,
-            )
-        };
-        sheets[slot].3.push(crate::map_lighting::SheetSurface {
-            triangles: surface
-                .triangles
-                .iter()
-                .map(|t| t.map(|i| world(&surface.vertices[i as usize])))
-                .collect(),
-            normal: normal_transform
-                .transform_vector3(Vec3::from(first.normal))
-                .normalize_or_zero(),
-            outside: surface.flags & crate::map_lighting::OUTSIDE_VISIBLE != 0,
         });
-    }
-    // Per slot: the lightmap drawn (mission or original) and its decomposition.
-    let mut lightmaps = vec![];
-    for (base, mission, lightmap, surfaces) in sheets {
-        let index = out.images.len();
-        let decomposed = crate::map_lighting::decompose_sheet(
-            &base,
-            mission.map(|m| &out.images[m]),
-            &surfaces,
-            sun,
-        );
-        out.images.push(decomposed);
-        out.lightmap_bases.push((lightmap, Arc::new(base)));
-        lightmaps.push((lightmap, index));
+        let mut sheets = vec![];
+        for (slot, lm) in detail.lightmaps.iter().enumerate() {
+            let replacement = baked.iter().find(|r| {
+                r["node"].as_u64() == Some(node_index as u64)
+                    && r["detail"].as_u64() == Some(0)
+                    && r["slot"].as_u64() == Some(slot as u64)
+            });
+            let base = decode(&lm.png, &format!("{id}/base-lightmap-{slot}"), false)?;
+            let lightmap = match replacement {
+                Some(record) => texture(
+                    root,
+                    record["file"]
+                        .as_str()
+                        .context("Baked interior lightmap filename missing")?,
+                    false,
+                    out,
+                    cache,
+                )?,
+                None => {
+                    out.omissions.push(format!("Interior node {node_index} lightmap {slot} uses the original embedded lightmap: composed mission replacement absent"));
+                    let index = out.images.len();
+                    out.images.push(base.clone());
+                    index
+                }
+            };
+            sheets.push((
+                base,
+                replacement.is_some().then_some(lightmap),
+                lightmap,
+                Vec::<crate::map_lighting::SheetSurface>::new(),
+            ));
+        }
+        for surface in &detail.surfaces {
+            let Some(slot) = surface.lightmap else {
+                continue;
+            };
+            let Some(first) = surface.vertices.first() else {
+                continue;
+            };
+            let world = |v: &bri_content::interior::Vertex| {
+                (
+                    placement
+                        .transform_point3(Vec3::from(v.position))
+                        .to_array(),
+                    v.lightmap_uv,
+                )
+            };
+            sheets[slot].3.push(crate::map_lighting::SheetSurface {
+                triangles: surface
+                    .triangles
+                    .iter()
+                    .map(|t| t.map(|i| world(&surface.vertices[i as usize])))
+                    .collect(),
+                normal: normal_transform
+                    .transform_vector3(Vec3::from(first.normal))
+                    .normalize_or_zero(),
+                outside: surface.flags & crate::map_lighting::OUTSIDE_VISIBLE != 0,
+            });
+        }
+        // Per slot: the lightmap drawn (mission or original) and its decomposition.
+        lightmaps.clear();
+        for (base, mission, lightmap, surfaces) in sheets {
+            let index = out.images.len();
+            let decomposed = crate::map_lighting::decompose_sheet(
+                &base,
+                mission.map(|m| &out.images[m]),
+                &surfaces,
+                sun,
+            );
+            out.images.push(decomposed);
+            out.lightmap_bases.push((lightmap, Arc::new(base)));
+            lightmaps.push((lightmap, index));
+        }
     }
     let mut materials = BTreeMap::new();
     for binding in bindings
@@ -755,7 +784,7 @@ fn load_interior(
         let inset = lightmap_inset(
             &surface.vertices,
             &out.images[lightmap],
-            surface.lightmap.is_some(),
+            legacy && surface.lightmap.is_some(),
         );
         for vertex in &surface.vertices {
             out.vertices.push(SceneVertex {
@@ -823,6 +852,7 @@ fn load_terrain(
     scene: &Scene,
     field: Arc<TerrainField>,
     sun_direction: [f32; 3],
+    legacy: bool,
 ) -> Result<TerrainScene> {
     let id = field.id.as_str();
     let terrain = &field.terrain;
@@ -858,21 +888,23 @@ fn load_terrain(
             layer.slot
         );
     }
-    let light = bundle["lighting"][&scene.id]["terrain"]
-        .as_array()
-        .context("Map terrain mission lighting missing")?
-        .iter()
-        .find(|r| r["node"].as_u64() == Some(node_index as u64))
-        .context("Terrain placement has no native baked lightmap")?;
-    images[8] = texture(
-        root,
-        light["file"]
-            .as_str()
-            .context("Terrain lightmap filename missing")?,
-        false,
-        &mut out,
-        cache,
-    )?;
+    if legacy {
+        let light = bundle["lighting"][&scene.id]["terrain"]
+            .as_array()
+            .context("Map terrain mission lighting missing")?
+            .iter()
+            .find(|r| r["node"].as_u64() == Some(node_index as u64))
+            .context("Terrain placement has no native baked lightmap")?;
+        images[8] = texture(
+            root,
+            light["file"]
+                .as_str()
+                .context("Terrain lightmap filename missing")?,
+            false,
+            &mut out,
+            cache,
+        )?;
+    }
     for group in 0..2 {
         let mut rgba = vec![0; terrain.side as usize * terrain.side as usize * 4];
         for layer in terrain

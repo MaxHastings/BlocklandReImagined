@@ -52,7 +52,8 @@ impl EarlyGpu {
         let thread = std::thread::Builder::new()
             .name("open GPU".into())
             .spawn(move || -> Result<Opened> {
-                let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+                let mut descriptor =
+                    wgpu::InstanceDescriptor::new_without_display_handle_from_env();
                 descriptor.backends = backends;
                 let instance = wgpu::Instance::new(descriptor);
                 let (adapter, device, queue) = request_device(&instance, None, software)?;
@@ -1206,27 +1207,34 @@ impl Capture {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        if let Some([w, h]) = fit {
-            let frame = image::RgbaImage::from_raw(self.width, self.height, pixels)
-                .context("screenshot size")?;
-            let frame = image::DynamicImage::ImageRgba8(frame);
-            let frame = if frame.width() > w || frame.height() > h {
-                frame.resize(w, h, image::imageops::FilterType::Triangle)
-            } else {
-                frame
-            };
-            frame.into_rgb8().save(path)?;
-            return Ok(());
-        }
-        image::save_buffer(
-            path,
-            &pixels,
-            self.width,
-            self.height,
-            image::ColorType::Rgba8,
-        )?;
-        Ok(())
+        let frame = image::RgbaImage::from_raw(self.width, self.height, pixels)
+            .context("screenshot size")?;
+        let frame = image::DynamicImage::ImageRgba8(frame);
+        let frame = if let Some([w, h]) = fit
+            && (frame.width() > w || frame.height() > h)
+        {
+            frame.resize(w, h, image::imageops::FilterType::Triangle)
+        } else {
+            frame
+        };
+        write_capture_image(&frame, path)
     }
+}
+
+/// Runs on the screenshot writer, never on the render/input thread.
+fn write_capture_image(frame: &image::DynamicImage, path: &std::path::Path) -> Result<()> {
+    let jpeg = path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+    });
+    if jpeg {
+        let mut writer = std::io::BufWriter::new(std::fs::File::create(path)?);
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 95)
+            .encode_image(&frame.to_rgb8())?;
+        std::io::Write::flush(&mut writer)?;
+    } else {
+        frame.save(path)?;
+    }
+    Ok(())
 }
 
 impl ApplicationHandler for Runner {
@@ -1836,6 +1844,36 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn screenshot_jpeg_and_png_use_their_real_formats() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let pixels = image::RgbImage::from_fn(64, 48, |x, y| {
+            image::Rgb([(x * 3) as u8, (y * 4) as u8, ((x + y) * 2) as u8])
+        });
+        let frame = image::DynamicImage::ImageRgb8(pixels.clone());
+        for name in ["capture.jpg", "capture.JPEG", "capture.png"] {
+            let path = directory.path().join(name);
+            write_capture_image(&frame, &path)?;
+            let bytes = std::fs::read(&path)?;
+            let decoded = image::load_from_memory(&bytes)?.into_rgb8();
+            assert_eq!(decoded.dimensions(), pixels.dimensions());
+            if name.ends_with("png") {
+                assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+                assert_eq!(decoded, pixels, "PNG preserves exact pixels");
+            } else {
+                assert!(bytes.starts_with(&[0xff, 0xd8]));
+                let error: u64 = decoded
+                    .as_raw()
+                    .iter()
+                    .zip(pixels.as_raw())
+                    .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                    .sum();
+                assert!(error < pixels.as_raw().len() as u64 * 3);
+            }
+        }
+        Ok(())
+    }
+
     /// Two captures in back-to-back frames, and a save picture copied while
     /// a player's screenshot is still being read back, the way the window
     /// and the app each keep theirs: no submit may use a buffer with a map
@@ -1870,7 +1908,7 @@ mod tests {
         // Frame 1: the player's screenshot. Frame 2: another, and a save
         // picture, while the first is mapping. Frame 3 copies nothing.
         let frames: [&[(bool, Shot)]; 3] = [
-            &[(false, shot("first.png", None))],
+            &[(false, shot("first.jpg", None))],
             &[
                 (false, shot("second.png", None)),
                 (true, shot("save.jpg", Some([48, 32]))),
@@ -1910,7 +1948,7 @@ mod tests {
         assert_eq!(saved, 2);
         let save = image::open(dir.join("save.jpg"))?;
         assert_eq!((save.width(), save.height()), (48, 32), "scaled to fit");
-        for name in ["first.png", "second.png"] {
+        for name in ["first.jpg", "second.png"] {
             assert_eq!(image::open(dir.join(name))?.width(), 96);
         }
         std::fs::remove_dir_all(&dir)?;

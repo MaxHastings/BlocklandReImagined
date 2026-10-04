@@ -70,6 +70,8 @@ fn a_long_yes_no_question_is_shown_in_full_content() -> anyhow::Result<()> {
     let root = std::env::var_os("BRI_CONTENT_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content"));
-    a_long_yes_no_question_is_shown_in_full(Rc::new(Pack::load(&root.join("ui-pack-004"))?));
+    a_long_yes_no_question_is_shown_in_full(Rc::new(Pack::load(&bri_package::testing::pack_dir(
+        &root, "ui_pack",
+    ))?));
     Ok(())
 }

@@ -21,7 +21,7 @@ impl AvatarFixture {
         let content = std::env::var_os("BRI_CONTENT")
             .map_or_else(|| repo_root().join("content"), PathBuf::from);
         Ok(Self {
-            assets: AvatarAssets::load(&content.join("avatar-pack-002"))?,
+            assets: AvatarAssets::load(&bri_package::testing::pack_dir(&content, "avatar"))?,
             content: true,
             out: repo_root().join("artifacts"),
         })

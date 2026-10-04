@@ -270,22 +270,12 @@ struct Walk {
 /// looking (yaw, pitch), for `seconds` at [`FPS`], with the game's own
 /// order each frame: advance, turn the look by any opening passed, present,
 /// place the camera. Traces the picture every frame.
-fn walk(
-    scene: &Scene,
-    feet: Vec3,
-    look: (f32, f32),
-    forward: f32,
-    seconds: f32,
-    camera: Camera,
-) -> Walk {
-    let archetypes = bri_sim::archetype::Archetypes::default();
-    let mut motion = Motion::default();
-    motion.install(scene.mirror());
+fn camera_test_player(feet: Vec3) -> PlayerState {
     let mut player = PlayerState {
         owner: 2,
         feet: feet.to_array(),
         velocity: [0.0; 3],
-        yaw: look.0,
+        yaw: 0.0,
         pitch: 0.0,
         head_yaw: 0.0,
         grounded: false,
@@ -301,6 +291,22 @@ fn walk(
     };
     player.tick.feet = player.feet;
     player.tick.from = player.feet;
+    player
+}
+
+fn walk(
+    scene: &Scene,
+    feet: Vec3,
+    look: (f32, f32),
+    forward: f32,
+    seconds: f32,
+    camera: Camera,
+) -> Walk {
+    let archetypes = bri_sim::archetype::Archetypes::default();
+    let mut motion = Motion::default();
+    motion.install(scene.mirror());
+    let mut player = camera_test_player(feet);
+    player.yaw = look.0;
     let pose = bri_net::protocol::Pose {
         tick: 0,
         acknowledged_input: 0,
@@ -410,6 +416,236 @@ fn assert_seamless(name: &str, walk: &Walk, reach: Option<usize>) {
 /// In through the south side of a doorway walking north, out of the north
 /// side of its partner turned a quarter: the picture never jumps, in first
 /// person or from the chase camera.
+#[test]
+fn a_portal_camera_cuts_the_backing_wall_but_keeps_destination_obstacles() {
+    let scene = Scene::new(&[
+        (DOOR, [23.25, 1.5, -4.25], 0),
+        (DOOR, [100.25, 1.5, -40.25], 1),
+    ]);
+    let opening = scene
+        .passages
+        .list
+        .iter()
+        .find(|p| p.brick == 1 && p.normal.dot(Vec3::Z) > 0.9)
+        .unwrap();
+    let pivot = opening.centre + opening.normal;
+    let end = pivot - opening.normal * 8.0;
+    let expected = scene.passages.travel(pivot, end).0;
+    let backing = ColliderBuilder::cuboid(4.0, 4.0, 0.1).translation(Vector::from_array(
+        (opening.centre - opening.normal * 0.1).to_array(),
+    ));
+    let mut mirror = CollisionMirror::new(definitions(), vec![backing.clone()], vec![]);
+    mirror.sync(&scene.bricks.bricks).unwrap();
+    let boom = |mirror: &CollisionMirror| {
+        crate::portal_view::boom(
+            pivot,
+            pivot,
+            opening.normal,
+            8.0,
+            &scene.passages,
+            |p, f, d| mirror.portal_camera_position(p, f, d),
+        )
+        .unwrap()
+        .0
+    };
+    assert!(
+        boom(&mirror).abs_diff_eq(expected, 0.002),
+        "the portal's backing wall pulled the chase camera inward: {:?}, expected {expected:?}",
+        boom(&mirror)
+    );
+    // Prediction installs the local actor in the same mirror. Its own body
+    // must not pin the camera to the source room when the boom starts inside it.
+    let mut occupied = CollisionMirror::new(definitions(), vec![backing.clone()], vec![]);
+    occupied.sync(&scene.bricks.bricks).unwrap();
+    let predictor = bri_sim::prediction::Predictor::new(
+        occupied,
+        camera_test_player(pivot - Vec3::Y * 1.5),
+        bri_sim::archetype::Archetypes::default(),
+    )
+    .unwrap();
+    assert!(
+        boom(predictor.world()).abs_diff_eq(expected, 0.002),
+        "the local prediction body obstructed its own portal camera: {:?}",
+        boom(predictor.world())
+    );
+    // A wall in the exit room still stops the boom even if it starts with
+    // its sphere partly embedded in the source room's backing wall.
+    let exit = opening.carry.transform_point3(opening.centre);
+    let outward = -opening.carry.transform_vector3(opening.normal);
+    let wall = exit + outward * 2.0;
+    let obstacle =
+        ColliderBuilder::cuboid(0.1, 4.0, 4.0).translation(Vector::from_array(wall.to_array()));
+    let mut blocked = CollisionMirror::new(definitions(), vec![backing, obstacle], vec![]);
+    blocked.sync(&scene.bricks.bricks).unwrap();
+    let camera = boom(&blocked);
+    assert!(
+        ((camera - exit).dot(outward) - 1.73).abs() < 0.03,
+        "destination wall ignored: {camera:?}"
+    );
+    // With the partner gone, the opening is a shut pane, not an exception
+    // that lets the camera see behind it.
+    let mut single = scene.bricks.bricks.clone();
+    single.remove(&2);
+    mirror.sync(&single).unwrap();
+    let stopped = mirror
+        .portal_camera_position(pivot, opening.normal, 8.0)
+        .unwrap();
+    assert!(
+        opening.side(stopped) >= 0.15,
+        "closed portal did not stop the camera: {stopped:?}"
+    );
+}
+
+#[test]
+fn a_chase_boom_at_a_two_sided_portal_never_recrosses_its_partner() {
+    // Doorway faces share a plane. Starting exactly on the carried plane
+    // must not bounce back through its other face due to float rounding.
+    for a in 0..4 {
+        for b in 0..4 {
+            let scene = Scene::new(&[
+                (DOOR, [23.25, 1.5, -4.25], a),
+                (DOOR, [100.25, 1.5, -40.25], b),
+            ]);
+            let opening = &scene.passages.list[0];
+            for gap in [0.000001, 0.00001, 0.001, 0.25, 1.0] {
+                for sideways in [-0.25, 0.0, 0.25] {
+                    let pivot = opening.centre + opening.normal * gap + opening.u * sideways;
+                    for angle in [-0.4, -0.261, 0.0, 0.261, 0.4] {
+                        let forward =
+                            (opening.normal + opening.u * angle + opening.v * angle).normalize();
+                        let end = pivot - forward * 8.0;
+                        let expected = scene.passages.travel(pivot, end);
+                        let actual = crate::portal_view::boom(
+                            pivot,
+                            pivot,
+                            forward,
+                            8.0,
+                            &scene.passages,
+                            |p, f, d| Ok(p - f.normalize() * d),
+                        )
+                        .unwrap();
+                        assert!(
+                            actual.0.abs_diff_eq(expected.0, 0.001),
+                            "{a}->{b}, gap {gap}, offset {sideways}: expected {expected:?}, got {actual:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_vehicle_driver_camera_uses_portal_cuts_and_keeps_surface_normals() {
+    let scene = Scene::new(&[
+        (DOOR, [23.25, 1.5, -4.25], 0),
+        (DOOR, [100.25, 1.5, -40.25], 1),
+    ]);
+    let opening = scene
+        .passages
+        .list
+        .iter()
+        .find(|p| p.brick == 1 && p.normal.dot(Vec3::Z) > 0.9)
+        .unwrap();
+    let pivot = opening.centre + opening.normal;
+    let end = pivot - opening.normal * 8.0;
+    let expected = scene.passages.travel(pivot, end).0;
+    let backing = ColliderBuilder::cuboid(4.0, 4.0, 0.1).translation(Vector::from_array(
+        (opening.centre - opening.normal * 0.1).to_array(),
+    ));
+    let mut mirror = CollisionMirror::new(definitions(), vec![backing.clone()], vec![]);
+    mirror.sync(&scene.bricks.bricks).unwrap();
+    let camera = bri_vehicles::schema::VehicleCamera {
+        max_dist: 8.0,
+        offset: 2.0,
+        tilt: 0.0,
+        lag: 0.0,
+        decay: 0.75,
+    };
+    // The ordinary source-wall ray sees the backing plane. This is the
+    // production failure before the driver chooses the clipped camera soup.
+    let plain_hit = |a: Vec3, b: Vec3| -> anyhow::Result<Option<(f32, Vec3)>> {
+        let length = a.distance(b);
+        let direction = (b - a) / length;
+        let distance = (opening.centre.z - a.z) / direction.z;
+        Ok((distance >= 0.0 && distance <= length).then_some((distance, opening.normal)))
+    };
+    let driver = |mirror: &CollisionMirror| {
+        let mut crossed = None;
+        let (eye, _, _) = crate::vehicle_camera::driver_view(
+            pivot - Vec3::Y * 2.0,
+            glam::Quat::from_rotation_y(std::f32::consts::PI),
+            Vec3::ZERO,
+            &camera,
+            None,
+            1.0,
+            |from, to| {
+                let (hit, through) = crate::app::App::driver_camera_ray(
+                    from,
+                    to,
+                    mirror.links().passages(),
+                    Some(mirror),
+                    plain_hit,
+                )?;
+                crossed = Some((from, through));
+                Ok(hit)
+            },
+        )
+        .unwrap();
+        let (from, through) = crossed.unwrap();
+        crate::portal_view::along(&through, from.distance(eye), eye).0
+    };
+    assert!(
+        driver(&mirror).abs_diff_eq(expected, 0.003),
+        "vehicle camera was pinned by portal backing: {:?}, expected {expected:?}",
+        driver(&mirror)
+    );
+    let exit = opening.carry.transform_point3(opening.centre);
+    let outward = -opening.carry.transform_vector3(opening.normal);
+    let obstacle = ColliderBuilder::cuboid(0.1, 4.0, 4.0)
+        .translation(Vector::from_array((exit + outward * 2.0).to_array()));
+    let mut blocked = CollisionMirror::new(definitions(), vec![backing, obstacle], vec![]);
+    blocked.sync(&scene.bricks.bricks).unwrap();
+    let stopped = driver(&blocked);
+    assert!(
+        ((stopped - exit).dot(outward) - 1.71).abs() < 0.05,
+        "destination wall ignored: {stopped:?}"
+    );
+    let (hit, _) = crate::app::App::driver_camera_ray(
+        exit + outward * 0.1,
+        exit + outward * 4.0,
+        blocked.links().passages(),
+        Some(&blocked),
+        plain_hit,
+    )
+    .unwrap();
+    let (_, normal) = hit.expect("destination wall hit");
+    assert!(
+        normal.dot(-outward) > 0.99 && (normal.length() - 1.0).abs() < 0.001,
+        "surface normal preserved: {normal}"
+    );
+    let mut single = scene.bricks.bricks.clone();
+    single.remove(&2);
+    mirror.sync(&single).unwrap();
+    assert!(
+        opening.side(driver(&mirror)) >= 0.15,
+        "closed partner must stop driver camera"
+    );
+    // No opening: preserve the indexed ray's exact distance and normal,
+    // including the authored vehicle back-off calculation.
+    let old = Some((2.3, Vec3::Y));
+    let (hit, through) = crate::app::App::driver_camera_ray(
+        pivot,
+        end,
+        &Passages::default(),
+        Some(&mirror),
+        |_, _| Ok(old),
+    )
+    .unwrap();
+    assert_eq!(hit, old);
+    assert!(through.is_empty());
+}
+
 #[test]
 fn walking_through_a_doorway_never_changes_the_picture() {
     let scene = Scene::new(&[(DOOR, [0.0, 1.5, -4.25], 0), (DOOR, [10.25, 1.5, -4.0], 1)]);

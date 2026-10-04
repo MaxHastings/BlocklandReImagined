@@ -34,6 +34,7 @@ pub struct MapContent {
     pub tutorial: Option<PathBuf>,
     /// Other packages' bricks (`content_identity::brick_catalog_providers`).
     pub brick_extras: Vec<(String, PathBuf)>,
+    pub brick_geometry: std::collections::BTreeMap<String, bri_content::brick::Brick>,
     pub weapons: WeaponContent,
 }
 
@@ -84,6 +85,7 @@ impl MapContent {
             geometry: role("geometry")?,
             tutorial: role("tutorial").ok(),
             brick_extras: crate::content_identity::brick_catalog_providers(content_root, packages)?,
+            brick_geometry: crate::content_identity::brick_geometry_assets(content_root, packages)?,
             weapons,
         })
     }
@@ -99,9 +101,13 @@ impl MapContent {
     pub fn load(&self, mut world: bri_world::World) -> Result<LoadedMap> {
         let map_id = world.map_id.clone();
         let mut unresolved_items = self.weapons.resolve_world_items(&mut world)?;
-        let definitions =
-            Definitions::load_with(&self.brick_catalog, &self.geometry, &self.brick_extras)
-                .context("Loading native brick definitions")?;
+        let definitions = Definitions::load_with_geometry(
+            &self.brick_catalog,
+            &self.geometry,
+            &self.brick_extras,
+            &self.brick_geometry,
+        )
+        .context("Loading native brick definitions")?;
         let native =
             NativeMap::load(&self.map_bundle, &map_id).context("Loading native map collision")?;
         ensure!(

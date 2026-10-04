@@ -727,7 +727,7 @@ impl ClientVehicles {
             Vec3::from(s.transform.position),
             Quat::from_array(s.transform.rotation),
         );
-        if seat == 2 && d.attachment_mount.is_some() {
+        if d.weapon_seat() == Some(seat) && d.attachment_mount.is_some() {
             let pivot = d
                 .attachment_mount
                 .as_ref()
@@ -1158,7 +1158,10 @@ mod tests {
         }
         fn content() -> Result<Self> {
             Ok(Self {
-                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012"),
+                root: bri_package::testing::pack_dir(
+                    &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                    "vehicles",
+                ),
                 gunners: ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"]
                     .map(String::from)
                     .into(),

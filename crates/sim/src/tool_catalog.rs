@@ -69,6 +69,32 @@ impl ToolCatalog {
                 .filter(|b| b.special_kind.as_deref() == Some("VehicleSpawn"))
                 .map(|b| b.id.clone())
                 .collect(),
+            swap_sounds: catalog
+                .bricks
+                .iter()
+                .filter_map(|b| {
+                    let swap = b.swap.as_ref()?;
+                    let own = |id: &str| id.rsplit_once('/').map(|(p, _)| p.to_owned());
+                    if own(&swap.front) != own(&b.id) || own(&swap.back) != own(&b.id) {
+                        return None;
+                    }
+                    let silent = b
+                        .other_properties
+                        .get("nobricksounds")
+                        .is_some_and(|v| matches!(v.trim().trim_matches('"'), "1" | "true"));
+                    let sound = b
+                        .other_properties
+                        .get("native_swap_sound")
+                        .cloned()
+                        .or_else(|| {
+                            b.other_properties
+                                .get("isdoor")
+                                .filter(|v| matches!(v.trim().trim_matches('"'), "1" | "true"))
+                                .map(|_| "v20/sound/brickchange".to_owned())
+                        })?;
+                    (!silent).then(|| (b.id.clone(), sound))
+                })
+                .collect(),
             swaps: catalog
                 .bricks
                 .iter()
@@ -202,16 +228,20 @@ mod tests {
     /// The native inputs: the stock catalog, effects and print materials.
     fn native_inputs() -> Result<(Catalog, Library, Bundle, Definitions)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let catalog_dir = root.join("content/stock-catalog-004");
+        let catalog_dir = bri_package::testing::pack_dir(&root.join("content"), "brick_catalog");
         let catalog: Catalog =
             serde_json::from_slice(&std::fs::read(catalog_dir.join("stock-catalog.json"))?)?;
         let effects: Library = serde_json::from_slice(&std::fs::read(
-            root.join("content/effects-pass-004/effects.json"),
+            bri_package::testing::pack_dir(&root.join("content"), "effects").join("effects.json"),
         )?)?;
         let materials: Bundle = serde_json::from_slice(&std::fs::read(
-            root.join("content/brick-materials-002/brick-materials.json"),
+            bri_package::testing::pack_dir(&root.join("content"), "brick_materials")
+                .join("brick-materials.json"),
         )?)?;
-        let definitions = Definitions::load(&catalog_dir, &root.join("content/maps-pass-008"))?;
+        let definitions = Definitions::load(
+            &catalog_dir,
+            &bri_package::testing::pack_dir(&root.join("content"), "geometry"),
+        )?;
         Ok((catalog, effects, materials, definitions))
     }
 

@@ -82,8 +82,22 @@ pub fn preferred_scale(prefs: &crate::prefs::Prefs, size: (u32, u32)) -> Option<
     if percent <= 0 {
         return None;
     }
-    let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(1.0);
-    Some((percent as f32 / 100.0).clamp(1.0, fit))
+    let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(0.5);
+    Some((percent as f32 / 100.0).clamp(1.0, 8.0).min(fit))
+}
+
+#[cfg(test)]
+#[test]
+fn requested_ui_scale_fits_small_window_without_clipping_native_canvas() {
+    let mut prefs = crate::prefs::Prefs::default();
+    for percent in [100, 200, 800] {
+        prefs.set(UI_SCALE, percent.to_string());
+        assert_eq!(preferred_scale(&prefs, (400, 300)), Some(0.625));
+    }
+    prefs.set(UI_SCALE, "200");
+    assert_eq!(preferred_scale(&prefs, (1920, 1080)), Some(2.0));
+    prefs.set(UI_SCALE, "0");
+    assert_eq!(preferred_scale(&prefs, (400, 300)), None);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -326,6 +340,8 @@ pub struct Core {
     pub maps: Vec<MapInfo>,
     /// Start Game's game modes, from the enabled Add-Ons.
     pub game_modes: Vec<crate::api::GameModeInfo>,
+    /// Installed local colorsets offered before starting a host.
+    pub host_colorsets: Vec<crate::api::HostColorset>,
     pub servers: Vec<ServerInfo>,
     pub lan_querying: bool,
     pub bricks: Vec<BrickInfo>,
@@ -371,6 +387,8 @@ pub struct Core {
     pub minigames: MiniGameUiState,
     /// The mini-game whose Add-On Settings window is open (or opening).
     pub minigame_addons: Option<MiniGameId>,
+    /// Initial destination for this opening, not a saved user preference.
+    pub minigame_addons_teams: bool,
     /// The Add-On Settings window shows the server-wide settings instead
     /// (opened from the Admin menu).
     pub server_addon_settings: bool,
@@ -1388,6 +1406,20 @@ impl Ui {
             print_letters_visible: false,
             maps: Vec::new(),
             game_modes: Vec::new(),
+            host_colorsets: vec![crate::api::HostColorset {
+                id: String::new(),
+                name: "Default (v20)".into(),
+                divisions: pack
+                    .data
+                    .data
+                    .brick_colorset
+                    .iter()
+                    .map(|division| crate::api::PaintDivision {
+                        name: division.name.clone(),
+                        colors: division.colors.clone(),
+                    })
+                    .collect(),
+            }],
             servers: Vec::new(),
             lan_querying: false,
             bricks: Vec::new(),
@@ -1420,6 +1452,7 @@ impl Ui {
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
             minigame_addons: None,
+            minigame_addons_teams: false,
             server_addon_settings: false,
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
@@ -1725,11 +1758,11 @@ impl Ui {
                 for id in before {
                     if !c.admin.pending.contains_key(&id) {
                         c.pending.remove(&id);
+                        c.deadlines.remove(&id);
                     }
                 }
             }
             UiUpdate::ActionResult { id, result } => {
-                c.deadlines.remove(&id);
                 if c.abandoned.contains(&id) {
                     bri_console::echo(format!(
                         "Dropped a late answer to request {id}: {}",
@@ -1742,6 +1775,11 @@ impl Ui {
                 }
                 let kind = c.pending.remove(&id);
                 let mut handled = c.admin.result(id, &result);
+                // An acknowledgement is not the correlated list/state. Keep
+                // its deadline while Admin still awaits that second reply.
+                if !c.admin.pending.contains_key(&id) {
+                    c.deadlines.remove(&id);
+                }
                 for d in self.dialogs.iter_mut().rev().filter(|_| !handled) {
                     if d.on_result(id, kind.as_ref(), &result, &mut self.core) {
                         handled = true;
@@ -1816,6 +1854,7 @@ impl Ui {
             }
             UiUpdate::Maps(m) => c.maps = m,
             UiUpdate::GameModes(m) => c.game_modes = m,
+            UiUpdate::HostColorsets(choices) => c.host_colorsets = choices,
             UiUpdate::LanServers { servers, querying } => {
                 c.servers = servers;
                 c.lan_querying = querying;
@@ -2792,6 +2831,79 @@ mod sound_tests {
         });
         ui.update(0);
         assert!(!has_message(&ui), "a late answer is dropped");
+    }
+
+    #[test]
+    fn an_admin_acknowledgement_without_its_state_still_times_out() {
+        use crate::models::admin::{
+            AdminAction, AdminFeature, AdminRole, AdminSnapshot, AdminUpdate,
+        };
+        for action in [
+            AdminAction::Refresh,
+            AdminAction::RequestMaps,
+            AdminAction::RequestBans,
+            AdminAction::RequestBrickGroups,
+            AdminAction::RequestRanks,
+        ] {
+            let mut ui = fixture();
+            ui.apply(UiUpdate::Admin(AdminUpdate::State(AdminSnapshot {
+                revision: 1,
+                role: AdminRole::SuperAdmin,
+                local_host: true,
+                legacy_lan: false,
+                supported: [
+                    AdminFeature::Maps,
+                    AdminFeature::Ban,
+                    AdminFeature::Unban,
+                    AdminFeature::ClearBricks,
+                    AdminFeature::Ranks,
+                ]
+                .into(),
+                players: vec![],
+                options: None,
+            })));
+            let id = ui.core.admin_request(action.clone()).unwrap();
+            // A newer unsolicited snapshot can beat the correlated list.
+            if action == AdminAction::RequestMaps {
+                let mut newer = ui.core.admin.snapshot.clone().unwrap();
+                newer.revision = 2;
+                ui.apply(UiUpdate::Admin(AdminUpdate::State(newer)));
+                ui.apply(UiUpdate::Admin(AdminUpdate::Maps {
+                    request: id,
+                    revision: 1,
+                    rows: vec![],
+                }));
+            }
+            ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+            assert!(ui.core.admin.busy());
+            ui.update(Pending::Other.timeout_ms());
+            assert!(
+                !ui.core.admin.busy(),
+                "{action:?} left every admin button disabled"
+            );
+            assert!(ui.core.admin.status.contains(REQUEST_TIMED_OUT));
+            assert!(ui.core.admin_request(AdminAction::Refresh).is_some());
+        }
+    }
+
+    #[test]
+    fn an_admin_list_after_its_ack_completes_without_a_false_timeout() {
+        use crate::models::admin::{AdminAction, AdminUpdate};
+        let mut ui = fixture();
+        let id = ui
+            .core
+            .request_pending(UiAction::Admin(AdminAction::RequestMaps), Pending::Other);
+        ui.core.admin.pending.insert(id, AdminAction::RequestMaps);
+        ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+        ui.apply(UiUpdate::Admin(AdminUpdate::Maps {
+            request: id,
+            revision: 0,
+            rows: vec![],
+        }));
+        assert!(!ui.core.admin.busy());
+        assert!(!ui.core.deadlines.contains_key(&id));
+        ui.update(Pending::Other.timeout_ms());
+        assert!(ui.core.admin.status.is_empty());
     }
 
     #[test]

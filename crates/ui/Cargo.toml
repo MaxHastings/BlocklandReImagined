@@ -14,6 +14,7 @@ gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 [dependencies]
 anyhow.workspace = true
 bri-console = { path = "../console" }
+bri-events = { path = "../events" }
 bri-content = { path = "../content" }
 serde.workspace = true
 serde_json.workspace = true
@@ -35,3 +36,6 @@ required-features = ["gpu"]
 [[bin]]
 name = "ml_text_probe"
 required-features = ["gpu"]
+
+[dev-dependencies]
+bri-package = { path = "../package" }

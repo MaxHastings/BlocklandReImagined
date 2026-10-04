@@ -3,7 +3,8 @@
 This build brings building, deathmatch minigames, vehicles, bots and
 multiplayer over LAN or the internet together. Start with `TESTER-GUIDE.md`:
 its Install section covers setup and the "Windows protected your PC"
-warning, and Playing together covers LAN and internet games. `FEATURES.md`
+warning, and Playing together covers LAN and internet games. Mac users should
+read `PLAYTEST-MAC.md`; Linux users unzip and run `launch.sh`. `FEATURES.md`
 says what is done and what isn't, and `KNOWN-ISSUES.md` lists what is still
 unfinished. Slate and Bedroom are good first maps.
 
@@ -35,12 +36,14 @@ anything and says nothing when offline. Turn it off with Options > Advanced >
   a gun and rocket launcher. Shoot, fall, die, watch the respawn countdown and
   click to respawn. Kill messages appear in chat. The player list (F2) shows scores.
 - **Vehicles:** plant a Vehicle Spawn brick (Special tab), wrench it and pick a
-  vehicle (Jeep, Tank, Horse, Magic Carpet, Rowboat, Ball…). Walk into it to get
-  in; W/S throttle, A/D steer, Space gets out (Shift on the horse), period and
+  vehicle (Jeep, Tank, Horse, Magic Carpet, Rowboat, Ball…). Jump onto it to board;
+  walking into its side does not board. W/S throttle, A/D steer, Space gets out (Shift on the horse), period and
   comma change seats, left mouse fires vehicle weapons. Tick "Recolor Vehicle" to paint
   it with the brick color, and use `< Respawn >` to reset it.
 - **Bots:** pick "Blockhead Bot" in a Vehicle Spawn brick. Bots wander near their
-  brick; inside your minigame they fight you.
+  brick; inside your minigame they fight you. Try allied bots near a ground vehicle
+  with control and weapon seats, a human driver with bot passengers, a blocked
+  route, a teammate crossing the driving path, and a team change during a charge.
 - **Music:** plant a Music brick and choose a loop in its wrench.
 - **Other keys:** light (L), suicide (Ctrl+K), team chat (Y), screenshots
   (Ctrl+P, Shift+P without the HUD), net graph (Ctrl+N), build macro record /
@@ -48,6 +51,10 @@ anything and says nothing when offline. Turn it off with Options > Advanced >
   WASD, Space/Shift up/down) and drop yourself there (F7). Emotes have no default
   key: bind them in Options → Controls or type `/love`, `/hate`, `/alarm`,
   `/confusion` or `/sit`. `/suicide` and `/light` work in chat too.
+- **Rule Workshop:** Escape → Rule Workshop offers editable examples. Start
+  with a blank brick and ordinary Events, then add IF checks. Read
+  `RULE-WORKSHOP-PLAYTEST.md` and `RULE-WORKSHOP-CREATOR-TEST-CARD.md` in the
+  download for recipes, semantic limits and useful mutation tests.
 - **Save/load:** save a build (with events and ownership), leave, load it back.
 
 ## Playing with a friend

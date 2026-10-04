@@ -9,6 +9,8 @@ pub(super) struct GpuState {
     /// Outlines of non-rendering bricks, drawn only while a building tool is
     /// out, and whether the uploaded lines are the shown ones (None: stale).
     pub(super) hidden_lines: Option<bri_render::lines::LineRenderer>,
+    pub(super) region_lines: Option<bri_render::lines::LineRenderer>,
+    pub(super) region_outlines: crate::rule_regions::Outlines,
     /// The Environment window's vignette over the world.
     pub(super) vignette: Option<bri_render::vignette::VignetteRenderer>,
     /// An Add-On's selection box (`Notice::SelectionBox`), and the box it

@@ -78,13 +78,9 @@ pub fn screens_pack() -> Rc<Pack> {
     super::pack(data)
 }
 
-/// The converted pack `content/<id>` (for the content variants of tests
-/// that also run on [`screens_pack`]).
-pub fn content_pack(id: &str) -> Rc<Pack> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content")
-        .join(id);
-    Rc::new(Pack::load(&dir).unwrap_or_else(|e| panic!("loading {}: {e:#}", dir.display())))
+/// A converted pack at the caller's resolved package directory.
+pub fn content_pack(dir: &std::path::Path) -> Rc<Pack> {
+    Rc::new(Pack::load(dir).unwrap_or_else(|e| panic!("loading {}: {e:#}", dir.display())))
 }
 
 // ------------------------------------------------------------ builders

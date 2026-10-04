@@ -2,8 +2,8 @@
 
 From 2026-10-01 each progress entry is its own file in this folder, so two
 threads never edit the same file and progress notes stop causing merge
-conflicts. [../progress.md](../progress.md) keeps the history up to then and
-the current state at its top.
+conflicts. [../progress.md](../progress.md) keeps the earlier dated history.
+Read [../STATUS.md](../STATUS.md) for current release state and open work.
 
 - Name a new entry `YYYY-MM-DD-short-topic.md` (the date it lands, a few
   lowercase words joined by `-`), for example

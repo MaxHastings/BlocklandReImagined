@@ -93,6 +93,7 @@ pub struct ClientFoliage {
     images: Vec<Image>,
     pub prepared: PreparedFoliage,
     renderer: Option<FoliageRenderer>,
+    illumination: [f32; 3],
     /// Samples per pixel of the world pass the foliage draws into.
     samples: u32,
     seconds: f64,
@@ -107,6 +108,7 @@ impl ClientFoliage {
             images,
             prepared: PreparedFoliage::default(),
             renderer: None,
+            illumination: [1.0; 3],
             samples: 1,
             seconds: 0.,
             stats: RenderStats::default(),
@@ -159,6 +161,10 @@ impl ClientFoliage {
                 },
             )?);
         }
+        self.renderer
+            .as_mut()
+            .unwrap()
+            .set_illumination(self.illumination)?;
         self.stats = self.renderer.as_mut().unwrap().prepare_elapsed(
             frame.queue,
             camera,
@@ -187,6 +193,13 @@ impl ClientFoliage {
                 fog_start,
                 fog_end,
             )?;
+        }
+        Ok(())
+    }
+    pub fn set_illumination(&mut self, light: [f32; 3]) -> Result<()> {
+        self.illumination = light;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_illumination(light)?;
         }
         Ok(())
     }
@@ -276,7 +289,10 @@ mod tests {
         fn content() -> Result<Self> {
             let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
             let map_id = "v20/add-ons/map_bedroom/bedroom.mis";
-            let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map_id)?;
+            let map = bri_sim::map::NativeMap::load(
+                &bri_package::testing::pack_dir(&root, "map_bundle"),
+                map_id,
+            )?;
             let mut building = Building::new(
                 Definitions {
                     entries: BTreeMap::new(),
@@ -287,7 +303,7 @@ mod tests {
             Ok(Self {
                 building,
                 waters: map.waters,
-                pack: root.join("foliage-pack-003"),
+                pack: bri_package::testing::pack_dir(&root, "foliage"),
                 map_id: map_id.into(),
                 placed: 41000,
                 _scratch: None,

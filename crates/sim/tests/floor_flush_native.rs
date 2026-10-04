@@ -10,8 +10,6 @@ use bri_world::{Brick, ContentRef, World, authority::Actor};
 use glam::Vec3;
 use std::path::PathBuf;
 
-const BUNDLE: &str = "map-bundle-017";
-
 fn content() -> PathBuf {
     std::env::var_os("BRI_CONTENT").map_or_else(
         || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content"),
@@ -33,7 +31,7 @@ fn plate() -> Result<Definitions> {
 #[test]
 #[ignore = "requires generated v20 content (map-bundle-017, or BRI_CONTENT)"]
 fn a_plate_on_each_stock_spawn_floor_rests_flush() -> Result<()> {
-    let root = content().join(BUNDLE);
+    let root = bri_package::testing::pack_dir(&content(), "map_bundle");
     let bundle: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("bundle.json"))?)?;
     let maps: Vec<_> = bundle["maps"]

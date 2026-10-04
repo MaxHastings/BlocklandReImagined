@@ -1,4 +1,5 @@
 //! Host-driven native vehicle simulation. Host owns and steps shared physics at 120 Hz.
+mod contact_push;
 mod merge;
 pub use merge::asset_root;
 pub mod muzzle;

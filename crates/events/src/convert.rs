@@ -67,6 +67,10 @@ pub fn ui_event(e: &Json) -> Result<Row> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Row {
+        conditions: match e.get("conditions") {
+            Some(value) => serde_json::from_value(value.clone())?,
+            None => vec![],
+        },
         preserved: None,
         enabled: e["enabled"].as_bool().context("Missing enabled")?,
         input: e["input"].as_str().context("Missing input")?.into(),

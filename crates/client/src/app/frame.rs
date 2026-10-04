@@ -341,7 +341,10 @@ impl App {
                     let forward = frame.rotation * Vec3::NEG_Z;
                     // A driver steers as the host steers them (its copy of
                     // their prefs, in the pose), so view and prediction agree.
-                    let pose = view.vehicle_poses.get(&vehicle).filter(|_| seat == 0);
+                    let pose = view
+                        .vehicle_poses
+                        .get(&vehicle)
+                        .filter(|_| d.control_seat() == Some(usize::from(seat)));
                     let (strafe, _) = steering_in_use(pose, &self.ui.core.prefs);
                     let role = d.seat_role_for(usize::from(seat), strafe);
                     // The first-person view rides the seat on a vehicle and
@@ -688,6 +691,7 @@ impl App {
 
     /// Step 22: the Add-On import, LAN query and firewall fix jobs.
     fn poll_background_jobs(&mut self) {
+        self.poll_package_reload();
         if let Some(receiver) = &self.addons.add_on_sync {
             let mut notes = vec![];
             let mut done = false;
@@ -1189,6 +1193,7 @@ impl App {
                 &self.controls,
                 presented,
                 building,
+                self.motion.collision(),
                 &self.vehicle_assets,
                 &self.vehicles,
                 view,

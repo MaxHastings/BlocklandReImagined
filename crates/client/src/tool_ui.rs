@@ -43,6 +43,8 @@ pub struct ToolUi {
     package_events: bri_events::Extension,
     /// Every installed music loop; the wrench lists those the host offers.
     music: Vec<Choice>,
+    /// Current connection authority; independent of the installed host catalog.
+    offered_music: Option<BTreeSet<String>>,
 }
 
 impl ToolUi {
@@ -135,6 +137,7 @@ impl ToolUi {
             base_events: None,
             package_events: Default::default(),
             music: Vec::new(),
+            offered_music: None,
         })
     }
     pub fn server_catalog(&self) -> ToolCatalog {
@@ -220,21 +223,38 @@ impl ToolUi {
             choices
         };
         self.music = menu(sounds);
-        self.datablocks.insert("Music".into(), self.music.clone());
+        let _ = self.refresh_music();
         self.datablocks.insert("Vehicle".into(), menu(vehicles));
         self.invalidate();
         Ok(())
     }
     /// The wrench's Music list shows only the loops the host offers (its
     /// Music Files), as v20 clients knew only the host's music datablocks.
-    pub fn offer_music(&mut self, offered: &std::collections::BTreeSet<String>) {
-        let music = self
+    pub fn offer_music(&mut self, offered: &BTreeSet<String>) -> Option<UiUpdate> {
+        self.offered_music = Some(offered.clone());
+        self.refresh_music()
+    }
+    /// A new connection starts with its own authority, never the previous host's.
+    pub fn reset_music_offer(&mut self) -> Option<UiUpdate> {
+        self.offered_music = None;
+        self.refresh_music()
+    }
+    fn refresh_music(&mut self) -> Option<UiUpdate> {
+        let music: Vec<_> = self
             .music
             .iter()
-            .filter(|c| offered.contains(&c.id))
+            .filter(|c| {
+                self.offered_music
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&c.id))
+            })
             .cloned()
             .collect();
+        if self.datablocks.get("Music") == Some(&music) {
+            return None;
+        }
         self.datablocks.insert("Music".into(), music);
+        Some(UiUpdate::Datablocks(self.datablocks.clone()))
     }
     /// Install the wrench event catalog and the datablock menus only events
     /// use: sounds, projectiles and player types.
@@ -264,7 +284,9 @@ impl ToolUi {
                 })
                 .into(),
         );
-        self.base_events = Some(catalog);
+        self.base_events = Some(
+            bri_events::rules::workshop_catalog(&catalog).expect("Validated core rule vocabulary"),
+        );
         self.merge_events();
         self.invalidate();
     }
@@ -602,6 +624,9 @@ impl ToolUi {
                     "This brick cannot hold that sound or vehicle"
                 );
                 validate_choice(data.sound.as_deref(), &self.catalog.sounds, "music")?;
+                if let Some(offered) = &self.offered_music {
+                    validate_choice(data.sound.as_deref(), offered, "host-offered music")?;
+                }
                 validate_choice(data.vehicle.as_deref(), &self.catalog.vehicles, "vehicle")?;
                 validate_choice(data.light.as_deref(), &self.catalog.lights, "light")?;
                 validate_choice(data.emitter.as_deref(), &self.catalog.emitters, "emitter")?;
@@ -622,6 +647,7 @@ impl ToolUi {
                 ToolAction::SetWrench {
                     brick: *brick,
                     properties: WrenchProperties {
+                        rule_region: data.rule_region,
                         name: (!name.is_empty()).then(|| name.to_owned()),
                         light: data.light.clone(),
                         emitter: data.emitter.clone(),
@@ -715,6 +741,9 @@ fn validate_choice(value: Option<&str>, choices: &BTreeSet<String>, kind: &str) 
 }
 fn wrench_data(brick: &Brick) -> Result<WrenchData> {
     Ok(WrenchData {
+        rule_region: brick.rule_region,
+        rule_region_default: None,
+        region_inputs: bri_world::regions::has_region_input(brick),
         name: brick.name.clone().unwrap_or_default(),
         light: brick
             .light
@@ -797,6 +826,7 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
             .outputs
             .iter()
             .map(|o| EventOutputInfo {
+                provider: o.package.clone().unwrap_or_else(|| "core".into()),
                 class: o.class_name.clone(),
                 name: o.name.clone(),
                 params: o.params.iter().map(param).collect(),
@@ -879,6 +909,7 @@ fn ui_event(row: &Row, catalog: &bri_events::Catalog) -> Result<EventLine> {
         })
         .collect();
     Ok(EventLine {
+        conditions: row.conditions.clone(),
         enabled: row.enabled,
         delay_ms: row.delay_ms,
         input: input.name.clone(),
@@ -974,6 +1005,7 @@ mod tests {
             base_events: Some(events()),
             package_events: Default::default(),
             music: Vec::new(),
+            offered_music: None,
         }
     }
     #[test]
@@ -1135,6 +1167,7 @@ mod tests {
         // A row aimed at the team round-trips through the dialog.
         let catalog = ui.events.clone().unwrap();
         let row = Row {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -1149,22 +1182,137 @@ mod tests {
     }
     #[test]
     fn the_wrench_lists_only_the_music_the_host_offers() {
-        let mut ui = fixture();
+        use bri_ui::binds::Platform;
+        use bri_ui::screens::ScreenId;
+        use bri_ui::ui::{Ui, UiConfig};
+        let mut tools = fixture();
         let loops = vec![
             ("music/bass".to_string(), "Bass 1".to_string()),
             ("music/rock".to_string(), "Rock".to_string()),
         ];
-        ui.install_special(loops, vec![]).unwrap();
-        assert_eq!(ui.datablocks["Music"].len(), 2);
-        ui.offer_music(&["music/rock".to_string()].into());
-        let listed: Vec<_> = ui.datablocks["Music"]
+        tools.install_special(loops.clone(), vec![]).unwrap();
+        let mut guest = Ui::new(
+            bri_ui::testing::screens_pack(),
+            UiConfig {
+                size: (1024, 768),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        for update in tools.catalog_updates() {
+            guest.apply(update);
+        }
+        guest.apply(UiUpdate::OpenWrench {
+            brick: 7,
+            variant: WrenchVariant::Sound,
+            owner: "Builder".into(),
+            data: WrenchData {
+                sound: Some("music/bass".into()),
+                ..Default::default()
+            },
+            admin_override: false,
+            events_allowed: true,
+        });
+        let allowed: BTreeSet<_> = ["music/rock".into(), "music/unknown".into()].into();
+        guest.apply(
+            tools
+                .offer_music(&allowed)
+                .expect("changed menu reaches guest"),
+        );
+        guest.update(0);
+        assert_eq!(
+            guest.core.datablocks["Music"]
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Rock"]
+        );
+        let view = guest
+            .screen(ScreenId::Wrench(WrenchVariant::Sound))
+            .unwrap()
+            .view();
+        let menu = view.id("WrenchSound_Sounds").unwrap();
+        let labels: Vec<_> = view
+            .node(menu)
+            .state
+            .items
             .iter()
-            .map(|c| c.name.as_str())
+            .map(|(label, _)| label.as_str())
             .collect();
-        assert_eq!(listed, ["Rock"]);
-        // The next host's list starts again from every installed loop.
-        ui.offer_music(&["music/bass".to_string(), "music/rock".to_string()].into());
-        assert_eq!(ui.datablocks["Music"].len(), 2);
+        assert_eq!(labels, [" NONE", "Rock", "Unavailable: music/bass"]);
+        assert_eq!(
+            guest
+                .core
+                .wrench
+                .values(WrenchVariant::Sound)
+                .sound
+                .as_deref(),
+            Some("music/bass")
+        );
+        assert!(
+            tools.offer_music(&allowed).is_none(),
+            "identical authority needs no UI churn"
+        );
+        // Refreshing installed content cannot restore a track the current host excludes.
+        tools.install_special(loops, vec![]).unwrap();
+        assert_eq!(tools.datablocks["Music"].len(), 1);
+        // UI filtering must not narrow the installed catalog used by a future local host.
+        assert_eq!(tools.server_catalog().sounds.len(), 2);
+        guest.apply(tools.offer_music(&BTreeSet::new()).unwrap());
+        assert!(guest.core.datablocks["Music"].is_empty());
+        guest.apply(tools.reset_music_offer().unwrap());
+        assert_eq!(guest.core.datablocks["Music"].len(), 2);
+        guest.apply(tools.offer_music(&["music/bass".into()].into()).unwrap());
+        assert_eq!(guest.core.datablocks["Music"][0].id, "music/bass");
+    }
+
+    #[test]
+    fn a_changed_music_offer_keeps_inspection_but_rejects_unoffered_actions() {
+        let mut tools = fixture();
+        tools
+            .install_special(
+                vec![
+                    ("music/bass".into(), "Bass".into()),
+                    ("music/rock".into(), "Rock".into()),
+                ],
+                vec![],
+            )
+            .unwrap();
+        tools.variants.insert("plate".into(), WrenchVariant::Sound);
+        let b = brick();
+        let updates = open(&mut tools, &b, InspectMode::Wrench);
+        let UiUpdate::OpenWrench { data, .. } = &updates[0] else {
+            panic!("ordinary inspection")
+        };
+        let _ = tools.offer_music(&["music/rock".into()].into());
+        let action = |sound| UiAction::SendWrench {
+            brick: 7,
+            variant: WrenchVariant::Sound,
+            data: WrenchData {
+                sound,
+                ..data.clone()
+            },
+        };
+        assert!(
+            tools
+                .action_command(&action(Some("music/bass".into())))
+                .is_err()
+        );
+        assert!(
+            tools
+                .action_command(&action(Some("music/rock".into())))
+                .unwrap()
+                .is_some()
+        );
+        assert!(tools.action_command(&action(None)).unwrap().is_some());
+        assert!(
+            tools.inspection.is_some(),
+            "catalog updates retain an ordinary draft's inspection"
+        );
     }
     fn events() -> bri_events::Catalog {
         use bri_events::{InputDef, OutputDef, Param};
@@ -1273,6 +1421,7 @@ mod tests {
     }
     fn row(output: &str, params: Vec<EventValue>) -> Row {
         Row {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -1302,6 +1451,7 @@ mod tests {
         assert!(ui.install_items([("id".into(), "".into())]).is_err());
         assert_eq!(ui.server_catalog(), before);
         let mut b = brick();
+        b.rule_region = Some([8.0, 5.0, 8.0]);
         b.item_spawn = ItemSpawn {
             item: Some(ContentRef::Resolved("v20.weapon.gunitem".into())),
             position: 4,
@@ -1327,6 +1477,7 @@ mod tests {
             panic!()
         };
         assert_eq!(properties.item_spawn, b.item_spawn);
+        assert_eq!(properties.rule_region, Some([8.0, 5.0, 8.0]));
         let mut clear = data.clone();
         clear.item = None;
         let Some(Command::Tool(ToolAction::SetWrench { properties, .. })) = ui
@@ -1442,8 +1593,11 @@ mod tests {
             })
         }
         fn content() -> anyhow::Result<Self> {
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/weapons-pack-009/weapons.json");
+            let root = bri_package::testing::pack_dir(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                "weapons",
+            )
+            .join("weapons.json");
             let pack: serde_json::Value = serde_json::from_slice(&std::fs::read(root)?)?;
             assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
             Ok(Self {
@@ -1565,16 +1719,51 @@ mod tests {
         assert!(native_event(&invalid, &catalog).is_err());
     }
     #[test]
+    fn event_delays_above_the_cap_are_rejected_by_inspection_and_submission() {
+        let mut ui = fixture();
+        let mut b = brick();
+        b.events = vec![Row {
+            delay_ms: bri_ui::models::events::MAX_DELAY_MS + 1,
+            ..row("setRendering", vec![EventValue::Bool(false)])
+        }];
+        assert!(
+            ui.accept_inspection(
+                &Reply::Inspected {
+                    brick_id: 7,
+                    brick: Box::new(b.clone()),
+                    mode: InspectMode::Events
+                },
+                InspectMode::Events,
+                Some(7),
+                &world(&b),
+                &[(1, "Builder".into())].into(),
+                1,
+            )
+            .is_err()
+        );
+        let mut supported = b.events[0].clone();
+        supported.delay_ms = bri_ui::models::events::MAX_DELAY_MS;
+        let mut line = ui_event(&supported, ui.events.as_ref().unwrap()).unwrap();
+        line.delay_ms += 1;
+        assert!(native_event(&line, ui.events.as_ref().unwrap()).is_err());
+    }
+
+    #[test]
     fn preserved_events_cannot_be_dropped_duplicated_or_modified() {
         let mut ui = fixture();
         let mut b = brick();
         b.events = vec![
             row("setColor", vec![EventValue::Color(1)]),
             Row {
-                delay_ms: 60_000,
+                delay_ms: bri_ui::models::events::MAX_DELAY_MS,
                 ..row("setRendering", vec![EventValue::Bool(false)])
             },
             Row {
+                delay_ms: bri_ui::models::events::MAX_DELAY_MS,
+                ..row("futureRenderingAction", vec![EventValue::Bool(false)])
+            },
+            Row {
+                conditions: vec![],
                 preserved: Some(bri_events::PreservedRow {
                     original: "+-EVENT\t2\t1\tonUnknown\t0\tSelf\t\tfireRelay\t\t\t\t".into(),
                     diagnostic: "Unknown input".into(),
@@ -1597,42 +1786,48 @@ mod tests {
             panic!()
         };
         assert_eq!(named_targets, &["owned target"]);
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         assert!(matches!(rows[0], EventRow::Editable(_)));
-        assert!(matches!(rows[1], EventRow::Preserved { .. }));
-        for mutation in 0..4 {
-            let mut corrupted = rows.clone();
-            if mutation == 0 {
-                corrupted.pop();
-            } else if let EventRow::Preserved {
-                enabled,
-                text,
-                token,
-            } = &mut corrupted[2]
-            {
-                match mutation {
-                    1 => *enabled = false,
-                    2 => text.push_str(" forged"),
-                    _ => token.push_str(" forged"),
+        let EventRow::Editable(long_delay) = &rows[1] else {
+            panic!("the supported five-minute delay must remain editable")
+        };
+        assert_eq!(long_delay.delay_ms, bri_ui::models::events::MAX_DELAY_MS);
+        for preserved in [2, 3] {
+            assert!(matches!(rows[preserved], EventRow::Preserved { .. }));
+            for mutation in 0..4 {
+                let mut corrupted = rows.clone();
+                if mutation == 0 {
+                    corrupted.remove(preserved);
+                } else if let EventRow::Preserved {
+                    enabled,
+                    text,
+                    token,
+                } = &mut corrupted[preserved]
+                {
+                    match mutation {
+                        1 => *enabled = false,
+                        2 => text.push_str(" forged"),
+                        _ => token.push_str(" forged"),
+                    }
                 }
+                assert!(
+                    ui.action_command(&UiAction::SendEvents {
+                        brick: 7,
+                        rows: corrupted
+                    })
+                    .is_err()
+                );
             }
+            let mut duplicated = rows.clone();
+            duplicated.push(rows[preserved].clone());
             assert!(
                 ui.action_command(&UiAction::SendEvents {
                     brick: 7,
-                    rows: corrupted
+                    rows: duplicated
                 })
                 .is_err()
             );
         }
-        let mut duplicated = rows.clone();
-        duplicated.push(rows[2].clone());
-        assert!(
-            ui.action_command(&UiAction::SendEvents {
-                brick: 7,
-                rows: duplicated
-            })
-            .is_err()
-        );
         let Some(Command::Tool(ToolAction::SetEvents { brick, events })) = ui
             .action_command(&UiAction::SendEvents {
                 brick: 7,
@@ -1644,6 +1839,22 @@ mod tests {
         };
         assert_eq!(brick, 7);
         assert_eq!(events, b.events);
+        let mut edited = rows.clone();
+        let EventRow::Editable(long_delay) = &mut edited[1] else {
+            unreachable!()
+        };
+        long_delay.delay_ms = 60_000;
+        let Some(Command::Tool(ToolAction::SetEvents { events, .. })) = ui
+            .action_command(&UiAction::SendEvents {
+                brick: 7,
+                rows: edited,
+            })
+            .unwrap()
+        else {
+            panic!("a supported long delay can be edited and sent")
+        };
+        assert_eq!(events[1].delay_ms, 60_000);
+        assert_eq!(events[2..], b.events[2..]);
     }
     /// Max, b5d99c948: wrenching a Portal brick said "Inspected brick
     /// definition is unavailable", so its Name, which pairs portals, could

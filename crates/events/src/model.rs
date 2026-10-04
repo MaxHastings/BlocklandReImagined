@@ -44,6 +44,8 @@ impl Entity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Slot {
     SelfBrick,
+    Instigator,
+    Object,
     Player,
     Client,
     Projectile,
@@ -63,6 +65,8 @@ impl Slot {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "self" => Some(Self::SelfBrick),
+            "instigator" => Some(Self::Instigator),
+            "object" => Some(Self::Object),
             "player" => Some(Self::Player),
             "client" => Some(Self::Client),
             "projectile" => Some(Self::Projectile),
@@ -111,6 +115,8 @@ pub struct PreservedRow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Row {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<crate::rules::Condition>,
     #[serde(default)]
     pub preserved: Option<PreservedRow>,
     pub enabled: bool,
@@ -302,6 +308,7 @@ pub enum ProjectileOp {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Intent {
+    Rule(crate::rules::RuleOp),
     Brick(BrickOp),
     Player(PlayerOp),
     Client(ClientOp),
@@ -329,6 +336,7 @@ pub(crate) enum Action {
 }
 #[derive(Clone, Debug)]
 pub struct Dispatch {
+    pub context: Trigger,
     pub source: Id,
     pub target: Entity,
     pub origin: u64,
@@ -341,6 +349,8 @@ pub struct Dispatch {
     pub derived: Option<String>,
     pub scheduled_us: u64,
     pub now_us: u64,
+    /// Authored delay, preserved even if the work budget postpones dispatch.
+    pub delay_ms: u32,
     pub intent: Intent,
 }
 /// Deferred must have NO side effects. Applied mutations must be visible synchronously.
@@ -357,6 +367,27 @@ pub enum Apply {
 }
 /// Trusted server-internal adapter, not a public mod or network API.
 pub trait Host {
+    /// Queries are observations. Missing context makes a condition false.
+    fn query(
+        &self,
+        _context: &Trigger,
+        _target: Entity,
+        _condition: &crate::rules::Condition,
+    ) -> Option<crate::rules::Datum> {
+        None
+    }
+    /// Gameplay names for diagnostic values; never changes rule evaluation.
+    fn condition_value_label(
+        &self,
+        _context: &Trigger,
+        _target: Entity,
+        _condition: &crate::rules::Condition,
+        value: &crate::rules::Datum,
+    ) -> String {
+        value.label()
+    }
+    /// Bounded diagnostic sink, shared by native and Add-On rule actions.
+    fn trace(&mut self, _source: Id, _row: u16, _text: String) {}
     fn alive(&self, entity: Entity) -> bool;
     fn permitted(&self, context: &Trigger, target: Entity, output: &str) -> bool;
     fn relay_neighbors(

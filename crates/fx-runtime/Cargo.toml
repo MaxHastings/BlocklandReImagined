@@ -20,4 +20,5 @@ bri-content = { path = "../content" }
 rayon = "1.12"
 
 [dev-dependencies]
+bri-package = { path = "../package" }
 pollster.workspace = true

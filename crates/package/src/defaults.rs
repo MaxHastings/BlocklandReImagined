@@ -594,7 +594,12 @@ mod tests {
         let listed = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
         assert_eq!(
             ids(&listed.packages),
-            ["tool_duplicator", "tool_duplicator-rules", "brick_mirror"]
+            [
+                "tool_duplicator",
+                "tool_duplicator-rules",
+                "brick_mirror",
+                "rule-workshop-toys"
+            ]
         );
         assert!(install(&root, &repo_packages()).unwrap().is_empty());
 
@@ -614,7 +619,10 @@ mod tests {
         .unwrap();
         install(&root, &repo_packages()).unwrap();
         let listed = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
-        assert_eq!(ids(&listed.packages), ["brick_mirror"]);
+        assert_eq!(
+            ids(&listed.packages),
+            ["brick_mirror", "rule-workshop-toys"]
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -627,7 +635,8 @@ mod tests {
         );
         assert!(ours().contains(&"brick_mirror"));
         // On by default: the Duplicator, the Stunt Plane and the Mirror,
-        // and the brick packs (the_bundled_brick_packs_are_the_chosen_ones_in_v20_order).
+        // the Workshop vocabulary proof (which adds no tools), and the brick packs
+        // (the_bundled_brick_packs_are_the_chosen_ones_in_v20_order).
         let on: Vec<&str> = listed()
             .iter()
             .filter(|a| a.enabled && (!a.id.starts_with("brick_") || a.id == "brick_mirror"))
@@ -635,7 +644,12 @@ mod tests {
             .collect();
         assert_eq!(
             on,
-            ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]
+            [
+                "tool_duplicator",
+                "vehicle_stunt_plane",
+                "brick_mirror",
+                "rule-workshop-toys"
+            ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
             .packages
@@ -889,11 +903,17 @@ mod tests {
             set.packages[base.len()..].to_vec()
         };
         // The originals come from the bundle, not the checkout.
-        assert_eq!(ids(&defaults(&root)), ["brick_mirror"]);
+        assert_eq!(
+            ids(&defaults(&root)),
+            ["brick_mirror", "rule-workshop-toys"]
+        );
         // Installed from the bundle, an original is on in its place.
         install_original(&root, "vehicle_stunt_plane", "1.0.0");
         let on = defaults(&root);
-        assert_eq!(ids(&on), ["vehicle_stunt_plane", "brick_mirror"]);
+        assert_eq!(
+            ids(&on),
+            ["vehicle_stunt_plane", "brick_mirror", "rule-workshop-toys"]
+        );
         assert!(on.iter().all(|p| p.dir == format!("addons/{}", p.id)));
         assert_eq!(on[0].side, crate::packages::Side::Shared);
         // The Add-Ons screen shows them on, and the Ragdoll there to turn
@@ -984,9 +1004,12 @@ mod tests {
         // A newer import of the original, from the bundle.
         install_original(&root, "vehicle_stunt_plane", "1.0.0");
         let done = install(&root, &repo_packages()).unwrap();
-        assert_eq!(done.listed, ["vehicle_stunt_plane", "brick_mirror"]);
+        assert_eq!(
+            done.listed,
+            ["vehicle_stunt_plane", "brick_mirror", "rule-workshop-toys"]
+        );
         let on = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
-        assert_eq!(ids(&on.packages), ["brick_mirror"]);
+        assert_eq!(ids(&on.packages), ["brick_mirror", "rule-workshop-toys"]);
         let off = PackageSet::load(&root.join(DISABLED_FILE)).unwrap();
         assert_eq!(ids(&off.packages), ["vehicle_stunt_plane"]);
         assert_eq!(off.packages[0].version, "1.0.0");

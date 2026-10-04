@@ -27,9 +27,13 @@ impl Fixture {
     fn content() -> Result<Self> {
         let root = repo_root();
         Ok(Self {
-            effects: EffectsPack::load(root.join("content/effects-runtime-pack-005"))?,
+            effects: EffectsPack::load(bri_package::testing::pack_dir(
+                &root.join("content"),
+                "effects_runtime",
+            ))?,
             weapons: Arc::new(Pack::from_json(&std::fs::read(
-                root.join("content/weapons-pack-009/weapons.json"),
+                bri_package::testing::pack_dir(&root.join("content"), "weapons")
+                    .join("weapons.json"),
             )?)?),
             blue_mist: Vec3::new(0., 0.317, 0.745),
             out: root.join("artifacts/spray-paint"),

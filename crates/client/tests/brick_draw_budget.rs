@@ -201,7 +201,7 @@ fn the_largest_stock_build_stays_within_its_draw_budget() -> Result<()> {
 }
 
 fn gpu() -> Result<(wgpu::Device, wgpu::Queue)> {
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     descriptor.backends =
         wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN);
     let instance = wgpu::Instance::new(descriptor);

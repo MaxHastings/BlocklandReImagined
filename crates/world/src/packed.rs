@@ -63,6 +63,7 @@ fn plain(brick: &Brick) -> bool {
         && brick.sound.is_none()
         && brick.vehicle.is_none()
         && brick.events.is_empty()
+        && brick.rule_region.is_none()
         && brick.look.is_none()
         && brick.quarter_turns <= TURNS
         && brick.color_effect < 8

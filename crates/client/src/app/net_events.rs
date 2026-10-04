@@ -25,7 +25,7 @@ impl App {
         if failed.is_none() && a.worker.events.is_closed() {
             failed = Some("Connection worker stopped".into());
         }
-        if let Some(mut reason) = failed {
+        if let Some(reason) = failed {
             // A joined remote game whose network dropped is rejoined
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
@@ -47,28 +47,15 @@ impl App {
             let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
             if let Some(set) = add_ons {
                 self.disconnect();
-                let applied = self.apply_packages(&set);
-                // The next game this player hosts runs their own list again.
-                self.addons.packages_from_tools = false;
-                // Add-Ons that do not load here are joined without: the
-                // player is told which, in chat, once in the game.
-                if let Err(error) = applied {
-                    let text = format!(
-                        "Some of this server's Add-Ons could not be loaded on this computer, so you joined without them: {error:#}"
-                    );
-                    bri_console::warn(&text);
-                    self.net.join_notices.push(text);
-                    self.addons.skip_add_on_reload = true;
-                }
-                match self.join(id, a.name.clone(), String::new()) {
-                    Ok(()) => return Ok(()),
-                    Err(error) => {
-                        self.net.join_notices.clear();
-                        reason =
-                            format!("Could not join again with the server's Add-Ons: {error:#}");
-                        bri_console::warn(&reason);
-                    }
-                }
+                self.queue_package_reload(
+                    set,
+                    None,
+                    Some(addons::ReloadResume::Downloaded {
+                        id,
+                        address: a.name.clone(),
+                    }),
+                )?;
+                return Ok(());
             }
             if a.identity_changed
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -448,6 +435,7 @@ impl App {
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
+                    let lighting = self.graphics.lighting;
                     let light_cache = self.state_dir.join("light-volumes");
                     let selected = self.content.selectable.clone();
                     let catalog = self.build.tool_ui.server_catalog();
@@ -484,7 +472,14 @@ impl App {
                             let permit = load_limit.acquire_owned().await?;
                             tokio::task::spawn_blocking(move || {
                                 let _permit = permit;
-                                prepare_map(&paths, &map, selected, &catalog, &light_cache)
+                                prepare_map(
+                                    &paths,
+                                    &map,
+                                    selected,
+                                    &catalog,
+                                    &light_cache,
+                                    lighting,
+                                )
                             })
                             .await?
                         }
@@ -530,7 +525,8 @@ impl App {
                         view.owner,
                     ) {
                         Ok(updates) => {
-                            for update in updates {
+                            for mut update in updates {
+                                region_defaults(&mut update, &reply, self.scene.meshes.as_deref());
                                 self.ui.apply_session(a.id, update);
                             }
                         }
@@ -570,8 +566,10 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::MusicTracks(music) => {
-                            self.build.tool_ui.offer_music(&music);
-                            continue;
+                            let Some(update) = self.build.tool_ui.offer_music(&music) else {
+                                continue;
+                            };
+                            update
                         }
                         bri_sim::session::Notice::TempBrickColor(color) => {
                             if let Some(building) = self.build.building.as_mut() {
@@ -811,6 +809,10 @@ impl App {
             self.scene.palette = Some(prepared.palette);
             self.gpu.gpu_palette = None;
             let old = self.build.building.replace(prepared.building);
+            // The new controller has not seen any world or palette yet.
+            // The replica can be unchanged while the background map load finishes.
+            self.scene.query_source = None;
+            self.scene.query_log = None;
             self.motion.install(prepared.mirror);
             let building = self.build.building.as_mut().unwrap();
             building.set_tool_catalog(self.item_ui.catalog())?;

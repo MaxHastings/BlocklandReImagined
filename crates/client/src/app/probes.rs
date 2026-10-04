@@ -172,6 +172,13 @@ impl App {
     pub fn pending_requests(&self) -> usize {
         self.net.pending_actions.len() + self.files.file_jobs.len()
     }
+    /// Whether the actual region GPU line buffer is populated this frame.
+    pub fn region_outlines_visible(&self) -> bool {
+        self.gpu
+            .region_lines
+            .as_ref()
+            .is_some_and(|lines| !lines.is_empty())
+    }
     /// True when the CPU render snapshot has caught up with the latest replica.
     pub fn world_render_ready(&self) -> bool {
         self.network_view().is_some_and(|view| {

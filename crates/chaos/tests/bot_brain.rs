@@ -904,3 +904,90 @@ fn a_bot_crawls_through_a_low_gap() {
     );
     assert!(closest < 3.5, "and on to its enemy: {closest}");
 }
+
+/// A bot approaches a normal doorway in a long brick wall instead of treating
+/// the visually open doorway as blocked by its jambs.
+#[test]
+fn a_bot_enters_through_a_brick_building_doorway() {
+    let mut s = session();
+    only_kind(&mut s, |k| k.melee = Some(bite(5.0)));
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 30.0)])
+        .unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let mut bricks = glass_wall(8.0, 22.0, 38.0, human);
+    // Three half-unit columns make a 1.5-unit doorway. A player can fit, but
+    // only when the approach is centred on it. The bot starts behind the wall.
+    bricks.retain(|b| !(29.5..=30.5).contains(&(b.position[2] - 0.25)));
+    bricks.push(bot_brick([16.0, 0.1, 30.0], human));
+    load(&mut s, human, bricks);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut crossed_at = None;
+    let mut last = feet(&s, bot);
+    let mut closest = f32::MAX;
+    for _ in 0..120 * 15 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let now = feet(&s, bot);
+        if last.x >= 8.0 && now.x < 8.0 {
+            crossed_at.get_or_insert(now.z);
+        }
+        last = now;
+        closest = closest.min(now.distance(feet(&s, human)));
+    }
+    let z = crossed_at.expect("the bot entered through the doorway");
+    assert!((28.5..=31.5).contains(&z), "crossed in the doorway: {z}");
+    assert!(closest < 3.5, "reached the builder inside: {closest}");
+}
+
+#[test]
+fn a_jetting_bot_closes_on_an_enemy_on_a_high_brick_platform() {
+    let mut s = session();
+    only_kind(&mut s, |k| k.melee = Some(bite(5.0)));
+    let spawn = Vec3::new(16.0, 6.05, 30.0);
+    s.set_spawn_points(vec![spawn]).unwrap();
+    let human = s.join("Builder".into(), spawn, true).unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let mut bricks = vec![bot_brick([10.0, 0.1, 30.0], human)];
+    for x in 14..=18 {
+        for z in 28..=32 {
+            for y in [1.5, 4.5] {
+                let mut b = Brick::new(
+                    ContentRef::Resolved(fixture::TALL.into()),
+                    [x as f32 + 0.25, y, z as f32 + 0.25],
+                    human,
+                );
+                b.raycast = false;
+                bricks.push(b);
+            }
+        }
+    }
+    load(&mut s, human, bricks);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut closest = f32::MAX;
+    let mut late_farthest = 0.0_f32;
+    for tick in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let distance = feet(&s, bot).distance(feet(&s, human));
+        closest = closest.min(distance);
+        if tick >= 120 * 15 {
+            late_farthest = late_farthest.max(distance);
+        }
+    }
+    assert!(
+        closest < 4.5,
+        "the bot reached the elevated enemy: {closest}"
+    );
+    assert!(
+        late_farthest < 5.0,
+        "it stayed controlled near melee: {late_farthest}"
+    );
+    assert!(s.vitals()[&human].health < 100.0, "it reached melee range");
+}

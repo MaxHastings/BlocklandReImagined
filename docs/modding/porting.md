@@ -744,3 +744,10 @@ rules then name it in `optional_dependencies` and in `companions`, so
 turning the Add-On on turns that import on too when it is installed, the
 Add-On runs without it when it is not (the `exec` of a missing file did
 nothing), and `{uses:...}` names it the same way.
+
+A `handles` key `dependency:<original Add-On name>` can document a source
+framework replaced by native code. Pair it with a `package.json` patch that
+removes that framework's runtime dependency. Only a successfully applied
+port whose manifest no longer requires it marks the source dependency
+`ported`; its original name, call and location remain in the report. Removing
+a manifest requirement alone does not hide an unresolved source dependency.

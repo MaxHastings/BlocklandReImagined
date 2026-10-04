@@ -1,10 +1,38 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-09-29. It summarises; the linked docs are the evidence, and
+Revised 2026-10-03. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
+
+Current public release: [v0.2.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.2),
+source `e3c9010fccea923351c2968e52f240eca7f1f00b`, with verified Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives. The release source is on main;
+main is the only GitHub branch. See the
+[publication and cleanup evidence](progress/2026-10-03-v022-published-and-cleanup.md).
+The full content-backed local gate passed before publication. Max authorized
+publication while the full Windows CI test suite was still running; its result
+is available in the [Windows check](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37161683721).
+
+Start with the [short mutation guide](rule-workshop/V0.2.2-PLAYTEST.md).
+The [delivery contract](v022-delivery-contract.md),
+[current bot architecture](architecture/bots.md) and
+[objective integration audit](audits/objective-driven-integration.md)
+record the supported mechanisms and evidence. Creator menus prioritize common
+Wrench/MiniGame tasks, colorsets are selected before hosting, and bounded bots
+execute supported event objectives through ordinary controls. Dynamic lighting
+uses live geometry and source lamps; Classic and Unified retain their existing
+model. Shark body/swimming/capture, delayed projectile outputs, guest music/saving,
+JPEG screenshots and longer cosmetic destruction debris are integrated.
+
+The Rule Workshop, objective planning and alpha formats remain experimental.
+Bots do not infer arbitrary scripts or plan jet-assisted object carrying/high
+hoop throws; unfamiliar Add-On mechanisms need declarations. Recovered Dynamic
+lamps approximate lost metadata, and bulb material/model polish is deferred.
+Shark/Zombie fidelity remains partial. The reported Windows firefight NaN crash
+remains unreproduced, and sustained performance coverage is incomplete; no causal
+fix or Windows speedup is claimed. The full alpha contract remains open.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in
@@ -46,7 +74,10 @@ Don't reopen these without Max.
   invite. Only UDP 28000 needs forwarding; 28050 is LAN discovery only.
   The shelved join-codes patch lives in the project's shared files, not
   the repo. See [architecture/hosting.md](architecture/hosting.md).
-- **Windows only.** Other platforms are not a goal.
+- **Release platforms:** Maxwell authorized Windows x86-64, macOS Apple silicon
+  and Linux x86-64 releases on 2026-10-02. All interactive acceptance remains
+  Maxwell's; the full alpha roadmap is still open. Current publication is
+  recorded above rather than duplicated here.
 - **Players see "Add-Ons".** "Package" is an internal word.
 - **Add-On client code is sandboxed, with trust tiers.** Data needs no
   prompt. Sandboxed wasm and WGSL asks once per server ("Trust and join"),
@@ -185,10 +216,9 @@ IP.
   game.
 - Try the skis, and Demo Pong in Bedroom: load it, click the ramp, and use
   the + and - buttons.
-- Upload the content for release builds once (`python tools/ci_content.py
-  upload`, see [release-builds.md](release-builds.md)), then push a version
-  tag. GitHub Actions builds and publishes the release the update check
-  reads.
+- Original content access authorizes private CI bundle refreshes. The release
+  coordinator performs upload, checks and publication within Max's authorization;
+  see [release-builds.md](release-builds.md).
 - Buy a code-signing certificate, if wanted. Optional; signing is already
   behind a parameter.
 

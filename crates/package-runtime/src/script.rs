@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 mod bots;
 mod games;
+mod physics;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 
@@ -32,6 +33,7 @@ pub enum Budget {
     Think,
     Tick,
     Generate,
+    Objective,
 }
 impl Budget {
     pub fn operations(self) -> u64 {
@@ -41,6 +43,7 @@ impl Budget {
             Self::Tick => 400_000,
             // One chunk is generated per tick, so its budget fits a tick.
             Self::Generate => 400_000,
+            Self::Objective => 20_000,
         }
     }
 }
@@ -100,6 +103,15 @@ pub struct PlayerView {
     /// Seated on a vehicle or riding another player.
     #[serde(default)]
     pub mounted: bool,
+    /// A player/bot mount, independently of whether the actor sits in a vehicle.
+    #[serde(default)]
+    pub mount: Option<u64>,
+    /// The current body's model identity, for package-authored physical policy.
+    #[serde(default)]
+    pub model: String,
+    /// The brain's authored kind, independently of its current body. Empty for humans.
+    #[serde(default)]
+    pub bot_kind: String,
     /// Body scale (1 for a normal body).
     #[serde(default)]
     pub scale: f32,
@@ -553,6 +565,8 @@ struct Invocation {
     written: EntityVars,
     ops: Vec<Op>,
     output: Vec<String>,
+    read_only: bool,
+    write_attempted: bool,
     /// The call's [`World`], valid only while the call runs (see
     /// [`Runtime::call`]).
     ///
@@ -657,6 +671,7 @@ fn id(value: &Dynamic) -> Fallible<u64> {
 }
 fn push(op: Op) -> Fallible<()> {
     with(|i| {
+        permit_write(i)?;
         if i.ops.len() >= MAX_OPS_PER_CALL {
             return fail(format!(
                 "more than {MAX_OPS_PER_CALL} operations in one call"
@@ -665,6 +680,13 @@ fn push(op: Op) -> Fallible<()> {
         i.ops.push(op);
         Ok(())
     })
+}
+fn permit_write(i: &mut Invocation) -> Fallible<()> {
+    if i.read_only {
+        i.write_attempted = true;
+        return fail("objective discovery is read-only");
+    }
+    Ok(())
 }
 fn to_json(value: &Dynamic) -> Fallible<serde_json::Value> {
     let json: serde_json::Value = rhai::serde::from_dynamic(value)?;
@@ -755,6 +777,13 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("archetype", p.archetype.clone().into()),
         ("crouched", p.crouched.into()),
         ("mounted", p.mounted.into()),
+        (
+            "mount",
+            p.mount
+                .map_or(Dynamic::UNIT, |m| Dynamic::from_int(m as i64)),
+        ),
+        ("model", p.model.clone().into()),
+        ("bot_kind", p.bot_kind.clone().into()),
         float_entry("scale", p.scale),
         float_entry("cx", p.center[0]),
         float_entry("cy", p.center[1]),
@@ -1374,6 +1403,7 @@ fn register_api(engine: &mut Engine) {
     });
     engine.register_fn("set", |key: &str, value: Dynamic| {
         with(|i| {
+            permit_write(i)?;
             i.state.global.insert(key.into(), to_json(&value)?);
             Ok(())
         })
@@ -1392,6 +1422,7 @@ fn register_api(engine: &mut Engine) {
         "set_player",
         |player: Dynamic, key: &str, value: Dynamic| {
             with(|i| {
+                permit_write(i)?;
                 let k = player_key(i, &player)?;
                 let v = to_json(&value)?;
                 i.state.players.entry(k).or_default().insert(key.into(), v);
@@ -1403,6 +1434,7 @@ fn register_api(engine: &mut Engine) {
         "add_player",
         |player: Dynamic, key: &str, amount: Dynamic| {
             with(|i| {
+                permit_write(i)?;
                 let k = player_key(i, &player)?;
                 let values = i.state.players.entry(k).or_default();
                 let current = values
@@ -1440,6 +1472,7 @@ fn register_api(engine: &mut Engine) {
         "entity_set",
         |entity: Dynamic, key: &str, value: Dynamic| {
             with(|i| {
+                permit_write(i)?;
                 let e = id(&entity)?;
                 if !i.written.contains_key(&e) {
                     let Some(vars) = i.entity_vars.get(&e) else {
@@ -2435,7 +2468,7 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
-    register_physics(engine);
+    physics::register(engine);
     register_queries(engine);
     register_presentation(engine);
     games::register(engine);
@@ -3300,312 +3333,6 @@ fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map
     }))
 }
 
-/// Movable objects: reading them, and the `physics` operations.
-fn register_physics(engine: &mut Engine) {
-    engine.register_fn("object", |object: Dynamic| {
-        with(|i| {
-            let object = object_ref(&object)?;
-            Ok(i.snapshot
-                .object(object)
-                .map_or(Dynamic::UNIT, |o| object_map(&o)))
-        })
-    });
-    engine.register_fn("objects", || {
-        with(|i| Ok(i.snapshot.objects.iter().map(object_map).collect::<Array>()))
-    });
-    engine.register_fn(
-        "objects_near",
-        |x: Dynamic, y: Dynamic, z: Dynamic, radius: Dynamic| {
-            with(|i| {
-                let centre = [float(&x)?, float(&y)?, float(&z)?];
-                let radius = float(&radius)?;
-                let near = |p: [f32; 3]| {
-                    (p[0] - centre[0]).powi(2)
-                        + (p[1] - centre[1]).powi(2)
-                        + (p[2] - centre[2]).powi(2)
-                        <= radius * radius
-                };
-                let players = i
-                    .snapshot
-                    .players
-                    .iter()
-                    .filter(|p| p.alive)
-                    .map(|p| ObjectRef::Player(p.id));
-                let entities = i.snapshot.entities.iter().map(|e| ObjectRef::Entity(e.id));
-                let vehicles = i.snapshot.objects.iter().map(|o| o.object);
-                Ok(players
-                    .chain(entities)
-                    .chain(vehicles)
-                    .filter_map(|o| i.snapshot.object(o))
-                    .filter(|o| near(o.position))
-                    .map(|o| object_map(&o))
-                    .collect::<Array>())
-            })
-        },
-    );
-    engine.register_fn("held", |player: Dynamic| {
-        with(|i| {
-            let player = id(&player)?;
-            Ok(i.snapshot
-                .holds
-                .iter()
-                .find(|h| h.player == player)
-                .map_or(Dynamic::UNIT, |h| Dynamic::from(h.object.to_string())))
-        })
-    });
-    engine.register_fn(
-        "push",
-        |target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push_op(target, x, y, z, Dynamic::UNIT)
-        },
-    );
-    engine.register_fn("push", push_op);
-    engine.register_fn(
-        "tumble",
-        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
-            tumble_op(player, x, y, z, Dynamic::UNIT)
-        },
-    );
-    engine.register_fn("tumble", tumble_op);
-    engine.register_fn("tumble", tumble_for);
-    engine.register_fn(
-        "hold",
-        |player: Dynamic, target: Dynamic, distance: Dynamic| {
-            push(Op::Hold(ops::Hold {
-                player: id(&player)?,
-                target: object_ref(&target)?,
-                distance: float(&distance)?,
-                at: None,
-                force: None,
-                turn: false,
-            }))
-        },
-    );
-    // `hold(player, ref, distance, #{ at: [x, y, z], force: f, turn: true })`:
-    // every option may be left out.
-    engine.register_fn(
-        "hold",
-        |player: Dynamic, target: Dynamic, distance: Dynamic, options: rhai::Map| {
-            for key in options.keys() {
-                if !matches!(key.as_str(), "at" | "force" | "turn") {
-                    return fail(format!("hold has no option `{key}` (at, force, turn)"));
-                }
-            }
-            let at = match options.get("at") {
-                None => None,
-                Some(value) if value.is_unit() => None,
-                Some(value) => {
-                    let Some(a) = value.clone().try_cast::<Array>() else {
-                        return fail("hold's `at` is [x, y, z]");
-                    };
-                    let v = a.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
-                    let [x, y, z] = v[..] else {
-                        return fail("hold's `at` is [x, y, z]");
-                    };
-                    Some([x, y, z])
-                }
-            };
-            let force = options.get("force").map(float).transpose()?;
-            let turn = match options.get("turn") {
-                None => false,
-                Some(value) => match value.as_bool() {
-                    Ok(b) => b,
-                    Err(_) => return fail("hold's `turn` is true or false"),
-                },
-            };
-            push(Op::Hold(ops::Hold {
-                player: id(&player)?,
-                target: object_ref(&target)?,
-                distance: float(&distance)?,
-                at,
-                force,
-                turn,
-            }))
-        },
-    );
-    engine.register_fn("hold_distance", |player: Dynamic, distance: Dynamic| {
-        push(Op::HoldDistance(ops::HoldDistance {
-            player: id(&player)?,
-            distance: float(&distance)?,
-        }))
-    });
-    // `reach(player, distance, #{ near: d, force: f, turn: true })`: hold
-    // the first thing that comes where they look within `distance`
-    // (`Op::Reach`); every option may be left out.
-    engine.register_fn(
-        "reach",
-        |player: Dynamic, distance: Dynamic, options: rhai::Map| {
-            for key in options.keys() {
-                if !matches!(key.as_str(), "near" | "force" | "turn") {
-                    return fail(format!("reach has no option `{key}` (near, force, turn)"));
-                }
-            }
-            let near = options.get("near").map(float).transpose()?.unwrap_or(0.5);
-            let force = options.get("force").map(float).transpose()?;
-            let turn = match options.get("turn") {
-                None => false,
-                Some(value) => match value.as_bool() {
-                    Ok(b) => b,
-                    Err(_) => return fail("reach's `turn` is true or false"),
-                },
-            };
-            push(Op::Reach(ops::Reach {
-                player: id(&player)?,
-                distance: float(&distance)?,
-                near,
-                force,
-                turn,
-            }))
-        },
-    );
-    // How far off what `player` holds is carried, or () when nothing is held.
-    engine.register_fn("held_distance", |player: Dynamic| {
-        with(|i| {
-            let player = id(&player)?;
-            Ok(i.snapshot
-                .holds
-                .iter()
-                .find(|h| h.player == player)
-                .map_or(Dynamic::UNIT, |h| {
-                    Dynamic::from_float(f64::from(h.distance))
-                }))
-        })
-    });
-    engine.register_fn("let_go", |player: Dynamic| {
-        push(Op::LetGo(ops::LetGo {
-            player: id(&player)?,
-        }))
-    });
-    engine.register_fn("tethered", |player: Dynamic| {
-        with(|i| {
-            let player = id(&player)?;
-            Ok(i.snapshot
-                .tethers
-                .iter()
-                .find(|t| t.player == player)
-                .map_or(Dynamic::UNIT, |t| {
-                    let mut map = rhai::Map::new();
-                    let [x, y, z] = t.anchor;
-                    map.insert("x".into(), Dynamic::from_float(x.into()));
-                    map.insert("y".into(), Dynamic::from_float(y.into()));
-                    map.insert("z".into(), Dynamic::from_float(z.into()));
-                    map.insert("length".into(), Dynamic::from_float(t.length.into()));
-                    map.insert("target".into(), Dynamic::from_float(t.target.into()));
-                    map.insert(
-                        "brick".into(),
-                        t.brick
-                            .map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
-                    );
-                    map.insert(
-                        "object".into(),
-                        t.object
-                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.to_string())),
-                    );
-                    Dynamic::from_map(map)
-                }))
-        })
-    });
-    engine.register_fn(
-        "tether",
-        |player: Dynamic, anchor: Array, length: Dynamic| {
-            tether_op(player, anchor, length, rhai::Map::new())
-        },
-    );
-    // `tether(player, [x, y, z], length, #{ brick: id, object: ref, reel: r,
-    // swing: s, keys: [shortest, longest], straight: true })`:
-    // every option may be left out; a length of `()` is as long as the
-    // rope spans now.
-    engine.register_fn("tether", tether_op);
-    engine.register_fn("tether_length", |player: Dynamic, length: Dynamic| {
-        push(Op::TetherLength(ops::TetherLength {
-            player: id(&player)?,
-            length: float(&length)?,
-        }))
-    });
-    engine.register_fn("untether", |player: Dynamic| {
-        push(Op::Untether(ops::Untether {
-            player: id(&player)?,
-            keep: None,
-        }))
-    });
-    // `untether(player, #{ keep: k })`: let go, keeping only `k` (0 to 1) of
-    // their speed relative to what the rope was tied to.
-    engine.register_fn("untether", |player: Dynamic, options: rhai::Map| {
-        let keep = match options.get("keep") {
-            Some(k) => {
-                let k = float(k)?;
-                if !(0.0..=1.0).contains(&k) {
-                    return Err("untether keep must be between 0 and 1".into());
-                }
-                Some(k)
-            }
-            None => None,
-        };
-        push(Op::Untether(ops::Untether {
-            player: id(&player)?,
-            keep,
-        }))
-    });
-    fn mount_object(
-        mount: Dynamic,
-        rider: Dynamic,
-        node: i64,
-        can_dismount: bool,
-        turn: Dynamic,
-    ) -> Fallible<()> {
-        push(Op::MountObject(ops::MountObject {
-            mount: id(&mount)?,
-            rider: id(&rider)?,
-            node: u8::try_from(node)
-                .ok()
-                .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
-                .ok_or("a mount point is 0 to 7")?,
-            can_dismount,
-            turn: float(&turn)?.to_radians(),
-        }))
-    }
-    engine.register_fn(
-        "mount_object",
-        |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
-            mount_object(mount, rider, node, can_dismount, Dynamic::from_float(0.0))
-        },
-    );
-    engine.register_fn("mount_object", mount_object);
-    engine.register_fn("unmount_object", |rider: Dynamic| {
-        push(Op::UnmountObject(ops::UnmountObject { rider: id(&rider)? }))
-    });
-    engine.register_fn(
-        "spawn_vehicle",
-        |definition: &str,
-         x: Dynamic,
-         y: Dynamic,
-         z: Dynamic,
-         yaw: Dynamic,
-         velocity: Array,
-         owner: Dynamic| {
-            let v = velocity.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
-            let [vx, vy, vz] = v[..] else {
-                return fail("velocity is [x, y, z]");
-            };
-            push(Op::SpawnVehicle(ops::SpawnVehicle {
-                definition: definition.into(),
-                position: [float(&x)?, float(&y)?, float(&z)?],
-                yaw: float(&yaw)?,
-                velocity: [vx, vy, vz],
-                owner: credit(&owner)?,
-            }))
-        },
-    );
-    engine.register_fn("remove_vehicle", |vehicle: Dynamic| {
-        let vehicle = match object_ref(&vehicle) {
-            Ok(ObjectRef::Vehicle(v)) => v,
-            Ok(other) => return fail(format!("{other} is not a vehicle")),
-            Err(_) => id(&vehicle)?,
-        };
-        push(Op::RemoveVehicle(ops::RemoveVehicle { vehicle }))
-    });
-}
-
 /// Whether `source` compiles as a package script, with the line of the
 /// first problem: for tools that write scripts (an Add-On port's rules)
 /// to refuse one the game would not load.
@@ -3817,6 +3544,9 @@ impl Runtime {
             if behaviour.on_pickup {
                 need("on_pickup".into(), 3, "on_pickup");
             }
+            if behaviour.bot_objectives {
+                need("bot_objectives".into(), 1, "bot_objectives");
+            }
             if behaviour.on_drop {
                 need("on_drop".into(), 3, "on_drop");
             }
@@ -3915,6 +3645,19 @@ impl Runtime {
     }
     /// Run one function. On error nothing of the call is kept.
     pub fn call(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
+        self.call_impl(package, call, false)
+    }
+    /// The same sandbox/budget, with attempted operations/state writes rejected.
+    /// A script cannot hide a denied write by catching its error or restoring it.
+    pub fn query(&self, package: &str, call: Call<'_>) -> Result<Outcome, Diagnostic> {
+        self.call_impl(package, call, true)
+    }
+    fn call_impl(
+        &self,
+        package: &str,
+        call: Call<'_>,
+        read_only: bool,
+    ) -> Result<Outcome, Diagnostic> {
         let ast =
             self.scripts.get(package).cloned().ok_or_else(|| {
                 Diagnostic::error("script.none", "package has no script").at(package)
@@ -3942,6 +3685,8 @@ impl Runtime {
                 written: BTreeMap::new(),
                 ops: Vec::new(),
                 output: Vec::new(),
+                read_only,
+                write_attempted: false,
                 world,
                 rays: 0,
             })
@@ -3961,6 +3706,13 @@ impl Runtime {
             .with(|c| std::mem::replace(&mut *c.borrow_mut(), previous))
             .expect("set above");
         LIMIT.with(|l| l.set(previous_limit));
+        if read_only && (invocation.write_attempted || !invocation.output.is_empty()) {
+            return Err(Diagnostic::error(
+                "script.read_only",
+                "objective discovery attempted a state/operation/output write",
+            )
+            .at(package));
+        }
         match result {
             Ok(returned) => Ok(Outcome {
                 returned,
@@ -4037,4 +3789,78 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
         out.push(item);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod objective_queries {
+    use super::*;
+    fn runtime(source: &str) -> Runtime {
+        let mut runtime = Runtime::default();
+        let ast = runtime.engine.compile(source).unwrap();
+        runtime.scripts.insert("unfamiliar".into(), Arc::new(ast));
+        runtime
+            .sources
+            .insert("unfamiliar".into(), "test.rhai".into());
+        runtime
+    }
+    fn call() -> Call<'static> {
+        Call {
+            function: "bot_objectives",
+            args: vec![Dynamic::from_int(1)],
+            budget: Budget::Objective,
+            snapshot: Arc::new(Snapshot::default()),
+            caller: Some(1),
+            aim: None,
+            entity: None,
+            state: Namespace {
+                global: [("counter".into(), serde_json::json!(0))].into(),
+                ..Default::default()
+            },
+            entity_vars: Arc::new(EntityVars::default()),
+            world: None,
+        }
+    }
+    #[test]
+    fn read_only_discovery_can_observe_but_never_commit() {
+        let runtime = runtime("fn bot_objectives(p) { get(\"counter\") }");
+        let before = call().state;
+        let result = runtime.query("unfamiliar", call()).unwrap();
+        assert_eq!(result.returned.as_int().unwrap(), 0);
+        crate::bot_objectives::read_only(&before, &result).unwrap();
+    }
+    #[test]
+    fn state_operations_and_output_are_denied_even_if_caught() {
+        for write in [
+            "set(\"counter\", 1)",
+            "set_player(p, \"counter\", 1)",
+            "add_player(p, \"counter\", 1)",
+            "entity_set(1, \"counter\", 1)",
+            "add_score(p, 1)",
+            "print(\"side effect\")",
+        ] {
+            let runtime = runtime(&format!(
+                "fn bot_objectives(p) {{ try {{ {write}; }} catch(e) {{ }} [] }}"
+            ));
+            assert!(runtime.query("unfamiliar", call()).is_err(), "{write}");
+        }
+    }
+    #[test]
+    fn restoring_state_is_still_a_denied_attempt_and_normal_calls_keep_working() {
+        let guarded = runtime(
+            "fn bot_objectives(p) { try { set(\"counter\", 1); } catch(e) {} try { set(\"counter\", 0); } catch(e) {} [] }",
+        );
+        assert!(guarded.query("unfamiliar", call()).is_err());
+        let normal = runtime("fn bot_objectives(p) { set(\"counter\", 2); [] }");
+        assert_eq!(
+            normal.call("unfamiliar", call()).unwrap().state.global["counter"],
+            serde_json::json!(2)
+        );
+    }
+    #[test]
+    fn objective_queries_use_the_same_bounded_script_work_accounting() {
+        let runtime = runtime("fn bot_objectives(p) { loop {} }");
+        assert!(runtime.query("unfamiliar", call()).is_err());
+        assert!(runtime.last_operations() > 0);
+        assert!(runtime.last_operations() <= Budget::Objective.operations() + 1);
+    }
 }

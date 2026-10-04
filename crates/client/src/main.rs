@@ -136,6 +136,21 @@ fn game() -> Result<()> {
             "Save pictures: {pictures} of {} converted builds.",
             app.content.worlds.len()
         );
+        // Dynamic needs only these prepared source descriptors at runtime.
+        // A release cannot silently omit them and fall back to sun/ambient.
+        let lighting = bri_render::lighting_parameters::Parameters::read(
+            &app.content.paths.map_bundle,
+        )
+        .context("Modern light parameters are missing or invalid; refresh the content with tools/bootstrap.py")?;
+        for map in &app.content.maps {
+            lighting.lights(&map.id).with_context(|| {
+                format!("Modern light parameters are missing for map {}", map.id)
+            })?;
+        }
+        println!(
+            "Modern light parameters: {} maps validated.",
+            app.content.maps.len()
+        );
         // The release gate reads the full list from logs/add-on-health.json.
         let health = app.add_on_health();
         println!(

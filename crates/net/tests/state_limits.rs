@@ -23,6 +23,7 @@ fn heavy_rows(rows: usize, indices: u16) -> Vec<Row> {
     };
     (0..rows)
         .map(|_| Row {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),

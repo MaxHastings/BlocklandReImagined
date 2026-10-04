@@ -37,7 +37,12 @@ fn clicking_a_chat_link_asks_before_opening_it_synthetic() {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn clicking_a_chat_link_asks_before_opening_it() {
-    clicking_a_chat_link_asks_before_opening_it_on(bri_ui::testing::content_pack("ui-pack-004"));
+    clicking_a_chat_link_asks_before_opening_it_on(bri_ui::testing::content_pack(
+        &bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "ui_pack",
+        ),
+    ));
 }
 
 fn clicking_a_chat_link_asks_before_opening_it_on(pack: Rc<Pack>) {

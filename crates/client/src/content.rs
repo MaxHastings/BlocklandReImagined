@@ -81,9 +81,9 @@ pub struct WorldEntry {
 
 pub use bri_net::map_content::LoadedMap;
 
-pub struct ClientContent {
+pub struct ClientContent<P = Rc<Pack>> {
     pub paths: ContentPaths,
-    pub ui_pack: Rc<Pack>,
+    pub ui_pack: P,
     pub maps: Vec<MapInfo>,
     pub bricks: Vec<BrickInfo>,
     /// Every brick's catalog entry, the base game's then each Add-On's
@@ -105,6 +105,50 @@ pub struct ClientContent {
     pub events: bri_events::Catalog,
     pub event_sounds: Vec<(String, String)>,
     pub warnings: Vec<String>,
+}
+
+impl<P> ClientContent<P> {
+    /// Move content between a worker's owned UI schema and the UI thread's cache.
+    pub(crate) fn map_ui<Q>(self, convert: impl FnOnce(P) -> Q) -> ClientContent<Q> {
+        let Self {
+            paths,
+            ui_pack,
+            maps,
+            bricks,
+            catalog,
+            selectable,
+            paint,
+            datablocks,
+            worlds,
+            effects,
+            weapons,
+            item_physics,
+            vehicles,
+            music,
+            events,
+            event_sounds,
+            warnings,
+        } = self;
+        ClientContent {
+            paths,
+            ui_pack: convert(ui_pack),
+            maps,
+            bricks,
+            catalog,
+            selectable,
+            paint,
+            datablocks,
+            worlds,
+            effects,
+            weapons,
+            item_physics,
+            vehicles,
+            music,
+            events,
+            event_sounds,
+            warnings,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -297,6 +341,10 @@ impl ContentPaths {
             geometry: self.geometry.clone(),
             tutorial: Some(self.tutorial.clone()),
             brick_extras: self.brick_extras.clone(),
+            brick_geometry: bri_net::content_identity::brick_geometry_assets(
+                &self.root,
+                &self.packages,
+            )?,
             weapons: self.weapon_content()?,
         })
     }
@@ -344,6 +392,21 @@ impl ContentPaths {
     /// Expensive geometry decoding and collider construction belongs on the host
     /// worker. Only the requested saved world is read, never the whole corpus.
     pub fn load_map(&self, map_id: &str, world_id: Option<&str>) -> Result<LoadedMap> {
+        self.load_map_with_palette(map_id, world_id, None)
+    }
+
+    /// A selected host colorset initializes a fresh world's palette. Saved
+    /// reference worlds retain their own palette and cannot be overridden.
+    pub fn load_map_with_palette(
+        &self,
+        map_id: &str,
+        world_id: Option<&str>,
+        palette: Option<&[[f32; 4]]>,
+    ) -> Result<LoadedMap> {
+        ensure!(
+            world_id.is_none() || palette.is_none(),
+            "Cannot replace a saved world's colorset"
+        );
         ensure!(
             LOADABLE_MAPS.contains(&map_id),
             "Map is not integrated for native loading yet: {map_id}"
@@ -380,7 +443,11 @@ impl ContentPaths {
             world
         } else {
             let pack = load_ui_schema(&self.ui_pack)?;
-            bri_world::World::new(entry.name.clone(), map_id.into(), default_palette(&pack)?)
+            bri_world::World::new(
+                entry.name.clone(),
+                map_id.into(),
+                palette.map_or_else(|| default_palette(&pack), |colors| Ok(colors.to_vec()))?,
+            )
         };
         self.map_content()?.load(world)
     }
@@ -1416,7 +1483,11 @@ mod tests {
         assert_eq!(
             (
                 content.maps.len(),
-                content.bricks.len(),
+                content
+                    .bricks
+                    .iter()
+                    .filter(|b| !b.id.contains(':'))
+                    .count(),
                 content.worlds.len()
             ),
             (14, 166, 35)

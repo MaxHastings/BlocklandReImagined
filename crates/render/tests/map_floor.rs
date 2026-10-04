@@ -57,7 +57,7 @@ fn bedroom_carpet_is_drawn_on_the_plate_lattice() -> Result<()> {
     );
     // Authored at 287.415 over the carpet at 286.312; both rise 0.088.
     floor_is_drawn_on_the_plate_lattice(
-        &content.join("map-bundle-017"),
+        &bri_package::testing::pack_dir(&content, "map_bundle"),
         "v20/add-ons/map_bedroom/bedroom.mis",
         286.312,
         287.415,

@@ -213,7 +213,11 @@ fn side(p) {
 // the flags map (`flags.send_home(b)`), which it updates.
 fn send_home(b) {
     set_brick_item(b.id, flag_item());
-    this[`${b.id}`] = #{ state: "home", since: tick() };
+    // A standing replacement starts a new identity. Carriage/drop changes
+    // retain this epoch so a selected return survives ordinary pickup.
+    let epoch = get("incarnation") + 1;
+    set("incarnation", epoch);
+    this[`${b.id}`] = #{ state: "home", since: tick(), epoch: epoch };
 }
 
 // Remove the dropped flag that belongs to brick `brick`, if it lies around.
@@ -398,7 +402,7 @@ fn drop_flag(p) {
             data: #{ brick: b.id },
             seconds: respawn + 5
         });
-        flags[`${b.id}`] = #{ state: "dropped", since: tick(), respawn_at: tick() + respawn * 120 };
+        flags[`${b.id}`] = #{ state: "dropped", since: tick(), epoch: flag_of(flags, b.id).epoch, respawn_at: tick() + respawn * 120 };
     }
     set("flags", flags);
     // `Slayer_CTF::onFlagDrop`.
@@ -503,7 +507,7 @@ fn take_flag(s, b, flags, dropped) {
     // (`Player::mountImage` and `unMountImage`, packaged).
     mount_image(p, flag_image(), flag_slot(), #{ paint: b.color, keep: true });
     set_player(p, "carrying", b.id);
-    flags[`${b.id}`] = #{ state: "carried", since: tick(), carrier: p };
+    flags[`${b.id}`] = #{ state: "carried", since: tick(), epoch: flag_of(flags, b.id).epoch, carrier: p };
     set("flags", flags);
     tell_game(s.game, `${c3()}${s.me.name} ${magenta()}picked up the ${flag_name(s.game, b)} ${c5()}flag.`);
     if game_state(s.game.id).prefs.manualflagdrop != 0 {
@@ -600,7 +604,7 @@ fn on_pickup(p, item, info) {
             return false;
         }
     }
-    take_flag(s, b, flags, info.drop);
+    if pickup_described(s, b, flags, info.drop) { take_flag(s, b, flags, info.drop); }
     false
 }
 
@@ -683,7 +687,7 @@ fn on_zone(p, brick_id, event) {
             return;
         }
     }
-    capture(s, home, flags, prefs);
+    if return_described(s, home, b, flags) { capture(s, home, flags, prefs); }
 }
 
 // `Slayer_CTF::onFlagReturn`: a capture.
@@ -709,7 +713,7 @@ fn capture(s, home, flags, prefs) {
     }
     let respawn = prefs.flagreturnedrespawntime;
     if respawn > 0 {
-        flags[`${home.id}`] = #{ state: "waiting", since: tick(), respawn_at: tick() + respawn * 120 };
+        flags[`${home.id}`] = #{ state: "waiting", since: tick(), epoch: flag_of(flags, home.id).epoch, respawn_at: tick() + respawn * 120 };
         msg += ` The flag will respawn in ${c3()}${respawn} ${c5()}${if respawn == 1 { "second." } else { "seconds." }}`;
     } else {
         flags.send_home(home);
@@ -756,4 +760,92 @@ fn cmd_ctf(p) {
     for k in prefs.keys() {
         tell(p, `${c5()}${k}: ${c3()}${prefs[k]}`);
     }
+}
+
+
+// Explicit read-only desired-state support. These shared eligibility predicates
+// describe existing pickup/return policy; they never issue bot controls.
+fn pickup_described(s, b, flags, dropped) {
+    if b.game != s.game.id || b.kind != flag_spawn() { return false; }
+    let f = flag_of(flags, b.id);
+    if f == () || !("epoch" in f) || b.color == s.team.color { return false; }
+    if dropped == () && f.state != "home" { return false; }
+    if dropped != () && (f.state != "dropped" || tick() - f.since < pickup_guard_ticks()) { return false; }
+    if get_player(s.me.id, "carrying") != () || locked(b.id, s.team.color) { return false; }
+    let prefs = game_state(s.game.id).prefs;
+    let neutral = teams_of_color(s.game, b.color).is_empty();
+    if (neutral && prefs.neutralflags == 0) || (!neutral && prefs.neutralflags == 2) { return false; }
+    if !neutral && prefs.requireenemyplayers != 0 {
+        let anyone = false;
+        for o in players() {
+            if o.minigame == s.game.id && o.team != () {
+                let t = team_by_id(s.game, o.team);
+                if t != () && t.color == b.color { anyone = true; }
+            }
+        }
+        if !anyone { return false; }
+    }
+    true
+}
+fn return_described(s, home, b, flags) {
+    if b.game != s.game.id || home.game != s.game.id || home.color == s.team.color { return false; }
+    let neutral = teams_of_color(s.game, b.color).is_empty();
+    let at_return = b.kind == flag_return();
+    if !(b.kind == flag_spawn() || at_return) || !(b.color == s.team.color || (neutral && at_return)) || locked(b.id, s.team.color) { return false; }
+    let prefs = game_state(s.game.id).prefs;
+    if prefs.flagreturnonlyatreturnbrick != 0 && !at_return { return false; }
+    if home.color == b.color && neutral { return false; }
+    if prefs.returnwithoutown == 0 {
+        if at_return {
+            if flag_at_home(s.game, s.team.color) == 0 { return false; }
+        } else {
+            let here = flag_of(flags, b.id);
+            if here == () || here.state != "home" { return false; }
+        }
+    }
+    true
+}
+fn bot_objectives(p) {
+    let s = side(p);
+    if s == () || !s.me.alive { return []; }
+    let flags = flags();
+    let carrying = get_player(p, "carrying");
+    let out = [];
+    for home in bricks(flag_spawn()) {
+        if home.game != s.game.id { continue; }
+        let f = flag_of(flags, home.id);
+        if f == () || !("epoch" in f) { continue; }
+        let source = ();
+        if carrying == home.id && f.state == "carried" && f.carrier == p {
+            source = #{ kind: "brick", brick: home.id };
+        } else if carrying == () && pickup_described(s, home, flags, ()) {
+            source = #{ kind: "brick", brick: home.id };
+        } else if carrying == () && f.state == "dropped" {
+            for d in drops() {
+                if d.data != () && d.data.brick == home.id && pickup_described(s, home, flags, d.id) {
+                    source = #{ kind: "drop", drop: d.id, spawner: home.id };
+                    break;
+                }
+            }
+        }
+        if source == () { continue; }
+        let destinations = [];
+        for kind in [flag_spawn(), flag_return()] {
+            for b in bricks(kind) {
+                if return_described(s, home, b, flags) {
+                    destinations.push(b.id);
+                    if destinations.len() == 8 { break; }
+                }
+            }
+            if destinations.len() == 8 { break; }
+        }
+        if destinations.is_empty() { continue; }
+        out.push(#{ kind: "carry_return", id: `return:${home.id}`, source: source,
+            item: flag_item(), epoch: #{ scope: "global", key: "flags", path: [`${home.id}`, "epoch"] },
+            destinations: destinations,
+            carriage: #{ key: "carrying", worn: #{ slot: flag_slot(), image: flag_image() } },
+            completion: #{ scope: "global", key: "games", path: [`${s.game.id}`, "returns_by", `player:${p}`] } });
+        if out.len() == 8 { break; }
+    }
+    out
 }

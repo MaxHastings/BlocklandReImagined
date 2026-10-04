@@ -368,6 +368,37 @@ struct Instance {
     actor: Option<Player>,
 }
 impl Instance {
+    fn weapon_available(&self, d: &Definition) -> bool {
+        self.dead_at.is_none()
+            && d.weapon.is_some()
+            && self
+                .turret_damage
+                .is_none_or(|damage| damage < TURRET_MAX_DAMAGE)
+    }
+    fn cancel_charge(&mut self, id: VehicleId, d: &Definition, intents: &mut Vec<Intent>) {
+        if self.charge > 0 {
+            intents.push(Intent::Effect {
+                vehicle: id,
+                id: "CannonFuseImage".into(),
+                active: false,
+            });
+            if let Some((o, gun)) = d
+                .weapon_seat()
+                .and_then(|seat| self.seats[seat])
+                .zip(d.weapon.as_ref())
+            {
+                intents.push(Intent::Charged {
+                    vehicle: id,
+                    owner: o.owner,
+                    charge: 0,
+                    steps: gun.charge_steps,
+                });
+            }
+        }
+        self.charge = 0;
+        self.charge_started = None;
+        self.fire_held = false;
+    }
     fn velocity(&self, _: &Definition, b: &RigidBody) -> Vec3 {
         match &self.actor {
             Some(actor) => Vec3::from(actor.state().velocity),
@@ -492,7 +523,7 @@ fn idle_controls(d: &Definition, v: &Instance, seat: usize) -> Controls {
     }
 }
 fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize) -> Transform {
-    if index == 2
+    if d.weapon_seat() == Some(index)
         && v.turret_damage
             .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
         && let Some(t) = &d.attachment_fallback_seat
@@ -500,7 +531,7 @@ fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize
         return transform(&(b.position() * local_pose(t, v.spawn.scale)));
     }
     let base = &d.seats[index];
-    if index == 2 && d.attachment_mount.is_some() {
+    if d.weapon_seat() == Some(index) && d.attachment_mount.is_some() {
         let pivot = d
             .attachment_mount
             .as_ref()
@@ -563,6 +594,13 @@ impl VehiclesWorld {
     /// The definition a live vehicle was spawned from.
     pub fn definition_of(&self, id: VehicleId) -> Option<&Definition> {
         self.catalog.get(&self.instances.get(&id)?.spawn.definition)
+    }
+    /// An authored gun still usable on the current body. Occupancy and
+    /// trigger state remain separate from this physical capability.
+    pub fn weapon_available(&self, id: VehicleId) -> bool {
+        self.instances
+            .get(&id)
+            .is_some_and(|v| v.weapon_available(&self.catalog[&v.spawn.definition]))
     }
     pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
         self.catalog.values()
@@ -633,12 +671,67 @@ impl VehiclesWorld {
         }
         change
     }
+    /// Transfer actual motion removed by a character sweep to this body's
+    /// side. The host checks permissions and ownership of a physics grip.
+    /// Returns the momentum transferred, zero for an ineligible contact.
+    pub fn push_contact(
+        &mut self,
+        world: &mut PhysicsWorld,
+        id: VehicleId,
+        contact: &bri_motor::torque::SweepContact,
+        mover_mass: f32,
+    ) -> f32 {
+        let Some(v) = self.instances.get(&id) else {
+            return 0.0;
+        };
+        if v.dead_at.is_some()
+            || v.actor.is_some()
+            || contact.normal.y.abs() >= SIDE_HIT
+            || world
+                .colliders
+                .get(contact.collider)
+                .and_then(|c| c.parent())
+                != Some(v.body)
+        {
+            return 0.0;
+        }
+        crate::contact_push::transfer(
+            world,
+            v.body,
+            contact.point,
+            contact.normal,
+            contact.velocity,
+            contact.removed_speed,
+            mover_mass,
+        )
+    }
     /// Where an occupant sits, if mounted.
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
         self.occupied.get(&occupant).copied()
     }
-    /// The rigid body a vehicle simulates with, for hosts that move vehicles
-    /// themselves (a held object). Player-type mounts have none.
+    /// Abandon a held charge without firing on trigger release. Used when
+    /// an action is cancelled; ordinary release remains a firing action.
+    pub fn cancel_weapon_charge(&mut self, occupant: OccupantId) {
+        let Some((id, seat)) = self.occupant(occupant) else {
+            return;
+        };
+        if self.definition_of(id).and_then(Definition::weapon_seat) != Some(seat) {
+            return;
+        }
+        let Some(v) = self.instances.get_mut(&id) else {
+            return;
+        };
+        v.cancel_charge(id, &self.catalog[&v.spawn.definition], &mut self.intents);
+        v.controls[seat].fire = false;
+    }
+
+    /// Current authoritative occupancy. Geometry observations may be shared
+    /// for a tick, but admission and coordination use live seat state.
+    pub fn seat_occupant(&self, id: VehicleId, seat: usize) -> Option<Occupant> {
+        self.instances.get(&id)?.seats.get(seat).copied().flatten()
+    }
+
+    /// The rigid body for hosts that move a held vehicle. Player mounts have none.
     pub fn body_of(&self, id: VehicleId) -> Option<RigidBodyHandle> {
         let v = self.instances.get(&id)?;
         v.actor.is_none().then_some(v.body)
@@ -876,7 +969,7 @@ impl VehiclesWorld {
         v.controls[seat] = input;
         Ok(())
     }
-    /// Safely rejects obstructed exits; returns original mounted state on failure.
+    /// Uses the authored exit search and v20's last-point fallback.
     pub fn dismount(
         &mut self,
         world: &PhysicsWorld,
@@ -904,6 +997,9 @@ impl VehiclesWorld {
                 !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "")
             });
         if simple {
+            if d.weapon_seat() == Some(seat) {
+                v.cancel_charge(id, d, &mut self.intents);
+            }
             v.seats[seat] = None;
             v.controls[seat] = idle_controls(d, v, seat);
             self.occupied.remove(&occupant);
@@ -947,10 +1043,11 @@ impl VehiclesWorld {
         // `setVelocity(%vehicle.getVelocity())`: the body's own velocity,
         // with no share of its spin.
         let velocity = body_velocity + impulse;
+        if d.weapon_seat() == Some(seat) {
+            v.cancel_charge(id, d, &mut self.intents);
+        }
         v.seats[seat] = None;
         v.controls[seat] = idle_controls(d, v, seat);
-        v.charge = 0;
-        v.charge_started = None;
         self.occupied.remove(&occupant);
         self.intents.push(Intent::Dismounted {
             vehicle: id,
@@ -1263,8 +1360,11 @@ impl VehiclesWorld {
             v.last_damage = by;
             v.charge = 0;
             v.charge_started = None;
-            v.controls[2] = Controls::default();
             let d = &self.catalog[&v.spawn.definition];
+            let gunner = d.weapon_seat();
+            if let Some(index) = gunner {
+                v.controls[index] = Controls::default();
+            }
             self.intents.push(Intent::Fire(explosion(
                 v,
                 d,
@@ -1272,12 +1372,12 @@ impl VehiclesWorld {
                 world,
                 d.initial_explosion_offset,
             )));
-            if let Some(o) = v.seats[2] {
+            if let Some((index, o)) = gunner.and_then(|index| v.seats[index].map(|o| (index, o))) {
                 let fallback = d.attachment_fallback_seat.as_ref().unwrap();
                 self.intents.push(Intent::Mounted {
                     vehicle: id,
                     occupant: o,
-                    seat: 2,
+                    seat: index,
                     transform: transform(
                         &(world.bodies[v.body].position() * local_pose(fallback, v.spawn.scale)),
                     ),
@@ -1321,7 +1421,7 @@ impl VehiclesWorld {
         );
         let velocity = v.velocity(d, &world.bodies[v.body]);
         ensure!(velocity.is_finite(), "invalid contact velocity");
-        let driver = v.seats.first().copied().flatten();
+        let driver = d.control_seat().and_then(|seat| v.seats[seat]);
         let authored = |value: f32, default: f32| {
             if value > 0. && value < 1e30 {
                 value
@@ -1334,12 +1434,7 @@ impl VehiclesWorld {
         let speed = velocity.length();
         self.intents.push(Intent::RunOver {
             vehicle: id,
-            owner: v
-                .seats
-                .iter()
-                .flatten()
-                .next()
-                .map_or(v.spawn.owner, |o| o.owner),
+            owner: driver.map_or(v.spawn.owner, |o| o.owner),
             target,
             damage: if speed > minimum {
                 speed * authored(d.runover_damage, 5.)
@@ -1393,9 +1488,10 @@ impl VehiclesWorld {
         self.step_pending = true;
         for (id, v) in &mut self.instances {
             let d = &self.catalog[&v.spawn.definition];
-            let control = v.controls.first().copied().unwrap_or_default();
+            let driver_seat = d.control_seat();
+            let control = driver_seat.map_or_else(Controls::default, |seat| v.controls[seat]);
             let alive = v.dead_at.is_none();
-            let driven = alive && v.seats.first().is_some_and(Option::is_some);
+            let driven = alive && driver_seat.is_some_and(|seat| v.seats[seat].is_some());
             let c = if alive { control } else { Controls::default() };
             let wants_jet = alive && (c.jet || c.vertical > 0.);
             if !wants_jet {
@@ -1440,7 +1536,7 @@ impl VehiclesWorld {
             let strafe_mode = d.strafe_steering && !c.strafe_steering_off;
             let wheeled = matches!(d.family, Family::Wheeled | Family::Skis);
             let driver = matches!(
-                d.seat_role(0),
+                driver_seat.map_or(SeatRole::Passenger, |seat| d.seat_role(seat)),
                 SeatRole::MouseDriver | SeatRole::StrafeDriver
             );
             if driver {
@@ -1728,7 +1824,9 @@ impl VehiclesWorld {
                 world.remove_collider(collider);
             }
             if let (Some(collider), Some(mount)) = (v.turret_collider, &d.attachment_mount) {
-                let aim = v.controls.get(2).copied().unwrap_or_default();
+                let aim = d
+                    .weapon_seat()
+                    .map_or_else(Controls::default, |seat| v.controls[seat]);
                 let mut p = local_pose(mount, v.spawn.scale);
                 p.rotation *= Quat::from_rotation_y(aim.aim_yaw);
                 world.colliders[collider].set_position_wrt_parent(p);
@@ -2144,9 +2242,7 @@ fn weapon_step(
     world: &mut PhysicsWorld,
     intents: &mut Vec<Intent>,
 ) {
-    if v.turret_damage
-        .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
-    {
+    if !v.weapon_available(d) {
         return;
     }
     let Some(weapon) = &d.weapon else { return };
@@ -2470,10 +2566,13 @@ mod scale_tests {
     #[test]
     #[ignore = "requires generated v20 content"]
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
-        let pack = Pack::load(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-012/vehicles.json"
-        ))
+        let pack = Pack::load(
+            bri_package::testing::pack_dir(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+                "vehicles",
+            )
+            .join("vehicles.json"),
+        )
         .unwrap();
         wheel_geometry_scales(pack, "v20.vehicle.jeepvehicle");
     }

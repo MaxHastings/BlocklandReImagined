@@ -75,6 +75,8 @@ pub struct ToolCatalog {
     /// door), by brick id. Only bricks of the same catalog (ids sharing
     /// everything before the last `/`) are kept.
     pub swaps: BTreeMap<String, bri_content::brick::Swap>,
+    /// Optional sound of a successful click swap, by destination definition.
+    pub swap_sounds: BTreeMap<String, String>,
 }
 
 impl ToolCatalog {
@@ -121,7 +123,8 @@ impl ToolCatalog {
                 && self.prints.len() <= 100_000
                 && self.brick_print_aspects.len() <= 100_000
                 && self.brick_names.len() <= 100_000
-                && self.brick_names.values().all(|n| n.len() <= 256),
+                && self.brick_names.values().all(|n| n.len() <= 256)
+                && self.swap_sounds.len() <= 100_000,
             "Tool catalog exceeds limit"
         );
         for id in self
@@ -132,6 +135,13 @@ impl ToolCatalog {
             .chain(self.prints.keys())
         {
             ContentRef::Resolved(id.clone()).validate()?;
+        }
+        for (definition, profile) in &self.swap_sounds {
+            ensure!(
+                self.swaps.contains_key(definition),
+                "Swap sound has no click swap"
+            );
+            ContentRef::Resolved(profile.clone()).validate()?;
         }
         for (definition, aspect) in &self.brick_print_aspects {
             ensure!(
@@ -312,16 +322,77 @@ struct ToolHit {
     direction: Vec3,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeTool {
+    Hammer,
+    Wand,
+    AdminWand,
+    Wrench,
+    Printer,
+}
+
+/// Resolve the installed native callback once for players and NPC affordances.
+/// This names an engine mechanism, not a game's items, labels or objectives.
+fn native_tool_callback(id: &str) -> Option<NativeTool> {
+    Some(match id.strip_prefix("v20.image.").unwrap_or(id) {
+        "hammerimage" => NativeTool::Hammer,
+        "wandimage" => NativeTool::Wand,
+        "adminwandimage" => NativeTool::AdminWand,
+        "wrenchimage" => NativeTool::Wrench,
+        "printgunimage" => NativeTool::Printer,
+        _ => return None,
+    })
+}
+
+/// Admission for the existing host Hammer callback, not an item/display-name
+/// guess. Overridden callbacks remain opaque to native capability planning.
+pub(super) fn native_hammer(image: &bri_weapons::Image) -> bool {
+    native_tool_callback(&image.id) == Some(NativeTool::Hammer)
+        && image.name.eq_ignore_ascii_case("hammerImage")
+        && image
+            .states
+            .iter()
+            .any(|s| s.script.eq_ignore_ascii_case("onfire"))
+        && !image.charges()
+        && image.command.is_none()
+        && image.commands.is_empty()
+        && image.scripts.is_empty()
+        && image.left_image.is_none()
+        && image.state_shots.is_empty()
+        && image.volleys.is_empty()
+        && image.cook.is_none()
+}
+
 impl Session {
     /// Catalog installation is an atomic local-server decision. Existing world
     /// source references may remain unresolved; new assignments may not.
     pub fn set_tool_catalog(&mut self, catalog: ToolCatalog) -> Result<()> {
         catalog.validate(&self.simulation)?;
+        let music_changed = catalog.sounds != self.tool_catalog.sounds;
         self.tool_catalog = catalog;
         for peer in self.peers.values_mut() {
             peer.inspection = None;
         }
-        self.refresh_event_bindings()
+        self.refresh_event_bindings()?;
+        if music_changed {
+            let owners: Vec<_> = self
+                .peers
+                .keys()
+                .copied()
+                .filter(|owner| !self.bots.is_bot(*owner))
+                .collect();
+            for owner in owners {
+                self.notify_music_tracks(owner);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn notify_music_tracks(&mut self, owner: OwnerId) {
+        self.notify(
+            owner,
+            super::Notice::MusicTracks(self.tool_catalog.sounds.clone()),
+        );
     }
 
     /// Trusted host edit with a player's own brick authority, for scripted
@@ -458,8 +529,8 @@ impl Session {
             return Ok(());
         }
         let melee_range = if dir.y < -0.9 { 5.5 } else { 5.0 } * scale;
-        match image.strip_prefix("v20.image.").unwrap_or(image) {
-            "hammerimage" => {
+        match native_tool_callback(image) {
+            Some(NativeTool::Hammer) => {
                 let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
                     return Ok(());
                 };
@@ -512,7 +583,7 @@ impl Session {
                     TargetId::Map(_) | TargetId::Shape(_) => {}
                 }
             }
-            "wandimage" => {
+            Some(NativeTool::Wand) => {
                 // The wand item from a loadout or spawner obeys the same
                 // mini-game and tutorial rules as `/wand`.
                 let may_wand = self.tutorial_allows_wand(owner)
@@ -569,7 +640,7 @@ impl Session {
                     _ => {}
                 }
             }
-            "adminwandimage" => {
+            Some(NativeTool::AdminWand) => {
                 if !self.peers[&owner].actor.administrator {
                     return Ok(());
                 }
@@ -594,7 +665,7 @@ impl Session {
                     _ => {}
                 }
             }
-            "wrenchimage" => {
+            Some(NativeTool::Wrench) => {
                 let Some(hit) = self.tool_ray(owner, start, dir, 10.0 * scale, Reach::Wrench)?
                 else {
                     return Ok(());
@@ -617,7 +688,7 @@ impl Session {
                 self.open_inspection(owner, id, InspectMode::Wrench);
                 self.tool_sound("wrenchHitSound", hit.position);
             }
-            "printgunimage" => {
+            Some(NativeTool::Printer) => {
                 let Some(ToolHit {
                     target: TargetId::Brick(id),
                     ..
@@ -730,26 +801,47 @@ impl Session {
     /// five times its mass along the swing, tilted 45 degrees up, unless the
     /// swinger rides it or may not touch it.
     fn hammer_vehicle(&mut self, owner: OwnerId, vehicle: u64, position: Vec3, dir: Vec3) {
-        if self.mounted(owner).map(|(v, _)| v) == Some(vehicle) {
-            return;
-        }
-        let Some((vehicle_owner, mass)) = self.vehicle_owner_and_mass(vehicle) else {
+        let Some((_, mass)) = self.vehicle_owner_and_mass(vehicle) else {
             return;
         };
-        let flip = match self.vehicle_damage_decision(owner, vehicle) {
-            Some(allowed) => allowed,
-            // Outside minigames the owner's trust decides: their own vehicle,
-            // an administrator, or a vehicle nobody present owns.
-            None => {
-                vehicle_owner == owner
-                    || self.peers[&owner].actor.administrator
-                    || !self.peers.contains_key(&vehicle_owner)
-            }
-        };
-        if flip {
+        if self.hammer_vehicle_allowed(owner, vehicle) {
             let impulse = (dir + Vec3::Y).normalize() * mass * 5.0;
             self.push_vehicle(vehicle, position, impulse);
+            self.credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle), owner);
         }
+    }
+
+    pub(super) fn hammer_vehicle_allowed(&self, owner: OwnerId, vehicle: u64) -> bool {
+        if self.mounted(owner).map(|(v, _)| v) == Some(vehicle) {
+            return false;
+        }
+        let Some((vehicle_owner, _)) = self.vehicle_owner_and_mass(vehicle) else {
+            return false;
+        };
+        match self.vehicle_damage_decision(owner, vehicle) {
+            Some(allowed) => allowed,
+            None => self.peers.get(&owner).is_some_and(|p| {
+                vehicle_owner == owner
+                    || p.actor.administrator
+                    || !self.peers.contains_key(&vehicle_owner)
+            }),
+        }
+    }
+
+    /// Exact ordinary tool ray, including non-raycast brick obstruction and
+    /// portals, reused before requesting a native hammer swing.
+    pub(super) fn native_hammer_target(
+        &self,
+        owner: OwnerId,
+        direction: Vec3,
+    ) -> Result<Option<TargetId>> {
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(None);
+        };
+        let range = if direction.y < -0.9 { 5.5 } else { 5.0 } * peer.player.state().scale;
+        Ok(self
+            .tool_ray(owner, peer.player.eye(), direction, range, Reach::Melee)?
+            .map(|h| h.target))
     }
 
     /// `setVelocity` on a player (the wands' launch).

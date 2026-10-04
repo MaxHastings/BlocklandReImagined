@@ -66,5 +66,8 @@ fn every_stock_map_is_lit_from_its_authored_sun_angles() -> Result<()> {
         ("map_tutorial/tutorial", 275.0, 57.0),
     ]
     .map(|(map, a, e)| (format!("v20/add-ons/{map}.mis"), a, e));
-    lit_from_authored_sun_angles(&content.join("map-bundle-017"), &suns)
+    lit_from_authored_sun_angles(
+        &bri_package::testing::pack_dir(&content, "map_bundle"),
+        &suns,
+    )
 }

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Rotondo's Shark on the engine's bot brain: its hole brick keeps one shark, drawn with its own model. The port makes it a swimmer that keeps to its water, bites for this copy's damage, is painted the first of its colours with white fins, and in a mini-game dies after 9 seconds out of water (3 of Bot_Hole's 3-second loops). Its script sets every speed to 0 and nothing in it says how v20 moved it, so its speeds are chosen here: 10 forward, 5 back, 8 sideways in water, and a slow flop on land. Not ported yet: grabbing a player in its mouth and killing them 5 seconds later, its random colours and the rare Cool Shark, the swim animation, its hole brick hiding itself, and its huge bounding box (it collides as a Blockhead).",
+  "notes": "Rotondo's pinned Shark remains a partial native port. The generic importer now retains its 3.5-by-3.5-by-1.8 native collision dimensions (the raw PlayerData boundingBox is quartered), density/drag and authored mouth mount nodes; the renderer uses its own swim sequence in water. Its companion chooses among the source palette, including floating/sinking helper archetypes and the rare or named Cool Shark, hides its hole, and models a physically gated mouth capture followed by ordinary attributed damage after five seconds. Smaller-Shark biteReady/biteFix cues and release root cues use the source body threads 1/0. Capture release revalidates mount identity, life, MiniGame membership and damage permission, and handles death, spawn, leave and game/reset hooks. Harm release retains the resting adaptation for the source two-second restart delay (240 simulation ticks), with lifecycle/identity/permission invalidation and no early recapture. Only this package's own bot kinds may act as holders; body identity still classifies eligible victims. The source zeros native speeds, so chosen water speeds remain 10/5/8 and land speeds 2/1/1. Main swimming, 35-damage fallback bite and nine-second out-of-water death remain. Headless integration verified ordinary approach, authored mount2 alignment, a five-second capture kill and canonical credit with the refreshed original body; broader visual and interactive acceptance remains with Maxwell. Remaining deviations: capture temporarily rests the holder instead of the original flee loop; no forced vehicle ejection, source infection, full white-shark aggression/no-strafe policy, random Cool Shark rename or original SharkHoleBite death icon. Helper archetypes change buoyancy but are not additional spawn kinds. No universal creature policy is claimed.",
   "patch": {
     "assets/bots.json": {
       "bots": {
@@ -9,7 +9,8 @@
           "out_of_water_seconds": 9,
           "melee": {
             "damage": "{bite}",
-            "name": "Bite"
+            "name": "Bite",
+            "reach": 2.5
           },
           "look": {
             "colors": {
@@ -33,9 +34,40 @@
         "underwater_backward": 5.0,
         "underwater_sideways": 8.0
       }
+    },
+    "assets/archetypes/sharkholebottop.json": {
+      "movement": {
+        "forward": 2.0,
+        "backward": 1.0,
+        "sideways": 1.0,
+        "underwater_forward": 10.0,
+        "underwater_backward": 5.0,
+        "underwater_sideways": 8.0
+      }
+    },
+    "assets/archetypes/sharkholebotbottom.json": {
+      "movement": {
+        "forward": 2.0,
+        "backward": 1.0,
+        "sideways": 1.0,
+        "underwater_forward": 10.0,
+        "underwater_backward": 5.0,
+        "underwater_sideways": 8.0
+      }
     }
   },
   "handles": {
     "SharkHoleBot::onEnterLiquid": "nothing to do: water never hurts a swimmer here"
+  },
+  "rules": {
+    "capabilities": [
+      "player",
+      "physics",
+      "damage",
+      "bots",
+      "world.edit",
+      "minigame",
+      "effects"
+    ]
   }
 }

@@ -515,6 +515,24 @@ def touches_saves(changed):
     return any(path.startswith(SAVE_CORPUS_PATHS) for path in changed)
 
 
+def save_corpus_result(output, code):
+    """Keep libtest success separate from actual corpus coverage."""
+    if code != 0 or f"test {SAVE_CORPUS_TEST} ... ok" not in output:
+        return False, "FAILED"
+    skipped = next((line.strip() for line in output.splitlines()
+                    if line.strip().startswith("skipped:")), None)
+    if skipped:
+        return True, "SKIPPED: " + skipped.removeprefix("skipped:").strip()
+    coverage = re.search(r"^save corpus coverage: (\d+)/(\d+)$", output, re.M)
+    if coverage:
+        checked, total = map(int, coverage.groups())
+        if not 0 < checked <= total:
+            return False, "FAILED (invalid corpus coverage)"
+        kind = "coverage" if checked == total else "partial coverage"
+        return True, f"ok ({kind}: {checked}/{total} saves)"
+    return True, "ok (coverage not reported)"
+
+
 def save_corpus(binaries, log):
     """Host the fixed save corpus; True when it passed or found no saves."""
     owners = [b for b in binaries if b[0] == SAVE_CORPUS_TARGET]
@@ -529,10 +547,8 @@ def save_corpus(binaries, log):
                               cwd)
     with open(log, "a", encoding="utf-8", errors="replace") as handle:
         handle.write(f"\n===== save corpus =====\n{header}\n{output}\n")
-    ok = code == 0 and f"test {SAVE_CORPUS_TEST} ... ok" in output
-    say(f"save corpus: {'ok' if ok else 'FAILED'} in {time.time() - started:.0f}s")
-    if "skipped:" in output:
-        say("save corpus: " + next(l for l in output.splitlines() if "skipped:" in l).strip())
+    ok, summary = save_corpus_result(output, code)
+    say(f"save corpus: {summary} in {time.time() - started:.0f}s")
     if not ok:
         print(tail(log, "===== save corpus ====="))
     return ok
@@ -564,6 +580,7 @@ def full_gate(sha, root, changed=()):
         target = ["--target-dir", str(root / "target")]
         started = time.time()
         steps = [
+            ("tool-tests", [sys.executable, "-m", "unittest", "discover", "-s", str(worktree / "tools"), "-p", "test_*.py"]),
             ("build", ["cargo", "build", "--workspace", "--all-targets", "--locked", *target]),
             ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", *target,
                         "--", "-D", "warnings"]),
@@ -860,7 +877,9 @@ def ci_test():
             say(f"skipping {label} (needs generated content)")
             continue
         say(f"running {label}")
-        if subprocess.run([executable], cwd=cwd).returncode:
+        output, code = run_binary(label, executable, [], cwd)
+        print(output, end="", flush=True)
+        if code:
             failed.append(label)
     if failed:
         say(f"failing test targets: {', '.join(failed)}")

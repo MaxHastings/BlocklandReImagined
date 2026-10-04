@@ -698,6 +698,7 @@ pub struct MotionEvents {
     /// Each collision's collider and the speed into its surface before the
     /// collision stopped it (Torque `Player::updatePos` `bd`).
     pub hits: Vec<(ColliderHandle, f32)>,
+    pub contacts: Vec<crate::torque::SweepContact>,
     /// The body went through an opening this tick: the carry that took it
     /// to the partner's side (a player's view turns with it).
     pub passed: Option<glam::Affine3A>,
@@ -1048,7 +1049,10 @@ impl Player {
         let mut state = self.state.clone();
         state.feet = feet.to_array();
         state.velocity = [0.0; 3];
-        state.yaw = yaw;
+        // Spawn bricks and other server teleports can supply a full-turn
+        // heading. Match the canonical input/weapon range without changing facing.
+        state.yaw =
+            (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         state.pitch = 0.0;
         state.grounded = false;
         state.crouched = false;
@@ -1188,6 +1192,7 @@ impl Player {
                 touched: vec![],
                 impact: Vec3::ZERO,
                 hits: vec![],
+                contacts: vec![],
                 passed: None,
             }
         };
@@ -1655,6 +1660,7 @@ impl Player {
             touched,
             impact: before_collision - velocity,
             hits: moved.hit,
+            contacts: moved.contacts,
             passed,
         })
     }

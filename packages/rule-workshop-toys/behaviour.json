@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "script": "main.rhai",
+  "brick_inputs": [
+    { "name": "onWorkshopRed", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onWorkshopGreen", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onWorkshopBlue", "targets": ["Player", "Client", "MiniGame"] }
+  ],
+  "brick_outputs": [{ "name": "cycleRoute", "class": "fxDTSBrick" }],
+  "state": { "global": { "routes": { "default": {}, "persist": false } } }
+}

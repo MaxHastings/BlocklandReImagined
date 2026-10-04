@@ -8,7 +8,8 @@ use glam::Mat4;
 #[test]
 fn an_empty_posed_scene_draws_nothing_instead_of_panicking() -> Result<()> {
     let (device, queue) = pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

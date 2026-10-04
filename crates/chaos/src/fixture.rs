@@ -200,12 +200,13 @@ pub fn content(root: &Path, map: &str) -> Result<Fixture> {
         .cloned()
         .collect();
     let mut saves = Vec::new();
-    if let Ok(report) = std::fs::read(root.join("worlds-pass-005/report.json")) {
+    if let Ok(worlds) = packages.role_dir(root, "worlds")
+        && let Ok(report) = std::fs::read(worlds.join("report.json"))
+    {
         let report: Value = serde_json::from_slice(&report)?;
         for save in report["saves"].as_array().into_iter().flatten() {
             if let Some(file) = save["file"].as_str()
-                && let Ok(world) =
-                    bri_world::persistence::load(&root.join("worlds-pass-005").join(file))
+                && let Ok(world) = bri_world::persistence::load(&worlds.join(file))
             {
                 saves.push(world);
             }

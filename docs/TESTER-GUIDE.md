@@ -7,18 +7,22 @@ keys are in `PLAYTEST.md`.
 
 ## Install
 
-1. You need Windows 10 or 11 (64-bit). Other systems are not supported. A
+1. Download for Windows 10 or 11 (x86-64), an Apple Silicon Mac (M1 or newer),
+   or Linux x86-64 with glibc 2.35 or newer. A
    graphics card or graphics built into the processor both work; with
    neither, the game falls back to slow software drawing.
 2. Extract the whole zip to a normal folder you can write to, such as your
-   Desktop or Documents. Not Program Files. Keep the files together.
-3. Run `Launch.cmd`. A console window opens next to the game; leave it
-   open while you play. Nothing else needs installing, and you don't need
-   the original Blockland.
-4. **"Windows protected your PC"**: the game isn't signed yet. Click **More
+   Desktop or Documents. On Windows, avoid Program Files. Keep the files together.
+3. On Windows, run `Launch.cmd`; leave its console open while you play.
+   On Mac, open `BlocklandReImagined.app`; `PLAYTEST-MAC.md` in the Mac release
+   explains the first launch. On Linux, run `./launch.sh` from the extracted
+   folder in a terminal. You don't need the original Blockland.
+4. **Windows: "Windows protected your PC"**: the game isn't signed yet. Click **More
    info**, check the name is `Launch.cmd` or `bri-client.exe`, then **Run
    anyway**. If Windows blocked the download itself, right-click the zip,
    choose **Properties**, tick **Unblock**, and extract it again.
+   **Mac:** if macOS blocks the app, open System Settings → Privacy & Security
+   and choose **Open Anyway** for BlocklandReImagined.
 
 The first start asks a few things once:
 
@@ -31,12 +35,21 @@ It also picks Low, Medium or High graphics from your hardware. Change that
 in Options > Graphics. If the game runs slowly, `PLAYTEST.md` has a short
 list of settings to try.
 
-Your settings, saves, screenshots and identity are kept in one folder,
-`%LOCALAPPDATA%\BlocklandReImagined`, apart from the game. The rest of this
-page calls it your state folder. To update, extract the newer zip to a new
-folder and run its `Launch.cmd`: it finds your state folder by itself. Add-Ons
-you dropped in or imported live in the game folder's `content`, so copy
-`content\Add-Ons` and `content\addons` across too.
+Your settings, saves, screenshots and identity are kept apart from the game
+in your state folder:
+
+| System | State folder |
+|---|---|
+| Windows | `%LOCALAPPDATA%\BlocklandReImagined` |
+| Mac | `~/Library/Application Support/BlocklandReImagined` |
+| Linux | `$XDG_DATA_HOME/blockland-reimagined`, or `~/.local/share/blockland-reimagined` if unset |
+
+To update, extract the newer release to a new folder and start it normally:
+it finds your state folder by itself. On Windows and Linux, Add-Ons you
+dropped in or imported live in the game folder's `content`; copy
+`content/Add-Ons` and `content/addons` across too. On Mac, each build has its
+own content copy under the state folder; see `PLAYTEST-MAC.md` before moving
+custom content.
 
 **Bringing your old Blockland saves.** Open Load Bricks in a game and press
 **Saves Folder**. Copy your old `.bls` saves into that folder, either whole
@@ -46,6 +59,14 @@ or when you next open Load Bricks, and lists them under their map; loose
 files are under **Other**. Your original files are never changed, and the
 game never looks anywhere else for saves: only what is in this folder is
 listed. A save that can't be converted is skipped and noted in the log.
+
+## Brick colorsets
+
+In **Start Game**, press **Colorsets...**, choose a palette, and press **Use**.
+Default and Trueno's are included. **Folder...** opens your `colorsets` folder;
+add a named `.txt` file, or a subfolder containing `colorSet.txt`, and return to
+choose it. Guests receive the hosted world's colors automatically. When loading
+a brick save with different colors, use the existing color-matching choice.
 
 ## Playing together
 
@@ -94,15 +115,17 @@ Every run writes a log. A crash leaves a report, and the next start tells
 you which files it wrote and offers to open the folder. Nothing is sent
 anywhere automatically.
 
-All of these are in the `logs` folder beside `bri-client.exe`: beside
-`Launch.cmd`, or `%LOCALAPPDATA%\BlocklandReImagined\Game\logs` with the exe.
+On Windows and Linux, logs normally live in the extracted game's `logs`
+folder, beside the executable. If that folder cannot be written, session
+and crash reports use `logs` in your state folder instead. On Mac, they
+always use the state folder's `logs`. The crash prompt shows the actual folder.
 
 | File | What it is |
 |---|---|
 | `session-<time>.log` | everything the game printed during that run |
 | `crash-<time>.txt` | what went wrong, with the end of the session log |
-| `crash-<time>.dmp` | a memory snapshot, after a hard crash only |
-| `client-<time>.stderr.log`, `.stdout.log` | what `Launch.cmd` caught, useful if the game never opened (`Launch.cmd` only) |
+| `crash-<time>.dmp` | a Windows memory snapshot, after a hard crash only |
+| `client-<time>.stderr.log`, `.stdout.log` | what the Windows/Linux launcher caught, useful if the game never opened (in the release folder's `logs`) |
 
 Please send:
 
@@ -125,8 +148,8 @@ they're your identity and your server's.
 
 ## Known limits
 
-- **Windows only.**
-- **Unsigned.** SmartScreen warns on first start (see Install).
+- **Unsigned Windows builds; ad-hoc signed Mac app.** SmartScreen or macOS
+  may block the first start (see Install).
 - **Gamepads** work while playing (move, look, jump, crouch, fire, jet).
   Menus and building still need a keyboard and mouse.
 - **Vehicle handling** is rebuilt, not copied from v20's engine. Tell us

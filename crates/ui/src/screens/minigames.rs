@@ -15,6 +15,7 @@ enum Kind {
     Invite,
 }
 const ADDONS_BUTTON: &str = "NativeMiniGameAddOns";
+const TEAMS_BUTTON: &str = "NativeMiniGameTeams";
 /// Slayer's Default column header (`JMG_Slayer_Default`), shown while a
 /// listed game is the server's default one.
 const DEFAULT_HEADER: &str = "JMG_DefaultHeader";
@@ -33,6 +34,8 @@ pub struct MiniGameScreen {
     loaded_revision: Option<(bool, u64)>,
     request: Option<RequestId>,
     list_columns: Option<String>,
+    rules_dirty: bool,
+    loaded_game: Option<MiniGameId>,
 }
 impl MiniGameScreen {
     pub fn list(core: &Core) -> Self {
@@ -62,6 +65,8 @@ impl MiniGameScreen {
             loaded_revision: None,
             request: None,
             list_columns: None,
+            rules_dirty: false,
+            loaded_game: None,
         };
         // The End blocker greys End out, so it must draw over the button.
         if let Some(n) = s.view.id("CMG_EndBlocker") {
@@ -261,6 +266,8 @@ impl MiniGameScreen {
         ) {
             self.view.nodes[n].state.tint = Some([color.rgb[0], color.rgb[1], color.rgb[2], 255]);
         }
+    }
+    fn rules_availability(&mut self, core: &Core) {
         // Edit the running game when the player may manage it: its owner,
         // or an editor the host names (an admin).
         let mode_edit = core
@@ -416,6 +423,7 @@ impl MiniGameScreen {
         let Some(fav) = core.settings.minigame_favorites.get(&slot).cloned() else {
             return;
         };
+        self.rules_dirty = true;
         self.draft = fav.rules.clone();
         self.write_rules(&fav.rules);
         if let Some(n) = self.view.id("CMG_PlayerDataBlock") {
@@ -559,12 +567,20 @@ impl MiniGameScreen {
                 self.status(core);
             }
             Kind::Rules => {
+                if self.loaded_game != core.minigames.active_game {
+                    self.rules_dirty = false;
+                    self.loaded_game = core.minigames.active_game;
+                    self.loaded_revision = None;
+                }
                 if self.loaded_revision != Some((core.minigames.ready, core.minigames.revision)) {
-                    self.types = core.minigames.player_types.clone();
-                    self.items = core.minigames.items.clone();
-                    self.apply_rules_state(core);
+                    if !self.rules_dirty {
+                        self.types = core.minigames.player_types.clone();
+                        self.items = core.minigames.items.clone();
+                        self.apply_rules_state(core);
+                    }
                     self.loaded_revision = Some((core.minigames.ready, core.minigames.revision));
                 }
+                self.rules_availability(core);
                 self.status(core);
             }
             Kind::Invite => {
@@ -619,7 +635,7 @@ impl MiniGameScreen {
             self.view.nodes[parent].ctrl.extent[1] = h + grow;
             let mut c = text(
                 "GuiTextProfile",
-                Rect::new(12, h + grow - 28, (w - 24 - 136).max(0), 24),
+                Rect::new(12, h + grow - 28, (w - 24 - 160).max(0), 24),
                 &status,
             );
             c.name = Some(key.into());
@@ -629,21 +645,36 @@ impl MiniGameScreen {
             if !matches!(self.kind, Kind::Invite) {
                 let mut b = button(
                     "BlockButtonProfile",
-                    Rect::new(w - 12 - 130, h + grow - 30, 130, 26),
+                    Rect::new(w - 12 - 154, h + grow - 30, 74, 26),
                     "base/client/ui/button1",
-                    "Add-On Settings",
+                    "Setup",
                     ADDONS_BUTTON,
                 );
                 b.name = Some(ADDONS_BUTTON.into());
                 self.view.add(parent, b);
+                let mut teams = button(
+                    "BlockButtonProfile",
+                    Rect::new(w - 12 - 76, h + grow - 30, 76, 26),
+                    "base/client/ui/button1",
+                    "Teams",
+                    TEAMS_BUTTON,
+                );
+                teams.name = Some(TEAMS_BUTTON.into());
+                self.view.add(parent, teams);
             }
         }
         // Which game the button opens: the picked one in the list, else the
         // player's own.
         let target = self.addons_target(core);
         if let Some(n) = self.view.id(ADDONS_BUTTON) {
-            self.view
-                .set_visible(n, !core.minigames.addon_settings.is_empty());
+            self.view.set_visible(
+                n,
+                target.is_some() || !core.minigames.addon_settings.is_empty(),
+            );
+            self.view.set_active(n, target.is_some());
+        }
+        if let Some(n) = self.view.id(TEAMS_BUTTON) {
+            self.view.set_visible(n, target.is_some());
             self.view.set_active(n, target.is_some());
         }
     }
@@ -736,6 +767,12 @@ impl Screen for MiniGameScreen {
         if !self.view.node(ev.node).state.active {
             return;
         }
+        if matches!(self.kind, Kind::Rules)
+            && (ev.kind == EventKind::Changed
+                || (ev.kind == EventKind::Click && self.view.node(ev.node).ctrl.variable.is_some()))
+        {
+            self.rules_dirty = true;
+        }
         if ev.kind == EventKind::Close {
             core.pop(self.id);
             return;
@@ -768,9 +805,11 @@ impl Screen for MiniGameScreen {
         ) {
             return;
         }
-        if command_of(&self.view, ev.node) == ADDONS_BUTTON {
+        let destination = command_of(&self.view, ev.node);
+        if destination == ADDONS_BUTTON || destination == TEAMS_BUTTON {
             if let Some(game) = self.addons_target(core) {
                 core.minigame_addons = Some(game);
+                core.minigame_addons_teams = destination == TEAMS_BUTTON;
                 core.push(ScreenId::MiniGameAddOns);
             }
             return;

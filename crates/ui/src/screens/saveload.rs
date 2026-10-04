@@ -1028,6 +1028,31 @@ mod tests {
         }
     }
     #[test]
+    fn a_remote_non_admin_can_save_but_cannot_load() {
+        let mut ui = fixture();
+        ui.core.conn = ConnectionState::InGame {
+            server_name: "Someone else's server".into(),
+            max_players: 16,
+            local: false,
+            single_player: false,
+            admin: false,
+        };
+        assert!(!ui.core.is_admin());
+        let mut save = SaveLoad::new(ScreenId::SaveBricks, &ui.core);
+        save.set("SaveBricks_FileName", "Visited build");
+        save.submit(&mut ui.core);
+        assert!(matches!(
+            ui.drain_actions().as_slice(),
+            [(_, UiAction::SaveBricks { name, .. })] if name == "Visited build.world.json"
+        ));
+        let mut load = SaveLoad::new(ScreenId::LoadBricks, &ui.core);
+        load.submit(&mut ui.core);
+        assert!(
+            ui.drain_actions().is_empty(),
+            "saving grants no load authority"
+        );
+    }
+    #[test]
     fn save_takes_bare_names_and_confirms_overwrite_with_a_message_box() {
         let mut ui = fixture();
         let mut s = SaveLoad::new(ScreenId::SaveBricks, &ui.core);

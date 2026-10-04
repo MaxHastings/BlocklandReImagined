@@ -203,6 +203,7 @@ fn rows_on_an_add_ons_input_run_when_its_rules_fire_it() {
             panic!("expected a plant")
         };
         let row = EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onPing".into(),
@@ -275,6 +276,7 @@ fn plant(s: &mut Session, owner: OwnerId, seq: u64, x: f32) -> u64 {
 
 fn paint(input: &str, target: bri_events::Slot) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.into(),

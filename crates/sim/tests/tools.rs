@@ -1091,7 +1091,8 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved(f: &Fi
         .unwrap();
     aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     let event = EventRow {
-        preserved: None,
+        conditions: vec![],
+            preserved: None,
         enabled: true,
         input: "onActivate".into(),
         delay_ms: 25,
@@ -1228,6 +1229,7 @@ fn an_add_on_may_refuse_rows_a_builder_sends_and_says_why() {
     inspect(&mut s, owner, 2, InspectMode::Wrench);
     inspect(&mut s, owner, 3, InspectMode::Events);
     let row = |output: &str, params| EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),
@@ -1490,7 +1492,8 @@ fn nested_events_return_to_wrench_without_overwriting_concurrent_properties(f: &
             ToolAction::SetEvents {
                 brick: id,
                 events: vec![EventRow {
-                    preserved: None,
+                    conditions: vec![],
+            preserved: None,
                     enabled: true,
                     input: "onActivate".into(),
                     delay_ms: 0,
@@ -1623,6 +1626,7 @@ fn hammering_a_brick_fires_its_on_tool_break_events(f: &Fixture) {
         owner,
         id,
         Edit::Events(vec![EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onToolBreak".into(),
@@ -1648,7 +1652,8 @@ fn player_datablock_and_scale_events_reshape_the_player(f: &Fixture) {
         .unwrap();
     let id = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     let row = |output: &str, params| EventRow {
-        preserved: None,
+        conditions: vec![],
+            preserved: None,
         enabled: true,
         input: "onPlayerTouch".into(),
         delay_ms: 0,
@@ -1949,7 +1954,8 @@ fn an_input_past_its_owners_schedule_quota_runs_nothing_and_says_why(f: &Fixture
         .unwrap();
     aim(&mut s, owner, 1, [0.5, 0.1, -3.25]);
     let row = |color| EventRow {
-        preserved: None,
+        conditions: vec![],
+            preserved: None,
         enabled: true,
         input: "onActivate".into(),
         delay_ms: 1000,
@@ -2113,13 +2119,36 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixt
 on_both! {
 fn a_joining_player_learns_the_music_the_host_offers(f: &Fixture) {
     let mut s = session(f, vec![], false);
+    let mut first = catalog();
+    first.sounds.insert("music/first".into());
+    s.set_tool_catalog(first).unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
         .unwrap();
-    assert!(
-        s.take_private_notices()
-            .iter()
-            .any(|(to, n)| *to == owner && matches!(n, bri_sim::session::Notice::MusicTracks(_)))
-    );
+    let offered = |s: &mut Session| {
+        s.take_private_notices().into_iter().filter_map(|(to, n)| {
+            match n {
+                bri_sim::session::Notice::MusicTracks(tracks) if to == owner => Some(tracks),
+                _ => None,
+            }
+        }).collect::<Vec<_>>()
+    };
+    assert_eq!(offered(&mut s), vec![["music/first".into()].into()]);
+    s.disconnect(owner).unwrap();
+    s.take_private_notices();
+    let mut second = catalog();
+    second.sounds.insert("music/second".into());
+    s.set_tool_catalog(second.clone()).unwrap();
+    assert!(offered(&mut s).is_empty());
+    s.resume(owner, Vec3::new(0.0, 0.05, 0.0)).unwrap();
+    assert_eq!(offered(&mut s), vec![["music/second".into()].into()]);
+    s.set_tool_catalog(catalog()).unwrap();
+    assert_eq!(offered(&mut s), vec![Default::default()]);
+    s.set_tool_catalog(catalog()).unwrap();
+    assert!(offered(&mut s).is_empty(), "unchanged catalogs do not resend");
+    let mut next = session_on(f, vec![], false, "next-map");
+    next.set_tool_catalog(second).unwrap();
+    next.adopt(s, owner).unwrap();
+    assert_eq!(offered(&mut next), vec![["music/second".into()].into()]);
 }
 }

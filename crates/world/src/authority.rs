@@ -67,6 +67,8 @@ pub enum Edit {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct WrenchProperties {
+    /// None uses the brick footprint and a four-unit height.
+    pub rule_region: Option<[f32; 3]>,
     pub name: Option<String>,
     pub light: Option<String>,
     pub emitter: Option<String>,
@@ -276,6 +278,7 @@ impl Authority {
             Edit::Properties(p)
                 if p.raycast == old.raycast
                     && p.colliding == old.colliding
+                    && p.rule_region == old.rule_region
                     && p.visible == old.visible =>
             {
                 trust::BUILD
@@ -295,6 +298,7 @@ impl Authority {
             Edit::Events(e) => next.events = e,
             Edit::ShapeEffect(effect) => next.shape_effect = effect,
             Edit::Properties(properties) => {
+                next.rule_region = properties.rule_region;
                 next.name = properties.name;
                 next.light = properties.light.map(|id| {
                     Box::new(Light {
@@ -395,6 +399,7 @@ mod tests {
     }
     fn row(output: &str, color: u8) -> EventRow {
         EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -434,6 +439,7 @@ mod tests {
         }));
         full.events = (0..64)
             .map(|i| EventRow {
+                conditions: vec![],
                 preserved: Some(bri_events::PreservedRow {
                     original: hostile.clone(),
                     diagnostic: hostile.clone(),
@@ -606,6 +612,52 @@ mod tests {
         let before = server.state().clone();
         assert!(server.mutate(1, |b| b.color = 99).is_err());
         assert_eq!(server.state(), &before);
+    }
+
+    #[test]
+    fn detection_dimensions_require_full_trust_and_validate_atomically() {
+        let mut server = Authority::new(fixture()).unwrap();
+        let actor = |level| Actor {
+            owner: 99,
+            administrator: false,
+            trust: Trust::Levels(std::sync::Arc::new([(7, level)].into())),
+        };
+        let mut p = WrenchProperties {
+            rule_region: Some([8.0, 5.0, 8.0]),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        };
+        let before = server.state().clone();
+        assert!(
+            server
+                .edit(&actor(trust::BUILD), 1, Edit::Properties(p.clone()))
+                .is_err()
+        );
+        assert_eq!(server.state(), &before);
+        for size in [[0.0, 5.0, 8.0], [8.0, f32::NAN, 8.0], [101.0, 5.0, 8.0]] {
+            p.rule_region = Some(size);
+            assert!(
+                server
+                    .edit(&actor(trust::FULL), 1, Edit::Properties(p.clone()))
+                    .is_err()
+            );
+            assert_eq!(server.state(), &before);
+        }
+        p.rule_region = Some([8.0, 5.0, 8.0]);
+        server
+            .edit(&actor(trust::FULL), 1, Edit::Properties(p.clone()))
+            .unwrap();
+        assert_eq!(server.state().bricks[&1].rule_region, p.rule_region);
+        let saved = crate::build::SavedBuild::capture(server.state(), true, true).unwrap();
+        let restored = crate::build::decode(&crate::build::encode(&saved).unwrap()).unwrap();
+        assert_eq!(restored.world.bricks[&1].rule_region, p.rule_region);
+        p.rule_region = None;
+        server
+            .edit(&actor(trust::FULL), 1, Edit::Properties(p))
+            .unwrap();
+        assert_eq!(server.state().bricks[&1].rule_region, None);
     }
 
     /// One colour rule: a brick's paint and every event `Color` parameter

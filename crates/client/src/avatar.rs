@@ -520,7 +520,8 @@ impl AvatarAssets {
     /// A player drawn with the body `model`. An Add-On's own model paints
     /// each object named as an avatar colour slot with that slot's paint
     /// (`chest` the torso's), as `ApplyBodyColors` paints the Blockhead's
-    /// nodes, and hides the rest (the Shark hides its helmet and visor).
+    /// nodes. Named accessory objects follow selected avatar parts; all
+    /// remaining objects stay hidden.
     pub fn body_mesh(&self, model: &str, appearance: Appearance) -> Result<AvatarMesh> {
         let horse = self
             .bodies
@@ -534,6 +535,7 @@ impl AvatarAssets {
             ]
             .into()
         } else {
+            let selected = self.package.resolve(&appearance)?;
             horse
                 .object_names
                 .iter()
@@ -543,7 +545,11 @@ impl AvatarAssets {
                     } else {
                         name.as_str()
                     };
-                    appearance.colors.get(slot).map(|c| (name.clone(), *c))
+                    appearance
+                        .colors
+                        .get(slot)
+                        .or_else(|| selected.nodes.get(name))
+                        .map(|c| (name.clone(), *c))
                 })
                 .collect()
         };
@@ -1261,10 +1267,20 @@ impl AvatarMesh {
         // test that would hold an action for `sNewAnimationTickTime`.
         let next = Some(scripted.map_or_else(
             || {
-                locomotion(
-                    animation_input.tick_state.as_ref().unwrap_or(player),
-                    animation_input.water_coverage,
-                )
+                if self.model.is_some()
+                    && animation_input.water_coverage > 0.0
+                    && assets.rig.sequence("swim").is_some()
+                {
+                    LocomotionAction {
+                        sequence: "swim",
+                        forward: true,
+                    }
+                } else {
+                    locomotion(
+                        animation_input.tick_state.as_ref().unwrap_or(player),
+                        animation_input.water_coverage,
+                    )
+                }
             },
             |sequence| LocomotionAction {
                 sequence,
@@ -1305,7 +1321,8 @@ impl AvatarMesh {
             weight: 1.0,
         });
         // Native sequence priorities put armReady (14) over locomotion (12).
-        // It is absolute, so it must precede the additive headup/look overlays.
+        // Custom rigs may author it as an additive overlay; the completed
+        // stack below orders each rig's own sequence type appropriately.
         let ready_name = match animation_input.held_tool_pose {
             HeldToolPose::None => None,
             HeldToolPose::Right => Some("armreadyright"),
@@ -1321,7 +1338,6 @@ impl AvatarMesh {
             })
             .transpose()?;
         if let Some(clip) = &ready_clip {
-            ensure!(!clip.additive, "Held-arm clip must be an absolute sequence");
             layers.push(Layer {
                 animation: clip,
                 time: clip.duration,
@@ -1430,6 +1446,13 @@ impl AvatarMesh {
         unacted.extend(overlays);
         let acted = !absolute_actions.is_empty() || !additive_actions.is_empty();
         layers.extend(additive_actions);
+        // Custom rigs can supply absolute look/head overlays (or empty
+        // fallback clips) over an additive locomotion sequence such as swim.
+        // Order the complete stack, not only the layers before those overlays.
+        // Stable partition retains the existing overlay/thread order within
+        // each type; only misplaced absolute custom clips move before deltas.
+        layers.sort_by_key(|layer| layer.animation.additive);
+        unacted.sort_by_key(|layer| layer.animation.additive);
         // `transitionToSequence` blends the locomotion thread from the pose it
         // had when the action changed. Its channels end right after the
         // locomotion clip, or where the absolute layers end for additive jumps.
@@ -1858,6 +1881,11 @@ mod tests {
         let rig = crate::testing::avatar::rig();
         let mut shape = rig.shape.clone();
         shape.animations = rig.sequences.values().cloned().collect();
+        let mut swim = rig.sequence("root").unwrap().clone();
+        swim.name = "swim".into();
+        swim.looping = true;
+        swim.additive = true;
+        shape.animations.push(swim);
         std::fs::write(
             dir.join("assets/fish.shape.json"),
             serde_json::to_vec(&shape)?,
@@ -1891,9 +1919,25 @@ mod tests {
         appearance
             .colors
             .insert("torso".into(), [0.1, 0.2, 0.3, 1.0]);
-        let mesh = assets.body_mesh("fish:asset/fish.dts", appearance)?;
+        let mut mesh = assets.body_mesh("fish:asset/fish.dts", appearance)?;
         assert_eq!(mesh.model.as_deref(), Some("fish:asset/fish.dts"));
         assert_eq!(mesh.outfit.nodes.get("chest"), Some(&[0.1, 0.2, 0.3, 1.0]));
+        assert!(!mesh.outfit.nodes.contains_key("helmet"));
+        assert!(!mesh.outfit.nodes.contains_key("visor"));
+        let mut dressed = mesh.appearance.clone();
+        dressed.parts.insert("hat".into(), "helmet".into());
+        dressed.parts.insert("accent".into(), "visor".into());
+        dressed.colors.insert("hat".into(), [0.2, 0.2, 0.2, 1.0]);
+        dressed.colors.insert("accent".into(), [0.3, 0.3, 0.3, 1.0]);
+        let accessories = assets.body_mesh("fish:asset/fish.dts", dressed)?;
+        assert_eq!(
+            accessories.outfit.nodes.get("helmet"),
+            Some(&[0.2, 0.2, 0.2, 1.0])
+        );
+        assert_eq!(
+            accessories.outfit.nodes.get("visor"),
+            Some(&[0.3, 0.3, 0.3, 1.0])
+        );
         assert!(
             mesh.outfit
                 .nodes
@@ -1903,6 +1947,32 @@ mod tests {
                     .contains(n)),
             "only its own objects are painted"
         );
+        mesh.pose_with_animation(
+            &assets,
+            &player(),
+            0.0,
+            &AvatarAnimationInput {
+                water_coverage: 1.0,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(mesh.mode, "swim", "an authored body loop plays in liquid");
+        mesh.pose_with_animation(&assets, &player(), 0.1, &AvatarAnimationInput::default())?;
+        assert_eq!(
+            mesh.mode, "root",
+            "leaving liquid restores ordinary locomotion"
+        );
+        mesh.pose_with_animation(
+            &assets,
+            &player(),
+            0.2,
+            &AvatarAnimationInput {
+                water_coverage: 1.0,
+                dead: true,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(mesh.mode, "death1", "death overrides the swim loop");
         Ok(())
     }
 
@@ -1985,7 +2055,7 @@ mod tests {
             let content = std::env::var_os("BRI_CONTENT")
                 .map_or_else(|| repo().join("content"), std::path::PathBuf::from);
             Ok(Self {
-                assets: AvatarAssets::load(&content.join("avatar-pack-002"))?,
+                assets: AvatarAssets::load(&bri_package::testing::pack_dir(&content, "avatar"))?,
                 content: true,
             })
         }

@@ -20,10 +20,208 @@ use support::{content_root::ContentRoot, wait};
 synthetic_and_content!(
     ContentRoot: native_core_tools_render_from_eye_and_original_mounts,
     bricks_in_hand_render_the_grey_brick_in_first_and_third_person,
+    detection_regions_render_with_building_tools_and_hide_when_put_away,
 );
 
 const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
+
+fn detection_regions_render_with_building_tools_and_hide_when_put_away(
+    f: &ContentRoot,
+) -> Result<()> {
+    let artifact = f.out("detection-regions")?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
+    app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
+    app.ui.core.request(UiAction::HostGame {
+        map: BEDROOM.into(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Region outlines".into(),
+        password: String::new(),
+        admin_password: String::new(),
+        super_admin_password: String::new(),
+    });
+    pump(&mut app)?;
+    until(&mut app, "region fixture host", |a| {
+        matches!(a.ui.core.conn, ConnectionState::InGame { .. })
+            && a.local_motion().is_some_and(|(p, _)| p.grounded)
+    })
+    .with_context(|| {
+        format!(
+            "chat {:?}; message {:?}",
+            app.ui.core.chat.lines,
+            app.ui
+                .screen(bri_ui::screens::ScreenId::MessageBox)
+                .map(|s| s
+                    .view()
+                    .walk()
+                    .map(|n| s.view().text_of(n))
+                    .collect::<Vec<_>>())
+        )
+    })?;
+    app.ui.core.request(UiAction::ChatCommand {
+        name: "rulelab".into(),
+        args: vec!["hill".into()],
+    });
+    pump(&mut app)?;
+    wait::until_one(
+        &mut app,
+        "hill region replica",
+        Duration::from_secs(45),
+        step,
+        |a| {
+            a.ui.core.bottom_print.is_some()
+                || a.network_view().is_some_and(|v| {
+                    v.world
+                        .bricks
+                        .values()
+                        .any(bri_world::regions::has_region_input)
+                })
+        },
+    )
+    .with_context(|| {
+        format!(
+            "chat {:?}; world brick count {}; message {:?}",
+            app.ui.core.chat.lines,
+            app.network_view().map_or(0, |v| v.world.bricks.len()),
+            app.ui
+                .screen(bri_ui::screens::ScreenId::MessageBox)
+                .map(|s| s
+                    .view()
+                    .walk()
+                    .map(|n| s.view().text_of(n))
+                    .collect::<Vec<_>>())
+        )
+    })?;
+    ensure!(
+        app.network_view().is_some_and(|v| v
+            .world
+            .bricks
+            .values()
+            .any(bri_world::regions::has_region_input)),
+        "Workshop setup rejected: {:?}",
+        app.ui.core.bottom_print
+    );
+    let (yaw, pitch) = app.controls.view_angles();
+    app.ui.core.request(UiAction::Game(GameAction::Look {
+        yaw: std::f32::consts::FRAC_PI_2 - yaw,
+        pitch,
+    }));
+    pump(&mut app)?;
+    step(&mut app, Duration::from_millis(16))?;
+    let gpu = support::gpu::turn()?;
+    let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+    app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    let hidden = capture(&mut app, &gpu, &mut renderer)?;
+    ensure!(
+        !app.region_outlines_visible(),
+        "regions visible with empty hands"
+    );
+    let mut tool_pixels = Vec::new();
+    for slot in [0, 1, 2] {
+        app.ui.core.request(UiAction::UseTool { slot });
+        pump(&mut app)?;
+        until(&mut app, "building tool", |a| {
+            a.network_view()
+                .is_some_and(|v| v.tools[&v.owner].selected == Some(slot))
+        })?;
+        step(&mut app, Duration::from_millis(16))?;
+        let pixels = capture(&mut app, &gpu, &mut renderer)?;
+        ensure!(
+            app.region_outlines_visible(),
+            "building tool did not upload region geometry"
+        );
+        let cyan = pixels
+            .chunks_exact(4)
+            .zip(hidden.chunks_exact(4))
+            .filter(|(p, old)| {
+                p[0] < 130
+                    && p[1] > 180
+                    && p[2] > 220
+                    && p.iter().zip(old.iter()).any(|(a, b)| a.abs_diff(*b) > 20)
+            })
+            .count();
+        ensure!(
+            cyan > 12,
+            "region produced only {cyan} visible cyan pixels for slot {slot}"
+        );
+        save(&artifact.join(format!("tool-{slot}.png")), &pixels)?;
+        tool_pixels = pixels;
+    }
+    // Exercise the same live editor draft the renderer reads, with no window.
+    // Editing dimensions must move actual GPU edges without changing authority.
+    let (region, authored_size) = app
+        .network_view()
+        .unwrap()
+        .world
+        .bricks
+        .iter()
+        .find(|(_, b)| bri_world::regions::has_region_input(b))
+        .map(|(&id, b)| (id, b.rule_region))
+        .unwrap();
+    app.ui.core.wrench.open(
+        region,
+        bri_ui::api::WrenchVariant::Normal,
+        "Builder".into(),
+        bri_ui::api::WrenchData {
+            rule_region: Some([8.0, 5.0, 8.0]),
+            region_inputs: true,
+            ..Default::default()
+        },
+        false,
+        true,
+    );
+    let preview = capture(&mut app, &gpu, &mut renderer)?;
+    let changed_edges = preview
+        .chunks_exact(4)
+        .zip(tool_pixels.chunks_exact(4))
+        // Exclude the held tool and HUD; require visible pale preview edges.
+        .take((SIZE.0 * SIZE.1 * 2 / 3) as usize)
+        .filter(|(p, old)| {
+            p[0] > 130
+                && p[1] > 220
+                && p[2] > 220
+                && p.iter().zip(old.iter()).any(|(a, b)| a.abs_diff(*b) > 20)
+        })
+        .count();
+    ensure!(
+        changed_edges > 12,
+        "8 x 5 x 8 draft did not move visible edges"
+    );
+    ensure!(
+        app.network_view().unwrap().world.bricks[&region].rule_region == authored_size,
+        "unsent preview changed authoritative dimensions"
+    );
+    save(&artifact.join("preview-8x5x8.png"), &preview)?;
+    app.ui.core.wrench.close();
+    let cancelled = capture(&mut app, &gpu, &mut renderer)?;
+    ensure!(
+        cancelled == tool_pixels,
+        "Cancel did not restore authored edges"
+    );
+    app.ui.core.request(UiAction::UnUseTool);
+    pump(&mut app)?;
+    until(&mut app, "put tool away", |a| {
+        a.network_view()
+            .is_some_and(|v| v.tools[&v.owner].selected.is_none())
+    })?;
+    step(&mut app, Duration::from_millis(16))?;
+    capture(&mut app, &gpu, &mut renderer)?;
+    ensure!(
+        !app.region_outlines_visible(),
+        "put-away tool left region outlines"
+    );
+    app.ui.core.request(UiAction::Disconnect);
+    pump(&mut app)?;
+    ensure!(
+        !app.region_outlines_visible(),
+        "disconnect left old region outlines"
+    );
+    app.gpu_stopped();
+    Ok(())
+}
 
 fn pump(app: &mut App) -> Result<()> {
     ensure!(
@@ -38,7 +236,19 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     pump(app)
 }
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    wait::until_one(app, what, Duration::from_secs(45), step, ready)
+    wait::until_one(app, what, Duration::from_secs(45), step, ready).with_context(|| {
+        format!(
+            "chat {:?}; message {:?}",
+            app.ui.core.chat.lines,
+            app.ui
+                .screen(bri_ui::screens::ScreenId::MessageBox)
+                .map(|s| s
+                    .view()
+                    .walk()
+                    .map(|n| s.view().text_of(n))
+                    .collect::<Vec<_>>())
+        )
+    })
 }
 fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<Vec<u8>> {
     let format = wgpu::TextureFormat::Rgba8Unorm;

@@ -132,6 +132,10 @@ impl WrenchState {
         events_allowed: bool,
     ) {
         let mut cur = self.values(variant);
+        // Region size belongs to the inspected brick, never a remembered Copy lock.
+        cur.rule_region = data.rule_region;
+        cur.rule_region_default = data.rule_region_default;
+        cur.region_inputs = data.region_inputs;
         let l = |f| self.locked(variant, f);
         use WrenchField::*;
         if !l(Name) {
@@ -238,30 +242,25 @@ impl WrenchState {
         allow_named: bool,
         catalog: &EventCatalog,
     ) {
-        let incoming = EventsModel::open(brick, rows, named_targets.clone(), allow_named, catalog);
-        let rows = if let Some(copy) = &self.events_copy {
-            // Opaque preserved tokens belong to the destination host brick/row.
-            // Never duplicate them from the previous brick.
+        let mut incoming = EventsModel::open(brick, rows, named_targets, allow_named, catalog);
+        if let Some(copy) = &self.events_copy {
+            use crate::models::events::{EditRow, RowState};
+            // Only the destination host owns its opaque preservation tokens.
             incoming
-                .to_send()
-                .into_iter()
-                .filter(|r| matches!(r, EventRow::Preserved { .. }))
-                .chain(
-                    copy.to_send()
-                        .into_iter()
-                        .filter(|r| matches!(r, EventRow::Editable(_))),
-                )
-                .collect()
-        } else {
-            incoming.to_send()
-        };
-        self.events = Some(EventsModel::open(
-            brick,
-            rows,
-            named_targets,
-            allow_named,
-            catalog,
-        ));
+                .rows
+                .retain(|r| matches!(r, RowState::Preserved { .. }));
+            incoming.rows.extend(copy.rows.iter().filter_map(|row| {
+                let RowState::Editable(draft) = row else {
+                    return None;
+                };
+                draft.input.as_ref()?;
+                let mut draft = draft.clone();
+                draft.copied_draft = true;
+                Some(RowState::Editable(draft))
+            }));
+            incoming.rows.push(RowState::Editable(EditRow::blank()));
+        }
+        self.events = Some(incoming);
     }
 }
 
@@ -309,6 +308,7 @@ mod tests {
                 supported: true,
             }],
             outputs: vec![EventOutputInfo {
+                provider: "Blockland".into(),
                 class: "fxDTSBrick".into(),
                 name: "setRendering".into(),
                 params: vec![],
@@ -316,6 +316,7 @@ mod tests {
             }],
         };
         let line = EventRow::Editable(EventLine {
+            conditions: vec![],
             enabled: true,
             delay_ms: 10,
             input: "onActivate".into(),
@@ -352,6 +353,9 @@ mod tests {
         let mut w = WrenchState::default();
         let a = WrenchData {
             name: "door".into(),
+            rule_region: Some([8.0, 5.0, 8.0]),
+            rule_region_default: Some([2.0, 4.0, 2.0]),
+            region_inputs: true,
             light: Some("red".into()),
             rendering: true,
             ..Default::default()
@@ -373,6 +377,12 @@ mod tests {
             "locked field carried to the next brick"
         );
         assert!(!v.rendering);
+        assert_eq!(
+            v.rule_region, None,
+            "region dimensions belong to this brick"
+        );
+        assert_eq!(v.rule_region_default, None);
+        assert!(!v.region_inputs);
         assert_eq!(w.open.as_ref().unwrap().brick, 2);
         assert_eq!(respawn_ms("5"), 5000);
         assert_eq!(clean_name(&"x".repeat(40)).len(), 32);

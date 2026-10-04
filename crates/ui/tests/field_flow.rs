@@ -61,7 +61,7 @@ macro_rules! synthetic_and_content {
             $(#[test]
             #[ignore = "requires generated v20 content"]
             fn $body() {
-                super::$body(&bri_ui::testing::content_pack("ui-pack-004"));
+                super::$body(&bri_ui::testing::content_pack(&bri_package::testing::pack_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"), "ui_pack")));
             })*
         }
     };
@@ -71,6 +71,7 @@ synthetic_and_content!(
     every_entered_value_reaches_what_the_screen_sends,
     copy_locks_keep_their_own_field,
     an_events_row_built_by_clicks,
+    unfinished_event_rows_report_missing_output_and_keep_the_draft,
 );
 
 fn new_ui(pack: &Rc<Pack>) -> Ui {
@@ -897,6 +898,7 @@ fn open_events(u: &mut Ui) {
     u.apply(UiUpdate::OpenEvents {
         brick: 42,
         rows: vec![EventRow::Editable(EventLine {
+            conditions: vec![],
             enabled: true,
             delay_ms: 0,
             input: "onActivate".into(),
@@ -1039,7 +1041,8 @@ const COPY: &str =
     "Copy keeps this field for the next brick wrenched; see copy_locks_keep_their_own_field";
 
 const UNFINISHED: &str = "a row without an output is not sent; see an_events_row_built_by_clicks";
-const ROW_DROPPED: &[&str] = &[
+const INCOMPLETE_REJECTED: &[&str] = &[
+    "actions.SendEvents.brick",
     "actions.SendEvents.rows[0].Editable.delay_ms",
     "actions.SendEvents.rows[0].Editable.enabled",
     "actions.SendEvents.rows[0].Editable.input",
@@ -1833,11 +1836,10 @@ fn scenarios() -> Vec<Scenario> {
                     "WrenchEvent_0_delay",
                     Sent(&["actions.SendEvents.rows[0].Editable.delay_ms"]),
                 ),
-                // A new input or target clears the rest of the row, which is
-                // then not sent until an output is picked again (v20
-                // createTargetList/createOutputList, send skips it).
-                ("WrenchEvent_0_input", Sent(ROW_DROPPED)),
-                ("WrenchEvent_0_target", Sent(ROW_DROPPED)),
+                // A new input/target clears the output. Send rejects the
+                // incomplete draft rather than silently omitting that row.
+                ("WrenchEvent_0_input", Sent(INCOMPLETE_REJECTED)),
+                ("WrenchEvent_0_target", Sent(INCOMPLETE_REJECTED)),
                 (
                     "WrenchEvent_0_output",
                     Sent(&[
@@ -1852,7 +1854,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ("WrenchEvent_1_enabled", NotSent(UNFINISHED)),
                 ("WrenchEvent_1_delay", NotSent(UNFINISHED)),
-                ("WrenchEvent_1_input", NotSent(UNFINISHED)),
+                ("WrenchEvent_1_input", Sent(INCOMPLETE_REJECTED)),
             ],
             rows: None,
         },
@@ -2388,5 +2390,52 @@ fn an_events_row_built_by_clicks(pack: &Rc<Pack>) {
         serde_json::json!({"enabled": true, "delay_ms": 250, "input": "onPlayerTouch", "target": "Player",
             "named_target": null, "output": "Kill", "params": []}),
         "{sent:#}"
+    );
+}
+
+fn unfinished_event_rows_report_missing_output_and_keep_the_draft(pack: &Rc<Pack>) {
+    let screen = ScreenId::WrenchEvents;
+    for (control, row) in [
+        ("WrenchEvent_0_input", 1),
+        ("WrenchEvent_0_target", 1),
+        ("WrenchEvent_1_input", 2),
+    ] {
+        let mut u = new_ui(pack);
+        open_events(&mut u);
+        u.drain_actions();
+        change(&mut u, screen, control, None).unwrap();
+        click(&mut u, screen, "wrenchEventsDlg.send();");
+        let sent = snapshot(&mut u);
+        assert!(
+            sent["actions"]["SendEvents"].is_null(),
+            "{control}: {sent:#}"
+        );
+        assert!(
+            u.screen(screen).is_some(),
+            "rejected draft remains editable"
+        );
+        let message = view(&u, ScreenId::MessageBox);
+        let text = message
+            .walk()
+            .map(|n| message.text_of(n))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            text.contains(&format!("Row {row}: choose a target and output event.")),
+            "{control}: {text}"
+        );
+    }
+    let mut u = new_ui(pack);
+    open_events(&mut u);
+    u.drain_actions();
+    click(&mut u, screen, "wrenchEventsDlg.send();");
+    let sent = snapshot(&mut u);
+    assert_eq!(
+        sent["actions"]["SendEvents"]["rows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "untouched trailing blank is harmless"
     );
 }

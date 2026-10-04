@@ -19,6 +19,7 @@ committed under packages/, or bundled originals, which travel in their own
 draft release (tools/addon_bundle.py).
 """
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -61,18 +62,28 @@ def pack(content, out):
     out.parent.mkdir(parents=True, exist_ok=True)
     head = subprocess.run(['git', 'rev-parse', '--short=9', 'HEAD'], cwd=REPO,
                           capture_output=True, text=True).stdout.strip()
-    files = 0
+    members = {}
+    if has_override:
+        members['packages.json'] = content / 'packages.json'
+    for name in dirs:
+        directory = content / name
+        if directory.resolve() != content.resolve() and content.resolve() not in directory.resolve().parents:
+            fail(f'Pack directory escapes content root: {name}')
+        for path in sorted(directory.rglob('*')):
+            if path.is_symlink():
+                fail(f'Packs may not contain links: {path}')
+            if path.is_file():
+                members[path.relative_to(content).as_posix()] = path
+    info = {'schema_version': 1, 'packs': dirs, 'packed_at_commit': head, 'files': {}}
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        archive.writestr('ci-content.json', json.dumps({'packs': dirs, 'packed_at_commit': head}, indent=2) + '\n')
-        if has_override:
-            archive.write(content / 'packages.json', 'packages.json')
-        for name in dirs:
-            for path in sorted((content / name).rglob('*')):
-                if path.is_symlink():
-                    fail(f'Packs may not contain links: {path}')
-                if path.is_file():
-                    archive.write(path, path.relative_to(content).as_posix())
-                    files += 1
+        for name, path in sorted(members.items()):
+            # Hash exactly the bytes archived, even if a generator changes a file.
+            data = path.read_bytes()
+            archive.writestr(name, data)
+            info['files'][name] = hashlib.sha256(data).hexdigest()
+        archive.writestr('ci-content.json', json.dumps(info, indent=2) + '\n')
+    files = len(members)
+    verify(out)
     size = out.stat().st_size
     if size >= ASSET_LIMIT:
         fail(f'{out} is {size / 1024 ** 3:.2f} GiB, over GitHub\'s 2 GiB asset limit.')
@@ -89,12 +100,14 @@ def upload(zip_path, tag=TAG, title='CI content (private, never publish)',
         fail(f'gh (GitHub CLI) is not installed. Install it with "winget install GitHub.cli", run "gh auth login", '
              f'and rerun this; or upload {zip_path} by hand as {SETUP_DOC} describes.')
     run = lambda *args, **kw: subprocess.run([gh, *args], cwd=REPO, **kw)  # noqa: E731
-    if run('release', 'view', tag, capture_output=True).returncode != 0:
-        # A prerelease as well as a draft: even if someone publishes it by
-        # mistake, the game's update check (releases/latest) never sees it.
+    # ci-content and the bundled originals must remain private draft assets.
+    release = run('release', 'view', tag, '--json', 'isDraft', capture_output=True, text=True)
+    if release.returncode != 0:
         made = run('release', 'create', tag, '--draft', '--prerelease', '--title', title, '--notes', notes)
         if made.returncode != 0:
             fail(f'Could not create the {tag} draft release (is "gh auth login" done?).')
+    elif not json.loads(release.stdout).get('isDraft'):
+        fail(f'Refusing to upload private content: {tag} is published, not a draft.')
     if run('release', 'upload', tag, str(zip_path), '--clobber').returncode != 0:
         fail(f'Uploading {zip_path.name} failed.')
     print(f'Uploaded {zip_path.name} to the {tag} draft release. Release builds will use it.')
@@ -144,6 +157,32 @@ def download(repo, token, zip_path, tag, asset_name, missing_help):
     return zip_path
 
 
+def verify(zip_path):
+    """Validate every snapshot byte before installing it. Folder existence
+    cannot detect an obsolete, incomplete pack with the same revision name."""
+    with zipfile.ZipFile(zip_path) as archive:
+        names = archive.namelist()
+        for name in names:
+            parts = pathlib.PurePosixPath(name)
+            if parts.is_absolute() or '..' in parts.parts or '\\' in name or ':' in name:
+                fail(f'{zip_path.name} holds an unsafe path: {name}')
+        if len(set(names)) != len(names):
+            fail(f'{zip_path.name} holds duplicate files.')
+        info = json.loads(archive.read('ci-content.json'))
+        if info.get('schema_version') != 1 or not isinstance(info.get('files'), dict):
+            fail('The content snapshot has no file integrity manifest. Refresh it with ci_content.py upload.')
+        expected = set(info['files']) | {'ci-content.json'}
+        if set(names) != expected:
+            fail(f'{zip_path.name} does not match its file manifest.')
+        for name, digest in info['files'].items():
+            if hashlib.sha256(archive.read(name)).hexdigest() != digest:
+                fail(f'{zip_path.name} has changed or damaged content: {name}')
+        for directory in info.get('packs', []):
+            if not any(name.startswith(directory + '/') for name in info['files']):
+                fail(f'{zip_path.name} has no files for pack {directory}.')
+        return info
+
+
 def extract(zip_path, root):
     """Unpack zip_path into root, refusing any member that would land outside it."""
     root.mkdir(parents=True, exist_ok=True)
@@ -169,9 +208,8 @@ def fetch(content, repo, token):
                     f'holding {ASSET}. Max sets it up once from his PC with python tools/ci_content.py upload '
                     f'(see {SETUP_DOC}).')
     zip_path = download(repo, token, content.parent / ASSET, TAG, ASSET, missing_help)
+    info = verify(zip_path)
     extract(zip_path, content)
-    with zipfile.ZipFile(zip_path) as archive:
-        info = json.loads(archive.read('ci-content.json'))
     zip_path.unlink()
     dirs, _ = package_dirs(content)
     missing = [d for d in dirs if not (content / d).is_dir()]

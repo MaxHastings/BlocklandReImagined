@@ -125,6 +125,7 @@ pub struct ScopeReport {
 pub struct RunReport {
     pub steps: usize,
     pub applied: usize,
+    pub condition_skips: usize,
     pub cancelled: usize,
     pub stale: usize,
     pub rejected: usize,
@@ -212,7 +213,7 @@ fn context_bytes(t: &Trigger) -> usize {
     128 + t.input.len() + ENTITY * (t.targets.len() + usize::from(t.client.is_some()))
 }
 /// Event checkpoint schema. Alpha checkpoints of any other version do not load.
-const CHECKPOINT_SCHEMA: u32 = 2;
+const CHECKPOINT_SCHEMA: u32 = 3;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
@@ -320,6 +321,12 @@ impl EventWorld {
     pub fn pending(&self) -> usize {
         self.pending
     }
+    /// Whether this activation still owns queued or held work. Hosts use this
+    /// bounded origin index to retire transient activation observations.
+    pub fn pending_origin(&self, origin: u64) -> bool {
+        self.queues.get(&origin).is_some_and(|q| !q.is_empty())
+            || self.held_origins.contains_key(&origin)
+    }
     /// The per-phase and per-owner work limits this world runs under.
     pub fn limits(&self) -> Limits {
         self.limits
@@ -347,6 +354,51 @@ impl EventWorld {
     }
     pub fn program(&self, id: Id) -> Option<&BrickProgram> {
         self.bricks.get(&id)
+    }
+    /// Whether this builder's named-target group already contains this name.
+    pub fn has_named_brick(&self, owner_scope: u64, name: &str) -> bool {
+        self.names.contains_key(&(owner_scope, name.to_owned()))
+    }
+    /// Read-only semantic inspection for grounded providers. Outputs without a
+    /// native Intent deliberately have no inferred semantics.
+    pub fn row_intent(&self, source: Id, row: u16) -> Option<&Intent> {
+        let compiled = self
+            .compiled
+            .get(&source)?
+            .get(usize::from(row))?
+            .as_ref()?;
+        match compiled.action.as_ref() {
+            Action::Intent(intent) => Some(intent),
+            _ => None,
+        }
+    }
+    /// Resolve exactly the targets the installed row uses, without admission,
+    /// scheduling or execution. Context validation matches normal dispatch.
+    pub fn row_targets(&self, source: Id, context: &Trigger, row: u16) -> Result<Vec<Entity>> {
+        ensure!(source == context.source, "Source/context mismatch");
+        self.validate_context(context)?;
+        let program = self
+            .bricks
+            .get(&source)
+            .context("Missing source generation")?;
+        let compiled = self
+            .compiled
+            .get(&source)
+            .and_then(|rows| rows.get(usize::from(row)))
+            .and_then(Option::as_ref)
+            .context("Missing compiled row")?;
+        ensure!(
+            self.catalog
+                .input(&context.input)
+                .is_some_and(|i| i.id == compiled.input),
+            "Row/input mismatch"
+        );
+        let targets = self.targets(program, context, &compiled.row.target)?;
+        ensure!(
+            targets.iter().all(|t| t.class == compiled.class),
+            "Compiled target class mismatch"
+        );
+        Ok(targets)
     }
     pub fn install_brick(&mut self, mut brick: BrickProgram) -> Result<()> {
         ensure!(
@@ -584,7 +636,7 @@ impl EventWorld {
     fn validate_context(&self, t: &Trigger) -> Result<()> {
         ensure!(
             t.origin > 0
-                && t.targets.len() <= 7
+                && t.targets.len() <= 16
                 && t.input.len() <= 256
                 && t.rows.is_none_or(|(first, last)| first <= last),
             "Invalid event context"
@@ -624,7 +676,7 @@ impl EventWorld {
             .get(&t.source)
             .context("Missing event source generation")?;
         ensure!(
-            t.origin > 0 && t.targets.len() <= 7,
+            t.origin > 0 && t.targets.len() <= 16,
             "Invalid event origin/context"
         );
         self.validate_context(t)?;
@@ -657,7 +709,10 @@ impl EventWorld {
                     target.class == compiled.class,
                     "Compiled target class mismatch"
                 );
-                if row.delay_ms == 0 && matches!(action, Action::Cancel) {
+                if row.conditions.is_empty()
+                    && row.delay_ms == 0
+                    && matches!(action, Action::Cancel)
+                {
                     plan.cancel.insert(target.id);
                     continue;
                 }
@@ -821,7 +876,9 @@ impl EventWorld {
                 if row.enabled
                     && let Some(c) = c
                     && c.input == input.id
-                    && !(row.delay_ms == 0 && matches!(*c.action, Action::Cancel))
+                    && !(row.conditions.is_empty()
+                        && row.delay_ms == 0
+                        && matches!(*c.action, Action::Cancel))
                 {
                     count += match &row.target {
                         Target::Named(name) => {
@@ -981,6 +1038,18 @@ impl EventWorld {
                 || (!matches!(*job.action, Action::Reappear(_))
                     && job.context.client.is_some_and(|c| !host.alive(c)))
             {
+                host.trace(
+                    job.context.source,
+                    job.row,
+                    if job.target.class == Class::Projectile && !host.alive(job.target) {
+                        format!(
+                            "Skipped: original projectile {} no longer exists",
+                            job.target.id.index
+                        )
+                    } else {
+                        "Skipped: source, target or triggering client no longer exists".into()
+                    },
+                );
                 r.stale += 1;
                 self.charge(&mut r, &mut spent, charge);
                 continue;
@@ -988,6 +1057,11 @@ impl EventWorld {
             if !matches!(*job.action, Action::Reappear(_))
                 && !host.permitted(&job.context, job.target, &job.output)
             {
+                host.trace(
+                    job.context.source,
+                    job.row,
+                    format!("Rejected: permission for {}", job.output),
+                );
                 r.rejected += 1;
                 Self::note(
                     &mut r,
@@ -996,10 +1070,10 @@ impl EventWorld {
                 self.charge(&mut r, &mut spent, charge);
                 continue;
             }
-            let consumed_before = r.rejected + r.stale;
+            let consumed_before = r.rejected + r.stale + r.condition_skips;
             match self.execute(&job, host, &mut r) {
                 Ok(true) => {
-                    if r.rejected + r.stale == consumed_before {
+                    if r.rejected + r.stale + r.condition_skips == consumed_before {
                         r.applied += 1;
                         r.origins.get_mut(&origin).unwrap().applied += 1;
                     }
@@ -1080,6 +1154,58 @@ impl EventWorld {
         }
     }
     fn execute(&mut self, j: &Job, host: &mut impl Host, r: &mut RunReport) -> Result<bool> {
+        for (i, condition) in j.row_snapshot.conditions.iter().enumerate() {
+            let actual = host.query(&j.context, j.target, condition);
+            let passed = condition.matches(actual.clone());
+            host.trace(
+                j.context.source,
+                j.row,
+                format!(
+                    "IF {}: {} {} {} {} (current: {}) - {}",
+                    i + 1,
+                    crate::rules::SUBJECTS
+                        .iter()
+                        .find(|(_, v)| *v == condition.subject)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("Target"),
+                    if condition.property == crate::rules::Property::Variable {
+                        format!("Variable {}", condition.key)
+                    } else if condition.property == crate::rules::Property::Team {
+                        "Team".into()
+                    } else {
+                        crate::rules::PROPERTIES
+                            .iter()
+                            .find(|(_, v)| *v == condition.property)
+                            .map(|(n, _)| *n)
+                            .unwrap_or("Value")
+                            .into()
+                    },
+                    crate::rules::COMPARISONS
+                        .iter()
+                        .find(|(_, v)| *v == condition.compare)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("="),
+                    host.condition_value_label(&j.context, j.target, condition, &condition.value),
+                    actual
+                        .as_ref()
+                        .map(|v| host.condition_value_label(&j.context, j.target, condition, v))
+                        .unwrap_or("unavailable".into()),
+                    if passed { "pass" } else { "skipped" }
+                ),
+            );
+            if !passed {
+                r.condition_skips += 1;
+                return Ok(true);
+            }
+        }
+        host.trace(
+            j.context.source,
+            j.row,
+            format!(
+                "{} -> {} after {}ms",
+                j.context.input, j.output, j.row_snapshot.delay_ms
+            ),
+        );
         let mut child = Plan {
             jobs: Vec::new(),
             cancel: BTreeSet::new(),
@@ -1221,6 +1347,7 @@ impl EventWorld {
             .client
             .or_else(|| j.context.targets.get(&Slot::Client).copied());
         let dispatch = Dispatch {
+            context: j.context.clone(),
             source: j.context.source,
             target: j.target,
             origin: j.context.origin,
@@ -1234,9 +1361,27 @@ impl EventWorld {
             },
             scheduled_us: j.due,
             now_us: self.now,
+            delay_ms: j.row_snapshot.delay_ms,
             intent,
         };
-        match host.apply(&dispatch) {
+        let applied = host.apply(&dispatch);
+        host.trace(
+            j.context.source,
+            j.row,
+            format!(
+                "{} -> {:?} #{} after {}ms: {}",
+                dispatch.output,
+                dispatch.target.class,
+                dispatch.target.id.index,
+                j.row_snapshot.delay_ms,
+                match &applied {
+                    Apply::Applied | Apply::Chain(_) => "ran".into(),
+                    Apply::Deferred(e) => format!("waiting: {e}"),
+                    Apply::Rejected(e) => format!("rejected: {e}"),
+                }
+            ),
+        );
+        match applied {
             Apply::Applied => {
                 if let Some(digit) = digit {
                     self.bricks.get_mut(&j.target.id).unwrap().print_count = digit;
@@ -1367,7 +1512,7 @@ impl EventWorld {
             ensure!(
                 j.output.len() <= 128
                     && j.context.input.len() <= 256
-                    && j.context.targets.len() <= 7,
+                    && j.context.targets.len() <= 16,
                 "Checkpoint job budget"
             );
             w.validate_context(&j.context)?;
@@ -1451,5 +1596,104 @@ impl EventWorld {
             );
         }
         Ok(w)
+    }
+}
+
+#[cfg(test)]
+mod semantic_inspection_tests {
+    use super::*;
+    fn id(index: u64) -> Id {
+        Id {
+            index,
+            generation: 1,
+        }
+    }
+    fn program(index: u64, name: Option<&str>, target: Target) -> BrickProgram {
+        BrickProgram {
+            id: id(index),
+            owner_scope: 7,
+            name: name.map(str::to_string),
+            rows: vec![Row {
+                enabled: true,
+                input: "onActivate".into(),
+                output: "setColor".into(),
+                target,
+                params: vec![Value::Color(1)],
+                conditions: vec![],
+                delay_ms: 0,
+                preserved: None,
+            }],
+            print_count: 0,
+            implicit_cancel_relays: false,
+        }
+    }
+    #[test]
+    fn inspection_has_no_admission_side_effect_and_resolves_real_missing_named_derived_targets() {
+        let catalog = crate::testing::catalog()
+            .with_targets(&[crate::catalog::TargetDef {
+                id: "inspection:target/self".into(),
+                name: "CreatorSelf".into(),
+                class_name: "CreatorBrick".into(),
+                from: "Self".into(),
+                package: "inspection".into(),
+                source: "test".into(),
+                source_line: 1,
+            }])
+            .unwrap();
+        let mut output = catalog.output(Class::Brick, "setColor").unwrap().clone();
+        output.id = "inspection:output/color".into();
+        output.class_name = "CreatorBrick".into();
+        output.package = Some("inspection".into());
+        let catalog = catalog.with_outputs(&[output]).unwrap();
+        let mut world = EventWorld::new(
+            catalog,
+            Bindings {
+                palette_len: 8,
+                ..Default::default()
+            },
+            Limits::default(),
+        )
+        .unwrap();
+        world
+            .install_brick(program(1, None, Target::Slot(Slot::SelfBrick)))
+            .unwrap();
+        let mut cx = Trigger::new(id(1), "onActivate", 1);
+        assert!(matches!(
+            world.row_intent(id(1), 0),
+            Some(Intent::Brick(BrickOp::Color(1)))
+        ));
+        assert_eq!(
+            world.row_targets(id(1), &cx, 0).unwrap(),
+            vec![Entity::brick(id(1))]
+        );
+        assert_eq!(world.pending(), 0, "inspection cannot schedule effects");
+        world
+            .install_brick(program(1, None, Target::Slot(Slot::Player)))
+            .unwrap_err(); // Brick-only output cannot lie about class.
+        let mut missing = program(1, None, Target::Slot(Slot::Player));
+        missing.rows[0].output = "kill".into();
+        missing.rows[0].params.clear();
+        world.install_brick(missing).unwrap();
+        assert!(world.row_targets(id(1), &cx, 0).unwrap().is_empty());
+        world
+            .install_brick(program(1, None, Target::Named("marker".into())))
+            .unwrap();
+        world
+            .install_brick(program(2, Some("Marker"), Target::Slot(Slot::SelfBrick)))
+            .unwrap();
+        assert_eq!(
+            world.row_targets(id(1), &cx, 0).unwrap(),
+            vec![Entity::brick(id(2))]
+        );
+        world
+            .install_brick(program(1, None, Target::Derived("CreatorSelf".into())))
+            .unwrap();
+        assert_eq!(
+            world.row_targets(id(1), &cx, 0).unwrap(),
+            vec![Entity::brick(id(1))]
+        );
+        cx.source = id(99);
+        assert!(world.row_targets(id(1), &cx, 0).is_err());
+        assert_eq!(world.pending(), 0);
     }
 }

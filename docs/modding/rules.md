@@ -147,7 +147,9 @@ feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
 unit direction they look), `vx`, `vy`, `vz`, `item` (the id of the item
 in their hand, or `""`), `minigame` (its id, or `()` outside one),
 `health`, `max_health`, `archetype`, `crouched`, `mounted` (seated on a
-vehicle or riding a player), `scale`, `cx`, `cy`, `cz` (the middle of the
+vehicle or riding a player), `mount` (the player/bot carrying this actor,
+or `()`; vehicle seats stay in `riding`/`seat`), `model` (current body model),
+`bot_kind` (the bot brain's authored kind, `""` for humans), `scale`, `cx`, `cy`, `cz` (the middle of the
 body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
 `()`), `image` (the image in their hand, or `""`), `image_state` (the
 name of that image's state, such as `"Ready"`), `paint` (the palette
@@ -173,10 +175,12 @@ a single-player or LAN game (`$Server::LAN`).
 
 **Bots** are players without a connection. `players()` lists only people;
 `bots()` lists the bots, as the same maps, and `player(id)` reads either.
-Bots from bot bricks hear no player hooks. Bots a mini-game's rules add
-(`add_bot`, below) are members like players: `on_spawn`, `on_loadout`,
-`on_leave`, `on_pick_spawn`, zones, `on_death` and `on_minigame` hear them,
-and they keep player state keys while they play (gone when they leave).
+Bots participating in a MiniGame use its package loadout, spawn, leave and
+zone hooks, whether spawned by a brick or by `add_bot` below. Brick bots keep
+their authored home as their first spawn choice; rules-added bots use the
+game's `on_pick_spawn` choice. Free-build brick creatures keep their authored
+equipment. Death and MiniGame callbacks observe canonical changes, and bots
+keep player state keys while they play (gone when they leave).
 `on_join`, input hooks and policies stay for people.
 
 **Bots for a mini-game** (the `bots` capability, v20 Slayer's
@@ -186,12 +190,17 @@ name list, maybe empty). `add_bot(game, #{ kind, name, team })` adds a bot
 of that kind to the game, on `team` when given; it joins when the
 operations run, and the rules hear it join. Its brain is the engine's: it
 spawns where members spawn, roams from wherever it stands, fights whoever
-the damage rules let it hurt with the first weapon it carries (or the one
-`bot_tool(bot, slot)` put in its hand; `bot_tool(bot, ())` puts its tools
+the damage rules let it hurt. Supported native weapons are chosen using their
+range, trajectory, reach and available ammunition. A provider can select a tool
+with `bot_tool(bot, slot)`; `bot_tool(bot, ())` puts its tools
 away), and respawns as soon as its game lets it. `rest_bot(bot, true)`
 holds it still with its fire held, `rest_bot(bot, false)` lets it go.
 `remove_bot(bot)` takes it away; it also leaves when its game ends or it
-is put out of it. A package can only move, arm or remove its own bots.
+is put out of it. Arming/removing is restricted to the package that added it.
+Resting is also available to the bot kind's provider and companions explicitly
+declared by that provider, so a spawn-brick creature's policy can pause its
+brain. A body/model swap does not transfer ownership of its brain. Rules must
+check the authored `bot_kind` before relying on this permission.
 Spawn-brick bots and these share `bot_limit()`, 16 at once.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the

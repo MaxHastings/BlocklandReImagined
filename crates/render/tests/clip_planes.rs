@@ -34,7 +34,8 @@ fn square(half: f32) -> SceneData {
 #[test]
 fn a_cut_instance_draws_only_its_side_and_two_cut_copies_make_it_whole() -> Result<()> {
     let (device, queue) = pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

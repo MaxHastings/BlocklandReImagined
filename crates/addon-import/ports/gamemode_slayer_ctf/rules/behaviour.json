@@ -52,6 +52,7 @@
   ],
   "state": {
     "global": {
+      "incarnation": { "default": 0, "persist": false },
       "flags": { "default": {}, "persist": false },
       "games": { "default": {}, "persist": false }
     },
@@ -62,6 +63,7 @@
   "on_minigame": true,
   "on_death": true,
   "on_pickup": true,
+  "bot_objectives": true,
   "on_drop_key": true,
   "on_event_row": true,
   "on_brick": [

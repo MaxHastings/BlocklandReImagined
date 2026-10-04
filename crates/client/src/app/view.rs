@@ -34,6 +34,24 @@ pub(super) struct ViewState {
 }
 
 impl App {
+    pub(crate) fn driver_camera_ray(
+        from: Vec3,
+        to: Vec3,
+        passages: &bri_content::passage::Passages,
+        collision: Option<&bri_sim::prediction::CollisionMirror>,
+        mut solid: impl FnMut(Vec3, Vec3) -> Result<Option<(f32, Vec3)>>,
+    ) -> Result<(Option<(f32, Vec3)>, crate::portal_view::Through)> {
+        crate::portal_view::ray(from, to, passages, |from, to| {
+            let nearby = camera_segment_near_portal(passages, from, to);
+            match collision.filter(|_| nearby) {
+                Some(mirror) => {
+                    mirror.portal_camera_hit(from, (from - to).normalize(), from.distance(to))
+                }
+                None => solid(from, to),
+            }
+        })
+    }
+
     /// `shot.kick`: shake this player's own view when they shoot, and the
     /// view of anyone within a kick's `radius` of another player's shot,
     /// seen from the shot itself (a hitscan tracer, or a new projectile), so
@@ -240,6 +258,7 @@ impl App {
         controls: &Controls,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         building: &crate::building::Building,
+        collision: Option<&bri_sim::prediction::CollisionMirror>,
         assets: &crate::vehicles::VehicleAssets,
         vehicles: &crate::vehicles::ClientVehicles,
         view: &network::View,
@@ -252,6 +271,7 @@ impl App {
             controls,
             presented,
             building,
+            collision,
             assets,
             vehicles,
             view,
@@ -292,6 +312,7 @@ impl App {
         controls: &Controls,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         building: &crate::building::Building,
+        collision: Option<&bri_sim::prediction::CollisionMirror>,
         assets: &crate::vehicles::VehicleAssets,
         vehicles: &crate::vehicles::ClientVehicles,
         view: &network::View,
@@ -342,6 +363,7 @@ impl App {
                 &view.entities,
                 drawn_offset,
                 building,
+                collision,
                 first_person_eye,
                 look(yaw, pitch),
                 None,
@@ -379,7 +401,7 @@ impl App {
                     pos,
                     |from, to| {
                         let (hit, through) =
-                            crate::portal_view::ray(from, to, passages, |from, to| {
+                            Self::driver_camera_ray(from, to, passages, collision, |from, to| {
                                 Ok(building
                                     .solid_segment(from, to)?
                                     .map(|hit| (hit.distance, hit.normal)))
@@ -436,6 +458,7 @@ impl App {
                 &view.entities,
                 drawn_offset,
                 building,
+                collision,
                 pivot,
                 look(yaw, pitch),
                 Some((middle, distance)),
@@ -451,6 +474,7 @@ impl App {
             &view.entities,
             drawn_offset,
             building,
+            collision,
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
             Some((

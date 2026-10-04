@@ -56,14 +56,13 @@
 //! reaches much farther toward the sun than the casters' (`MAP_REACH`):
 //! the map is large and its walls stand far from the eye.
 //!
-//! The Dynamic lighting mode (`ShadowSettings::light_cubes`) lights
-//! objects from every map light, not only those with a visibility channel,
-//! at any distance from the eye. (Map surfaces carry each light's reach per
-//! lightmap texel from the bake.) Each light without a channel keeps a cube
-//! of the map's surfaces (half a moving caster's face, at least 128), drawn
-//! once, a few lights a frame, into layers after the lamps'. The map is
-//! static, so they never redraw while it stays; bricks and players still
-//! shade only the lamps with a slot.
+//! Dynamic shades map surfaces and objects from the live sun, ambient and
+//! recovered light parameters. Every recovered map light keeps a map-geometry
+//! cube, populated 24 faces per frame. No legacy lightmap, visibility volume or
+//! residual is sampled. Geometry changes invalidate the cubes. The nearest
+//! quality-limited lamps additionally receive live brick and moving shadows;
+//! sun cascades read current opaque map geometry including terrain and models.
+//! Past the finite cascade range the sun is unshadowed rather than baked.
 //!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, or when the static chunks
@@ -83,7 +82,7 @@ pub const MAX_LAMPS: usize = 4;
 /// Cube faces, in the order the shader picks them: +X, -X, +Y, -Y, +Z, -Z.
 const FACES: usize = 6;
 /// Lamp shadows reach no nearer to their lamp than this.
-const LAMP_NEAR: f32 = 0.05;
+pub(crate) const LAMP_NEAR: f32 = 0.05;
 /// Lights reaching farther than this are the fit's broad fill (bounced
 /// light spread over a room), not lamps: a shadow from one would be a long
 /// smear across the room.
@@ -122,10 +121,9 @@ pub struct ShadowSettings {
     /// `resolution`: faces are tiles of the sun's map layers).
     pub lamps: u32,
     pub lamp_resolution: u32,
-    /// The Dynamic lighting mode: every map light without a visibility
-    /// channel also keeps a cube of the map's own surfaces
-    /// (`cube_resolution`), drawn once, so its light reaches exactly the
-    /// objects it sees.
+    /// Dynamic: every recovered map light keeps a geometry-derived cube.
+    /// Map surfaces and objects both read it; no legacy visibility channel.
+    /// Cached faces are rebuilt when map geometry or light parameters change.
     pub light_cubes: bool,
 }
 impl ShadowSettings {
@@ -174,12 +172,10 @@ impl ShadowSettings {
         let per_layer = self.tiles_of(size) * self.tiles_of(size);
         (self.lamps * FACES as u32).div_ceil(per_layer)
     }
-    /// Each map light's cube face in the Dynamic mode: half a moving
-    /// caster's face, at least 128.
+    /// Each Dynamic map light face: moving-caster resolution, at least
+    /// 256 (512 at Best). Finite MAX_LIGHTS x 6 faces in the shared atlas.
     pub fn cube_resolution(&self) -> u32 {
-        (self.lamp_dynamic_resolution() / 2)
-            .max(128)
-            .min(self.resolution)
+        self.lamp_dynamic_resolution().max(256).min(self.resolution)
     }
     /// The map lights' cubes' layers, after the lamps' (none unless
     /// `light_cubes`).
@@ -530,6 +526,78 @@ pub(crate) fn lamp_faces(position: Vec3, outer: f32, resolution: u32) -> [Mat4; 
     })
 }
 
+/// Admission uses the same six-face construction as rendering, rather than a
+/// coordinate envelope. All face axes are checked. Resolution changes only the
+/// lateral margin (scale <= 1); the overflow-prone depth coefficients are the
+/// same at every quality, so the standard cube faces cover that contract.
+pub(crate) fn finite_lamp_faces(position: Vec3, outer: f32) -> bool {
+    position.is_finite()
+        && outer.is_finite()
+        && outer > LAMP_NEAR
+        && lamp_faces(position, outer, ShadowSettings::BEST.cube_resolution())
+            .iter()
+            .all(|face| face.to_cols_array().iter().all(|value| value.is_finite()))
+}
+
+/// Freshness is distinct from availability. A geometry change schedules new
+/// faces but the previous runtime geometry cubes remain usable for the same
+/// lamp projectors until their replacements are drawn. A source change has no
+/// such history: its missing faces are explicitly unavailable.
+#[derive(Default)]
+struct CubeCache {
+    key: Vec<usize>,
+    projectors: Vec<Option<(Vec3, f32)>>,
+    drawn: Vec<Option<Mat4>>,
+    available: bool,
+}
+impl CubeCache {
+    fn refresh(
+        &mut self,
+        settings: ShadowSettings,
+        key: &[usize],
+        lights: &[Option<(Vec3, f32)>],
+        budget: usize,
+    ) -> (Vec<(usize, usize, Mat4)>, bool) {
+        if key.is_empty() {
+            *self = Self::default();
+            return (Vec::new(), false);
+        }
+        let lights = &lights[..lights.len().min(crate::map_lighting::MAX_LIGHTS)];
+        if self.projectors.as_slice() != lights {
+            self.drawn.clear();
+            self.available = false;
+            self.projectors = lights.to_vec();
+        }
+        if self.key.as_slice() != key {
+            self.drawn.clear();
+            self.key = key.to_vec();
+        }
+        self.drawn.resize(lights.len() * FACES, None);
+        self.drawn.truncate(lights.len() * FACES);
+        let mut stale = Vec::new();
+        let mut fresh = true;
+        for (light, cube) in lights.iter().enumerate() {
+            let Some((position, reach)) = *cube else {
+                continue;
+            };
+            let faces = lamp_faces(position, reach, settings.cube_resolution());
+            for (face, matrix) in faces.iter().enumerate() {
+                let index = light * FACES + face;
+                if self.drawn[index] != Some(*matrix) {
+                    if stale.len() < budget {
+                        self.drawn[index] = Some(*matrix);
+                        stale.push((light, face, *matrix));
+                    } else {
+                        fresh = false;
+                    }
+                }
+            }
+        }
+        self.available |= fresh;
+        (stale, self.available)
+    }
+}
+
 /// Shadow map textures, uniforms and caster pipelines. Disabled shadows keep
 /// a 1x1 map and a zero cascade count so receivers need no variant.
 pub(crate) struct ShadowMaps {
@@ -572,7 +640,7 @@ pub(crate) struct ShadowMaps {
     map_faces: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
     /// Per map light face (Dynamic mode): the matrix its cube face was
     /// drawn with, and the map it was drawn from.
-    cubes: std::cell::RefCell<(Vec<usize>, Vec<Option<Mat4>>)>,
+    cubes: std::cell::RefCell<CubeCache>,
 }
 impl ShadowMaps {
     pub fn new(
@@ -1155,13 +1223,13 @@ impl ShadowMaps {
     /// Forgets the drawn map faces (a new map or new map lighting).
     pub fn forget_map_faces(&self) {
         self.map_faces.borrow_mut().1.clear();
-        self.cubes.borrow_mut().1.clear();
+        *self.cubes.borrow_mut() = CubeCache::default();
     }
     /// The map lights' cube faces to draw this frame from `map` (identified
     /// by `key`), at most `budget`, lights in order, marking them drawn; and
-    /// whether every cube is then whole. `lights` are each light's position
-    /// and reach, or `None` for a light that needs no cube (map surfaces
-    /// carry its visibility per texel). Without light cubes or a map, none.
+    /// whether a whole runtime cube cohort is available (including the last
+    /// geometry version during a bounded refresh). `lights` are each light's position
+    /// and reach, or `None` for an inactive light. Without cubes or a map, none.
     pub fn stale_cube_faces(
         &self,
         key: &[usize],
@@ -1171,38 +1239,9 @@ impl ShadowMaps {
         let Some(settings) = self.settings.filter(|s| s.light_cubes) else {
             return (Vec::new(), false);
         };
-        let mut state = self.cubes.borrow_mut();
-        let (drawn_key, drawn) = &mut *state;
-        if key.is_empty() || drawn_key.as_slice() != key {
-            drawn.clear();
-            *drawn_key = key.to_vec();
-        }
-        if key.is_empty() {
-            return (Vec::new(), false);
-        }
-        let lights = &lights[..lights.len().min(crate::map_lighting::MAX_LIGHTS)];
-        drawn.resize(lights.len() * FACES, None);
-        drawn.truncate(lights.len() * FACES);
-        let mut stale = Vec::new();
-        let mut ready = true;
-        for (light, cube) in lights.iter().enumerate() {
-            let Some((position, reach)) = *cube else {
-                continue;
-            };
-            let faces = lamp_faces(position, reach, settings.cube_resolution());
-            for (face, matrix) in faces.iter().enumerate() {
-                let index = light * FACES + face;
-                if drawn[index] != Some(*matrix) {
-                    if stale.len() < budget {
-                        drawn[index] = Some(*matrix);
-                        stale.push((light, face, *matrix));
-                    } else {
-                        ready = false;
-                    }
-                }
-            }
-        }
-        (stale, ready)
+        self.cubes
+            .borrow_mut()
+            .refresh(settings, key, lights, budget)
     }
 }
 impl ShadowUniform {
@@ -1334,6 +1373,75 @@ mod tests {
     }
 
     #[test]
+    fn validated_light_radii_have_finite_shadow_faces() {
+        for outer in [0.001, LAMP_NEAR, 0.050001, 1.0, 50.0] {
+            if crate::lighting_parameters::valid_radii(0.0, outer) {
+                assert!(
+                    lamp_faces(Vec3::new(3.0, 4.0, 5.0), outer, 512)
+                        .iter()
+                        .all(|face| face.to_cols_array().iter().all(|v| v.is_finite()))
+                );
+            } else {
+                assert!(
+                    outer <= LAMP_NEAR,
+                    "tiny/equal inputs must be rejected before projection"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn geometry_cube_refresh_preserves_available_lighting_and_bounded_work() {
+        let settings = ShadowSettings {
+            light_cubes: true,
+            ..ShadowSettings::BEST
+        };
+        let lights = vec![Some((Vec3::new(0.0, 12.0, 0.0), 40.0)); 24];
+        let mut cache = CubeCache::default();
+        for frame in 0..6 {
+            let (drawn, available) = cache.refresh(settings, &[1], &lights, 24);
+            assert_eq!(drawn.len(), 24);
+            assert_eq!(
+                available,
+                frame == 5,
+                "first-use cohort has no valid history"
+            );
+        }
+        for _ in 0..6 {
+            let (drawn, available) = cache.refresh(settings, &[2], &lights, 24);
+            assert_eq!(drawn.len(), 24);
+            assert!(available, "geometry invalidation must not zero every lamp");
+        }
+        assert!(cache.refresh(settings, &[2], &lights, 24).0.is_empty());
+        let mut moved = lights.clone();
+        moved[23] = Some((Vec3::new(1.0, 12.0, 0.0), 40.0));
+        assert!(
+            !cache.refresh(settings, &[2], &moved, 24).1,
+            "new projector identities cannot reuse an old source's cohort"
+        );
+        assert!(!cache.refresh(settings, &[], &moved, 24).1);
+    }
+
+    #[test]
+    fn finite_positions_can_overflow_shadow_depth_projection() {
+        let position = Vec3::new(1e38, 0.0, 0.0);
+        let outer = 0.050001;
+        assert!(position.is_finite());
+        assert!(crate::lighting_parameters::valid_radii(0.0, outer));
+        for resolution in [256, 512] {
+            assert!(
+                lamp_faces(position, outer, resolution)
+                    .iter()
+                    .any(|face| face.to_cols_array().iter().any(|value| !value.is_finite()))
+            );
+        }
+        assert!(!finite_lamp_faces(position, outer));
+        // There is no invented position limit: the math itself decides.
+        assert!(finite_lamp_faces(position, 50.0));
+        assert!(finite_lamp_faces(Vec3::new(3.0, 4.0, 5.0), outer));
+    }
+
+    #[test]
     fn each_lamp_face_holds_its_axis_and_reaches_the_light_range() {
         let at = Vec3::new(3.0, 4.0, 5.0);
         let faces = lamp_faces(at, 50.0, 512);
@@ -1373,22 +1481,22 @@ mod tests {
         assert_eq!(best.lamp_map_tile(23), (21, [1536, 512, 512]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
-        // Dynamic: 24 lights' cubes after the lamps, 64 faces of 256 a layer.
+        // Dynamic: 24 lights' cubes after the lamps, 16 faces of 512 a layer.
         assert_eq!(best.cube_layers(), 0);
         let dynamic = ShadowSettings {
             light_cubes: true,
             ..best
         };
-        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (256, 3));
-        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 256]));
-        assert_eq!(dynamic.cube_tile(143), (24, [1792, 256, 256]));
+        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (512, 9));
+        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 512]));
+        assert_eq!(dynamic.cube_tile(143), (30, [1536, 1536, 512]));
         let low = ShadowSettings {
             light_cubes: true,
             ..ShadowSettings::LOW
         };
         assert_eq!(
             (low.cube_resolution(), low.cube_layers(), low.cube_tile(0).0),
-            (128, 3, 6)
+            (256, 9, 6)
         );
     }
 }

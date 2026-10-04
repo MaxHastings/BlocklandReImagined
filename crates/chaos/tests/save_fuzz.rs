@@ -32,6 +32,7 @@ fn sample() -> &'static Value {
         let mut world = chaos.session.simulation().state().clone();
         let rows = [
             EventRow {
+                conditions: vec![],
                 preserved: None,
                 enabled: true,
                 input: "onActivate".into(),
@@ -41,6 +42,7 @@ fn sample() -> &'static Value {
                 params: vec![EventValue::Color(3)],
             },
             EventRow {
+                conditions: vec![],
                 preserved: None,
                 enabled: true,
                 input: "onActivate".into(),

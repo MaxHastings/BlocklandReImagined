@@ -235,20 +235,23 @@ fn fixture_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
-    maps_fit_lights_that_explain_their_lightmaps(&content().join("map-bundle-017"), |id, lit| {
-        // Kitchen's stove glows orange, dimmer than the white lights round
-        // it; the fit finds it (and its error then drops below 9 levels).
-        if id.ends_with("/kitchen.mis") {
-            assert!(
-                lit.lights.iter().any(|l| l.color[0] > 0.4
-                    && l.color[2] < 0.02
-                    && l.color[0] > 1.8 * l.color[1]),
-                "{:?}",
-                lit.lights
-            );
-            assert!(lit.report.mean < 9.0, "{}", lit.report.mean);
-        }
-    })?;
+    maps_fit_lights_that_explain_their_lightmaps(
+        &bri_package::testing::pack_dir(&content(), "map_bundle"),
+        |id, lit| {
+            // Kitchen's stove glows orange, dimmer than the white lights round
+            // it; the fit finds it (and its error then drops below 9 levels).
+            if id.ends_with("/kitchen.mis") {
+                assert!(
+                    lit.lights.iter().any(|l| l.color[0] > 0.4
+                        && l.color[2] < 0.02
+                        && l.color[0] > 1.8 * l.color[1]),
+                    "{:?}",
+                    lit.lights
+                );
+                assert!(lit.report.mean < 9.0, "{}", lit.report.mean);
+            }
+        },
+    )?;
     Ok(())
 }
 

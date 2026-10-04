@@ -159,6 +159,26 @@ own sun lighting pass. It does not read `.ml` lighting caches, so the output
 does not depend on which maps someone has played. Accuracy against the engine's
 own caches is recorded in content-conversion.md ("Mission lighting bake").
 
+Classic and Unified retain those baked inputs. Dynamic uses a separate
+`lighting-parameters.json` sidecar containing lamp positions, colors and radii;
+its illumination and shadows come from the current scene. Bootstrap runs
+`prepare_lighting` after map generation and before the startup check, including
+when the map pack was copied in without regeneration stamps. Valid sidecars
+are kept; missing or stale ones are recovered offline from the converted source.
+Recovery cannot reconstruct light metadata that the original map never retained.
+
+For an existing map pack, without reimporting the original installation:
+
+```sh
+cargo run --release --locked -p bri-render --bin prepare_lighting -- content/map-bundle-017
+cargo run --release --locked -p bri-render --bin prepare_lighting -- content/map-bundle-017 --check
+```
+
+The sidecar is checked against the bundle identity and travels in the private
+CI content archive. Packaged startup validation rejects missing or stale
+parameters. Interactive Dynamic rendering announces a live sun/ambient fallback
+if the sidecar is unavailable; it never silently reuses baked shadows.
+
 ## Reproducibility
 
 On 2026-09-27 a run from an empty checkout against the reference install

@@ -172,6 +172,10 @@ pub struct Behaviour {
     pub commands: Vec<CommandDef>,
     #[serde(default)]
     pub state: StateSchema,
+    /// Read-only explicit desired-state discovery for ordinary NPC controls.
+    /// `bot_objectives(player)` describes supported semantics, not bot scripts.
+    #[serde(default)]
+    pub bot_objectives: bool,
     /// `on_join(player)` when a player joins.
     #[serde(default)]
     pub on_join: bool,

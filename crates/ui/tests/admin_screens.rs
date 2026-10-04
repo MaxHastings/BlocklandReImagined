@@ -310,9 +310,10 @@ fn admin_screens_render_offscreen_synthetic() -> anyhow::Result<()> {
 #[ignore = "requires generated v20 content"]
 fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
     let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = std::rc::Rc::new(bri_ui::pack::Pack::load(
-        &workspace.join("content/ui-pack-004"),
-    )?);
+    let pack = std::rc::Rc::new(bri_ui::pack::Pack::load(&bri_package::testing::pack_dir(
+        &workspace.join("content"),
+        "ui_pack",
+    ))?);
     let out = workspace.join("artifacts/native-admin-ui");
     std::fs::create_dir_all(&out)?;
     admin_screens_render_offscreen(pack, Some(&out))
@@ -1083,5 +1084,10 @@ fn change_map_shows_the_picked_maps_picture_synthetic() {
 #[test]
 #[ignore = "requires generated v20 content"]
 fn change_map_shows_the_picked_maps_picture_content() {
-    change_map_shows_the_picked_maps_picture(bri_ui::testing::content_pack("ui-pack-004"));
+    change_map_shows_the_picked_maps_picture(bri_ui::testing::content_pack(
+        &bri_package::testing::pack_dir(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+            "ui_pack",
+        ),
+    ));
 }

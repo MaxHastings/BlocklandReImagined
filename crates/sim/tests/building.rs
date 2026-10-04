@@ -72,6 +72,43 @@ fn actor(owner: u64) -> Actor {
 }
 
 #[test]
+fn liquid_volumes_do_not_block_sight_but_still_remain_selectable() {
+    let mut defs = definitions();
+    let mut water = defs.entries["plate"].clone();
+    water.special = bri_sim::definitions::Special::Water;
+    defs.entries.insert("water".into(), water);
+    let mut w = world();
+    let mut liquid = brick(0.1);
+    liquid.definition = ContentRef::Resolved("water".into());
+    w.bricks.insert(1, liquid);
+    w.next_brick_id = 2;
+    let from = Vec3::new(-2.0, 0.1, 0.25);
+    let to = Vec3::new(3.0, 0.1, 0.25);
+    let sim = Simulation::new(w.clone(), defs.clone(), vec![]).unwrap();
+    assert_eq!(
+        sim.target(from, Vec3::X, 5.0).unwrap().unwrap().brick,
+        Some(1)
+    );
+    assert!(sim.sight(from, to, 6.0).is_some());
+    let mut wall = brick(0.1);
+    wall.position[0] = 2.0;
+    w.bricks.insert(2, wall);
+    w.next_brick_id = 3;
+    let sim = Simulation::new(w, defs, vec![]).unwrap();
+    assert!(
+        sim.sight(from, to, 6.0).is_none(),
+        "solid surfaces still occlude"
+    );
+    assert_eq!(
+        sim.target_bricks_always(from, Vec3::X, 5.0)
+            .unwrap()
+            .unwrap()
+            .brick,
+        Some(1)
+    );
+}
+
+#[test]
 fn placement_is_atomic_and_checks_grid_support_ownership_and_reach() {
     let mut sim = Simulation::new(world(), definitions(), vec![floor()]).unwrap();
     let owner = actor(1);

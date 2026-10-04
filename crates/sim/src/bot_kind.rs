@@ -15,8 +15,16 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_FIRST_NAMES: usize = 256;
 /// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
 /// order (`session::bots::behaviour::Behaviour`).
-pub const BEHAVIOURS: [&str; 7] = [
-    "carry", "fly", "fight", "chase", "search", "return", "wander",
+pub const BEHAVIOURS: [&str; 9] = [
+    "carry",
+    "fly",
+    "interact",
+    "fight",
+    "chase",
+    "search",
+    "return",
+    "objective",
+    "wander",
 ];
 
 /// One bot kind: its spawn list entry and how its brain plays.
@@ -72,7 +80,8 @@ pub struct BotKind {
     /// was (Bot_Hole's `hAlertOtherBots`).
     pub alerts_allies: bool,
     /// Weights on its behaviours' scores by name (`carry`, `fly`,
-    /// `fight`, `chase`, `search`, `return`, `wander`), 1 when not given:
+    /// `interact`, `fight`, `chase`, `search`, `return`, `wander`). Ordinary
+    /// behaviours default to 1; environmental interactions and objectives default to 0:
     /// 0 turns one off (a guard that never gives chase), more puts it ahead
     /// of others (`docs/architecture/bots.md`).
     pub behaviours: std::collections::BTreeMap<String, f32>,

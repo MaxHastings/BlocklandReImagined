@@ -35,7 +35,23 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     pump(app)
 }
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    wait::until_one(app, what, Duration::from_secs(45), step, ready)
+    wait::until_one(app, what, Duration::from_secs(45), step, ready).with_context(|| {
+        app.network_view().map_or_else(
+            || "no network replica".to_string(),
+            |v| {
+                format!(
+                    "tick {}; images {:?}; projectiles {:?}",
+                    v.tick,
+                    v.weapons.images.get(&v.owner),
+                    v.weapons
+                        .projectiles
+                        .iter()
+                        .map(|p| &p.definition)
+                        .collect::<Vec<_>>()
+                )
+            },
+        )
+    })
 }
 /// Let `seconds` of game time pass ([`wait::run_one_for`]).
 fn run_for(app: &mut App, seconds: f32) -> Result<()> {
@@ -203,7 +219,26 @@ fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms(f: &ContentRoot) ->
         down: true,
     }));
     pump(&mut app)?;
-    run_for(&mut app, 0.6)?;
+    until(&mut app, "basketball charge accepted", |a| {
+        a.network_view().is_some_and(|v| {
+            v.weapons.images.get(&v.owner).is_some_and(|images| {
+                images.iter().any(|i| {
+                    i.hand == 0
+                        && i.image.contains("basketballshoot")
+                        && matches!(i.state.as_str(), "Charge" | "Armed")
+                })
+            })
+        })
+    })?;
+    until(&mut app, "basketball charge armed", |a| {
+        a.network_view().is_some_and(|v| {
+            v.weapons.images.get(&v.owner).is_some_and(|images| {
+                images.iter().any(|i| {
+                    i.hand == 0 && i.image.contains("basketballshoot") && i.state == "Armed"
+                })
+            })
+        })
+    })?;
     save(
         &artifact.join("ball-shooting.png"),
         &capture(&mut app, &gpu, &mut renderer)?,

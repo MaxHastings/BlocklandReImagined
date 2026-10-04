@@ -1353,6 +1353,22 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
         let member = rel_member(cx, &f.path);
         let digest = hash(&f.bytes);
         match kind_of(&f.path) {
+            "text" if member.eq_ignore_ascii_case("colorSet.txt") => {
+                // A colorset is data read by the host chooser, not a script.
+                // Preserve its authored divisions and exact source bytes.
+                ensure!(f.bytes.len() <= 65_536, "Colorset exceeds 64 KiB");
+                std::str::from_utf8(&f.bytes).context("Colorset is not UTF-8")?;
+                cx.write("colorSet.txt", &f.bytes)?;
+                let id = cx.id("asset", &member, &f.path, "colorSet.txt");
+                set_asset(
+                    cx,
+                    &f.path,
+                    "copied",
+                    Some("colorSet.txt".into()),
+                    Some(id),
+                    None,
+                );
+            }
             "shape" => {
                 match bri_convert::shape::read_dts(&f.bytes, content_id(&cx.ns, "shape", &member)) {
                     Ok((shape, provenance)) => {
@@ -1413,8 +1429,9 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                 let id = content_id(&cx.ns, "brick_geometry", &member);
                 match bri_convert::brick::read(&f.bytes, id.clone()) {
                     Ok((brick, provenance)) => {
-                        let rel = format!("bricks/{}.brick.json", &digest[..24]);
-                        cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&brick)?)?;
+                        let native = serde_json::to_vec(&brick)?;
+                        let rel = format!("bricks/{}.brick.json", &hash(&native)[..24]);
+                        cx.write(&format!("assets/{rel}"), &native)?;
                         let id =
                             cx.id("brick_geometry", &member, &f.path, &format!("assets/{rel}"));
                         cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
@@ -2700,6 +2717,12 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     let name = cx.owned.get(&key).map_or(key.clone(), |o| o.d.name.clone());
                     b.id = cx.id("brick", &key, &name, "assets/bricks.json");
                     b.swap = door_swap(&b);
+                    if b.swap.is_some() {
+                        // Support_Doors::setDoorDataBlock plays the stock
+                        // clickChange clip unless the target suppresses it.
+                        b.other_properties
+                            .insert("native_swap_sound".into(), "v20/sound/brickchange".into());
+                    }
                     // A hole brick keeps one bot of its `holeBot`'s kind.
                     let hole = b
                         .other_properties
@@ -3008,17 +3031,26 @@ fn player_type(cx: &mut Ctx, name: &str, at: &Location, hole: bool) -> Option<St
                 .get(&name.to_ascii_lowercase())
                 .and_then(|o| o.fields.get("shapefile"))
                 .map(|v| literal(v).trim().to_owned());
-            if let Some(model) = shape.and_then(|shape| {
+            if let Some(model) = shape.as_ref().and_then(|shape| {
                 cx.report.assets.iter().find_map(|a| {
                     (a.kind == "shape"
                         && a.status == "converted"
-                        && a.source.eq_ignore_ascii_case(&shape))
+                        && a.source.eq_ignore_ascii_case(shape))
                     .then(|| a.id.clone())
                     .flatten()
                 })
             }) {
                 def["model"] = json!(model);
                 gaps.retain(|g| g != "shapefile");
+                // A custom body owns its rider nodes. Inheriting Blockhead's
+                // single mount makes authored mouth/seat nodes unreachable.
+                if let Some((_, body)) = shape
+                    .as_ref()
+                    .and_then(|shape| cx.shapes.get(&shape.to_ascii_lowercase()))
+                    && let Ok(points) = body_mount_points(body)
+                {
+                    def["mount_points"] = json!(points);
+                }
             }
             // Bot_Hole's settings make its bot kind.
             if hole {
@@ -3070,6 +3102,34 @@ fn player_type(cx: &mut Ctx, name: &str, at: &Location, hole: bool) -> Option<St
             None
         }
     }
+}
+
+fn body_mount_points(
+    body: &bri_content::shape::Shape,
+) -> anyhow::Result<Vec<bri_package_runtime::content::MountPointDef>> {
+    let pose = bri_content::animation::sample(body, None, 0.0)?;
+    let mut points = Vec::new();
+    // Seat numbers are authored identities; stop at a missing node rather
+    // than renumbering later ones. This matches the motor's eight-seat bound.
+    for seat in 0..8 {
+        let node = format!("mount{seat}");
+        let Some(index) = body
+            .nodes
+            .iter()
+            .position(|n| n.name.eq_ignore_ascii_case(&node))
+        else {
+            break;
+        };
+        let position = pose.nodes[index]
+            .transform_point3(glam::Vec3::ZERO)
+            .to_array();
+        points.push(bri_package_runtime::content::MountPointDef {
+            node: body.nodes[index].name.clone(),
+            position,
+            pose: "root".into(),
+        });
+    }
+    Ok(points)
 }
 
 /// The bot kind of the hole bot `PlayerData` named `name`: this Add-On's
@@ -4010,6 +4070,36 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
             }
         }
         if port.applied {
+            // A port may replace a source framework with native mechanisms.
+            // Report that only when it explicitly handles the dependency AND
+            // removes the runtime requirement; an unapplied port changes neither.
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(cx.out.join("package.json"))?)?;
+            for dependency in &mut cx.report.dependencies {
+                let key = format!("dependency:{}", dependency.addon.to_ascii_lowercase());
+                let Some(how) = port.handled.get(&key) else {
+                    continue;
+                };
+                let package = dependency
+                    .package
+                    .clone()
+                    .unwrap_or_else(|| namespace_for(&dependency.addon).unwrap_or_default());
+                if package.is_empty() || manifest["dependencies"].get(&package).is_some() {
+                    continue;
+                }
+                dependency.status = "ported".into();
+                dependency.package = None;
+                cx.report.ported.push(Finding {
+                    what: format!("dependency {}", dependency.addon),
+                    source: dependency.source.clone(),
+                    detail: "source framework required by the original script".into(),
+                    resolution: Some(format!(
+                        "port {}: {}",
+                        port.port,
+                        how.iter().cloned().collect::<Vec<_>>().join("; ")
+                    )),
+                });
+            }
             let covered = |f: &str| {
                 port.covers.iter().any(|c| c.eq_ignore_ascii_case(f))
                     || port.handled.contains_key(&f.to_ascii_lowercase())
@@ -4056,6 +4146,36 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_body_mounts_keep_parent_transforms_and_seat_numbers() {
+        let node = |name: &str, parent, translation| bri_content::shape::Node {
+            name: name.into(),
+            parent,
+            translation,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let shape = bri_content::shape::Shape {
+            schema_version: 1,
+            id: "test:body".into(),
+            nodes: vec![
+                node("body", None, [1.0, 2.0, 3.0]),
+                node("Mount0", Some(0), [0.0, 1.0, 0.0]),
+                node("mount1", None, [2.0, 3.0, 4.0]),
+                node("mount3", None, [9.0, 9.0, 9.0]),
+            ],
+            objects: vec![],
+            details: vec![],
+            meshes: vec![],
+            materials: vec![],
+            animations: vec![],
+        };
+        let points = super::body_mount_points(&shape).unwrap();
+        assert_eq!(points.len(), 2, "a missing mount2 must not renumber mount3");
+        assert_eq!(points[0].node, "Mount0");
+        assert_eq!(points[0].position, [1.0, 3.0, 3.0]);
+        assert_eq!(points[1].position, [2.0, 3.0, 4.0]);
+    }
+
     #[test]
     fn material_textures_are_looked_for_up_the_folders() {
         assert_eq!(

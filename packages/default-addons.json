@@ -31,6 +31,7 @@
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
+    { "id": "rule-workshop-toys", "path": "rule-workshop-toys" },
     { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false },
     { "id": "brick_portal", "path": "brick_portal", "enabled": false },
     { "id": "gravity-gun-tool", "path": "showcase/gravity-gun-tool", "enabled": false },
@@ -1299,6 +1300,21 @@
           "b4a95ae4f40baa1a5af8f0d8eeb05fb5b609cd8e531933af657e289aac30f3b8"
         ]
       }
+    },
+    {
+      "id": "colorset_trueno",
+      "original": {
+        "addon": "Colorset_Trueno",
+        "title": "Trueno's Colorset",
+        "authors": [
+          "Trueno"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "99a1b3d3dc87af59645b71fa329160510df3af7dad88e2391a4801d301be2130"
+        ]
+      },
+      "enabled": false
     }
   ]
 }

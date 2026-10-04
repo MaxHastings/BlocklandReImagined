@@ -1,5 +1,5 @@
 # Adds the macOS zip to an existing release. It builds the client on an Apple
-# silicon runner, takes the content from that release's public Windows zip
+# silicon runner, takes the content from that release's Windows zip (drafts included)
 # (checked against its MANIFEST.json), packages with tools/package_mac.sh
 # (an ad-hoc signed .app) and uploads the zip. It never replaces an asset.
 name: mac-release-asset
@@ -71,6 +71,46 @@ jobs:
       - name: Build the game and Add-On importer
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
 
+      - name: Verify release panic capture
+        run: cargo test --release --locked -p bri-crash --test capture
+
+      - name: Retain matching executables and dSYMs
+        run: |
+          mkdir -p "$RUNNER_TEMP/mac-symbols"
+          for binary in bri-client bri-import-addon; do
+            cp "target/release/$binary" "$RUNNER_TEMP/mac-symbols/$binary"
+            dsymutil "target/release/$binary" -o "$RUNNER_TEMP/mac-symbols/$binary.dSYM"
+          done
+          python3 - "$RUNNER_TEMP/mac-symbols" <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, sys
+          root = pathlib.Path(sys.argv[1])
+          def uuids(path):
+              output = subprocess.check_output(['dwarfdump', '--uuid', str(path)], text=True)
+              return sorted(re.findall(r'UUID: ([0-9A-Fa-f-]+) \(([^)]+)\)', output))
+          binaries = []
+          for name in ['bri-client', 'bri-import-addon']:
+              executable_uuids = uuids(root / name)
+              if not executable_uuids or executable_uuids != uuids(root / (name + '.dSYM')):
+                  sys.exit(f'::error::{name} dSYM UUID does not match the built executable')
+              binaries.append({'path': name, 'mach_o_uuids': executable_uuids})
+          files = [{'path': p.relative_to(root).as_posix(), 'bytes': p.stat().st_size,
+                    'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                   for p in sorted(root.rglob('*')) if p.is_file()]
+          manifest = {'schema_version': 1, 'version': os.environ['BRI_VERSION'],
+                      'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                      'run_id': os.environ['GITHUB_RUN_ID'], 'platform': 'macos',
+                      'rustc': subprocess.check_output(['rustc', '-vV'], text=True),
+                      'binaries': binaries, 'files': files}
+          (root / 'SYMBOLS.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: mac-debug-symbols
+          path: ${{ runner.temp }}/mac-symbols/
+          retention-days: 90
+          if-no-files-found: error
+
       - name: Startup check against the content
         run: |
           target/release/bri-client --check content "$RUNNER_TEMP/bri-check-state"
@@ -89,6 +129,26 @@ jobs:
           name: mac-release
           path: ${{ env.MAC_ZIP }}
           retention-days: 30
+
+      - name: Extracted app startup smoke
+        run: |
+          mkdir -p "$RUNNER_TEMP/mac-smoke"
+          ditto -x -k "$MAC_ZIP" "$RUNNER_TEMP/mac-smoke"
+          roots=("$RUNNER_TEMP/mac-smoke"/*)
+          test "${#roots[@]}" -eq 1
+          game="${roots[0]}/BlocklandReImagined.app/Contents"
+          "$game/MacOS/bri-client" --check "$game/Resources/content" "$RUNNER_TEMP/bri-zip-state"
+          "$game/MacOS/bri-client" --version
+          python3 - "$RUNNER_TEMP/mac-symbols/SYMBOLS.json" "$game/MacOS" <<'PY'
+          import json, pathlib, re, subprocess, sys
+          manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          for binary in manifest['binaries']:
+              executable = pathlib.Path(sys.argv[2]) / binary['path']
+              output = subprocess.check_output(['dwarfdump', '--uuid', str(executable)], text=True)
+              actual = sorted([list(v) for v in re.findall(r'UUID: ([0-9A-Fa-f-]+) \(([^)]+)\)', output)])
+              if actual != binary['mach_o_uuids']:
+                  sys.exit(f"::error::{executable.name} packaged UUID differs from retained symbols")
+          PY
 
       - name: Attach the zip to the release
         run: gh release upload "$BRI_VERSION" "$MAC_ZIP"

@@ -90,7 +90,8 @@ fn cuboid(min: Vec3, max: Vec3, fx: [f32; 4]) -> SceneData {
 #[test]
 fn chrome_on_a_moved_instance_matches_the_brick_built_in_place() -> Result<()> {
     let (device, queue) = pollster::block_on(async {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

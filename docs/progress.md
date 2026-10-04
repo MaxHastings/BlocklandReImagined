@@ -1,8 +1,11 @@
 # Progress and evidence
 
-New entries from 2026-10-01 are one file each in [progress/](progress/README.md).
+This file preserves the earlier dated history. For current release state and
+open work, read [STATUS.md](STATUS.md). New entries from 2026-10-01 are one file
+each in [progress/](progress/README.md).
 
-## Current state
+## State snapshot — 2026-09-26
+
 2026-09-26: full vanilla playable-alpha goal active; not ready for Maxwell's
 interactive playtest. All 14 reference maps have native geometry/collision and
 baseline environment rendering. Stock building, original surfaces/77 prints,

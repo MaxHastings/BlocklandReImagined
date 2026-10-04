@@ -2658,6 +2658,7 @@ fn a_required_add_on_beside_the_copy_is_its_reference() {
 /// A wrench row on `onPoke` aimed at the player who pokes.
 fn add_ammo_row(choice: i64, amount: i64, ignore_max: bool) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onPoke".into(),

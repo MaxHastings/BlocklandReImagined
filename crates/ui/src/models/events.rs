@@ -6,9 +6,58 @@
 
 use crate::api::{EventCatalog, EventLine, EventRow, ParamValue};
 use crate::schema::ParamSpec;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const NAMED_BRICK: &str = "<NAMED BRICK>";
-pub const MAX_DELAY_MS: u32 = 30_000;
+pub const MAX_DELAY_MS: u32 = 300_000;
+
+/// Presentation only: qualified legacy inputs keep their exact runtime names.
+/// Group only when the catalog also offers the base event; unfamiliar Add-Ons
+/// otherwise retain an ordinary searchable fallback.
+pub fn input_group(name: &str, choices: &[String]) -> Option<String> {
+    let (base, qualifier) = name.split_once('(')?;
+    if qualifier.strip_suffix(')')?.is_empty() || !choices.iter().any(|n| n == base) {
+        return None;
+    }
+    Some(format!("{base} variants"))
+}
+
+/// Gameplay vocabulary augments search without changing labels or identities.
+pub fn event_aliases(name: &str) -> String {
+    let base = name.split('(').next().unwrap_or(name);
+    let hint = match base {
+        "onActivate" => "click activate button use",
+        "onPlayerTouch" => "touch walk step player",
+        "onRegionEnter" => "enter region player checkpoint zone",
+        "onRegionLeave" => "leave region player checkpoint zone",
+        "onRegionStay" => "stay region player checkpoint zone",
+        "onObjectEnter" => "enter region object ball goal vehicle zone",
+        "onObjectLeave" => "leave region object ball goal vehicle zone",
+        "onObjectStay" => "stay region object ball goal vehicle zone",
+        "onCPCapture" => "capture point team",
+        "onCPReset" => "capture point reset",
+        "setColliding" => "collision solid pass through open close door",
+        "setRendering" => "visible invisible show hide open close door",
+        "disappear" => "hide disappear open close seconds door",
+        "setEventEnabled" | "toggleEventEnabled" => "enable disable event row switch puzzle",
+        "setVariable" | "addVariable" | "onRuleVariableChanged" => {
+            "variable state progress puzzle checkpoint"
+        }
+        "addPlayerScore" | "addTeamScore" => "score points goal checkpoint",
+        "winRound" | "endRound" => "win finish victory round game",
+        "setRegionSize" => "detection bounds region zone goal checkpoint",
+        "setTeam" | "joinTeam" => "team join assign player",
+        _ => "",
+    };
+    let mut words = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() || matches!(ch, '(' | ')' | '_' | '-') {
+            words.push(' ');
+        }
+        words.push(ch.to_ascii_lowercase());
+    }
+    format!("{words} {hint}")
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowState {
@@ -22,8 +71,16 @@ pub enum RowState {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct EditRow {
+    /// Cross-brick UI draft: unavailable vocabulary must be corrected or removed,
+    /// never converted into a destination host preservation token.
+    pub copied_draft: bool,
+    pub conditions: Vec<bri_events::rules::Condition>,
+    /// UI-only unfinished IF checks. Never sent; retained with copied drafts.
+    pub pending_conditions: BTreeSet<usize>,
+    /// Raw text belongs to the UI draft, including unfinished numbers.
+    pub draft_text: BTreeMap<DraftField, String>,
     pub enabled: bool,
-    /// Delay field text (clamped to 0..=30000 when accepted).
+    /// Delay field text (clamped to 0..=300000 when accepted).
     pub delay_text: String,
     /// Input event name (`None` = "-").
     pub input: Option<String>,
@@ -31,6 +88,31 @@ pub struct EditRow {
     pub named: Option<String>,
     pub output: Option<String>,
     pub params: Vec<ParamValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DraftField {
+    Parameter(usize),
+    VectorAxis(usize),
+    ConditionKey(usize),
+    ConditionValue(usize),
+}
+
+impl DraftField {
+    pub fn is_condition(self) -> bool {
+        matches!(self, Self::ConditionKey(_) | Self::ConditionValue(_))
+    }
+    pub fn remove_condition(self, removed: usize) -> Option<Self> {
+        match self {
+            Self::ConditionKey(i) => {
+                (i != removed).then(|| Self::ConditionKey(i - usize::from(i > removed)))
+            }
+            Self::ConditionValue(i) => {
+                (i != removed).then(|| Self::ConditionValue(i - usize::from(i > removed)))
+            }
+            _ => Some(self),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +123,7 @@ pub struct EventsModel {
     pub allow_named: bool,
 }
 
-/// `mClamp(value, 0, 30000)` on the delay text (atoi semantics).
+/// `mClamp(value, 0, 300000)` on the delay text (atoi semantics).
 pub fn clamp_delay(text: &str) -> u32 {
     let t = text.trim();
     let digits: String = t
@@ -113,7 +195,11 @@ impl EventsModel {
             m.rows.push(match r {
                 EventRow::Editable(l) if m.line_supported(&l, catalog) => {
                     RowState::Editable(EditRow {
+                        copied_draft: false,
                         enabled: l.enabled,
+                        conditions: l.conditions,
+                        pending_conditions: BTreeSet::new(),
+                        draft_text: BTreeMap::new(),
                         delay_text: l.delay_ms.min(MAX_DELAY_MS).to_string(),
                         input: Some(l.input),
                         target: Some(l.target),
@@ -233,6 +319,7 @@ impl EventsModel {
                     e.named = None;
                     e.output = None;
                     e.params.clear();
+                    e.draft_text.retain(|field, _| field.is_condition());
                     if was_blank && last {
                         self.rows.push(RowState::Editable(EditRow::blank()));
                     }
@@ -258,6 +345,7 @@ impl EventsModel {
         if old != new {
             e.output = None;
             e.params.clear();
+            e.draft_text.retain(|field, _| field.is_condition());
         }
     }
 
@@ -284,6 +372,7 @@ impl EventsModel {
             .map(|o| o.params.clone())
             .unwrap_or_default();
         e.output = Some(output);
+        e.draft_text.retain(|field, _| field.is_condition());
         e.params = specs.iter().take(4).map(default_param).collect();
     }
 
@@ -354,12 +443,16 @@ impl EventsModel {
                     token: token.clone(),
                 }),
                 RowState::Editable(e) => {
+                    if !e.pending_conditions.is_empty() {
+                        return None;
+                    }
                     let (input, target, output) =
                         (e.input.clone()?, e.target.clone()?, e.output.clone()?);
                     if target == NAMED_BRICK && e.named.is_none() {
                         return None;
                     }
                     Some(EventRow::Editable(EventLine {
+                        conditions: e.conditions.clone(),
                         enabled: e.enabled,
                         delay_ms: clamp_delay(&e.delay_text),
                         input,
@@ -429,6 +522,27 @@ mod tests {
     use super::*;
     use crate::api::{CURRENT_BRICK_EVENT_INPUTS, CURRENT_BRICK_EVENT_OUTPUTS};
     use crate::schema::{EventTables, InputEventDef, OutputEventDef};
+
+    #[test]
+    fn presentation_groups_preserve_generic_qualified_names() {
+        let names = vec![
+            "onActivate".into(),
+            "onActivate(Team6)".into(),
+            "onActivate(Custom)".into(),
+        ];
+        assert_eq!(
+            input_group("onActivate(Team6)", &names).as_deref(),
+            Some("onActivate variants")
+        );
+        assert_eq!(
+            input_group("onActivate(Custom)", &names).as_deref(),
+            Some("onActivate variants")
+        );
+        assert_eq!(input_group("onOther(Team6)", &names), None);
+        assert!(event_aliases("onObjectEnter").contains("ball goal"));
+        assert!(event_aliases("setColliding").contains("open close door"));
+        assert!(event_aliases("customCheckpointReached").contains("checkpoint"));
+    }
 
     pub fn catalog() -> EventCatalog {
         let t = EventTables {
@@ -541,7 +655,7 @@ mod tests {
         let EventRow::Editable(l) = &sent[0] else {
             panic!()
         };
-        assert_eq!(l.delay_ms, 30_000);
+        assert_eq!(l.delay_ms, 99_999);
         assert_eq!(l.params, vec![ParamValue::PaintColor(5)]);
         assert!(m.uses_named("door"));
         // Different class clears the output.
@@ -558,6 +672,7 @@ mod tests {
     fn unsupported_rows_are_preserved_read_only() {
         let c = catalog();
         let relay = EventLine {
+            conditions: vec![],
             enabled: true,
             delay_ms: 100,
             input: "onRelay".into(),

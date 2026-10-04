@@ -89,8 +89,11 @@ impl Raw<'_> {
 }
 
 fn load() -> Pack {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
+    let path = bri_package::testing::pack_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
+        "weapons",
+    )
+    .join("weapons.json");
     Pack::from_json(&std::fs::read(path).expect("Run documented importer first")).unwrap()
 }
 

@@ -254,6 +254,7 @@ PY
 for doc in "${docs[@]}"; do
     cp "$repo/$doc" "$release/"
 done
+python3 "$repo/tools/package_guides.py" "$release"
 credits="$(field 'print(plan["credits"])')"
 [[ -z "$credits" ]] || cp "$credits" "$release/CREDITS.md"
 # Finder metadata would change the sealed bundle after signing.

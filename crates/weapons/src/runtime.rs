@@ -127,7 +127,11 @@ impl Frame {
                 && (0.01..=100.0).contains(&self.scale)
                 && self.direction.length_squared() > 0.1
                 && self.velocity.length() < 10000.0,
-            "Invalid actor frame"
+            "Invalid actor frame: yaw={}, scale={}, direction length squared={}, speed={}",
+            self.body_yaw,
+            self.scale,
+            self.direction.length_squared(),
+            self.velocity.length()
         );
         Ok(())
     }
@@ -784,17 +788,47 @@ fn key_item(key: &str) -> &str {
 /// The rounds `key`'s magazine holds: one counted from its reserve
 /// ([`crate::Magazine::from_reserve`]) holds what the reserve does.
 fn rounds_in(a: &Actor, key: &str, magazine: &crate::Magazine) -> u32 {
+    magazine_rounds(
+        magazine,
+        a.rounds.get(key).copied().unwrap_or(0),
+        a.reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(0)),
+    )
+}
+fn magazine_rounds(magazine: &crate::Magazine, stored: u32, reserve: Reserve) -> u32 {
     if magazine.counts_reserve() {
-        match a.reserve.get(&magazine.ammo) {
-            Some(Reserve::Endless) => u32::MAX,
-            Some(Reserve::Rounds(n)) => *n,
-            None => 0,
+        match reserve {
+            Reserve::Endless => u32::MAX,
+            Reserve::Rounds(n) => n,
         }
     } else if magazine.supply == crate::Supply::Unlimited {
         // Never used: always full.
         magazine.size
     } else {
-        a.rounds.get(key).copied().unwrap_or(0)
+        stored
+    }
+}
+fn ammo_view(
+    key: &str,
+    magazine: crate::Magazine,
+    rounds: u32,
+    reserve: Reserve,
+    reloading: bool,
+) -> AmmoView {
+    AmmoView {
+        rounds: rounds.min(100_000),
+        counted: magazine.counts_reserve(),
+        supply: magazine.supply,
+        shown: magazine.displayed(),
+        item: key_item(key).to_string(),
+        size: magazine.size,
+        name: magazine.name().to_string(),
+        reserve,
+        ammo: magazine.ammo,
+        reloading,
+        display_ticks: magazine.display_ticks,
     }
 }
 /// Whether a reload of `magazine` has something to fill it from: reserve,
@@ -962,6 +996,42 @@ impl WeaponsWorld {
     }
     pub fn projectiles(&self) -> impl Iterator<Item = &Projectile> {
         self.projectiles.values()
+    }
+    pub fn projectile(&self, id: u64) -> Option<&Projectile> {
+        self.projectiles.get(&id)
+    }
+    /// A scheduled output on the still-live original projectile. Bounce uses
+    /// the activation's normal and current velocity; normalized redirect uses
+    /// its current speed. Retired IDs are never substituted.
+    pub fn respond_projectile(
+        &mut self,
+        id: u64,
+        normal: Vec3,
+        response: ContactResponse,
+    ) -> Result<bool> {
+        if !self.projectiles.contains_key(&id) {
+            return Ok(false);
+        }
+        match response {
+            ContactResponse::Delete => Ok(self.remove_projectile(id)),
+            ContactResponse::Explode => {
+                ensure!(
+                    self.explosions.len() < MAX_EXPLOSIONS_PER_TICK && self.events.len() < 8192,
+                    "Explosion budget for this tick"
+                );
+                // Explicit explosions already run at the next weapon phase.
+                let p = self.projectiles.remove(&id).unwrap();
+                self.explosions.push(p);
+                self.events.push(Event::Removed { projectile: id });
+                Ok(true)
+            }
+            ContactResponse::Bounce(_) | ContactResponse::Redirect { .. } => {
+                let p = self.projectiles.get_mut(&id).unwrap();
+                self.events.push(redirect_projectile(p, normal, response)?);
+                Ok(true)
+            }
+            ContactResponse::Continue => anyhow::bail!("No projectile output"),
+        }
     }
     /// [`fall_per_tick`] of every projectile that falls, by definition.
     pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
@@ -1696,23 +1766,40 @@ impl WeaponsWorld {
     pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
         let a = self.actors.get(&id)?;
         let (item, magazine) = self.magazine_of(a).or_else(|| self.stowed(a))?;
-        Some(AmmoView {
-            rounds: rounds_in(a, &item, &magazine).min(100_000),
-            counted: magazine.counts_reserve(),
-            supply: magazine.supply,
-            shown: magazine.displayed(),
-            item: key_item(&item).to_string(),
-            size: magazine.size,
-            name: magazine.name().to_string(),
-            reserve: a
-                .reserve
-                .get(&magazine.ammo)
-                .copied()
-                .unwrap_or(Reserve::Rounds(0)),
-            ammo: magazine.ammo,
-            reloading: a.reload.is_some(),
-            display_ticks: magazine.display_ticks,
-        })
+        let rounds = rounds_in(a, &item, &magazine);
+        let reserve = a
+            .reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(0));
+        Some(ammo_view(
+            &item,
+            magazine,
+            rounds,
+            reserve,
+            a.reload.is_some(),
+        ))
+    }
+    /// Read the magazine that equipping this inventory slot would provide.
+    /// A never-drawn slot starts full, and the first magazine of an ammo
+    /// kind supplies its authored starting reserve. Existing empty magazines
+    /// and shared reserves stay empty. This projection changes no state and
+    /// does not promise that a busy image can switch immediately.
+    pub fn ammo_on_equip(&self, id: ActorId, slot: usize) -> Option<AmmoView> {
+        let a = self.actors.get(&id)?;
+        let item = a.inventory.get(slot)?.as_ref()?;
+        let image = &self.pack.items.get(item)?.image;
+        let magazine = self.pack.images.get(image)?.magazine.clone()?;
+        let key = slot_key(item, slot);
+        let reserve = a
+            .reserve
+            .get(&magazine.ammo)
+            .copied()
+            .unwrap_or(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
+        let stored = a.rounds.get(&key).copied().unwrap_or(magazine.size);
+        let rounds = magazine_rounds(&magazine, stored, reserve);
+        let reloading = a.reload.as_ref().is_some_and(|r| r.item == key);
+        Some(ammo_view(&key, magazine, rounds, reserve, reloading))
     }
     /// Every reserve a holder has, by ammo name.
     pub fn reserves(&self, id: ActorId) -> Option<&BTreeMap<String, Reserve>> {
@@ -2158,6 +2245,38 @@ impl WeaponsWorld {
         }
         Ok(())
     }
+    /// Abandon a held charge without taking its release-to-fire transition.
+    /// Restart the same hand images through the normal unmount/mount events,
+    /// preserving selection and paint. Worn images and inventory are untouched.
+    /// Hosts must clear any queued presses before using this cancellation.
+    pub fn cancel_charge(&mut self, id: ActorId) -> Result<bool> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        if !a.images[0]
+            .as_ref()
+            .is_some_and(|e| self.pack.images[&e.image].charges())
+        {
+            return Ok(false);
+        }
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        let image = a.images[0].as_ref().expect("checked");
+        let restart = NextImage {
+            image: image.image.clone(),
+            paint: image.paint,
+        };
+        let mut a = self.actors.remove(&id).expect("checked");
+        let flags = (a.ammo, a.loaded);
+        let pending = a.next.take();
+        a.trigger = false;
+        self.swap_images(id, &mut a, restart);
+        (a.ammo, a.loaded) = flags;
+        a.next = pending;
+        self.actors.insert(id, a);
+        Ok(true)
+    }
+
     /// Sports movement trigger switches dribble/standing presentation to shoot mode.
     pub fn sport_trigger(&mut self, id: ActorId, trigger: u8, down: bool) -> Result<()> {
         ensure!(self.events.len() < 8192, "Command event budget");
@@ -3537,17 +3656,9 @@ impl WeaponsWorld {
                     self.explode(p, &d, q, Some(normal));
                     return false;
                 }
-                response => match redirected_velocity(&contact, response) {
-                    Ok(velocity) => {
-                        p.velocity = velocity;
-                        p.position += velocity.normalize_or_zero() * 0.002;
-                        p.age = 0;
-                        p.stuck = false;
-                        self.events.push(Event::Bounced {
-                            projectile: p.id,
-                            position: p.position,
-                            velocity,
-                        });
+                response => match redirect_projectile(p, contact.normal, response) {
+                    Ok(event) => {
+                        self.events.push(event);
                         return true;
                     }
                     Err(error) => self.events.push(Event::Diagnostic {
@@ -4492,11 +4603,28 @@ mod persistence;
 pub use persistence::{SAVE_SCHEMA, WeaponsSave};
 
 /// Source Bounce/Redirect preserve incident speed when normalized and cap new speed at 200.
+fn redirect_projectile(
+    p: &mut Projectile,
+    normal: Vec3,
+    response: ContactResponse,
+) -> Result<Event> {
+    let velocity = response_velocity(p.velocity, normal, response)?;
+    p.velocity = velocity;
+    p.position += velocity.normalize_or_zero() * 0.002;
+    p.age = 0;
+    p.stuck = false;
+    Ok(Event::Bounced {
+        projectile: p.id,
+        position: p.position,
+        velocity,
+    })
+}
 pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse) -> Result<Vec3> {
+    response_velocity(impact.velocity, impact.normal, response)
+}
+fn response_velocity(current: Vec3, normal: Vec3, response: ContactResponse) -> Result<Vec3> {
     ensure!(
-        impact.velocity.is_finite()
-            && impact.normal.is_finite()
-            && impact.normal.length_squared() > 0.1,
+        current.is_finite() && normal.is_finite() && normal.length_squared() > 0.1,
         "Invalid impact"
     );
     let velocity = match response {
@@ -4505,8 +4633,8 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
                 factor.is_finite() && factor.abs() <= 1000.0,
                 "Invalid bounce factor"
             );
-            let normal = impact.normal.normalize();
-            (impact.velocity - normal * impact.velocity.dot(normal) * 2.0) * factor
+            let normal = normal.normalize();
+            (current - normal * current.dot(normal) * 2.0) * factor
         }
         ContactResponse::Redirect { vector, normalized } => {
             ensure!(
@@ -4514,7 +4642,7 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
                 "Invalid redirect vector"
             );
             if normalized {
-                vector.normalize_or_zero() * impact.velocity.length()
+                vector.normalize_or_zero() * current.length()
             } else {
                 vector
             }

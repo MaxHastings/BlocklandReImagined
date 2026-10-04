@@ -55,12 +55,14 @@ const LEARN_RATE: f64 = 0.2;
 const GHOST_SECONDS: f32 = 0.35;
 /// Seconds a body stays solid before it starts to fade: long enough to
 /// kick it around.
-const SOLID_SECONDS: f32 = 3.0;
+const SOLID_SECONDS: f32 = 10.0;
 /// Seconds of fading to fully transparent, after which the body is removed.
-const FADE_SECONDS: f32 = 2.0;
+const FADE_SECONDS: f32 = 3.0;
 /// Converts v20 blast force into launch speed (units/s).
 const FORCE_TO_SPEED: f32 = 0.5;
 const MAX_SPEED: f32 = 40.0;
+/// Cosmetic explosion cues waiting for the next debris frame.
+const MAX_BLASTS: usize = 64;
 /// Bodies are a hair smaller than the brick so neighbours killed together
 /// don't start out interpenetrating.
 const BODY_SHRINK: f32 = 0.96;
@@ -175,6 +177,15 @@ struct Ghost {
     left: f32,
 }
 
+#[derive(Clone, Copy)]
+struct CosmeticBlast {
+    tick: u64,
+    origin: Vec3,
+    normal: Option<Vec3>,
+    force: f32,
+    radius: f32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BrickDebrisDiagnostics {
     pub accepted: u64,
@@ -212,6 +223,8 @@ pub struct BrickDebris {
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
     cursor: u64,
+    explosion_cursor: u64,
+    pending_blasts: Vec<CosmeticBlast>,
     accumulator: f32,
     pushers: Pushers,
     shots: Shots,
@@ -245,6 +258,8 @@ impl BrickDebris {
             surroundings: Surroundings::default(),
             dead: BTreeSet::new(),
             cursor: 0,
+            explosion_cursor: 0,
+            pending_blasts: Vec::new(),
             accumulator: 0.0,
             pushers: Pushers::default(),
             shots: Shots::default(),
@@ -360,6 +375,52 @@ impl BrickDebris {
     pub fn is_dead(&self, brick: BrickId) -> bool {
         self.dead.contains(&brick)
     }
+    /// A real explosion can move existing debris even when no new brick dies.
+    /// The native projectile's brick force supplies cosmetic launch strength;
+    /// its impulse radius supplies reach. Unrecognized effects supply neither.
+    pub fn explosion_cue(&mut self, cue: &Cue, pack: &bri_weapons::Pack) {
+        if cue.id <= self.explosion_cursor {
+            return;
+        }
+        self.explosion_cursor = cue.id;
+        let CueKind::WeaponEffect {
+            definition,
+            direction,
+            scale,
+            node,
+            image: None,
+            ..
+        } = &cue.kind
+        else {
+            return;
+        };
+        if !node.is_empty() || cue.validate().is_err() || self.pending_blasts.len() >= MAX_BLASTS {
+            return;
+        }
+        let (force, radius) = pack
+            .projectiles
+            .values()
+            .filter(|p| p.explosion.effect.eq_ignore_ascii_case(definition))
+            .fold((0.0_f32, 0.0_f32), |(force, radius), p| {
+                (
+                    force.max(p.brick.force),
+                    radius.max(p.brick.radius.max(p.explosion.impulse_radius)),
+                )
+            });
+        if force <= 0.0 || radius <= 0.0 {
+            return;
+        }
+        self.pending_blasts.push(CosmeticBlast {
+            tick: cue.tick,
+            origin: Vec3::from(cue.position),
+            normal: direction
+                .map(Vec3::from)
+                .filter(|n| n.length_squared() > 1e-6)
+                .map(Vec3::normalize),
+            force: (force * scale).min(bri_sim::presentation::MAX_BRICK_FORCE),
+            radius: (radius * scale).min(bri_sim::presentation::MAX_BRICK_FORCE),
+        });
+    }
     /// Turn new `BrickKill` cues into debris and return how many there were:
     /// falling bricks for kills, bodies for blasts. Other cues are ignored.
     pub fn cues<'a>(
@@ -368,6 +429,10 @@ impl BrickDebris {
         building: &Building,
     ) -> Result<usize> {
         let mut spawned = 0;
+        let explosions = std::mem::take(&mut self.pending_blasts);
+        for blast in &explosions {
+            self.blast(blast.origin, blast.force, blast.radius, blast.normal);
+        }
         // One blast kills many bricks, one cue each: it shoves the debris
         // already flying once, not once per brick it killed.
         let mut last_blast = None;
@@ -428,8 +493,11 @@ impl BrickDebris {
             }
             // A big blast also shoves the debris already flying around it.
             let blast = (*origin, *force, *radius);
-            if *radius > 0.5 && last_blast != Some(blast) {
-                self.blast(Vec3::from(*origin), *force, *radius);
+            let explosion = explosions
+                .iter()
+                .find(|b| b.tick == cue.tick && b.origin == Vec3::from(*origin));
+            if *radius > 0.5 && last_blast != Some(blast) && explosion.is_none() {
+                self.blast(Vec3::from(*origin), *force, *radius, None);
             }
             last_blast = Some(blast);
             // The dead brick must never hold up its own debris.
@@ -448,6 +516,7 @@ impl BrickDebris {
                 Vec3::from(*origin),
                 *force,
                 *radius,
+                explosion.filter(|_| *radius > 1.0).and_then(|b| b.normal),
             );
             self.diagnostics.accepted += 1;
             spawned += 1;
@@ -503,6 +572,7 @@ impl BrickDebris {
         origin: Vec3,
         force: f32,
         radius: f32,
+        normal: Option<Vec3>,
     ) {
         self.diagnostics.evicted += self.evict_to(self.room - 1);
         let mut rng = Seeded::new(id);
@@ -520,9 +590,26 @@ impl BrickDebris {
         } else {
             1.0
         };
+        let falloff = if normal.is_some() {
+            falloff.max(0.4)
+        } else {
+            falloff
+        };
         let wobble = Vec3::new(rng.signed(), rng.signed(), rng.signed()) * 0.25;
-        let direction = (direction + wobble).normalize_or(Vec3::Y);
+        // A wall impact's center-to-origin vector points into the wall.
+        // Its observed surface normal sends the broken pieces out of that
+        // face instead of wedging them against surviving backing bricks.
+        let direction =
+            (direction + normal.unwrap_or(Vec3::ZERO) * 2.0 + wobble).normalize_or(Vec3::Y);
         let speed = (force * FORCE_TO_SPEED * falloff * (0.85 + 0.3 * rng.unit())).min(MAX_SPEED);
+        let mut velocity = direction * speed;
+        if normal.is_some() && speed > 0.0 {
+            // A modest lift separates pieces from the floor/shelves before
+            // friction can put them back to sleep. Authored event throws,
+            // which have no explosion surface cue, retain their direction.
+            velocity.y = velocity.y.max((speed * 0.45).min(8.0));
+        }
+        velocity = velocity.clamp_length_max(MAX_SPEED);
         let spin = Vec3::new(rng.signed(), rng.signed(), rng.signed()).normalize_or(Vec3::X)
             * (2.0 + 6.0 * rng.unit());
         let rotation = Rotation::from_scaled_axis(
@@ -533,7 +620,7 @@ impl BrickDebris {
                 Vector::from_array(center.to_array()),
                 rotation,
             ))
-            .linvel(Vector::from_array((direction * speed).to_array()))
+            .linvel(Vector::from_array(velocity.to_array()))
             .angvel(Vector::from_array(spin.to_array()))
             .linear_damping(0.1)
             .angular_damping(0.4)
@@ -630,8 +717,13 @@ impl BrickDebris {
         }
     }
     /// Shove every body within `radius` of `origin` away from it.
-    fn blast(&mut self, origin: Vec3, force: f32, radius: f32) {
-        if !origin.is_finite() || !force.is_finite() || force <= 0.0 {
+    fn blast(&mut self, origin: Vec3, force: f32, radius: f32, normal: Option<Vec3>) {
+        if !origin.is_finite()
+            || !force.is_finite()
+            || force <= 0.0
+            || !radius.is_finite()
+            || radius <= 0.0
+        {
             return;
         }
         for body in self.bodies.values() {
@@ -642,11 +734,15 @@ impl BrickDebris {
             if distance > radius {
                 continue;
             }
-            let direction = offset.normalize_or(Vec3::Y);
+            let direction = (offset.normalize_or(Vec3::Y) + normal.unwrap_or(Vec3::ZERO) * 2.0)
+                .normalize_or(Vec3::Y);
             let falloff = (1.0 - distance / radius).clamp(0.25, 1.0);
             let speed = (force * FORCE_TO_SPEED * falloff).min(MAX_SPEED);
-            let v = (Vec3::from_array(rb.linvel().to_array()) + direction * speed)
-                .clamp_length_max(MAX_SPEED);
+            let mut kick = direction * speed;
+            if normal.is_some() {
+                kick.y = kick.y.max((speed * 0.45).min(8.0));
+            }
+            let v = (Vec3::from_array(rb.linvel().to_array()) + kick).clamp_length_max(MAX_SPEED);
             rb.set_linvel(Vector::from_array(v.to_array()), true);
         }
     }
@@ -1150,7 +1246,11 @@ pub(crate) mod tests {
         );
         let (_, t) = debris.instances().next().unwrap();
         assert_eq!(t.tint[3], 1.0);
-        run(&mut debris, &building, SOLID_SECONDS);
+        // A rocket's debris is still fully visible after the old five-second
+        // total lifetime, so creators can enjoy the settled destruction.
+        run(&mut debris, &building, 4.0);
+        assert_eq!(debris.instances().next().unwrap().1.tint[3], 1.0);
+        run(&mut debris, &building, SOLID_SECONDS - 4.0);
         let (_, t) = debris.instances().next().unwrap();
         assert!(
             t.tint[3] > 0.0 && t.tint[3] < 1.0,
@@ -1217,6 +1317,165 @@ pub(crate) mod tests {
         a.cues(&cues, &building).unwrap();
         assert_eq!(a.len(), 6);
         assert_eq!(a.diagnostics.duplicates, 6);
+    }
+
+    fn cosmetic_blast_pack() -> bri_weapons::Pack {
+        let mut pack = bri_weapons::testing::pack();
+        let projectile = pack
+            .projectiles
+            .get_mut(bri_weapons::testing::ROCKET_PROJECTILE)
+            .unwrap();
+        // An arbitrary provider effect, not a weapon-name special case.
+        projectile.explosion.effect = "fixtureSurfaceBlast".into();
+        projectile.explosion.impulse_radius = 6.0;
+        projectile.brick.force = 30.0;
+        projectile.brick.radius = 3.0;
+        pack
+    }
+
+    fn cosmetic_blast(id: u64, at: Vec3, normal: Option<Vec3>) -> Cue {
+        Cue {
+            id,
+            tick: 1,
+            position: at.to_array(),
+            kind: CueKind::WeaponEffect {
+                source: bri_weapons::TargetId::Map(0),
+                definition: "fixtureSurfaceBlast".into(),
+                node: String::new(),
+                seconds: 0.0,
+                image: None,
+                hand: None,
+                direction: normal.map(|n| n.to_array()),
+                scale: 1.0,
+            },
+        }
+    }
+
+    #[test]
+    fn a_surface_blast_ejects_broken_wall_bricks_away_from_surviving_backing() {
+        let bricks: Vec<_> = (0..3)
+            .flat_map(|i| {
+                let y = 0.3 + i as f32 * 0.6;
+                [(i + 1, [0.0, y, 0.0]), (i + 11, [0.0, y, 1.0])]
+            })
+            .collect();
+        let (building, _) = building(&bricks);
+        let origin = Vec3::new(0.0, 0.9, -0.5);
+        let pack = cosmetic_blast_pack();
+        let kills: Vec<_> = (0..3)
+            .map(|i| {
+                kill(
+                    i + 2,
+                    i + 1,
+                    [0.0, 0.3 + i as f32 * 0.6, 0.0],
+                    origin.to_array(),
+                    30.0,
+                    3.0,
+                )
+            })
+            .collect();
+        let mut debris = BrickDebris::new();
+        debris.explosion_cue(&cosmetic_blast(1, origin, Some(Vec3::NEG_Z)), &pack);
+        debris.cues(&kills, &building).unwrap();
+        for body in debris.bodies.values() {
+            let velocity = debris.world.bodies[body.handle].linvel();
+            assert!(velocity.z < -4.0 && velocity.y > 0.0, "{velocity:?}");
+        }
+        run(&mut debris, &building, 0.5);
+        for position in debris.positions() {
+            assert!(position.z < -0.75, "still inside the wall: {position}");
+        }
+        assert_eq!(debris.len(), 3);
+        assert!(
+            !debris.is_dead(11),
+            "surviving backing remains a world brick"
+        );
+    }
+
+    #[test]
+    fn an_explosion_without_new_kills_wakes_and_moves_existing_debris_once() {
+        let (building, _) = building(&[]);
+        let pack = cosmetic_blast_pack();
+        let mut debris = BrickDebris::new();
+        debris
+            .cues(&[lying(1, [-1.0, 0.3, 0.0])], &building)
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        let handle = debris.bodies[&1].handle;
+        debris.world.bodies[handle].sleep();
+        let cue = cosmetic_blast(2, Vec3::new(0.0, 0.3, 0.0), None);
+        debris.explosion_cue(&cue, &pack);
+        assert_eq!(debris.cues(&[], &building).unwrap(), 0);
+        let velocity = debris.world.bodies[handle].linvel();
+        assert!(velocity.x < -10.0 && !debris.world.bodies[handle].is_sleeping());
+        // No new body, no repeated kick when a checkpoint resends the cue.
+        debris.explosion_cue(&cue, &pack);
+        debris.cues(&[], &building).unwrap();
+        assert_eq!(debris.world.bodies[handle].linvel(), velocity);
+        assert_eq!(debris.len(), 1);
+        run(&mut debris, &building, 0.25);
+        assert!(debris.positions()[0].x < -2.0, "{:?}", debris.positions());
+    }
+
+    #[test]
+    fn explosion_queue_is_bounded_and_does_not_double_kick_or_change_authored_throws() {
+        let (building, _) = building(&[]);
+        let pack = cosmetic_blast_pack();
+        let origin = Vec3::new(0.0, 0.3, 0.0);
+        let cue = cosmetic_blast(2, origin, Some(Vec3::NEG_Z));
+        let mut debris = BrickDebris::new();
+        debris
+            .cues(&[lying(1, [1.0, 0.3, 0.0])], &building)
+            .unwrap();
+        debris.explosion_cue(&cue, &pack);
+        debris.cues(&[], &building).unwrap();
+        let handle = debris.bodies[&1].handle;
+        let once = debris.world.bodies[handle].linvel();
+        let mut with_kills = BrickDebris::new();
+        with_kills
+            .cues(&[lying(1, [1.0, 0.3, 0.0])], &building)
+            .unwrap();
+        with_kills.explosion_cue(&cue, &pack);
+        with_kills
+            .cues(
+                &[kill(3, 3, [2.0, 0.3, 0.0], origin.to_array(), 30.0, 3.0)],
+                &building,
+            )
+            .unwrap();
+        let handle = with_kills.bodies[&1].handle;
+        assert_eq!(with_kills.world.bodies[handle].linvel(), once);
+
+        // Small authored fakeKill/direct throws retain their exact launch,
+        // even if an explosion surface cue happens to share their origin.
+        for radius in [0.02, 1.0] {
+            let kill = kill(3, 3, [0.0, 0.3, 1.0], origin.to_array(), 20.0, radius);
+            let mut authored = BrickDebris::new();
+            authored
+                .cues(std::slice::from_ref(&kill), &building)
+                .unwrap();
+            let mut accompanied = BrickDebris::new();
+            accompanied.explosion_cue(&cue, &pack);
+            accompanied.cues(&[kill], &building).unwrap();
+            let a = authored.bodies[&3].handle;
+            let b = accompanied.bodies[&3].handle;
+            assert_eq!(
+                authored.world.bodies[a].linvel(),
+                accompanied.world.bodies[b].linvel()
+            );
+        }
+        for id in 10..10 + MAX_BLASTS as u64 + 10 {
+            debris.explosion_cue(&cosmetic_blast(id, origin, None), &pack);
+        }
+        assert_eq!(debris.pending_blasts.len(), MAX_BLASTS);
+        debris.cues(&[], &building).unwrap();
+        let rb = &debris.world.bodies[debris.bodies[&1].handle];
+        assert!(Vec3::from_array(rb.linvel().to_array()).length() <= MAX_SPEED + 1e-4);
+        let mut unknown = cosmetic_blast(1000, origin, None);
+        if let CueKind::WeaponEffect { definition, .. } = &mut unknown.kind {
+            *definition = "unknownVisualEffect".into();
+        }
+        debris.explosion_cue(&unknown, &pack);
+        assert!(debris.pending_blasts.is_empty());
     }
 
     fn player_at(id: u64, feet: Vec3) -> Pusher {

@@ -98,6 +98,7 @@ fn program(catalog: &Catalog, rng: &mut Rng, palette: usize) -> Vec<EventRow> {
             _ => EventTarget::Named(format!("b{}", rng.below(8))),
         };
         rows.push(EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: !rng.chance(0.1),
             input: input.name.clone(),
@@ -120,17 +121,34 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<String, Tes
     let fail = |what: String| TestCaseError::fail(format!("seed {seed}: {what}"));
     let mut rng = Rng::new(seed);
     let palette = session.simulation().state().palette.len();
+    // The content fixture installs real package definitions, not the synthetic
+    // test/brick/plate ID. Use the same filled one-stud, one-plate geometry in
+    // either fixture, so the exact field/load checks exercise real content too.
+    let plate = session
+        .simulation()
+        .definitions
+        .entries
+        .iter()
+        .find(|(_, d)| {
+            d.mesh.footprint_studs == [1, 1]
+                && d.mesh.height_plates == 1
+                && d.special == bri_sim::definitions::Special::None
+                && d.bot.is_none()
+                && d.link.is_none()
+                && d.reflection.is_none()
+                && matches!(d.collision.parts.as_slice(),
+                    [bri_content::collision::Part::Box { center, size }]
+                        if *center == [0.0; 3] && *size == [0.5, 0.2, 0.5])
+        })
+        .map(|(id, _)| id.clone())
+        .ok_or_else(|| fail("no ordinary filled 1x1 plate definition".into()))?;
     // The programs arrive the way whole builds do: an administrator's Load
     // Bricks, which keeps their zero delays.
     let mut world = World::new("Events".into(), "chaos/map".into(), vec![[1.0; 4]; palette]);
     for i in 0..FIELD {
         let x = (i % 6) as f32 * 0.5 - 1.25;
         let z = (i / 6) as f32 * 0.5 + 2.25;
-        let mut brick = Brick::new(
-            ContentRef::Resolved(fixture::PLATE.into()),
-            [x, 0.1, z],
-            HOST,
-        );
+        let mut brick = Brick::new(ContentRef::Resolved(plate.clone()), [x, 0.1, z], HOST);
         if i < 8 {
             brick.name = Some(format!("b{i}"));
         }

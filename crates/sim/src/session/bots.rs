@@ -35,7 +35,73 @@ use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
 
 mod behaviour;
+mod charged_control;
+pub(super) use charged_control::FireAdmission;
+mod claims;
+mod combat_objectives;
+#[path = "bots/combat.rs"]
+mod hand_combat;
+mod interactions;
+mod objectives;
+mod package_objectives;
+mod physical_objectives;
+mod planning;
+mod search_memory;
+mod tactics;
 
+/// Read-only brain evidence for headless diagnostics and playtest logs. This
+/// is derived state, never an input that assigns decisions to a bot.
+#[derive(Clone, Debug)]
+pub struct BotThought {
+    pub bot: OwnerId,
+    pub behaviour: &'static str,
+    pub visible: Option<OwnerId>,
+    pub remembered: Option<BotEvidence>,
+    pub task: Option<BotTask>,
+    pub goal: Option<[f32; 3]>,
+    pub next: Option<[f32; 3]>,
+    pub path_steps: usize,
+    pub searching: bool,
+    /// Evidence-based search progress; never an unseen actor position.
+    pub search_phase: &'static str,
+    pub objective: Option<BrickId>,
+    pub objective_diagnostic: Option<&'static str>,
+    /// Current derived plan evidence, never commands or authored rule state.
+    pub objective_detail: Option<BotObjectiveDetail>,
+    /// Actual searches and unchanged failed-search reuse, for headless diagnostics.
+    pub objective_searches: u64,
+    pub objective_reused: u64,
+}
+#[derive(Clone, Debug)]
+pub struct BotObjectiveDetail {
+    pub desired: String,
+    pub action: String,
+    pub provider: &'static str,
+    pub phase: &'static str,
+    /// Proposed action IDs; bounded by the planner's depth limit.
+    pub route: Vec<String>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct BotEvidence {
+    pub subject: OwnerId,
+    pub position: [f32; 3],
+    pub observed: u64,
+    pub expires: u64,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum BotTask {
+    Seat {
+        vehicle: u64,
+        seat: u8,
+        subject: OwnerId,
+        deadline: u64,
+    },
+    Push {
+        vehicle: u64,
+        subject: OwnerId,
+        deadline: u64,
+    },
+}
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
 const TICK: f32 = 1.0 / 120.0;
 /// Farthest from its start a path may lead, across.
@@ -81,18 +147,36 @@ pub(super) struct Bots {
     /// The walk grid, one per body size in use.
     navs: Vec<(Body, Nav)>,
     /// Who last hurt each bot, and when.
-    hurt: BTreeMap<OwnerId, (OwnerId, u64)>,
+    hurt: BTreeMap<OwnerId, Knowledge>,
     /// Warnings bots gave this tick (`BotKind::alerts_allies`), heard by
     /// their side once every bot has stepped.
     alerts: Vec<Alert>,
+    /// Geometry observed once per tick; admission still reads live occupancy.
+    objects: Vec<bri_vehicles::VehicleSnapshot>,
+    claims: claims::Claims,
+    interaction_budget: usize,
+    objective_budget_tick: u64,
+    objective_budget_used: bool,
+    objective_cursor: Option<OwnerId>,
+    objective_candidate: Option<OwnerId>,
+    combat_budget: hand_combat::Budget,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {
     from: OwnerId,
     /// Where the enemy was.
-    at: Vec3,
+    knowledge: Knowledge,
     /// How far it is heard: the warner's sight.
     reach: f32,
+}
+/// Evidence keeps its subject and observation time when shared. No receiver
+/// can extend it by relaying or look up an unseen subject's current transform.
+#[derive(Clone, Copy, Debug)]
+struct Knowledge {
+    subject: OwnerId,
+    at: Vec3,
+    observed: u64,
+    expires: u64,
 }
 struct Brain {
     /// The vehicle spawn brick that made it; `None` for a bot the rules
@@ -121,6 +205,8 @@ struct Brain {
     /// The goal's plan is walked (or none exists): no new search until the
     /// goal changes or the bot gets stuck.
     settled: bool,
+    partial_route: bool,
+    segment_anchor: Vec3,
     next_wander: u64,
     last_position: Vec3,
     stuck: u32,
@@ -132,12 +218,22 @@ struct Brain {
     /// Tick the current target was first seen.
     seen_since: u64,
     /// Where an enemy was last seen or heard, until when.
-    memory: Option<(Vec3, u64)>,
+    memory: Option<Knowledge>,
+    evidence_search: search_memory::State,
+    evidence_context: Option<(bri_minigames::GameId, u64, Option<bri_minigames::TeamId>)>,
     error: (f32, f32),
     next_error: u64,
     fire_down: bool,
     /// What it is doing ([`behaviour`]).
     behaviour: Behaviour,
+    objective: objectives::State,
+    combat: hand_combat::State,
+    native_combat_tick: Option<u64>,
+    /// The selected objective owns the ordinary hand trigger this tick.
+    objective_tool: bool,
+    /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
+    /// someone damageable does not make them more urgent than winning.
+    objective_threat: Option<Knowledge>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -151,6 +247,13 @@ struct Brain {
     /// The kind its brick made, while a bite has turned it into another
     /// (`BotMelee::converts_below`); it comes back as this one.
     born: Option<BotKind>,
+    next_interaction: u64,
+    object_cursor: usize,
+    push_contact: Option<(u64, u64)>,
+    push_anchor: Option<(u64, Vec3)>,
+    vehicle_stuck: u32,
+    vehicle_anchor: Option<Vec3>,
+    vehicle_since: Option<(u64, u64)>,
 }
 /// An enemy up where a bot flies to them ([`Session::air_chase`]).
 #[derive(Clone, Copy, Debug)]
@@ -178,12 +281,19 @@ enum Goal {
     Search(Vec3),
     /// Carrying what it holds to open space.
     Carry(Vec3),
+    Interact(Vec3),
+    Objective(Vec3),
     Home,
 }
 impl Goal {
     fn point(self, home: Vec3) -> Vec3 {
         match self {
-            Self::Wander(p) | Self::Chase(p) | Self::Search(p) | Self::Carry(p) => p,
+            Self::Wander(p)
+            | Self::Chase(p)
+            | Self::Search(p)
+            | Self::Carry(p)
+            | Self::Interact(p)
+            | Self::Objective(p) => p,
             Self::Home => home,
         }
     }
@@ -204,6 +314,8 @@ impl Brain {
             plan: Vec::new(),
             search: None,
             settled: false,
+            partial_route: false,
+            segment_anchor: home,
             next_wander: 0,
             last_position: home,
             stuck: 0,
@@ -213,16 +325,30 @@ impl Brain {
             target: None,
             seen_since: 0,
             memory: None,
+            evidence_search: Default::default(),
+            evidence_context: None,
             error: (0.0, 0.0),
             next_error: 0,
             fire_down: false,
             behaviour: Behaviour::default(),
+            objective: objectives::State::default(),
+            combat: hand_combat::State::default(),
+            native_combat_tick: None,
+            objective_tool: false,
+            objective_threat: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
             posed: false,
             dry: 0,
             born: None,
+            next_interaction: 0,
+            object_cursor: 0,
+            push_contact: None,
+            push_anchor: None,
+            vehicle_stuck: 0,
+            vehicle_anchor: None,
+            vehicle_since: None,
         }
     }
     fn random(&mut self) -> f32 {
@@ -240,12 +366,20 @@ impl Brain {
             self.replans = 0;
             self.stuck = 0;
             self.settled = false;
+            self.partial_route = false;
         }
     }
     /// The goal of going after an enemy: standing its ground in its band
     /// (`fight`), after the enemy in sight, or to where one was. Whether it
     /// stands, and whether it gives ground (closer than `near`).
-    fn pursue(&mut self, enemy: Option<Seen>, fight: bool, near: f32, feet: Vec3) -> (bool, bool) {
+    fn pursue(
+        &mut self,
+        enemy: Option<Seen>,
+        fight: bool,
+        near: f32,
+        feet: Vec3,
+        tick: u64,
+    ) -> (bool, bool) {
         match (enemy, self.memory) {
             (Some(seen), _) if fight => {
                 self.set_goal(None);
@@ -263,17 +397,14 @@ impl Brain {
                 }
                 (false, false)
             }
-            (None, Some((at, _))) => {
-                if flat(at - feet).length() > 1.5 {
-                    if self.goal != Some(Goal::Search(at)) {
-                        self.set_goal(Some(Goal::Search(at)));
-                    }
-                    (false, false)
-                } else {
-                    // Got there: look around until it forgets.
-                    self.set_goal(None);
-                    (true, false)
-                }
+            (None, Some(knowledge)) => {
+                let failed = matches!(self.goal, Some(Goal::Search(_)))
+                    && self.settled
+                    && self.plan.is_empty()
+                    && !self.partial_route;
+                let next = self.evidence_search.next(knowledge, feet, tick, failed);
+                self.set_goal(next.map(Goal::Search));
+                (next.is_none(), false)
             }
             (None, None) => (false, false),
         }
@@ -333,9 +464,12 @@ impl Weapon {
         if self.melee {
             (0.0, (self.reach * 0.8).max(1.2))
         } else {
-            let far = (self.reach * 0.7).clamp(6.0, 40.0);
-            let near = self.near.unwrap_or((self.splash + 3.0).max(5.0));
-            (near, far.max(near + 4.0))
+            let far = (self.reach * 0.7).clamp(6.0, 40.0).min(self.reach);
+            let near = self
+                .near
+                .unwrap_or((self.splash + 3.0).max(5.0))
+                .min(far * 0.75);
+            (near, far.max(near + 4.0).min(self.reach))
         }
     }
 }
@@ -369,11 +503,20 @@ impl Bots {
         self.kinds.iter().find(|k| k.id == id)
     }
     /// A bot was hurt: it turns on whoever did it.
-    pub(super) fn note_hurt(&mut self, bot: OwnerId, source: Option<OwnerId>, tick: u64) {
-        if let Some(source) = source.filter(|s| *s != bot)
+    pub(super) fn note_hurt(&mut self, bot: OwnerId, source: Option<(OwnerId, Vec3)>, tick: u64) {
+        if let Some(source) = source.filter(|(s, _)| *s != bot)
             && self.brains.contains_key(&bot)
         {
-            self.hurt.insert(bot, (source, tick));
+            self.hurt.insert(
+                bot,
+                Knowledge {
+                    subject: source.0,
+                    at: source.1,
+                    observed: tick,
+                    expires: tick
+                        .saturating_add((self.brains[&bot].kind.memory_seconds * 120.0) as u64),
+                },
+            );
         }
     }
 }
@@ -573,6 +716,7 @@ impl Session {
     }
     /// A bot leaves the server, whatever made it.
     fn drop_bot(&mut self, bot: OwnerId) -> Result<()> {
+        self.bots.claims.release_owner(bot);
         if self.peers.contains_key(&bot) {
             self.disconnect(bot)?;
             self.departed.remove(&bot);
@@ -675,15 +819,59 @@ impl Session {
         ensure!(self.is_alive(bot), "Only a living bot holds things");
         self.equip_tool(bot, slot.map(usize::from))
     }
+    /// Trigger release is a shot for a charged image. Abandoning hostile
+    /// intent instead clears queued input and restarts the held image safely.
+    fn abort_bot_hand_charge(&mut self, bot: OwnerId) -> Result<bool> {
+        if !self
+            .weapons
+            .image_state(ActorId(bot), 0)
+            .is_some_and(|(i, _)| i.charges())
+        {
+            return Ok(false);
+        }
+        let release_can_fire = self
+            .weapons
+            .image_state(ActorId(bot), 0)
+            .is_some_and(|(image, state)| charged_control::release_may_fire(image, state));
+        self.release_trigger(bot)?;
+        if release_can_fire {
+            self.weapons.cancel_charge(ActorId(bot))
+        } else {
+            // A released shot's native Fire/cooldown must finish normally.
+            Ok(true)
+        }
+    }
     pub(super) fn rest_rules_bot(&mut self, package: &str, bot: OwnerId, rest: bool) -> Result<()> {
-        self.own_bot(package, bot)?;
+        let own_kind = self.bots.brains.get(&bot).is_some_and(|brain| {
+            let Some((owner, _)) = brain.kind.id.split_once(':') else {
+                return false;
+            };
+            owner == package
+                || self.packages.as_ref().is_some_and(|host| {
+                    host.catalog.packages.get(owner).is_some_and(|provider| {
+                        provider.manifest.companions.iter().any(|id| id == package)
+                    })
+                })
+        });
+        ensure!(
+            self.bots.rules_package(bot) == Some(package) || own_kind,
+            "Bot {bot} was not added by `{package}` and its kind is not owned by that package or its companion"
+        );
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
         if rest && !brain.resting {
+            brain.objective_threat = None;
             brain.set_goal(None);
             brain.target = None;
             brain.memory = None;
+            brain.evidence_search.clear();
         }
         brain.resting = rest;
+        if rest {
+            self.bots.claims.release_owner(bot);
+            if self.seated(bot) {
+                self.dismount_vehicle(bot)?;
+            }
+        }
         Ok(())
     }
     pub(super) fn bot_bricks(&self) -> Vec<BrickId> {
@@ -746,16 +934,78 @@ impl Session {
         }
         Ok(())
     }
+    pub fn bot_thoughts(&self) -> Vec<BotThought> {
+        let tick = self.simulation.state().tick;
+        self.bots
+            .brains
+            .iter()
+            .map(|(bot, b)| BotThought {
+                bot: *bot,
+                behaviour: b.behaviour.name(),
+                visible: b.target,
+                remembered: b.memory.map(|k| BotEvidence {
+                    subject: k.subject,
+                    position: k.at.to_array(),
+                    observed: k.observed,
+                    expires: k.expires,
+                }),
+                task: self
+                    .bots
+                    .claims
+                    .owner_claim(*bot, tick)
+                    .map(|c| match c.resource {
+                        claims::Resource::Seat { vehicle, seat } => BotTask::Seat {
+                            vehicle,
+                            seat,
+                            subject: c.subject,
+                            deadline: c.deadline,
+                        },
+                        claims::Resource::Body { vehicle } => BotTask::Push {
+                            vehicle,
+                            subject: c.subject,
+                            deadline: c.deadline,
+                        },
+                    }),
+                goal: b.goal.map(|g| g.point(b.leash).to_array()),
+                next: b.plan.first().map(|p| p.feet.to_array()),
+                path_steps: b.plan.len(),
+                searching: b.search.is_some(),
+                search_phase: b.evidence_search.phase(),
+                objective: b.objective.source(),
+                objective_diagnostic: b.objective.diagnostic,
+                objective_detail: b.objective.detail().map(|detail| BotObjectiveDetail {
+                    desired: detail.desired.to_owned(),
+                    action: detail.action.to_owned(),
+                    provider: detail.provider,
+                    phase: if detail.phase == "waiting" {
+                        "waiting"
+                    } else if b.resting || b.behaviour != Behaviour::Objective {
+                        "paused"
+                    } else {
+                        detail.phase
+                    },
+                    route: detail.route.to_vec(),
+                }),
+                objective_searches: b.objective.searches,
+                objective_reused: b.objective.reused,
+            })
+            .collect()
+    }
+
     /// Whether `bot` treats `other` as an enemy: anyone it may hurt, except
     /// bots of the same builder, who are on its side. A rules bot plays
     /// as a member, so its game alone says who is on its side (Slayer's
     /// `checkHoleBotTeams`).
     fn bot_enemy(&self, bot: OwnerId, kind: &BotKind, other: OwnerId) -> bool {
-        if other == bot || !self.peers.get(&other).is_some_and(|p| p.combat.alive) {
+        if other == bot
+            || self.bot_allies(bot, other)
+            || !self.peers.get(&other).is_some_and(|p| p.combat.alive)
+        {
             return false;
         }
         if self.bots.is_brick_bot(bot)
             && self.bots.is_brick_bot(other)
+            && self.bot_team_relation(bot, other).is_none()
             && (self.bot_allies(bot, other)
                 || !kind.fights_bots
                     && kind.side.is_none()
@@ -769,11 +1019,39 @@ impl Session {
         }
         self.can_damage_player(bot, other, false)
     }
+    /// Explicit same-game teams are the author's policy, including opposition.
+    /// Unassigned creatures retain the original builder/species fallback.
+    fn bot_team_relation(&self, bot: OwnerId, other: OwnerId) -> Option<bool> {
+        let a = self
+            .minigames
+            .player(self.peers.get(&bot)?.combat.player)
+            .ok()?;
+        let b = self
+            .minigames
+            .player(self.peers.get(&other)?.combat.player)
+            .ok()?;
+        (a.game.is_some() && a.game == b.game && a.team.is_some() && b.team.is_some())
+            .then(|| self.minigames.allied(a.id, b.id))
+    }
+
     /// Whether two brick bots are on one side: one side (Bot_Hole's
     /// `hType`) never fights itself and fights every other; bots of no side
     /// side with their builder.
     fn bot_allies(&self, bot: OwnerId, other: OwnerId) -> bool {
+        if let Some(allied) = self.bot_team_relation(bot, other) {
+            return allied;
+        }
+        if let (Some(a), Some(b)) = (self.peers.get(&bot), self.peers.get(&other))
+            && bot != other
+            && b.combat.alive
+            && self.minigames.allied(a.combat.player, b.combat.player)
+        {
+            return true;
+        }
         if !self.bots.is_brick_bot(bot) || !self.bots.is_brick_bot(other) {
+            return false;
+        }
+        if self.game_of(bot) != self.game_of(other) {
             return false;
         }
         let side = |o: OwnerId| {
@@ -804,6 +1082,26 @@ impl Session {
                 way,
             })
         };
+        // Real injury takes priority over a previously visible bystander.
+        // Resolve only through the same authoritative visibility test; when
+        // the attacker is unseen during a retained objective, ordinary dated
+        // hurt/search evidence must guide pursuit instead of a fresh passive
+        // target. Never renew that evidence from an unseen live position.
+        let tick = self.simulation.state().tick;
+        let valid_threat = |k: &Knowledge| tick < k.expires && self.bot_enemy(bot, kind, k.subject);
+        let threat = self
+            .bots
+            .hurt
+            .get(&bot)
+            .copied()
+            .filter(valid_threat)
+            .or(brain.objective_threat.filter(valid_threat));
+        if let Some(threat) = threat {
+            let target = visible(threat.subject);
+            if target.is_some() || brain.objective.detail().is_some() {
+                return Sight { target };
+            }
+        }
         // Keep fighting the same enemy while it stays in view.
         if let Some(seen) = brain.target.and_then(visible) {
             return Sight { target: Some(seen) };
@@ -835,7 +1133,7 @@ impl Session {
         let to = sight
             .target
             .map(|seen| seen.feet)
-            .or(brain.memory.map(|(at, _)| at))?;
+            .or(brain.memory.map(|k| k.at))?;
         // Taking off for someone well above; once up, until it is by them.
         let above = to.y - feet.y;
         let across = flat(to - feet).length();
@@ -891,10 +1189,49 @@ impl Session {
         None
     }
     /// The held weapon's reach and flight.
+    fn bot_vehicle_weapon(&self, bot: OwnerId) -> Option<Weapon> {
+        if let Some((vehicle, seat)) = self.mounted(bot)
+            && let Some(w) = &self.vehicles.world
+            && w.weapon_available(bri_vehicles::VehicleId(vehicle))
+            && let Some(d) = w.definition_of(bri_vehicles::VehicleId(vehicle))
+            && d.weapon_seat() == Some(usize::from(seat))
+            && let Some(gun) = &d.weapon
+            && let Some(p) = self.weapons.pack.projectiles.get(&gun.projectile)
+            && let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle)
+        {
+            let speed = gun.speed * f32::from(gun.charge_steps.max(1)) * v.scale;
+            return Some(Weapon {
+                melee: false,
+                hold: false,
+                charge: gun.charge_ticks > 0,
+                near: None,
+                reach: speed * p.lifetime_ticks as f32 * TICK,
+                speed,
+                fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
+                splash: p.explosion.radius,
+            });
+        }
+        None
+    }
     fn bot_weapon(&self, bot: OwnerId) -> Option<Weapon> {
+        if let Some(gun) = self.bot_vehicle_weapon(bot) {
+            return Some(gun);
+        }
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
         let using = image.bot.unwrap_or_default();
         let hold = using.fire == bri_weapons::BotFire::Hold;
+        if let Some(ray) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
+            return Some(Weapon {
+                melee: false,
+                hold,
+                charge: image.charges(),
+                near: using.near,
+                reach: using.reach.unwrap_or(ray.range),
+                speed: 0.0,
+                fall: 0.0,
+                splash: 0.0,
+            });
+        }
         let projectile = image
             .projectile
             .as_ref()
@@ -944,6 +1281,7 @@ impl Session {
             }
             nav.begin_tick();
         }
+        self.observe_bot_objects();
         for brick in self.bot_bricks_pending() {
             self.reconcile_bot_brick(brick, None)?;
         }
@@ -954,6 +1292,27 @@ impl Session {
         if tick.is_multiple_of(30) {
             self.sync_bot_minigames()?;
         }
+        self.bots.objective_candidate = objectives::next_turn(
+            self.bots.objective_cursor,
+            self.bots
+                .brains
+                .iter()
+                .filter(|(bot, brain)| {
+                    !brain.resting
+                        && self.riding.driver_of(**bot).is_none()
+                        && !self.riding.is_riding(**bot)
+                        && brain.objective.ready(tick)
+                        && brain
+                            .kind
+                            .behaviours
+                            .get("objective")
+                            .copied()
+                            .unwrap_or(0.0)
+                            > 0.0
+                        && self.peers.get(bot).is_some_and(|p| p.combat.alive)
+                })
+                .map(|(bot, _)| *bot),
+        );
         // Bots share the grid's sampling budget; start with a different one
         // each tick so none waits behind the others.
         let mut bots: Vec<OwnerId> = self.bots.brains.keys().copied().collect();
@@ -985,8 +1344,12 @@ impl Session {
                 .iter()
                 .filter(|(o, b)| {
                     **o != alert.from
-                        && b.memory.is_none()
+                        && !b.resting
                         && b.target.is_none()
+                        && b.memory
+                            .is_none_or(|old| old.observed < alert.knowledge.observed)
+                        && tick < alert.knowledge.expires
+                        && self.bot_enemy(**o, &b.kind, alert.knowledge.subject)
                         && self.bot_allies(**o, alert.from)
                         && self.peers.get(o).is_some_and(|p| {
                             p.combat.alive
@@ -997,12 +1360,45 @@ impl Session {
                 .collect();
             for bot in heard {
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
-                let ticks = (brain.kind.memory_seconds * 120.0) as u64;
-                brain.memory = Some((alert.at, tick + ticks));
+                let expires = alert.knowledge.expires.min(
+                    alert
+                        .knowledge
+                        .observed
+                        .saturating_add((brain.kind.memory_seconds * 120.0) as u64),
+                );
+                if tick < expires {
+                    brain.memory = Some(Knowledge {
+                        expires,
+                        ..alert.knowledge
+                    });
+                }
             }
         }
     }
     fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
+        if self.bots.brains[&bot].objective.drive(self, bot).is_none() {
+            self.promote_bot_seat(bot)?;
+        }
+        let context = self.game_of(bot).and_then(|game| {
+            Some((
+                game,
+                self.minigames.game(game).ok()?.round,
+                self.minigames
+                    .player(self.peers.get(&bot)?.combat.player)
+                    .ok()?
+                    .team,
+            ))
+        });
+        if let Some(brain) = self.bots.brains.get_mut(&bot)
+            && brain.evidence_context != context
+        {
+            brain.evidence_context = context;
+            brain.objective_threat = None;
+            self.bots.hurt.remove(&bot);
+            brain.memory = None;
+            brain.target = None;
+            brain.evidence_search.clear();
+        }
         let Some(peer) = self.peers.get(&bot) else {
             return Ok(());
         };
@@ -1026,26 +1422,41 @@ impl Session {
                 brain.set_goal(None);
                 brain.target = None;
                 brain.memory = None;
+                brain.evidence_search.clear();
                 brain.posed = false;
+                brain.objective = objectives::State::default();
+                brain.objective_threat = None;
+                self.bots.hurt.remove(&bot);
                 brain.dry = 0;
                 brain.rehome = brain.brick.is_none();
                 brain.leash = brain.home;
+                self.bots.claims.release_owner(bot);
+                brain.vehicle_since = None;
+                brain.vehicle_stuck = 0;
+                brain.vehicle_anchor = None;
+                brain.fire_down = false;
+                brain.objective_tool = false;
             }
             return Ok(());
         }
         // Held still by the rules: it stands, holding its fire.
         if self.bots.brains.get(&bot).is_some_and(|b| b.resting) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.objective.suspend(tick);
+            brain.native_combat_tick = None;
+            brain.objective_tool = false;
             brain.sequence += 1;
             let sequence = brain.sequence;
             let input = MoveInput {
                 yaw: brain.yaw,
                 pitch: brain.pitch.clamp(-1.5, 1.5),
+                jump: self.vehicles.is_mounted(bot),
                 ..Default::default()
             };
             let release = std::mem::take(&mut brain.fire_down);
             self.movement(bot, sequence, input)?;
-            if release {
+            self.vehicles.set_fire(bot, false);
+            if release && !self.abort_bot_hand_charge(bot)? {
                 let _ = self.weapon_trigger(bot, false, Vec3::ZERO, false);
             }
             return Ok(());
@@ -1053,12 +1464,32 @@ impl Session {
         // Ridden by a player who steers it, or carried by one
         // (`mountObject`): its brain rests.
         if self.riding.driver_of(bot).is_some() || self.riding.is_riding(bot) {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.objective.suspend(tick);
+            brain.native_combat_tick = None;
+            brain.objective_tool = false;
+            let release = std::mem::take(&mut brain.fire_down);
+            self.vehicles.set_fire(bot, false);
+            if release && !self.abort_bot_hand_charge(bot)? {
+                self.weapon_trigger(bot, false, Vec3::ZERO, false)?;
+            }
             return Ok(());
         }
+        if !self.seated(bot) {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.vehicle_since = None;
+            brain.vehicle_anchor = None;
+            brain.vehicle_stuck = 0;
+        }
         let state = peer.player.state().clone();
-        let feet = Vec3::from(state.feet);
-        let eye = peer.player.eye();
-        let body = Body::of(peer.player.tuning(), state.scale);
+        let own_feet = Vec3::from(state.feet);
+        let eye = self
+            .bot_weapon_origin(bot)
+            .unwrap_or_else(|| peer.player.eye());
+        let can_fly =
+            peer.player.tuning().can_jet && state.energy >= peer.player.tuning().min_jet_energy;
+        let driving = self.bot_vehicle_body(bot);
+        let (feet, body) = driving.unwrap_or((own_feet, Body::of(peer.player.tuning(), 1.0)));
         // A swimmer in water: how tall it is, to keep it under.
         let swim = (self.bots.brains[&bot].kind.moves == Moves::Swim)
             .then(|| crate::water::body_height(&state, peer.player.tuning()) * state.scale)
@@ -1095,20 +1526,55 @@ impl Session {
         self.bot_crossed(bot);
         let brain = &self.bots.brains[&bot];
         let sight = self.bot_sight(bot, brain, eye);
-        // An enemy it was watching went in through an opening as it went
-        // out of sight: it knows where that leads.
+        // A crossing immediately after direct sight can carry that last
+        // observation through the opening. It never reads the hidden body.
         let followed = brain
-            .target
-            .filter(|_| sight.target.is_none())
-            .filter(|owner| {
-                self.crossings
-                    .last_of(ObjectRef::Player(*owner))
-                    .is_some_and(|c| tick.saturating_sub(c.tick) <= 2)
+            .memory
+            .filter(|k| {
+                Some(k.subject) == brain.target
+                    && sight.target.is_none()
+                    && tick < k.expires
+                    && self.bot_enemy(bot, &brain.kind, k.subject)
             })
-            .and_then(|owner| self.peers.get(&owner))
-            .map(|p| Vec3::from(p.player.state().feet));
+            .and_then(|k| {
+                self.crossings
+                    .last_of(ObjectRef::Player(k.subject))
+                    .filter(|c| tick.saturating_sub(c.tick) <= 2 && c.tick >= k.observed)
+                    .map(|c| Knowledge {
+                        at: c.carry.transform_point3(k.at),
+                        ..k
+                    })
+            });
+        // Inventory capabilities are grounded only in current sight. The
+        // desired path uses a shared budget; actual firing is checked after
+        // movement against the live launch frame in step_weapons.
+        let native = if let Some(seen) = sight.target {
+            let mut combat = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().combat);
+            let mut budget = std::mem::take(&mut self.bots.combat_budget);
+            budget.begin_tick(tick);
+            let decision = hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget);
+            self.bots.brains.get_mut(&bot).unwrap().combat = combat;
+            self.bots.combat_budget = budget;
+            decision
+        } else {
+            hand_combat::Decision::Unsupported
+        };
+        let native_choice = match &native {
+            hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c) => Some(*c),
+            _ => None,
+        };
+        let native_gate = !matches!(native, hand_combat::Decision::Unsupported)
+            || (sight.target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some());
+        self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);
         // Empty-handed, a kind that hits with its body fights with that.
-        let held = self.bot_weapon(bot);
+        let held = native_choice
+            .map(|c| c.weapon)
+            .or_else(|| {
+                (!matches!(native, hand_combat::Decision::Unsupported))
+                    .then(|| self.bots.brains[&bot].combat.movement_hint())
+                    .flatten()
+            })
+            .or_else(|| self.bot_weapon(bot));
         let bite = held
             .is_none()
             .then(|| self.bots.brains[&bot].kind.melee.clone())
@@ -1123,28 +1589,144 @@ impl Session {
             fall: 0.0,
             splash: 0.0,
         }));
-        let hurt = self.bots.hurt.remove(&bot);
-        let hurt_by = hurt.and_then(|(source, _)| {
-            let kind = &self.bots.brains[&bot].kind;
-            let p = self.peers.get(&source)?;
-            self.bot_enemy(bot, kind, source)
-                .then(|| Vec3::from(p.player.state().feet))
+        let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
+            tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
         });
+        if self.bots.brains[&bot].memory.is_some_and(|k| {
+            tick >= k.expires || !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+        }) {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.memory = None;
+            brain.evidence_search.clear();
+        }
+        let threat = hurt_by
+            .or(self.bots.brains[&bot].objective_threat)
+            .filter(|k| {
+                tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+            });
+        self.bots.brains.get_mut(&bot).unwrap().objective_threat = threat;
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
         let carry_to =
             (holding && self.bots.brains[&bot].carry.is_none()).then(|| self.open_spot(feet));
-        let air = self.air_chase(&self.bots.brains[&bot], &sight, feet, eye, state.grounded);
+        let air = (can_fly && !self.seated(bot))
+            .then(|| self.air_chase(&self.bots.brains[&bot], &sight, feet, eye, state.grounded))
+            .flatten();
+        let interaction_enemy = sight
+            .target
+            .map(|s| Knowledge {
+                subject: s.owner,
+                at: s.real,
+                observed: tick,
+                expires: tick + (self.bots.brains[&bot].kind.memory_seconds * 120.0) as u64,
+            })
+            .or(self.bots.brains[&bot].memory)
+            .or(hurt_by)
+            .filter(|_| {
+                flat(feet - self.bots.brains[&bot].leash).length()
+                    <= self.bots.brains[&bot].kind.chase_radius
+            });
+        let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
+        let can_retaliate = vehicle_weapon
+            || self.bots.brains[&bot]
+                .kind
+                .melee
+                .as_ref()
+                .is_some_and(|melee| melee.damage > 0.0)
+            || hand_combat::has_possible_attack(self, bot);
+        let retaliating = threat.is_some()
+            && can_retaliate
+            && flat(feet - self.bots.brains[&bot].leash).length()
+                <= self.bots.brains[&bot].kind.chase_radius;
+        let mut pausing_delivery = false;
+        let objective = self.bot_objective(bot, tick).filter(|view| {
+            // Keep the selected action and its completion baseline, but let
+            // ordinary chase/search resolve a dated real injury even outside
+            // the weapon band. Objective's utility otherwise beats pursuit.
+            // account_control suspends its approach clock during this pause.
+            if view.enemy.is_none() && retaliating {
+                pausing_delivery = true;
+                return false;
+            }
+            // A different visible hostile is an ordinary combat interruption,
+            // not execution of the retained intended-participant action.
+            view.enemy
+                .is_none_or(|target| sight.target.is_none_or(|seen| seen.owner == target))
+        });
+        // Objective reservations use the bot itself as their subject. Hand a
+        // completed or invalidated action back before combat discovery sees
+        // that reservation and mistakes its different subject for a failure.
+        // Successful policy progress must not cool down the next action on
+        // the same physical resource.
+        if self
+            .bots
+            .claims
+            .owner_claim(bot, tick)
+            .is_some_and(|claim| {
+                claim.subject == bot
+                    && objective.and_then(|view| view.resource) != Some(claim.resource)
+            })
+        {
+            self.bots.claims.release_owner(bot);
+        }
+        // A live objective reservation is not a combat opportunity. Both use
+        // the same advisory leases, occupancy and native action admission.
+        let opportunity =
+            if pausing_delivery || objective.is_some_and(|view| view.resource.is_some()) {
+                None
+            } else {
+                self.bot_interaction(bot, interaction_enemy, tick)
+            };
+        let objective_holding = objective
+            .and_then(|view| view.held)
+            .is_some_and(|target| self.held_by(bot) == Some(target));
+        let objective_hold_control = objective.is_some_and(|view| {
+            view.trigger.is_some() && matches!(view.resource, Some(claims::Resource::Body { .. }))
+        });
+        let crew_ready = self.bot_crew_ready(bot, tick);
+        let attack_clear = sight.target.is_none_or(|seen| {
+            self.bot_fire_clear(
+                bot,
+                eye,
+                seen.eye - Vec3::Y * 0.5,
+                weapon.map_or(0.0, |w| w.splash),
+            )
+        });
+        let mounted_charging = self
+            .mounted(bot)
+            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
+            .is_some_and(|v| v.charge > 0);
+        let charged_ready = self
+            .mounted(bot)
+            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
+            .is_some_and(|v| {
+                self.vehicles
+                    .world
+                    .as_ref()
+                    .and_then(|w| w.definition(&v.definition))
+                    .and_then(|d| d.weapon.as_ref())
+                    .is_some_and(|g| g.charge_ticks > 0 && v.charge >= g.charge_steps)
+            });
         let target_velocity = sight.target.map_or(Vec3::ZERO, |seen| {
             self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
                 seen.way.seen_vector(Vec3::from(p.player.state().velocity))
             })
         });
 
+        // A known noncombat body/tool cannot resolve a threat by staring at
+        // it. Keep its useful objective; unknown scripted attacks retain their
+        // existing behavior rather than being silently classified as harmless.
+        let peaceful_objective =
+            objective.is_some_and(|view| view.enemy.is_none()) && threat.is_none();
+        let objective_without_attack = peaceful_objective
+            || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
-        if !holding {
+        // The grounded objective owns its hold controls, including ordinary
+        // release of a different body caught by the real ray. Legacy carry
+        // must not take over that recovery or start a combat swing.
+        if !holding || objective_hold_control {
             brain.carry = None;
         } else if let Some(to) = carry_to {
             brain.carry = Some(Carry {
@@ -1171,40 +1753,52 @@ impl Session {
                 if brain.target != Some(seen.owner) {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
-                    warn = Some(seen.real);
                 }
-                brain.memory = Some((seen.real, tick + memory_ticks));
+                let knowledge = Knowledge {
+                    subject: seen.owner,
+                    at: seen.real,
+                    observed: tick,
+                    expires: tick + memory_ticks,
+                };
+                brain.memory = Some(knowledge);
+                brain.evidence_search.observe(knowledge, feet);
+                if tick.is_multiple_of(30) || brain.seen_since == tick {
+                    warn = Some(knowledge);
+                }
             }
             None => {
                 brain.target = None;
-                if let Some(at) = hurt_by.or(followed) {
-                    brain.memory = Some((at, tick + memory_ticks));
+                if let Some(k) = hurt_by.or(followed) {
+                    if brain.memory.is_none_or(|old| old.observed <= k.observed) {
+                        brain.memory = Some(k);
+                    }
+                    warn = hurt_by;
                 }
             }
         }
-        // It tells its side when it first sees an enemy or is hurt.
-
         if kind.alerts_allies
-            && let Some(at) = warn.or(hurt_by)
+            && let Some(knowledge) = warn
         {
             self.bots.alerts.push(Alert {
                 from: bot,
-                at,
+                knowledge,
                 reach: kind.sight,
             });
-        }
-        if brain.memory.is_some_and(|(_, until)| tick >= until) {
-            brain.memory = None;
         }
         let away = flat(feet - brain.leash).length();
         if away > kind.chase_radius {
             brain.memory = None;
+            brain.evidence_search.clear();
             brain.target = None;
         }
 
         // Behaviour: the most urgent that applies.
         let enemy = sight.target.filter(|_| away <= kind.chase_radius);
-        let (near, far) = weapon.map_or((2.0, 3.0), |w| w.band());
+        let (near, far) = if driving.is_some() && !vehicle_weapon {
+            (0.0, 0.0)
+        } else {
+            weapon.map_or((2.0, 3.0), |w| w.band())
+        };
         let walks_up = |to: Vec3| {
             brain
                 .plan
@@ -1212,13 +1806,19 @@ impl Session {
                 .is_some_and(|w| w.feet.y > to.y - body.step - 0.5)
         };
         let situation = Situation {
-            holding,
-            fly: swim.is_none() && air.is_some_and(|a| !walks_up(a.to)),
+            holding: holding && !objective_hold_control,
+            fly: !objective_without_attack
+                && swim.is_none()
+                && air.is_some_and(|a| !walks_up(a.to)),
+            interaction: opportunity.map_or(0.0, |o| o.utility),
+            objective: objective.is_some(),
             // A swimmer reaches any depth: only how far counts.
-            enemy: enemy.map(|seen| match swim {
-                Some(_) => (seen.feet.distance(feet), 0.0),
-                None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
-            }),
+            enemy: enemy
+                .filter(|_| !objective_without_attack)
+                .map(|seen| match swim {
+                    Some(_) => (seen.feet.distance(feet), 0.0),
+                    None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
+                }),
             far,
             step: body.step,
             remembers: brain.memory.is_some(),
@@ -1226,18 +1826,113 @@ impl Session {
             home: brain.goal != Some(Goal::Home),
         };
         let behaviour = choose(brain.behaviour, &situation, |b| {
-            kind.behaviours.get(b.name()).copied().unwrap_or(1.0)
+            kind.behaviours.get(b.name()).copied().unwrap_or(
+                if matches!(b, Behaviour::Interact | Behaviour::Objective) {
+                    0.0
+                } else {
+                    1.0
+                },
+            )
         });
         brain.behaviour = behaviour;
+        let mut selected_objective = objective.filter(|_| behaviour == Behaviour::Objective);
+        let objective_resource = selected_objective
+            .and_then(|view| view.resource)
+            .filter(|_| {
+                // After real sensor admission, the native grip already owns
+                // exclusivity. A stationary delayed guard needs no advisory
+                // approach lease; expiring that lease must not release an
+                // otherwise valid physical hold. The provider still checks
+                // identity, inventory, permission and occupancy every turn.
+                !selected_objective
+                    .is_some_and(|view| view.waiting && view.held.is_some() && objective_holding)
+            });
+        if behaviour != Behaviour::Interact
+            && self
+                .bots
+                .claims
+                .owner_claim(bot, tick)
+                .is_some_and(|claim| {
+                    objective_resource != Some(claim.resource) || claim.subject != bot
+                })
+        {
+            self.bots.claims.release_owner(bot);
+        }
+        if let Some(resource) = objective_resource {
+            if self.bots.claims.acquire(
+                bot,
+                bot,
+                resource,
+                selected_objective.unwrap().point.distance(feet),
+                tick,
+            ) {
+                self.bots.claims.progress(
+                    bot,
+                    selected_objective.unwrap().point.distance(feet),
+                    selected_objective.unwrap().physical_progress,
+                    tick,
+                );
+            } else {
+                // Advisory contention blocks this proposed action, never the
+                // authority/physics rules. It cannot grant tool or seat use.
+                brain.objective.fail(tick, "objective resource claimed");
+                brain.set_goal(None);
+                brain.native_combat_tick = None;
+                selected_objective = None;
+            }
+        }
 
         // Goal.
         let (hold, back_off) = match behaviour {
+            Behaviour::Interact => {
+                if let Some(o) = opportunity
+                    && !matches!(brain.goal, Some(Goal::Interact(p)) if p.distance(o.point) < 0.2)
+                {
+                    brain.set_goal(Some(Goal::Interact(o.point)));
+                }
+                (false, false)
+            }
+            Behaviour::Objective => {
+                if let Some(step) = selected_objective.as_ref() {
+                    if step.enemy.is_some() {
+                        // The objective supplies the intended participant;
+                        // ordinary bands and dated evidence execute combat.
+                        if let Some(evidence) = step.enemy_evidence
+                            && brain.memory.is_none_or(|memory| {
+                                memory.subject != evidence.subject
+                                    || memory.observed < evidence.observed
+                            })
+                        {
+                            // This is a dated observation from the selected
+                            // participant, never its current hidden transform.
+                            brain.memory = Some(evidence);
+                            brain.evidence_search.observe(evidence, feet);
+                        }
+                        let intended = enemy.filter(|seen| Some(seen.owner) == step.enemy);
+                        let in_band = intended.is_some_and(|seen| {
+                            flat(seen.feet - feet).length() <= far
+                                && (seen.feet.y - feet.y).abs() <= body.step + 1.0
+                        });
+                        brain.pursue(intended, in_band, near, feet, tick)
+                    } else {
+                        if step.waiting && !step.move_while_waiting {
+                            brain.set_goal(None);
+                        } else if !matches!(brain.goal, Some(Goal::Objective(p)) if p.distance(step.point) < 0.2)
+                        {
+                            brain.set_goal(Some(Goal::Objective(step.point)));
+                        }
+                        (false, false)
+                    }
+                } else {
+                    (false, false)
+                }
+            }
             Behaviour::Carry => {
                 brain.set_goal(brain.carry.and_then(|c| c.to).map(Goal::Carry));
                 (false, false)
             }
-            Behaviour::Fight => brain.pursue(enemy, true, near, feet),
-            Behaviour::Chase | Behaviour::Search => brain.pursue(enemy, false, near, feet),
+            Behaviour::Fight => brain.pursue(enemy, true, near, feet, tick),
+            Behaviour::Chase | Behaviour::Search => brain.pursue(enemy, false, near, feet, tick),
             // Flying goes after them as walking would, so its path tells
             // when a walk leads up after all.
             Behaviour::Fly => {
@@ -1245,7 +1940,7 @@ impl Session {
                     flat(seen.feet - feet).length() <= far
                         && (seen.feet.y - feet.y).abs() <= body.step + 1.0
                 });
-                brain.pursue(enemy, fight, near, feet)
+                brain.pursue(enemy, fight, near, feet, tick)
             }
             Behaviour::Return => {
                 brain.set_goal(Some(Goal::Home));
@@ -1311,8 +2006,14 @@ impl Session {
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, &body) {
                     brain.search = None;
                     match found {
-                        Found::Path(path) | Found::Partial(path) if !path.is_empty() => {
-                            brain.plan = path
+                        Found::Path(path) if !path.is_empty() => {
+                            brain.partial_route = false;
+                            brain.plan = path;
+                        }
+                        Found::Partial(path) if !path.is_empty() => {
+                            brain.partial_route = true;
+                            brain.segment_anchor = feet;
+                            brain.plan = path;
                         }
                         // Already as close as it gets, or nowhere to stand.
                         _ => brain.plan.clear(),
@@ -1323,7 +2024,10 @@ impl Session {
             while let Some(next) = brain.plan.first() {
                 let d = next.feet - feet;
                 // One through an opening is reached by going through.
-                if next.through.is_none() && flat(d).length() < 0.4 && d.y.abs() < body.step + 0.5 {
+                if next.through.is_none()
+                    && flat(d).length() < if body.conservative { 1.2 } else { 0.4 }
+                    && d.y.abs() < body.step + 0.5
+                {
                     brain.plan.remove(0);
                     brain.stuck = 0;
                 } else {
@@ -1332,13 +2036,53 @@ impl Session {
             }
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
-                brain.settled = true;
+                if matches!(brain.goal, Some(Goal::Objective(_))) && brain.partial_route {
+                    brain.partial_route = false;
+                    if feet.distance(brain.segment_anchor) > 0.5 {
+                        brain.settled = false; // Continue a bounded, advancing segment.
+                    } else {
+                        brain.settled = true;
+                        brain
+                            .objective
+                            .fail(tick, "objective navigation made no progress");
+                    }
+                } else {
+                    brain.settled = true;
+                }
                 if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
                     brain.goal = None;
                 }
             }
             wanted = brain.plan.first().copied();
+            // A grid route ends at a cell, not necessarily at the authored
+            // interaction point. Finish a nearby approach with the ordinary
+            // motor; the action's physical reach decides when it succeeds.
+            // Include the search's arrival radius, consumed-waypoint tolerance
+            // and bounded target drift rather than stopping in the gap between
+            // those tolerances and an unrelated fixed one-unit cutoff.
+            if wanted.is_none()
+                && brain.search.is_none()
+                && matches!(goal, Goal::Interact(_) | Goal::Objective(_))
+                && flat(point - feet).length()
+                    < crate::nav::ARRIVAL_RADIUS + if body.conservative { 1.2 } else { 0.4 } + 0.2
+                && flat(point - feet).length() > 0.1
+                && (point.y - feet.y).abs() < body.step + 0.5
+            {
+                wanted = Some(Waypoint {
+                    feet: point,
+                    jump: false,
+                    through: None,
+                    crouch: false,
+                });
+            }
         }
+        let pushing = if behaviour == Behaviour::Interact {
+            self.act_bot_interaction(bot, interaction_enemy.map(|k| k.at), tick)?
+        } else {
+            None
+        };
+        let walk_direction =
+            wanted.map(|p| self.bot_walk_direction(bot, flat(p.feet - feet).normalize_or_zero()));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -1386,6 +2130,14 @@ impl Session {
                     aim_pitch = 0.15;
                 }
             }
+        } else if behaviour == Behaviour::Objective
+            && selected_objective.is_none_or(|view| view.enemy.is_none())
+        {
+            if let Some(objective) = selected_objective.as_ref() {
+                let delta = objective.aim - eye;
+                aim_yaw = yaw_to(delta);
+                aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
+            }
         } else if let Some(seen) = sight.target {
             let mut at = seen.eye - Vec3::Y * 0.5;
             if let Some(w) = weapon.filter(|w| !w.melee && w.speed > 0.0) {
@@ -1393,7 +2145,7 @@ impl Session {
                 at += target_velocity * time;
                 at.y += 0.5 * w.fall * time * time;
             }
-            let delta = at - eye;
+            let delta = native_choice.map_or(at - eye, |c| c.direction);
             if tick >= brain.next_error {
                 let tracked = (tick - brain.seen_since) as f32 * TICK;
                 let size = kind.aim_error_degrees.to_radians()
@@ -1407,15 +2159,19 @@ impl Session {
             aim_yaw = wrap(yaw_to(delta) + brain.error.0);
             aim_pitch = (delta.y.atan2(flat(delta).length()) + brain.error.1).clamp(-1.5, 1.5);
             let reaction = (kind.reaction_seconds * 120.0) as u64;
-            let in_reach = weapon.is_some_and(|w| delta.length() <= w.reach.max(1.0) * 1.1 + 0.5);
-            fire = tick >= brain.seen_since + reaction
+            let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
+            fire = enemy.is_some()
+                && (driving.is_none() || vehicle_weapon)
+                && tick >= brain.seen_since + reaction
                 && in_reach
+                && attack_clear
+                && crew_ready
                 && wrap(aim_yaw - brain.yaw).abs() < 0.1
                 && (aim_pitch - brain.pitch).abs() < 0.12;
             // A tool reaching to hold keeps its trigger down while it
             // watches its target, until it catches; none just after a
             // throw.
-            if grabbing {
+            if grabbing && enemy.is_some() && driving.is_none() {
                 fire = true;
             }
             if tick < brain.next_grab {
@@ -1443,16 +2199,23 @@ impl Session {
         let right = Vec3::new(brain.yaw.cos(), 0.0, brain.yaw.sin());
         let mut direction = Vec3::ZERO;
         if let Some(next) = wanted {
-            direction = flat(next.through.unwrap_or(next.feet) - feet).normalize_or_zero();
+            direction = if let Some(through) = next.through {
+                flat(through - feet).normalize_or_zero()
+            } else {
+                walk_direction.unwrap_or(Vec3::ZERO)
+            };
             input.jump = next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded;
             // Into a crawlspace: crouch on the way in (the body stays down
             // until it has room to stand).
             input.crouch = next.crouch && flat(next.feet - feet).length() < 1.6;
         }
+        if let Some(push) = pushing {
+            direction = push;
+        }
         match behaviour {
             // In its band: strafe so it is not a still target, and give
             // ground if too close.
-            Behaviour::Fight if wanted.is_none() && hold => {
+            Behaviour::Fight | Behaviour::Objective if wanted.is_none() && hold => {
                 let side = if (tick / 90 + bot).is_multiple_of(2) {
                     0.7
                 } else {
@@ -1470,20 +2233,68 @@ impl Session {
             Behaviour::Fly => {
                 if let Some(air) = air {
                     let toward = flat(air.to - feet);
-                    input.jet = toward.length() > 1.0 || feet.y < air.to.y + 0.5;
-                    direction = if air.roofed {
-                        // Under something: out from under it first.
-                        let away = -toward;
-                        if away.length() > 0.1 {
-                            away.normalize()
+                    let across = toward.length();
+                    let toward = toward.normalize_or_zero();
+                    if !air.roofed && kind.moves != Moves::Swim && weapon.is_some_and(|w| w.melee) {
+                        let velocity = Vec3::from(state.velocity);
+                        let closing_speed = flat(velocity).dot(toward);
+                        if feet.y < air.to.y - 0.6
+                            || (!state.grounded && velocity.y < -1.0 && feet.y < air.to.y + 0.8)
+                        {
+                            // Recover the target's altitude before spending more
+                            // thrust on horizontal speed.
+                            input.jet = true;
+                            direction = Vec3::ZERO;
                         } else {
-                            forward
+                            // Crouched jets trade lift for flat forward thrust.
+                            // Use them only with altitude in hand; near the target,
+                            // release thrust and walk against excess closing speed.
+                            input.crouch = true;
+                            if across > 2.5 && closing_speed < 3.0 {
+                                input.jet = true;
+                                direction = toward;
+                            } else {
+                                input.jet = false;
+                                let desired = (across * 0.8).clamp(0.35, 1.5);
+                                direction = if closing_speed > desired {
+                                    -toward
+                                } else {
+                                    toward
+                                };
+                            }
                         }
-                    } else if feet.y > air.to.y + 1.0 && toward.length() > 1.0 {
-                        toward.normalize() * (toward.length() / 3.0).min(1.0)
                     } else {
-                        Vec3::ZERO
-                    };
+                        let ranged = weapon.is_some_and(|w| !w.melee);
+                        // The live enemy supplies air.to. A close ranged
+                        // flyer must regain its weapon's band, including
+                        // when vertical separation selected Fly over Fight.
+                        let close = ranged
+                            && sight.target.is_some()
+                            && (back_off || feet.distance(air.to) < near);
+                        if close {
+                            input.jet = false;
+                            let side = if (tick / 90 + bot).is_multiple_of(2) {
+                                0.7
+                            } else {
+                                -0.7
+                            };
+                            direction =
+                                if across > 0.1 { -toward } else { -forward } + right * side;
+                        } else {
+                            // Clear a blocked roof/contact horizontally
+                            // instead of spending lift against the ceiling.
+                            let blocked = air.roofed || ranged && state.jump.ceiling;
+                            input.jet =
+                                (!ranged || !blocked) && (across > 1.0 || feet.y < air.to.y + 0.5);
+                            direction = if blocked {
+                                if across > 0.1 { -toward } else { forward }
+                            } else if feet.y > air.to.y + 1.0 && across > 1.0 {
+                                toward * (across / 3.0).min(1.0)
+                            } else {
+                                Vec3::ZERO
+                            };
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1503,12 +2314,12 @@ impl Session {
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up.
         let trying = input.forward != 0.0 || input.right != 0.0;
-        if trying && moved < 0.01 {
+        if driving.is_none() && trying && moved < 0.01 {
             brain.stuck += 1;
         } else {
             brain.stuck = 0;
         }
-        if brain.stuck > 20 && brain.stuck % 40 < 5 {
+        if driving.is_none() && pushing.is_none() && brain.stuck > 20 && brain.stuck % 40 < 5 {
             input.jump = true;
         }
         let mut forget = false;
@@ -1522,8 +2333,14 @@ impl Session {
             forget = true;
             if brain.replans > MAX_REPLANS {
                 brain.goal = None;
+                if behaviour == Behaviour::Objective {
+                    brain.objective.fail(tick, "objective navigation blocked");
+                }
                 brain.replans = 0;
                 brain.next_wander = tick + 120;
+                if let Some(c) = self.bots.claims.owner_claim(bot, tick) {
+                    self.bots.claims.fail(bot, c.resource, tick);
+                }
             }
         }
         brain.sequence += 1;
@@ -1541,32 +2358,148 @@ impl Session {
         let pulse = pulse
             || fire
                 && charging
-                && self
-                    .weapons
-                    .image_state(ActorId(bot), 0)
-                    .is_some_and(|(image, state)| image.fires_on_release(state));
+                && (if vehicle_weapon {
+                    charged_ready || !mounted_charging && tick.is_multiple_of(40)
+                } else {
+                    self.weapons
+                        .image_state(ActorId(bot), 0)
+                        .is_some_and(|(image, state)| image.fires_on_release(state))
+                });
         let bites = bite.as_ref().filter(|_| fire && tick >= brain.next_bite);
         if let Some(m) = bites {
             brain.next_bite = tick + (m.seconds * 120.0).round() as u64;
         }
-        // A body's hit pulls no trigger.
-        let fire = fire && bite.is_none();
-        let fire_changed = fire != brain.fire_down;
-        brain.fire_down = fire && !pulse;
-        self.movement(bot, sequence, input)?;
-        if let (Some(m), Some(seen)) = (bites, sight.target) {
-            self.bot_bite(bot, seen.owner, m, tick)?;
+        // A body's hit pulls no trigger. Native hand charge releases are
+        // authorized only on its fair Ready turn and then validated postmove.
+        let mut fire = fire && bite.is_none();
+        let mut desired_down = fire && !pulse;
+        let last_down = brain.fire_down;
+        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down;
+        if !matches!(native, hand_combat::Decision::Unsupported) {
+            if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
+                let tracking_charge = last_down
+                    && native_choice.is_some()
+                    && image.charges()
+                    && charged_control::release_only(image)
+                    && (matches!(
+                        behaviour,
+                        Behaviour::Fight | Behaviour::Chase | Behaviour::Fly
+                    ) || behaviour == Behaviour::Objective
+                        && selected_objective.is_some_and(|view| view.enemy.is_some()));
+                let decision = hand_combat::trigger(
+                    image,
+                    image_state,
+                    last_down,
+                    fire && native_choice.is_some() || tracking_charge,
+                    fire && matches!(native, hand_combat::Decision::Ready(_)),
+                );
+                desired_down = decision.down;
+                cancel_hand_charge = decision.abort_charge;
+            } else {
+                desired_down = false;
+            }
         }
-        if sight.target.is_some() {
-            self.bot_arm(bot)?;
+        let objective_tool = selected_objective.is_some_and(|view| view.trigger.is_some());
+        let previous_objective_tool = brain.objective_tool;
+        brain.objective_tool = objective_tool;
+        if objective_tool {
+            // Do not validate a manipulation trigger against yesterday's
+            // hostile weapon intent at the post-movement launch gate.
+            brain.native_combat_tick = None;
+            desired_down = selected_objective.unwrap().trigger.unwrap();
+            cancel_hand_charge |= charging && last_down && !previous_objective_tool;
+        } else if previous_objective_tool {
+            desired_down = false;
+            cancel_hand_charge |= charging && last_down;
         }
+        // Releasing a ready mounted charge is the firing control itself.
+        // Preserve that intent before `fire` becomes the requested button
+        // state; cancellation would otherwise erase the native charge before
+        // the ordinary trigger-release executor could consume it.
+        let mounted_release = fire
+            && vehicle_weapon
+            && charging
+            && charged_ready
+            && pulse
+            && last_down
+            && !objective_tool
+            && !previous_objective_tool;
+        let mut fire_changed = desired_down != last_down;
+        fire = desired_down;
+
+        brain.fire_down = desired_down;
+        if cancel_hand_charge {
+            self.abort_bot_hand_charge(bot)?;
+        }
+        if !fire && vehicle_weapon {
+            self.vehicles.set_fire(bot, false);
+            if !mounted_release && let Some(w) = &mut self.vehicles.world {
+                w.cancel_weapon_charge(bri_vehicles::OccupantId(bot));
+            }
+        }
+        // Preserve the brain's world aim before a seat converts look into
+        // steering or a relative passenger angle.
         let direction = Vec3::new(
             input.yaw.sin() * input.pitch.cos(),
             input.pitch.sin(),
             -input.yaw.cos() * input.pitch.cos(),
         );
-        if fire_changed || pulse {
-            let down = fire && !pulse;
+        let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
+        self.movement(bot, sequence, input)?;
+        if let (Some(m), Some(seen)) = (bites, sight.target) {
+            self.bot_bite(bot, seen.owner, m, tick)?;
+        }
+        if behaviour == Behaviour::Objective {
+            if let Some(view) = selected_objective {
+                if let Some(slot) = view.equip
+                    && self
+                        .weapons
+                        .actor(ActorId(bot))
+                        .is_some_and(|a| a.selected != Some(slot))
+                {
+                    self.abort_bot_hand_charge(bot)?;
+                    self.equip_tool(bot, Some(slot))?;
+                    // The newly selected image has its own trigger state.
+                    fire_changed = true;
+                }
+                if let Some((vehicle, seat)) = view.board {
+                    self.try_bot_board(bot, vehicle, seat, tick)?;
+                }
+            }
+            self.bot_objective_act(bot, tick)?;
+        }
+        if (behaviour != Behaviour::Objective
+            || selected_objective.is_some_and(|view| view.enemy.is_some()))
+            && sight.target.is_some()
+            && !self.vehicles.weapon_seat(bot)
+        {
+            if let Some(choice) = native_choice {
+                if self
+                    .weapons
+                    .actor(ActorId(bot))
+                    .is_some_and(|a| a.selected != Some(choice.slot))
+                {
+                    self.abort_bot_hand_charge(bot)?;
+                    self.equip_tool(bot, Some(choice.slot))?;
+                    self.bots.brains.get_mut(&bot).unwrap().fire_down = false;
+                    return Ok(());
+                }
+            } else if matches!(native, hand_combat::Decision::Unsupported) {
+                self.bot_arm(bot)?;
+            }
+        }
+        if fire_changed || (pulse && matches!(native, hand_combat::Decision::Unsupported)) {
+            if self.vehicles.weapon_seat(bot) {
+                let _ = self.command(
+                    bot,
+                    sequence,
+                    Command::WeaponTrigger {
+                        down: fire && !pulse,
+                    },
+                );
+                return Ok(());
+            }
+            let down = desired_down;
             if self.weapons.image_state(ActorId(bot), 0).is_some() || !down {
                 // A bot's look reaches the host with its trigger.
                 let _ = self.weapon_trigger(bot, down, direction, false);
@@ -1574,6 +2507,45 @@ impl Session {
                     self.note_shot(bot);
                 }
             }
+        }
+        Ok(())
+    }
+    /// Supported inventory intent is checked at the actual post-movement
+    /// launch frame. None preserves existing package/mounted executors.
+    pub(super) fn bot_hand_fire_gate(
+        &mut self,
+        bot: OwnerId,
+        direction: Vec3,
+        tick: u64,
+    ) -> Option<FireAdmission> {
+        let brain = self.bots.brains.get(&bot)?;
+        let plan_tick = tick.checked_sub(1)?;
+        if brain.native_combat_tick != Some(plan_tick) {
+            return None;
+        }
+        let intent = brain.combat.intent(plan_tick);
+        let mut budget = std::mem::take(&mut self.bots.combat_budget);
+        let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
+            hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
+        });
+        self.bots.combat_budget = budget;
+        Some(allowed)
+    }
+    /// Replace a speculative release with a safe native hold, without a
+    /// re-press (which itself would release/restart a charged image).
+    pub(super) fn bot_hold_hand_charge(&mut self, bot: OwnerId) -> Result<()> {
+        self.weapon_triggers.remove(&bot);
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.fire_down = true;
+        }
+        self.weapons.trigger(ActorId(bot), true)
+    }
+    pub(super) fn bot_abort_unsafe_hand_fire(&mut self, bot: OwnerId) -> Result<()> {
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.fire_down = false;
+        }
+        if !self.abort_bot_hand_charge(bot)? {
+            self.weapons.trigger(ActorId(bot), false)?;
         }
         Ok(())
     }
@@ -1662,9 +2634,11 @@ impl Session {
         let brain = self.bots.brains.get_mut(&target).unwrap();
         let born = std::mem::replace(&mut brain.kind, kind.clone());
         brain.born.get_or_insert(born);
+        brain.objective_threat = None;
         brain.posed = false;
         brain.target = None;
         brain.memory = None;
+        brain.evidence_search.clear();
         self.embody_bot(target, &kind)?;
         let max = self.max_health(target);
         self.peers.get_mut(&target).unwrap().combat.health = max;
@@ -1695,6 +2669,13 @@ impl Session {
         Ok(())
     }
     /// The bot kinds as rules see them (`bot_kinds()`).
+    pub(super) fn bot_kind_id(&self, bot: OwnerId) -> Option<&str> {
+        self.bots
+            .brains
+            .get(&bot)
+            .map(|brain| brain.kind.id.as_str())
+    }
+
     pub(super) fn bot_kind_views(&self) -> Vec<bri_package_runtime::script::BotKindView> {
         self.bots
             .kinds

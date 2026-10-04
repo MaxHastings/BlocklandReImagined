@@ -1312,21 +1312,16 @@ impl Simulation {
             build()
         }
     }
-    /// Swap a brick to another definition with the same grid size (the
-    /// treasure chest opening, a pumpkin being carved).
+    /// Swap a brick's definition in place, replacing its grid bounds and
+    /// collision as well as its look (including wider open doors).
     pub fn set_definition(&mut self, id: BrickId, definition: &str) -> Result<()> {
         let brick = self.state().bricks.get(&id).context("Unknown brick")?;
-        let old = self.definitions.get(brick)?;
         let new = self
             .definitions
             .entries
             .get(definition)
             .context("Unknown brick definition")?;
-        ensure!(
-            old.mesh.footprint_studs == new.mesh.footprint_studs
-                && old.mesh.height_plates == new.mesh.height_plates,
-            "Replacement brick has a different size"
-        );
+        let bounds = Bounds::new(brick, &new.mesh)?;
         let definition = definition.to_string();
         if let Some(handle) = self.detach(id) {
             self.parked.remove(&mut self.physics, &[handle]);
@@ -1335,6 +1330,7 @@ impl Simulation {
         self.authority.mutate(id, |b| {
             b.definition = bri_world::ContentRef::Resolved(definition)
         })?;
+        self.index.insert(id, bounds);
         self.note_kind(id);
         self.attach(id)?;
         self.detect_collisions();
@@ -1395,7 +1391,7 @@ impl Simulation {
     /// up to four times player scale.
     pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, false)
+        self.target_filtered(origin, direction, max_distance, |brick| brick.raycast)
     }
     /// [`Self::target`] on through the openings of linked bricks
     /// (portals), as the player sees: the hit, its distance along the whole
@@ -1425,14 +1421,25 @@ impl Simulation {
     /// The shortest way `from` sees `to` by, no longer than `reach`:
     /// straight across, or in through one opening of a linked brick and
     /// out of its partner ([`bri_content::passage::Passages::ways`]), with
-    /// nothing that stops a targeting ray on any leg (within half a unit
-    /// of `to`, which may stand in a body).
+    /// no opaque surface on any leg (within half a unit of `to`, which
+    /// may stand in a body). Water bricks are liquid volumes, not walls;
+    /// they remain selectable by editing rays.
     pub fn sight(&self, from: Vec3, to: Vec3, reach: f32) -> Option<bri_content::passage::Way> {
         // Nothing within `slack` of a leg's end counts.
         let clear = |origin: Vec3, direction: Vec3, length: f32, slack: f32| {
             length <= 1e-3
                 || self
-                    .target(origin, direction, length.min(Self::MAX_TARGET_DISTANCE))
+                    .target_filtered(
+                        origin,
+                        direction,
+                        length.min(Self::MAX_TARGET_DISTANCE),
+                        |brick| {
+                            brick.raycast
+                                && self.definitions.get(brick).is_ok_and(|definition| {
+                                    definition.special != crate::definitions::Special::Water
+                                })
+                        },
+                    )
                     .ok()
                     .flatten()
                     .is_none_or(|hit| hit.distance > length - slack)
@@ -1472,14 +1479,14 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
     ) -> Result<Option<Hit>> {
-        self.target_filtered(origin, direction, max_distance, true)
+        self.target_filtered(origin, direction, max_distance, |_| true)
     }
     fn target_filtered(
         &self,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
-        all_bricks: bool,
+        accept: impl Fn(&Brick) -> bool,
     ) -> Result<Option<Hit>> {
         ensure!(
             origin.is_finite()
@@ -1520,7 +1527,7 @@ impl Simulation {
             });
         }
         self.walk_bricks(origin, direction, max_distance, &mut nearest, |_, brick| {
-            all_bricks || brick.raycast
+            accept(brick)
         })?;
         Ok(nearest)
     }
@@ -1579,7 +1586,10 @@ impl Simulation {
         nearest: &mut Option<Hit>,
         accept: impl Fn(BrickId, &Brick) -> bool,
     ) -> Result<()> {
-        let mut tested = std::collections::HashSet::new();
+        // This set is only a per-ray duplicate guard for bricks registered in
+        // more than one spatial bucket. A fast non-cryptographic hasher keeps
+        // sight queries from paying for randomized SipHash on every candidate.
+        let mut tested = rustc_hash::FxHashSet::default();
         for (bucket, exit) in
             grid::ray_buckets(origin.to_array(), direction.to_array(), max_distance)
         {
@@ -1587,10 +1597,11 @@ impl Simulation {
                 if !tested.insert(id) {
                     continue;
                 }
-                if !accept(id, &self.state().bricks[&id]) {
+                let brick = &self.state().bricks[&id];
+                if !accept(id, brick) {
                     continue;
                 }
-                self.ray_brick(id, origin, direction, max_distance, nearest)?;
+                self.ray_brick(id, brick, origin, direction, max_distance, nearest)?;
             }
             if nearest
                 .as_ref()
@@ -1604,12 +1615,14 @@ impl Simulation {
     fn ray_brick(
         &self,
         id: BrickId,
+        brick: &Brick,
         origin: Vec3,
         direction: Vec3,
         max_distance: f32,
         nearest: &mut Option<Hit>,
     ) -> Result<()> {
-        let brick = &self.state().bricks[&id];
+        // The caller already fetched this brick for the acceptance check;
+        // keep it instead of repeating the persistent world-map lookup.
         // Cheap slab test against the padded grid bounds first.
         let bounds = self.index.bounds(id);
         let low = Vec3::from_array(std::array::from_fn(|a| {
