@@ -887,7 +887,11 @@ fn base_addon_script(path: &str, arg: &str, cx: &Ctx) -> Option<String> {
         return None;
     }
     let folder = target.to_ascii_lowercase();
-    let folder = folder.strip_prefix("add-ons/")?.split('/').next()?.to_owned();
+    let folder = folder
+        .strip_prefix("add-ons/")?
+        .split('/')
+        .next()?
+        .to_owned();
     reference::VANILLA
         .iter()
         .find(|v| v.eq_ignore_ascii_case(&folder))

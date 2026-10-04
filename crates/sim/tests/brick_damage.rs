@@ -716,7 +716,10 @@ fn bricks_over_the_volume_limit_break_only_when_floating() {
         ([0.5, 1.5, -8.5], 1),
     ];
     let white = vec![[1.0; 4]; 2];
-    assert_eq!(rocket_into(10.0, 20.0, white.clone(), &stack), [true, false, true]);
+    assert_eq!(
+        rocket_into(10.0, 20.0, white.clone(), &stack),
+        [true, false, true]
+    );
     // Over both limits nothing breaks; within the plain limit all do.
     assert_eq!(rocket_into(10.0, 11.0, white.clone(), &stack), [false; 3]);
     assert_eq!(rocket_into(12.0, 0.0, white, &stack), [true; 3]);
@@ -801,7 +804,10 @@ fn a_blast_through_thousands_of_bricks_keeps_its_explosion() {
         .values()
         .filter(|b| !b.colliding)
         .count();
-    assert!(out > bri_sim::session::MAX_BLAST_DEBRIS, "{out} knocked out");
+    assert!(
+        out > bri_sim::session::MAX_BLAST_DEBRIS,
+        "{out} knocked out"
+    );
     let thrown: Vec<[f32; 3]> = cues
         .iter()
         .filter(|c| matches!(c.kind, CueKind::BrickKill { .. }))

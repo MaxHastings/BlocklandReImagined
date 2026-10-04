@@ -362,8 +362,7 @@ impl Index {
     pub fn insert_many(&mut self, bricks: impl IntoIterator<Item = (BrickId, Bounds)>) {
         let bricks: FxHashMap<BrickId, Bounds> = bricks.into_iter().collect();
         self.remove_many(bricks.keys().copied());
-        let mut joining: FxHashMap<(i32, i32, i32), Vec<(BrickId, Bounds)>> =
-            FxHashMap::default();
+        let mut joining: FxHashMap<(i32, i32, i32), Vec<(BrickId, Bounds)>> = FxHashMap::default();
         for (&id, &bounds) in &bricks {
             for key in keys(bounds) {
                 joining.entry(key).or_default().push((id, bounds));
@@ -478,7 +477,11 @@ mod tests {
     #[test]
     fn batched_changes_match_one_brick_at_a_time() {
         let bounds = |id: u64| Bounds {
-            min: [(id % 40) as i32 * 2, (id / 1600) as i32 * 3, ((id / 40) % 40) as i32 * 2],
+            min: [
+                (id % 40) as i32 * 2,
+                (id / 1600) as i32 * 3,
+                ((id / 40) % 40) as i32 * 2,
+            ],
             size: [2 + (id % 3) as i32 * 16, 3, 2],
         };
         let (mut one, mut many) = (Index::default(), Index::default());

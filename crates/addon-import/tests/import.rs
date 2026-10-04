@@ -345,7 +345,10 @@ fn real_steam_mini_nuke() {
     let blast = &pack.effects.explosions[0];
     assert_eq!(blast.emitters.len(), 2);
     assert!(blast.light.is_some() && blast.burst.is_some());
-    assert_eq!(debris::explosion_debris(&pack)["mininukeexplosion"].count, 90);
+    assert_eq!(
+        debris::explosion_debris(&pack)["mininukeexplosion"].count,
+        90
+    );
     let checks: bri_addon_import::porting::Checks = serde_json::from_slice(
         &std::fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("ports/weapon_mini_nuke/checks.json"),
