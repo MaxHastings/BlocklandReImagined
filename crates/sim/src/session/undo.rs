@@ -474,6 +474,7 @@ impl Session {
         }
         self.simulation.mutate(id, |b| b.color = old)?;
         self.dirty.insert(id);
+        self.settle_brick_paint(vehicle);
         Ok(Reply::Undone(Some(id)))
     }
 
