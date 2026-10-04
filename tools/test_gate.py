@@ -1,4 +1,5 @@
 """Regression tests for release-gate outcomes; no content or compiler needed."""
+import os
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -17,6 +18,15 @@ class GateEnvironment(unittest.TestCase):
     def test_a_chosen_content_folder_is_kept(self):
         env = gate_env_for({"BRI_CONTENT": "mine"})
         self.assertEqual(env["BRI_CONTENT"], "mine")
+
+
+class BinaryEnvironment(unittest.TestCase):
+    def test_a_test_binary_runs_in_the_gate_environment(self):
+        env = gate_env_for({"PATH": os.environ.get("PATH", "")})
+        script = "import os; print(os.environ.get('BRI_CONTENT', 'unset'))"
+        output, code = gate.run_binary("probe", sys.executable, ["-c", script], ".", env)
+        self.assertEqual(code, 0)
+        self.assertEqual(output.strip(), str(Path("main") / "content"))
 
 
 def gate_env_for(environ):
