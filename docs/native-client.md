@@ -66,7 +66,7 @@ layers and both weight maps. Map and world-brick meshes have separate GPU
 lifetimes. Opaque brick batches are coalesced; transparent batches retain
 ordering. Replicated brick state drives native geometry, paint, visibility and
 rotation through background mesh builds, including after joining a populated
-world. The current four-million-triangle replacement budget rejects excessive
+world. The current sixteen-million-triangle render budget rejects excessive
 worlds explicitly. Bricks are meshed in 32-unit chunks (`world_chunks`) against
 one shared material palette; a replica change rebuilds only the chunks it
 touches, and chunks are frustum culled.
@@ -152,8 +152,10 @@ Overwriting a local save first retains its prior bytes under `.history/`, then
 publishes a flushed replacement. Publication requires filesystem hard-link support;
 failure leaves the prior save intact. Names are case-insensitive across platforms.
 
-Native `.world.json` build files wrap a versioned world. The world's owner
-table records which player (public-key principal) each owner number is. A
+Native build files wrap a versioned world in compressed binary data while
+retaining the `.world.json` filename. JSON-encoded builds in the current schema
+also load. The world's owner table records which player (public-key principal)
+each owner number is. A
 player who joins gets back the number the world has for their principal, so
 their bricks are theirs again after a restart. Loading a build with ownership
 gives each recorded builder's bricks to that player's number on this server;
@@ -165,7 +167,9 @@ legacy records. Both wrapped build saves and native world files are readable in 
 schema only; there is no migration from earlier formats. Dedicated startup
 also accepts wrapped builds.
 
-Loading appends atomically after validating every definition/collision footprint.
+Loading appends in budgeted slices, validating placements against the live world.
+Overlapping or off-grid bricks are skipped and counted in the completion report;
+bricks with missing definitions are retained without placement.
 It keeps existing players and builds, allocates new brick IDs and merges exact
 colors (including event color parameters) within the native 256-color bound.
 It does not apply hand-placement reach/support rules to a restored build. Only
@@ -175,11 +179,13 @@ This is the intentional modern LAN trust policy, not stock v20's unrestricted LA
 
 File work runs off the UI thread with a bounded serial queue. A pending read
 cannot load into a different session after reconnect/rehost. Working admission
-limits are 63 MiB per build, eight local file operations, four server save/load
-requests per 120 ticks, and a listing scan of 1,000 local saves/512 MiB. A corrupt
-save currently produces an explicit listing error. Large loads still perform
-planning/collision publication/replication on the authority loop; asynchronous
-chunked loading and smooth large-world rendering remain work.
+limits include a 1 GiB native build-file bound, eight local file operations,
+separate budgets of four server saves and four loads per 120 ticks, and a listing
+scan of 1,000 local saves/512 MiB. A corrupt save is marked damaged in the listing;
+loading it reports its specific error while other entries remain available.
+The authority publishes large loads in 256-brick slices within a tick-time
+budget and refreshes collision after each tick
+(`crates/sim/src/session/build_load.rs`).
 
 Current client and dedicated host use a matching full native content identity
 covering geometry/map bindings, materials/prints, effects and the avatar rig,

@@ -1,7 +1,9 @@
 # Bots acting together in a physical world
 
-This records the implemented mechanism, its deliberate boundary and acceptance
-evidence, integrated for the v0.2.0 alpha release.
+This is the v0.2.0 interaction-design snapshot: its implemented mechanism,
+boundaries and acceptance evidence. Capability limits below describe that
+release. Read [bots.md](bots.md) for the current bot architecture, bounded
+objective planning and verification limits.
 
 ## Problem
 

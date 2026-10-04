@@ -6,40 +6,33 @@ Revised 2026-10-03. It summarises; the linked docs are the evidence, and
 
 ## Release state
 
-Current public release: [v0.2.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.1),
-source `d738257192cb9ab54bfa7dadc0c7107d15a71956`, with verified Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives. The reviewed code is on main.
-See the [publication evidence, hashes and remaining playtest limits](progress/2026-10-03-v021-published.md).
-The full alpha contract remains open. The Rule Workshop and bounded NPC objective/
-weapon work remain experimental; the reported Windows firefight NaN crash is not
-claimed causally fixed.
+Current public release: [v0.2.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.2),
+source `e3c9010fccea923351c2968e52f240eca7f1f00b`, with verified Windows x86-64,
+Apple silicon macOS and Linux x86-64 archives. The release source is on main;
+main is the only GitHub branch. See the
+[publication and cleanup evidence](progress/2026-10-03-v022-published-and-cleanup.md).
+The full content-backed local gate passed before publication. Max authorized
+publication while the full Windows CI test suite was still running; its result
+is available in the [Windows check](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37161683721).
 
-**v0.2.2 candidate:** creator menus prioritize common Wrench/mini-game tasks,
-Start Game selects local colorsets (including credited Trueno), Shark has
-verified body/swim/mouth-capture behavior, and bounded NPC planning/recovery has
-focused real-control coverage. Blast debris lasts 10 seconds plus a 3-second
-fade. See the [short mutation guide](rule-workshop/V0.2.2-PLAYTEST.md) and
-[integration evidence](progress/2026-10-03-v022-root-integration-and-cleanup.md).
-The [delivery contract](v022-delivery-contract.md) now includes the objective
-pipeline integration and all fourteen real-control journeys plus a held-out
-composition. The [current architecture audit](audits/npc-pipeline-current.md)
-records the initial gaps and current linked implementation. Physical contact,
-declared hold, control-seat delivery, elimination/search, package pickup/return
-and a held-out composition have focused real-control evidence. The independent
-tool-loss and revoked-guard causal tests now pass. Renamed/reordered variants
-pass, and independent source/headless review signs off the fourteen journeys
-plus held-out composition. The sustained battle produced real damage and deaths but failed four strict
-activity windows; further measurements stopped on Max's finalization instruction.
-The duplicator render-budget crash fix and modern Dynamic lighting are integrated
-and have focused render/content evidence. Max's candidate feedback additionally
-led to colorset pointer fixes, restored native Wrench buttons, real hand/Hammer
-delivery, retained charged-weapon windup, lamp-cache blackout prevention and
-stronger bounded cosmetic blast response. The `9650a6b1` source gate failed
-two objective-controller fixtures; their diagnosis and a newly reported
-duplicator effects crash are [tracked here](progress/2026-10-03-v022-final-gate-and-effects-crash.md).
-The corrected final source gate, Windows CI and three-platform publication
-remain pending. Classic and Unified retain
-their existing appearance. No v0.2.2 build is published yet.
+Start with the [short mutation guide](rule-workshop/V0.2.2-PLAYTEST.md).
+The [delivery contract](v022-delivery-contract.md),
+[current bot architecture](architecture/bots.md) and
+[objective integration audit](audits/objective-driven-integration.md)
+record the supported mechanisms and evidence. Creator menus prioritize common
+Wrench/MiniGame tasks, colorsets are selected before hosting, and bounded bots
+execute supported event objectives through ordinary controls. Dynamic lighting
+uses live geometry and source lamps; Classic and Unified retain their existing
+model. Shark body/swimming/capture, delayed projectile outputs, guest music/saving,
+JPEG screenshots and longer cosmetic destruction debris are integrated.
+
+The Rule Workshop, objective planning and alpha formats remain experimental.
+Bots do not infer arbitrary scripts or plan jet-assisted object carrying/high
+hoop throws; unfamiliar Add-On mechanisms need declarations. Recovered Dynamic
+lamps approximate lost metadata, and bulb material/model polish is deferred.
+Shark/Zombie fidelity remains partial. The reported Windows firefight NaN crash
+remains unreproduced, and sustained performance coverage is incomplete; no causal
+fix or Windows speedup is claimed. The full alpha contract remains open.
 
 Test builds are named by date and letter (for example `2026-09-28-a23`)
 and show that name and their commit in the main menu. Each is recorded in

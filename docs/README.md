@@ -81,7 +81,13 @@ Read [AGENTS.md](../AGENTS.md) first, then:
 - [building-simulation.md](building-simulation.md) and
   [brick-materials.md](brick-materials.md): bricks, the catalog and prints.
 - [native-client.md](native-client.md): the client, renderer and input.
-- [event-modernization.md](event-modernization.md): wrench events.
+- [../crates/events/README.md](../crates/events/README.md): the current event
+  runtime, timing, targets and limits. [rule-workshop/DESIGN.md](rule-workshop/DESIGN.md)
+  covers creator-rule semantics. [event-modernization.md](event-modernization.md)
+  records the original modernization requirements and implementation checkpoint.
+- [architecture/bots.md](architecture/bots.md): current bot behavior, bounded
+  objectives and verification limits. [architecture/bot-interactions.md](architecture/bot-interactions.md)
+  preserves the v0.2.0 interaction design and evidence.
 - [avatar-pipeline.md](avatar-pipeline.md): the Blockhead rig and
   animation.
 - Runtime pieces: [audio](runtime-audio.md), [effects](runtime-effects.md),
