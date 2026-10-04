@@ -919,6 +919,10 @@ pub struct Session {
             Option<bri_admin::Principal>,
         ),
     >,
+    /// A restarted host's mini-game (a recovery or shutdown save's), set up
+    /// again for the player who ran it when they join
+    /// ([`Session::hold_minigame`]).
+    held_minigame: Option<serde_json::Value>,
     dirty: dirty::Dirty,
     load_pace: build_load::LoadPace,
     load_clock: build_load::LoadClock,
@@ -1050,6 +1054,7 @@ impl Session {
             chat: VecDeque::new(),
             next_chat: 1,
             departed: BTreeMap::new(),
+            held_minigame: None,
             dirty: dirty::Dirty::default(),
             load_pace: build_load::LoadPace::Budget,
             load_clock: Default::default(),
@@ -1465,6 +1470,7 @@ impl Session {
         self.join_server_game(owner)?;
         if !is_bot {
             self.notify_music_tracks(owner);
+            self.restore_held_minigame(owner);
         }
         Ok(owner)
     }
@@ -1681,6 +1687,7 @@ impl Session {
         self.packages_joined(owner);
         self.join_server_game(owner)?;
         self.notify_music_tracks(owner);
+        self.restore_held_minigame(owner);
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the

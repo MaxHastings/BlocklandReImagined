@@ -74,7 +74,7 @@ fn other_file(listed: &Entry, source: &Path) -> bool {
         stem(listed) != stem(source)
     })
 }
-fn modified_date(seconds: u64) -> String {
+pub(crate) fn modified_date(seconds: u64) -> String {
     // Gregorian calendar in March-based 400-year eras. Fixed-width UTC text
     // keeps the existing UI's lexicographic date sort chronological.
     let days = seconds / 86400 + 719468;
@@ -457,6 +457,9 @@ pub struct Request {
     pub session: Option<RequestId>,
     pub action: UiAction,
     pub build: Option<Box<SavedBuild>>,
+    /// A Save Bricks write: the world revision its build was taken at
+    /// (when the host's answer came), which the save covers once written.
+    pub revision: Option<u64>,
 }
 pub enum Outcome {
     Listed(Vec<Entry>),
@@ -774,7 +777,7 @@ mod tests {
             vec!["Second"]
         );
         assert_eq!(
-            bri_world::persistence::load_startup(&saved_path)?,
+            bri_world::persistence::load_startup(&saved_path)?.world,
             store.load("Map", "Original.world.json")?.world
         );
         assert!(

@@ -25,8 +25,12 @@ sound or desktop is needed.
    `bedroomdark`, `kitchendark`, `skylands`, `slatedesert`,
    `halloweenslate`, `slatesearevised`, `slatestormrevised`. A wrong name
    prints the full list.
-4. Stop it with Ctrl+C. It saves the world into `server-state`. Next time,
-   start it with `resume` instead of the map name to carry on building:
+4. Stop it with Ctrl+C. It saves the world, with the mini-game running
+   in it (teams and settings), into `server-state`. Stopping it with
+   `kill` or a service manager (SIGTERM), closing its terminal (SIGHUP) or
+   closing its window on Windows saves the same way. Next time, start it
+   with `resume` instead of the map name to carry on building; the
+   mini-game comes back for the player who ran it when they rejoin:
    ```sh
    ./bri-server content resume server-state 0.0.0.0:28000
    ```
@@ -37,6 +41,12 @@ sound or desktop is needed.
 
 To keep it running after you log out, start it inside `tmux` or `screen`
 (Ctrl+C there still saves).
+
+While it runs it keeps one recovery file, `server-state/recovery.json`,
+rewritten about once a minute while the world changes and removed when the
+server stops normally. If the server crashes or is killed outright, the next
+start turns that file into the world `resume` carries on from, so at most a
+minute of building is lost. It never adds save files of its own.
 
 ## Settings and admin passwords
 
@@ -62,5 +72,4 @@ server when they join.
 
 ## Not there yet
 
-- No autosave while it runs: it saves when stopped with Ctrl+C.
 - No public server list: share the address.

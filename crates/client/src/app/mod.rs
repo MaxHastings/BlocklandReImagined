@@ -1772,14 +1772,62 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// A small JSON file in the client state folder, or None when missing or
-/// unreadable.
+/// A small JSON file in the client state folder (saved servers, host
+/// pins), or None when missing. One that cannot be read as what it holds
+/// is moved aside as `<name>.damaged-<unix seconds>.json` (as damaged
+/// settings are kept) before anything writes a new one, and the player is
+/// told ([`take_damaged_files`]): favourites and host pins are never wiped
+/// without a copy.
 pub(crate) fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    std::fs::metadata(path)
-        .ok()
-        .filter(|m| m.len() <= 1024 * 1024)
-        .and_then(|_| std::fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    let bytes = match std::fs::metadata(path) {
+        Ok(meta) if meta.len() <= 1024 * 1024 => std::fs::read(path),
+        Ok(_) => Err(std::io::Error::other("it is too big")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => Err(error),
+    };
+    let error = match bytes.map(|bytes| serde_json::from_slice(&bytes)) {
+        Ok(Ok(value)) => return Some(value),
+        Ok(Err(error)) => error.to_string(),
+        Err(error) => error.to_string(),
+    };
+    let copy = crate::settings::damaged_copy(path);
+    let moved = std::fs::rename(path, &copy);
+    bri_console::warn(format!(
+        "{} could not be read ({error}){}",
+        path.display(),
+        if moved.is_ok() {
+            format!("; moved to {}", copy.display())
+        } else {
+            String::new()
+        }
+    ));
+    // Not moved (in use, no permission): reading it again tries again.
+    if moved.is_ok() {
+        DAMAGED_FILES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((path.to_path_buf(), copy));
+    }
+    None
+}
+
+/// State files [`read_small_json`] found damaged and moved aside since
+/// last asked: (file, where its old contents are now).
+static DAMAGED_FILES: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) fn take_damaged_files() -> Vec<(PathBuf, PathBuf)> {
+    std::mem::take(&mut *DAMAGED_FILES.lock().unwrap_or_else(|e| e.into_inner()))
+}
+/// What the player is told about a damaged state file.
+fn damaged_file_message(file: &Path, copy: &Path) -> String {
+    let what = match file.file_name().and_then(|n| n.to_str()) {
+        Some("servers.json") => "Your saved and favourite servers",
+        Some("trusted-hosts.json") => "The servers you trusted",
+        _ => "A saved list",
+    };
+    format!(
+        "{what} could not be read, so the list starts empty. The old file was kept as {}.",
+        copy.display()
+    )
 }
 
 /// Read, change and crash-safely write back a small JSON state file.
@@ -1814,6 +1862,18 @@ fn body_straddle(
             avatar.middle(),
             avatar.bounding_sphere().1,
         ),
+    }
+}
+
+impl App {
+    /// Tell the player about state files found damaged (kept aside).
+    pub(super) fn show_damaged_files(&mut self) {
+        for (file, copy) in take_damaged_files() {
+            self.ui.apply(UiUpdate::MessageBox {
+                title: "Saved List Problem".into(),
+                text: damaged_file_message(&file, &copy),
+            });
+        }
     }
 }
 

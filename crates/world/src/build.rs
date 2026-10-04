@@ -230,8 +230,11 @@ impl SavedBuild {
                     && (ownership || !tag.eq_ignore_ascii_case("+-OWNER"))
             });
         };
-        crate::update_bricks(&mut world.bricks, strip);
-        world.unloaded.iter_mut().for_each(strip);
+        // Keeping both strips nothing: the bricks stay shared, uncopied.
+        if !events || !ownership {
+            crate::update_bricks(&mut world.bricks, strip);
+            world.unloaded.iter_mut().for_each(strip);
+        }
         if !ownership {
             world.owners.clear();
         } else {
