@@ -980,7 +980,12 @@ impl Session {
         hit.sort_unstable();
         hit.dedup();
         let kills = self
-            .breakable_bricks(source, &hit, impact.max_volume)
+            .breakable_bricks(
+                source,
+                &hit,
+                impact.max_volume,
+                Some(impact.max_floating_volume),
+            )
             .into_iter()
             .map(|(brick, _)| {
                 // v20 throws direct hits with a 0.02 falloff radius.
@@ -1002,12 +1007,15 @@ impl Session {
     /// breaks bricks up to `max_volume`, each with its volume (studs x
     /// studs x plates): standing, not a baseplate or indestructible, and
     /// allowed by the minigame's brick damage or, outside minigames, the
-    /// rocket's rules.
+    /// rocket's rules. A projectile's blast gives `max_floating_volume`
+    /// and follows v20's `canExplode` (see [`Self::can_explode`]); without
+    /// it only `max_volume` counts.
     pub(super) fn breakable_bricks(
         &self,
         source: OwnerId,
         bricks: &[BrickId],
         max_volume: f32,
+        max_floating_volume: Option<f32>,
     ) -> Vec<(BrickId, f32)> {
         let mut out = Vec::new();
         let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
@@ -1037,7 +1045,7 @@ impl Session {
                 || !b.colliding
                 || b.base_plate
                 || definition.indestructible
-                || volume > max_volume
+                || !self.can_explode(brick, b, volume, max_volume, max_floating_volume)
             {
                 continue;
             }
@@ -1069,6 +1077,62 @@ impl Session {
             }
         }
         out
+    }
+    /// `fxDTSBrick::canExplode(maxVolume, maxFloatingVolume)`
+    /// (blocklandv20.exe 0x5381f0). The brick's volume, studs x studs x
+    /// plates, counts a quarter (rounded down) when its paint's alpha is
+    /// under 0.95. Within `max_volume` it breaks; beyond the larger of the
+    /// two limits it never does; in between it breaks only when it is not
+    /// held between a live brick below and a live brick above (0x534e80:
+    /// a brick on the floor or with nothing on top counts as floating).
+    fn can_explode(
+        &self,
+        id: BrickId,
+        brick: &bri_world::Brick,
+        volume: f32,
+        max_volume: f32,
+        max_floating_volume: Option<f32>,
+    ) -> bool {
+        let Some(max_floating_volume) = max_floating_volume else {
+            return volume <= max_volume;
+        };
+        let alpha = self
+            .simulation
+            .state()
+            .palette
+            .get(usize::from(brick.color))
+            .map_or(1.0, |c| c[3]);
+        let volume = if alpha < 0.95 {
+            (volume * 0.25).floor()
+        } else {
+            volume
+        };
+        if volume <= max_volume {
+            return true;
+        }
+        volume <= max_volume.max(max_floating_volume) && !self.held_above_and_below(id)
+    }
+    /// Whether a live (not knocked-out) brick joins `id` from below and
+    /// another from above.
+    fn held_above_and_below(&self, id: BrickId) -> bool {
+        let Ok(joined) = self.simulation.connected_bricks(id) else {
+            return false;
+        };
+        let own = self.simulation.index_bounds(id);
+        let (top, bottom) = (own.min[1] + own.size[1], own.min[1]);
+        let (mut below, mut above) = (false, false);
+        for other in joined {
+            if self.events.respawns.contains_key(&other) {
+                continue;
+            }
+            let bounds = self.simulation.index_bounds(other);
+            if bounds.min[1] >= top {
+                above = true;
+            } else if bounds.min[1] + bounds.size[1] <= bottom {
+                below = true;
+            }
+        }
+        below && above
     }
     /// Knock `kills` out together (one collision refresh) for the
     /// minigame's brick respawn time, then fire each one's `onBlownUp`.

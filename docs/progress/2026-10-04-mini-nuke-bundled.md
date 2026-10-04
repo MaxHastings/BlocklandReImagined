@@ -81,10 +81,20 @@ Causes and fixes:
 - `bri_client::app::fx::tests::bricks_a_blast_knocks_out_without_a_cue_do_not_fade`.
 - `bri_client::brick_fade` tests check fade scenes carry no images of their own.
 
+## canExplode recovered
+
+Max asked for nothing to be missing, so the Mini-Nuke's 390-volume limit
+for floating bricks had to work. v20's `fxDTSBrick::canExplode` (0x5381f0)
+and the support test it calls (0x534e80) were disassembled: see the audit's
+rule 6. Every projectile blast now follows it, including its quarter
+volume for translucent bricks. Guard tests:
+`bricks_over_the_volume_limit_break_only_when_floating` and
+`translucent_bricks_count_a_quarter_of_their_volume` in
+`crates/sim/tests/brick_damage.rs`. Vehicles smashing bricks (not a v20
+feature) keep their plain volume limit.
+
 ## Not done
 
-- `brickExplosionMaxVolumeFloating` (390 for the Mini-Nuke) is still not
-  modelled; see the audit's "Not verified" list.
 - Default Physics Quality keeps 512 debris bodies and sheds to what the PC
   affords inside a dense build (66 at the blast's centre on the test PC),
   as for any blast.

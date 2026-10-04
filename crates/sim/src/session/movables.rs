@@ -1415,7 +1415,7 @@ impl Session {
         let order: Vec<BrickId> = std::iter::once(brick)
             .chain(near.into_iter().map(|(_, id)| id))
             .collect();
-        let breakable = self.breakable_bricks(source, &order, smash.max_volume);
+        let breakable = self.breakable_bricks(source, &order, smash.max_volume, None);
         // The brick it struck must break first, or the hit only bumps.
         if breakable.first().is_none_or(|(id, _)| *id != brick) {
             return Ok(());
