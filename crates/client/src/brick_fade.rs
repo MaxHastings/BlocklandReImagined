@@ -19,6 +19,7 @@
 //! static batch. Once settled, the chunk is rebuilt with the brick in it
 //! before this drawing stops.
 use anyhow::Result;
+use bri_console::Clamp;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{GpuScene, SceneData, SceneRenderer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,7 +57,7 @@ pub const OUTLINE_ALPHA: f32 = 0.1;
 /// One frame of v20's easing. Returns the new drawn colour and whether it
 /// has reached the target.
 pub fn ease(drawn: [f32; 4], target: [f32; 4], dt: f32) -> ([f32; 4], bool) {
-    let k = RATE * dt.clamp(MIN_DT, MAX_DT);
+    let k = RATE * dt.clamped(MIN_DT, MAX_DT);
     let close = (0..4).all(|i| (drawn[i] - target[i]).abs() < SNAP_DISTANCE);
     if dt > SNAP_DT || k >= 1.0 || close {
         return (target, true);
@@ -435,7 +436,7 @@ fn fade_brick(
     brick.recolor(|_| 0);
     // A brick fading out has already stopped rendering.
     brick.visible = true;
-    Some((brick, [drawn.map(|v| v.clamp(0.0, 1.0))]))
+    Some((brick, [drawn.map(|v| v.clamped(0.0, 1.0))]))
 }
 
 /// One brick where it stands in `world`, painted `drawn`, against the

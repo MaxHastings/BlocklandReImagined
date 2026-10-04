@@ -9,6 +9,7 @@ use crate::ml;
 use crate::pack::{Pack, TexKey};
 use crate::schema::{Control, HSizing, Justify, Style, VSizing};
 use crate::text::{self, Font};
+use bri_console::Clamp;
 use std::collections::HashMap;
 
 pub type NodeId = usize;
@@ -1252,7 +1253,7 @@ impl View {
                 let (lo, hi) = self.range(id);
                 let v = self.num(id);
                 let t = if hi > lo {
-                    ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+                    ((v - lo) / (hi - lo)).clamped(0.0, 1.0)
                 } else {
                     0.0
                 };
@@ -1283,7 +1284,7 @@ impl View {
                         .field(field)?
                         .split_whitespace()
                         .filter_map(|x| x.parse::<f32>().ok())
-                        .map(|x| (x.clamp(0.0, 1.0) * 255.0) as u8)
+                        .map(|x| (x.clamped(0.0, 1.0) * 255.0) as u8)
                         .collect();
                     c.try_into().ok()
                 };
@@ -1293,7 +1294,7 @@ impl View {
                 {
                     dl.fill(r, c);
                 }
-                let f = self.num(id).clamp(0.0, 1.0);
+                let f = self.num(id).clamped(0.0, 1.0);
                 let bar = if on("flipped") {
                     let w = (r.w as f32 * f) as i32;
                     Rect::new(r.x + r.w - w, r.y, w, r.h)
@@ -1311,7 +1312,7 @@ impl View {
             }
             "GuiProgressCtrl" => {
                 if let Some(s) = style {
-                    let f = self.num(id).clamp(0.0, 1.0);
+                    let f = self.num(id).clamped(0.0, 1.0);
                     dl.fill(
                         Rect::new(r.x, r.y, (r.w as f32 * f) as i32, r.h),
                         s.fill_color.unwrap_or([0, 0, 128, 128]),
@@ -2322,7 +2323,7 @@ impl View {
     fn slide_to(&mut self, id: NodeId, x: i32) {
         let r = self.nodes[id].rect;
         let (lo, hi) = self.range(id);
-        let t = ((x - r.x - 4) as f32 / (r.w - 8).max(1) as f32).clamp(0.0, 1.0);
+        let t = ((x - r.x - 4) as f32 / (r.w - 8).max(1) as f32).clamped(0.0, 1.0);
         let mut v = lo + t * (hi - lo);
         if let Some(ticks) = self.nodes[id]
             .ctrl

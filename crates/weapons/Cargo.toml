@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.93"
 publish = false
 [dependencies]
+bri-console = { path = "../console" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -4,6 +4,7 @@
 use crate::items::native_shape_scene;
 use crate::portal_view::Straddle;
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::Passages;
 use bri_content::shape::{Animation, Shape};
 use bri_render::scene::{
@@ -699,7 +700,7 @@ impl ClientVehicles {
             -((look_yaw - heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
                 - std::f32::consts::PI)
         };
-        frame.turret_aim = [yaw, look_pitch.clamp(d.look_pitch[0], d.look_pitch[1])];
+        frame.turret_aim = [yaw, look_pitch.clamped(d.look_pitch[0], d.look_pitch[1])];
     }
     /// World transform of a seat node (players' feet ride there).
     pub fn seat(
@@ -913,7 +914,7 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
 /// rotation, so its pitch would answer the mouse late and in steps.
 fn extrapolate(history: &VecDeque<VehiclePose>, index: usize, now: f64) -> VehicleFrame {
     let pose = &history[index];
-    let ahead = (now - pose.tick as f64).clamp(0.0, DRIVEN_AHEAD);
+    let ahead = (now - pose.tick as f64).clamped(0.0, DRIVEN_AHEAD);
     let mut frame = frame_of(pose);
     frame.position += frame.velocity * (ahead / TICK_RATE) as f32;
     if let Some(before) = index.checked_sub(1).map(|i| &history[i]) {
@@ -1509,8 +1510,8 @@ mod tests {
         let host: Vec<_> = (0..600u64)
             .map(|tick| {
                 let target = (tick / 40) as f32 * 3.0;
-                let wanted = ((target - x) * 8.0).clamp(-12.0, 12.0);
-                speed += (wanted - speed).clamp(-3.0, 3.0);
+                let wanted = ((target - x) * 8.0).clamped(-12.0, 12.0);
+                speed += (wanted - speed).clamped(-3.0, 3.0);
                 x += speed / TICK_RATE as f32;
                 (tick, x, speed)
             })

@@ -1,4 +1,5 @@
 //! Client intentions and view angles; authoritative simulation owns positions.
+use bri_console::Clamp;
 use bri_sim::{
     player::{MAX_FREELOOK, MoveInput, PlayerState},
     session::ControlObject,
@@ -89,7 +90,7 @@ impl PortalEase {
     /// The share left: all of it at first, none after
     /// [`PORTAL_EASE_SECONDS`], gently at both ends.
     fn left(&self) -> f32 {
-        let t = (self.seconds / PORTAL_EASE_SECONDS).clamp(0.0, 1.0);
+        let t = (self.seconds / PORTAL_EASE_SECONDS).clamped(0.0, 1.0);
         1.0 - t * t * (3.0 - 2.0 * t)
     }
     fn roll(&self) -> f32 {
@@ -252,7 +253,7 @@ fn wrap_half(a: f32) -> f32 {
 /// Looking straight up or down, the yaw is the one whose level basis
 /// (`App::view_basis`) has `up` for its up.
 pub fn angles(forward: glam::Vec3, up: glam::Vec3) -> (f32, f32) {
-    let pitch = forward.y.clamp(-1.0, 1.0).asin();
+    let pitch = forward.y.clamped(-1.0, 1.0).asin();
     let yaw = if forward.x * forward.x + forward.z * forward.z > 1e-8 {
         forward.x.atan2(-forward.z)
     } else if forward.y > 0.0 {
@@ -314,7 +315,7 @@ impl Controls {
                 self.look(yaw * scale, -pitch * scale);
             }
             GameAction::SetZoomFov { fov } if fov.is_finite() => {
-                self.zoom_fov = Some(fov.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1))
+                self.zoom_fov = Some(fov.clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1))
             }
             GameAction::ToggleFirstPerson { fast } => {
                 self.third_person = !self.third_person;
@@ -327,21 +328,21 @@ impl Controls {
     fn look(&mut self, yaw: f32, pitch: f32) {
         if let Some(observer) = &mut self.observer {
             observer.yaw = wrap(observer.yaw + yaw);
-            observer.pitch = (observer.pitch + pitch).clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
+            observer.pitch = (observer.pitch + pitch).clamped(-OBSERVER_PITCH, OBSERVER_PITCH);
         } else if let Some(look) = self.seat_look()
             && (look == SeatLook::StrafeDriver || self.held(HeldControl::FreeLook))
         {
             // Free looking hands the rider the whole turn and the vehicle
             // none (`Player::processTick` 0x5b2df7 zeroes the vehicle's yaw
             // and pitch), and `pitch()` goes back to Invert Mouse.
-            self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
-            self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.free_yaw = (self.free_yaw + yaw).clamped(-MAX_FREELOOK, MAX_FREELOOK);
+            self.head_pitch = (self.head_pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
             self.driver_head = HeadTicks::at(self.head_pitch);
         } else if self.free_looking() {
             // Only the turn is free; pitch still tilts the body's look
             // (`Player::updateMove` always adds pitch to `mHead.x`).
-            self.free_yaw = (self.free_yaw + yaw).clamp(-MAX_FREELOOK, MAX_FREELOOK);
-            self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.free_yaw = (self.free_yaw + yaw).clamped(-MAX_FREELOOK, MAX_FREELOOK);
+            self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
         } else if self.vehicle_view.is_some() {
             // v20's `pitch()`: Vehicle Mouse Invert replaces Invert Mouse
             // (which the UI already applied). The steering is Torque's
@@ -366,14 +367,14 @@ impl Controls {
             self.pitch = wrap_half(self.pitch + pitch);
         } else if self.seat_look() == Some(SeatLook::Passenger) {
             self.body_turn = wrap(self.body_turn + yaw);
-            self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.head_pitch = (self.head_pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
         } else if self.seated() {
-            self.head_pitch = (self.head_pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.head_pitch = (self.head_pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
         } else if self.seat_yaw.is_some() {
-            self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
         } else {
             self.yaw = wrap(self.yaw + yaw);
-            self.pitch = (self.pitch + pitch).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.pitch = (self.pitch + pitch).clamped(-FRAC_PI_2, FRAC_PI_2);
         }
     }
     /// Follow a mouse-steered vehicle's heading and pitch, or stop. Leaving
@@ -452,7 +453,7 @@ impl Controls {
             // Off a vehicle seat the head's turn halves every tick unless
             // it is free looking (the else branch of 0x5aea5f).
             if seconds.is_finite() && !self.free_looking() {
-                self.free_yaw *= 0.5f32.powf(seconds.clamp(0.0, 1.0) / HEAD_RETURN_TICK);
+                self.free_yaw *= 0.5f32.powf(seconds.clamped(0.0, 1.0) / HEAD_RETURN_TICK);
             }
             return;
         };
@@ -464,7 +465,7 @@ impl Controls {
             self.driver_head = HeadTicks::at(self.head_pitch);
             return;
         }
-        let seconds = seconds.clamp(0.0, 1.0);
+        let seconds = seconds.clamped(0.0, 1.0);
         let keep = 0.5f32.powf(seconds / HEAD_RETURN_TICK);
         match look {
             SeatLook::Passenger => self.free_yaw *= keep,
@@ -509,7 +510,7 @@ impl Controls {
             Ride::Hull(hull) => {
                 let (heading, _) = angles(hull * Vec3::NEG_Z, hull * Vec3::Y);
                 hull * Quat::from_rotation_y(-wrap(self.yaw + self.free_yaw - heading))
-                    * Quat::from_rotation_x(self.pitch.clamp(-FRAC_PI_2, FRAC_PI_2))
+                    * Quat::from_rotation_x(self.pitch.clamped(-FRAC_PI_2, FRAC_PI_2))
             }
         })
     }
@@ -519,7 +520,7 @@ impl Controls {
     pub fn take_turret(&mut self, yaw: f32, pitch: f32) {
         if yaw.is_finite() && pitch.is_finite() {
             self.yaw = wrap(yaw);
-            self.pitch = pitch.clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.pitch = pitch.clamped(-FRAC_PI_2, FRAC_PI_2);
             self.free_yaw = 0.0;
         }
     }
@@ -539,7 +540,7 @@ impl Controls {
         let turn = glam::Quat::from_mat3a(&carry.matrix3).normalize();
         let before = self.yaw;
         self.yaw = wrap(yaw - self.free_yaw);
-        self.pitch = pitch.clamp(-FRAC_PI_2, FRAC_PI_2);
+        self.pitch = pitch.clamped(-FRAC_PI_2, FRAC_PI_2);
         // The eye's offset turns with the heading (`ahead` of the yaw): the
         // tilt is the rest of the carry's turn.
         let tilt = turn * self.portal_tilt() * glam::Quat::from_rotation_y(self.yaw - before);
@@ -570,7 +571,7 @@ impl Controls {
         if let Some(ease) = &mut self.portal_ease
             && seconds.is_finite()
         {
-            ease.seconds += seconds.clamp(0.0, 0.25);
+            ease.seconds += seconds.clamped(0.0, 0.25);
             if ease.seconds >= PORTAL_EASE_SECONDS {
                 self.portal_ease = None;
             }
@@ -650,7 +651,7 @@ impl Controls {
             self.observer = Some(Observer {
                 mode,
                 yaw,
-                pitch: pitch.clamp(-OBSERVER_PITCH, OBSERVER_PITCH),
+                pitch: pitch.clamped(-OBSERVER_PITCH, OBSERVER_PITCH),
                 distance,
                 zoom,
                 from: control,
@@ -671,7 +672,7 @@ impl Controls {
         if let Some(o) = &mut self.observer
             && o.zoom.0 < o.zoom.1
         {
-            o.distance = (o.distance - notches as f32).clamp(o.zoom.0, o.zoom.1);
+            o.distance = (o.distance - notches as f32).clamped(o.zoom.0, o.zoom.1);
         }
     }
     /// `dropCameraAtPlayer` again while flying: back to the player's eye.
@@ -777,7 +778,7 @@ impl Controls {
             + right * self.axis(HeldControl::Right, HeldControl::Left))
             * walk;
         let from = position;
-        position += direction * self.fly_speed() * seconds.clamp(0.0, 0.1);
+        position += direction * self.fly_speed() * seconds.clamped(0.0, 0.1);
         let (position, carry) = match passages.is_empty() {
             true => (position, None),
             false => passages.travel(from, position),
@@ -788,7 +789,7 @@ impl Controls {
                 let (yaw, pitch, _) =
                     crate::portal_view::carried_look((observer.yaw, observer.pitch, 0.0), &carry);
                 observer.yaw = yaw;
-                observer.pitch = pitch.clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
+                observer.pitch = pitch.clamped(-OBSERVER_PITCH, OBSERVER_PITCH);
             }
         }
     }
@@ -903,16 +904,16 @@ impl Controls {
     /// The saved FOV prefs: the normal FOV, and the zoom FOV to start from
     /// until the wheel changes it.
     pub fn set_fov_prefs(&mut self, normal: f32, zoom: f32) {
-        self.normal_fov = normal.is_finite().then(|| normal.clamp(5.0, 140.0));
+        self.normal_fov = normal.is_finite().then(|| normal.clamped(5.0, 140.0));
         if self.zoom_fov.is_none() && zoom.is_finite() {
-            self.zoom_fov = Some(zoom.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1));
+            self.zoom_fov = Some(zoom.clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1));
         }
     }
     /// The field of view the host sets, or `None` for the player's own. It
     /// glides like any other FOV change.
     pub fn set_server_fov(&mut self, fov: Option<f32>) {
         self.server_fov = fov.filter(|f| f.is_finite()).map(|f| {
-            f.clamp(
+            f.clamped(
                 *bri_package_runtime::ops::FOV_RANGE.start(),
                 *bri_package_runtime::ops::FOV_RANGE.end(),
             )
@@ -926,8 +927,8 @@ impl Controls {
         }
         let target = self.target_fov();
         let shown = self.fov_shown.get_or_insert(target);
-        let step = ZOOM_DEGREES_PER_SECOND * seconds.clamp(0.0, 0.25);
-        *shown += (target - *shown).clamp(-step, step);
+        let step = ZOOM_DEGREES_PER_SECOND * seconds.clamped(0.0, 0.25);
+        *shown += (target - *shown).clamped(-step, step);
     }
     /// The held weapon's aim, or `None` when it has none: holding Zoom (or
     /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
@@ -1010,7 +1011,7 @@ impl Controls {
         if !seconds.is_finite() {
             return;
         }
-        let seconds = seconds.clamp(0.0, 0.25);
+        let seconds = seconds.clamped(0.0, 0.25);
         let on_foot = self.observer.is_none()
             && !self.mounted
             && self.vehicle_view.is_none()
@@ -1046,7 +1047,7 @@ impl Controls {
             }
         };
         let step = seconds / SWAY_EASE_SECONDS;
-        self.sway.gain += (target - self.sway.gain).clamp(-step, step);
+        self.sway.gain += (target - self.sway.gain).clamped(-step, step);
         self.sway.phase = (self.sway.phase + f64::from(seconds / def.seconds)).fract();
         let (yaw, pitch) = def.offset(self.sway.phase);
         let now = (yaw * self.sway.gain, pitch * self.sway.gain);
@@ -1054,7 +1055,7 @@ impl Controls {
         self.sway.applied = now;
         if on_foot {
             self.yaw = wrap(self.yaw + dy);
-            self.pitch = (self.pitch + dp).clamp(-FRAC_PI_2, FRAC_PI_2);
+            self.pitch = (self.pitch + dp).clamped(-FRAC_PI_2, FRAC_PI_2);
         }
         if self.sway.gain == 0.0 {
             self.sway = SwayState::default();
@@ -1063,7 +1064,7 @@ impl Controls {
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim_while_aiming() {
             aim.level_fov(self.aim_level)
-                .clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
+                .clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
         } else if self.held(HeldControl::Zoom) {
             self.zoom_fov.unwrap_or(10.0)
         } else {
@@ -1090,7 +1091,7 @@ impl Controls {
         } else {
             CAMERA_SPEED.0
         };
-        let step = speed * seconds.clamp(0.0, 0.25);
+        let step = speed * seconds.clamped(0.0, 0.25);
         self.camera_pos = if self.third_person_view() {
             (self.camera_pos + step).min(1.0)
         } else {

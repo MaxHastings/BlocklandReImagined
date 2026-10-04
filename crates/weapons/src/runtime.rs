@@ -1,6 +1,7 @@
 //! Host-authoritative fixed-tick gameplay. Coordinates: X-right, Y-up, -Z-forward.
 use crate::*;
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::{MAX_CARRIES, PAST};
 use glam::{Quat, Vec3};
 use std::{
@@ -3260,7 +3261,7 @@ impl WeaponsWorld {
                                 velocity = direction * 15.0 + Vec3::Y * 2.0 + a.frame.velocity;
                             } else {
                                 let scale = (dist / 11.0 + 0.1).min(1.0);
-                                let zs = (dist / 22.0).clamp(0.01, 1.0);
+                                let zs = (dist / 22.0).clamped(0.01, 1.0);
                                 let inherited = if a.frame.grounded {
                                     a.frame.velocity
                                 } else {
@@ -3737,7 +3738,7 @@ impl WeaponsWorld {
             if d.min_stick_speed > 0.0 && p.velocity.length() >= d.min_stick_speed {
                 let incidence = (-p.velocity.normalize_or_zero())
                     .dot(normal)
-                    .clamp(-1.0, 1.0)
+                    .clamped(-1.0, 1.0)
                     .acos()
                     .to_degrees();
                 if incidence < d.bounce_angle / 2.0 {
@@ -3905,7 +3906,7 @@ impl WeaponsWorld {
             self.events.push(Event::Damage {
                 source: p.source,
                 target,
-                amount: d.damage.clamp(0.0, 100.0)
+                amount: d.damage.clamped(0.0, 100.0)
                     * if d.fixed_damage { 1.0 } else { p.scale }
                     * hurt,
                 kind: d.damage_type.clone(),
@@ -4187,7 +4188,7 @@ impl WeaponsWorld {
                 d.damage = if hit.target == TargetId::Actor(id) {
                     base * r.shooter
                 } else {
-                    (base + landing as f32 * r.damage).clamp(-100.0, 100.0)
+                    (base + landing as f32 * r.damage).clamped(-100.0, 100.0)
                 };
             }
             let normal = hit.normal.normalize_or(-direction);
@@ -4487,7 +4488,7 @@ impl WeaponsWorld {
         // taken to the target's centre and both falloffs are quadratic.
         let falloff = |distance: f32, radius: f32| {
             if radius > 0.0 {
-                (1.0 - (distance / radius).powi(2)).clamp(0.0, 1.0)
+                (1.0 - (distance / radius).powi(2)).clamped(0.0, 1.0)
             } else {
                 0.0
             }

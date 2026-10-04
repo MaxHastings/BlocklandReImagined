@@ -232,6 +232,7 @@ impl App {
             "weapon_effects": world(self.fx.weapon_effects.world()),
             "actor_effects": world(self.fx.actor_effects.world()),
             "particles_drawn": drawn.map_or(0, |s| s.instances),
+            "particles_cut": self.fx.effect_sprites_cut,
             "particle_draw_calls": drawn.map_or(0, |s| s.draw_calls),
             "particle_upload_bytes": drawn.map_or(0, |s| s.uploaded_bytes),
             "avatars": self.avatar.avatars.len(),

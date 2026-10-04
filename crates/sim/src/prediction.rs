@@ -670,7 +670,9 @@ impl Predictor {
         let own = self.player.state().owner;
         let mut seen = BTreeSet::new();
         for state in states {
-            if state.owner == own || !seen.insert(state.owner) {
+            // A body no player state may hold (a host fault) is left out:
+            // the copy stops colliding with it rather than failing.
+            if state.owner == own || state.check_bounds().is_err() || !seen.insert(state.owner) {
                 continue;
             }
             let tuning = self.archetypes.tuning(state.archetype, state.scale);

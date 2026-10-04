@@ -1,5 +1,6 @@
 use crate::{FIXED_DT, schema::*};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_motor::player::{MoveInput, Player, PlayerState, PlayerTuning, TORQUE_TICK};
 use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
@@ -73,7 +74,7 @@ const AUTO_RETURN_QUIET: u8 = 4;
 const SIDE_HIT: f32 = 0.7;
 fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
     if f.max_forward_vel > 0. {
-        ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
+        ((speed - f.stall_speed) / f.max_forward_vel).clamped(0., 1.)
     } else {
         0.
     }
@@ -422,7 +423,7 @@ pub fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
         });
     let size = (max - min).max(Vec3::splat(0.1));
     let authored = |key: &str| d.authored.get(key).and_then(|v| v.parse::<f32>().ok());
-    let slope = d.run_surface_angle.clamp(1., 89.);
+    let slope = d.run_surface_angle.clamped(1., 89.);
     let [uf, ub, us] = d.underwater_speeds;
     PlayerTuning {
         width: size.x.max(size.z),
@@ -445,9 +446,11 @@ pub fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
         density: d.density.max(0.05),
         drag: d.drag.max(0.001),
         slope_degrees: slope,
-        jump_surface_degrees: authored("jumpsurfaceangle").unwrap_or(slope).clamp(1., 89.),
+        jump_surface_degrees: authored("jumpsurfaceangle")
+            .unwrap_or(slope)
+            .clamped(1., 89.),
         // `jumpDelay` in 32 ms ticks, at 120 Hz.
-        jump_delay_ticks: (authored("jumpdelay").unwrap_or(0.) * 3.75).clamp(0., 255.) as u8,
+        jump_delay_ticks: (authored("jumpdelay").unwrap_or(0.) * 3.75).clamped(0., 255.) as u8,
         can_jet: false,
         max_energy: d.energy.maximum.max(0.),
         recharge: d.energy.recharge_per_32ms.max(0.) / TORQUE_TICK,
@@ -929,7 +932,7 @@ impl VehiclesWorld {
             for (i, (w, def)) in v.wheels.iter_mut().zip(&d.wheels).enumerate() {
                 *w = WheelState {
                     extension: (motion.wheel_suspension[i] / (def.rest_length * v.spawn.scale))
-                        .clamp(0., 1.),
+                        .clamped(0., 1.),
                     contact: motion.wheel_contact[i],
                     rotation: motion.wheel_rotation[i],
                     tire: motion.wheel_tire[i],
@@ -1255,7 +1258,7 @@ impl VehiclesWorld {
         let intent = if let Some(occupant) = v.seats[0] {
             let b = &world.bodies[v.body];
             let speed = b.linvel().length();
-            let ticks = ((((speed - 10.) / 50.) * 7. + 1.).clamp(1., 7.) * 120.).round() as u64;
+            let ticks = ((((speed - 10.) / 50.) * 7. + 1.).clamped(1., 7.) * 120.).round() as u64;
             Some(Intent::TumbleRequested {
                 vehicle: id,
                 occupant,
@@ -1441,8 +1444,8 @@ impl VehiclesWorld {
                 default
             }
         };
-        let minimum =
-            authored(d.runover_speed, 2.).clamp(2., 999.) + if driver.is_none() { 2. } else { 0. };
+        let minimum = authored(d.runover_speed, 2.).clamped(2., 999.)
+            + if driver.is_none() { 2. } else { 0. };
         let speed = velocity.length();
         self.intents.push(Intent::RunOver {
             vehicle: id,
@@ -1587,7 +1590,7 @@ impl VehiclesWorld {
                 };
                 if driven {
                     for (axis, turn) in steering.iter_mut().zip(turn) {
-                        *axis = (*axis + turn).clamp(-limit, limit);
+                        *axis = (*axis + turn).clamped(-limit, limit);
                     }
                 } else {
                     steering = [0.; 2];
@@ -1758,7 +1761,7 @@ impl VehiclesWorld {
                             }
                             // Lift along the roof, truncated to a whole number
                             // and capped whatever the pitch or stall.
-                            force += up * (d.lift * speed).trunc().clamp(0., WHEELED_LIFT_CAP);
+                            force += up * (d.lift * speed).trunc().clamped(0., WHEELED_LIFT_CAP);
                             let bite = bite(f, speed);
                             // Squared mouse steering over maxSteeringAngle;
                             // a positive pitch (mouse up with v20's default
@@ -2177,7 +2180,7 @@ impl VehiclesWorld {
                 },
                 weapon_control
                     .aim_pitch
-                    .clamp(d.look_pitch[0], d.look_pitch[1]),
+                    .clamped(d.look_pitch[0], d.look_pitch[1]),
             ],
             turret_damage: v.turret_damage,
             turret_transform: d
@@ -2237,7 +2240,7 @@ fn actor_step(
         actor.state().yaw
     };
     let (throttle, strafe) = if driven {
-        (c.throttle.clamp(-1., 1.), c.strafe.clamp(-1., 1.))
+        (c.throttle.clamped(-1., 1.), c.strafe.clamped(-1., 1.))
     } else {
         (0., 0.)
     };
@@ -2305,7 +2308,7 @@ fn weapon_step(
     if d.is_actor() {
         c.aim_yaw = 0.;
     }
-    c.aim_pitch = c.aim_pitch.clamp(d.look_pitch[0], d.look_pitch[1]);
+    c.aim_pitch = c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]);
     let ready = v
         .last_shot
         .is_none_or(|last| tick - last >= weapon.cooldown_ticks);

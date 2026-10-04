@@ -6,6 +6,7 @@
 //! so the shot starts at the barrel's mouth at every pitch.
 use crate::schema::{Asset, Definition, Family, Pack};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::shape::{Animation, ClipSet, Shape};
 use glam::{Quat, Vec3};
 use sha2::{Digest, Sha256};
@@ -19,7 +20,7 @@ pub const MUZZLE_SAMPLES: usize = 65;
 /// thread to `(mHead.x + pi/2) / pi` whatever the datablock's look angles,
 /// so the barrel always points where the gunner looks.
 pub fn look_phase(pitch: f32) -> f32 {
-    (0.5 - pitch / std::f32::consts::PI).clamp(0.0, 1.0)
+    (0.5 - pitch / std::f32::consts::PI).clamped(0.0, 1.0)
 }
 
 /// The `look` clip made for this shape: every channel names one of its nodes.
@@ -82,7 +83,7 @@ impl Definition {
     /// facing tipped by the head pitch.
     pub fn muzzle(&self, aim: [f32; 2]) -> Option<(Vec3, Vec3)> {
         let weapon = self.weapon.as_ref()?;
-        let pitch = aim[1].clamp(self.look_pitch[0], self.look_pitch[1]);
+        let pitch = aim[1].clamped(self.look_pitch[0], self.look_pitch[1]);
         let yaw = if self.is_actor() { 0.0 } else { aim[0] };
         let (mount, mount_rotation) = self
             .attachment_mount

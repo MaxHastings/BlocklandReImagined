@@ -3,6 +3,10 @@
 //!
 //! Inputs are only read. Outputs go to a caller-chosen directory, which must
 //! stay out of version control because it contains original game content.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 
 pub mod data;
 pub mod gft;

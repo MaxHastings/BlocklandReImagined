@@ -280,6 +280,7 @@ impl App {
                 fade_models: Default::default(),
                 brick_kills: Vec::new(),
                 weapon_light_deferred: 0,
+                effect_sprites_cut: 0,
                 weapon_effect_session: None,
                 weapon_animation_cues: VecDeque::new(),
                 weapon_animation_drops: 0,

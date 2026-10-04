@@ -1,4 +1,8 @@
 //! Read-only, bounded literal add-on importer. This does not execute TorqueScript.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 use anyhow::{Context, Result, ensure};
 use bri_weapons::*;
 use regex::Regex;

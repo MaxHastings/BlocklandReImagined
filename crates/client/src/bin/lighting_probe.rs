@@ -41,6 +41,7 @@
 //! classic volume, brick lights) as the brightest channel's percentiles.
 use anyhow::{Context, Result, ensure};
 use bri_client::content::ClientContent;
+use bri_console::Clamp;
 use bri_net::protocol::PublicWorld;
 use bri_render::{
     light_volume::LightVolume,
@@ -279,7 +280,8 @@ fn light_terms(
                     if d >= l.outer || cosine <= 0.0 {
                         continue;
                     }
-                    let falloff = ((l.outer - d) / (l.outer - l.inner).max(0.001)).clamp(0.0, 1.0);
+                    let falloff =
+                        ((l.outer - d) / (l.outer - l.inner).max(0.001)).clamped(0.0, 1.0);
                     let light = Vec3::from(l.color) * falloff * (0.5 + 0.5 * cosine);
                     all += light;
                     if let (Some(c), Some(t)) = (l.channel, texel) {
@@ -787,7 +789,8 @@ fn main() -> Result<()> {
                     if d >= l.outer {
                         continue;
                     }
-                    let falloff = ((l.outer - d) / (l.outer - l.inner).max(0.001)).clamp(0.0, 1.0);
+                    let falloff =
+                        ((l.outer - d) / (l.outer - l.inner).max(0.001)).clamped(0.0, 1.0);
                     let seen = match (l.channel, texel) {
                         (Some(c), Some(t)) => format!("{}", t[c as usize + 1]),
                         (None, _) => "no channel (residual only, never casts)".into(),
@@ -851,7 +854,7 @@ fn main() -> Result<()> {
         .collect();
     if views.is_empty() {
         views.push(("spawn".into(), spawn + Vec3::Y * 2.4, centre));
-        let extent = (hi - lo).length().clamp(20.0, 120.0);
+        let extent = (hi - lo).length().clamped(20.0, 120.0);
         views.push((
             "overview".into(),
             centre + Vec3::new(extent * 0.5, extent * 0.35, extent * 0.5),
@@ -981,8 +984,8 @@ fn main() -> Result<()> {
                     for &k in &sheet.lights {
                         let l = &u.lights[k as usize];
                         let distance = Vec3::from(l.position).distance(at);
-                        let falloff =
-                            ((l.outer - distance) / (l.outer - l.inner).max(1e-3)).clamp(0.0, 1.0);
+                        let falloff = ((l.outer - distance) / (l.outer - l.inner).max(1e-3))
+                            .clamped(0.0, 1.0);
                         let given = Vec3::from(l.color) * falloff * 255.0 * sheet.share(k, i);
                         whole += given;
                         if !broken[k as usize] {
@@ -1161,7 +1164,7 @@ fn main() -> Result<()> {
                         .chain(&mut u.residual_all.texels)
                     {
                         for c in &mut t[..3] {
-                            *c = (*c as f32 * light_scale).round().clamp(0.0, 255.0) as u8;
+                            *c = (*c as f32 * light_scale).round().clamped(0.0, 255.0) as u8;
                         }
                     }
                 }

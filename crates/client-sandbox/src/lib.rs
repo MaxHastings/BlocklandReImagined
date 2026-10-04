@@ -14,6 +14,10 @@
 //! - [`gpu`]: draws an Add-On's render layer with wgpu.
 //! - [`world`]: what the game shows, for code that reads it.
 //! - [`bodies`]: local physics bodies and body poses Add-Ons ask for.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 pub mod addon;
 pub mod bodies;
 pub mod capability;

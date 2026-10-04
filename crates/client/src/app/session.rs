@@ -120,6 +120,7 @@ impl App {
         }
         self.shapes_uploaded = None;
         self.fx.weapon_light_deferred = 0;
+        self.fx.effect_sprites_cut = 0;
         self.fx.weapon_effect_session = None;
         self.world_items.reset();
         if let Some(mut attempt) = self.net.attempt.take() {

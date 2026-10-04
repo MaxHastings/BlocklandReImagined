@@ -4,6 +4,7 @@
 //! teleports and camera orbs. Driven by reliable presentation
 //! cues and the presented poses; no gameplay authority.
 use anyhow::Result;
+use bri_console::Clamp;
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
     SourceTransform, StopMode,
@@ -717,7 +718,7 @@ impl ActorEffects {
                 ..Default::default()
             };
             let options = SourceOptions {
-                time_scale: s.rate.clamp(0.001, 1000.0),
+                time_scale: s.rate.clamped(0.001, 1000.0),
                 ..Default::default()
             };
             match self.tires.get(&(s.vehicle, s.wheel)) {
@@ -789,7 +790,7 @@ impl ActorEffects {
                 ..Default::default()
             };
             let options = SourceOptions {
-                time_scale: d.rate.clamp(0.001, 1.0),
+                time_scale: d.rate.clamped(0.001, 1.0),
                 hidden_from_own_eye: self.own_eye == Some(d.actor),
                 ..Default::default()
             };
@@ -1330,7 +1331,7 @@ fn sync_liquid_source(
         ..Default::default()
     };
     let options = SourceOptions {
-        time_scale: rate.clamp(0.001, 1000.0),
+        time_scale: rate.clamped(0.001, 1000.0),
         ..liquid_options(color)
     };
     match *slot {

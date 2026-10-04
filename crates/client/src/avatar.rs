@@ -2,6 +2,7 @@
 use crate::crouch::CrouchThread;
 use anyhow::{Context, Result, ensure};
 use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
+use bri_console::Clamp;
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition},
     avatar::{Appearance, Outfit, Package, Rig},
@@ -820,9 +821,9 @@ impl HeldToolPose {
 /// `Player::updateLookAnimation`: the arm thread follows the head pitch over
 /// the arm range, then Blockland clamps it to the seated look limits.
 fn look_position(pitch: f32, limits: Option<[f32; 2]>) -> f32 {
-    let position = (0.5 - pitch / std::f32::consts::PI).clamp(0.0, 1.0);
+    let position = (0.5 - pitch / std::f32::consts::PI).clamped(0.0, 1.0);
     match limits {
-        Some([down, up]) if down <= up => position.clamp(down, up),
+        Some([down, up]) if down <= up => position.clamped(down, up),
         _ => position,
     }
 }
@@ -1254,7 +1255,7 @@ impl AvatarMesh {
         let first = self.last_time.is_none();
         let elapsed = self
             .last_time
-            .map_or(0.0, |last| (time - last).clamp(0.0, 0.25) as f32);
+            .map_or(0.0, |last| (time - last).clamped(0.0, 0.25) as f32);
         self.last_time = Some(time);
         let scripted = if animation_input.dead {
             Some("death1")
@@ -1312,7 +1313,7 @@ impl AvatarMesh {
         if clip.looping && clip.duration > 0.0 {
             self.phase = self.phase.rem_euclid(clip.duration);
         } else {
-            self.phase = self.phase.clamp(0.0, clip.duration);
+            self.phase = self.phase.clamped(0.0, clip.duration);
         }
         let mut layers = Vec::new();
         layers.push(Layer {
@@ -1438,7 +1439,7 @@ impl AvatarMesh {
             .context("Missing headside clip")?;
         overlays.push(Layer {
             animation: headside,
-            time: (0.5 + player.head_yaw / std::f32::consts::PI).clamp(0.0, 1.0)
+            time: (0.5 + player.head_yaw / std::f32::consts::PI).clamped(0.0, 1.0)
                 * headside.duration,
             weight: 1.0,
         });
@@ -1484,7 +1485,7 @@ impl AvatarMesh {
             self.transition = None;
         }
         let from = self.transition.as_ref().map(|(channels, start)| {
-            let progress = ((time - start) / transition_time).clamp(0.0, 1.0);
+            let progress = ((time - start) / transition_time).clamped(0.0, 1.0);
             (channels, 1.0 - progress as f32)
         });
         let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
@@ -1640,6 +1641,12 @@ impl AvatarMesh {
             self.build_mesh(assets, &pose)?;
         }
         Ok(())
+    }
+    /// Forget everything this mesh holds on the GPU (the device is gone):
+    /// the next [`Self::upload`] sends it all to the new one.
+    pub fn gpu_stopped(&mut self) {
+        self.gpu = None;
+        self.instance = None;
     }
     /// Send the vertices to the GPU: only positions and normals while the
     /// structure holds.

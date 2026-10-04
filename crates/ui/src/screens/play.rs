@@ -4,6 +4,7 @@ use super::*;
 use crate::api::{ConnectionState, IconRef, PlantError};
 use crate::geom::WHITE;
 use crate::models::hud::{FX_ART, ScrollMode};
+use bri_console::Clamp;
 
 pub const SMALL_PLANT_ERRORS: &str = "$pref::Video::useSmallPlantErrors";
 
@@ -160,7 +161,7 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
         return;
     };
     for tag in &core.name_tags {
-        let alpha = (tag.opacity.clamp(0.0, 1.0) * 255.0) as u8;
+        let alpha = (tag.opacity.clamped(0.0, 1.0) * 255.0) as u8;
         if alpha == 0 {
             continue;
         }
@@ -318,7 +319,7 @@ fn hud(core: &Core) -> View {
         );
     }
     for tint in &core.underwater {
-        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
         fill(
             &mut v,
             Rect::new(0, 0, w, h),
@@ -337,7 +338,7 @@ fn hud(core: &Core) -> View {
             .nth(m.spray_index as usize)
             .copied()
             .unwrap_or([1.0; 4]);
-        color[3] = color[3].clamp(0.1, 1.0);
+        color[3] = color[3].clamped(0.1, 1.0);
         let tint = if m.prefs.recolor_brick_icons {
             rgba(color)
         } else {

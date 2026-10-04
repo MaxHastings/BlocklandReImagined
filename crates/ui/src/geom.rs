@@ -1,6 +1,7 @@
 //! Integer UI geometry in logical pixels (the authored 640x480 space scaled by
 //! Torque's resize rules; physical pixels = logical × UI scale).
 
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -51,6 +52,6 @@ pub const BLACK: Rgba = [0, 0, 0, 255];
 
 /// 0..1 float colour to bytes.
 pub fn from_f32(c: [f32; 4]) -> Rgba {
-    let q = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let q = |x: f32| (x.clamped(0.0, 1.0) * 255.0).round() as u8;
     [q(c[0]), q(c[1]), q(c[2]), q(c[3])]
 }

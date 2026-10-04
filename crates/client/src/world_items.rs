@@ -2,6 +2,7 @@
 //! No source script fields, physics authority, window or gameplay input.
 use crate::items::{Appearance, ItemAssets, ItemMesh};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_render::scene::{
     ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer, SceneTransform,
     SceneVertex,
@@ -1370,7 +1371,7 @@ fn normalized_pose(clip: &bri_content::shape::Animation, time: f64) -> PoseKey {
         if clip.looping {
             time.max(0.).rem_euclid(f64::from(clip.duration))
         } else {
-            time.clamp(0., f64::from(clip.duration))
+            time.clamped(0., f64::from(clip.duration))
         }
     } else {
         0.
@@ -1420,7 +1421,7 @@ pub fn projectile_opacity(age: u32, fade: u32, lifetime: u32) -> f32 {
     if age >= lifetime {
         0.
     } else {
-        (1. - age.saturating_sub(fade) as f32 / lifetime.max(1) as f32).clamp(0., 1.)
+        (1. - age.saturating_sub(fade) as f32 / lifetime.max(1) as f32).clamped(0., 1.)
     }
 }
 

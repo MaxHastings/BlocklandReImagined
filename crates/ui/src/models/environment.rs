@@ -2,6 +2,7 @@
 //! natively): what the host set over the map's own sun, sky and fog, and
 //! the admin's draft of a change. Nothing here has authority: the host
 //! checks the rank and validates every value when the draft is applied.
+use bri_console::Clamp;
 use bri_content::atmosphere::{self, Authored, DayCycle, Settings, SunFlare, Vignette};
 use serde::{Deserialize, Serialize};
 
@@ -124,7 +125,7 @@ impl NumberField {
     }
     pub fn snap(self, v: f32) -> f32 {
         let (lo, hi) = self.range();
-        ((v / self.step()).round() * self.step()).clamp(lo, hi)
+        ((v / self.step()).round() * self.step()).clamped(lo, hi)
     }
 }
 
@@ -216,7 +217,7 @@ impl EnvironmentModel {
         self.revision += 1;
         let c = c.map(|v| {
             if v.is_finite() {
-                v.clamp(0.0, 1.0)
+                v.clamped(0.0, 1.0)
             } else {
                 0.0
             }
@@ -277,7 +278,7 @@ impl EnvironmentModel {
                 }
             }
         }
-        .clamp(field.range().0, field.range().1.max(field.range().0))
+        .clamped(field.range().0, field.range().1.max(field.range().0))
     }
     pub fn set_number(&mut self, field: NumberField, v: f32) {
         if !v.is_finite() {
