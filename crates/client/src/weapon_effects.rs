@@ -812,6 +812,8 @@ fn insert_binding(
 /// effect texture is a layer of one array as large as the largest.
 pub const ADD_ON_TEXTURES: usize = 64;
 pub const ADD_ON_TEXTURE_SIDE: u32 = 256;
+/// What a particle draws when its texture does not load.
+pub const MISSING_PARTICLE_TEXTURE: &str = "base/data/particles/cloud";
 
 /// The textures an Add-On's particles draw that the effects pack lacks,
 /// from `texture` (keyed as the particle names it), each fitted within
@@ -936,6 +938,17 @@ fn add_pack_effects(
         }
         if library.textures.contains_key(&p.texture) {
             library.particles.push(p.clone());
+        } else if library.textures.contains_key(MISSING_PARTICLE_TEXTURE) {
+            // v20's `ParticleData` preload (0x558c60) loads the cloud
+            // whenever a named texture does not load, and never fails.
+            notes.push(format!(
+                "{}: texture {} is missing, so it draws {MISSING_PARTICLE_TEXTURE} as v20 did",
+                p.id, p.texture
+            ));
+            library.particles.push(bri_content::effects::Particle {
+                texture: MISSING_PARTICLE_TEXTURE.into(),
+                ..p.clone()
+            });
         } else {
             fault(
                 notes,

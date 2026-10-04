@@ -583,6 +583,92 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     Ok(())
 }
 
+/// v20 draws the game's cloud for a particle whose texture does not load
+/// (`ParticleData` preload, 0x558c60), so an explosion naming a texture the
+/// game lacks (the Mini-Nuke's `base/data/particles/star`) keeps every part.
+#[test]
+fn a_particle_whose_texture_is_missing_draws_the_cloud() -> Result<()> {
+    let cloud = bri_client::weapon_effects::MISSING_PARTICLE_TEXTURE;
+    let fixture = fixture(false);
+    let mut library = fixture.library.clone();
+    library.textures.insert(cloud.into(), "cloud.png".into());
+    let mut textures: Vec<_> = fixture
+        .textures
+        .iter()
+        .map(|t| TextureImage {
+            id: t.id.clone(),
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.clone(),
+        })
+        .collect();
+    textures.push(TextureImage {
+        id: cloud.into(),
+        width: 1,
+        height: 1,
+        rgba: vec![128; 4],
+    });
+    let base = EffectsPack::from_parts(library, fixture.manifest.clone(), textures)?;
+    let lost = Particle {
+        id: "kit:particle/star".into(),
+        texture: "base/data/particles/star".into(),
+        ..base.library.particles[0].clone()
+    };
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![lost.clone()],
+        emitters: vec![Emitter {
+            id: "kit:emitter/star".into(),
+            name: String::new(),
+            particles: vec![lost.id.clone()],
+            ..base.library.emitters[0].clone()
+        }],
+        lights: vec![],
+        explosions: vec![bri_weapons::ExplosionEffect {
+            id: "kit:explosion/nuke".into(),
+            lifetime: 0.2,
+            emitters: vec!["kit:emitter/star".into()],
+            light: None,
+            burst: Some(("kit:emitter/star".into(), 4, 0.5)),
+        }],
+    };
+    pack.validate()?;
+    let fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
+    assert!(
+        fx.resolves("kit:emitter/star"),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    let drawn = fx
+        .world()
+        .pack()
+        .library
+        .particles
+        .iter()
+        .find(|p| p.id == lost.id)
+        .expect("the particle is kept");
+    assert_eq!(drawn.texture, cloud);
+    let explosion = fx
+        .world()
+        .pack()
+        .manifest
+        .composites
+        .iter()
+        .find(|c| c.id == "kit:explosion/nuke")
+        .unwrap();
+    assert_eq!(explosion.emitters, ["kit:emitter/star"]);
+    assert!(explosion.burst.is_some());
+    assert!(
+        !fx.diagnostics
+            .messages
+            .iter()
+            .any(|m| m.contains("draws nothing") || m.contains("shows less")),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    Ok(())
+}
+
 /// An Add-On particle may draw the Add-On's own texture: the effects take
 /// it from the item presentation's images, fitted within the Add-On limit.
 #[test]

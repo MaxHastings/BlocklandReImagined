@@ -1470,6 +1470,7 @@ impl App {
                     }
                 }
             }
+            settle_blasted(&mut self.fx.brick_fades, &view.world.bricks, &kills);
             if self
                 .cosmetic_faults
                 .absorb("brick debris", thrown)

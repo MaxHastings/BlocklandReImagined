@@ -111,6 +111,15 @@ impl BrickFades {
             fade.settled = true;
         }
     }
+    /// [`Self::settle`] every easing brick `knocked_out` names.
+    pub fn settle_where(&mut self, mut knocked_out: impl FnMut(u64) -> bool) {
+        for (id, fade) in &mut self.fades {
+            if !fade.settled && knocked_out(*id) {
+                fade.drawn = fade.target;
+                fade.settled = true;
+            }
+        }
+    }
     /// Stop easing `id`: it is drawn at its target (a knocked-out brick:
     /// gone at once, its debris takes its place) until the chunks take it.
     pub fn settle(&mut self, id: u64) {
