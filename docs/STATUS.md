@@ -1,67 +1,55 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-10-03. It summarises; the linked docs are the evidence, and
+Revised 2026-10-04. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
 
-Current public release: [v0.2.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.2),
-source `e3c9010fccea923351c2968e52f240eca7f1f00b`, with verified Windows x86-64,
+Current public release: [v0.2.3 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.3),
+source `7089836612c1b0201096b815f4219cea7f5399fc`, with verified Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives. The release source is on main;
 main is the only GitHub branch. See the
-[publication and cleanup evidence](progress/2026-10-03-v022-published-and-cleanup.md).
-The full content-backed local gate passed before publication. Max authorized
-publication while the full Windows CI test suite was still running; its result
-is available in the [Windows check](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37161683721).
-That check subsequently failed one repeated physical-object-entry hold journey
-(13 other physical-objective checks passed). Diagnosis and the current
-[v0.2.3 engineering pass](v023-work-plan.md) are on the local
-`codex/v0.2.3-proactive-hardening` branch; fixes under test are not yet released.
+[publication and cleanup evidence](progress/2026-10-04-v023-published-and-cleanup.md).
+The full content-backed local gate and
+[Windows CI](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37184136071)
+passed before publication. The local gate ran 351 test binaries; one native
+item-render check passed its isolated retry under the existing flake policy.
+External save-corpus coverage is 1/23: the available 6,275-brick A.T.C. Fort
+passed, while the other source saves are absent on this Mac.
 
-For the public v0.2.2 build, use its [mutation guide](rule-workshop/V0.2.2-PLAYTEST.md).
-For the v0.2.3 candidate, use the [player checks](rule-workshop/V0.2.3-PLAYTEST.md)
-and [release notes](rule-workshop/V0.2.3-RELEASE-NOTES.md).
-The [delivery contract](v022-delivery-contract.md),
+Start with the [player checks](rule-workshop/V0.2.3-PLAYTEST.md) and
+[release notes](rule-workshop/V0.2.3-RELEASE-NOTES.md). The
 [current bot architecture](architecture/bots.md) and
 [objective integration audit](audits/objective-driven-integration.md)
-record the supported mechanisms and evidence. Creator menus prioritize common
-Wrench/MiniGame tasks, colorsets are selected before hosting, and bounded bots
-execute supported event objectives through ordinary controls. Dynamic lighting
-uses live geometry and source lamps; Classic and Unified retain their existing
-model. Shark body/swimming/capture, delayed projectile outputs, guest music/saving,
-JPEG screenshots and longer cosmetic destruction debris are integrated.
+record the supported mechanisms and limits. The
+[v0.2.3 work plan](v023-work-plan.md) and dated progress entries preserve the
+investigation history; the [v0.2.2 mutation guide](rule-workshop/V0.2.2-PLAYTEST.md)
+is for that older release.
+
+This increment hardens creator draft/acknowledgment flows, persistent Add-On
+choices, live vehicle recoloring, join preparation, copy authority/support,
+conservative face coverage, committed bot holds/charged attacks, native avatar
+preview, authored-unlit Dynamic materials and authoritative portal travel frames.
+Borrowed Add-On geometry loads under independent identities, and Shark capture
+completes through ordinary typed damage. The final corrections after gameplay
+wind-down changed only offscreen test layout; no runtime logic, assertions or
+watchdogs changed.
 
 The Rule Workshop, objective planning and alpha formats remain experimental.
-Bots do not infer arbitrary scripts or plan jet-assisted object carrying/high
-hoop throws; unfamiliar Add-On mechanisms need declarations. Recovered Dynamic
-lamps approximate lost metadata, and bulb model/broader lighting polish is deferred.
-The v0.2.3 candidate corrects authored-unlit Dynamic material assignment and
-opaque shadow participation, with [offscreen evidence](progress/2026-10-03-v023-authored-unlit.md);
-bulb models and broader lighting fidelity remain separate work.
-Shark/Zombie fidelity remains partial. The reported Windows firefight NaN crash
-remains unreproduced, and sustained performance coverage is incomplete; no causal
-fix or Windows speedup is claimed. The full alpha contract remains open.
+Bots execute supported event objectives through ordinary controls; unfamiliar
+Add-On mechanisms need declarations. Arbitrary scripts, jet-assisted carrying,
+high-hoop throws and coordinated stacking remain unsupported. Shark/Zombie
+fidelity is partial. Dynamic uses live geometry/source lamps, with approximate
+recovered metadata and no general indirect lighting; Classic and Unified retain
+their existing appearance. Bulb model and broader lighting polish remain deferred.
 
-The current candidate also preserves missing favorite resource IDs, tracks combined
-MiniGame/Add-On saves through each acknowledgment, and protects pending drafts.
-See the [creator review](progress/2026-10-03-v023-creator-cohesion-review.md).
-[Stability evidence](progress/2026-10-03-v023-stability-lane-verification.md)
-records saved MiniGame state, persistent Add-On choices, live vehicle recoloring,
-join preparation and mounted portal checks. The
-[admin refresh fix](progress/2026-10-03-v023-admin-refresh.md) closes a demonstrated
-cached-state race. Portal correction refinements, full release gate, Windows CI,
-platform archive verification and Maxwell's acceptance remain separate evidence.
-The reported death/disconnect, destruction/respawn hitches and tank retreat/cover
-behavior have no established causal fix; scoped diagnostic/control results do not
-close those reports.
-
-Test builds are named by date and letter (for example `2026-09-28-a23`)
-and show that name and their commit in the main menu. Each is recorded in
-[progress.md](progress.md) with its commit and protocol version. The first
-public build on GitHub Releases is
-[2026-09-28-a20](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/2026-09-28-a20);
-it is unsigned. Later releases go up only on Max's word.
+The reported Windows firefight NaN crash, death disconnect, destruction/respawn
+hitch and tank retreat behavior remain unreproduced. Scoped diagnostic/control
+checks do not close those reports or establish Windows performance gains.
+Interactive acceptance belongs to Maxwell, and the full alpha contract is open.
+Release menus display their version and source commit; publication remains
+Maxwell's decision.
 
 ## What this is
 
@@ -227,8 +215,7 @@ IP.
 - **Stress campaign next steps.** Block faces in the renderer, a saturation
   round, predicted driven entities, animated box models (see
   [stress-lab/HANDOFF.md](stress-lab/HANDOFF.md)). Not started.
-- **`revive/visual-compare`.** It drives v20 itself, so only with Max's OK.
-- **`revive/docs-drift`, `revive/creature-notes`.** Not revived.
+- **Visual comparison with v20.** It drives the original game itself, so only with Max's OK.
 - **Terrain.** Opus's data, conversion and collision pieces are kept; the
   playtest ships the finite map-bundle path.
 

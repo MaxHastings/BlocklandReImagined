@@ -5,8 +5,9 @@ core flows are blockers: please report them (see `TESTER-GUIDE.md` for what
 to send). The items below are known. Everything v20 had that is still
 missing is listed in `FEATURES.md`.
 
-Use the [v0.2.2 checks](rule-workshop/V0.2.2-PLAYTEST.md) for that public build,
-or the [v0.2.3 candidate checks](rule-workshop/V0.2.3-PLAYTEST.md) for the new work. Focused headless/offscreen checks do not replace your playtest.
+Use the [v0.2.3 checks](rule-workshop/V0.2.3-PLAYTEST.md) for the current release.
+The [v0.2.2 checks](rule-workshop/V0.2.2-PLAYTEST.md) remain for that older build.
+Focused headless/offscreen checks do not replace your playtest.
 
 - **Unsigned builds:** Windows SmartScreen warns on the first start. The Apple
   silicon Mac app uses an ad-hoc signature; see `PLAYTEST-MAC.md` for opening it.
@@ -44,8 +45,9 @@ or the [v0.2.3 candidate checks](rule-workshop/V0.2.3-PLAYTEST.md) for the new w
   mouth capture/five-second hold and hidden hole now have focused checks using
   actual imported content. Harm release observes the original two-second restart
   delay with lifecycle checks. Its original escape loop, forced
-  vehicle ejection, full white-Shark aggression/no-strafe behavior and bite
-  death icon remain incomplete. Zombie infection markings/name prefixes also
+  vehicle ejection and full white-Shark aggression/no-strafe behavior remain
+  incomplete. Capture completion and its declared death type/icon now have
+  actual-import checks. Zombie infection markings/name prefixes also
   remain incomplete. Visual feel still needs your playtest.
 - **Colorsets:** only valid UTF-8 text palettes with 1–256 RGBA colors load.
   Removed or invalid selections block a new host instead of silently choosing

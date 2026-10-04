@@ -1,5 +1,9 @@
 # v0.2.3 proactive hardening
 
+Delivered in [v0.2.3 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.2.3).
+The [publication record](progress/2026-10-04-v023-published-and-cleanup.md) is
+the final status; the plan and investigation checkpoints below remain history.
+
 This began as a bounded engineering pass while Maxwell playtested v0.2.2.
 Maxwell subsequently authorized completing the current work and publishing
 v0.2.3 for Windows, macOS and Linux. Human acceptance remains his; publication
