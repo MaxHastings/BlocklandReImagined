@@ -2,6 +2,7 @@
 //! unlit box stretched between two points, in the beam's colour, fading out
 //! over its life. One cue per beam; nothing is sent while it shows.
 use anyhow::Result;
+use bri_console::Clamp;
 use bri_render::scene::{
     AlphaMode, GpuInstances, GpuScene, Material, MaterialKind, MeshBatch, SceneData, SceneRenderer,
     SceneTransform, SceneVertex,
@@ -57,7 +58,7 @@ impl Beams {
             to,
             color: color.map(|c| {
                 if c.is_finite() {
-                    c.clamp(0.0, 1.0)
+                    c.clamped(0.0, 1.0)
                 } else {
                     1.0
                 }
@@ -78,7 +79,7 @@ impl Beams {
     /// fades as it ages.
     pub fn advance(&mut self, dt: f32) {
         let dt = if dt.is_finite() {
-            dt.clamp(0.0, 0.25)
+            dt.clamped(0.0, 0.25)
         } else {
             0.0
         };

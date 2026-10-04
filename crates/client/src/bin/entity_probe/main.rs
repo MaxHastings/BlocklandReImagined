@@ -21,6 +21,8 @@
 //!
 //! Other work on the machine moves wall-clock times, so every stage also
 //! reports this thread's CPU cycles and heap allocations, which it does not.
+use bri_console::Clamp;
+
 #[cfg(windows)]
 mod profiler;
 
@@ -260,7 +262,7 @@ impl Rng {
 /// looks down -Z).
 fn aim(from: Vec3, to: Vec3) -> (f32, f32) {
     let d = (to - from).normalize_or(Vec3::NEG_Z);
-    (d.x.atan2(-d.z), d.y.clamp(-1.0, 1.0).asin())
+    (d.x.atan2(-d.z), d.y.clamped(-1.0, 1.0).asin())
 }
 
 /// A player holding a weapon's trigger at a spot, aimed at the target.

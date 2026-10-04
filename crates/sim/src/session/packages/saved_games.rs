@@ -25,6 +25,10 @@ struct SavedMiniGame {
     /// By package, its `per_minigame` keys' values for this game.
     #[serde(default)]
     packages: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
+    /// Who ran it (their principal, hex), in a host's recovery and shutdown
+    /// saves only: a restarted host sets it up again for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -37,6 +41,10 @@ struct SavedTeam {
     color: u8,
     #[serde(default)]
     addon_settings: BTreeMap<String, SettingValue>,
+}
+
+fn principal_hex(principal: &bri_admin::Principal) -> String {
+    principal.0.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Session {
@@ -93,8 +101,68 @@ impl Session {
                 })
                 .collect(),
             packages,
+            owner: None,
         };
         serde_json::to_value(saved).ok()
+    }
+
+    /// What a host keeps of itself to come back from a crash or a restart:
+    /// the world as saved, and one mini-game (the server's, else the
+    /// oldest running one, with who runs it; else one held since the
+    /// restart for a player who has not come back yet). Cheap: the world's
+    /// bricks are a persistent map, so this copies no brick.
+    pub fn recovery_snapshot(&self) -> (bri_world::World, Option<serde_json::Value>) {
+        let game = self
+            .minigames
+            .server_game()
+            .or_else(|| self.minigames.games().map(|g| g.id).min());
+        let minigame = match game {
+            Some(game) => self.minigame_snapshot(game).map(|mut saved| {
+                let owner = self.minigames.game(game).ok().and_then(|g| {
+                    self.peers
+                        .values()
+                        .find(|p| p.combat.player == g.owner)
+                        .and_then(|p| p.principal)
+                });
+                if let (Some(owner), Some(fields)) = (owner, saved.as_object_mut()) {
+                    fields.insert("owner".into(), principal_hex(&owner).into());
+                }
+                saved
+            }),
+            None => self.held_minigame.clone(),
+        };
+        (self.saved_world(), minigame)
+    }
+
+    /// A restarted host's saved mini-game: it is set up again for the
+    /// player who ran it when they join, as loading their build would.
+    /// One with no recorded owner (a server's game mode sets its own up)
+    /// is not.
+    pub fn hold_minigame(&mut self, saved: serde_json::Value) {
+        self.held_minigame = Some(saved);
+    }
+
+    pub(in crate::session) fn restore_held_minigame(&mut self, owner: OwnerId) {
+        let Some(principal) = self.peers.get(&owner).and_then(|p| p.principal) else {
+            return;
+        };
+        let theirs = self
+            .held_minigame
+            .as_ref()
+            .and_then(|saved| saved.get("owner"))
+            .and_then(|o| o.as_str())
+            == Some(principal_hex(&principal).as_str());
+        if let Some(saved) = self.held_minigame.take_if(|_| theirs) {
+            let note = match self.try_restore_minigame(owner, saved) {
+                Ok(()) => {
+                    "Your mini-game from before the server restarted was set up again.".into()
+                }
+                Err(error) => format!(
+                    "Your mini-game from before the server restarted was not set up: {error:#}"
+                ),
+            };
+            self.private_chat(owner, note);
+        }
     }
 
     /// Set up a loaded build's mini-game for whoever loaded it, telling

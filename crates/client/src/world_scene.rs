@@ -2,6 +2,7 @@
 //! or UI guesses. Native brick overlays and prints retain authored UVs and paint.
 //! The material-free development path explicitly reports its missing resources.
 use anyhow::{Context, Result, bail, ensure};
+use bri_console::Clamp;
 use bri_content::brick::Brick as BrickMesh;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{BrickFx, Material, SceneData};
@@ -388,7 +389,7 @@ impl TempBrickLook {
         let rgb = |side: &str| {
             ["Red", "Green", "Blue"].map(|c| {
                 p.f32_or(&format!("$pref::HUD::tempBrick{side}{c}"), 0.0)
-                    .clamp(0.0, 1.0)
+                    .clamped(0.0, 1.0)
             })
         };
         Self {
@@ -398,13 +399,13 @@ impl TempBrickLook {
                 .then(|| rgb("Inside")),
             flash_ms: p
                 .f32_or("$pref::HUD::tempBrickFlashTime", d.flash_ms)
-                .clamp(100.0, 10_000.0),
+                .clamped(100.0, 10_000.0),
             flash_range: p
                 .f32_or("$pref::HUD::tempBrickFlashRange", d.flash_range)
-                .clamp(0.0, 1.0),
+                .clamped(0.0, 1.0),
             flash_offset: p
                 .f32_or("$pref::HUD::tempBrickFlashoffset", d.flash_offset)
-                .clamp(0.0, 1.0),
+                .clamped(0.0, 1.0),
         }
     }
 }

@@ -2,6 +2,7 @@
 //! No source script fields, physics authority, window or gameplay input.
 use crate::items::{Appearance, ItemAssets, ItemMesh};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_render::scene::{
     ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer, SceneTransform,
     SceneVertex,
@@ -84,6 +85,11 @@ pub struct WorldItemDiagnostics {
     pub missing_poses: usize,
     pub missing_sequences: usize,
     pub cached_models: usize,
+    /// Models kept, textures and all, though nothing drew them this frame:
+    /// the least recently drawn within [`WorldItemLimits::models`] beside
+    /// the drawn ones, so a weapon put away, a body respawning or a
+    /// projectile fired again finds its model still built.
+    pub idle_models: usize,
     pub geometry_slots: usize,
     pub geometry_vertices: usize,
     pub model_builds: u64,
@@ -150,6 +156,8 @@ struct Model {
     mesh: ItemMesh,
     gpu: Option<GpuScene>,
     slots: Vec<Slot>,
+    /// The [`WorldItems::prepares`] that last drew it.
+    used: u64,
 }
 #[derive(Clone)]
 struct AnimationClock {
@@ -243,6 +251,8 @@ pub struct WorldItems {
     loose: Vec<(String, Mat4, [f32; 4])>,
     /// Skinned copies the last sync drew.
     skinned: Vec<SkinnedCopy>,
+    /// Frames prepared, for the idle models' recency.
+    prepares: u64,
     pub diagnostics: WorldItemDiagnostics,
 }
 /// Most loose models drawn at once.
@@ -290,6 +300,7 @@ impl WorldItems {
             hide_own_first_person: false,
             scoped: false,
             headings: BTreeMap::new(),
+            prepares: 0,
             diagnostics: Default::default(),
         })
     }
@@ -1025,6 +1036,7 @@ impl WorldItems {
                 poses.push((candidate.pose.clone(), vec![candidate]));
             }
         }
+        self.prepares += 1;
         let mut cache = std::mem::take(&mut self.models);
         let mut total_slots = 0usize;
         let mut total_vertices = 0usize;
@@ -1050,11 +1062,13 @@ impl WorldItems {
                     mesh,
                     gpu: None,
                     slots: Vec::new(),
+                    used: 0,
                 }
             };
             let base_vertices = model.mesh.data.vertices.len();
             if total_vertices + base_vertices > self.limits.vertices {
                 self.diagnostics.deferred += poses.iter().map(|(_, v)| v.len()).sum::<usize>();
+                cache.insert(key, model);
                 continue;
             }
             total_vertices += base_vertices;
@@ -1126,13 +1140,34 @@ impl WorldItems {
             }
             if model.slots.is_empty() {
                 total_vertices -= base_vertices;
+                // Kept, idle, like any model not drawn this frame.
+                model.slots = reusable;
+                cache.insert(key, model);
             } else {
+                // Pose slots it did not need this frame go with their buffers.
+                model.used = self.prepares;
                 self.models.insert(key, model);
             }
         }
-        // Unused models/slots are dropped here, including their device handles.
-        // Active static geometry and identical sampled poses retain their uploads.
+        // Models nothing drew this frame keep their meshes and uploads, most
+        // recently drawn first, in whatever room the drawn ones leave
+        // within the model budget; the rest go, with their device handles.
+        // A model unused for a frame (a weapon switched away, a body
+        // respawning) would otherwise rebuild its mesh and textures.
         self.diagnostics.cached_models = self.models.len();
+        let room = self.limits.models.saturating_sub(self.models.len());
+        let mut idle: Vec<_> = cache.into_iter().collect();
+        idle.sort_by_key(|(_, m)| std::cmp::Reverse(m.used));
+        idle.truncate(room);
+        self.diagnostics.idle_models = idle.len();
+        for (key, mut model) in idle {
+            for slot in &mut model.slots {
+                slot.transforms.clear();
+                slot.clips.clear();
+                slot.identities.clear();
+            }
+            self.models.insert(key, model);
+        }
         self.diagnostics.geometry_slots = total_slots;
         self.diagnostics.geometry_vertices = total_vertices;
         Ok(())
@@ -1370,7 +1405,7 @@ fn normalized_pose(clip: &bri_content::shape::Animation, time: f64) -> PoseKey {
         if clip.looping {
             time.max(0.).rem_euclid(f64::from(clip.duration))
         } else {
-            time.clamp(0., f64::from(clip.duration))
+            time.clamped(0., f64::from(clip.duration))
         }
     } else {
         0.
@@ -1420,7 +1455,7 @@ pub fn projectile_opacity(age: u32, fade: u32, lifetime: u32) -> f32 {
     if age >= lifetime {
         0.
     } else {
-        (1. - age.saturating_sub(fade) as f32 / lifetime.max(1) as f32).clamp(0., 1.)
+        (1. - age.saturating_sub(fade) as f32 / lifetime.max(1) as f32).clamped(0., 1.)
     }
 }
 

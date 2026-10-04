@@ -17,10 +17,10 @@ pub(super) struct GpuState {
     /// last uploaded.
     pub(super) selection_lines: Option<bri_render::lines::LineRenderer>,
     pub(super) selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
+    /// None: rebuild the outlines whatever `hidden_outlines` finds.
     pub(super) hidden_uploaded: Option<bool>,
-    /// `BrickFades::outlined` when the outlines were built: bricks fading
-    /// in or out gain or lose theirs as they pass v20's alpha 0.1.
-    pub(super) hidden_fading: Vec<(u64, bool)>,
+    /// The hidden bricks the outlines draw, kept from world changes.
+    pub(super) hidden_outlines: crate::hidden_outlines::HiddenOutlines,
     pub(super) effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     pub(super) gpu_scene: Option<GpuScene>,
     pub(super) gpu_broken: BTreeSet<u32>,

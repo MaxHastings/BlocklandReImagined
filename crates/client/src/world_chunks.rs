@@ -481,6 +481,48 @@ pub fn build_brick(
     .map(|(scene, _)| scene)
 }
 
+/// Rebuild `scene`, which [`build_brick`] made against `palette`, for
+/// `brick` in place: new geometry over the same material table, with no
+/// material list copied and no image added. A brick easing between colours
+/// is rebuilt every frame this way.
+pub fn rebuild_brick(
+    scene: &mut SceneData,
+    brick: &Brick,
+    colors: &[[f32; 4]],
+    meshes: &BTreeMap<String, BrickMesh>,
+    palette: &BrickPalette,
+    materials: Option<&BrickMaterials>,
+) -> Result<()> {
+    ensure!(
+        scene.materials.len() == palette.scene.materials.len() && scene.images.is_empty(),
+        "Rebuilt brick was not built against this material palette"
+    );
+    brick.validate(colors.len())?;
+    scene.vertices.clear();
+    scene.indices.clear();
+    scene.batches.clear();
+    scene.omissions.clear();
+    crate::world_scene::append_world_brick(
+        scene,
+        0,
+        brick,
+        colors,
+        meshes,
+        palette.surfaces,
+        materials,
+        false,
+        0,
+    )?;
+    ensure!(
+        scene.materials.len() == palette.scene.materials.len(),
+        "Brick needed a material outside the shared palette"
+    );
+    scene.coalesce_opaque_batches()?;
+    scene.omissions.sort();
+    scene.omissions.dedup();
+    Ok(())
+}
+
 /// Each brick's vertices in a scene, as `palette_scene` built them.
 type BrickRanges = Vec<(u64, std::ops::Range<u32>)>;
 

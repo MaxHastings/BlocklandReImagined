@@ -1,6 +1,7 @@
 //! The weapons runtime. Each behaviour test runs twice: on the content-free
 //! [`bri_weapons::testing`] pack (`synthetic::*`) and on the converted v20
 //! pack (`content::*`, ignored unless that content is generated).
+use bri_console::Clamp;
 use bri_weapons::*;
 use glam::Vec3;
 use std::collections::BTreeMap;
@@ -1311,7 +1312,7 @@ impl Query for Pool {
         true
     }
     fn liquid(&mut self, bottom: Vec3, height: f32) -> Option<Liquid> {
-        let coverage = (-bottom.y / height).clamp(0.0, 1.0);
+        let coverage = (-bottom.y / height).clamped(0.0, 1.0);
         (coverage > 0.0).then_some(Liquid {
             coverage,
             density: 1.0,

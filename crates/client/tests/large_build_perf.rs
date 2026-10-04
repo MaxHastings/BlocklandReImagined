@@ -14,6 +14,8 @@
 //! Stacked saves: `BRI_PERF_SAVE="a.bls;b.bls;c.bls" BRI_PERF_MAP=Bedroom`
 //! loads them all onto one map. Each view reports GPU ms per world pass
 //! (`gpu_passes`) beside the frame's whole GPU time.
+use bri_console::Clamp;
+
 #[path = "support/sampler.rs"]
 mod sampler;
 use anyhow::{Context, Result, ensure};
@@ -733,7 +735,7 @@ fn large_build_frame_times() -> Result<()> {
             // map's fog.
             center
                 + Vec3::new(1.0, 0.7, 1.0).normalize()
-                    * (Vec3::new(extent.x, 0.0, extent.z).length() * 0.6).clamp(30.0, 150.0),
+                    * (Vec3::new(extent.x, 0.0, extent.z).length() * 0.6).clamped(30.0, 150.0),
         ),
         ("inside", center + Vec3::new(0.0, 2.0, 0.0)),
     ] {

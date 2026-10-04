@@ -7,6 +7,10 @@
 //! Nothing is executed. What only a script run would know is reported, with
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 pub mod behaviour;
 mod help;
 mod hole_bots;

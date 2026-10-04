@@ -7,6 +7,7 @@ use super::*;
 use crate::models::admin::{AdminAction, AdminFeature};
 use crate::models::environment::{ColorField, NumberField, hsv, rgb};
 use crate::view::EventKind;
+use bri_console::Clamp;
 
 fn named(mut c: Control, name: &str) -> Control {
     c.name = Some(name.into());
@@ -588,11 +589,11 @@ impl ColorPicker {
         }
         let [a, b, c, alpha] = v;
         let rgb3 = if self.hsv {
-            rgb([a, b.clamp(0.0, 1.0), c.clamp(0.0, 1.0)])
+            rgb([a, b.clamped(0.0, 1.0), c.clamped(0.0, 1.0)])
         } else {
             [a, b, c]
         };
-        self.color = [rgb3[0], rgb3[1], rgb3[2], alpha].map(|x| x.clamp(0.0, 1.0));
+        self.color = [rgb3[0], rgb3[1], rgb3[2], alpha].map(|x| x.clamped(0.0, 1.0));
         if !self.field.is_some_and(ColorField::has_alpha) {
             self.color[3] = 1.0;
         }

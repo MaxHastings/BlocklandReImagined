@@ -30,6 +30,21 @@ pub(super) fn entity(class: Class, index: u64) -> Entity {
     }
 }
 
+impl Session {
+    /// `owner`'s body as an event target: its generation is the body
+    /// ([`super::combat::Combat::body`]), so what a delayed row scheduled on
+    /// one body never reaches the next. A Client target outlives deaths.
+    pub(in crate::session) fn player_entity(&self, owner: OwnerId) -> Entity {
+        Entity {
+            class: Class::Player,
+            id: Id {
+                index: owner,
+                generation: self.peers.get(&owner).map_or(1, |p| p.combat.body),
+            },
+        }
+    }
+}
+
 type ObjectiveInputKey = (BrickId, OwnerId, String, Option<u64>);
 type ObjectiveInputObservation = (u64, u64);
 
@@ -605,9 +620,7 @@ impl Session {
             // quotas. An NPC has no GameConnection/Client target. This
             // deliberately replaces v20's absent Player/MiniGame bot slots.
             if slots.contains(&Slot::Bot) {
-                trigger
-                    .targets
-                    .insert(Slot::Bot, entity(Class::Player, bot));
+                trigger.targets.insert(Slot::Bot, self.player_entity(bot));
             }
             let driver = self
                 .riding
@@ -617,7 +630,7 @@ impl Session {
             if let Some(driver) = driver.filter(|_| slots.contains(&Slot::Driver)) {
                 trigger
                     .targets
-                    .insert(Slot::Driver, entity(Class::Player, driver));
+                    .insert(Slot::Driver, self.player_entity(driver));
             }
             let player = |o: &OwnerId| self.peers.contains_key(o) && !self.is_bot(*o);
             let client = self
@@ -651,7 +664,7 @@ impl Session {
         {
             trigger
                 .targets
-                .insert(Slot::Instigator, entity(Class::Player, owner));
+                .insert(Slot::Instigator, self.player_entity(owner));
         }
         if let Some(object) = extra.object {
             trigger
@@ -679,12 +692,12 @@ impl Session {
             if slots.contains(&Slot::Instigator) {
                 trigger
                     .targets
-                    .insert(Slot::Instigator, entity(Class::Player, killer));
+                    .insert(Slot::Instigator, self.player_entity(killer));
             }
             if slots.contains(&Slot::KillerPlayer) && self.is_alive(killer) {
                 trigger
                     .targets
-                    .insert(Slot::KillerPlayer, entity(Class::Player, killer));
+                    .insert(Slot::KillerPlayer, self.player_entity(killer));
             }
             if slots.contains(&Slot::KillerClient) && !self.is_bot(killer) {
                 trigger
@@ -706,7 +719,7 @@ impl Session {
         if slots.contains(&Slot::Player) {
             trigger
                 .targets
-                .insert(Slot::Player, entity(Class::Player, owner));
+                .insert(Slot::Player, self.player_entity(owner));
         }
         if slots.contains(&Slot::Client) {
             trigger
@@ -747,7 +760,7 @@ impl Session {
             .filter(|o| self.peers.contains_key(o) && !self.is_bot(*o));
         if let Some(owner) = owner {
             if slots.contains(&Slot::OwnerPlayer) {
-                targets.insert(Slot::OwnerPlayer, entity(Class::Player, owner));
+                targets.insert(Slot::OwnerPlayer, self.player_entity(owner));
             }
             if slots.contains(&Slot::OwnerClient) {
                 targets.insert(Slot::OwnerClient, entity(Class::Client, owner));
@@ -1929,7 +1942,11 @@ impl ev::Host for EventHost<'_> {
         let s = &self.session;
         match entity.class {
             Class::Brick => s.simulation.state().bricks.contains_key(&entity.id.index),
-            Class::Player => s.is_alive(entity.id.index),
+            // The same body, alive: a respawned player is a new `Player`.
+            Class::Player => {
+                s.is_alive(entity.id.index)
+                    && s.peers[&entity.id.index].combat.body == entity.id.generation
+            }
             Class::Client => s.peers.contains_key(&entity.id.index),
             Class::MiniGame => s.minigames.game(mg::GameId(entity.id.index)).is_ok(),
             Class::Vehicle => s

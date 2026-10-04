@@ -1,5 +1,6 @@
 //! The camera: whose eyes, which mode, where it looks.
 use super::*;
+use bri_console::Clamp;
 
 /// What the camera shows beyond the controls: observer and rendered eyes, the drawn controls, crosshair and wheels.
 pub(super) struct ViewState {
@@ -123,7 +124,7 @@ impl App {
         let camera = &assets.definition(&info.definition)?.camera;
         let frame = vehicles.frame(vehicle)?;
         Some((
-            camera.max_dist.clamp(1.0, 40.0),
+            camera.max_dist.clamped(1.0, 40.0),
             frame.position + Vec3::Y * camera.offset,
             camera.tilt,
         ))
@@ -353,7 +354,7 @@ impl App {
         let (yaw, pitch) =
             mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
         // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
-        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+        let pitch = pitch.clamped(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         if controls.observer().is_some() || pos == 0.0 {
             let ride = controls
                 .ride_view()
@@ -499,7 +500,7 @@ impl App {
             )),
             passages,
         )?;
-        let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
+        let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamped(-1.56, 1.56));
         Ok((eye, yaw, pitch, 0.0, boom))
     }
     /// Seated where v20's `armor::onTrigger` fires the mount's gun instead

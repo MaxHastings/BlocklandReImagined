@@ -9,6 +9,7 @@ use crate::models::perf::{
 use crate::pack::Pack;
 use crate::text::Font;
 use crate::ui::Core;
+use bri_console::Clamp;
 
 /// `NetGraphGui` is authored at 640x480 with `horizSizing = "left"`, so it
 /// keeps its distance from the right edge: the graph at "432 5", 200x200.
@@ -415,8 +416,12 @@ fn frame_graph<'a>(
     let frames: Vec<&FrameSample> = frames.take(r.w.max(0) as usize).collect();
     let worst = frames.iter().map(|f| f.frame_ms).fold(0.0, f32::max);
     // Keep 30 FPS on the graph; grow for hitches, up to 100 ms.
-    let top_ms = worst.clamp(1000.0 / 30.0 * 1.2, 100.0);
-    let px = |ms: f32| ((ms / top_ms) * r.h as f32).round().clamp(0.0, r.h as f32) as i32;
+    let top_ms = worst.clamped(1000.0 / 30.0 * 1.2, 100.0);
+    let px = |ms: f32| {
+        ((ms / top_ms) * r.h as f32)
+            .round()
+            .clamped(0.0, r.h as f32) as i32
+    };
     for (i, f) in frames.iter().enumerate() {
         let x = r.right() - 1 - i as i32;
         let bar = px(f.frame_ms).max(1);

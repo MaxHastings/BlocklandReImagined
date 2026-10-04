@@ -30,14 +30,19 @@ impl App {
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
             let id = a.id;
-            let rejoin =
-                (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
-                    .then(|| a.name.clone());
-            if let Some(address) = rejoin
+            let rejoin = a
+                .join_target
+                .clone()
+                .filter(|_| a.entered && reason.contains(bri_net::client::CONNECTION_LOST));
+            if let Some(target) = rejoin
                 && self.net.reconnects < MAX_RECONNECTS
             {
                 self.net.reconnects += 1;
-                if self.join(id, address, String::new()).is_ok() {
+                let resume = a.view.as_ref().map(|view| view.resume.clone());
+                if self
+                    .join_resuming(id, target, String::new(), resume)
+                    .is_ok()
+                {
                     return Ok(());
                 }
             }
@@ -52,7 +57,7 @@ impl App {
                     None,
                     Some(addons::ReloadResume::Downloaded {
                         id,
-                        address: a.name.clone(),
+                        address: a.join_target.clone().unwrap_or_default(),
                     }),
                 )?;
                 return Ok(());
@@ -60,7 +65,21 @@ impl App {
             if a.identity_changed
                 .load(std::sync::atomic::Ordering::Relaxed)
             {
-                let question = self.identity_question(&a.name);
+                // The saved server is known by its address, not an invite.
+                let address = a
+                    .join_target
+                    .as_deref()
+                    .and_then(|t| bri_net::invite::JoinTarget::parse(t).ok())
+                    .map_or_else(|| a.name.clone(), |t| t.address());
+                let question = self.identity_question(&address);
+                self.ui
+                    .apply_session(id, UiUpdate::FailureQuestion(question));
+            }
+            // A game this player hosted failed: its build waits to be kept.
+            if a.local
+                && let Some(left) = crate::recovery::left(&self.state_dir, &self.files.saves)
+            {
+                let question = crate::recovery::question(&left, Some("it hit an internal error"));
                 self.ui
                     .apply_session(id, UiUpdate::FailureQuestion(question));
             }
@@ -228,7 +247,6 @@ impl App {
             self.scene.query_log = Some((view.world_log.clone(), view.world_revision));
             self.gpu.ghost_uploaded = u64::MAX;
             self.fx.brick_debris.sync_world(&view.world);
-            self.gpu.hidden_uploaded = None;
         }
         if let Some(view) = &a.view {
             self.scene.mirror_index.follow(
@@ -254,6 +272,7 @@ impl App {
                 // a newer replica is reached by the next incremental update.
                 Ok((chunked, changes)) => {
                     self.scene.chunked = chunked;
+                    self.scene.chunks_rebuilt += changes.len() as u64;
                     for (key, built) in changes {
                         if let Some(built) = built {
                             self.scene.cpu_chunks.insert(key, built.scene);
@@ -338,6 +357,7 @@ impl App {
             let job_left_out = left_out.clone();
             let mut chunked = std::mem::take(&mut self.scene.chunked);
             let (send, receive) = mpsc::sync_channel(1);
+            self.scene.chunk_jobs += 1;
             let load_limit = self.load_limit.clone();
             let task = self.runtime.spawn(async move {
                 let Ok(permit) = load_limit.acquire_owned().await else {
@@ -769,8 +789,12 @@ impl App {
                     };
                     self.ui.apply_session(a.id, update);
                 }
-                network::Event::Reply { request, result } => {
-                    self.accept_reply(a, request, result);
+                network::Event::Reply {
+                    request,
+                    result,
+                    revision,
+                } => {
+                    self.accept_reply(a, request, result, revision);
                 }
                 network::Event::Failed(reason) => {
                     failed = Some(reason);
@@ -808,6 +832,8 @@ impl App {
             self.scene.materials = Some(prepared.materials);
             self.scene.palette = Some(prepared.palette);
             self.gpu.gpu_palette = None;
+            // Easing bricks bind the old palette's materials.
+            self.fx.fade_models.clear();
             let old = self.build.building.replace(prepared.building);
             // The new controller has not seen any world or palette yet.
             // The replica can be unchanged while the background map load finishes.

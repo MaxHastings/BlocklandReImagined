@@ -16,6 +16,8 @@
 //! pose is still rising snaps it to standing and sinks it again, so tapping
 //! crouch pumps the hips (and the first-person view) instead of blending.
 
+use bri_console::Clamp;
+
 /// Authored `crouch` Eye node heights (m.dts), one per keyframe. The eye
 /// follows the thread, so the view dips and snaps with the body.
 const EYE_KEYS: [f32; 4] = [2.156_496_5, 1.759_874_3, 1.023_290_5, 0.626_668_45];
@@ -56,7 +58,7 @@ impl CrouchThread {
             self.scale = -1.0;
         }
         if self.active {
-            self.position = (self.position + elapsed * self.scale).clamp(0.0, duration);
+            self.position = (self.position + elapsed * self.scale).clamped(0.0, duration);
             if self.position == 0.0 && self.scale != 1.0 {
                 self.active = false;
             }
@@ -71,7 +73,7 @@ impl CrouchThread {
         let Some(time) = self.time().filter(|_| duration > 0.0) else {
             return 0.0;
         };
-        let frame = (time / duration).clamp(0.0, 1.0) * (EYE_KEYS.len() - 1) as f32;
+        let frame = (time / duration).clamped(0.0, 1.0) * (EYE_KEYS.len() - 1) as f32;
         let a = (frame.floor() as usize).min(EYE_KEYS.len() - 2);
         let height = EYE_KEYS[a] + (EYE_KEYS[a + 1] - EYE_KEYS[a]) * (frame - a as f32);
         (EYE_KEYS[0] - height) / (EYE_KEYS[0] - EYE_KEYS[3])

@@ -11,6 +11,7 @@
 //! Fonts are memory-mapped once per process and only opened when a
 //! character the caches lack is first drawn.
 use ab_glyph::{Font as _, FontRef, GlyphImageFormat, PxScale, ScaleFont as _, point};
+use bri_console::Clamp;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -229,7 +230,7 @@ fn rasterise(face: &FontRef<'_>, c: char, ascent: u32) -> Option<Raster> {
         .as_scaled(scale)
         .h_advance(id)
         .round()
-        .clamp(0.0, 512.0) as i16;
+        .clamped(0.0, 512.0) as i16;
     if let Some(outline) = face.outline_glyph(id.with_scale_and_position(scale, point(0.0, 0.0))) {
         let bounds = outline.px_bounds();
         let (width, height) = (bounds.width() as u32, bounds.height() as u32);
@@ -244,7 +245,7 @@ fn rasterise(face: &FontRef<'_>, c: char, ascent: u32) -> Option<Raster> {
                     255,
                     255,
                     255,
-                    (coverage.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (coverage.clamped(0.0, 1.0) * 255.0).round() as u8,
                 ]);
             }
         });

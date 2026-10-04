@@ -1,5 +1,6 @@
 //! Immutable native item names/icons for the HUD. No gameplay authority.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_render::scene::SceneImage;
 use bri_ui::api::{IconRef, ToolInfo};
 use std::collections::BTreeMap;
@@ -83,7 +84,7 @@ impl ItemUi {
             };
             let tint = item
                 .map_or([1.; 4], |item| item.tint)
-                .map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
+                .map(|c| (c.clamped(0., 1.) * 255.).round() as u8);
             catalog.insert(
                 id.clone(),
                 ToolInfo {
@@ -330,7 +331,7 @@ mod tests {
                 Some(
                     assets.presentation.items[&id]
                         .tint
-                        .map(|c| (c.clamp(0., 1.) * 255.).round() as u8)
+                        .map(|c| (c.clamped(0., 1.) * 255.).round() as u8)
                 )
             );
             if let IconRef::External(key) = info.icon {

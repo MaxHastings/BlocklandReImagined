@@ -1,5 +1,9 @@
 //! Native administration foundation. The host supplies authenticated connections;
 //! request bytes never select the acting connection, role, or host authority.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 use bri_package::setting::{self, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::{

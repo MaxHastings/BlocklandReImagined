@@ -2,6 +2,7 @@
 use super::*;
 use crate::api::{HOST_COLORSET_PREF, UiAction};
 use crate::view::EventKind;
+use bri_console::Clamp;
 
 pub(super) fn label(core: &Core, id: &str) -> String {
     core.host_colorsets
@@ -140,7 +141,7 @@ impl HostColorsets {
                     Rect::new(2 + (i % 9) as i32 * 12, (i / 9) as i32 * 12, 11, 11),
                 );
                 swatch.color =
-                    Some(color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8));
+                    Some(color.map(|channel| (channel.clamped(0.0, 1.0) * 255.0).round() as u8));
                 preview.children.push(swatch);
             }
         }

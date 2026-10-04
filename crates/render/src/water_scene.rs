@@ -1,6 +1,7 @@
 //! Native water meshes and depth masks; wave/texture motion stays on the GPU.
 use crate::scene::*;
 use anyhow::Result;
+use bri_console::Clamp;
 use bri_content::water::Water;
 
 /// `specular` is the block's authored `specularColor` and `specularPower`.
@@ -26,7 +27,7 @@ pub fn append(
             let wx = water.min[0] + (x as f32 + 0.5) / side as f32 * width;
             let wz = water.max[2] - (y as f32 + 0.5) / side as f32 * depth;
             let opacity = if !water.depth_mask {
-                [water.opacity.clamp(0.0, 1.0), 0.0]
+                [water.opacity.clamped(0.0, 1.0), 0.0]
             } else if !terrain {
                 [1.0; 2]
             } else if let Some(height) = terrain_height(wx, wz) {
@@ -66,7 +67,7 @@ pub fn append(
             water.flow[0],
             water.flow[1],
             water.wave_amplitude,
-            water.opacity.clamp(0., 1.),
+            water.opacity.clamped(0., 1.),
         ],
         [
             water.distortion[0],
@@ -78,7 +79,7 @@ pub fn append(
             water.tiles[0],
             water.tiles[1],
             if water.reflection.is_some() {
-                water.reflection_intensity.clamp(0., 1.)
+                water.reflection_intensity.clamped(0., 1.)
             } else {
                 0.
             },
@@ -95,8 +96,8 @@ pub fn append(
     ]);
     let material_index = out.materials.len();
     out.materials.push(material);
-    let columns = (width / 16.).ceil().clamp(1., 128.) as u32;
-    let rows = (depth / 16.).ceil().clamp(1., 128.) as u32;
+    let columns = (width / 16.).ceil().clamped(1., 128.) as u32;
+    let rows = (depth / 16.).ceil().clamped(1., 128.) as u32;
     let copies = if water.repeat_period.is_some() {
         -1..=1
     } else {

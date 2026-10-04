@@ -40,6 +40,10 @@ pub(super) struct Vehicles {
     /// Each vehicle's colour (`%vehicle.color`), red, green, blue and
     /// alpha; `None` draws it as its model is.
     pub(super) colors: BTreeMap<VehicleId, Option<[f32; 4]>>,
+    /// The spawn brick's paint (`fxDTSBrick::colorVehicle`) each spawned
+    /// vehicle last took. A brick change that alters it repaints the live
+    /// vehicle; one that leaves it alone keeps independent paint.
+    brick_paint: BTreeMap<VehicleId, Option<[f32; 4]>>,
     next_id: u64,
     mounted: BTreeMap<OwnerId, Mount>,
     last_dismount: BTreeMap<OwnerId, u64>,
@@ -752,6 +756,7 @@ impl Session {
         self.vehicles.brick_of.insert(id, brick_id);
         let color = spawn_color(&brick, &self.simulation.state().palette);
         self.vehicles.colors.insert(id, color);
+        self.vehicles.brick_paint.insert(id, color);
         Ok(())
     }
     /// Whether `owner` may have one more vehicle of `definition`, or the
@@ -868,6 +873,7 @@ impl Session {
             self.vehicles.by_brick.remove(&brick);
         }
         self.vehicles.colors.remove(&id);
+        self.vehicles.brick_paint.remove(&id);
     }
     /// Wrench Send reapplies the spawn's paint to its existing vehicle.
     /// Unrelated brick edits must leave independently painted vehicles alone.
@@ -894,9 +900,40 @@ impl Session {
         if spawn.vehicle != ContentRef::Resolved(current.definition) {
             return;
         }
-        self.vehicles
-            .colors
-            .insert(id, spawn_color(brick, &self.simulation.state().palette));
+        let color = spawn_color(brick, &self.simulation.state().palette);
+        self.vehicles.colors.insert(id, color);
+        self.vehicles.brick_paint.insert(id, color);
+    }
+    /// A changed spawn brick whose paint for its vehicle changed (a spray
+    /// can, Fill Can, `setColor` event, undo, or Re-Color Vehicle turned on
+    /// or off by any path) repaints the vehicle it owns, wherever it is,
+    /// without respawning it. A highlight's flash is not the brick's paint.
+    fn follow_brick_paint(&mut self, brick_id: BrickId, vehicle: VehicleId) {
+        let Some(color) = self.brick_paint_of(brick_id) else {
+            return;
+        };
+        if self.vehicles.brick_paint.insert(vehicle, color) != Some(color) {
+            self.vehicles.colors.insert(vehicle, color);
+        }
+    }
+    /// The paint `brick_id` gives its vehicle, `None` when it is no brick.
+    fn brick_paint_of(&self, brick_id: BrickId) -> Option<Option<[f32; 4]>> {
+        let brick = self.simulation.state().bricks.get(&brick_id)?;
+        Some(spawn_color(
+            &self.unlit(brick_id, brick),
+            &self.simulation.state().palette,
+        ))
+    }
+    /// Count the spawn brick's current paint as already taken by `vehicle`,
+    /// for a change that set the vehicle's colour itself (undoing a vehicle
+    /// paint puts back both, and the vehicle's own colour must win).
+    pub(super) fn settle_brick_paint(&mut self, vehicle: VehicleId) {
+        if let Some(color) = self
+            .vehicle_spawn_brick(vehicle)
+            .and_then(|brick| self.brick_paint_of(brick))
+        {
+            self.vehicles.brick_paint.insert(vehicle, color);
+        }
     }
     /// Keep spawned vehicles in step with their spawn bricks.
     fn reconcile_vehicle_bricks(&mut self) -> Result<()> {
@@ -941,6 +978,9 @@ impl Session {
                     .map(|v| v.definition)
             });
             if wanted == current_definition && (current.is_some() || wanted.is_none()) {
+                if let Some(vehicle) = current {
+                    self.follow_brick_paint(brick_id, vehicle);
+                }
                 continue;
             }
             if let Some(id) = current {

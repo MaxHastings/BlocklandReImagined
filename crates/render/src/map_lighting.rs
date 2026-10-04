@@ -31,6 +31,7 @@
 //! through [`Bake::recover_lights`], then renders current illumination and
 //! geometry shadows. It consumes none of this module's baked outputs.
 use crate::scene::SceneImage;
+use bri_console::Clamp;
 use glam::{Vec2, Vec3};
 
 /// `SurfaceOutsideVisible`: the mission sun and its ambient light these.
@@ -99,7 +100,7 @@ pub struct BakeSun {
 }
 
 fn byte(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    (v.clamped(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 /// A Dynamic sheet's light share as stored: `SHARE_ONE` levels to the
@@ -110,7 +111,7 @@ pub const SHARE_ONE: f32 = 128.0;
 pub const SHARE_MAX: f32 = 255.0 / SHARE_ONE;
 /// A light share as a Dynamic sheet stores it.
 pub fn share_byte(share: f32) -> u8 {
-    (share.clamp(0.0, SHARE_MAX) * SHARE_ONE + 0.5) as u8
+    (share.clamped(0.0, SHARE_MAX) * SHARE_ONE + 0.5) as u8
 }
 
 /// Splits a mission lightmap into RGB: its static part (the interior's
@@ -192,7 +193,7 @@ pub fn decompose_sheet(
                             visibility = if saturated && fixed[c] + lit >= 1.0 {
                                 1.0
                             } else {
-                                ((m[c] - fixed[c]) / lit).clamp(0.0, 1.0)
+                                ((m[c] - fixed[c]) / lit).clamped(0.0, 1.0)
                             };
                         }
                     }
@@ -311,7 +312,7 @@ pub fn fixture_owners<T: Copy>(lights: &[MapLight], shapes: &[(T, Vec3)]) -> Vec
         .collect()
 }
 fn falloff(distance: f32, inner: f32, outer: f32) -> f32 {
-    ((outer - distance) / (outer - inner).max(1e-3)).clamp(0.0, 1.0)
+    ((outer - distance) / (outer - inner).max(1e-3)).clamped(0.0, 1.0)
 }
 /// The map compiler lit every surface facing a light fully, without the
 /// cosine: fitted that way the stock maps' lit texels are 15 levels off on
@@ -984,7 +985,7 @@ impl Bake {
             if luminance(given) <= 1e-6 {
                 0.0
             } else {
-                (luminance(held) / luminance(given)).clamp(0.0, 1.0)
+                (luminance(held) / luminance(given)).clamped(0.0, 1.0)
             }
         };
         let mut sheets = Vec::with_capacity(self.decomposed.len());
@@ -1271,7 +1272,7 @@ impl Bake {
                         } else if r >= 0.25 {
                             1.0
                         } else {
-                            let fade = ((r - 0.1) / 0.15).clamp(0.0, 1.0);
+                            let fade = ((r - 0.1) / 0.15).clamped(0.0, 1.0);
                             fade * fade * (3.0 - 2.0 * fade)
                         }
                     })

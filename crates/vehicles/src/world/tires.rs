@@ -8,6 +8,7 @@
 //! v20's Tank pivots almost on the spot at full lock because its rear
 //! tyres, steering the other way, slide round instead of holding a line.
 use super::*;
+use bri_console::Clamp;
 
 /// One wheel as `WheeledVehicle::Wheel` keeps it between ticks.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,7 +111,7 @@ pub(super) fn update(
                 let hit = q.cast_ray_and_get_normal(&Ray::new(start, -up), length + radius, true);
                 s.contact = hit.is_some();
                 s.extension = hit.map_or(1., |(_, hit)| {
-                    ((hit.time_of_impact - radius) / length).clamp(0., 1.)
+                    ((hit.time_of_impact - radius) / length).clamped(0., 1.)
                 });
                 hit.map(|(_, hit)| Surface {
                     normal: if hit.normal.length_squared() > 0.5 {

@@ -230,6 +230,37 @@ impl Client {
         identity: &ClientIdentity,
         cache: &bri_package::sync::Cache,
         progress: Progress,
+        load: impl FnMut(
+            &[crate::packages::Fetched],
+            &[bri_package::environment::PackageRef],
+        ) -> Result<Vec<bri_package::environment::PackageRef>>,
+    ) -> Result<(
+        Self,
+        Vec<crate::packages::Fetched>,
+        Vec<bri_package::environment::PackageRef>,
+    )> {
+        Self::connect_fetching_resuming(
+            address, pin, name, packages, None, host, identity, cache, progress, load,
+        )
+        .await
+    }
+    /// [`Client::connect_fetching`] back into the game a lost connection
+    /// was in: `resume` is that connection's [`Client::resume`] ticket. The
+    /// host gives the player their owner number back, and a connection of
+    /// theirs it has not yet timed out is replaced. A host that no longer
+    /// knows the ticket (it restarted) refuses it, and the join is made
+    /// afresh.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_fetching_resuming(
+        address: SocketAddr,
+        pin: HostPin,
+        name: JoinName,
+        packages: Vec<bri_package::environment::PackageRef>,
+        mut resume: Option<ResumeToken>,
+        host: Option<ResumeToken>,
+        identity: &ClientIdentity,
+        cache: &bri_package::sync::Cache,
+        progress: Progress,
         mut load: impl FnMut(
             &[crate::packages::Fetched],
             &[bri_package::environment::PackageRef],
@@ -269,18 +300,38 @@ impl Client {
                 }
             }
         }
-        let refused = match Self::connect_pinned(
+        let mut joined = Self::connect_pinned(
             address,
             pin.clone(),
             name.clone(),
-            packages,
-            None,
+            packages.clone(),
+            resume.clone(),
             host.clone(),
             identity,
             progress.clone(),
         )
-        .await
+        .await;
+        if resume.is_some()
+            && let Err(error) = &joined
+            && matches!(
+                error.downcast_ref::<JoinError>(),
+                Some(JoinError::Rejected(_))
+            )
         {
+            resume = None;
+            joined = Self::connect_pinned(
+                address,
+                pin.clone(),
+                name.clone(),
+                packages,
+                None,
+                host.clone(),
+                identity,
+                progress.clone(),
+            )
+            .await;
+        }
+        let refused = match joined {
             Ok(client) => {
                 // Every shared package matches. The caller has already
                 // prepared client-only content before this admission.
@@ -319,7 +370,7 @@ impl Client {
             pin,
             name,
             packages.clone(),
-            None,
+            resume,
             host,
             Some(identity),
             progress,

@@ -5,6 +5,8 @@
 //! Converted content maps Torque `(x, y, z)` to native `(x, z, -y)`; distances
 //! are unchanged by that rotation, so authored audio distances apply as-is.
 
+use bri_console::Clamp;
+
 /// Native world-space vector `[x, y(up), z]`.
 pub type Vec3 = [f32; 3];
 
@@ -83,7 +85,7 @@ pub fn torque_attenuation(distance: f32, reference: f32, max: f32) -> f32 {
     if max <= reference {
         return if distance <= reference { 1.0 } else { 0.0 };
     }
-    let d = distance.clamp(reference, max);
+    let d = distance.clamped(reference, max);
     1.0 - (d - reference) / (max - reference)
 }
 
@@ -144,7 +146,7 @@ pub fn pan_gains(listener: &Listener, position: Vec3) -> (f32, f32) {
     let rel = sub(position, listener.position);
     let dist = length(rel);
     let pan = if dist > 1e-4 {
-        (dot(rel, listener.right()) / dist).clamp(-1.0, 1.0)
+        (dot(rel, listener.right()) / dist).clamped(-1.0, 1.0)
     } else {
         0.0
     };

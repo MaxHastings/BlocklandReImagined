@@ -10,6 +10,10 @@
 //! other side. Each side's `+` and `-` print bricks move its paddle through
 //! a chain of `_pong_AU*`/`_pong_AD*` relay bricks whose rows are switched
 //! on and off to remember where the paddle is.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 use bri_sim::{
     definitions::Definitions,
     player::MoveInput,

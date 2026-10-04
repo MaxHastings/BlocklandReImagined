@@ -18,7 +18,8 @@ pub(super) struct RuleState {
     variables: BTreeMap<StateKey, i64>,
     pending: Vec<(String, mg::GameId, Option<OwnerId>, Option<OwnerId>)>,
     occupants: BTreeSet<(BrickId, u8, u64)>,
-    previous: BTreeMap<(u8, u64), Vec3>,
+    /// Each object's place at the last look and its relocation count then.
+    previous: BTreeMap<(u8, u64), (Vec3, u64)>,
     trace: VecDeque<(BrickId, u16, String)>,
     traced: BTreeSet<BrickId>,
 }
@@ -780,11 +781,17 @@ impl Session {
             self.events.rules.occupants.clear();
             return Ok(());
         }
-        let mut objects: Vec<(u8, u64, Vec3, Option<u64>)> = self
+        // (kind, id, position, credit, relocations): a changed relocation
+        // count is a jump (a teleport, a respawn, a portal), which enters
+        // only the region it lands in, not those on the line between.
+        let mut objects: Vec<(u8, u64, Vec3, Option<u64>, u64)> = self
             .peers
             .iter()
             .filter(|(_, p)| p.combat.alive)
-            .map(|(o, p)| (0, *o, Vec3::from(p.player.state().feet) + Vec3::Y, Some(*o)))
+            .map(|(o, p)| {
+                let feet = Vec3::from(p.player.state().feet);
+                (0, *o, feet + Vec3::Y, Some(*o), p.player.relocations())
+            })
             .collect();
         let drivers: BTreeMap<_, _> = self
             .vehicle_infos()
@@ -803,7 +810,13 @@ impl Session {
         for v in self.vehicle_poses() {
             let driver = drivers.get(&v.id).copied().flatten();
             let by = self.mover_credit(ObjectRef::Vehicle(v.id)).or(driver);
-            objects.push((1, v.id, Vec3::from(v.position), by));
+            let relocations = self
+                .vehicles
+                .world
+                .as_ref()
+                .and_then(|w| w.relocations(VehicleId(v.id)))
+                .unwrap_or_default();
+            objects.push((1, v.id, Vec3::from(v.position), by, relocations));
         }
         let mut current = BTreeSet::new();
         let mut observations = vec![];
@@ -817,7 +830,7 @@ impl Session {
                 continue;
             };
             let (lo, hi) = bri_world::regions::bounds(source.rule_region, (min, max));
-            for (kind, id, position, by) in &objects {
+            for (kind, id, position, by, relocations) in &objects {
                 // Players share the builder's game, including None in free build.
                 if *kind == 0 && self.game_of(*id) != builder_game {
                     continue;
@@ -852,7 +865,8 @@ impl Session {
                     }
                 } else if was {
                     observations.push((brick, format!("{prefix}Leave"), *by, *kind, *id));
-                } else if let Some(previous) = self.events.rules.previous.get(&(*kind, *id))
+                } else if let Some((previous, then)) = self.events.rules.previous.get(&(*kind, *id))
+                    && then == relocations
                     && segment_box(*previous, *position, lo, hi)
                 {
                     observations.push((brick, format!("{prefix}Enter"), *by, *kind, *id));
@@ -863,7 +877,7 @@ impl Session {
         self.events.rules.occupants = current;
         self.events.rules.previous = objects
             .iter()
-            .map(|(k, id, pos, _)| ((*k, *id), *pos))
+            .map(|(k, id, pos, _, relocations)| ((*k, *id), (*pos, *relocations)))
             .collect();
         for (brick, fact, by, kind, object) in observations {
             let game = self
@@ -2809,6 +2823,115 @@ mod tests {
             s.rule_query(&cx, Entity::brick(cx.source), &condition),
             None,
             "A reset object cannot supply even default-zero state"
+        );
+    }
+    #[test]
+    fn life_epoch_teleport_over_a_region_never_enters_it() {
+        let (mut s, p, _q) = setup();
+        let ids = s.create_rule_lab(p, "hill").unwrap();
+        let mut enter = lab_programs("puzzle")[0].1[1].clone();
+        enter.input = "onRegionEnter".into();
+        enter.conditions.clear();
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.events = vec![enter];
+                b.color = 0;
+            })
+            .unwrap();
+        s.dirty.insert(ids[0]);
+        s.step_events(&BTreeSet::new()).unwrap();
+        let center = Vec3::from(s.simulation.state().bricks[&ids[0]].position);
+        s.peers.get_mut(&p).unwrap().player.place(
+            &mut s.simulation.physics,
+            center - Vec3::Y + Vec3::X * 30.,
+            0.,
+            Vec3::ZERO,
+        );
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        // A server teleport (instantRespawn, a reset, a teleport event) to the far side.
+        s.peers
+            .get_mut(&p)
+            .unwrap()
+            .player
+            .teleport(
+                &mut s.simulation.physics,
+                center - Vec3::Y - Vec3::X * 30.,
+                0.,
+            )
+            .unwrap();
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert_eq!(
+            s.simulation.state().bricks[&ids[0]].color,
+            0,
+            "a teleport that never entered the region fired onRegionEnter"
+        );
+    }
+    #[test]
+    fn life_epoch_rule_respawn_time_ends_with_its_minigame() {
+        let (mut s, p, q) = setup();
+        s.minigame_request(
+            p,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        join_game(&mut s, p, q);
+        // Slayer's team respawn time / teamkill penalty (`set_respawn_time`).
+        s.peers.get_mut(&q).unwrap().respawn_ms = Some(60_000);
+        s.minigame_request(q, MiniGameRequest::Leave).unwrap();
+        assert_eq!(s.game_of(q), None);
+        for _ in 0..400 {
+            s.step().unwrap();
+        }
+        s.kill(q, None, super::super::combat::DamageKind::Suicide)
+            .unwrap();
+        let tick = s.simulation.state().tick;
+        let wait = s.peers[&q].combat.respawn_tick - tick;
+        assert!(wait <= 240, "free-build respawn waits {wait} ticks");
+    }
+    #[test]
+    fn life_epoch_delayed_player_output_dies_with_its_life() {
+        let (mut s, p, _q) = setup();
+        let ids = s.create_rule_lab(p, "hill").unwrap();
+        s.minigame_request(p, MiniGameRequest::Leave).unwrap();
+        let row = ev::Row {
+            conditions: vec![],
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 5000,
+            target: ev::Target::Slot(Slot::Player),
+            output: "kill".into(),
+            params: vec![],
+        };
+        s.simulation
+            .mutate(ids[0], |b| b.events = vec![row])
+            .unwrap();
+        s.dirty.insert(ids[0]);
+        for _ in 0..400 {
+            s.step().unwrap();
+        }
+        s.start_event_tick(s.simulation.state().tick).unwrap();
+        s.fire_input(ids[0], "onActivate", Some(p));
+        s.step_events(&BTreeSet::new()).unwrap();
+        // Dies some other way, then respawns.
+        s.kill(p, None, super::super::combat::DamageKind::Suicide)
+            .unwrap();
+        for _ in 0..130 {
+            s.step().unwrap();
+        }
+        s.request_respawn(p).unwrap();
+        assert!(s.is_alive(p));
+        for _ in 0..(6 * 120) {
+            s.step().unwrap();
+        }
+        assert!(
+            s.is_alive(p),
+            "the old life's delayed kill killed the new body"
         );
     }
     #[test]

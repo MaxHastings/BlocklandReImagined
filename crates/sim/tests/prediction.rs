@@ -544,3 +544,56 @@ fn normal_death_physics_and_respawn_poses_remain_valid_authoritative_corrections
         assert_eq!(ticks_after_respawn, 120);
     }
 }
+
+/// The host's own states always pass the client's correction checks: a
+/// rider of a vehicle faster than a player may move (`Player::place`, as
+/// the session seats riders) and a light body's long fall (an imported
+/// player type with little drag) both reconcile instead of disconnecting.
+#[test]
+fn a_fast_rider_and_a_low_drag_fall_stay_valid_authoritative_corrections() {
+    use bri_sim::player::{MAX_SPEED, Player, PlayerTuning};
+    let predict = |state: bri_sim::player::PlayerState| {
+        let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+        let mut prediction = Predictor::new(mirror, state.clone(), Default::default())?;
+        prediction.teleport(1, 0, state.clone())?;
+        prediction.reconcile(2, 0, state, Default::default())?;
+        anyhow::Ok(())
+    };
+    let mut physics = bri_physics::new_world();
+    // A seated rider of a 1500 u/s vehicle, high above the map.
+    let mut rider = Player::spawn(
+        &mut physics,
+        7,
+        Vec3::new(0.0, 500.0, 0.0),
+        PlayerTuning::default(),
+    )
+    .unwrap();
+    rider.place(
+        &mut physics,
+        Vec3::new(0.0, 500.0, 0.0),
+        0.0,
+        Vec3::new(0.0, 0.0, -1500.0),
+    );
+    let speed = Vec3::from(rider.state().velocity).length();
+    assert!(
+        (speed - MAX_SPEED).abs() < 0.01,
+        "rides at the limit: {speed}"
+    );
+    predict(rider.state().clone()).unwrap_or_else(|e| panic!("fast rider: {e:#}"));
+    // A body with a hundredth of v20's drag falls past 1000 u/s.
+    let light = PlayerTuning {
+        drag: 0.001,
+        ..PlayerTuning::default()
+    };
+    let mut faller = Player::spawn(&mut physics, 8, Vec3::new(50.0, 0.0, 50.0), light).unwrap();
+    for _ in 0..9000 {
+        faller.step(&mut physics, MoveInput::default()).unwrap();
+        physics.step();
+    }
+    let speed = Vec3::from(faller.state().velocity).length();
+    assert!(
+        (speed - MAX_SPEED).abs() < 0.01,
+        "falls at the limit: {speed}"
+    );
+    predict(faller.state().clone()).unwrap_or_else(|e| panic!("low-drag fall: {e:#}"));
+}

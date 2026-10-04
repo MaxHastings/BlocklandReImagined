@@ -1,5 +1,6 @@
 //! Combat presentation: hugs, hidden bodies, hit feedback.
 use super::*;
+use bri_console::Clamp;
 
 /// Client-side death, respawn and status presentation derived from vitals.
 #[derive(Default)]
@@ -74,7 +75,7 @@ impl App {
             .get(&view.owner)
             .filter(|p| view.archetypes.resolve(p.archetype).energy_bar)
             .map(|p| p.energy / view.archetypes.tuning(p.archetype, p.scale).max_energy);
-        let shown = energy.map(|e| (e.clamp(0.0, 1.0) * 100.0).round() as u8);
+        let shown = energy.map(|e| (e.clamped(0.0, 1.0) * 100.0).round() as u8);
         if shown != c.energy {
             c.energy = shown;
             updates.push(UiUpdate::Energy(energy));

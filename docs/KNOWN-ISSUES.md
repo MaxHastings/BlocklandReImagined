@@ -73,7 +73,6 @@ Focused headless/offscreen checks do not replace your playtest.
   three fading); Physics Quality and load limits can retire older pieces early.
 
 - **Rule Workshop** is experimental. IF checks run when a delayed action is
-  due; regions use entity centers and sweep straight through portal/teleport
-  jumps. Authored rules save, while live counters do not. Team totals follow
+  due; regions use entity centers. Authored rules save, while live counters do not. Team totals follow
   current members' scores. The shipped Rule Workshop guides describe these
   choices and the remaining limits. Alpha save formats can change.
