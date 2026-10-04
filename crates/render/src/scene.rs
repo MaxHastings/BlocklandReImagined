@@ -2165,6 +2165,21 @@ pub struct PointLight {
     pub color: [f32; 4],
 }
 
+/// Scenes a renderer has uploaded since it was made: what a frame's work
+/// probes compare from frame to frame, since a full upload (textures,
+/// mipmaps and bind groups) is the costly kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct UploadCounts {
+    /// Whole scenes ([`SceneRenderer::upload`]) and the textures they made.
+    pub scenes: u64,
+    pub textures: u64,
+    /// Geometry sharing another scene's materials and textures
+    /// ([`SceneRenderer::upload_geometry_shared`]).
+    pub shared_geometry: u64,
+    /// Geometry on the brick palette's materials (chunks, palette models).
+    pub palette_geometry: u64,
+}
+
 /// What the last frame's world and shadow passes recorded. Counts, unlike
 /// times, do not change with the load on the machine, so they make stable
 /// regression checks.
@@ -2294,6 +2309,7 @@ pub struct SceneRenderer {
     /// The lights' grid: cell table and per-cell lists (`light_grid`).
     light_grid: wgpu::Buffer,
     light_counts: std::cell::Cell<(u32, u32)>,
+    uploads: std::cell::Cell<UploadCounts>,
     volume: VolumeBinding,
     map_lights: MapLightBinding,
     probe: crate::environment_probe::ProbeBinding,
@@ -2604,6 +2620,7 @@ impl SceneRenderer {
             light_buffer,
             light_grid,
             light_counts: Default::default(),
+            uploads: Default::default(),
             volume,
             map_lights,
             probe: crate::environment_probe::ProbeBinding::new(device, color_format),
@@ -2750,6 +2767,15 @@ impl SceneRenderer {
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
     /// replacing that handle leaves the map buffers and textures untouched.
+    /// What this renderer has uploaded since it was made.
+    pub fn upload_counts(&self) -> UploadCounts {
+        self.uploads.get()
+    }
+    fn count(&self, add: impl FnOnce(&mut UploadCounts)) {
+        let mut counts = self.uploads.get();
+        add(&mut counts);
+        self.uploads.set(counts);
+    }
     pub fn upload(
         &self,
         device: &wgpu::Device,
@@ -2757,6 +2783,10 @@ impl SceneRenderer {
         data: &SceneData,
     ) -> Result<GpuScene> {
         data.validate()?;
+        self.count(|c| {
+            c.scenes += 1;
+            c.textures += data.images.len() as u64;
+        });
         let limits = device.limits();
         ensure!(
             data.vertices.len() as u64 * std::mem::size_of::<SceneVertex>() as u64
@@ -2968,6 +2998,7 @@ impl SceneRenderer {
         palette: &GpuScene,
     ) -> Result<GpuScene> {
         data.validate_geometry()?;
+        self.count(|c| c.palette_geometry += 1);
         ensure!(
             data.materials == palette.material_descriptors,
             "Chunk geometry was built against a different material palette"
@@ -3079,6 +3110,7 @@ impl SceneRenderer {
         base: &GpuScene,
     ) -> Result<GpuScene> {
         data.validate()?;
+        self.count(|c| c.shared_geometry += 1);
         ensure!(
             data.materials == base.material_descriptors
                 && image_signatures(data) == base.image_signatures,
