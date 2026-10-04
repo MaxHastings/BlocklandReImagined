@@ -28,7 +28,11 @@ param(
     # Package without the bundled originals: packaging tests only, never a release.
     [switch]$WithoutOriginals,
     # The Python that runs tools/addon_bundle.py.
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    # The DirectX Shader Compiler release tools/shader-compiler.json pins,
+    # already downloaded. Default: <repo>/dist/shader-compiler/<its file>,
+    # fetched from the pinned URL when missing.
+    [string]$ShaderCompilerArchive
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -148,6 +152,74 @@ function New-ModPackage([string]$Directory, [string]$Prefix) {
     return [pscustomobject]@{ id = [string]$manifest.id; version = [string]$manifest.version; side = $side; path = $Directory; dir = "$Prefix/$($manifest.id)"; files = $files.Count }
 }
 
+# The DirectX Shader Compiler the game ships beside bri-client.exe
+# (tools/shader-compiler.json). With dxcompiler.dll there, wgpu compiles the
+# world's shaders with DXC instead of the system's FXC: 3 s instead of about
+# 20 s on an RTX 4070 SUPER, and minutes on a busy CPU. Without it the game
+# still runs on FXC. Only dxcompiler.dll (LLVM and MIT licences) ships, with
+# its licences; dxil.dll, under Microsoft's own terms, does not, and DXC
+# hashes the shaders itself without it.
+function Get-ShaderCompilerPin {
+    $path = Join-Path $RepoRoot 'tools/shader-compiler.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing shader compiler pin: $path" }
+    $pin = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    if ([int]$pin.schema_version -ne 1 -or [string]$pin.sha256 -notmatch '^[0-9a-f]{64}$' -or @($pin.ships).Count -eq 0) { throw "Invalid shader compiler pin: $path" }
+    foreach ($file in @($pin.ships)) {
+        $to = [string]$file.to
+        if ([string]$file.sha256 -notmatch '^[0-9a-f]{64}$' -or [string]::IsNullOrWhiteSpace($to) -or $to.Contains('\') -or $to.Contains(':') -or
+            @($to.Split('/') | Where-Object { $_ -in @('','.','..') }).Count -gt 0) { throw "Invalid shader compiler file in the pin: $to" }
+    }
+    return $pin
+}
+function Get-ShaderCompilerArchive($Pin) {
+    $archive = $ShaderCompilerArchive
+    if ([string]::IsNullOrWhiteSpace($archive)) {
+        $name = [IO.Path]::GetFileName(([Uri][string]$Pin.url).AbsolutePath)
+        $archive = Join-Path (Join-Path $RepoRoot 'dist/shader-compiler') $name
+        if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $archive)) | Out-Null
+            Write-Host "Downloading $($Pin.name) $($Pin.version) from $($Pin.url)"
+            $partial = "$archive.part"
+            Invoke-WebRequest -Uri ([string]$Pin.url) -OutFile $partial -UseBasicParsing
+            Move-Item -LiteralPath $partial -Destination $archive -Force
+        }
+    }
+    if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) { throw "Shader compiler archive is missing: $archive" }
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -cne [string]$Pin.sha256) { throw "Shader compiler archive $archive has sha256 $hash, not the pinned $($Pin.sha256)." }
+    return $archive
+}
+# Copy the pinned files out of the verified archive into the release.
+function Add-ShaderCompiler([string]$Release) {
+    $pin = Get-ShaderCompilerPin
+    $archive = Get-ShaderCompilerArchive $pin
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+    try {
+        foreach ($file in @($pin.ships)) {
+            $entry = $zip.GetEntry([string]$file.from)
+            if ($null -eq $entry) { throw "The shader compiler archive has no $($file.from)." }
+            $destination = Join-Path $Release (([string]$file.to).Replace('/',[IO.Path]::DirectorySeparatorChar))
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $true)
+            $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -cne [string]$file.sha256) { throw "$($file.from) in the shader compiler archive has sha256 $hash, not the pinned $($file.sha256)." }
+        }
+    } finally { $zip.Dispose() }
+    Write-Host "Added $($pin.name) $($pin.version) beside bri-client.exe."
+}
+# A release carries the pinned shader compiler files, unchanged.
+function Verify-ShaderCompiler([string]$Root) {
+    $pin = Get-ShaderCompilerPin
+    foreach ($file in @($pin.ships)) {
+        $path = Join-Path $Root (([string]$file.to).Replace('/',[IO.Path]::DirectorySeparatorChar))
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "The release lacks $($file.to) of $($pin.name) $($pin.version)." }
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -cne [string]$file.sha256) { throw "The release's $($file.to) is not the pinned $($pin.name) $($pin.version) file." }
+    }
+}
+
 function Verify-PlaytestPackage([string]$Path) {
     $root = (Resolve-Path -LiteralPath $Path).Path
     $manifestPath = Join-Path $root 'MANIFEST.json'
@@ -178,6 +250,7 @@ function Verify-PlaytestPackage([string]$Path) {
     if ($actual.Count -ne $listed.Count) { throw "Package contains unlisted or missing files (listed $($listed.Count), found $($actual.Count))." }
     foreach ($relative in $actual) { if (-not $listed.ContainsKey($relative)) { throw "Unlisted package file: $relative" } }
     Write-Host "Verified $($listed.Count) files for package version $($manifest.version)."
+    Verify-ShaderCompiler $root
     Verify-DefaultAddOns $root
 }
 
@@ -332,6 +405,7 @@ foreach ($existing in @($releasePath, $zipPath)) {
 try {
     Copy-Item -LiteralPath $ExecutablePath -Destination (Join-Path $releasePath 'bri-client.exe')
     foreach ($companion in $companions) { Copy-Item -LiteralPath $companion.path -Destination (Join-Path $releasePath $companion.name) }
+    Add-ShaderCompiler $releasePath
     if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint)) { Invoke-CodeSigning $releasePath }
     foreach ($packageInput in $docInputs) { Copy-Item -LiteralPath $packageInput.source -Destination (Join-Path $releasePath $packageInput.destination) }
     & python (Join-Path $PSScriptRoot 'package_guides.py') $releasePath

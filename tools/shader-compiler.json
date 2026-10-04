@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "DirectX Shader Compiler",
+  "version": "1.8.2502",
+  "url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/dxc_2025_02_20.zip",
+  "sha256": "70b1913a1bfce4a3e1a5311d16246f4ecdf3a3e613abec8aa529e57668426f85",
+  "ships": [
+    {
+      "from": "bin/x64/dxcompiler.dll",
+      "to": "dxcompiler.dll",
+      "sha256": "f79943b02f73b621421b58a569fd6ee120d0023fb6bfa23844ecad6b00d6a295"
+    },
+    {
+      "from": "LICENSE-LLVM.txt",
+      "to": "licenses/DirectXShaderCompiler/LICENSE-LLVM.txt",
+      "sha256": "729615317e28dd03907e46f0fc3b5e88f7853cee61d1a1471d2749335516b46f"
+    },
+    {
+      "from": "LICENSE-MIT.txt",
+      "to": "licenses/DirectXShaderCompiler/LICENSE-MIT.txt",
+      "sha256": "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c"
+    }
+  ]
+}

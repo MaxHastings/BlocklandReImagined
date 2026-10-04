@@ -146,6 +146,24 @@ last uploaded.
 - **A new original:** add an entry (its `id` is the importer's name for it,
   `Weapon_Example` becoming `weapon_example`) and its port.
 
+## The DirectX Shader Compiler (Windows)
+
+The Windows release carries `dxcompiler.dll` from Microsoft's open-source
+DirectX Shader Compiler beside `bri-client.exe`, with its LLVM and MIT
+licences under `licenses/DirectXShaderCompiler/`. wgpu's default compiler
+choice loads it, and the world's shaders compile in about 3 s instead of
+about 20 s with the system's FXC (minutes on a busy CPU). The session log
+says which one the game used. Without the file the game still runs, on FXC.
+`dxil.dll`, under Microsoft's own licence terms, does not ship: DXC hashes
+shaders itself without it.
+
+`tools/shader-compiler.json` pins the release by URL and sha256, and each
+shipped file by sha256. `tools/package_playtest.ps1` downloads it into
+`dist/shader-compiler/` when missing (or takes `-ShaderCompilerArchive`),
+refuses anything that is not the pinned file, and `-VerifyPackage` refuses a
+release without them. To move to a newer DXC, change the pin and check the
+game on the PC.
+
 ## Making a release
 
 Either push a tag named by the version:
