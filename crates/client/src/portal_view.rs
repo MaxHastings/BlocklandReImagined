@@ -252,6 +252,74 @@ pub struct SeenAt {
     pub through: Option<(Vec3, Vec3)>,
 }
 
+/// Two doorways linked as the Portal Add-On's bricks are, for tests of
+/// bodies drawn going through.
+#[cfg(test)]
+pub(crate) mod doorways {
+    use super::*;
+    use bri_content::passage::Passage;
+
+    /// Doorway A's pane is z = 0 at the origin, open both ways; B's stands
+    /// 30 east turned a quarter. Its four openings (A's two faces, then B's)
+    /// carry by `carry` and back, as `Links` makes a doorway pair's.
+    pub fn pair() -> (Passages, Affine3A) {
+        let carry = Affine3A::from_translation(Vec3::new(30.0, 0.0, 0.0))
+            * Affine3A::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let opening = |brick, carry: Affine3A, at: Affine3A, normal: Vec3| Passage {
+            brick,
+            centre: at.transform_point3(Vec3::Y * 1.5),
+            normal: at.transform_vector3(normal),
+            u: at.transform_vector3(Vec3::X),
+            v: Vec3::Y,
+            half: glam::Vec2::new(1.0, 1.5),
+            carry,
+        };
+        let one = Affine3A::IDENTITY;
+        let passages = Passages {
+            list: vec![
+                opening(1, carry, one, Vec3::Z),
+                opening(1, carry, one, Vec3::NEG_Z),
+                opening(2, carry.inverse(), carry, Vec3::Z),
+                opening(2, carry.inverse(), carry, Vec3::NEG_Z),
+            ],
+            closed: vec![],
+        };
+        (passages, carry)
+    }
+
+    /// A body with its middle at `middle` (reaching `reach`) is drawn only
+    /// where a body going in through A's front (+z) face toward -z can be:
+    /// whole in front of A, cut at A with its far part out of B's -z face
+    /// (either way round), or whole out of B. Err names how it is drawn instead.
+    pub fn drawn_on_its_way(middle: Vec3, reach: f32) -> Result<(), String> {
+        let (passages, carry) = pair();
+        let close = |a: [f32; 4], b: [f32; 4]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-4);
+        let entering = Straddle::find(&passages, Vec3::new(0.0, 1.5, 0.3), 1.0).unwrap();
+        match Straddle::find(&passages, middle, reach) {
+            // Cut at A, the rest out of B; or once its middle is out, cut
+            // at B with the rest still coming in at A: the same picture.
+            Some(s)
+                if close(s.near, entering.near) && close(s.far, entering.far)
+                    || close(s.near, entering.far) && close(s.far, entering.near) =>
+            {
+                Ok(())
+            }
+            Some(s) => Err(format!(
+                "at {middle} cut at {:?} and {:?}, not A's front and B's back",
+                s.near, s.far
+            )),
+            None => {
+                let before = middle.z > 0.0 && middle.length() < 10.0;
+                let out = carry.inverse().transform_point3(middle);
+                let after = out.z < 0.0 && out.length() < 10.0;
+                (before || after)
+                    .then_some(())
+                    .ok_or(format!("whole at {middle}, out of its way"))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

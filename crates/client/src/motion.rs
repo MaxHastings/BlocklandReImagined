@@ -1085,9 +1085,26 @@ fn blend_through(
             )
         })
         .flatten();
-    match carry {
-        Some(carry) => blend(&a.carried(&carry, middle), b, t),
-        None => blend(a, b, t),
+    let Some(carry) = carry else {
+        return blend(a, b, t);
+    };
+    // Drawn on `a`'s side until its middle reaches the opening, then moving
+    // on from the partner: blended where it went in, and carried once the
+    // blend is through. Blended past the partner from the start, a body not
+    // yet in would sit behind the far opening, which a doorway's back face
+    // shares, and draw cut at that face: its halves at the wrong doorways
+    // for the frames before it is through.
+    let back = blend(a, &b.carried(&carry.inverse(), middle), t);
+    let through = passages
+        .travel(
+            Vec3::from(a.shown_feet()) + lift,
+            Vec3::from(back.feet) + lift,
+        )
+        .1
+        .is_some();
+    match through {
+        true => back.carried(&carry, middle),
+        false => back,
     }
 }
 /// The angle `t` of the way from `a` to `b` (radians), turning the short way
@@ -1148,6 +1165,36 @@ mod tests {
             spawn_tick: 0,
             player: state(x, yaw),
         }
+    }
+    /// A body drawn between two poses either side of a doorway portal is
+    /// drawn coming up to the doorway it went in by, cut there, and only
+    /// then moving on out of the partner: never cut at the partner's back
+    /// face (its halves at the wrong doorways for the frames before the
+    /// drawn middle reaches the opening).
+    #[test]
+    fn a_remote_body_between_poses_through_a_doorway_draws_only_on_its_way() {
+        let (passages, carry) = crate::portal_view::doorways::pair();
+        let lift = Vec3::Y * bri_sim::player::nominal_middle(1.0);
+        let at = |tick, feet: Vec3| {
+            let mut p = pose(tick, 0.0, 0.0);
+            p.player.feet = feet.to_array();
+            p.player.velocity = [0.0, 0.0, -30.0];
+            p
+        };
+        let before = at(10, Vec3::new(0.2, 0.0, 0.5));
+        let mut after = at(14, Vec3::new(0.2, 0.0, -0.5));
+        after.player = after.player.carried(&carry, lift.y);
+        let history: imbl::Vector<_> = [before, after].into_iter().collect();
+        let mut wrong = Vec::new();
+        for step in 0..=40 {
+            let tick = 10.0 + 4.0 * step as f64 / 40.0;
+            let drawn = sample(&history, tick, &passages);
+            let middle = Vec3::from(drawn.feet) + lift;
+            if let Err(e) = crate::portal_view::doorways::drawn_on_its_way(middle, 1.5) {
+                wrong.push(format!("tick {tick}: {e}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
     #[test]
     fn stale_own_spawn_or_ack_cannot_mutate_presentation_before_pose_admission() -> Result<()> {
