@@ -14,6 +14,14 @@ use crate::presentation::BrickDeath;
 /// from below the brick for anything that reads the blast fields.
 const KILL_POP_FORCE: f32 = 12.0;
 
+/// Most bricks one blast throws as debris. A client draws at most 2048
+/// debris bodies at its highest Physics Quality (v20's
+/// `$pref::Physics::MaxBricks`), and like a v20 client over that limit it
+/// only hides the rest. A blast through a huge build (the Mini-Nuke takes
+/// out thousands) would otherwise fill the presentation queue with kill
+/// cues and push out its own explosion and sound.
+pub const MAX_BLAST_DEBRIS: usize = 2048;
+
 /// Where debris is thrown from, as v20 `transmitBrickExplosion(center, force,
 /// radius, ...)`. Clients push each brick away from `origin`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,14 +135,18 @@ impl Session {
         self.fake_kill_bricks(&[(brick, blast)], respawn_ticks)
     }
     /// `fake_kill_brick` for every brick a blast knocks out, with one
-    /// collision refresh for them all.
+    /// collision refresh for them all. Every brick is hidden; at most
+    /// [`MAX_BLAST_DEBRIS`] of them, spread evenly over the blast, are
+    /// announced as debris.
     pub(super) fn fake_kill_bricks(
         &mut self,
         kills: &[(BrickId, BrickBlast)],
         respawn_ticks: u64,
     ) -> Result<()> {
+        let stride = kills.len().div_ceil(MAX_BLAST_DEBRIS).max(1);
         let cues = kills
             .iter()
+            .step_by(stride)
             .map(|(brick, blast)| self.brick_kill_cue(*brick, Some(*blast)))
             .collect::<Result<Vec<_>>>()?;
         let bricks: Vec<BrickId> = kills.iter().map(|(brick, _)| *brick).collect();
@@ -144,11 +156,13 @@ impl Session {
             b.colliding = false;
         })?;
         let tick = self.simulation.state().tick;
-        for (brick, cue) in bricks.into_iter().zip(cues) {
+        for brick in bricks {
             self.dirty.insert(brick);
             self.events
                 .respawns
                 .insert(brick, tick + respawn_ticks.max(1));
+        }
+        for cue in cues {
             self.emit_brick_kill(cue);
         }
         Ok(())

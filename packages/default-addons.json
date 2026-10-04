@@ -217,6 +217,21 @@
       }
     },
     {
+      "id": "weapon_mini_nuke",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Mini_nuke",
+        "title": "Mini-Nuke",
+        "authors": [
+          "Bushido"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "7d3e6507f35fc80f3e59477edf83ff178b90e7c9f108df18ceeca949424c8ea3"
+        ]
+      }
+    },
+    {
       "id": "weapon_adventurepack",
       "enabled": false,
       "original": {

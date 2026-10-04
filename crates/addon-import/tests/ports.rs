@@ -1681,6 +1681,60 @@ fn sniper_rifle_port_kicks_the_arm() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Bushido's Mini-Nuke rests on the shoulder with both arms up: its
+/// `onMount` raises them and its `onUnMount` lowers them. It also runs the
+/// base game's rocket launcher script, which loads that Add-On (always
+/// there), and names a particle texture the game lacks, which draws the
+/// cloud as in v20. With the port the import is complete.
+#[test]
+fn mini_nuke_port_holds_it_up_with_both_arms() {
+    let dir = fresh("mini-nuke");
+    let out = dir.join("package");
+    let report = import(&options(fixture("ports/Weapon_Mini_nuke"), out.clone())).unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, "weapon_mini_nuke");
+    assert_eq!(report.summary.needs_behaviour, 2);
+    assert_eq!(report.summary.needs_behaviour_ported, 2);
+    assert_eq!(report.summary.verdict, "converted");
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert!(pack.images["weapon_mini_nuke:image/mininukelauncherimage"].both_arms);
+    // Its blast keeps the stand-in's own numbers.
+    let missile = &pack.projectiles["weapon_mini_nuke:projectile/standinnukeprojectile"];
+    assert_eq!(missile.explosion.radius, 20.0);
+    assert_eq!(missile.brick.radius, 20.0);
+    assert_eq!(missile.brick.max_volume, 200.0);
+    // The rocket launcher's script is a base Add-On it loads, not a gap.
+    let rocket = report
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Weapon_Rocket_Launcher")
+        .expect("the exec names the base rocket launcher");
+    assert_eq!(rocket.how, "exec");
+    assert!(
+        !report.ambiguous.iter().any(|a| a.what.starts_with("exec")),
+        "{:?}",
+        report.ambiguous
+    );
+    // The missing star says what v20 drew instead.
+    let star = report
+        .ambiguous
+        .iter()
+        .find(|a| a.what.contains("base/data/particles/star"))
+        .unwrap();
+    assert!(
+        star.resolution
+            .as_deref()
+            .is_some_and(|r| r.contains("cloud")),
+        "{star:?}"
+    );
+    let (spawned, recoil) = click(&out, "weapon_mini_nuke:weapon/mininukelauncheritem");
+    assert_eq!(spawned.len(), 1);
+    assert!(recoil.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Conan's Sniper Rifle Updated draws its own hands: held, it hides the
 /// Blockhead's hands and hooks and raises both arms, and its shot plays
 /// `plant`. All three of its image callbacks are covered.

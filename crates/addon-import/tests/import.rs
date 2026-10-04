@@ -293,6 +293,72 @@ fn real_steam_knife_and_grenade_ports() {
     }
 }
 
+/// The Mini-Nuke a player has imports completely: its port applies, its
+/// rocket launcher load is the base game's, every effect part converts and
+/// its blast keeps Bushido's numbers.
+#[test]
+fn real_steam_mini_nuke() {
+    let addons = std::env::var("BRI_STEAM_ADDONS").unwrap_or(STEAM_ADDONS.into());
+    let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
+    let zip = Path::new(&addons).join("Weapon_Mini_nuke.zip");
+    if !zip.is_file() || !Path::new(&reference).is_dir() {
+        eprintln!("skipped: the Mini-Nuke or v20 reference install is not on this machine");
+        return;
+    }
+    let out = fresh("Weapon_Mini_nuke");
+    let report = import(&Options {
+        input: zip,
+        out: out.clone(),
+        reference: Some(reference.into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(report.summary.verdict, "converted");
+    assert_eq!(report.summary.needs_behaviour_ported, 2);
+    assert_eq!(
+        report.summary.datablocks_converted,
+        report.summary.datablocks
+    );
+    // Base datablocks (`AudioDefault3d`) need the core scripts, which this
+    // test does not pass; the rest of the findings each say what v20 did.
+    assert!(
+        report
+            .ambiguous
+            .iter()
+            .filter(|a| !a.detail.contains("--core"))
+            .all(|a| a.resolution.is_some()),
+        "{:?}",
+        report.ambiguous
+    );
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let missile = &pack.projectiles["weapon_mini_nuke:projectile/mininukeprojectile"];
+    assert_eq!(
+        (missile.explosion.radius, missile.explosion.damage),
+        (25.0, 9000.0)
+    );
+    assert_eq!(
+        (missile.brick.radius, missile.brick.max_volume),
+        (29.0, 290.0)
+    );
+    let blast = &pack.effects.explosions[0];
+    assert_eq!(blast.emitters.len(), 2);
+    assert!(blast.light.is_some() && blast.burst.is_some());
+    assert_eq!(debris::explosion_debris(&pack)["mininukeexplosion"].count, 90);
+    let checks: bri_addon_import::porting::Checks = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("ports/weapon_mini_nuke/checks.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+        assert!(ok, "{line}");
+    }
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn real_community_samples() {
     // Only folders named for this run: the test reads nothing of the

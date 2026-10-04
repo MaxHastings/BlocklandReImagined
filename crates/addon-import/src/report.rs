@@ -148,8 +148,9 @@ pub struct IdEntry {
 pub struct Dependency {
     /// The Add-On name the script asks for (`Weapon_Gun`).
     pub addon: String,
-    /// `ForceRequiredAddOn`, `LoadRequiredAddOn`, or `reference` when only a
-    /// datablock or file of another Add-On is used.
+    /// `ForceRequiredAddOn`, `LoadRequiredAddOn`, `exec` (a script of an
+    /// Add-On the base game ships), or `reference` when only a datablock or
+    /// file of another Add-On is used.
     pub how: String,
     pub source: Option<Location>,
     /// `reference` (found in the v20 reference install), `base` (an Add-On

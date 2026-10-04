@@ -875,6 +875,24 @@ fn ships_with_game(arg: &str) -> bool {
         .is_some_and(|(addon, _)| reference::base_package(addon).is_some())
 }
 
+/// The base-game Add-On (`Weapon_Rocket_Launcher`, as v20 names it) whose
+/// script an `exec` outside this Add-On runs, if any.
+fn base_addon_script(path: &str, arg: &str, cx: &Ctx) -> Option<String> {
+    if !ships_with_game(arg) {
+        return None;
+    }
+    let target = source::resolve(path, literal(arg));
+    if cx.src.get(&target).is_some() {
+        return None;
+    }
+    let folder = target.to_ascii_lowercase();
+    let folder = folder.strip_prefix("add-ons/")?.split('/').next()?.to_owned();
+    reference::VANILLA
+        .iter()
+        .find(|v| v.eq_ignore_ascii_case(&folder))
+        .map(|v| (*v).to_owned())
+}
+
 const KNOWN_TOP_LEVEL: &[&str] = &[
     "exec",
     "forcerequiredaddon",
@@ -899,6 +917,7 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                 let target = c.args.first().map(|a| source::resolve(&s.path, literal(a)));
                 if let Some(t) = target
                     && cx.src.get(&t).is_none()
+                    && base_addon_script(&s.path, &c.args[0], cx).is_none()
                 {
                     cx.ambiguous(
                         format!("exec {t}"),
@@ -1262,10 +1281,12 @@ fn references(cx: &mut Ctx) {
                     ),
                     if case_only {
                         Some("matches a member by case only".into())
+                    } else if base == "explosionshape" {
+                        Some("unless an enabled Add-On provides that file, the explosion shows the rocket's sphere, as v20 does for a shape it cannot load".into())
+                    } else if base == "texturename" {
+                        Some("the particle draws the game's cloud texture, as v20 does for a particle texture it cannot load".into())
                     } else {
-                        (base == "explosionshape").then(|| {
-                            "unless an enabled Add-On provides that file, the explosion shows the rocket's sphere, as v20 does for a shape it cannot load".into()
-                        })
+                        None
                     },
                 );
             }
@@ -3692,11 +3713,18 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
     for s in scripts {
         for c in &s.calls {
             let how = c.callee.to_ascii_lowercase();
-            if how != "forcerequiredaddon" && how != "loadrequiredaddon" {
-                continue;
-            }
             let Some(a) = c.args.first() else { continue };
-            let addon = literal(a).to_owned();
+            let addon = match how.as_str() {
+                "forcerequiredaddon" | "loadrequiredaddon" => literal(a).to_owned(),
+                // `exec("add-ons/weapon_rocket_launcher/weapon_rocket
+                // launcher.cs")`: running a script of an Add-On the base
+                // game ships loads that Add-On, which is always there.
+                "exec" => match base_addon_script(&s.path, a, cx) {
+                    Some(addon) => addon,
+                    None => continue,
+                },
+                _ => continue,
+            };
             if cx.src.get(&s.path).is_some_and(|f| {
                 required_if_present(
                     &String::from_utf8_lossy(&f.bytes),

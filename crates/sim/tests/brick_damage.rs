@@ -641,6 +641,95 @@ fn a_blasts_bricks_respawn_together_with_one_collision_refresh() {
     panic!("bricks never respawned");
 }
 
+/// A blast through a huge build (the Mini-Nuke's 29-unit radius takes out
+/// thousands of bricks) knocks every one out, but announces at most
+/// `MAX_BLAST_DEBRIS` of them as debris, spread over the blast, so its own
+/// explosion cue is never pushed out of the presentation queue.
+#[test]
+fn a_blast_through_thousands_of_bricks_keeps_its_explosion() {
+    let mut s = session();
+    s.set_lan_host(true);
+    let mut pack = bri_weapons::testing::pack();
+    let rocket = pack.projectiles.get_mut(ROCKET_PROJECTILE).unwrap();
+    rocket.brick.radius = 60.0;
+    let effect = rocket.explosion.effect.clone();
+    assert!(!effect.is_empty());
+    s.set_weapon_pack(pack).unwrap();
+    let shooter = s
+        .join("Shooter".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    // A 50 x 50 x 2 slab of 2x2 bricks starting 8 units ahead.
+    let mut saved = World::new("Slab".into(), "test".into(), vec![[1.0; 4]; 2]);
+    for layer in 0..2u64 {
+        for i in 0..2500u64 {
+            let (x, z) = ((i % 50) as f32 - 24.5, -8.5 - (i / 50) as f32);
+            let mut brick = bri_world::Brick::new(
+                ContentRef::Resolved("brick".into()),
+                [x, 0.3 + 0.6 * layer as f32, z],
+                shooter,
+            );
+            brick.color = 1;
+            saved.bricks.insert(layer * 2500 + i + 1, brick);
+        }
+    }
+    saved.next_brick_id = 5001;
+    s.command(
+        shooter,
+        1,
+        Command::LoadBuild {
+            build: Box::new(bri_world::build::SavedBuild::new(saved)),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while s.build_loading() {
+        s.step().unwrap();
+    }
+    assert_eq!(s.simulation().state().bricks.len(), 5000);
+    let slot = s.give_item(shooter, ROCKET_ITEM).unwrap();
+    s.command(shooter, 2, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    s.take_cues();
+    let aim = aim_at(&mut s, shooter, Vec3::new(0.5, 0.6, -8.5));
+    for (seq, down) in [(3, true), (4, false)] {
+        s.command_with_aim(shooter, seq, Command::WeaponTrigger { down }, Some(aim))
+            .unwrap();
+    }
+    let mut cues = Vec::new();
+    for _ in 0..120 {
+        s.step().unwrap();
+        cues.extend(s.take_cues());
+    }
+    let out = s
+        .simulation()
+        .state()
+        .bricks
+        .values()
+        .filter(|b| !b.colliding)
+        .count();
+    assert!(out > bri_sim::session::MAX_BLAST_DEBRIS, "{out} knocked out");
+    let thrown: Vec<[f32; 3]> = cues
+        .iter()
+        .filter(|c| matches!(c.kind, CueKind::BrickKill { .. }))
+        .map(|c| c.position)
+        .collect();
+    assert!(
+        thrown.len() <= bri_sim::session::MAX_BLAST_DEBRIS && thrown.len() >= out / 3,
+        "{} thrown of {out}",
+        thrown.len()
+    );
+    // Spread over the blast, not only its nearest bricks.
+    let far = thrown.iter().map(|p| -p[2]).fold(0.0f32, f32::max);
+    assert!(far > 40.0, "farthest debris {far} units out");
+    assert_eq!(s.dropped_cues(), 0);
+    assert!(cues.iter().any(
+        |c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if *definition == effect)
+    ));
+}
+
 /// v20's `onCollision` knocks out only the brick a projectile hits; the
 /// radius is `onExplode`'s.
 #[test]
