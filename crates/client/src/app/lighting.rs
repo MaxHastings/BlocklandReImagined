@@ -425,6 +425,12 @@ impl LightVolumeState {
         }
     }
 
+    /// No lighting-mode source is loading and no compatibility bake is
+    /// still to arrive: nothing will replace the map's lighting.
+    pub(super) fn settled(&self) -> bool {
+        self.source_loading.is_none() && (self.source_modern || self.baking.is_none())
+    }
+
     fn poll_compatibility(&mut self) {
         // Queued supersession is retried by ensure_compatibility; preserve its
         // source until that retry rather than treating it as a completed bake.
