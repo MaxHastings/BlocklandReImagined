@@ -25,13 +25,22 @@ use support::{
     gpu,
 };
 
-const WIDTH: u32 = 1280;
-const HEIGHT: u32 = 800;
+const CONTENT_SIZE: [u32; 2] = [1280, 800];
+// Synthetic audits exercise the same layouts and materials at the same aspect
+// ratio, without the native reference comparison's image-detail requirement.
+// Keep their fragment/readback work bounded on the software GPU used by CI.
+const SYNTHETIC_SIZE: [u32; 2] = [640, 400];
 
-fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Result<()> {
+fn render(
+    gpu: &Headless,
+    scene: &SceneData,
+    camera: &Camera,
+    [width, height]: [u32; 2],
+    path: &Path,
+) -> Result<()> {
     let size = wgpu::Extent3d {
-        width: WIDTH,
-        height: HEIGHT,
+        width,
+        height,
         depth_or_array_layers: 1,
     };
     // The game presents to a non-sRGB surface (platform.rs), so blending
@@ -47,7 +56,7 @@ fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Re
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let depth = create_depth(&gpu.device, WIDTH, HEIGHT);
+    let depth = create_depth(&gpu.device, width, height);
     let mut renderer = SceneRenderer::new(&gpu.device, format);
     let uploaded = renderer.upload(&gpu.device, &gpu.queue, scene)?;
     renderer.update_camera(&gpu.queue, camera);
@@ -64,10 +73,10 @@ fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Re
             a: 1.0,
         }),
     );
-    let row = WIDTH * 4;
+    let row = width * 4;
     let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("brick audit readback"),
-        size: u64::from(row) * u64::from(HEIGHT),
+        size: u64::from(row) * u64::from(height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -78,7 +87,7 @@ fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Re
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row),
-                rows_per_image: Some(HEIGHT),
+                rows_per_image: Some(height),
             },
         },
         size,
@@ -94,7 +103,7 @@ fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Re
     })?;
     rx.recv_timeout(std::time::Duration::from_secs(30))??;
     let pixels = readback.slice(..).get_mapped_range()?;
-    image::save_buffer(path, &pixels, WIDTH, HEIGHT, image::ColorType::Rgba8)?;
+    image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8)?;
     Ok(())
 }
 
@@ -372,22 +381,28 @@ fn audit_scene(
     ensure!(!scene.indices.is_empty(), "Empty audit scene");
     let out = a.out.join(name);
     std::fs::create_dir_all(&out)?;
+    let size = if a.bricks.content {
+        CONTENT_SIZE
+    } else {
+        SYNTHETIC_SIZE
+    };
+    let [width, height] = size;
     let fov = 45_f32;
     let mut camera = Camera::perspective(
         eye,
         target,
-        WIDTH as f32 / HEIGHT as f32,
+        width as f32 / height as f32,
         fov.to_radians(),
         0.1,
         200.0,
     );
     camera.atmosphere[2] = time;
     let gpu = gpu::turn()?;
-    render(&gpu, &scene, &camera, &out.join("ours.png"))?;
+    render(&gpu, &scene, &camera, size, &out.join("ours.png"))?;
     std::fs::write(
         out.join("layout.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "width": WIDTH, "height": HEIGHT, "eye": eye, "target": target,
+            "width": width, "height": height, "eye": eye, "target": target,
             "fov_y_degrees": fov, "near": 0.1, "far": 200.0, "time_seconds": time,
             "sun_direction": &camera.sun_direction[..3], "sun_color": &camera.sun_color[..3],
             "ambient": &camera.ambient[..3], "background": [0.3, 0.3, 0.3],
