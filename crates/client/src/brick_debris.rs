@@ -906,44 +906,20 @@ impl DebrisModels {
         materials: &crate::materials::BrickMaterials,
         colors: &[[f32; 4]],
     ) -> Result<()> {
-        self.frame += 1;
-        for model in self.models.values_mut() {
-            model.transforms.clear();
-        }
-        for (look, transform) in debris.instances() {
-            if transform.tint[3] <= 0.0 {
-                continue;
-            }
-            if !self.models.contains_key(look) {
-                if usize::from(look.color) >= colors.len() {
-                    continue;
-                }
-                if self.models.len() >= MAX_LOOKS {
-                    self.evict();
-                }
-                let data = look_scene(look, meshes, palette, materials, colors)
-                    .with_context(|| format!("Debris model for {}", look.definition))?;
-                let gpu = data
-                    .map(|data| {
-                        self.diagnostics.looks_built += 1;
-                        self.diagnostics.images_uploaded += data.images.len() as u64;
-                        renderer.upload_palette_model(device, &data, gpu_palette)
-                    })
-                    .transpose()?;
-                self.models.insert(
-                    look.clone(),
-                    Model {
-                        gpu,
-                        instances: None,
-                        transforms: Vec::new(),
-                        used: self.frame,
-                    },
-                );
-            }
-            let model = self.models.get_mut(look).expect("model built above");
-            model.transforms.push(transform);
-            model.used = self.frame;
-        }
+        let (mut built, mut images) = (0, 0);
+        let framed = self.frame_models(debris.instances(), colors.len(), |look| {
+            let data = look_scene(look, meshes, palette, materials, colors)
+                .with_context(|| format!("Debris model for {}", look.definition))?;
+            data.map(|data| {
+                built += 1;
+                images += data.images.len() as u64;
+                renderer.upload_palette_model(device, &data, gpu_palette)
+            })
+            .transpose()
+        });
+        self.diagnostics.looks_built += built;
+        self.diagnostics.images_uploaded += images;
+        framed?;
         for model in self.models.values_mut() {
             if model.gpu.is_none() {
                 continue;
@@ -962,6 +938,60 @@ impl DebrisModels {
             if let Some(instances) = &mut model.instances {
                 instances.update(queue, &model.transforms)?;
             }
+        }
+        Ok(())
+    }
+    /// Give this frame's bodies to their looks' models, building (`build`)
+    /// the looks not kept yet. Every kept look this frame wears is marked
+    /// first, so making room for a new look ([`MAX_LOOKS`]) evicts only
+    /// looks no body wears now, never one the frame has not reached yet
+    /// (which would be built again further down the same frame). More
+    /// looks worn at once than the bound keeps them all for that frame.
+    fn frame_models<'a>(
+        &mut self,
+        instances: impl Iterator<Item = (&'a Look, SceneTransform)>,
+        colors: usize,
+        mut build: impl FnMut(&Look) -> Result<Option<GpuScene>>,
+    ) -> Result<()> {
+        self.frame += 1;
+        for model in self.models.values_mut() {
+            model.transforms.clear();
+        }
+        let mut missing = Vec::new();
+        for (look, transform) in instances {
+            if transform.tint[3] <= 0.0 {
+                continue;
+            }
+            match self.models.get_mut(look) {
+                Some(model) => {
+                    model.transforms.push(transform);
+                    model.used = self.frame;
+                }
+                None if usize::from(look.color) < colors => missing.push((look, transform)),
+                None => {}
+            }
+        }
+        for (look, transform) in missing {
+            if !self.models.contains_key(look) {
+                if self.models.len() >= MAX_LOOKS {
+                    self.evict();
+                }
+                let gpu = build(look)?;
+                self.models.insert(
+                    look.clone(),
+                    Model {
+                        gpu,
+                        instances: None,
+                        transforms: Vec::new(),
+                        used: self.frame,
+                    },
+                );
+            }
+            self.models
+                .get_mut(look)
+                .expect("model built above")
+                .transforms
+                .push(transform);
         }
         Ok(())
     }
@@ -1031,6 +1061,51 @@ pub(crate) mod tests {
     use super::*;
     use bri_content::collision::{CollisionBody, Part};
     use bri_sim::definitions::{Definition, Definitions};
+
+    /// A full look cache meeting a frame of new looks and kept ones evicts
+    /// only looks no body of this frame wears: a kept look the frame has not
+    /// reached yet is never thrown out and built again the same frame.
+    #[test]
+    fn a_full_look_cache_evicts_only_looks_nobody_wears() -> Result<()> {
+        let look = |i: usize| Look {
+            definition: format!("brick{i}"),
+            color: (i % 4) as u8,
+            color_effect: 0,
+            shape_effect: 0,
+            print: None,
+        };
+        let body = SceneTransform {
+            transform: Mat4::IDENTITY,
+            tint: [1.0; 4],
+        };
+        let mut models = DebrisModels::default();
+        let builds = std::cell::Cell::new(0);
+        let frame = |models: &mut DebrisModels, looks: &[Look]| {
+            models.frame_models(looks.iter().map(|l| (l, body)), 4, |_| {
+                builds.set(builds.get() + 1);
+                Ok(None)
+            })
+        };
+        let first: Vec<Look> = (0..MAX_LOOKS).map(look).collect();
+        frame(&mut models, &first)?;
+        // Half new looks first, then half the kept ones, as debris of a new
+        // blast lands beside the old.
+        let second: Vec<Look> = (MAX_LOOKS..MAX_LOOKS + MAX_LOOKS / 2)
+            .chain(MAX_LOOKS / 2..MAX_LOOKS)
+            .map(look)
+            .collect();
+        frame(&mut models, &second)?;
+        assert_eq!(
+            builds.get(),
+            MAX_LOOKS + MAX_LOOKS / 2,
+            "only the new looks build"
+        );
+        assert_eq!(models.models.len(), MAX_LOOKS);
+        for l in &second {
+            assert_eq!(models.models[l].transforms.len(), 1, "{l:?} drawn");
+        }
+        Ok(())
+    }
 
     /// A flat floor at y 0 and 1x0.6x1 bricks at `bricks`.
     pub(crate) fn building(bricks: &[(BrickId, [f32; 3])]) -> (Building, PublicWorld) {

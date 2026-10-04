@@ -33,6 +33,7 @@ pub mod gamepad;
 pub mod ghosts;
 pub mod gpu_build;
 pub mod graphics;
+pub mod hidden_outlines;
 pub mod item_icon_render;
 pub mod item_skins;
 pub mod item_ui;

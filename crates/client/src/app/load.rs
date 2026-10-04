@@ -158,7 +158,7 @@ impl App {
                 selection_lines: None,
                 selection_uploaded: None,
                 hidden_uploaded: None,
-                hidden_fading: Vec::new(),
+                hidden_outlines: Default::default(),
                 effects_renderer: None,
                 gpu_scene: None,
                 gpu_broken: BTreeSet::new(),
@@ -251,6 +251,8 @@ impl App {
                 materials: None,
                 query_source: None,
                 query_log: None,
+                chunk_jobs: 0,
+                chunks_rebuilt: 0,
             },
             view: ViewState {
                 crosshair_hidden: false,

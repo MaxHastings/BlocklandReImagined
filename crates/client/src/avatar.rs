@@ -1649,15 +1649,27 @@ impl AvatarMesh {
         self.instance = None;
     }
     /// Send the vertices to the GPU: only positions and normals while the
-    /// structure holds.
+    /// structure holds, and only geometry when it changes (skis, hidden
+    /// nodes, a translucent paint): the outfit's materials and textures
+    /// (face, decal, colours) stay as uploaded for this appearance.
     pub fn upload(
         &mut self,
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<()> {
-        if std::mem::take(&mut self.restructured) {
-            self.gpu = None;
+        if std::mem::take(&mut self.restructured)
+            && let Some(base) = &self.gpu
+        {
+            // Refused only for different materials or images, which a new
+            // outfit brings in a new mesh: then upload everything again.
+            match renderer.upload_geometry_shared(device, &self.data, base) {
+                Ok(gpu) => {
+                    self.gpu = Some(gpu);
+                    self.vertices_dirty = false;
+                }
+                Err(_) => self.gpu = None,
+            }
         }
         if let Some(gpu) = &mut self.gpu {
             if std::mem::take(&mut self.vertices_dirty) {
@@ -2089,6 +2101,7 @@ mod tests {
     }
     crate::testing::synthetic_and_content!(
         Avatar: reposed_vertices_match_a_full_shape_rebuild,
+        a_restructured_body_keeps_its_textures,
         a_respawned_body_stands_in_root_without_getting_up_from_the_corpse,
         item_mounts_use_the_same_sampled_avatar_pose_and_body_transform,
         held_and_action_arm_layers_keep_locomotion_and_mounts_coherent,
@@ -2410,6 +2423,48 @@ mod tests {
             HeldToolPose::from_mounted_images([(7, true)]),
             HeldToolPose::None
         );
+    }
+
+    /// Skis on and off, hands hidden and shown, a translucent paint: the
+    /// body's layout changes but not its outfit, so it uploads new geometry
+    /// on the textures it has, never the face, decal and surfaces again.
+    fn a_restructured_body_keeps_its_textures(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let gpu = bri_ui::gpu::Headless::new()?;
+        let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let mut p = player();
+        mesh.pose(assets, &p, 0.0)?;
+        mesh.upload(&renderer, &gpu.device, &gpu.queue)?;
+        let first = renderer.upload_counts();
+        assert_eq!(first.scenes, 1);
+        let mut layouts = 0;
+        for frame in 1..12u8 {
+            p.yaw = f32::from(frame) * 0.1;
+            mesh.set_skis((2..4).contains(&frame).then_some([0.2, 0.4, 0.6, 1.0]));
+            let hands = (6..8)
+                .contains(&frame)
+                .then(|| ["LHand".to_string(), "rhand".to_string()]);
+            mesh.set_hidden_nodes(hands.into_iter().flatten());
+            if frame == 10 {
+                mesh.outfit
+                    .nodes
+                    .insert("chest".into(), [1.0, 0.0, 0.0, 0.5]);
+            }
+            mesh.pose(assets, &p, f64::from(frame) / 30.0)?;
+            layouts += usize::from(mesh.restructured);
+            mesh.upload(&renderer, &gpu.device, &gpu.queue)?;
+            assert!(mesh.gpu.is_some());
+        }
+        assert!(layouts >= 3, "{layouts} layouts");
+        let counts = renderer.upload_counts();
+        assert_eq!(
+            (counts.scenes, counts.textures),
+            (first.scenes, first.textures),
+            "a new layout uploaded the body's textures again"
+        );
+        assert_eq!(counts.shared_geometry, layouts as u64);
+        Ok(())
     }
 
     fn reposed_vertices_match_a_full_shape_rebuild(fx: &Avatar) -> Result<()> {

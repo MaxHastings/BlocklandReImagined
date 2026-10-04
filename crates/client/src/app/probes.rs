@@ -2,12 +2,34 @@
 use super::*;
 
 impl App {
+    pub fn work_counters(&self) -> crate::perf::WorkCounters {
+        crate::perf::WorkCounters {
+            chunk_jobs: self.scene.chunk_jobs,
+            chunks_rebuilt: self.scene.chunks_rebuilt,
+            uploads: self
+                .gpu
+                .renderer
+                .as_ref()
+                .and_then(|r| r.finished())
+                .map(|r| r.upload_counts()),
+            item_model_builds: self.world_items.diagnostics.model_builds,
+            item_model_uploads: self.world_items.diagnostics.model_uploads,
+            debris_looks_built: self.fx.debris_models.diagnostics.looks_built,
+            music_full_scans: self.audio.music_bricks.full_scans,
+            music_visited: self.audio.music_bricks.visited,
+            hidden_outlines: self.gpu.hidden_outlines.diagnostics,
+        }
+    }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
         &self.item_assets
     }
     /// Names of the Add-Ons whose client code runs in the game entered.
     pub fn add_on_code_running(&self) -> Vec<&str> {
         self.addons.client_code.running()
+    }
+    /// Bodies of knocked-out bricks still flying or fading.
+    pub fn brick_debris_count(&self) -> usize {
+        self.fx.brick_debris.len()
     }
     /// Gun casings currently tumbling or resting.
     pub fn weapon_shell_count(&self) -> usize {

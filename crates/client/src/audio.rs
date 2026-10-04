@@ -85,6 +85,73 @@ impl PreparedSounds {
     }
 }
 
+/// The world's music bricks (a resolved `sound`), kept in step with each
+/// replica revision from what changed in it (`Bricks::diff` skips the
+/// shared tree), so a world change costs its changed bricks, not a pass
+/// over every brick with a copy of every sound name.
+#[derive(Default)]
+pub struct MusicBricks {
+    bricks: Option<bri_world::Bricks>,
+    wanted: BTreeMap<u64, (String, [f32; 3])>,
+    /// Passes over a whole world: the first replica only.
+    pub full_scans: u64,
+    /// Bricks examined, in passes and in changes.
+    pub visited: u64,
+}
+impl MusicBricks {
+    fn music(brick: &bri_world::Brick) -> Option<(String, [f32; 3])> {
+        match &brick.sound {
+            Some(bri_world::ContentRef::Resolved(sound)) => Some((sound.clone(), brick.position)),
+            _ => None,
+        }
+    }
+    /// Bring the music bricks up to `bricks`; true when any changed.
+    pub fn update(&mut self, bricks: &bri_world::Bricks) -> bool {
+        if self.bricks.as_ref().is_some_and(|old| old.ptr_eq(bricks)) {
+            return false;
+        }
+        let mut changed = false;
+        match &self.bricks {
+            Some(old) => {
+                for change in old.diff(bricks) {
+                    self.visited += 1;
+                    match change {
+                        imbl::ordmap::DiffItem::Remove(id, _) => {
+                            changed |= self.wanted.remove(id).is_some();
+                        }
+                        imbl::ordmap::DiffItem::Add(id, b)
+                        | imbl::ordmap::DiffItem::Update { new: (id, b), .. } => {
+                            let want = Self::music(b);
+                            if self.wanted.get(id) != want.as_ref() {
+                                changed = true;
+                                match want {
+                                    Some(want) => self.wanted.insert(*id, want),
+                                    None => self.wanted.remove(id),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            None => {
+                self.full_scans += 1;
+                self.visited += bricks.len() as u64;
+                self.wanted = bricks
+                    .iter()
+                    .filter_map(|(id, b)| Some((*id, Self::music(b)?)))
+                    .collect();
+                changed = true;
+            }
+        }
+        self.bricks = Some(bricks.clone());
+        changed
+    }
+    /// Music brick id, loop and position.
+    pub fn wanted(&self) -> &BTreeMap<u64, (String, [f32; 3])> {
+        &self.wanted
+    }
+}
+
 pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement)>,
@@ -95,6 +162,8 @@ pub struct ClientAudio {
     prefs: Prefs,
     /// Music-brick loops keyed by brick: (loop id, position, voice).
     music: BTreeMap<u64, (String, [f32; 3], SoundHandle)>,
+    /// The music bricks the world has.
+    pub music_bricks: MusicBricks,
     /// Looping image state sounds (spray hiss, push broom) keyed by
     /// (player, hand); they play only while that state lasts.
     image_loops: BTreeMap<(u64, u8), (String, SoundHandle)>,
@@ -183,6 +252,7 @@ impl ClientAudio {
             requested: BTreeMap::new(),
             prefs: Prefs::default(),
             music: BTreeMap::new(),
+            music_bricks: MusicBricks::default(),
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             master: 1.,
@@ -372,20 +442,19 @@ impl ClientAudio {
     }
     /// Keep one positional loop per music brick in step with the world.
     pub fn sync_music(&mut self, bricks: &bri_world::Bricks) {
-        let wanted: BTreeMap<u64, (String, [f32; 3])> = bricks
-            .iter()
-            .filter_map(|(id, b)| match &b.sound {
-                Some(bri_world::ContentRef::Resolved(sound)) => {
-                    Some((*id, (sound.clone(), b.position)))
-                }
-                _ => None,
-            })
-            .collect();
+        // Loops that would not start (64 at once, or a failed play) are
+        // tried again on later revisions, as before.
+        if !self.music_bricks.update(bricks) && self.music.len() == self.music_bricks.wanted.len() {
+            return;
+        }
+        let wanted = &self.music_bricks.wanted;
         let stale: Vec<u64> = self
             .music
             .iter()
             .filter(|(id, (sound, position, _))| {
-                wanted.get(id) != Some(&(sound.clone(), *position))
+                wanted
+                    .get(id)
+                    .is_none_or(|(want, at)| want != sound || at != position)
             })
             .map(|(id, _)| *id)
             .collect();
@@ -395,9 +464,16 @@ impl ClientAudio {
                 self.record(result);
             }
         }
-        for (id, (sound, position)) in wanted {
-            if self.music.contains_key(&id) || self.music.len() >= 64 {
-                continue;
+        let missing: Vec<(u64, String, [f32; 3])> = self
+            .music_bricks
+            .wanted
+            .iter()
+            .filter(|(id, _)| !self.music.contains_key(id))
+            .map(|(id, (sound, position))| (*id, sound.clone(), *position))
+            .collect();
+        for (id, sound, position) in missing {
+            if self.music.len() >= 64 {
+                break;
             }
             match self.runtime.play(&sound, Placement::World(position)) {
                 Ok(handle) => {
@@ -527,6 +603,7 @@ impl ClientAudio {
     }
     pub fn clear(&mut self) {
         self.music.clear();
+        self.music_bricks = MusicBricks::default();
         self.projectiles.clear();
         self.image_loops.clear();
         self.pending.clear();
@@ -557,6 +634,51 @@ impl ClientAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A world change costs the bricks it changed: only the first replica
+    /// is read whole, however many revisions follow.
+    #[test]
+    fn music_bricks_follow_world_changes_without_rereading_the_world() {
+        let brick = |x: f32, sound: Option<&str>| {
+            let mut b = bri_world::Brick::new(
+                bri_world::ContentRef::Resolved("brick".into()),
+                [x, 0.0, 0.0],
+                1,
+            );
+            b.sound = sound.map(|s| bri_world::ContentRef::Resolved(s.into()));
+            b
+        };
+        let mut bricks: bri_world::Bricks = (0..5000u64)
+            .map(|id| (id, brick(id as f32, (id == 7).then_some("music.loop"))))
+            .collect();
+        let mut index = MusicBricks::default();
+        assert!(index.update(&bricks));
+        assert_eq!(index.wanted().len(), 1);
+        let after_first = index.visited;
+        assert!(!index.update(&bricks.clone()), "the same replica");
+        for revision in 0..50u64 {
+            // A brick knocked out and back, a repaint: no music changes.
+            let id = 100 + revision;
+            let mut b = bricks[&id].clone();
+            b.visible = !b.visible;
+            bricks.insert(id, b);
+            assert!(!index.update(&bricks));
+        }
+        bricks.insert(9000, brick(9.0, Some("music.other")));
+        assert!(index.update(&bricks));
+        bricks.remove(&7);
+        assert!(index.update(&bricks));
+        assert_eq!(
+            index.wanted().keys().copied().collect::<Vec<_>>(),
+            vec![9000]
+        );
+        assert_eq!(index.full_scans, 1, "the world was read whole again");
+        assert!(
+            index.visited - after_first < 200,
+            "{} bricks examined for 52 changed",
+            index.visited - after_first
+        );
+    }
     /// An audio pack folder and the interface sound it plays as a profile.
     struct Pack {
         root: std::path::PathBuf,
