@@ -1653,6 +1653,7 @@ impl Session {
                         settings,
                         teams,
                         quiet,
+                        false,
                     )?;
                     if !reset {
                         return Ok(());
@@ -1702,6 +1703,7 @@ impl Session {
                     settings,
                     teams,
                     quiet,
+                    false,
                 )?;
                 if !reset {
                     return Ok(());

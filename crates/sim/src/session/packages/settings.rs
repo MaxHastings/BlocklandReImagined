@@ -230,9 +230,6 @@ impl Registry {
             .get(&name.to_ascii_lowercase())
             .map(|&i| &self.list[i])
     }
-    pub(in crate::session) fn has_team_settings(&self) -> bool {
-        self.list.iter().any(|s| s.def.scope == SettingScope::Team)
-    }
 }
 
 /// `key` as `package` names it: its own, or `namespace:key`.
@@ -516,7 +513,9 @@ impl Session {
     /// Change settings of `game` and its teams, and (from the menu) its
     /// team list, all or nothing. Values are checked against their
     /// definitions; a player must be the game's owner or an admin, and an
-    /// admin for an admins-only setting.
+    /// admin for an admins-only setting. A team edit's id names a team the
+    /// game has, unless `saved_ids`: a saved build's teams come back in
+    /// the slots its rules name them by.
     pub(in crate::session) fn edit_settings(
         &mut self,
         editor: Editor,
@@ -524,6 +523,7 @@ impl Session {
         settings: Vec<SettingEdit>,
         teams: Option<Vec<TeamEdit>>,
         quiet: bool,
+        saved_ids: bool,
     ) -> Result<()> {
         let host = self.packages.as_ref().context("No Add-Ons are running")?;
         let g = self
@@ -595,15 +595,16 @@ impl Session {
         // new teams have ids.
         let mut team_changes: Vec<(usize, mg::SettingChange)> = Vec::new();
         let specs = match &teams {
+            // Teams are the engine's (an Add-On's team settings are extra):
+            // the native team editor needs no Add-On declaring one.
             Some(list) => {
-                ensure!(
-                    host.settings.has_team_settings(),
-                    "No running Add-On uses teams"
-                );
                 let mut specs = Vec::with_capacity(list.len());
                 for (i, t) in list.iter().enumerate() {
                     if let Some(id) = t.id {
-                        ensure!(g.teams.get(mg::TeamId(id)).is_some(), "No such team");
+                        ensure!(
+                            saved_ids || g.teams.get(mg::TeamId(id)).is_some(),
+                            "No such team"
+                        );
                     }
                     ensure!(
                         t.color < 64,
@@ -710,7 +711,9 @@ impl Session {
         let game = mg::GameId(game);
         let edit = SettingEdit { key, value };
         match team {
-            None => self.edit_settings(Editor::Rules(package), game, vec![edit], None, false),
+            None => {
+                self.edit_settings(Editor::Rules(package), game, vec![edit], None, false, false)
+            }
             Some(team) => {
                 let team = u32::try_from(team)
                     .ok()

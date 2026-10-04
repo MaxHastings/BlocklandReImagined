@@ -2062,6 +2062,7 @@ impl Ui {
             }
             UiUpdate::OpenEvents {
                 brick,
+                builder,
                 rows,
                 named_targets,
                 allow_named,
@@ -2069,6 +2070,7 @@ impl Ui {
                 c.pop(ScreenId::WrenchEvents);
                 c.wrench
                     .open_events(brick, rows, named_targets, allow_named, &c.events);
+                c.wrench.events_builder = builder;
                 c.push(ScreenId::WrenchEvents);
             }
             UiUpdate::NamedTargetsInvalidated => {

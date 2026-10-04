@@ -1,6 +1,7 @@
 use bri_ui::{
     api::*,
     binds::Platform,
+    input::{InputEvent, MouseButton},
     pack::Pack,
     schema::{Control, UiPack},
     screens::ScreenId,
@@ -1050,6 +1051,94 @@ fn teams_work_without_addon_settings_and_remain_editable_in_a_small_window() {
     let teams = teams.unwrap();
     assert_eq!(teams.len(), 2);
     assert_eq!(teams[0].name, "Blue");
+}
+
+/// The Add-On Settings window with a checkbox setting, open over a game
+/// whose bot is mid-fight (it has a score).
+fn addon_window_with_checkbox() -> (Ui, MiniGameUiState) {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "slayer:friendlyfire".into(),
+        add_on: "Slayer".into(),
+        category: "Victory Method".into(),
+        title: "Friendly Fire".into(),
+        team: false,
+        server: false,
+        restart: false,
+        kind: MiniGameSettingKind::Bool,
+        default: MiniGameSettingValue::Bool(false),
+        help: String::new(),
+        avatar: None,
+        shown_when: None,
+    });
+    state.members.push(MiniGameMemberRow {
+        id: MiniGamePlayerId(31),
+        name: "Blockhead Bot".into(),
+        score: 0,
+        is_owner: false,
+        admin: false,
+        in_local_game: true,
+    });
+    ui.apply(UiUpdate::MiniGames(state.clone()));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::MiniGameAddOns));
+    (ui, state)
+}
+/// Press the checkbox, let `between` reach the window, release, and
+/// Save: the click must have ticked it.
+fn click_across_update(mut ui: Ui, between: MiniGameUiState) {
+    let (x, y) = ui
+        .control_center(ScreenId::MiniGameAddOns, "AOS_S4")
+        .expect("checkbox row");
+    ui.handle_input(InputEvent::MouseMove { x, y });
+    ui.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    ui.apply(UiUpdate::MiniGames(between));
+    ui.update(16);
+    ui.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    ui.update(32);
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let sent = ui.drain_actions().into_iter().find_map(|(_, a)| match a {
+        UiAction::EditMiniGameAddOns { settings, .. } => Some(settings),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some(vec![(
+            "slayer:friendlyfire".into(),
+            Some(MiniGameSettingValue::Bool(true))
+        )]),
+        "the click landed on the row the update rebuilt"
+    );
+}
+
+#[test]
+fn a_score_changing_mid_click_does_not_rebuild_the_addon_settings_rows() {
+    let (ui, mut state) = addon_window_with_checkbox();
+    state.revision += 1;
+    state.members[0].score += 1;
+    click_across_update(ui, state);
+}
+
+#[test]
+fn a_rebuild_between_press_and_release_keeps_the_click_on_the_rebuilt_row() {
+    // A real change the window shows (the host renamed a team) rebuilds
+    // every row while the button is down.
+    let (ui, mut state) = addon_window_with_checkbox();
+    state.revision += 1;
+    state.games[0].teams[0].name = "Crimson".into();
+    click_across_update(ui, state);
 }
 
 #[test]

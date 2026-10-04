@@ -807,11 +807,18 @@ fn condition_properties(
         })
         .collect()
 }
-fn active_teams(core: &Core) -> Vec<crate::api::MiniGameTeam> {
+/// The teams a brick's Team checks and `setTeam` name: those of the
+/// mini-game its rows run in, its builder's (v20's brick events act in the
+/// brick owner's mini-game), whoever has the wrench open.
+fn rule_teams(core: &Core) -> Vec<crate::api::MiniGameTeam> {
+    let builder = core.wrench.events_builder;
     core.minigames
         .games
         .iter()
-        .find(|g| Some(g.id) == core.minigames.active_game)
+        .find(|g| match builder {
+            Some(b) => g.members.iter().any(|m| m.id.0 == b),
+            None => Some(g.id) == core.minigames.active_game,
+        })
         .map(|g| g.teams.clone())
         .unwrap_or_default()
 }
@@ -948,7 +955,7 @@ impl WrenchEvents {
             error: None,
             datablocks: core.datablocks.clone(),
             paint: core.hud.paint.clone(),
-            teams: active_teams(core),
+            teams: rule_teams(core),
         };
         s.preserve_unsupported();
         s.build(core);
@@ -1871,13 +1878,7 @@ impl WrenchEvents {
                 );
             }
             Property::Team => {
-                let teams = core
-                    .minigames
-                    .games
-                    .iter()
-                    .find(|g| Some(g.id) == core.minigames.active_game)
-                    .map(|g| g.teams.as_slice())
-                    .unwrap_or(&[]);
+                let teams = &self.teams;
                 let current = match c.value {
                     Datum::Number(n) => n,
                     _ => 0,
@@ -2029,18 +2030,11 @@ impl WrenchEvents {
                 ParamValue::Int(v) => v,
                 _ => 1,
             };
-            let mut items = core
-                .minigames
-                .games
+            let mut items: Vec<_> = self
+                .teams
                 .iter()
-                .find(|g| Some(g.id) == core.minigames.active_game)
-                .map(|g| {
-                    g.teams
-                        .iter()
-                        .map(|t| (t.name.clone(), i64::from(t.id)))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+                .map(|t| (t.name.clone(), i64::from(t.id)))
+                .collect();
             if !items.iter().any(|(_, i)| *i == current) {
                 items.push((format!("Team {current} (unavailable)"), current));
             }
@@ -2696,12 +2690,12 @@ impl Screen for WrenchEvents {
         if catalog != self.catalog
             || self.datablocks != core.datablocks
             || self.paint != core.hud.paint
-            || self.teams != active_teams(core)
+            || self.teams != rule_teams(core)
         {
             self.catalog = catalog;
             self.datablocks = core.datablocks.clone();
             self.paint = core.hud.paint.clone();
-            self.teams = active_teams(core);
+            self.teams = rule_teams(core);
             self.preserve_unsupported();
             self.save_draft(core);
             self.build(core);
@@ -3853,6 +3847,82 @@ mod tests {
         };
         assert_eq!(line.named_target.as_deref(), Some("Door"));
         assert_eq!(line.conditions[0].value, Datum::Text("MatchBall".into()));
+    }
+
+    /// A goal's Team check names the teams of the mini-game its rows run in,
+    /// its builder's, even when whoever has the wrench open plays in none,
+    /// and each team by its own id (never "No team"'s 0).
+    #[test]
+    fn team_checks_offer_the_builders_mini_game_teams() {
+        let mut ui = fixture();
+        ui.core.events.inputs.push(EventInputInfo {
+            name: "onObjectEnter".into(),
+            supported: true,
+            targets: vec![
+                ("Self".into(), "fxDTSBrick".into()),
+                ("Player".into(), "Player".into()),
+                ("Instigator".into(), "Player".into()),
+                ("Object".into(), "Vehicle".into()),
+            ],
+        });
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "core:rules".into(),
+            class: "Player".into(),
+            name: "winRound".into(),
+            params: vec![],
+            supported: true,
+        });
+        let team = |id: u32, name: &str| crate::api::MiniGameTeam {
+            id,
+            name: name.into(),
+            color: 0,
+            settings: Default::default(),
+        };
+        ui.core.minigames.active_game = None;
+        ui.core.minigames.games.push(crate::api::MiniGameSummary {
+            id: crate::api::MiniGameId(1),
+            title: "Soccer".into(),
+            owner: crate::api::MiniGamePlayerId(5),
+            owner_name: "Max".into(),
+            color: 0,
+            member_count: 1,
+            invite_only: false,
+            rules: crate::api::MiniGameRules::default(),
+            teams: vec![team(1, "Blue"), team(2, "Red")],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: vec![crate::api::MiniGameTeamMember {
+                id: crate::api::MiniGamePlayerId(5),
+                name: "Max".into(),
+                team: None,
+            }],
+        });
+        ui.apply(UiUpdate::OpenEvents {
+            brick: 3,
+            builder: Some(5),
+            rows: vec![],
+            named_targets: vec![],
+            allow_named: true,
+        });
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "Instigator", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "winRound", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Player", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_property", "Team", &mut ui.core);
+        let value = s.view().id("WrenchEvent_0_if0_value").unwrap();
+        assert_eq!(
+            s.view().node(value).state.items,
+            vec![("No team".into(), 0), ("Blue".into(), 1), ("Red".into(), 2)]
+        );
+        choose(&mut s, "WrenchEvent_0_if0_value", "Red", &mut ui.core);
+        let value = s.view().id("WrenchEvent_0_if0_value").unwrap();
+        assert_eq!(
+            s.view().node(value).state.value,
+            crate::view::Value::Selected(Some(2))
+        );
     }
 
     #[test]

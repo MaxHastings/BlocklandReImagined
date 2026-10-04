@@ -77,6 +77,9 @@ pub struct WrenchState {
     pub locks: BTreeSet<(u8, WrenchField)>,
     pub open: Option<OpenWrench>,
     pub events: Option<EventsModel>,
+    /// The builder (owner id) of the brick whose events are open: its rows
+    /// run in their mini-game, so its teams are the ones rows name.
+    pub events_builder: Option<u64>,
     /// Copy checkbox survives dialog closure. Only editable rows may cross bricks.
     pub events_copy: Option<EventsModel>,
     /// The fill wrench's ticked settings: its Copy boxes say which settings
@@ -242,6 +245,7 @@ impl WrenchState {
         allow_named: bool,
         catalog: &EventCatalog,
     ) {
+        self.events_builder = None;
         let mut incoming = EventsModel::open(brick, rows, named_targets, allow_named, catalog);
         if let Some(copy) = &self.events_copy {
             use crate::models::events::{EditRow, RowState};

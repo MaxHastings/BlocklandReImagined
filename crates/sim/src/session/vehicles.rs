@@ -981,9 +981,7 @@ impl Session {
             bri_world::ContentRef::Resolved(id) if self.is_bot_kind(id) => Some(id.clone()),
             _ => None,
         }) {
-            // Bots come back fresh at their brick.
-            self.reconcile_bot_brick(brick_id, None)?;
-            return self.reconcile_bot_brick(brick_id, Some(&kind));
+            return self.respawn_brick_bot(brick_id, &kind);
         }
         if let Some(id) = self.vehicles.by_brick.get(&brick_id).copied() {
             self.remove_vehicle(id)?;

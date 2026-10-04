@@ -306,7 +306,8 @@ pub fn workshop_catalog(catalog: &Catalog) -> Result<Catalog> {
             "setTeam",
             vec![Param::Int {
                 min: 1,
-                max: 32,
+                // A mini-game's team slots: 1 to `bri_minigames::MAX_TEAMS`.
+                max: 64,
                 default: 1,
             }],
         );
