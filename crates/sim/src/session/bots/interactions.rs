@@ -80,16 +80,16 @@ fn object_centre(v: &VehicleSnapshot, d: &bri_vehicles::Definition) -> Vec3 {
             * (v.scale * 0.5)
 }
 use super::claims::Resource;
+/// How near the spot a bot makes for another body contests it rather than
+/// stands in its way (`Session::bot_walk_direction`).
+const CONTESTED: f32 = 3.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct Opportunity {
     resource: Resource,
     pub point: Vec3,
     pub utility: f32,
 }
-
-/// How far past its target a ranged shot that misses is still dangerous
-/// to an ally standing there.
-pub(super) const MISS_CARRIES: f32 = 8.0;
 
 impl Session {
     /// A passenger may have boarded the reachable lower seat of a tall vehicle.
@@ -702,17 +702,34 @@ impl Session {
     /// The path describes fixed geometry. A small local sidestep lets living
     /// actors pass each other instead of hopping indefinitely at a shared
     /// waypoint; the ordinary motor still enforces physical clearance.
-    pub(super) fn bot_walk_direction(&self, bot: OwnerId, desired: Vec3) -> Vec3 {
+    /// Any ally in the way is passed. So is any other body, except
+    /// `quarry`, the one it is going after, and one standing at `goal`, the
+    /// spot it is making for, which it contests rather than walks round.
+    /// It always passes on its left, so two walking into each other both
+    /// step aside the same way and get by.
+    pub(super) fn bot_walk_direction(
+        &self,
+        bot: OwnerId,
+        desired: Vec3,
+        quarry: Option<OwnerId>,
+        goal: Option<Vec3>,
+    ) -> Vec3 {
         if desired == Vec3::ZERO || self.seated(bot) {
             return desired;
         }
         let own = &self.peers[&bot].player;
         let feet = Vec3::from(own.state().feet);
         let blocked = self.peers.iter().any(|(o, p)| {
-            if *o == bot || !p.combat.alive || self.seated(*o) || !self.bot_allies(bot, *o) {
+            if *o == bot || !p.combat.alive || self.seated(*o) {
                 return false;
             }
-            let delta = flat(Vec3::from(p.player.state().feet) - feet);
+            let at = Vec3::from(p.player.state().feet);
+            if !self.bot_allies(bot, *o)
+                && (Some(*o) == quarry || goal.is_some_and(|g| flat(at - g).length() < CONTESTED))
+            {
+                return false;
+            }
+            let delta = flat(at - feet);
             let along = delta.dot(desired);
             let width = (own.tuning().width + p.player.tuning().width) * 0.5;
             along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
@@ -837,7 +854,8 @@ impl Session {
     }
 
     /// No ally stands in the line of fire from `origin` to `target`, nor
-    /// within `past` beyond the target, where a miss carries on.
+    /// within `past` beyond the target, where a miss carries on. The line
+    /// widens by `spread` radians, how far off its aim may send the shot.
     pub(super) fn bot_fire_clear(
         &self,
         bot: OwnerId,
@@ -845,6 +863,7 @@ impl Session {
         target: Vec3,
         splash: f32,
         past: f32,
+        spread: f32,
     ) -> bool {
         let delta = target - origin;
         let length = delta.length();
@@ -865,7 +884,7 @@ impl Session {
                 Vec3::from(p.player.state().feet) + Vec3::Y * p.player.tuning().stand_height * 0.5;
             let along = (centre - origin).dot(direction).clamp(0.0, length + past);
             centre.distance(origin + direction * along)
-                < p.player.tuning().stand_height * 0.5 + splash
+                < p.player.tuning().stand_height * 0.5 + splash + along * spread.tan()
         })
     }
 

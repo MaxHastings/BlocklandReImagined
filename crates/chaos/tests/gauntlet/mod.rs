@@ -409,6 +409,8 @@ pub struct Report {
     /// next waypoint).
     pub stuck_in: BTreeMap<&'static str, u64>,
     pub stuck_at: Vec<(OwnerId, &'static str, Vec3, Option<Vec3>)>,
+    /// Circling ticks by behaviour.
+    pub circling_in: BTreeMap<&'static str, u64>,
 }
 
 impl Report {
@@ -457,6 +459,9 @@ impl Report {
             shares.join(" "),
             &top[..top.len().min(6)]
         );
+        if self.circling > 0 {
+            eprintln!("GAUNTLET {} circling in {:?}", self.name, self.circling_in);
+        }
         if self.stuck > 0 {
             eprintln!(
                 "GAUNTLET {} stuck in {:?} e.g. {:?}",
@@ -612,6 +617,11 @@ impl Scorer {
                 let net = track.path.front().unwrap().distance(flat);
                 if length > 6.0 && net < 0.2 * length {
                     self.report.circling += 1;
+                    *self
+                        .report
+                        .circling_in
+                        .entry(thought.behaviour)
+                        .or_default() += 1;
                 }
             }
             if thought.behaviour == "wander" && work(*bot) {
@@ -697,6 +707,19 @@ impl Scorer {
                 && sides.get(&hit) == sides.get(&shooter)
             {
                 self.report.at_ally += 1;
+                if std::env::var("BRI_GAUNTLET_TRACE").is_ok_and(|t| self.report.name.contains(&t))
+                {
+                    eprintln!(
+                        "T{tick} AT ALLY bot{shooter} from {origin:.1} along {direction:.2} \
+                         nearest ally bot{hit} at {:?}, target {:?} at {:?}",
+                        states.get(&hit).map(|st| st.feet),
+                        thought.visible,
+                        thought
+                            .visible
+                            .and_then(|t| states.get(&t))
+                            .map(|st| st.feet),
+                    );
+                }
             }
         }
         // Deaths, once each.

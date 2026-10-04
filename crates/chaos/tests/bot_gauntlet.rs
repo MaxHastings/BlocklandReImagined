@@ -456,8 +456,10 @@ fn weapons_lying_on_the_ground() {
     // other doing nothing), no bot ever armed, no kills. Now a bot with
     // nothing to attack with does not fight; it arms itself from a weapon
     // in sight: all 4 armed, 31 kills, circling 4.4%, 36 changes a
-    // bot-minute (arm, fight, and arm again after each respawn).
-    within(&r, 0.01, 0.01, 0.08, 45.0);
+    // bot-minute (arm, fight, and arm again after each respawn). Over runs
+    // since, circling 2.4-8.3% and 35-46 changes (three rounds: 7.6% and
+    // 41), most of the circling a ranged strafe's legs back and forth.
+    within(&r, 0.01, 0.01, 0.10, 50.0);
     assert!(
         r.progress["armed_bots"] == 4 * rounds() as i64,
         "every bot armed itself: {:?}",
@@ -513,16 +515,67 @@ fn zombie_survival() {
 
 #[test]
 fn capture_the_flag() {
-    const FLAG: &str = "gauntlet-ctf:brick/flag";
-    const BASE: &str = "gauntlet-ctf:brick/base";
-    const FLAG_ITEM: &str = "gauntlet-ctf:weapon/flag";
-    const FLAG_IMAGE: &str = "gauntlet-ctf:image/flag";
-    let mut spec = Spec::new(
+    let spec = Spec::new(
         "capture_the_flag",
         line(-76.0, 0.0, 50.0, 2),
         line(-36.0, 0.0, 50.0, 2),
         &[GUN],
     );
+    let r = flags(spec, 90);
+    // Measured at the merge: stuck 34.5% (opposing runners deadlock
+    // head-on), circling 1%, 39 changes a bot-minute, 34 kills, 1656 ticks
+    // carrying, and no capture in 90 s. Now, with fights held through a
+    // jump: stuck 0.4-20%, 43-53 kills. The changes a bot-minute rose with
+    // the fighting, to 44-60 (each fight is an objective/fight change and
+    // back). TARGET captures > 0.
+    within(&r, 0.25, 0.01, 0.03, 65.0);
+    assert!(
+        r.progress["carry_ticks"] >= 1000 * rounds() as i64,
+        "flags were taken: {:?}",
+        r.progress
+    );
+    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+}
+
+/// Runners and nothing else: no weapon and no fighting, each side's flag
+/// on the lane the other side runs down, so they meet head-on.
+#[test]
+fn runners_cross_head_on() {
+    const RUNNER: &str = "gauntlet:bot/runner";
+    let mut spec = Spec::new(
+        "runners_cross_head_on",
+        line(-76.0, 0.0, 50.0, 1),
+        line(-36.0, 0.0, 50.0, 1),
+        &[],
+    );
+    spec.kinds = [RUNNER, RUNNER];
+    spec.extra_kinds = vec![kind(RUNNER, |k| {
+        for b in ["fight", "chase", "search", "arm", "fly", "return"] {
+            k.behaviours.insert(b.into(), 0.0);
+        }
+    })];
+    let r = flags(spec, 60);
+    // Measured while bots sidestepped only allies: stuck 7.7% (the two
+    // runners push into each other head-on, hopping, until one slides by).
+    // Passing any body: stuck 0.2%, circling 6.6% (out and back), 15
+    // changes a bot-minute. Idle 11.7% is the objective blinking off for a
+    // few seconds after each capture. TARGET idle < 1%.
+    within(&r, 0.02, 0.12, 0.08, 18.0);
+    let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
+    assert!(
+        caps >= 2 * rounds() as i64,
+        "both ran it home: {:?}",
+        r.progress
+    );
+}
+
+/// Capture the flag in `spec`'s layout and arsenal, for `seconds`: each
+/// side takes the other's flag from beside its spawns back to its base.
+fn flags(mut spec: Spec, seconds: usize) -> Report {
+    const FLAG: &str = "gauntlet-ctf:brick/flag";
+    const BASE: &str = "gauntlet-ctf:brick/base";
+    const FLAG_ITEM: &str = "gauntlet-ctf:weapon/flag";
+    const FLAG_IMAGE: &str = "gauntlet-ctf:image/flag";
     spec.brick_defs = vec![(FLAG, fixture::PLATE), (BASE, fixture::PLATE)];
     spec.item_defs = vec![(FLAG_ITEM, FLAG_IMAGE)];
     spec.bricks = vec![
@@ -617,7 +670,7 @@ fn bot_objectives(p) {
         );
     });
     let sides = b.sides.clone();
-    let r = b.play(0.0, 90, |s, report| {
+    b.play(0.0, seconds, |s, report| {
         let state = s.package_state();
         let Some(ns) = state.packages.get("gauntlet-ctf") else {
             return;
@@ -640,20 +693,7 @@ fn bot_objectives(p) {
             })
             .count() as i64;
         *report.progress.entry("carry_ticks".into()).or_default() += carrying;
-    });
-    // Measured at the merge: stuck 34.5% (opposing runners deadlock
-    // head-on), circling 1%, 39 changes a bot-minute, 34 kills, 1656 ticks
-    // carrying, and no capture in 90 s. Now, with fights held through a
-    // jump: stuck 0.4-20%, 43-53 kills. The changes a bot-minute rose with
-    // the fighting, to 44-60 (each fight is an objective/fight change and
-    // back). TARGET captures > 0.
-    within(&r, 0.25, 0.01, 0.03, 65.0);
-    assert!(
-        r.progress["carry_ticks"] >= 1000 * rounds() as i64,
-        "flags were taken: {:?}",
-        r.progress
-    );
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    })
 }
 
 #[test]

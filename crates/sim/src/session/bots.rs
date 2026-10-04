@@ -1903,19 +1903,21 @@ impl Session {
             view.trigger.is_some() && matches!(view.resource, Some(claims::Resource::Body { .. }))
         });
         let crew_ready = self.bot_crew_ready(bot, tick);
+        // A ranged shot that misses carries on to its reach, and goes as
+        // far off as its aim errs now.
+        let ranged = weapon.is_some_and(|w| !w.melee);
+        let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
+        let aim_error = yaw_error.hypot(pitch_error);
         let attack_clear = sight.target.is_none_or(|seen| {
             self.bot_fire_clear(
                 bot,
                 eye,
                 seen.eye - Vec3::Y * 0.5,
                 weapon.map_or(0.0, |w| w.splash),
-                weapon.map_or(0.0, |w| {
-                    if w.melee {
-                        0.0
-                    } else {
-                        interactions::MISS_CARRIES
-                    }
-                }),
+                weapon
+                    .filter(|_| ranged)
+                    .map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0)),
+                if ranged { aim_error } else { 0.0 },
             )
         });
         let mounted_charging = self
@@ -2388,8 +2390,20 @@ impl Session {
         } else {
             None
         };
-        let walk_direction =
-            wanted.map(|p| self.bot_walk_direction(bot, flat(p.feet - feet).normalize_or_zero()));
+        // The enemy it goes after is walked up to, not around.
+        let quarry = sight
+            .target
+            .filter(|_| matches!(behaviour, Behaviour::Fight | Behaviour::Chase))
+            .map(|seen| seen.owner);
+        let goal_at = self.bots.brains[&bot].goal.map(|g| g.point(home));
+        let walk_direction = wanted.map(|p| {
+            self.bot_walk_direction(
+                bot,
+                flat(p.feet - feet).normalize_or_zero(),
+                quarry,
+                goal_at,
+            )
+        });
         // Allies close by, which a strafe does not walk into.
         let allies_near: Vec<Vec3> = self
             .peers
