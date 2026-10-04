@@ -9,7 +9,7 @@
           "out_of_water_seconds": 9,
           "melee": {
             "damage": "{bite}",
-            "name": "Bite",
+            "name": "{bite_type}",
             "reach": 2.5
           },
           "look": {

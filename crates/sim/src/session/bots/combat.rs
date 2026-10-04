@@ -346,7 +346,10 @@ pub(super) fn choose(
             .filter(|s| Some(*s) != selected),
     );
     for slot in slots.take(tactics::MAX_CANDIDATES) {
-        if !turn && Some(slot) != selected {
+        if (!turn || charge_continuation.is_some()) && Some(slot) != selected {
+            // A live wind-up belongs to the unchanged participant/equipment.
+            // A transient range/intercept miss may keep it tracking, but may
+            // not hand its trigger sequence to another inventory choice.
             continue;
         }
         let Some(item) = actor.inventory[slot]

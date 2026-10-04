@@ -1182,6 +1182,20 @@ impl Reflections {
         clear: wgpu::Color,
         after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
     ) {
+        self.render_views(renderer, encoder, scenes, &|_| instances, clear, after);
+    }
+    /// Draw the same reflection plan with model visibility chosen independently
+    /// for each virtual camera (view 1 + the plane index, as for `after`).
+    /// This does not change geometry or shadow casters.
+    pub fn render_views<'a>(
+        &self,
+        renderer: &SceneRenderer,
+        encoder: &mut wgpu::CommandEncoder,
+        scenes: &[&GpuScene],
+        instances: &dyn Fn(usize) -> &'a [(&'a GpuScene, &'a GpuInstances)],
+        clear: wgpu::Color,
+        after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
+    ) {
         // Keep last frame's pictures before this frame draws over them.
         for (target, held) in self.targets.iter().zip(&self.held) {
             if held.is_some() {
@@ -1212,7 +1226,7 @@ impl Reflections {
                     after_all: Some(&late),
                 },
                 scenes,
-                instances,
+                instances(1 + i),
             );
         }
     }

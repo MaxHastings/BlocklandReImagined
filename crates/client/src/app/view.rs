@@ -244,6 +244,16 @@ impl App {
         };
         eye.is_finite().then_some(eye)
     }
+    /// The eye in the body's space before a leading eye crosses a portal.
+    pub(super) fn first_person_eye_here(
+        controls: &Controls,
+        local: &bri_sim::player::PlayerState,
+        eye: Vec3,
+    ) -> Vec3 {
+        let middle =
+            Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        middle + controls.portal_tilt() * (eye - middle)
+    }
     /// Where the view camera is and how it looks (yaw, pitch, roll): first
     /// person, sliding out to the chase camera, or an observer camera. Only
     /// a rider's first-person view rolls, with its seat.
@@ -297,7 +307,7 @@ impl App {
             Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
         let look = (yaw, pitch, roll);
         let eye = if boom.is_none() && controls.camera_pos() == 0.0 {
-            middle + controls.portal_tilt() * (eye - middle)
+            Self::first_person_eye_here(controls, local, eye)
         } else {
             eye
         };

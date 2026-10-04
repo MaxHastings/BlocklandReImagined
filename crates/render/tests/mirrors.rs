@@ -165,9 +165,25 @@ impl Gpu {
         mirrors: &[Mirror],
         frames: usize,
     ) -> Result<(Vec<u8>, RenderStats)> {
+        self.frame_with_model_visibility(camera, samples, settings, data, mirrors, frames, true)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn frame_with_model_visibility(
+        &self,
+        camera: &Camera,
+        samples: u32,
+        settings: ReflectionSettings,
+        data: &SceneData,
+        mirrors: &[Mirror],
+        frames: usize,
+        visible: bool,
+    ) -> Result<(Vec<u8>, RenderStats)> {
         let device = &self.device;
         let mut renderer = SceneRenderer::with_samples(device, FORMAT, samples);
         let scene = renderer.upload(device, &self.queue, data)?;
+        let mut instance = GpuInstances::new(device, 1)?;
+        instance.update(&self.queue, &[SceneTransform::default()])?;
+        let models = [(&scene, &instance)];
         let camera = *camera;
         renderer.update_camera(&self.queue, &camera);
         let mut reflections = Reflections::new(device, FORMAT, samples, settings);
@@ -225,7 +241,17 @@ impl Gpu {
                     mirrors,
                 )?;
             }
-            reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
+            reflections.render_views(
+                &renderer,
+                &mut encoder,
+                &[],
+                &|view| {
+                    assert!(view > 0);
+                    if visible { &models } else { &[] }
+                },
+                clear,
+                &|_, _| {},
+            );
             let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
             renderer.render_world(
                 &mut encoder,
@@ -295,6 +321,43 @@ fn halves(pixels: &[u8], channel: usize) -> [usize; 2] {
         }
     }
     out
+}
+
+#[test]
+fn each_virtual_view_can_omit_a_first_person_body_without_changing_other_views() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let camera = Camera::perspective([0.0, 0.0, 4.0], [0.0; 3], 1.0, 1.0, 0.05, 100.0);
+    for samples in [1, 4] {
+        let (shown, _) = gpu.frame_with_model_visibility(
+            &camera,
+            samples,
+            ReflectionSettings::MEDIUM,
+            &room(),
+            &[mirror()],
+            1,
+            true,
+        )?;
+        let (hidden, _) = gpu.frame_with_model_visibility(
+            &camera,
+            samples,
+            ReflectionSettings::MEDIUM,
+            &room(),
+            &[mirror()],
+            1,
+            false,
+        )?;
+        assert!(
+            halves(&shown, 0)[1] > 50,
+            "visible model must actually appear"
+        );
+        assert_eq!(
+            halves(&hidden, 0),
+            [0, 0],
+            "hidden model must leave the virtual view"
+        );
+        assert_eq!(halves(&hidden, 1), [0, 0]);
+    }
+    Ok(())
 }
 
 #[test]

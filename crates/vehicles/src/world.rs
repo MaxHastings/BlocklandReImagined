@@ -201,6 +201,8 @@ impl VehicleSnapshot {
 /// drives resets it to before replaying its unacknowledged moves.
 #[derive(Clone, Debug)]
 pub struct Motion {
+    /// Authoritative travel evidence consumed by the client predictor.
+    pub passage_frame: bri_content::passage::PassageFrame,
     pub transform: Transform,
     pub velocity: [f32; 3],
     pub angular_velocity: [f32; 3],
@@ -408,7 +410,9 @@ impl Instance {
 }
 /// A player-type mount's `PlayerData` as motor constants: its box, speeds,
 /// `runForce`/mass, `jumpForce`/mass, surfaces, energy and density.
-pub(crate) fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
+/// Call for a player-type mount with its validated canonical scale. The
+/// renderer reads this same motor box to split the body at its travel middle.
+pub fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
     let (min, max) = d
         .collision_hulls
         .iter()
@@ -1187,10 +1191,18 @@ impl VehiclesWorld {
         Some(match &v.actor {
             Some(actor) => {
                 let state = actor.state();
-                Vec3::from(state.feet) + Vec3::Y * bri_motor::player::nominal_middle(state.scale)
+                Vec3::from(state.feet) + Vec3::Y * actor.middle()
             }
             None => world.bodies.get(v.body)?.center_of_mass(),
         })
+    }
+    /// The same travel middle at the between-tick pose the host draws.
+    pub fn shown_centre(&self, world: &PhysicsWorld, id: VehicleId) -> Option<Vec3> {
+        let v = self.instances.get(&id)?;
+        match &v.actor {
+            Some(actor) => Some(Vec3::from(actor.state().shown_feet()) + Vec3::Y * actor.middle()),
+            None => self.centre(world, id),
+        }
     }
     /// Every vehicle there is.
     pub fn ids(&self) -> impl Iterator<Item = VehicleId> + '_ {
@@ -1480,6 +1492,25 @@ impl VehiclesWorld {
         world: &mut PhysicsWorld,
         waters: &[bri_content::water::Water],
     ) -> Result<()> {
+        self.pre_step_through(
+            world,
+            waters,
+            &(),
+            &bri_content::passage::Passages::default(),
+        )?;
+        Ok(())
+    }
+    /// Step player-type mounts through the host's openings with the same
+    /// motor and collision-part identities as walking players. Physical
+    /// vehicles still cross after the shared physics step.
+    pub fn pre_step_through(
+        &mut self,
+        world: &mut PhysicsWorld,
+        waters: &[bri_content::water::Water],
+        parts: &dyn bri_motor::torque::PartTags,
+        passages: &bri_content::passage::Passages,
+    ) -> Result<Vec<(VehicleId, glam::Affine3A)>> {
+        let mut carried = Vec::new();
         ensure!(
             (world.integration_parameters.dt - FIXED_DT).abs() < 1e-6,
             "vehicles require shared 120Hz timestep"
@@ -1643,7 +1674,21 @@ impl VehiclesWorld {
                 v.water = in_water;
             }
             if d.is_actor() {
-                actor_step(*id, v, d, c, driven, waters, world, &mut self.intents)?;
+                if let Some(carry) = actor_step(
+                    *id,
+                    v,
+                    d,
+                    c,
+                    driven,
+                    waters,
+                    world,
+                    parts,
+                    passages,
+                    &mut self.intents,
+                )? {
+                    v.previous_velocity = carry.transform_vector3(v.previous_velocity);
+                    carried.push((*id, carry));
+                }
                 v.jump_held = c.jump;
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
@@ -1835,7 +1880,7 @@ impl VehiclesWorld {
                 weapon_step(self.tick, *id, v, d, world, &mut self.intents);
             }
         }
-        Ok(())
+        Ok(carried)
     }
     pub fn post_step(&mut self, world: &mut PhysicsWorld) -> Result<()> {
         ensure!(self.step_pending, "post_step needs pre_step");
@@ -2180,8 +2225,10 @@ fn actor_step(
     driven: bool,
     waters: &[bri_content::water::Water],
     world: &mut PhysicsWorld,
+    parts: &dyn bri_motor::torque::PartTags,
+    passages: &bri_content::passage::Passages,
     intents: &mut Vec<Intent>,
-) -> Result<()> {
+) -> Result<Option<glam::Affine3A>> {
     let actor = v.actor.as_mut().context("actor mount without a motor")?;
     let yaw = if driven {
         // mRot.z follows the rider's accumulated mouse turn.
@@ -2204,7 +2251,7 @@ fn actor_step(
         crouch: false,
         jet: false,
     };
-    let motion = actor.step_in_water(world, input, waters)?;
+    let motion = actor.step_through(world, input, waters, parts, passages)?;
     if motion.jumped && d.family == Family::Horse {
         intents.push(Intent::Audio {
             vehicle: id,
@@ -2232,7 +2279,7 @@ fn actor_step(
             });
         }
     }
-    Ok(())
+    Ok(motion.passed)
 }
 fn weapon_step(
     tick: u64,

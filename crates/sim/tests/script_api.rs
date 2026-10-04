@@ -136,7 +136,22 @@ fn cmd_bot_tool(p, b, slot) { if slot < 0 { bot_tool(b, ()); } else { bot_tool(b
 fn cmd_unbot(p, b) { remove_bot(b); }
 fn cmd_box(p) { message_box(p, "Probe", "A box"); }
 fn cmd_keep_game(p, v) { let s = get("per_game"); s[`${player(p).minigame}`] = v; set("per_game", s); }
-fn on_minigame(event) { if event.kind == "loaded" { note("heard", get("heard") + "loaded "); } }
+fn cmd_keep_large_game(p) {
+    let values = [];
+    for i in 0..30 { values.push("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); }
+    let s = get("per_game");
+    s[`${player(p).minigame}`] = values;
+    set("per_game", s);
+}
+fn on_minigame(event) {
+    if event.kind == "loaded" {
+        note("heard", get("heard") + "loaded ");
+        let values = get("per_game");
+        let key = `${event.game}`;
+        note("loaded_present", key in values);
+        note("loaded_value", if key in values { values[key] } else { () });
+    }
+}
 "#;
 
 fn behaviour() -> Value {
@@ -196,6 +211,7 @@ fn behaviour() -> Value {
             command("unbot", &["int"]),
             command("box", &[]),
             command("keep_game", &["string"]),
+            command("keep_large_game", &[]),
         ],
         "on_damage": true,
         "state": { "global": {
@@ -212,7 +228,9 @@ fn behaviour() -> Value {
             "heard": { "default": "", "visible": "everyone" },
             "kinds": { "default": "", "visible": "everyone" },
             "bots": { "default": "", "visible": "everyone" },
-            "per_game": { "default": {}, "visible": "everyone", "per_minigame": true }
+            "per_game": { "default": {}, "visible": "everyone", "per_minigame": true },
+            "loaded_present": { "default": false, "visible": "everyone" },
+            "loaded_value": { "default": null, "visible": "everyone" }
         } }
     })
 }
@@ -347,13 +365,16 @@ impl Game {
     /// Flat ground (tagged as the map, as a loaded map's colliders are),
     /// with the probe package installed.
     fn new() -> Self {
+        Self::with_definitions(Definitions::default())
+    }
+    fn with_definitions(definitions: Definitions) -> Self {
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
         let mut s = Session::new(
             Simulation::new(
                 World::new("Probe".into(), "probe".into(), vec![[1.0; 4]]),
-                Definitions::default(),
+                definitions,
                 vec![ground],
             )
             .unwrap(),
@@ -1644,4 +1665,204 @@ fn a_saved_build_brings_back_its_mini_game_and_the_add_on_state_kept_per_game() 
     assert_eq!(g.value("per_game")[game.to_string()], "path");
     assert!(g.text("heard").contains("loaded"), "{}", g.text("heard"));
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+/// A real, known brick lets native loads reach mini-game restoration.
+fn saved_build_fixture() -> Game {
+    Game::with_definitions(Definitions {
+        entries: [(
+            "probe:brick/plate".into(),
+            bri_sim::testing::definition(
+                "probe:brick/plate",
+                [1, 1],
+                1,
+                bri_sim::definitions::Special::None,
+                false,
+            ),
+        )]
+        .into(),
+    })
+}
+
+/// Exercise the actual native file framing before the authoritative load.
+fn saved_build_snapshot(g: &mut Game, who: OwnerId) -> bri_world::build::SavedBuild {
+    g.seq += 1;
+    let bri_sim::session::Reply::Saved(build) =
+        g.s.command(
+            who,
+            g.seq,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        )
+        .unwrap()
+    else {
+        panic!("Expected a saved build")
+    };
+    bri_world::build::decode(&bri_world::build::encode(&build).unwrap()).unwrap()
+}
+
+fn load_saved_build(g: &mut Game, who: OwnerId, build: bri_world::build::SavedBuild) {
+    g.steps(5 * 120);
+    g.send(
+        who,
+        Command::LoadBuild {
+            build: Box::new(build),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    for _ in 0..120 {
+        if !g.s.build_loading() {
+            break;
+        }
+        g.steps(1);
+    }
+    assert!(!g.s.build_loading());
+    // The package's loaded hook observes the restored state.
+    g.steps(2);
+}
+
+fn saved_build_game(g: &mut Game, who: OwnerId, color: u8) -> u64 {
+    if g.s.simulation().state().bricks.is_empty() {
+        let mut world = g.s.simulation().state().clone();
+        world.bricks.insert(
+            1,
+            bri_world::Brick::new(
+                bri_world::ContentRef::Resolved("probe:brick/plate".into()),
+                [20.25, 0.1, 20.25],
+                who,
+            ),
+        );
+        world.next_brick_id = 2;
+        load_saved_build(g, who, bri_world::build::SavedBuild::new(world));
+        assert_eq!(g.s.simulation().state().bricks.len(), 1);
+    }
+    g.send(
+        who,
+        Command::MiniGame(bri_sim::session::MiniGameRequest::Create {
+            color,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.s.minigame_views()
+        .iter()
+        .find(|game| game.color == color)
+        .unwrap()
+        .id
+}
+
+#[test]
+fn saved_build_clears_absent_per_game_values_and_restores_explicit_empty_values() {
+    let mut g = saved_build_fixture();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(4.0, 0.05, 0.0));
+    let ga = saved_build_game(&mut g, a, 2).to_string();
+    let gb = saved_build_game(&mut g, b, 3).to_string();
+    let absent = saved_build_snapshot(&mut g, a);
+    assert_eq!(absent.minigame.as_ref().unwrap()["packages"], json!({}));
+    g.run(b, "keep_game", vec![PackageArg::String("neighbor".into())]);
+    g.run(
+        a,
+        "keep_game",
+        vec![PackageArg::String("later path".into())],
+    );
+    g.run(a, "reload", vec![]);
+
+    load_saved_build(&mut g, a, absent);
+    assert_eq!(g.value("per_game"), json!({ gb.clone(): "neighbor" }));
+    assert_eq!(g.value("loaded_present"), json!(false));
+    assert_eq!(g.value("loaded_value"), Value::Null);
+    assert_eq!(g.value("reloads"), json!(1));
+
+    // Empty text is authored data, distinct from an omitted game entry.
+    g.run(a, "keep_game", vec![PackageArg::String(String::new())]);
+    let mut empty = saved_build_snapshot(&mut g, a);
+    // Unknown packages and ordinary keys cannot be written by a snapshot.
+    let packages = &mut empty.minigame.as_mut().unwrap()["packages"];
+    packages["probe"]["reloads"] = json!(99);
+    packages["missing"] = json!({ "per_game": "ignored" });
+    g.run(
+        a,
+        "keep_game",
+        vec![PackageArg::String("later path".into())],
+    );
+    load_saved_build(&mut g, a, empty);
+    assert_eq!(g.value("per_game"), json!({ ga: "", gb: "neighbor" }));
+    assert_eq!(g.value("loaded_present"), json!(true));
+    assert_eq!(g.value("loaded_value"), json!(""));
+    assert_eq!(g.value("reloads"), json!(1));
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+#[test]
+fn saved_build_rejects_a_merge_that_breaks_public_or_persistent_state_limits() {
+    let mut g = saved_build_fixture();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(4.0, 0.05, 0.0));
+    let ga = saved_build_game(&mut g, a, 2).to_string();
+    let gb = saved_build_game(&mut g, b, 3).to_string();
+    g.run(a, "keep_large_game", vec![]);
+    let saved = saved_build_snapshot(&mut g, a);
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+    let authored = saved.minigame.as_ref().unwrap()["packages"]["probe"]["per_game"].clone();
+    bri_package_runtime::state::check_value(&authored).unwrap();
+    g.run(a, "keep_game", vec![PackageArg::String("current".into())]);
+    g.run(b, "keep_large_game", vec![]);
+    let before = g.value("per_game");
+    let neighbor = before[&gb].clone();
+    bri_package_runtime::state::check_value(&before).unwrap();
+    let mut invalid = before.clone();
+    invalid[&ga] = authored;
+    assert!(bri_package_runtime::state::check_value(&invalid).is_err());
+
+    load_saved_build(&mut g, a, saved);
+    assert_eq!(g.value("per_game"), before, "rejection retains both games");
+    assert_eq!(g.value("per_game")[&gb], neighbor);
+    assert_eq!(g.value("loaded_present"), json!(true));
+    assert_eq!(g.value("loaded_value"), json!("current"));
+    assert!(
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("state.restore") && d.contains("per_game")),
+        "{:?}",
+        g.diagnostics()
+    );
+    g.s.package_state().validate().unwrap();
+    let store = g.s.package_save().unwrap().store;
+    assert_eq!(
+        bri_package_runtime::Store::decode(&store.encode().unwrap()).unwrap(),
+        store
+    );
+}
+
+#[test]
+fn saved_build_keeps_current_data_when_a_present_saved_value_is_malformed() {
+    let mut g = saved_build_fixture();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let game = saved_build_game(&mut g, a, 2).to_string();
+    g.run(a, "keep_game", vec![PackageArg::String("current".into())]);
+    let mut saved = saved_build_snapshot(&mut g, a);
+    // This entry alone fits depth four, but its required game-id envelope
+    // would exceed the same depth limit enforced on replicated/saved keys.
+    let malformed = json!({"a": {"b": {"c": {"d": 1}}}});
+    bri_package_runtime::state::check_value(&malformed).unwrap();
+    saved.minigame.as_mut().unwrap()["packages"]["probe"]["per_game"] = malformed;
+    load_saved_build(&mut g, a, saved);
+    assert_eq!(g.value("per_game"), json!({ game: "current" }));
+    assert_eq!(g.value("loaded_present"), json!(true));
+    assert_eq!(g.value("loaded_value"), json!("current"));
+    assert!(
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("state.restore") && d.contains("nest at most 4")),
+        "{:?}",
+        g.diagnostics()
+    );
+    g.s.package_state().validate().unwrap();
 }

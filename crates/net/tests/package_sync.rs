@@ -662,6 +662,7 @@ async fn a_join_downloads_exactly_the_servers_add_ons_without_asking() -> Result
     let expected = environment.client_packages();
     let join = async |have: Vec<bri_package::environment::PackageRef>, cache: &Cache| {
         let mut ran = Vec::new();
+        let mut loads = 0;
         let (client, fetched, dropped) = bri_net::client::Client::connect_fetching(
             server.address,
             bri_net::client::HostPin::from(&server.certificate[..]),
@@ -672,12 +673,17 @@ async fn a_join_downloads_exactly_the_servers_add_ons_without_asking() -> Result
             cache,
             Progress::default(),
             |fetched, dropped| {
+                loads += 1;
                 ran = joined(&have, fetched, dropped);
                 Ok(ran.clone())
             },
         )
         .await?;
         anyhow::ensure!(client.owner > 0, "not in the game");
+        assert_eq!(
+            loads, 1,
+            "the prepared refs must be used in the first Hello"
+        );
         drop(client);
         anyhow::Ok((ran, fetched, dropped))
     };
@@ -718,7 +724,11 @@ async fn a_join_downloads_exactly_the_servers_add_ons_without_asking() -> Result
     let mut ran_sorted = ran;
     ran_sorted.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(ran_sorted, want, "the server's exact Add-Ons");
-    server.stop().await?;
+    let report = server.stop().await?;
+    assert_eq!(
+        report.rejected, 0,
+        "fresh and stale clients declared prepared refs before admission"
+    );
     Ok(())
 }
 
@@ -939,5 +949,307 @@ async fn a_failed_download_joins_without_the_add_ons() -> Result<()> {
     assert_eq!(ids, ["creeper", "zombies"]);
     drop(client);
     server.stop().await?;
+    Ok(())
+}
+
+/// A client-only package mismatch does not reject Hello. Loading it must
+/// still finish before a real player (and connected/left notices) exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_only_content_load_failure_never_enters_the_game() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let (set, mut environment) = content(root.path())?;
+    environment
+        .packages
+        .retain(|p| p.side == bri_package::packages::Side::Client);
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment,
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let cache = Cache::open(cache_dir.path())?;
+    let mut saw_download = false;
+    let failed = bri_net::client::Client::connect_fetching(
+        server.address,
+        bri_net::client::HostPin::from(&server.certificate[..]),
+        "NotReady".into(),
+        Vec::new(),
+        None,
+        &identity,
+        &cache,
+        Progress::default(),
+        |fetched, _| {
+            saw_download |= !fetched.is_empty();
+            anyhow::bail!("fixture content preparation failed")
+        },
+    )
+    .await
+    .err()
+    .expect("the loader failure remains an error");
+    assert!(saw_download, "real offered content reached the loader");
+    assert!(
+        failed
+            .to_string()
+            .contains("fixture content preparation failed")
+    );
+    let report = server.stop().await?;
+    assert_eq!(report.joins, 0, "preparation failed before admission");
+    assert_eq!(report.resumes, 0);
+    Ok(())
+}
+
+/// The ordinary client continuation installs engine content, then retries
+/// using the prepared package IDs. Only that final connection is a player;
+/// a later real disconnect must still be announced to another joined client.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_content_preparation_announces_only_the_final_join_and_real_departure()
+-> Result<()> {
+    use bri_net::client::{Client, ClientEvent, HostPin, JoinPreparationPending};
+    use bri_sim::session::Notice;
+    for case in ["shared-missing", "client-only-missing", "extra-shared"] {
+        let root = tempfile::tempdir()?;
+        let (set, environment) = content(root.path())?;
+        let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+        let server = server::start(
+            fixture::session(),
+            ServerOptions {
+                environment: environment.clone(),
+                packages: Some(Arc::new(shelf)),
+                ..fixture::options()
+            },
+        )?;
+        let identity_dir = tempfile::tempdir()?;
+        let observer_identity = bri_identity::ClientIdentity::load_or_create(
+            identity_dir.path().join("observer.identity"),
+        )?;
+        let identity = bri_identity::ClientIdentity::load_or_create(
+            identity_dir.path().join("joiner.identity"),
+        )?;
+        let expected = environment.client_packages();
+        let mut observer = Client::connect_with_identity(
+            server.address,
+            &server.certificate,
+            "Observer".into(),
+            expected.clone(),
+            None,
+            None,
+            &observer_identity,
+        )
+        .await?;
+        let have = match case {
+            "shared-missing" => Vec::new(),
+            "client-only-missing" => expected
+                .iter()
+                .filter(|p| p.side != bri_package::packages::Side::Client)
+                .cloned()
+                .collect(),
+            _ => expected
+                .iter()
+                .cloned()
+                .chain(std::iter::once(bri_package::environment::PackageRef {
+                    id: "local-only".into(),
+                    version: "1.0.0".into(),
+                    side: bri_package::packages::Side::Shared,
+                    hash: "ab".repeat(32),
+                    size: 1,
+                }))
+                .collect(),
+        };
+        let cache_dir = tempfile::tempdir()?;
+        let cache = Cache::open(cache_dir.path())?;
+        let mut prepared = Vec::new();
+        let mut removed = Vec::new();
+        let pending = Client::connect_fetching(
+            server.address,
+            HostPin::from(&server.certificate[..]),
+            "Candidate".into(),
+            have.clone(),
+            None,
+            &identity,
+            &cache,
+            Progress::default(),
+            |fetched, dropped| {
+                prepared = fetched.to_vec();
+                removed = dropped.to_vec();
+                Err(JoinPreparationPending.into())
+            },
+        )
+        .await
+        .err()
+        .expect("the ordinary reload continuation deferred the join");
+        assert!(
+            pending.is::<JoinPreparationPending>(),
+            "{case}: {pending:#}"
+        );
+        assert!(
+            prepared.iter().all(|f| f.dir.is_dir()),
+            "verified cached data: {case}"
+        );
+        let ready = joined(&have, &prepared, &removed);
+        assert_eq!(ready, expected, "prepared canonical IDs: {case}");
+        // As after App's package installation, the next attempt already uses
+        // the prepared content. The cache and prepared set cause no reload.
+        let (candidate, fetched, dropped) = Client::connect_fetching(
+            server.address,
+            HostPin::from(&server.certificate[..]),
+            "Candidate".into(),
+            ready,
+            None,
+            &identity,
+            &cache,
+            Progress::default(),
+            |_, _| anyhow::bail!("prepared content unexpectedly needs another load"),
+        )
+        .await?;
+        assert!(fetched.is_empty() && dropped.is_empty(), "{case}");
+        let mut notices = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let ClientEvent::Notice(Notice::Chat(text)) = observer.receive().await? {
+                    let connected = text.ends_with("Candidate connected.");
+                    notices.push(text);
+                    if connected {
+                        return anyhow::Ok(());
+                    }
+                }
+            }
+        })
+        .await??;
+        candidate.close();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let ClientEvent::Notice(Notice::Chat(text)) = observer.receive().await? {
+                    let departed = text.ends_with("Candidate has left the game.");
+                    notices.push(text);
+                    if departed {
+                        return anyhow::Ok(());
+                    }
+                }
+            }
+        })
+        .await??;
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|s| s.ends_with("Candidate connected."))
+                .count(),
+            1,
+            "{case}: {notices:?}"
+        );
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|s| s.ends_with("Candidate spawned."))
+                .count(),
+            1,
+            "{case}: {notices:?}"
+        );
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|s| s.ends_with("Candidate has left the game."))
+                .count(),
+            1,
+            "{case}: {notices:?}"
+        );
+        observer.close();
+        let report = server.stop().await?;
+        assert_eq!(
+            report.joins, 2,
+            "observer plus final candidate, no bootstrap admission: {case}"
+        );
+        assert_eq!(report.resumes, 0);
+    }
+    Ok(())
+}
+
+/// An ordinary late loader failure after removing an extra shared package
+/// still names every host package absent from the final successful load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_load_fallback_reports_previously_prepared_shared_packages_as_unavailable()
+-> Result<()> {
+    use bri_net::client::{Client, HostPin};
+    let root = tempfile::tempdir()?;
+    let (set, environment) = content(root.path())?;
+    let shelf = PackageShelf::new(root.path(), &set, &environment)?;
+    let server = server::start(
+        fixture::session(),
+        ServerOptions {
+            environment: environment.clone(),
+            packages: Some(Arc::new(shelf)),
+            ..fixture::options()
+        },
+    )?;
+    let extra = bri_package::environment::PackageRef {
+        id: "local-extra".into(),
+        version: "1.0.0".into(),
+        side: bri_package::packages::Side::Shared,
+        hash: "ab".repeat(32),
+        size: 1,
+    };
+    let have = vec![extra.clone()];
+    let identity_dir = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(identity_dir.path().join("client.identity"))?;
+    let cache_dir = tempfile::tempdir()?;
+    let mut loads = 0;
+    let (client, fetched, dropped) = Client::connect_fetching(
+        server.address,
+        HostPin::from(&server.certificate[..]),
+        "Fallback".into(),
+        have.clone(),
+        None,
+        &identity,
+        &Cache::open(cache_dir.path())?,
+        Progress::default(),
+        |fetched, dropped| {
+            loads += 1;
+            match loads {
+                1 => {
+                    assert!(dropped.is_empty());
+                    Ok(joined(&have, fetched, dropped))
+                }
+                2 => {
+                    assert_eq!(dropped, std::slice::from_ref(&extra));
+                    anyhow::bail!("real preparation failure after dropping extra package")
+                }
+                3 => {
+                    assert!(fetched.is_empty());
+                    assert_eq!(dropped, std::slice::from_ref(&extra));
+                    Ok(Vec::new())
+                }
+                _ => anyhow::bail!("unexpected preparation call"),
+            }
+        },
+    )
+    .await?;
+    assert_eq!(loads, 3);
+    assert!(fetched.is_empty());
+    assert_eq!(dropped, [extra]);
+    let mut expected: Vec<_> = environment
+        .client_packages()
+        .into_iter()
+        .filter(|p| p.side == bri_package::packages::Side::Shared)
+        .collect();
+    expected.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(
+        client.unavailable, expected,
+        "fetched metadata was cleared, but final loaded IDs remain authoritative"
+    );
+    client.close();
+    let report = server.stop().await?;
+    assert_eq!(report.joins, 1);
+    assert_eq!(report.resumes, 0);
+    assert_eq!(
+        report.rejected, 1,
+        "only the extra shared package's first Hello was refused"
+    );
     Ok(())
 }

@@ -67,6 +67,7 @@ fn host() -> (VehiclesWorld, PhysicsWorld) {
 fn motion(v: &VehiclesWorld, w: &PhysicsWorld) -> Motion {
     let s = &v.snapshot(w).vehicles[0];
     Motion {
+        passage_frame: Default::default(),
         // As the session sends it: a mount drawn between its ticks.
         transform: s.shown_transform(),
         velocity: s.velocity,
@@ -227,6 +228,7 @@ fn predict(definition: &str, motion: Motion) -> anyhow::Result<Predictor> {
 }
 fn at(position: [f32; 3], rotation: Quat) -> Motion {
     Motion {
+        passage_frame: Default::default(),
         transform: Transform {
             position,
             rotation: rotation.to_array(),

@@ -1130,6 +1130,8 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
             let mut selected = false;
             let mut rearmed = false;
             let mut winner = false;
+            let mut held_before = false;
+            let mut acquisitions = 0;
             let mut transitions = Vec::new();
             let mut previous = String::new();
             for _ in 0..120 * 40 {
@@ -1158,6 +1160,44 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
                         .into_iter()
                         .find(|b| b.bot == g.bot)
                         .unwrap();
+                let held_now = g.s.held_by(g.bot)
+                    == Some(bri_package_runtime::ops::ObjectRef::Vehicle(g.object));
+                if hold
+                    && held_now
+                    && !held_before
+                    && thought
+                        .objective_detail
+                        .as_ref()
+                        .is_some_and(|d| d.provider == method)
+                {
+                    let feet = Vec3::from(
+                        g.s.snapshot()
+                            .players
+                            .iter()
+                            .find(|p| p.owner == g.bot)
+                            .unwrap()
+                            .feet,
+                    );
+                    // This authored body has radius sqrt(3)*0.6 and the real
+                    // hold descriptor has near=2.5. Acquisition must follow
+                    // ordinary travel to its standoff, not fire from discovery
+                    // range and inherit a long-distance grip that stalls.
+                    let standoff = 2.5 + Vec3::splat(0.6).length() + 1.0;
+                    assert!(
+                        Vec3::new(point.x - feet.x, 0.0, point.z - feet.z).length()
+                            <= standoff + 0.75,
+                        "native grip acquired before its physical approach ({namespace}): point={point:?}, feet={feet:?}, transitions={transitions:?}"
+                    );
+                    acquisitions += 1;
+                }
+                if hold && selected && entries == 1 && held_before {
+                    assert!(
+                        held_now,
+                        "authoritative first-entry observation released the live native grip before rearm ({namespace}): tick={}, thought={thought:?}",
+                        g.s.simulation().state().tick
+                    );
+                }
+                held_before = held_now;
                 let state = format!(
                     "{} {:?} {:?}",
                     thought.behaviour, thought.objective_detail, thought.objective_diagnostic
@@ -1188,6 +1228,12 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
             );
             if initially_inside {
                 assert!(rearmed, "an initially occupied region must rearm first");
+            }
+            if hold {
+                assert!(
+                    acquisitions > 0,
+                    "a real native grip must execute the declared method"
+                );
             }
             assert!(
                 entries >= 2,

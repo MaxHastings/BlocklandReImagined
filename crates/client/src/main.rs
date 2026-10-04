@@ -204,6 +204,9 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
     // The GPU opens while the content loads.
     let early_gpu = platform::EarlyGpu::start();
     install_default_add_ons(content)?;
+    for notice in bri_client::add_on_choices::restore(content, state)? {
+        bri_console::warn(notice);
+    }
     // Executing the game opts into the normal game window and audio device.
     // Library/headless callers use App::load, which always selects silent output.
     let mut app = App::load_with_audio(content, state, (1280, 720), bri_audio::OutputKind::Device)

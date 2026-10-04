@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
   "pose_like": "v20.weapon.printgun",
+  "clockwise_quarter_turns": 1,
   "look": { "skin": {} }
 }

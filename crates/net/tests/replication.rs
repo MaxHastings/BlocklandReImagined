@@ -52,6 +52,8 @@ fn checkpoint() -> Checkpoint {
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
     Pose {
+        passage_frame: Default::default(),
+        passage_vehicle: None,
         tick,
         acknowledged_input: tick,
         spawn_tick: 0,
@@ -998,4 +1000,83 @@ fn environment_replicates_whole_and_is_checked() {
     delta.environment = Some(Settings::default());
     replica.update(delta).unwrap();
     assert!(replica.environment.is_empty());
+}
+
+#[test]
+fn malformed_passage_frames_are_rejected_after_codec_decode_in_both_pose_streams() {
+    use bri_content::passage::PassageFrame;
+    let mut invalid = Vec::new();
+    for value in [f32::NAN, f32::INFINITY, f32::MAX] {
+        invalid.push(PassageFrame {
+            translation: [value, 0., 0.],
+            ..Default::default()
+        });
+    }
+    invalid.push(PassageFrame {
+        rotation: [0.; 4],
+        ..Default::default()
+    });
+    invalid.push(PassageFrame {
+        rotation: [f32::NAN, 0., 0., 1.],
+        ..Default::default()
+    });
+    invalid.push(PassageFrame {
+        revision: u64::MAX,
+        ..Default::default()
+    });
+    for frame in invalid {
+        let mut replica = Replica::new(checkpoint()).unwrap();
+        replica.pose(pose(10, 0., 0.)).unwrap();
+        let mut bad = pose(11, 0., 0.);
+        bad.passage_frame = frame;
+        let bytes = codec::encode_datagram(&Datagram::Pose(bad.clone())).unwrap();
+        let Datagram::Pose(decoded) = codec::decode_datagram::<Datagram>(&bytes).unwrap() else {
+            panic!("own pose")
+        };
+        assert!(replica.pose(decoded).is_err());
+        assert_eq!(replica.poses[&1].tick, 10, "refusal is atomic");
+        let mut cp = checkpoint();
+        cp.poses.push(bad);
+        let encoded = codec::encode(&cp).unwrap();
+        let decoded: Checkpoint = codec::decode(&encoded).unwrap();
+        assert!(
+            Replica::new(decoded).is_err(),
+            "own checkpoint marker must be validated"
+        );
+        let bad_vehicle = bri_sim::session::VehiclePose {
+            passage_frame: frame,
+            id: 1,
+            tick: 11,
+            position: [0.; 3],
+            rotation: [0., 0., 0., 1.],
+            velocity: [0.; 3],
+            steering: 0.,
+            wheel_suspension: vec![],
+            wheel_rotation: vec![],
+            wheel_contact: vec![],
+            wheel_tire: vec![],
+            turret_aim: [0.; 2],
+            jetting: false,
+            angular_velocity: [0.; 3],
+            mouse_steering: [0.; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
+        };
+        let bytes = codec::encode_datagram(&Datagram::Vehicle(bad_vehicle.clone())).unwrap();
+        let Datagram::Vehicle(decoded) = codec::decode_datagram::<Datagram>(&bytes).unwrap() else {
+            panic!("vehicle pose")
+        };
+        assert!(replica.vehicle_pose(decoded).is_err());
+        assert!(replica.vehicle_poses.is_empty(), "refusal is atomic");
+        let mut cp = checkpoint();
+        cp.vehicle_poses.push(bad_vehicle);
+        let encoded = codec::encode(&cp).unwrap();
+        let decoded: Checkpoint = codec::decode(&encoded).unwrap();
+        assert!(
+            Replica::new(decoded).is_err(),
+            "vehicle checkpoint marker must be validated"
+        );
+    }
 }

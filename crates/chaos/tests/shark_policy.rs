@@ -42,6 +42,7 @@ fn catalog_fixture(declared: bool, watch_all: bool) -> Arc<Catalog> {
     let mut script = std::fs::read_to_string(source.join("shark.rhai"))
         .unwrap()
         .replace("{{namespace}}", "bot_shark")
+        .replace("{{bite_type|text}}", "\"FixtureSharkBite\"")
         .replace("{{palette|text}}", &serde_json::to_string(palette).unwrap())
         .replace("{{fins|text}}", "\"1 1 1 1\"");
     script.push_str("\nfn cmd_rest_probe(p, b, on) { rest_bot(b, on); }\nfn cmd_harm_probe(p, b) { damage(b, 100.0, p); }\n");
@@ -80,6 +81,9 @@ fn catalog_fixture(declared: bool, watch_all: bool) -> Arc<Catalog> {
         .unwrap();
         provides.push(json!({"kind":"archetype","id":format!("bot_shark:archetype/{name}"),"file":format!("{name}.json")}));
     }
+    let damage = json!({"schema_version":bri_weapons::SCHEMA,"id":"bot_shark","damage_types":{"fixturesharkbite":{"name":"FixtureSharkBite","suicide_message":"<bitmap:fixture/bite> %1","murder_message":"%2 <bitmap:fixture/bite> %1","vehicle_scale":0.5,"direct":true}}});
+    std::fs::write(body_dir.join("weapons.json"), damage.to_string()).unwrap();
+    provides.push(json!({"kind":"weapons","id":"bot_shark:weapons/main","file":"weapons.json"}));
     let parent = json!({"schema_version":1,"id":"bot_shark","version":"1.0.0","api":1,"name":"Physical Shark fixture","license":"CC0-1.0","capabilities":[],"companions":if declared { vec![PACKAGE] } else { vec![] },"provides":provides});
     std::fs::write(
         body_dir.join("package.json"),
@@ -95,7 +99,7 @@ fn catalog_fixture(declared: bool, watch_all: bool) -> Arc<Catalog> {
                     PackageEntry {
                         id: "bot_shark".into(),
                         version: "1.0.0".into(),
-                        side: Side::Server,
+                        side: Side::Shared,
                         dir: "bot_shark".into(),
                         role: None,
                     },
@@ -167,6 +171,7 @@ impl Policy {
             state: Namespace {
                 global: BTreeMap::from([
                     ("grabs".into(), json!({})),
+                    ("finishing".into(), json!({})),
                     ("restarts".into(), json!({})),
                     ("known".into(), json!({"1":{"white":true,"cool":false}})),
                 ]),
@@ -180,6 +185,14 @@ impl Policy {
         }
     }
     fn call(&mut self, f: &str, args: Vec<Dynamic>, permission: bool) -> Vec<Op> {
+        self.call_with_return(f, args, permission).1
+    }
+    fn call_with_return(
+        &mut self,
+        f: &str,
+        args: Vec<Dynamic>,
+        permission: bool,
+    ) -> (Dynamic, Vec<Op>) {
         let outcome = self
             .runtime
             .call(
@@ -199,12 +212,12 @@ impl Policy {
             )
             .unwrap_or_else(|e| panic!("{f}: {e:#?}"));
         self.state = outcome.state;
-        outcome.ops
+        (outcome.returned, outcome.ops)
     }
     fn capture(&mut self) -> Vec<Op> {
         let info = bri_package_runtime::rhai::Map::from_iter([
             ("kind".into(), Dynamic::from("weapon")),
-            ("type".into(), Dynamic::from("Bite")),
+            ("type".into(), Dynamic::from("FixtureSharkBite")),
         ]);
         self.call(
             "on_damage",
@@ -233,13 +246,114 @@ fn a_supported_bite_captures_once_then_kills_after_five_seconds() {
     );
     p.snapshot.tick = 600;
     let ops = p.call("on_tick", vec![], true);
-    assert!(ops.iter().any(|o|matches!(o,Op::Damage(d) if d.target==ObjectRef::Player(2) && d.by==Some(1) && d.amount==1000.0)));
+    assert!(ops.iter().any(|o|matches!(o,Op::Damage(d) if d.target==ObjectRef::Player(2) && d.by==Some(1) && d.amount==1000.0 && d.damage_type.as_deref()==Some("FixtureSharkBite"))));
     assert!(
         ops.iter()
             .any(|o| matches!(o,Op::UnmountObject(u) if u.rider==2))
     );
     assert_eq!(p.state.global["grabs"], json!({}));
 }
+#[test]
+fn typed_capture_completion_passes_damage_without_recapturing_or_stale_grip() {
+    let mut p = Policy::new();
+    p.capture();
+    p.snapshot.players[0].mount = Some(1);
+    p.snapshot.players[0].mounted = true;
+    p.snapshot.tick = 600;
+    let ops = p.call("on_tick", vec![], true);
+    assert!(ops.iter().any(
+        |o| matches!(o, Op::Damage(d) if d.damage_type.as_deref() == Some("FixtureSharkBite"))
+    ));
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::RestBot(b) if b.bot == 1 && !b.rest))
+    );
+    assert_eq!(p.state.global["grabs"], json!({}));
+    // Ordinary queued release runs before the typed damage hook, as in Session.
+    p.snapshot.players[0].mount = None;
+    p.snapshot.players[0].mounted = false;
+    let info = bri_package_runtime::rhai::Map::from_iter([
+        ("kind".into(), Dynamic::from("weapon")),
+        ("type".into(), Dynamic::from("FixtureSharkBite")),
+    ]);
+    let (returned, ops) = p.call_with_return(
+        "on_damage",
+        vec![2_i64.into(), 1_i64.into(), 1000.0.into(), info.into()],
+        true,
+    );
+    assert!(
+        returned.is_unit(),
+        "completion keeps ordinary typed damage unchanged"
+    );
+    assert!(
+        ops.is_empty(),
+        "completion must not queue capture/rest/orbit: {ops:?}"
+    );
+    assert_eq!(p.state.global["grabs"], json!({}));
+    assert_eq!(p.state.global["finishing"], json!({}));
+    p.snapshot.players[0].alive = false;
+    p.call("on_death", vec![2_i64.into(), 1_i64.into()], true);
+    p.snapshot.players[0].alive = true;
+    p.call("on_spawn", vec![2_i64.into()], true);
+    assert!(
+        p.capture().iter().any(|o| matches!(o, Op::MountObject(_))),
+        "later legitimate contacts still capture"
+    );
+}
+
+#[test]
+fn an_uncompleted_capture_finish_cancels_on_lifecycle_or_the_next_tick() {
+    for scenario in 0..8 {
+        let mut p = Policy::new();
+        p.capture();
+        p.snapshot.players[0].mount = Some(1);
+        p.snapshot.players[0].mounted = true;
+        p.snapshot.tick = 600;
+        p.call("on_tick", vec![], true);
+        p.snapshot.players[0].mount = None;
+        p.snapshot.players[0].mounted = false;
+        // The legitimate pending capture retains exact identities, not damage amount.
+        assert_eq!(p.state.global["finishing"]["1"]["victim"], 2);
+        let ops = match scenario {
+            0 => p.call("on_death", vec![1_i64.into(), ().into()], true),
+            1 => p.call("on_death", vec![2_i64.into(), ().into()], true),
+            2 => p.call("on_leave", vec![1_i64.into()], true),
+            3 => p.call("on_leave", vec![2_i64.into()], true),
+            4 => p.call("on_spawn", vec![1_i64.into()], true),
+            5 => p.call("on_spawn", vec![2_i64.into()], true),
+            6 => {
+                let e = bri_package_runtime::rhai::Map::from_iter([
+                    ("kind".into(), Dynamic::from("reset")),
+                    ("game".into(), 7_i64.into()),
+                    ("player".into(), 2_i64.into()),
+                ]);
+                p.call("on_minigame", vec![e.into()], true)
+            }
+            _ => {
+                p.snapshot.tick = 601;
+                p.call("on_tick", vec![], true)
+            }
+        };
+        assert_eq!(
+            p.state.global["finishing"],
+            json!({}),
+            "scenario {scenario}"
+        );
+        assert_eq!(p.state.global["grabs"], json!({}), "scenario {scenario}");
+        assert!(
+            ops.is_empty(),
+            "released grip must not be released/rested again: scenario {scenario}, {ops:?}"
+        );
+        p.state
+            .global
+            .insert("known".into(), json!({"1":{"white":true,"cool":false}}));
+        assert!(
+            p.capture().iter().any(|o| matches!(o, Op::MountObject(_))),
+            "scenario {scenario} blocks a future capture"
+        );
+    }
+}
+
 #[test]
 fn death_leave_reset_team_change_and_lost_permission_release_without_damage() {
     for scenario in 0..9 {
@@ -476,7 +590,10 @@ fn an_authored_large_shark_reaches_a_human_and_finishes_a_real_capture() {
     kind.moves = bri_sim::bot_kind::Moves::Swim;
     kind.side = Some("shark".into());
     kind.melee = Some(
-        serde_json::from_value(json!({"damage":35,"reach":2.5,"seconds":1,"name":"Bite"})).unwrap(),
+        serde_json::from_value(
+            json!({"damage":35,"reach":2.5,"seconds":1,"name":"FixtureSharkBite"}),
+        )
+        .unwrap(),
     );
     kind.out_of_water_seconds = Some(9.0);
     physical_capture(catalog(), pack.bots.remove(0), 1);
@@ -500,7 +617,10 @@ fn real_harm_releases_the_rider_and_delays_the_brain_restart() {
     kind.moves = bri_sim::bot_kind::Moves::Swim;
     kind.side = Some("shark".into());
     kind.melee = Some(
-        serde_json::from_value(json!({"damage":35,"reach":2.5,"seconds":1,"name":"Bite"})).unwrap(),
+        serde_json::from_value(
+            json!({"damage":35,"reach":2.5,"seconds":1,"name":"FixtureSharkBite"}),
+        )
+        .unwrap(),
     );
     let (mut s, human) = physical_scene(catalog(), kind);
     for sequence in 11..=2_000 {
@@ -582,6 +702,19 @@ fn real_harm_releases_the_rider_and_delays_the_brain_restart() {
 fn physical_capture(catalog: Arc<Catalog>, kind: bri_sim::bot_kind::BotKind, max_lives: u64) {
     use bri_sim::player::MoveInput;
     use glam::Vec3;
+    let expected_type = kind.melee.as_ref().unwrap().name.clone();
+    let declared = catalog
+        .packages
+        .values()
+        .flat_map(|p| &p.assets)
+        .filter(|a| a.kind == bri_package_runtime::content::Kind::Weapons)
+        .map(|a| bri_weapons::Pack::from_json(&a.bytes).unwrap())
+        .find_map(|p| {
+            p.damage_types
+                .get(&expected_type.to_ascii_lowercase())
+                .cloned()
+        })
+        .expect("source-declared bite type must be available to the ordinary executor");
     let (mut s, human) = physical_scene(catalog, kind);
     let mut mounted_at = None;
     let mut holder = None;
@@ -729,6 +862,14 @@ fn physical_capture(catalog: Arc<Catalog>, kind: bri_sim::bot_kind::BotKind, max
     );
     eprintln!("Shark credited capture finished after {held_ticks} ticks, lives={lives}");
     assert!(checked_sight && checked_mouth);
+    let killer = &s.names()[&holder.unwrap()];
+    let expected = declared.message(&s.names()[&human], Some(killer));
+    let notices = s.take_private_notices();
+    assert!(
+        notices.iter().any(|(owner, notice)| *owner == human
+            && matches!(notice, bri_sim::session::Notice::Chat(text) if *text == expected)),
+        "actual MiniGame capture death must use the source type and bitmap: expected {expected:?}, notices={notices:?}"
+    );
     let bot = holder.unwrap();
     assert!(
         s.vitals()[&bot].score > 0,
@@ -784,6 +925,19 @@ fn physical_scene(
     let floor = ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0));
     let empty = World::new("Shark contact".into(), "test/map".into(), vec![[1.0; 4]]);
     let mut s = Session::new(Simulation::new(empty, defs, vec![floor]).unwrap());
+    let parts = catalog
+        .packages
+        .iter()
+        .flat_map(|(id, p)| {
+            p.assets
+                .iter()
+                .filter(|a| a.kind == bri_package_runtime::content::Kind::Weapons)
+                .map(move |a| (id.clone(), bri_weapons::Pack::from_json(&a.bytes).unwrap()))
+        })
+        .collect();
+    let (weapons, problems) = bri_weapons::testing::pack().merge(parts);
+    assert!(problems.is_empty(), "{problems:?}");
+    s.set_weapon_pack(weapons).unwrap();
     s.install_packages(catalog, None).unwrap();
     s.set_vehicle_pack(bri_vehicles::testing::pack(), vec![kind])
         .unwrap();

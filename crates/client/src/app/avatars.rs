@@ -18,6 +18,8 @@ pub(super) struct Avatars {
     pub(super) avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
     pub(super) preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     pub(super) preview_dirty: bool,
+    /// The editor keeps walking even when the server pauses game time.
+    pub(super) preview_time: f64,
 }
 
 impl App {

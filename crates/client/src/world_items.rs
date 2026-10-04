@@ -1203,6 +1203,15 @@ impl WorldItems {
     pub fn reflection_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         self.draws_where(|key| !key.first_person)
     }
+    /// Other bodies' items and loose items, excluding the local first-person
+    /// body's world-space copies. Shadows still use `reflection_draws`.
+    pub fn reflection_draws_without_self(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| !key.first_person && !key.reflected)
+    }
+    /// The local first-person body's world-space held images only.
+    pub fn reflected_self_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        self.draws_where(|key| key.reflected)
+    }
     fn draws_where(&self, keep: impl Fn(&ModelKey) -> bool) -> Vec<(&GpuScene, &GpuInstances)> {
         self.models
             .iter()

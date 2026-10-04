@@ -262,9 +262,9 @@ impl Session {
         self.edit_settings(editor, game, settings, teams, true)
     }
 
-    /// The build's `per_minigame` state, under `game`'s id now. A key no
-    /// running Add-On declares so, or one that would outgrow the state
-    /// budget, is left out.
+    /// Replace the chosen game's declared `per_minigame` entries. Absence
+    /// clears an entry; a rejected value retains it with a diagnostic.
+    /// Other games and ordinary state stay as they are.
     fn restore_per_minigame(
         &mut self,
         game: mg::GameId,
@@ -275,31 +275,74 @@ impl Session {
         };
         let id = game.0.to_string();
         let mut changed = false;
-        for (package, values) in packages {
-            let Some(schema) = host
-                .catalog
-                .behaviours()
-                .find(|(p, _)| **p == package)
-                .map(|(_, b)| b.state.global.clone())
-            else {
-                continue;
-            };
-            for (key, value) in values {
-                if !schema.get(&key).is_some_and(|d| d.per_minigame)
-                    || state::check_value(&value).is_err()
-                {
-                    continue;
-                }
-                let ns = host.store.namespace_mut(&package);
+        let catalog = host.catalog.clone();
+        for (package, behaviour) in catalog.behaviours() {
+            for (key, _) in behaviour
+                .state
+                .global
+                .iter()
+                .filter(|(_, d)| d.per_minigame)
+            {
+                let saved = packages.get(package).and_then(|values| values.get(key));
+                let ns = host.store.namespace_mut(package);
                 let before = state::stored_size(&ns.global);
                 let mut global = ns.global.clone();
-                let Some(games) = global.get_mut(&key).and_then(|v| v.as_object_mut()) else {
+                let Some(value) = global.get_mut(key) else {
                     continue;
                 };
-                games.insert(id.clone(), value);
+                let Some(games) = value.as_object_mut() else {
+                    note(
+                        host,
+                        Diagnostic::warning(
+                            "state.restore",
+                            format!("Mini-game {id}: `{key}` is not a per-mini-game map"),
+                        )
+                        .at(package.clone()),
+                    );
+                    continue;
+                };
+                // Absence in a snapshot means no authored value for this
+                // game. Other games and ordinary state keys stay as they are.
+                match saved {
+                    Some(saved) => {
+                        games.insert(id.clone(), saved.clone());
+                    }
+                    None => {
+                        games.remove(&id);
+                    }
+                }
+                // Admit the entire declared key, including its game-id map.
+                // Individually valid entries can otherwise exceed the value
+                // size/depth limits and break replication or save decoding.
+                if let Err(error) = state::check_value(value) {
+                    note(
+                        host,
+                        Diagnostic::warning(
+                            "state.restore",
+                            format!("Mini-game {id}: saved `{key}` was not restored: {error:#}"),
+                        )
+                        .at(package.clone()),
+                    );
+                    continue;
+                }
+                if global == ns.global {
+                    continue;
+                }
                 let after = state::stored_size(&global);
                 let total = (host.state_bytes + after).saturating_sub(before);
-                if after > state::MAX_GLOBAL_STATE_BYTES || total > state::MAX_STATE_BYTES {
+                if after > before
+                    && (after > state::MAX_GLOBAL_STATE_BYTES || total > state::MAX_STATE_BYTES)
+                {
+                    note(
+                        host,
+                        Diagnostic::error(
+                            "state.budget",
+                            format!(
+                                "Mini-game {id}: saved `{key}` would exceed package state limits"
+                            ),
+                        )
+                        .at(package.clone()),
+                    );
                     continue;
                 }
                 ns.global = global;

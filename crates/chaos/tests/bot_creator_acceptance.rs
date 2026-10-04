@@ -310,7 +310,12 @@ impl Game {
             .take_private_notices()
             .into_iter()
             .filter_map(|(who, n)| match n {
-                Notice::Chat(text) if who == self.owner && text.starts_with("[NPC ") => Some(text),
+                Notice::Chat(text)
+                    if who == self.owner
+                        && text.starts_with(&format!("[Events {source}] [NPC ")) =>
+                {
+                    Some(text)
+                }
                 _ => None,
             })
             .collect();
@@ -415,13 +420,19 @@ impl Game {
     }
     fn explain_reason(&mut self, role: &str, word: &str) {
         self.s.take_private_notices();
-        self.s.explain_rules(self.owner, self.id(role)).unwrap();
+        let source = self.id(role);
+        self.s.explain_rules(self.owner, source).unwrap();
         let summaries: Vec<_> = self
             .s
             .take_private_notices()
             .into_iter()
             .filter_map(|(who, n)| match n {
-                Notice::Chat(text) if who == self.owner && text.starts_with("[NPC ") => Some(text),
+                Notice::Chat(text)
+                    if who == self.owner
+                        && text.starts_with(&format!("[Events {source}] [NPC ")) =>
+                {
+                    Some(text)
+                }
                 _ => None,
             })
             .collect();

@@ -31,6 +31,7 @@ pub struct MiniGameScreen {
     draft: MiniGameRules,
     types: Vec<MiniGameChoice>,
     items: Vec<MiniGameChoice>,
+    resources: std::collections::BTreeMap<NodeId, Vec<Option<String>>>,
     loaded_revision: Option<(bool, u64)>,
     request: Option<RequestId>,
     list_columns: Option<String>,
@@ -62,6 +63,7 @@ impl MiniGameScreen {
             draft: core.minigames.rules_draft(),
             types: vec![],
             items: vec![],
+            resources: Default::default(),
             loaded_revision: None,
             request: None,
             list_columns: None,
@@ -189,43 +191,69 @@ impl MiniGameScreen {
             self.set_var(key, if value { "1" } else { "0" });
         }
     }
-    fn fill_choice(&mut self, node: &str, choices: &[MiniGameChoice], selected: Option<&str>) {
+    /// Keep saved IDs outside popup indices, including unavailable choices.
+    fn fill_resource(
+        &mut self,
+        node: &str,
+        choices: &[MiniGameChoice],
+        selected: Option<&str>,
+        none: bool,
+    ) {
         if let Some(n) = self.view.id(node) {
-            let mut items = vec![(" NONE".to_string(), 0)];
-            items.extend(
+            let ids = resource_choices(
+                &mut self.view,
+                n,
                 choices
                     .iter()
-                    .enumerate()
-                    .map(|(i, c)| (c.name.clone(), (i + 1) as i64)),
+                    .map(|choice| (choice.id.as_str(), choice.name.as_str())),
+                selected,
+                none,
             );
-            self.view.nodes[n].state.items = items;
-            let index = choices
-                .iter()
-                .position(|c| Some(c.id.as_str()) == selected)
-                .map_or(0, |i| (i + 1) as i64);
-            self.view.select(n, Some(index));
+            self.resources.insert(n, ids);
         }
+    }
+    fn fill_choice(&mut self, node: &str, choices: &[MiniGameChoice], selected: Option<&str>) {
+        self.fill_resource(node, choices, selected, true);
+    }
+    fn selected_resource(&self, name: &str) -> Option<String> {
+        let node = self.view.id(name)?;
+        let index = usize::try_from(self.view.selected(node)?).ok()?;
+        self.resources.get(&node)?.get(index)?.clone()
+    }
+    fn available_rules(core: &Core, rules: &MiniGameRules) -> Result<(), String> {
+        if !core
+            .minigames
+            .player_types
+            .iter()
+            .any(|choice| choice.id == rules.player_type)
+        {
+            return Err(format!(
+                "Player type {} is unavailable. Enable its Add-On before hosting, or choose another player type.",
+                rules.player_type
+            ));
+        }
+        for (slot, id) in rules.loadout.iter().enumerate() {
+            if let Some(id) = id
+                && !core.minigames.items.iter().any(|choice| &choice.id == id)
+            {
+                return Err(format!(
+                    "Equipment slot {}: {id} is unavailable. Enable its Add-On before hosting, or choose another item or NONE.",
+                    slot + 1
+                ));
+            }
+        }
+        Ok(())
     }
     fn apply_rules_state(&mut self, core: &Core) {
         self.draft = core.minigames.rules_draft();
         self.write_rules(&self.draft.clone());
-        if let Some(n) = self.view.id("CMG_PlayerDataBlock") {
-            self.view.nodes[n].state.items = core
-                .minigames
-                .player_types
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (c.name.clone(), i as i64))
-                .collect();
-            self.view.select(
-                n,
-                core.minigames
-                    .player_types
-                    .iter()
-                    .position(|c| c.id == self.draft.player_type)
-                    .map(|i| i as i64),
-            );
-        }
+        let player_type = self.draft.player_type.clone();
+        self.fill_resource(
+            "CMG_PlayerDataBlock",
+            &core.minigames.player_types,
+            Some(&player_type),
+            false,
+        );
         for i in 0..5 {
             let selected = self.draft.loadout[i].clone();
             self.fill_choice(
@@ -376,24 +404,11 @@ impl MiniGameScreen {
         rules.enable_wand = boolean("$MiniGame::EnableWand");
         rules.enable_building = boolean("$MiniGame::EnableBuilding");
         rules.enable_painting = boolean("$MiniGame::EnablePainting");
-        if let Some(n) = self
-            .view
-            .id("CMG_PlayerDataBlock")
-            .and_then(|n| self.view.selected(n))
-            .and_then(|i| usize::try_from(i).ok())
-            .and_then(|i| self.draft_type_id(i))
-        {
-            rules.player_type = n;
+        if let Some(id) = self.selected_resource("CMG_PlayerDataBlock") {
+            rules.player_type = id;
         }
         for i in 0..5 {
-            let selected = self
-                .view
-                .id(&format!("CMG_StartEquip{i}"))
-                .and_then(|n| self.view.selected(n))
-                .unwrap_or(0);
-            rules.loadout[i] = usize::try_from(selected)
-                .ok()
-                .and_then(|i| self.draft_item_id(i));
+            rules.loadout[i] = self.selected_resource(&format!("CMG_StartEquip{i}"));
         }
         Ok(rules)
     }
@@ -426,13 +441,13 @@ impl MiniGameScreen {
         self.rules_dirty = true;
         self.draft = fav.rules.clone();
         self.write_rules(&fav.rules);
-        if let Some(n) = self.view.id("CMG_PlayerDataBlock") {
-            let i = self
-                .types
-                .iter()
-                .position(|c| c.id == fav.rules.player_type);
-            self.view.select(n, i.map(|i| i as i64));
-        }
+        let types = self.types.clone();
+        self.fill_resource(
+            "CMG_PlayerDataBlock",
+            &types,
+            Some(&fav.rules.player_type),
+            false,
+        );
         let items = self.items.clone();
         for i in 0..5 {
             self.fill_choice(
@@ -454,16 +469,6 @@ impl MiniGameScreen {
                 self.view.nodes[s].state.tint =
                     Some([color.rgb[0], color.rgb[1], color.rgb[2], 255]);
             }
-        }
-    }
-    fn draft_type_id(&self, index: usize) -> Option<String> {
-        self.types.get(index).map(|c| c.id.clone())
-    }
-    fn draft_item_id(&self, index: usize) -> Option<String> {
-        if index == 0 {
-            None
-        } else {
-            self.items.get(index - 1).map(|c| c.id.clone())
         }
     }
     fn refresh(&mut self, core: &Core) {
@@ -868,7 +873,10 @@ impl Screen for MiniGameScreen {
             },
             Kind::Rules => match cmd.as_str() {
                 "canvas.popdialog(createminigamegui);" => core.pop(self.id),
-                "createminigamegui.clickcreate();" => match self.read_rules() {
+                "createminigamegui.clickcreate();" => match self.read_rules().and_then(|rules| {
+                    Self::available_rules(core, &rules)?;
+                    Ok(rules)
+                }) {
                     Err(e) => core.minigames.status = e,
                     Ok(rules) => {
                         let editing = core

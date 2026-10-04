@@ -89,12 +89,24 @@ fn game_scene(
     game_scene_kind(pack, loadout, spawn, bot_spawn, geometry, None)
 }
 fn game_scene_kind(
+    pack: Pack,
+    loadout: &[&str],
+    spawn: Vec3,
+    bot_spawn: [f32; 3],
+    geometry: Vec<Brick>,
+    kind: Option<bri_sim::bot_kind::BotKind>,
+) -> (Session, u64, u64, u64) {
+    game_scene_kind_with_packages(pack, loadout, spawn, bot_spawn, geometry, kind, None)
+}
+
+fn game_scene_kind_with_packages(
     mut pack: Pack,
     loadout: &[&str],
     spawn: Vec3,
     bot_spawn: [f32; 3],
     geometry: Vec<Brick>,
     kind: Option<bri_sim::bot_kind::BotKind>,
+    catalog: Option<std::sync::Arc<bri_package_runtime::Catalog>>,
 ) -> (Session, u64, u64, u64) {
     let mut s = fixture::synthetic().unwrap().session;
     if let Some(kind) = kind {
@@ -116,6 +128,9 @@ fn game_scene_kind(
         ..Default::default()
     })
     .unwrap();
+    if let Some(catalog) = catalog {
+        s.install_packages(catalog, None).unwrap();
+    }
     s.set_spawn_points(vec![spawn]).unwrap();
     let human = s.join("Observer".into(), spawn, true).unwrap();
     let mut world = World::new(
@@ -754,4 +769,218 @@ fn a_depleted_stored_magazine_switches_to_the_usable_undrawn_slot() {
     assert!(!s.take_cues().iter().any(|cue| {
         matches!(cue.kind, bri_sim::presentation::CueKind::Tracer { actor, .. } if actor == bot)
     }));
+}
+
+#[test]
+fn gaining_an_alternative_weapon_preserves_the_actual_native_hold_until_its_throw() {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    let mut weapons = pack();
+    let hold = Pack::from_json(include_bytes!(
+        "../../../packages/showcase/gravity-gun-tool/assets/weapons.json"
+    ))
+    .unwrap();
+    weapons.items.extend(hold.items);
+    weapons.images.extend(hold.images);
+    let tool = "gravity-gun-tool:weapon/gravitygun";
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase");
+    let packages = [
+        ("gravity-gun", Side::Server),
+        ("gravity-gun-tool", Side::Shared),
+    ]
+    .into_iter()
+    .map(|(id, side)| PackageEntry {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side,
+        dir: id.into(),
+        role: None,
+    })
+    .collect();
+    let catalog = bri_package_runtime::Catalog::load(
+        &root,
+        &PackageSet {
+            schema_version: 1,
+            packages,
+        },
+        true,
+    )
+    .unwrap();
+    let (mut s, human, bot, mut seq) = game_scene_kind_with_packages(
+        weapons,
+        &[tool],
+        Vec3::new(-25.0, 0.05, 35.0),
+        [-24.75, 0.1, 23.25],
+        vec![],
+        None,
+        Some(std::sync::Arc::new(catalog)),
+    );
+    let target = bri_package_runtime::ops::ObjectRef::Player(human);
+    for _ in 0..120 * 20 {
+        ticks(&mut s, human, &mut seq, 1);
+        if s.held_by(bot) == Some(target) {
+            break;
+        }
+    }
+    assert_eq!(
+        s.held_by(bot),
+        Some(target),
+        "the real trigger must catch the actual enemy: {:?}",
+        s.bot_thoughts()
+    );
+    let caught = s.simulation().state().tick;
+    // A real inventory mutation makes a supported alternative available while
+    // the normal package holds the human. No brain/hold state is injected.
+    s.give_tool(bot, A, false).unwrap();
+    let mut carried = false;
+    let mut released = false;
+    let mut fastest = 0.0_f32;
+    for _ in 0..120 * 9 {
+        ticks(&mut s, human, &mut seq, 1);
+        let thought = s.bot_thoughts().into_iter().find(|b| b.bot == bot).unwrap();
+        carried |= thought.behaviour == "carry";
+        let inventory = &s.tool_inventories()[&bot];
+        let selected = inventory
+            .selected
+            .and_then(|slot| inventory.slots[slot].as_deref());
+        if s.held_by(bot) == Some(target) {
+            assert_eq!(
+                selected,
+                Some(tool),
+                "new equipment interrupted an observed live grip at tick{}: {thought:?}",
+                s.simulation().state().tick
+            );
+        }
+        fastest = fastest.max(
+            Vec3::from(
+                s.snapshot()
+                    .players
+                    .iter()
+                    .find(|p| p.owner == human)
+                    .unwrap()
+                    .velocity,
+            )
+            .length(),
+        );
+        if mounted_hand_state(&s, bot).is_some_and(|(_, state)| state == "Release") {
+            assert!(
+                s.simulation().state().tick >= caught + 90,
+                "a throw must preserve its real lift interval"
+            );
+            assert_eq!(s.held_by(bot), None, "release must end the canonical grip");
+            released = true;
+            break;
+        }
+    }
+    assert!(
+        carried && released && fastest > 3.0,
+        "normal carry/swing/release failed: carried={carried}, release={released}, fastest={fastest}, thoughts={:?}",
+        s.bot_thoughts()
+    );
+}
+
+#[test]
+fn an_alternative_weapon_cannot_replace_a_live_charge_during_a_real_range_excursion() {
+    let mut weapons = pack();
+    let image = weapons.images.get_mut("tactics:image/zenith").unwrap();
+    image.bot.get_or_insert_with(Default::default).reach = Some(13.0);
+    for state in &mut image.states {
+        if state.script.eq_ignore_ascii_case("oncharge") {
+            state.ticks = 84;
+        }
+    }
+    let (mut s, human, bot, mut seq) = game_scene_kind(
+        weapons,
+        &[C],
+        Vec3::new(-25.0, 0.05, 35.0),
+        [-24.75, 0.1, 47.25],
+        vec![],
+        Some(bri_sim::bot_kind::BotKind {
+            id: fixture::BOT.into(),
+            name: "Committed unfamiliar thrower".into(),
+            aim_error_degrees: 0.0,
+            reaction_seconds: 0.05,
+            behaviours: [
+                ("chase".into(), 0.0),
+                ("wander".into(), 0.0),
+                ("fly".into(), 0.0),
+            ]
+            .into(),
+            ..Default::default()
+        }),
+    );
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    s.give_tool(bot, A, false).unwrap();
+    let mut outside = false;
+    let mut returned = false;
+    let mut fired = false;
+    for tick in 0..120 * 5 {
+        seq += 1;
+        let toward = feet(&s, bot) - feet(&s, human);
+        s.movement(
+            human,
+            seq,
+            MoveInput {
+                yaw: if tick < 90 {
+                    0.0
+                } else {
+                    toward.x.atan2(-toward.z)
+                },
+                forward: if tick < 90 {
+                    1.0
+                } else if feet(&s, human).distance(feet(&s, bot)) > 12.0 {
+                    // The bot still strafes through its ordinary fight
+                    // controls. Steer toward its observed live position,
+                    // rather than assuming the return lies on the old axis.
+                    1.0
+                } else {
+                    0.0
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+        outside |= feet(&s, human).distance(feet(&s, bot)) > 13.5;
+        returned |= outside && feet(&s, human).distance(feet(&s, bot)) <= 12.5;
+        let inventory = &s.tool_inventories()[&bot];
+        let selected = inventory
+            .selected
+            .and_then(|slot| inventory.slots[slot].as_deref());
+        assert_eq!(
+            selected,
+            Some(C),
+            "an alternative replaced the ordinary windup during target motion: {:?}",
+            s.bot_thoughts()
+        );
+        if s.weapon_view()
+            .fired()
+            .any(|p| p.source.0 == bot && p.definition == "tactics:projectile/zenith")
+        {
+            fired = true;
+            break;
+        }
+        let (_, state) = mounted_hand_state(&s, bot).unwrap();
+        assert!(
+            matches!(state.as_str(), "Charge" | "Armed"),
+            "windup restarted instead of tracking: {state}"
+        );
+    }
+    assert!(
+        outside,
+        "human controls must actually cross the declared attack band"
+    );
+    assert!(
+        returned,
+        "ordinary controls must actually return the human inside the band: human={:?}, bot={:?}",
+        feet(&s, human),
+        feet(&s, bot)
+    );
+    assert!(
+        fired,
+        "returning into the band must release the retained native charge: human={:?}, bot={:?}, state={:?}, thoughts={:?}",
+        feet(&s, human),
+        feet(&s, bot),
+        mounted_hand_state(&s, bot),
+        s.bot_thoughts()
+    );
 }

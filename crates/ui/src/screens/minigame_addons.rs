@@ -111,6 +111,11 @@ pub struct AddOnSettings {
     /// The request sends the draft (Apply), so its success makes the
     /// draft the host's.
     applying: bool,
+    /// A favourite applies vanilla rules before its Add-On settings/reset.
+    after_rules: Option<(MiniGameOperation, UiAction)>,
+    configuring_rules: bool,
+    /// Keep the source slot intact when its unavailable vocabulary is omitted.
+    unavailable_favorite: Option<u8>,
     /// Preserve partially typed fields across asynchronous listing refreshes.
     typed_dirty: bool,
     seen: Option<u64>,
@@ -276,6 +281,9 @@ impl AddOnSettings {
             rows: Vec::new(),
             request: None,
             applying: false,
+            after_rules: None,
+            configuring_rules: false,
+            unavailable_favorite: None,
             typed_dirty: false,
             seen: None,
             rules: None,
@@ -339,6 +347,18 @@ impl AddOnSettings {
             return;
         }
         let slot = self.favorite_slot();
+        if self
+            .unavailable_favorite
+            .as_ref()
+            .is_some_and(|source| *source == slot)
+        {
+            self.status(
+                core,
+                Some("This slot has unavailable settings. Choose another slot to Store."),
+            );
+            core.message_ok("Favorite has unavailable settings", "The saved favorite is intact. Enable its Add-Ons before hosting and reopen this editor, or choose another slot to store the compatible draft.");
+            return;
+        }
         // The game's vanilla rules go with it (Slayer's favourites kept
         // every preference), or the ones a loaded favourite brought.
         let rules = self
@@ -376,6 +396,20 @@ impl AddOnSettings {
         let fits = |key: &str, value: &MiniGameSettingValue, team: bool| {
             Self::setting(core, key).is_some_and(|s| s.team == team && Self::takes(s, value))
         };
+        let mut unavailable = Vec::new();
+        for (key, value) in &fav.settings {
+            if !fits(key, value, false) {
+                unavailable.push(key.clone());
+            }
+        }
+        for (index, team) in fav.teams.iter().enumerate() {
+            for (key, value) in &team.settings {
+                if !fits(key, value, true) {
+                    unavailable.push(format!("Team {}: {key}", index + 1));
+                }
+            }
+        }
+        self.unavailable_favorite = (!unavailable.is_empty()).then_some(slot);
         for (key, value) in &fav.settings {
             if fits(key, value, false) {
                 self.values.insert(key.clone(), value.clone());
@@ -416,8 +450,21 @@ impl AddOnSettings {
         self.build(core);
         self.status(
             core,
-            Some(&format!("Loaded slot {}. Save to use it.", slot + 1)),
+            Some(&if unavailable.is_empty() {
+                format!("Loaded slot {}. Save to use it.", slot + 1)
+            } else {
+                format!("Loaded compatible settings from slot {}. Unavailable settings remain in that slot.", slot + 1)
+            }),
         );
+        if !unavailable.is_empty() {
+            let keys = unavailable
+                .iter()
+                .take(12)
+                .map(|key| key.replace(['<', '>'], ""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            core.message_ok("Favorite has unavailable settings", &format!("These settings are not offered here, or their values are no longer accepted:\n\n{keys}\n\nThe saved favorite is intact. Save applies only compatible settings. Enable its Add-Ons before hosting to recover them. Choose another slot to Store this draft."));
+        }
     }
     /// Whether a setting may hold `value` (a favourite's, kept from before).
     fn takes(s: &MiniGameAddOnSetting, value: &MiniGameSettingValue) -> bool {
@@ -637,6 +684,7 @@ impl AddOnSettings {
         self.name_field = None;
         self.typed_dirty = false;
         self.rules = None;
+        self.unavailable_favorite = None;
         if self.server {
             let stored = Self::server_values(core);
             let values: BTreeMap<_, _> = core
@@ -1441,10 +1489,35 @@ impl AddOnSettings {
         (settings, teams)
     }
 
+    /// Editing a captured draft while its acknowledgment is outstanding would
+    /// let that acknowledgment mark a different draft as applied.
+    fn mutation_control(name: &str) -> bool {
+        matches!(
+            name,
+            FAVS | "AOS_FavLoad"
+                | "AOS_FavSave"
+                | NOTIFY
+                | APPLY
+                | APPLY_RESET
+                | RESET
+                | END
+                | "AOS_AddTeam"
+        ) || ["AOS_S", "AOS_T", "AOS_P"].into_iter().any(|prefix| {
+            name.strip_prefix(prefix)
+                .and_then(|suffix| suffix.chars().next())
+                .is_some_and(|c| c.is_ascii_digit())
+        })
+    }
     fn status(&mut self, core: &Core, message: Option<&str>) {
         let editable = self.editable(core);
         let (settings, teams) = self.changes(core);
-        let changed = self.typed_dirty || !settings.is_empty() || teams.is_some();
+        let changed = self.typed_dirty
+            || !settings.is_empty()
+            || teams.is_some()
+            || self
+                .rules
+                .as_ref()
+                .is_some_and(|r| self.summary(core).is_some_and(|g| g.rules != *r));
         let text = match message {
             Some(m) => m.to_owned(),
             None if !core.minigames.status.is_empty() && self.request.is_some() => {
@@ -1464,6 +1537,44 @@ impl AddOnSettings {
             self.view.set_text(n, text.replace(['<', '>'], ""));
         }
         let ready = editable && self.request.is_none() && self.open(core);
+        for node in self.view.walk().collect::<Vec<_>>() {
+            let name = self.view.node(node).ctrl.name.as_deref().unwrap_or("");
+            if !Self::mutation_control(name) {
+                continue;
+            }
+            let favorite = matches!(name, FAVS | "AOS_FavLoad" | "AOS_FavSave");
+            let locked = self
+                .view
+                .node(node)
+                .ctrl
+                .field("settingKey")
+                .is_some_and(|key| !self.server && self.locked(core, key));
+            self.view.set_active(
+                node,
+                if favorite {
+                    self.request.is_none()
+                } else {
+                    ready && !locked
+                },
+            );
+        }
+        // View text input follows its focus. Clear stale edit/popup captures
+        // when their controls have just become inactive.
+        if self
+            .view
+            .focus
+            .is_some_and(|node| !self.view.node(node).state.active)
+        {
+            self.view.focus = None;
+        }
+        if self
+            .view
+            .open_popup_node()
+            .is_some_and(|node| !self.view.node(node).state.active)
+        {
+            self.view.close_popup();
+        }
+
         for button in [APPLY, APPLY_RESET, RESET, END, NOTIFY] {
             if let Some(n) = self.view.id(button) {
                 // Server settings only apply: there is no game to reset.
@@ -1492,49 +1603,44 @@ impl AddOnSettings {
             return;
         }
         let Some(game) = self.game else { return };
-        // A favourite's vanilla rules go first, then what follows them.
         let rules = self
             .rules
             .clone()
             .filter(|r| self.summary(core).is_some_and(|g| g.rules != *r));
+        let next = if settings.is_empty() && teams.is_none() {
+            reset.then_some((MiniGameOperation::Reset, UiAction::ResetMiniGame { game }))
+        } else {
+            Some((
+                MiniGameOperation::AddOnSettings,
+                UiAction::EditMiniGameAddOns {
+                    game,
+                    settings,
+                    teams,
+                    quiet: !core.prefs.bool_or(NOTIFY_PREF, true),
+                    reset,
+                },
+            ))
+        };
         if let Some(rules) = rules {
-            let action = UiAction::ConfigureMiniGame { game, rules };
-            if settings.is_empty() && teams.is_none() && !reset {
-                self.request = core.minigame_request(MiniGameOperation::Configure, action);
-                let status = core.minigames.status.clone();
-                self.status(core, Some(&status));
-                return;
-            }
-            if !core
-                .minigames
-                .can_on(crate::models::minigames::Operation::Configure, Some(game))
-            {
-                self.status(core, Some("You may not change this mini-game's rules."));
-                return;
-            }
-            core.request(action);
-        }
-        if settings.is_empty() && teams.is_none() {
-            if reset {
-                self.request = core
-                    .minigame_request(MiniGameOperation::Reset, UiAction::ResetMiniGame { game });
-            } else {
-                self.status(core, Some("Nothing has changed."));
-            }
+            self.after_rules = next;
+            self.configuring_rules = true;
+            self.request = core.minigame_request(
+                MiniGameOperation::Configure,
+                UiAction::ConfigureMiniGame { game, rules },
+            );
+        } else if let Some((operation, action)) = next {
+            self.after_rules = None;
+            self.configuring_rules = false;
+            self.request = core.minigame_request(operation, action);
+        } else {
+            self.status(core, Some("Nothing has changed."));
             return;
         }
-        let quiet = !core.prefs.bool_or(NOTIFY_PREF, true);
-        self.applying = true;
-        self.request = core.minigame_request(
-            MiniGameOperation::AddOnSettings,
-            UiAction::EditMiniGameAddOns {
-                game,
-                settings,
-                teams,
-                quiet,
-                reset,
-            },
-        );
+        self.applying = self.request.is_some();
+        if !self.applying {
+            self.after_rules = None;
+            self.configuring_rules = false;
+        }
         let status = core.minigames.status.clone();
         self.status(core, Some(&status));
     }
@@ -1674,8 +1780,11 @@ impl Screen for AddOnSettings {
     }
     fn on_sleep(&mut self, core: &mut Core) {
         if let Some(id) = self.request.take() {
-            core.pending.remove(&id);
+            core.abandon(id);
         }
+        self.after_rules = None;
+        self.configuring_rules = false;
+        self.applying = false;
     }
     fn on_wake(&mut self, core: &mut Core) {
         self.take_look(core);
@@ -1703,7 +1812,15 @@ impl Screen for AddOnSettings {
         let revision = self.revision(core);
         if self.seen != Some(revision) {
             let (settings, teams) = self.changes(core);
-            if self.request.is_none() && !self.typed_dirty && settings.is_empty() && teams.is_none()
+            let rules_dirty = self
+                .rules
+                .as_ref()
+                .is_some_and(|r| self.summary(core).is_some_and(|g| g.rules != *r));
+            if self.request.is_none()
+                && !self.typed_dirty
+                && settings.is_empty()
+                && teams.is_none()
+                && !rules_dirty
             {
                 self.load(core);
             } else {
@@ -1723,11 +1840,35 @@ impl Screen for AddOnSettings {
             return false;
         }
         self.request = None;
+        let configuring_rules = std::mem::take(&mut self.configuring_rules);
+        if result.is_ok()
+            && configuring_rules
+            && let Some((operation, action)) = self.after_rules.take()
+        {
+            self.request = core.minigame_request(operation, action);
+            if self.request.is_none() {
+                self.applying = false;
+                let reason = format!(
+                    "Vanilla rules applied; remaining settings/reset could not be sent: {}. Review permissions, then Save again.",
+                    core.minigames.status
+                );
+                self.status(
+                    core,
+                    Some("Rules applied; remaining changes were not sent. Review permissions."),
+                );
+                core.message_ok("MiniGame changes incomplete", &reason);
+            } else {
+                self.status(
+                    core,
+                    Some("Rules applied. Waiting for remaining changes..."),
+                );
+            }
+            return true;
+        }
+        self.after_rules = None;
         match result {
             Ok(()) if std::mem::take(&mut self.applying) => {
                 core.minigames.status.clear();
-                // The new values arrive with the next listing; take them now
-                // as the base so the window reads as applied.
                 self.typed_dirty = false;
                 self.base = (self.values.clone(), self.teams.clone());
                 self.status(core, Some("Applied."));
@@ -1737,11 +1878,33 @@ impl Screen for AddOnSettings {
                 self.status(core, Some("Done."));
             }
             Err(e) => {
-                self.applying = false;
+                let applying = std::mem::take(&mut self.applying);
                 core.minigames.status.clear();
-                self.status(core, Some(e));
-                // A refused team move shows the player where they still are.
                 self.build(core);
+                let reason = if configuring_rules {
+                    format!(
+                        "Vanilla rules were not confirmed: {e}. Remaining settings/reset were not sent. Review the favorite's player type and equipment, then Save again."
+                    )
+                } else if applying {
+                    format!(
+                        "Settings/reset were not confirmed: {e}. Review the draft and Save again."
+                    )
+                } else {
+                    e.clone()
+                };
+                self.status(
+                    core,
+                    Some(if configuring_rules {
+                        "Rules were not confirmed. Remaining changes were not sent."
+                    } else if applying {
+                        "Settings/reset were not confirmed. Review the draft and try Save again."
+                    } else {
+                        e.as_str()
+                    }),
+                );
+                if applying || configuring_rules {
+                    core.message_ok("MiniGame changes incomplete", &reason);
+                }
             }
         }
         true
@@ -1753,6 +1916,9 @@ impl Screen for AddOnSettings {
         }
         // Delete removes the team whose row has the focus (Slayer's team
         // list), unless the focus is in a text field.
+        if key == Key::Delete && self.request.is_some() {
+            return true;
+        }
         if key == Key::Delete && self.editable(core) {
             let focused = self.view.focus.and_then(|n| {
                 let ctrl = &self.view.node(n).ctrl;
@@ -1790,6 +1956,9 @@ impl Screen for AddOnSettings {
             .name
             .clone()
             .unwrap_or_default();
+        if self.request.is_some() && Self::mutation_control(&name) {
+            return;
+        }
         let row = self.rows.iter().find(|(_, n)| *n == name).map(|(t, _)| *t);
         if ev.kind == EventKind::Changed {
             if name == CATEGORY {
@@ -1907,6 +2076,7 @@ impl Screen for AddOnSettings {
                         MiniGameOperation::Reset,
                         UiAction::ResetMiniGame { game },
                     );
+                    self.status(core, None);
                 }
             }
             END => {

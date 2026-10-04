@@ -163,6 +163,9 @@ pub struct VehiclePose {
     /// `acknowledged_input`), 0 with no driver: the driver's client replays
     /// its later moves from here.
     pub driver_input: u64,
+    /// Actual passage coordinate frame, paired with this authoritative pose/ack.
+    #[serde(default)]
+    pub passage_frame: bri_content::passage::PassageFrame,
     /// The driver's `UseStrafeSteering` and `UseAutoReturnSteering` as the
     /// host steers their moves ([`DEFAULT_STEERING`] with no driver): their
     /// client predicts with these, never its own copy, so the two agree.
@@ -191,6 +194,7 @@ impl VehiclePose {
             wheel_contact: self.wheel_contact.clone(),
             wheel_tire: self.wheel_tire.clone(),
             actor: self.actor.clone(),
+            passage_frame: self.passage_frame,
         }
     }
 }
@@ -419,6 +423,44 @@ impl Session {
             })
             .collect()
     }
+    /// Same-tick vehicle basis for the rider's canonical body frame.
+    pub fn passage_vehicle(
+        &self,
+        owner: OwnerId,
+    ) -> Option<(u64, bri_content::passage::PassageFrame)> {
+        let mount = self.vehicles.mounted.get(&owner)?;
+        Some((
+            mount.vehicle.0,
+            self.crossings
+                .frame(bri_package_runtime::ops::ObjectRef::Vehicle(
+                    mount.vehicle.0,
+                )),
+        ))
+    }
+    fn crossed_vehicle(&mut self, vehicle: VehicleId, carry: glam::Affine3A) {
+        self.crossed(
+            bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0),
+            carry,
+        );
+        // The live seats own occupancy. The Session mount index may still
+        // contain a jet-ejected rider until post-step intents are drained.
+        let riders: Vec<_> = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|world| world.vehicle_snapshot(&self.simulation.physics, vehicle))
+            .map(|snapshot| {
+                snapshot
+                    .seats
+                    .into_iter()
+                    .filter_map(|seat| seat.occupant.map(|occupant| occupant.owner.0))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for owner in riders {
+            self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
+        }
+    }
     pub fn vehicle_poses(&self) -> Vec<VehiclePose> {
         let Some(world) = &self.vehicles.world else {
             return Vec::new();
@@ -467,6 +509,9 @@ impl Session {
                 mouse_steering: v.mouse_steering,
                 steering_quiet: v.steering_quiet,
                 actor: v.actor,
+                passage_frame: self
+                    .crossings
+                    .frame(bri_package_runtime::ops::ObjectRef::Vehicle(v.id.0)),
             })
             .collect()
     }
@@ -815,12 +860,43 @@ impl Session {
         self.vehicles.brick_of.get(&vehicle).copied()
     }
     fn forget_vehicle(&mut self, id: VehicleId) {
+        self.crossings
+            .forget(bri_package_runtime::ops::ObjectRef::Vehicle(id.0));
         if let Some(brick) = self.vehicles.brick_of.remove(&id)
             && self.vehicles.by_brick.get(&brick) == Some(&id)
         {
             self.vehicles.by_brick.remove(&brick);
         }
         self.vehicles.colors.remove(&id);
+    }
+    /// Wrench Send reapplies the spawn's paint to its existing vehicle.
+    /// Unrelated brick edits must leave independently painted vehicles alone.
+    pub(super) fn color_vehicle_brick(&mut self, brick_id: BrickId) {
+        let Some(brick) = self.simulation.state().bricks.get(&brick_id) else {
+            return;
+        };
+        let Some(spawn) = &brick.vehicle else {
+            return;
+        };
+        let Some(id) = self.vehicles.by_brick.get(&brick_id).copied() else {
+            return;
+        };
+        let Some(current) = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.vehicle_snapshot(&self.simulation.physics, id))
+        else {
+            return;
+        };
+        // A change of kind still follows normal spawn reconciliation. Do not
+        // recolour the old kind while it waits to be replaced.
+        if spawn.vehicle != ContentRef::Resolved(current.definition) {
+            return;
+        }
+        self.vehicles
+            .colors
+            .insert(id, spawn_color(brick, &self.simulation.state().palette));
     }
     /// Keep spawned vehicles in step with their spawn bricks.
     fn reconcile_vehicle_bricks(&mut self) -> Result<()> {
@@ -945,6 +1021,16 @@ impl Session {
     /// when neither side is in a minigame and trust decides instead.
     pub(super) fn vehicle_damage_decision(&self, source: OwnerId, vehicle: u64) -> Option<bool> {
         let (owner, _) = self.vehicle_owner_and_mass(vehicle)?;
+        // A spawn belongs to its brick's canonical group in this game. A
+        // departed builder's Full-trusted group already follows the game
+        // owner for brick rules; the live spawned body must follow it too.
+        // Independent package bodies keep their own physical ownership.
+        let owner = self
+            .vehicle_spawn_brick(VehicleId(vehicle))
+            .and_then(|brick| self.simulation.state().bricks.get(&brick))
+            .map_or(owner, |brick| {
+                self.brick_group_owner_for(brick.owner, self.game_of(source))
+            });
         let peer = self.peers.get(&source)?;
         let source = self.minigames.projectile_source(peer.combat.player).ok()?;
         let target = mg::Target::Object {
@@ -1486,8 +1572,9 @@ impl Session {
         let waters = self.simulation.liquids();
         let passable = !self.simulation.links().passages().list.is_empty();
         self.vehicles.centres.clear();
+        let mut carried = Vec::new();
         if let Some(world) = &mut self.vehicles.world {
-            world.pre_step(&mut self.simulation.physics, &waters)?;
+            carried = self.simulation.step_vehicle_bodies(world, &waters)?;
             if passable {
                 let physics = &self.simulation.physics;
                 self.vehicles.centres = world
@@ -1495,6 +1582,9 @@ impl Session {
                     .filter_map(|id| Some((id, world.centre(physics, id)?)))
                     .collect();
             }
+        }
+        for (vehicle, carry) in carried {
+            self.crossed_vehicle(vehicle, carry);
         }
         Ok(())
     }
@@ -1531,10 +1621,7 @@ impl Session {
             let carried =
                 carry_through_openings(world, &mut self.simulation.physics, &passages, &before)?;
             for (vehicle, carry) in carried {
-                self.crossed(
-                    bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0),
-                    carry,
-                );
+                self.crossed_vehicle(vehicle, carry);
             }
         }
         let world = self.vehicles.world.as_mut().context("No vehicle world")?;

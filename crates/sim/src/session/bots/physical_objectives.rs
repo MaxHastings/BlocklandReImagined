@@ -160,6 +160,29 @@ fn exit_point(point: Vec3, bounds: (Vec3, Vec3), margin: f32) -> Option<Vec3> {
     })
 }
 
+/// Reach the body's delivery-rear standoff without walking through its
+/// moving hull. Reuse the ordinary physical approach arc before acquiring;
+/// the native hold then moves the body ahead of its holder toward delivery.
+fn hold_acquisition_approach(
+    feet: Vec3,
+    centre: Vec3,
+    toward: Vec3,
+    distance: f32,
+    width: f32,
+) -> Option<(Vec3, bool)> {
+    let toward = flat(toward).try_normalize()?;
+    let final_point = centre - toward * distance;
+    let ready = flat(final_point - feet).length() <= 0.5;
+    let approach = push_approach(feet, centre, toward, distance, width)?;
+    let mut point = if ready || approach.pushing {
+        final_point
+    } else {
+        approach.point
+    };
+    point.y = feet.y;
+    Some((point, ready))
+}
+
 fn effort(distance: f32, speed: f32, setup: f32) -> u32 {
     // A ranking estimate, not a predicted physics result. Observed displacement,
     // native control readiness and canonical admission decide progress/failure.
@@ -736,8 +759,19 @@ impl Choice {
                     out.point.y = feet.y;
                     out.aim = desired_grip;
                 } else {
-                    out.point = centre - radial * distance;
-                    out.point.y = feet.y;
+                    let (point, ready) = hold_acquisition_approach(
+                        feet,
+                        centre,
+                        toward,
+                        distance,
+                        peer.player.tuning().width,
+                    )
+                    .ok_or(Rejection::Unsupported)?;
+                    out.point = point;
+                    // Acquire at the planned standoff, rather than firing on
+                    // the way in and inheriting an unrelated long grip range.
+                    // A correct existing hold stays down; a wrong one releases.
+                    out.trigger &= ready;
                 }
             }
             Method::Drive { seat } => {
@@ -775,6 +809,63 @@ mod tests {
 
     fn push_point(feet: Vec3, centre: Vec3, toward: Vec3, radius: f32, width: f32) -> Option<Vec3> {
         push_approach(feet, centre, toward, radius, width).map(|a| a.point)
+    }
+
+    #[test]
+    fn hold_acquisition_reaches_delivery_rear_without_the_old_through_body_flip() {
+        for shift in [
+            Vec3::ZERO,
+            Vec3::new(24.0, 0.0, 0.0),
+            Vec3::new(-7.3, 0.0, 11.7),
+        ] {
+            let centre = shift + Vec3::new(0.25, 0.8, 56.25);
+            let destination = shift + Vec3::new(0.25, 0.8, 45.96);
+            let toward = destination - centre;
+            for z in [42.06, 45.64, 47.42, 51.6] {
+                let feet = shift + Vec3::new(0.5, 0.005, z);
+                let (point, ready) =
+                    hold_acquisition_approach(feet, centre, toward, 4.54, 1.0).unwrap();
+                assert!(
+                    !ready,
+                    "the acquisition must first go around to the delivery side"
+                );
+                let segment = flat(point - feet);
+                let t = flat(centre - feet).dot(segment) / segment.length_squared();
+                let closest = feet + segment * t.clamp(0.0, 1.0);
+                assert!(
+                    flat(closest - centre).length() > 1.6,
+                    "approach crosses the expanded actual hull"
+                );
+                assert_eq!(point.y, feet.y);
+                if feet.z > destination.z {
+                    let old_radial = flat(destination - (feet + Vec3::Y * 1.6)).normalize();
+                    let old_point = centre - old_radial * 4.54;
+                    let chord = flat(old_point - feet);
+                    let t = flat(centre - feet).dot(chord) / chord.length_squared();
+                    assert!(
+                        flat(feet + chord * t.clamp(0.0, 1.0) - centre).length() < 1.6,
+                        "counterfactual must reproduce the old through-body shortcut"
+                    );
+                }
+                let turn = glam::Quat::from_rotation_y(0.73);
+                let rotated =
+                    hold_acquisition_approach(turn * feet, turn * centre, turn * toward, 4.54, 1.0)
+                        .unwrap();
+                assert!(rotated.0.abs_diff_eq(turn * point, 1e-5));
+                assert_eq!(rotated.1, ready);
+            }
+            let rear = centre - flat(toward).normalize() * 4.54;
+            let (point, ready) = hold_acquisition_approach(
+                Vec3::new(rear.x, 0.005, rear.z),
+                centre,
+                toward,
+                4.54,
+                1.0,
+            )
+            .unwrap();
+            assert!(ready);
+            assert!(flat(point - rear).length() < 1e-5);
+        }
     }
 
     #[test]

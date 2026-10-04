@@ -17,6 +17,7 @@
       "loops": "%obj\\.hFishOutOfWater\\s*>=\\s*(3)\\s*\\)",
       "minigame_only": "getMiniGameFromObject",
       "kills": "%obj\\.kill\\s*\\(",
+      "bite_type": "hMeleeCI\\s*=\\s*\"([^\"]+)\"",
       "bite": "%obj\\.hAttackDamage\\s*=\\s*([1-9]\\d*)\\s*;"
     },
     "SharkHoleBot::onAdd": {

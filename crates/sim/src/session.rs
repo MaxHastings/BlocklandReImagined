@@ -1521,6 +1521,8 @@ impl Session {
         self.eject(owner);
         self.release_riders(owner);
         let peer = self.peers.remove(&owner).context("Unknown connection")?;
+        self.crossings
+            .forget(bri_package_runtime::ops::ObjectRef::Player(owner));
         self.admin_disconnect(owner);
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);

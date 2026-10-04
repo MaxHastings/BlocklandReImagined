@@ -837,9 +837,9 @@ impl Session {
         }
         // Another player's group needs their build trust still.
         let mut actor = peer.actor.clone();
-        if let Some(into) = plant_as {
+        if let Some(into) = &plant_as {
             if !self.may_plant_into(owner, into.group, into.admin) {
-                return self.refuse_place(package, owner, CopyRefusal::Group(into.name));
+                return self.refuse_place(package, owner, CopyRefusal::Group(into.name.clone()));
             }
             actor.owner = into.group;
         }
@@ -867,6 +867,11 @@ impl Session {
             anchor,
             (partial, float),
         );
+        work.plant_as = plant_as;
+        work.float_admin = self
+            .copies
+            .get(&owner)
+            .is_some_and(|c| c.float && c.float_admin);
         work.float_refused = float_refused;
         work.look = (quarter_turns % 4, (flipped, mirrored));
         // What fits in this tick's copy work plants now; a bigger copy

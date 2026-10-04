@@ -80,7 +80,10 @@ fn prediction_matches_server_under_delay_loss_and_redundancy() {
         while to_client.front().is_some_and(|(due, _, _, _)| *due <= tick) {
             let (_, server_tick, ack, state) = to_client.pop_front().unwrap();
             let first = !acknowledged;
-            if let Some(offset) = prediction.reconcile(server_tick, ack, state).unwrap() {
+            if let Some(offset) = prediction
+                .reconcile(server_tick, ack, state, Default::default())
+                .unwrap()
+            {
                 // Before any input arrives the server idles the player (it may
                 // fall); the first acknowledgement absorbs that difference.
                 if !first {
@@ -94,7 +97,9 @@ fn prediction_matches_server_under_delay_loss_and_redundancy() {
     assert!(worst < 1e-3, "prediction diverged by {worst}");
     let (state, ack) = session.motion_states().remove(0);
     assert_eq!(ack, 581);
-    prediction.reconcile(601, ack, state.clone()).unwrap();
+    prediction
+        .reconcile(601, ack, state.clone(), Default::default())
+        .unwrap();
     assert_eq!(prediction.state(), &state);
     assert_eq!(prediction.pending_len(), 0);
     // The run exercised jumping, jetting and the raised step.
@@ -181,20 +186,34 @@ fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
     assert_eq!(prediction.pending_len(), INPUT_HISTORY);
     let mut forged = initial.clone();
     forged.owner += 1;
-    assert!(prediction.reconcile(10, 1, forged).is_err());
     assert!(
         prediction
-            .reconcile(10, prediction.sequence() + 1, initial.clone())
+            .reconcile(10, 1, forged, Default::default())
             .is_err()
     );
     assert!(
         prediction
-            .reconcile(10, 5, initial.clone())
+            .reconcile(
+                10,
+                prediction.sequence() + 1,
+                initial.clone(),
+                Default::default()
+            )
+            .is_err()
+    );
+    assert!(
+        prediction
+            .reconcile(10, 5, initial.clone(), Default::default())
             .unwrap()
             .is_some()
     );
     // Older server ticks never rewind an applied correction.
-    assert!(prediction.reconcile(9, 6, initial).unwrap().is_none());
+    assert!(
+        prediction
+            .reconcile(9, 6, initial, Default::default())
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// A correction that moves the body no further than float noise keeps the
@@ -225,7 +244,9 @@ fn a_correction_within_noise_still_takes_the_hosts_rope() {
         straight: false,
     });
     assert_eq!(
-        prediction.reconcile(1, 0, roped.clone()).unwrap(),
+        prediction
+            .reconcile(1, 0, roped.clone(), Default::default())
+            .unwrap(),
         Some(Vec3::ZERO),
         "no visible correction"
     );
@@ -389,7 +410,9 @@ fn a_tool_that_takes_jet_is_predicted_without_jetting() {
         "the press still reaches the host"
     );
     // A correction from the start replays the unjetted steps.
-    prediction.reconcile(1, 0, initial).unwrap();
+    prediction
+        .reconcile(1, 0, initial, Default::default())
+        .unwrap();
     assert!((prediction.state().feet[1] - ground).abs() < 0.05);
     prediction.set_tool_jet(false);
     for _ in 0..60 {
@@ -399,4 +422,125 @@ fn a_tool_that_takes_jet_is_predicted_without_jetting() {
         prediction.state().feet[1] > ground + 0.1,
         "without it, jet jets"
     );
+}
+
+/// Use real fall damage or an ordinary authoritative blast, not fabricated
+/// invalid poses. Feed every resulting death/corpse/respawn pose through the
+/// same restore/replay boundary that reports client movement disconnects.
+#[test]
+fn normal_death_physics_and_respawn_poses_remain_valid_authoritative_corrections() {
+    use bri_sim::session::{Command, MiniGameRequest};
+    for falling in [false, true] {
+        let mut session = server();
+        let spawn = Vec3::new(0.0, if falling { 80.0 } else { 0.05 }, 0.0);
+        session.set_spawn_points(vec![spawn]).unwrap();
+        let owner = session.join("Lifecycle".into(), spawn, false).unwrap();
+        session
+            .command(
+                owner,
+                1,
+                Command::MiniGame(MiniGameRequest::Create {
+                    color: 0,
+                    settings: bri_minigames::Settings::default(),
+                }),
+            )
+            .unwrap();
+        let (initial, _) = session.motion_states().remove(0);
+        let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+        let mut prediction = Predictor::new(mirror, initial, Default::default()).unwrap();
+        let mut died = None;
+        let mut respawned = false;
+        let mut dead_poses = 0;
+        let mut ticks_after_respawn = 0;
+        for tick in 1..=1800 {
+            let input = if respawned && !falling {
+                MoveInput {
+                    forward: 1.0,
+                    jump: tick % 20 < 10,
+                    ..Default::default()
+                }
+            } else {
+                MoveInput::default()
+            };
+            prediction.step(input).unwrap();
+            session
+                .movement(owner, prediction.sequence(), input)
+                .unwrap();
+            session.step().unwrap();
+            if !falling && tick == 320 {
+                let (state, _) = session.motion_states().remove(0);
+                // A slightly off-centre blast kills and launches the ordinary
+                // corpse into real map geometry using the canonical push.
+                session
+                    .explode(
+                        Vec3::from(state.feet) + Vec3::new(0.3, 1.0, 0.4),
+                        4.0,
+                        1000.0,
+                        0.0,
+                        None,
+                        "lifecycle",
+                        None,
+                    )
+                    .unwrap();
+                assert!(!session.is_alive(owner), "the blast caused a real death");
+            }
+            let vitals = session.vitals();
+            if !vitals[&owner].alive {
+                died.get_or_insert(tick);
+            }
+            if tick % 3 == 0 {
+                let (state, ack) = session.motion_states().remove(0);
+                if !vitals[&owner].alive {
+                    dead_poses += 1;
+                }
+                prediction
+                    .reconcile(
+                        session.simulation().state().tick,
+                        ack,
+                        state,
+                        session.passage_frame(owner),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "falling={falling} tick={tick} alive={} spawn={} died={:?}: {error:#}",
+                            vitals[&owner].alive,
+                            vitals[&owner].spawn_tick,
+                            vitals[&owner].died_tick
+                        )
+                    });
+            }
+            // Wait through the actual five-second corpse timeout before
+            // ordinary click-to-respawn; a new life must still reconcile.
+            if !respawned && died.is_some_and(|at| tick >= at + 650) {
+                session.command(owner, 2, Command::Respawn).unwrap();
+                assert!(session.is_alive(owner));
+                respawned = true;
+                let (state, ack) = session.motion_states().remove(0);
+                prediction
+                    .reconcile(
+                        session.simulation().state().tick,
+                        ack,
+                        state,
+                        session.passage_frame(owner),
+                    )
+                    .unwrap();
+            }
+            if respawned {
+                ticks_after_respawn += 1;
+                if ticks_after_respawn == 120 {
+                    break;
+                }
+            }
+        }
+        assert!(
+            died.is_some(),
+            "falling={falling}: ordinary damage killed the player"
+        );
+        assert!(dead_poses > 200, "observed the complete corpse lifecycle");
+        assert!(
+            respawned && session.is_alive(owner),
+            "the respawned body remains connected to prediction"
+        );
+        assert_eq!(ticks_after_respawn, 120);
+    }
 }

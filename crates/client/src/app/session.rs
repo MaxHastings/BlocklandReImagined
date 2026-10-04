@@ -66,7 +66,7 @@ impl App {
             self.ui.apply_session(
                 attempt.id,
                 UiUpdate::Admin(bri_ui::models::admin::AdminUpdate::State(
-                    crate::admin_ui::state(snapshot),
+                    crate::admin_ui::refresh_state(snapshot, self.ui.core.admin.snapshot.as_ref()),
                 )),
             );
             self.answer(id, Ok(()));
@@ -824,18 +824,12 @@ impl App {
                         fetched,
                         dropped,
                     )?;
-                    mods = Some(catalog);
-                    Ok(packages)
-                },
-            )
-            .await;
-            let client = match joined {
-                Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
+                    // Prepare engine content before the transport admits a
+                    // player. The existing reload continuation starts the
+                    // final cached join after installation or visible fallback.
                     let set =
-                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped);
+                        crate::mods::joined_set(&package_root, &package_set, fetched, dropped);
                     let set = if reload_add_ons { Some(set?) } else { set.ok() };
-                    // Content that does not resolve reloads too: applying it
-                    // names the problem and the join goes ahead without it.
                     let reload = reload_add_ons
                         && set.as_ref().is_some_and(|set| {
                             crate::content::ContentPaths::resolve(&package_root, set).map_or(
@@ -849,12 +843,21 @@ impl App {
                             )
                         });
                     if reload {
-                        client.close();
-                        if let Ok(mut slot) = needs_add_ons.lock() {
-                            *slot = set;
-                        }
-                        anyhow::bail!("Loading the server's Add-Ons");
+                        *needs_add_ons.lock().map_err(|_| {
+                            anyhow::anyhow!("Server Add-On preparation state is unavailable")
+                        })? = set;
+                        return Err(bri_net::client::JoinPreparationPending.into());
                     }
+                    mods = Some(catalog);
+                    Ok(packages)
+                },
+            )
+            .await;
+            let client = match joined {
+                Ok((client, fetched, dropped)) if !fetched.is_empty() || !dropped.is_empty() => {
+                    let set =
+                        crate::mods::joined_set(&package_root, &package_set, &fetched, &dropped);
+                    let set = if reload_add_ons { Some(set?) } else { set.ok() };
                     // No new content, but the server's Add-On code runs for
                     // this game: the host decides which (`ClientCode`).
                     if let Ok(mut slot) = joined_add_ons.lock() {

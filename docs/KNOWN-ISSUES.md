@@ -5,8 +5,8 @@ core flows are blockers: please report them (see `TESTER-GUIDE.md` for what
 to send). The items below are known. Everything v20 had that is still
 missing is listed in `FEATURES.md`.
 
-The [v0.2.2 creator and bot checks](rule-workshop/V0.2.2-PLAYTEST.md) cover the
-current changes. Focused headless/offscreen checks do not replace your playtest.
+Use the [v0.2.2 checks](rule-workshop/V0.2.2-PLAYTEST.md) for that public build,
+or the [v0.2.3 candidate checks](rule-workshop/V0.2.3-PLAYTEST.md) for the new work. Focused headless/offscreen checks do not replace your playtest.
 
 - **Unsigned builds:** Windows SmartScreen warns on the first start. The Apple
   silicon Mac app uses an ad-hoc signature; see `PLAYTEST-MAC.md` for opening it.
@@ -35,6 +35,11 @@ current changes. Focused headless/offscreen checks do not replace your playtest.
   but does not cover Windows rendering/audio. v0.2.1 improves crash reports and
   retains matching build symbols; it does not claim a causal fix. Please retain
   the complete crash/session files if it happens again.
+- **Reported death/disconnect, destruction/respawn hitches and tank retreat:**
+  v0.2.3 has not established their causes or a causal fix. More precise death
+  correction errors and scoped headless/offscreen controls do not establish
+  Windows performance or close the original reports. Please retain complete
+  logs and the smallest reproducing save.
 - **Shark/Zombie ports remain partial.** Shark's original body, swim,
   mouth capture/five-second hold and hidden hole now have focused checks using
   actual imported content. Harm release observes the original two-second restart

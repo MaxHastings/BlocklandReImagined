@@ -572,6 +572,11 @@ impl App {
             }
             instances.update(frame.queue, &shells)?;
         }
+        let first_person_eye = self
+            .mounts
+            .rider_eye
+            .or(self.motion.local_eye())
+            .unwrap_or_else(|| view.archetypes.eye(local));
         let (eye, yaw, pitch, roll) = Self::view_camera(
             controls,
             self.motion.presented(),
@@ -584,10 +589,7 @@ impl App {
             &self.vehicles,
             view,
             local,
-            self.mounts
-                .rider_eye
-                .or(self.motion.local_eye())
-                .unwrap_or_else(|| view.archetypes.eye(local)),
+            first_person_eye,
             &self.motion.passages(),
             orbit_drawn_offset(controls, &self.avatar.avatars),
         )?;
@@ -1054,12 +1056,12 @@ impl App {
                 Some((*owner, (avatar.gpu.as_ref()?, avatar.instance.as_ref()?)))
             })
             .collect();
-        scenes.extend(
-            self.avatar
-                .mount_meshes
-                .values()
-                .filter_map(|m| m.gpu.as_ref()),
-        );
+        let mount_draws: Vec<_> = self
+            .avatar
+            .mount_meshes
+            .values()
+            .filter_map(|mesh| Some((mesh.gpu.as_ref()?, mesh.instance.as_ref()?)))
+            .collect();
         scenes.extend(self.fx.fade_models.scenes());
         // Models every view draws; the player's own body and held items
         // differ between the player's view and a mirror's.
@@ -1068,6 +1070,7 @@ impl App {
             shared_draws.push((ghost, placed));
         }
         shared_draws.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+        shared_draws.extend(mount_draws.iter().copied());
         shared_draws.extend(self.gpu.gpu_terrain.iter().flat_map(|t| t.draws()));
         shared_draws.extend(self.fx.explosion_shapes.draws());
         shared_draws.extend(self.fx.beams.draws());
@@ -1100,26 +1103,21 @@ impl App {
                 .values()
                 .chain(self.fx.fade_models.scenes())
                 .collect();
-            let (mut bodies, blockers) = if self.graphics.brick_shadows || effective.lighting == 3 {
+            let (bodies, blockers) = if self.graphics.brick_shadows || effective.lighting == 3 {
                 (chunks, Vec::new())
             } else {
                 (Vec::new(), chunks)
             };
             let mut blocking = Vec::new();
 
-            // Rigged mounts (the horse) draw through their own meshes, not
-            // the vehicle models, but cast like every other vehicle.
-            bodies.extend(
-                self.avatar
-                    .mount_meshes
-                    .values()
-                    .filter_map(|m| m.gpu.as_ref()),
-            );
+            // Rigged mounts cast through the same clipped body instances
+            // as their main, portal, mirror and probe views.
             // The player's own items cast from their hands, as others see
             // them, not from the first-person copy at the eye.
             let mut models = self.world_items.reflection_draws();
             models.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             models.extend(crate::vehicles::ClientVehicles::draws(&self.vehicle_assets));
+            models.extend(mount_draws.iter().copied());
             if let Some((scene, instances)) = &self.gpu.shell_gpu
                 && self.fx.weapon_shells.active_count() > 0
             {
@@ -1171,10 +1169,45 @@ impl App {
         let clear = wgpu::Color { r, g, b, a };
         let reflections = self.lighting.reflections.as_ref().unwrap();
         if reflecting {
-            let mut mirrored = self.world_items.reflection_draws();
-            mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
+            let mut mirrored = self.world_items.reflection_draws_without_self();
+            mirrored.extend(
+                avatar_draws
+                    .iter()
+                    .filter(|(owner, _)| *owner != view.owner || third_person)
+                    .map(|(_, draw)| *draw),
+            );
             mirrored.extend(shared_draws.iter().copied());
-            mirrored.extend(self.addons.package_models.own_draws());
+            let mut own_body: Vec<_> = avatar_draws
+                .iter()
+                .filter(|(owner, _)| *owner == view.owner && !third_person)
+                .map(|(_, draw)| *draw)
+                .collect();
+            own_body.extend(self.addons.package_models.own_draws());
+            own_body.extend(self.world_items.reflected_self_draws());
+            let straddle = self.avatar.avatars.get(&view.owner).and_then(|avatar| {
+                body_straddle(&self.vehicles, view, &passages, view.owner, avatar)
+            });
+            let body_eye = Self::first_person_eye_here(controls, local, first_person_eye);
+            let own_visible: Vec<_> = reflections
+                .plan()
+                .planes
+                .iter()
+                .map(|plane| {
+                    third_person
+                        || crate::portal_view::first_person_body_visible(
+                            body_eye, plane.eye, straddle,
+                        )
+                })
+                .collect();
+            let mut mirrored_with_body = mirrored.clone();
+            mirrored_with_body.extend(own_body);
+            let models = |view: usize| {
+                if own_visible[view - 1] {
+                    mirrored_with_body.as_slice()
+                } else {
+                    mirrored.as_slice()
+                }
+            };
             let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
             let (layers, skins) = (&self.addons.client_code, &self.addons.item_skins);
             // As the player's view draws them after the world.
@@ -1185,7 +1218,7 @@ impl App {
                 skins.render_view(pass, view);
                 layers.render_view(pass, view);
             };
-            reflections.render(renderer, frame.encoder, &scenes, &mirrored, clear, &late);
+            reflections.render_views(renderer, frame.encoder, &scenes, &models, clear, &late);
             renderer.mark(frame.encoder, "mirrors");
         }
         let probe = self.lighting.environment_probe.as_ref().unwrap();
@@ -1352,7 +1385,8 @@ impl App {
         }
         self.item_ui.register_icons(frame);
         // Until its pipelines finish compiling, the preview stays due.
-        if self.avatar.preview_dirty
+        if (self.avatar.preview_dirty
+            || self.ui.stack().contains(&bri_ui::screens::ScreenId::Avatar))
             && let Some((appearance, rotation, distance)) = &self.avatar.preview_request
             && let Some(preview) = self
                 .avatar
@@ -1366,6 +1400,7 @@ impl App {
                 appearance,
                 *rotation,
                 *distance,
+                self.avatar.preview_time,
                 frame,
             )?;
             self.ui.apply(UiUpdate::AvatarPreview(IconRef::External(

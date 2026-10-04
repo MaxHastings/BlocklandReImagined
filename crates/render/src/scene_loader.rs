@@ -350,7 +350,7 @@ fn load_bundle(root: &Path, map_id: &str, legacy: bool) -> Result<MapScene> {
                 load_interior(&root,&bundle,bindings,&scene,node_index,node,interior,&mut out,&mut cache,legacy)?
             }
             Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>{
-                load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache)?;
+                load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache,legacy)?;
                 shape_indices.insert(u32::try_from(node_index)?, first..out.indices.len() as u32);
             }
             Kind::StaticModel=>anyhow::bail!("Static model {} has no native asset",node.name),
@@ -511,6 +511,7 @@ fn load_static_shape(
     node: &Node,
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
+    legacy: bool,
 ) -> Result<()> {
     let id = node
         .asset
@@ -558,6 +559,11 @@ fn load_static_shape(
         } else {
             Material::vertex_lit(format!("{id}/{}", authored.name), diffuse)
         };
+        // Dynamic has no baked lighting to supply the authored unlit face.
+        // Keep the compatibility path's existing lightmap behavior unchanged.
+        if authored.unlit && !legacy {
+            material.kind = MaterialKind::Unlit;
+        }
         material.alpha = match authored.blend.as_str() {
             "opaque" => AlphaMode::Opaque,
             "alpha" => alpha(&out.images[diffuse]),

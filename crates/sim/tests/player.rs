@@ -254,6 +254,123 @@ fn a_jump_stays_available_briefly_after_walking_off_a_ledge() {
     assert!(p.state().velocity[1] > 8.0, "{:?}", p.state());
 }
 #[test]
+fn standard_crouch_collision_matches_v20_clearance_at_each_player_scale() {
+    // Recovered PlayerStandardArmor authors VectorScale("1.25 1.25 1.00", 4).
+    // The v20 collision step quarters that box, then applies object scale.
+    // Test real controls against just-wide/high-enough and just-too-small gaps.
+    for scale in [0.75, 1.0, 1.5] {
+        for (gap_width, gap_height, fits) in
+            [(1.29, 1.04, true), (1.21, 1.04, false), (1.29, 0.96, false)]
+        {
+            let mut world = scene();
+            let mut player = Player::spawn(
+                &mut world,
+                1,
+                Vec3::new(0.0, 0.05, 1.0),
+                PlayerTuning::default(),
+            )
+            .unwrap();
+            player
+                .set_archetype(
+                    &mut world,
+                    player.state().archetype,
+                    PlayerTuning::default(),
+                    scale,
+                )
+                .unwrap();
+            step(&mut player, &mut world, MoveInput::default(), 60);
+            let half_gap = gap_width * scale * 0.5;
+            for side in [-1.0, 1.0] {
+                world.insert_collider(
+                    ColliderBuilder::cuboid(0.5, 2.0 * scale, 1.0).translation(Vector::new(
+                        side * (half_gap + 0.5),
+                        2.0 * scale,
+                        -2.0,
+                    )),
+                    None,
+                );
+            }
+            world.insert_collider(
+                ColliderBuilder::cuboid(half_gap + 1.0, 0.5 * scale, 1.0).translation(Vector::new(
+                    0.0,
+                    (gap_height + 0.5) * scale,
+                    -2.0,
+                )),
+                None,
+            );
+            world.detect_collisions(&(), &());
+            let walk = MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            };
+            step(&mut player, &mut world, walk, 120);
+            assert!(
+                player.state().feet[2] > -1.0,
+                "standing entered gap: {scale} {gap_width} {gap_height} {:?}",
+                player.state()
+            );
+            let crouch = MoveInput {
+                crouch: true,
+                ..walk
+            };
+            if !fits {
+                step(&mut player, &mut world, crouch, 240);
+                assert!(player.state().crouched);
+                assert!(
+                    player.state().feet[2] > -1.0,
+                    "undersized gap passed: {scale} {gap_width} {gap_height} {:?}",
+                    player.state()
+                );
+                continue;
+            }
+            for _ in 0..240 {
+                step(&mut player, &mut world, crouch, 1);
+                if player.state().feet[2] < -1.8 {
+                    break;
+                }
+            }
+            assert!(
+                player.state().feet[2] < -1.8,
+                "crouched body did not enter: {scale} {:?}",
+                player.state()
+            );
+            step(&mut player, &mut world, MoveInput::default(), 60);
+            assert!(
+                player.state().crouched,
+                "stood inside low gap: {scale} {:?}",
+                player.state()
+            );
+            let (min, max) = player.world_bounds();
+            let min = Vec3::from(min);
+            let max = Vec3::from(max);
+            assert!(
+                ((max - min) - Vec3::new(1.25, 1.0, 1.25) * scale)
+                    .abs()
+                    .max_element()
+                    < 1e-5
+            );
+            assert!((min.y - player.state().feet[1]).abs() < 1e-5);
+            assert!((player.middle() - 0.5 * scale).abs() < 1e-5);
+            let collider = &world.colliders[player.collider()];
+            let halves = collider.shape().as_cuboid().unwrap().half_extents;
+            assert!((halves.y - 0.5 * scale).abs() < 1e-5);
+            step(&mut player, &mut world, walk, 300);
+            assert!(
+                player.state().feet[2] < -4.0,
+                "did not leave gap: {scale} {:?}",
+                player.state()
+            );
+            assert!(
+                !player.state().crouched,
+                "did not stand after clearing gap: {scale} {:?}",
+                player.state()
+            );
+            let (min, max) = player.world_bounds();
+            assert!((max[1] - min[1] - 2.65 * scale).abs() < 1e-5);
+        }
+    }
+}
+#[test]
 fn crouch_clearance_wall_slide_and_camera_occlusion() {
     let mut world = scene();
     let mut p = spawn(&mut world);

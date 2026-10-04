@@ -761,23 +761,32 @@ impl ClientVehicles {
             let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
                 continue;
             };
-            // Horses are animated with the horse rig instead.
-            if d.family == bri_vehicles::Family::Horse {
-                continue;
-            }
-            let tint = body_tint(d, info);
             let body = to_transform(frame.position, frame.rotation);
-            let pitch = frame.turret_aim[1];
             // Openings carry a vehicle by its centre of mass, as the host
             // does; part way through one it draws on both sides, cut there.
             let (low, high) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
-            let centre = Vec3::from(d.mass_center);
-            let reach = (centre - low).abs().max((high - centre).abs()).length() * 2.0 * info.scale;
-            let middle = body.transform_point3(centre * info.scale);
+            let centre = if d.is_actor() {
+                Vec3::Y * (bri_vehicles::actor_tuning(d, info.scale).stand_height * 0.5)
+            } else {
+                Vec3::from(d.mass_center) * info.scale
+            };
+            let reach = (centre - low * info.scale)
+                .abs()
+                .max((high * info.scale - centre).abs())
+                .length()
+                * 2.0;
+            let middle = body.transform_point3(centre);
             let straddle = Straddle::find(&self.passages, middle, reach);
             if let Some(straddle) = straddle {
                 self.straddles.insert(*id, straddle);
             }
+            // Horses use their animated rig, but it and their riders need
+            // the same travel middle and clips as every other mount.
+            if d.family == bri_vehicles::Family::Horse {
+                continue;
+            }
+            let tint = body_tint(d, info);
+            let pitch = frame.turret_aim[1];
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
                 for (model, transform) in posed(looks, model, pitch, transform) {
                     if let Some(m) = models.get_mut(model)
@@ -993,6 +1002,7 @@ mod tests {
     use super::*;
     fn pose(tick: u64, x: f32) -> VehiclePose {
         VehiclePose {
+            passage_frame: Default::default(),
             id: 1,
             tick,
             position: [x, 0.0, 0.0],
@@ -1173,6 +1183,97 @@ mod tests {
         }
     }
     crate::testing::synthetic_and_content!(Gunners: gunner_barrels_follow_the_pitch_to_the_muzzle);
+    crate::testing::synthetic_and_content!(Gunners: a_rigged_mount_retains_the_same_portal_split_as_its_motor_and_riders);
+    fn a_rigged_mount_retains_the_same_portal_split_as_its_motor_and_riders(
+        fx: &Gunners,
+    ) -> Result<()> {
+        use bri_content::passage::Passage;
+        use bri_vehicles::{OwnerId, Spawn, Transform, VehicleId, VehiclesWorld};
+        let mut assets = VehicleAssets::load(&fx.root)?;
+        let d = assets
+            .pack
+            .definitions
+            .iter()
+            .find(|d| d.family == bri_vehicles::Family::Horse)
+            .unwrap()
+            .clone();
+        for scale in [0.75, 1., 1.5] {
+            let root = Vec3::new(0., 0., 0.15);
+            let mut physics = bri_physics::new_world();
+            let mut mounts = VehiclesWorld::new(assets.pack.clone())?;
+            mounts.spawn(
+                &mut physics,
+                Spawn {
+                    id: VehicleId(1),
+                    owner: OwnerId(0),
+                    definition: d.id.clone(),
+                    scale,
+                    transform: Transform {
+                        position: root.to_array(),
+                        ..Default::default()
+                    },
+                    spawn_id: None,
+                    respawn_ticks: None,
+                },
+            )?;
+            // Read the actual motor/body boundary, not a nominal player height
+            // or the renderer's authored model bounds/mass centre.
+            let motor_middle = mounts.centre(&physics, VehicleId(1)).unwrap();
+            let carry = glam::Affine3A::from_translation(Vec3::new(30., 0., 0.))
+                * glam::Affine3A::from_rotation_y(std::f32::consts::FRAC_PI_2);
+            let passages = Passages {
+                list: vec![Passage {
+                    brick: 2,
+                    centre: Vec3::new(0., motor_middle.y, 0.),
+                    normal: Vec3::Z,
+                    u: Vec3::X,
+                    v: Vec3::Y,
+                    half: glam::Vec2::splat(10.),
+                    carry,
+                }],
+                closed: vec![],
+            };
+            let mut host_pose = pose(1, 0.);
+            host_pose.position = root.to_array();
+            let infos = BTreeMap::from([(
+                1,
+                VehicleInfo {
+                    id: 1,
+                    definition: d.id.clone(),
+                    color: None,
+                    occupants: vec![Some(7)],
+                    destroyed: false,
+                    scale,
+                },
+            )]);
+            let mut vehicles = ClientVehicles::default();
+            vehicles.set_passages(&passages);
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, host_pose)]),
+                Some(1.),
+                None,
+                &passages,
+            );
+            vehicles.prepare(&mut assets, &infos);
+            let split = *vehicles
+                .straddle(1)
+                .expect("rigged horse and rider retain a shared vehicle split");
+            let expected = Straddle::find(&passages, motor_middle, 10.).unwrap();
+            assert_eq!(split, expected);
+            assert!(
+                assets.models.values().all(|m| m.transforms.is_empty()),
+                "horse rig must not also draw as static vehicle models"
+            );
+            vehicles.set_passages(&Passages::default());
+            vehicles.prepare(&mut assets, &infos);
+            assert!(
+                vehicles.straddle(1).is_none(),
+                "map/opening removal clears the split"
+            );
+        }
+        Ok(())
+    }
     fn gunner_barrels_follow_the_pitch_to_the_muzzle(fx: &Gunners) -> Result<()> {
         let assets = VehicleAssets::load(&fx.root)?;
         for id in &fx.gunners {
@@ -1281,6 +1382,46 @@ mod tests {
         let (body, wheels) = draw(&mut assets, true);
         assert_eq!(body, vec![[0.0, 0.0, 0.0, 1.0]], "a wreck is charred black");
         assert_eq!(wheels, 0, "and its tires are gone");
+        Ok(())
+    }
+    /// Reliable paint changes on the same vehicle are reflected in the next
+    /// prepared frame; clearing paint restores its authored material tint.
+    #[test]
+    fn a_live_vehicle_updates_its_draw_tint_without_a_new_pose_or_identity() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vehicles/tests/fixtures/stand-in-plane/assets");
+        let mut assets = VehicleAssets::load(&root)?;
+        let d = assets.pack.definitions[0].clone();
+        let mut infos = BTreeMap::from([(
+            1,
+            VehicleInfo {
+                id: 1,
+                definition: d.id.clone(),
+                color: Some([1.0, 0.0, 0.0, 1.0]),
+                occupants: vec![Some(7)],
+                destroyed: false,
+                scale: 1.0,
+            },
+        )]);
+        let mut vehicles = ClientVehicles::default();
+        vehicles.update(
+            &infos,
+            &BTreeMap::from([(1, pose(1, 0.0))]),
+            None,
+            None,
+            &Default::default(),
+        );
+        for (color, tint) in [
+            (Some([1.0, 0.0, 0.0, 1.0]), [1.0, 0.0, 0.0, 1.0]),
+            (None, [1.0; 4]),
+            (Some([0.0, 0.0, 1.0, 1.0]), [0.0, 0.0, 1.0, 1.0]),
+        ] {
+            infos.get_mut(&1).unwrap().color = color;
+            vehicles.prepare(&mut assets, &infos);
+            let transforms = &assets.models[&d.model].transforms;
+            assert!(!transforms.is_empty());
+            assert!(transforms.iter().all(|t| t.tint == tint));
+        }
         Ok(())
     }
     #[test]

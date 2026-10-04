@@ -411,6 +411,8 @@ mod tests {
         };
         let bytes = encode_datagram(&movement).unwrap();
         let pose = Datagram::Pose(Pose {
+            passage_frame: Default::default(),
+            passage_vehicle: None,
             tick: u64::MAX,
             acknowledged_input: u64::MAX,
             spawn_tick: u64::MAX,
@@ -449,6 +451,7 @@ mod tests {
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {
+            passage_frame: Default::default(),
             id: u64::MAX,
             tick: u64::MAX,
             position: [1.0; 3],

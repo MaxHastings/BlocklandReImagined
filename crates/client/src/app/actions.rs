@@ -915,12 +915,17 @@ impl App {
                 self.show_add_ons(view);
                 Ok(())
             }
-            UiAction::SetAddOnEnabled { ref id, enabled } => {
-                crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+            UiAction::SetAddOnEnabled { ref id, enabled } => crate::add_on_choices::set_enabled(
+                &self.content.paths.root,
+                &self.state_dir,
+                id,
+                enabled,
+            )
+            .map(|view| self.add_ons_listed(view)),
+            UiAction::DefaultAddOns => {
+                crate::add_on_choices::defaults(&self.content.paths.root, &self.state_dir)
                     .map(|view| self.add_ons_listed(view))
             }
-            UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
-                .map(|view| self.add_ons_listed(view)),
             UiAction::ApplyAddOns
                 if self.addons.packages_from_tools || self.net.attempt.is_some() =>
             {

@@ -5,7 +5,7 @@
 use super::*;
 use crate::blueprint::{Inexact, Placement};
 use crate::session::copy_jobs::{CopyWork, Ending, Progress};
-use crate::simulation::{PlantFailure, Support, spend, work};
+use crate::simulation::{GroupSupport, PlantFailure, Support, spend, work};
 
 /// Why bricks of a plant were refused: how many for each plant error, and
 /// the first.
@@ -46,6 +46,7 @@ enum Phase {
         next: usize,
         supported: bool,
         lowest: (usize, f32),
+        preflight: Box<GroupSupport>,
     },
     /// All or none, checked: each planted. `base` is the baseplate.
     Place { next: usize, base: Option<usize> },
@@ -67,10 +68,13 @@ pub(in crate::session) struct PlantWork {
     placement: Placement,
     inexact: Inexact,
     actor: Actor,
+    pub(super) plant_as: Option<PlantAs>,
+    pub(super) float_admin: bool,
     package: Option<String>,
     anchor: [f32; 3],
     support: Support,
     phase: Phase,
+    checked_epoch: Option<u64>,
     ids: Vec<BrickId>,
     refused: Refusals,
     /// Floating was asked for administrators only, and the player is not
@@ -111,6 +115,7 @@ impl PlantWork {
                 next: 0,
                 supported: false,
                 lowest: (0, f32::INFINITY),
+                preflight: Box::default(),
             }
         };
         Self {
@@ -121,10 +126,13 @@ impl PlantWork {
             placement,
             inexact,
             actor,
+            plant_as: None,
+            float_admin: false,
             package,
             anchor,
             support,
             phase,
+            checked_epoch: None,
             refused: Refusals::default(),
             float_refused: false,
         }
@@ -132,18 +140,31 @@ impl PlantWork {
 
     fn work(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
         loop {
+            if matches!(self.phase, Phase::Check { .. } | Phase::Place { .. }) {
+                let epoch = s.simulation.support_epoch();
+                if self.checked_epoch.is_some_and(|checked| checked != epoch) {
+                    let error = anyhow::anyhow!("Build support changed while the copy was checked");
+                    if self.ids.is_empty() {
+                        return Err(error);
+                    }
+                    self.phase = Phase::Undo { error: Some(error) };
+                } else {
+                    self.checked_epoch = Some(epoch);
+                }
+            }
             match &mut self.phase {
                 Phase::Check {
                     next,
                     supported,
                     lowest,
+                    preflight,
                 } => {
                     while *next < self.copy.len() {
                         if !spend(budget, work::PLANT) {
                             return Ok(false);
                         }
                         let brick = self.placement.brick(&self.copy, &self.copy.bricks[*next]);
-                        match s.simulation.check_plant(&self.actor, &brick) {
+                        match preflight.check(&s.simulation, &self.actor, &brick) {
                             Ok(held) => *supported |= held,
                             Err(error) => {
                                 self.refused = Refusals::all(error);
@@ -154,6 +175,16 @@ impl PlantWork {
                             *lowest = (*next, brick.position[1]);
                         }
                         *next += 1;
+                    }
+                    if matches!(self.support, Support::Required) {
+                        match preflight.step(&s.simulation, budget) {
+                            Ok(true) => {}
+                            Ok(false) => return Ok(false),
+                            Err(error) => {
+                                self.refused = Refusals::all(error);
+                                return Ok(true);
+                            }
+                        }
                     }
                     let base = match (*supported, self.support) {
                         (true, _) => None,
@@ -168,6 +199,14 @@ impl PlantWork {
                 Phase::Place { next, base } => {
                     let base = *base;
                     while *next < self.copy.len() {
+                        if self.checked_epoch != Some(s.simulation.support_epoch()) {
+                            self.phase = Phase::Undo {
+                                error: Some(anyhow::anyhow!(
+                                    "Build support changed while the copy was checked"
+                                )),
+                            };
+                            break;
+                        }
                         if !spend(budget, work::PLANT) {
                             return Ok(false);
                         }
@@ -176,15 +215,20 @@ impl PlantWork {
                         let mut brick = self.placement.brick(&self.copy, &self.copy.bricks[i]);
                         brick.base_plate |= base == Some(i);
                         match s.simulation.plant_try(&self.actor, brick, true) {
-                            Ok(id) => planted(
-                                s,
-                                owner,
-                                (i, id),
-                                &mut self.ids,
-                                (&self.copy, &self.actor),
-                                self.look,
-                                &self.names,
-                            )?,
+                            Ok(id) => {
+                                // Only this publication is expected. Package callbacks after
+                                // it may change support and must invalidate the next member.
+                                self.checked_epoch = Some(s.simulation.support_epoch());
+                                planted(
+                                    s,
+                                    owner,
+                                    (i, id),
+                                    &mut self.ids,
+                                    (&self.copy, &self.actor),
+                                    self.look,
+                                    &self.names,
+                                )?;
+                            }
                             Err(error) => {
                                 self.phase = Phase::Undo { error: Some(error) };
                                 break;
@@ -391,6 +435,50 @@ impl CopyWork for PlantWork {
     }
 
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        if !matches!(self.phase, Phase::Undo { .. }) {
+            let current = (|| {
+                let mut actor =
+                    s.live_copy_actor(owner, Some(bri_minigames::BuildAction::Build))?;
+                if let Some(into) = &self.plant_as {
+                    ensure!(
+                        s.may_plant_into(owner, into.group, into.admin),
+                        "The destination group no longer permits this copy"
+                    );
+                    actor.owner = into.group;
+                }
+                ensure!(
+                    !(self.float_admin && matches!(self.support, Support::Float))
+                        || actor.administrator,
+                    "Administrator-only floating is no longer permitted"
+                );
+                Ok(actor)
+            })();
+            match current {
+                Ok(actor) => {
+                    let changed = self.actor.owner != actor.owner
+                        || self.actor.administrator != actor.administrator
+                        || self.actor.trust != actor.trust;
+                    if changed
+                        && self.checked_epoch.is_some()
+                        && matches!(self.phase, Phase::Check { .. } | Phase::Place { .. })
+                    {
+                        let error =
+                            anyhow::anyhow!("Build permission changed while the copy was checked");
+                        if self.ids.is_empty() {
+                            return Err(error);
+                        }
+                        self.phase = Phase::Undo { error: Some(error) };
+                    }
+                    self.actor = actor;
+                }
+                Err(error) if matches!(self.phase, Phase::Place { .. }) => {
+                    // Undo only this job's provenance-owned publications under
+                    // the existing atomic cleanup policy; publish nothing new.
+                    self.phase = Phase::Undo { error: Some(error) };
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let before = self.ids.len();
         let done = self.work(s, owner, budget);
         if self.ids.len() != before {

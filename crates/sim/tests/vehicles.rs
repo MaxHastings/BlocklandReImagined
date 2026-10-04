@@ -53,6 +53,105 @@ fn session_with(f: &Fixture, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     let owner = s.join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
     Ok((s, owner))
 }
+
+on_both! {
+/// Sending a spawn's wrench properties repaints the live vehicle, including
+/// while occupied, without resetting its identity or any physical state.
+fn wrench_send_recolors_the_existing_vehicle_without_respawning(f: &Fixture) -> anyhow::Result<()> {
+    use bri_package_runtime::ops::VehiclePaint;
+    use bri_sim::{player::PlayerTuning, session::{ActionAim, InspectMode, ToolCatalog, WrenchProperties}};
+    use bri_world::authority::Edit;
+    let (mut s, rider) = session(f)?;
+    s.set_tool_catalog(ToolCatalog {
+        vehicles: [f.vehicle(Vehicle::Car).to_string()].into(),
+        vehicle_bricks: [f.vehicle_spawn_brick().to_string()].into(),
+        ..Default::default()
+    })?;
+    let (min, max) = s.simulation().brick_box(1).unwrap();
+    let edge = Vec3::new(max.x - 0.3, max.y - 0.05, max.z - 0.3);
+    assert!(edge.x > min.x && edge.z > min.z);
+    let builder = s.join("Builder".into(), Vec3::new(edge.x, 0.05, max.z + 1.5), true)?;
+    for _ in 0..120 { s.step()?; }
+    // Use the same ordinary walking/jumping mount as the driving regression.
+    for i in 0..60 {
+        for _ in 0..10 {
+            s.movement(rider, common::move_sequence(&s), MoveInput {
+                forward: 1.0, jump: i % 3 == 0, ..Default::default()
+            })?;
+            common::hold_still(&mut s, builder);
+            s.step()?;
+        }
+        if s.mounted(rider).is_some() { break; }
+    }
+    let mounted = s.mounted(rider).expect("the rider mounted the car");
+    s.equip_tool(builder, Some(1))?;
+    let mut sequence = 0;
+    fn inspect(s: &mut Session, builder: u64, rider: u64, edge: Vec3, sequence: &mut u64) -> anyhow::Result<()> {
+        // Let the previous swing finish before sending the next ordinary click.
+        for _ in 0..60 {
+            common::hold_still(s, builder);
+            common::hold_still(s, rider);
+            s.step()?;
+        }
+        let player = s.snapshot().players.into_iter().find(|p| p.owner == builder).unwrap();
+        let d = edge - player.eye(&PlayerTuning::default());
+        let aim = ActionAim { yaw: d.x.atan2(-d.z), pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()) };
+        for down in [true, false] {
+            *sequence += 1;
+            s.command_with_aim(builder, *sequence, Command::WeaponTrigger { down }, Some(aim))?;
+        }
+        for _ in 0..8 {
+            common::hold_still(s, builder);
+            common::hold_still(s, rider);
+            s.step()?;
+        }
+        let (brick, _, mode) = common::opened(s, builder).expect("wrench inspected the spawn's exposed corner");
+        assert_eq!((brick, mode), (1, InspectMode::Wrench));
+        Ok(())
+    }
+    let properties = |recolor_vehicle| WrenchProperties {
+        vehicle: Some(f.vehicle(Vehicle::Car).into()), recolor_vehicle,
+        raycast: true, colliding: true, visible: true, ..Default::default()
+    };
+    let red = Some([1.0, 0.0, 0.0, 1.0]);
+    let blue = Some([0.0, 0.0, 1.0, 1.0]);
+    for (index, (recolor, color)) in [(false, None), (true, red), (true, blue), (true, blue)].into_iter().enumerate() {
+        if color == blue {
+            s.edit_brick(builder, 1, Edit::Color(1))?;
+        }
+        if index == 3 {
+            // Independent paint survives an unrelated dirty-brick update.
+            s.paint_vehicle(builder, mounted.0, VehiclePaint::Rgb([0.3, 0.6, 0.9]))?;
+            s.edit_brick(builder, 1, Edit::Name(Some("painted spawn".into())))?;
+        }
+        inspect(&mut s, builder, rider, edge, &mut sequence)?;
+        if index == 3 {
+            assert_eq!(s.vehicle_infos()[0].color, Some([0.3, 0.6, 0.9, 1.0]));
+        }
+        let before = s.vehicle_infos();
+        let poses = s.vehicle_poses();
+        assert!(before[0].occupants.contains(&Some(rider)), "the car remains occupied");
+        // Catalog rejection does not repaint or disturb the live vehicle.
+        let mut invalid = properties(recolor);
+        invalid.vehicle = Some("missing/vehicle".into());
+        sequence += 1;
+        assert!(s.command(builder, sequence, Command::Tool(ToolAction::SetWrench { brick: 1, properties: invalid })).is_err());
+        assert_eq!(s.vehicle_infos(), before);
+        assert_eq!(s.vehicle_poses(), poses);
+        sequence += 1;
+        s.command(builder, sequence, Command::Tool(ToolAction::SetWrench { brick: 1, properties: properties(recolor) }))?;
+        let mut expected = before;
+        expected[0].color = color;
+        assert_eq!(s.vehicle_infos(), expected, "Send changes only replicated paint");
+        assert_eq!(s.vehicle_poses(), poses, "Send leaves motion unchanged");
+        assert_eq!(s.mounted(rider), Some(mounted));
+        let replicated: Vec<bri_sim::session::VehicleInfo> = serde_json::from_slice(&serde_json::to_vec(&s.vehicle_infos())?)?;
+        assert_eq!(replicated, expected);
+    }
+    Ok(())
+}
+}
+
 /// The Blockhead Bot sample package's bot kinds.
 fn bots() -> Vec<bri_sim::bot_kind::BotKind> {
     bri_sim::bot_kind::BotPack::from_json(include_bytes!(
@@ -383,6 +482,60 @@ fn walking_into_a_vehicle_does_not_board_it_but_jumping_on_does(f: &Fixture) -> 
         Some(0),
         "the driver seat first"
     );
+    Ok(())
+}
+}
+
+on_both! {
+/// An ordinary rider runs a spawned horse through a quarter-turn doorway;
+/// the same unlinked opening remains solid. No motor or grip state is injected.
+fn a_ridden_horse_uses_the_same_linked_openings_as_a_walking_player(f: &Fixture) -> anyhow::Result<()> {
+    const PORTAL: &str = "test.horse-portal";
+    for linked in [true, false] {
+        let mut definitions = f.bricks();
+        definitions.entries.insert(PORTAL.into(), bri_sim::testing::portal(PORTAL, Some([14, 1, 30])));
+        let mut world = vehicle_world(f, f.vehicle(Vehicle::Horse));
+        for (id, position, turns) in [(2, [0., 3., -24.25], 0), (3, [30.25, 3., -24.], 1)] {
+            let mut portal = Brick::new(ContentRef::Resolved(PORTAL.into()), position, 0);
+            portal.quarter_turns = turns;
+            portal.name = linked.then(|| "horse-doorway".into());
+            world.bricks.insert(id, portal);
+        }
+        world.next_brick_id = 4;
+        let mut s = Session::new(Simulation::new(world, definitions, vec![ground()])?);
+        s.set_weapon_pack(f.weapons.clone())?;
+        s.set_vehicle_pack(f.vehicles(), Vec::new())?;
+        let owner = s.join("Rider".into(), Vec3::new(0., 0.05, 0.), true)?;
+        let mut p = Feeder { owner, sequence: 0 };
+        p.feed(&mut s, MoveInput::default(), 120)?;
+        p.board(&mut s, 0.)?;
+        p.feed(&mut s, MoveInput::default(), 60)?;
+        let mounted = s.mounted(owner).expect("ordinary jump boarded the horse");
+        let mut crossed = false;
+        for _ in 0..480 {
+            p.feed(&mut s, MoveInput { forward: 1., ..Default::default() }, 1)?;
+            assert_eq!(s.mounted(owner), Some(mounted), "the rider remains in the same seat");
+            let pose = &s.vehicle_poses()[0];
+            if pose.position[0] > 20. {
+                crossed = true;
+                assert!(linked, "an unlinked opening must remain shut");
+                assert!((pose_heading(pose.rotation).abs() - std::f32::consts::FRAC_PI_2).abs() < 0.01,
+                    "the horse turns with the opening: {pose:?}");
+                assert!(pose.velocity[0].abs() > 1. && pose.velocity[2].abs() < 0.01,
+                    "its existing running velocity turns: {pose:?}");
+                let info = &s.vehicle_infos()[0];
+                assert_eq!(info.id, mounted.0);
+                assert!(info.occupants.contains(&Some(owner)));
+                let rider = s.motion_states().into_iter().find(|(p, _)| p.owner == owner).unwrap().0;
+                assert!(rider.feet[0] > 20., "the rider follows the carried seat");
+                assert!((rider.yaw - pose_heading(pose.rotation)).abs() < 0.01);
+                assert!(Vec3::from(rider.velocity).distance(Vec3::from(pose.velocity)) < 0.01);
+                break;
+            }
+        }
+        assert_eq!(crossed, linked, "ordinary ridden horse passes precisely a linked doorway");
+        if !linked { assert!(s.vehicle_poses()[0].position[2] > -24.25, "closed-pane collision must stop the horse: {:?}", s.vehicle_poses()[0]); }
+    }
     Ok(())
 }
 }

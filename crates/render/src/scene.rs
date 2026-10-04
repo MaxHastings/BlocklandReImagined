@@ -3883,6 +3883,7 @@ impl SceneRenderer {
                                     MaterialKind::Terrain
                                         | MaterialKind::VertexLit
                                         | MaterialKind::Metal
+                                        | MaterialKind::Unlit
                                 ))
                         {
                             flush!();

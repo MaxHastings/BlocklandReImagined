@@ -32,6 +32,10 @@ pub struct Spec {
     pub schema_version: u32,
     /// The stock item whose icon's pose and framing this one takes.
     pub pose_like: String,
+    /// Clockwise screen-space quarter turns after stock-profile framing.
+    /// Changes icon orientation without changing the model or its lighting.
+    #[serde(default, skip_serializing_if = "zero_turns")]
+    pub clockwise_quarter_turns: u8,
     #[serde(default)]
     pub look: Look,
 }
@@ -65,6 +69,10 @@ pub struct Skin {
     pub puff: f32,
 }
 
+fn zero_turns(turns: &u8) -> bool {
+    *turns == 0
+}
+
 fn shell() -> [f32; 3] {
     [0.035, 0.025, 0.05]
 }
@@ -81,6 +89,10 @@ impl Spec {
             spec.schema_version
         );
         ensure!(!spec.pose_like.is_empty(), "pose_like names no item");
+        ensure!(
+            spec.clockwise_quarter_turns < 4,
+            "icon clockwise_quarter_turns must be 0 to 3"
+        );
         let colours = spec.look.base.iter().flatten().chain(
             spec.look
                 .skin
@@ -693,8 +705,17 @@ pub fn clear_border(image: &SceneImage) -> [usize; 4] {
 
 /// The model drawn under `pose` with `look`, on a clear background.
 pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage {
-    let [w, h] = pose.size.map(|v| v as usize);
-    let (sw, sh) = (w * SAMPLES, h * SAMPLES);
+    render_oriented(mesh, pose, look, label, 0)
+}
+
+fn render_oriented(mesh: &Mesh, pose: &Pose, look: &Look, label: &str, turns: u8) -> SceneImage {
+    let [iw, ih] = pose.size.map(|v| v as usize);
+    let (w, h) = if turns.is_multiple_of(2) {
+        (iw, ih)
+    } else {
+        (ih, iw)
+    };
+    let (sw, sh) = (iw * SAMPLES, ih * SAMPLES);
     let mut fine = *pose;
     fine.scale *= SAMPLES as f32;
     fine.centre *= SAMPLES as f32;
@@ -792,10 +813,18 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
     let mut rgba = Vec::with_capacity(w * h * 4);
     for y in 0..h {
         for x in 0..w {
+            // Screen orientation is a texel-coordinate transform at output,
+            // so stock framing, shading, antialiasing and artwork stay exact.
+            let (ix, iy) = match turns {
+                1 => (y, ih - 1 - x),
+                2 => (iw - 1 - x, ih - 1 - y),
+                3 => (iw - 1 - y, x),
+                _ => (x, y),
+            };
             let (mut sum, mut covered) = (Vec3::ZERO, 0usize);
             for sy in 0..SAMPLES {
                 for sx in 0..SAMPLES {
-                    if let Some(c) = colour[(y * SAMPLES + sy) * sw + x * SAMPLES + sx] {
+                    if let Some(c) = colour[(iy * SAMPLES + sy) * sw + ix * SAMPLES + sx] {
                         sum += c;
                         covered += 1;
                     }
@@ -813,8 +842,8 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
     }
     SceneImage {
         label: label.into(),
-        width: pose.size[0],
-        height: pose.size[1],
+        width: w as u32,
+        height: h as u32,
         rgba,
         srgb: false,
     }
@@ -884,7 +913,17 @@ pub fn render_posed(
     let puff = spec.look.skin.as_ref().map_or(0.0, |s| s.puff);
     let pose = frame(mesh, profile.rotation(mesh.axes), puff, target, fitted.size)
         .context("the model has no size")?;
-    Ok(render(mesh, &pose, &spec.look, label))
+    ensure!(
+        spec.clockwise_quarter_turns < 4,
+        "icon clockwise_quarter_turns must be 0 to 3"
+    );
+    Ok(render_oriented(
+        mesh,
+        &pose,
+        &spec.look,
+        label,
+        spec.clockwise_quarter_turns,
+    ))
 }
 
 /// Bumped whenever the drawing changes, so icons kept on disk from an
@@ -1110,6 +1149,65 @@ mod tests {
         assert_eq!([redrawn.width, redrawn.height], [64, 64]);
     }
 
+    #[test]
+    fn screen_quarter_turn_rotates_an_icon_clockwise_and_changes_its_cache_key() {
+        let mesh = gun();
+        let pose = Pose {
+            rotation: Profile {
+                side: -1.0,
+                roll: -0.3,
+                yaw: 0.2,
+                pitch: 0.15,
+            }
+            .rotation(mesh.axes),
+            scale: 18.0,
+            centre: Vec2::new(34.0, 24.0),
+            size: [72, 48],
+        };
+        let look = Look {
+            base: Some([0.35, 1.0, 0.8]),
+            skin: Some(Skin {
+                shell: shell(),
+                veins: Some([0.3, 0.95, 1.0]),
+                puff: puff(),
+            }),
+            textured: false,
+        };
+        let plain = render(&mesh, &pose, &look, "plain");
+        let rotated = render_oriented(&mesh, &pose, &look, "turned", 1);
+        assert_eq!((rotated.width, rotated.height), (48, 72));
+        assert!(plain.rgba.chunks_exact(4).any(|p| p[3] > 0));
+        for y in 0..plain.height as usize {
+            for x in 0..plain.width as usize {
+                let before = (y * plain.width as usize + x) * 4;
+                let after = (x * rotated.width as usize + (plain.height as usize - 1 - y)) * 4;
+                for c in 0..4 {
+                    assert_eq!(
+                        plain.rgba[before + c],
+                        rotated.rgba[after + c],
+                        "clockwise pixel ({x},{y}) channel {c}"
+                    );
+                }
+            }
+        }
+        let spec = Spec::parse(br#"{"schema_version":1,"pose_like":"stock"}"#).unwrap();
+        assert_eq!(spec.clockwise_quarter_turns, 0);
+        let mut request = Request {
+            spec,
+            mesh: mesh.clone(),
+            reference: mesh,
+            icon: plain,
+            label: "icon".into(),
+        };
+        let old = request.digest();
+        request.spec.clockwise_quarter_turns = 1;
+        assert_ne!(request.digest(), old);
+        assert!(
+            Spec::parse(br#"{"schema_version":1,"pose_like":"stock","clockwise_quarter_turns":4}"#)
+                .is_err()
+        );
+    }
+
     /// Max, v0.1.10: the Gravity Gun icon was "great just seems to be
     /// wrong perspective angle". An item drawn like a stock one is seen in
     /// the same profile: its own forward and up point the same ways in the
@@ -1141,6 +1239,7 @@ mod tests {
         let spec = Spec {
             schema_version: 1,
             pose_like: "stock".into(),
+            clockwise_quarter_turns: 0,
             look: Look {
                 base: None,
                 skin: None,
@@ -1211,6 +1310,7 @@ mod tests {
         let spec = Spec {
             schema_version: 1,
             pose_like: "stock".into(),
+            clockwise_quarter_turns: 0,
             look: Look {
                 base: None,
                 skin: None,

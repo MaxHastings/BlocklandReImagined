@@ -173,7 +173,8 @@ impl CopyWork for SuperCutWork {
             ..Default::default()
         }
     }
-    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+    fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor = s.live_copy_actor(owner, Some(bri_minigames::BuildAction::Build))?;
         let placed = self.placed.len();
         let done = self.work(s, budget);
         if self.placed.len() != placed {
@@ -326,7 +327,8 @@ impl CopyWork for FillWork {
             ..Default::default()
         }
     }
-    fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
+    fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
+        self.actor = s.live_copy_actor(owner, Some(bri_minigames::BuildAction::Build))?;
         let planted = self.ids.len();
         let done = self.work(s, budget);
         if self.ids.len() != planted {

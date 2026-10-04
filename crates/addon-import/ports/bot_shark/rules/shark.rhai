@@ -79,6 +79,13 @@ fn cancel_restart(id) {
     if owned_bot(holder) { rest_bot(id, false); }
 }
 fn release_actor(id) {
+    // Completion is an identity transition, separate from the released grip.
+    let finishing = get("finishing");
+    for key in finishing.keys() {
+        let finish = finishing[key];
+        if finish.holder == id || finish.victim == id { finishing.remove(key); }
+    }
+    set("finishing", finishing);
     cancel_restart(id);
     let restarts = get("restarts");
     for key in restarts.keys() {
@@ -105,6 +112,11 @@ fn on_minigame(event) {
         set("known", known);
     }
     if event.kind in ["reset", "ended", "round_end", "configured", "loaded", "teams"] {
+        let finishing = get("finishing");
+        for key in finishing.keys() {
+            if finishing[key].game == event.game { finishing.remove(key); }
+        }
+        set("finishing", finishing);
         let restarts = get("restarts");
         for key in restarts.keys() {
             if restarts[key].game == event.game { cancel_restart(parse_int(key)); }
@@ -121,6 +133,18 @@ fn on_brick(event, id, by, info) {
     if event in ["planted", "loaded"] { set_brick_shown(id, false, false, false); }
 }
 fn on_damage(victim_id, attacker, amount, info) {
+    let finishing = get("finishing");
+    if attacker != () && `${attacker}` in finishing &&
+       info.kind == "weapon" && info.type == {{bite_type|text}} {
+        // Typed finish damage uses the ordinary weapon hook too. Observe the
+        // queued capture's identity, then let damage/death policy run unchanged.
+        // An unrelated bite cannot begin another capture during this transition.
+        if finishing[`${attacker}`].victim == victim_id {
+            finishing.remove(`${attacker}`);
+            set("finishing", finishing);
+        }
+        return ();
+    }
     let grabs = get("grabs");
     let victim = player(victim_id);
     let held_key = `${victim_id}`;
@@ -131,7 +155,7 @@ fn on_damage(victim_id, attacker, amount, info) {
         if tick() - grab.at < 24 { return 0.0; }
         if amount >= 50.0 || roll(victim_id, 31, 4) == 0 { release_grab(victim_id, true); }
     }
-    if attacker == () || info.kind != "weapon" || info.type != "Bite" { return (); }
+    if attacker == () || info.kind != "weapon" || info.type != {{bite_type|text}} { return (); }
     let holder = player(attacker);
     if !owned_shark(holder) || !holder.bot || !holder.alive || victim == () || !victim.alive || holder.mounted {
         return ();
@@ -188,6 +212,13 @@ fn on_tick() {
         }
     }
     set("known", live);
+    let finishing = get("finishing");
+    for key in finishing.keys() {
+        // Queued operations finish in their originating tick. If no matching
+        // hook/death observed completion, cancel before ordinary contacts resume.
+        if tick() > finishing[key].at { finishing.remove(key); }
+    }
+    set("finishing", finishing);
     let restarts = get("restarts");
     for key in restarts.keys() {
         let holder = player(parse_int(key));
@@ -207,12 +238,18 @@ fn on_tick() {
            victim.minigame != grab.game || !can_damage(grab.holder, grab.victim) {
             release_grab(grab.holder, false);
         } else if tick() - grab.at >= 600 {
-            // Permission and actual mount were observed just above. Ordinary
-            // attributed damage retains score/death policy and cannot recurse.
+            // Retain the observed capture identity while releasing its grip.
+            // Typed damage then passes through on_damage as completion rather
+            // than becoming a fresh body-contact capture.
+            let finishing = get("finishing");
+            finishing[key] = #{holder: grab.holder, victim: grab.victim,
+                               game: grab.game, at: tick()};
+            set("finishing", finishing);
+            // Ordinary attributed damage retains score/death policy.
             // Release first: ordinary lethal damage itself clears mounts,
             // so a later unmount would target an already-cleared relationship.
             release_grab(grab.holder, false);
-            damage(grab.victim, 1000.0, grab.holder);
+            damage(grab.victim, 1000.0, grab.holder, {{bite_type|text}});
         }
     }
 }

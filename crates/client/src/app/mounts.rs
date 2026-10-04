@@ -45,6 +45,9 @@ impl App {
         let wanted = driven.and_then(|id| {
             let info = view.vehicles.get(&id)?;
             let pose = view.vehicle_poses.get(&id)?;
+            motion
+                .drive_anchor_ready(id, pose.tick, pose.driver_input, pose.passage_frame)
+                .then_some(())?;
             let d = assets.definition(&info.definition)?;
             let target = drive_target(info, d, pose.driver_steering.0)?;
             (motion.drive_state.refused.as_ref() != Some(&target)).then_some(())?;
@@ -55,7 +58,11 @@ impl App {
         // A new vehicle, a respawn under a new id, a changed definition or
         // scale, or leaving the seat: start again or stop.
         let target = wanted.as_ref().map(|(t, ..)| t.clone());
-        if target != motion.drive_state.target {
+        if target != motion.drive_state.target
+            || target
+                .as_ref()
+                .is_some_and(|t| motion.driving() != Some(t.id))
+        {
             motion.drive_state.target = target;
             let request = wanted.as_ref().map(|(target, info, pose)| {
                 let owner = view.owner;
@@ -148,7 +155,7 @@ impl App {
                 jetting: false,
                 jump: Default::default(),
                 archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
-                scale: 1.0,
+                scale: info.scale,
                 energy: 0.0,
                 speed_scale: 1.0,
                 tick: Default::default(),
@@ -158,10 +165,10 @@ impl App {
                 dead: info.destroyed,
                 ..Default::default()
             };
-            mount_meshes
-                .get_mut(&info.id)
-                .unwrap()
-                .pose_with_animation(avatar_assets, &state, animation_time, &input)?;
+            let mesh = mount_meshes.get_mut(&info.id).unwrap();
+            mesh.instanced = true;
+            mesh.straddle = vehicles.straddle(info.id).copied();
+            mesh.pose_with_animation(avatar_assets, &state, animation_time, &input)?;
         }
         Ok(())
     }

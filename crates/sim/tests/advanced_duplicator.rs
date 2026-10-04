@@ -1480,3 +1480,244 @@ fn a_copy_carries_its_bricks_settings_and_turns_them_with_it() {
     // The original keeps its own.
     assert_eq!(bricks[&a].events[0].output, "fireRelayNorth");
 }
+
+#[test]
+fn atomic_blueprint_controls_check_internal_support_across_the_actual_map() {
+    for (name, partial_floor, accepted) in [
+        ("Copper copy courtyard", false, false),
+        ("Renamed open workshop", true, true),
+    ] {
+        // Real native map surface. A plate spans two attachment cells; the
+        // partial-floor control obstructs one but leaves the other clear.
+        let right = if partial_floor { 0.5 } else { 10.0 };
+        let left = if partial_floor { 0.0 } else { -10.0 };
+        let detail = bri_content::interior::Detail {
+            minimum_pixels: 0,
+            materials: vec![],
+            surfaces: vec![],
+            lightmaps: vec![],
+            collision_triangles: vec![
+                [[left, 0., -10.], [left, 0., 10.], [right, 0., 10.]],
+                [[left, 0., -10.], [right, 0., 10.], [right, 0., -10.]],
+            ],
+            convex_hulls: vec![],
+            ambient: [0; 4],
+            alarm_ambient: [0; 4],
+            has_alarm: false,
+        };
+        let mesh = bri_physics::content::interior_collider(&detail, glam::Mat4::IDENTITY).unwrap();
+        let mut layout = World::new(name.into(), "unfamiliar-native-map".into(), vec![[1.; 4]]);
+        // A trusted loaded anchor above the target floor. Actual source
+        // bricks below are planted normally on their separate source platform.
+        let anchor = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.5, 0.25], 1);
+        layout.bricks.insert(1, anchor);
+        layout.next_brick_id = 2;
+        let sim = Simulation::new(
+            layout,
+            definitions(),
+            vec![
+                mesh,
+                ColliderBuilder::cuboid(1., 0.5, 4.).translation(Vector::new(4.5, -0.5, 0.25)),
+            ],
+        )
+        .unwrap();
+        let mut g = Game {
+            s: Session::new(sim),
+            seq: BTreeMap::new(),
+        };
+        g.s.set_spawn_points(vec![Vec3::new(4.5, 0.05, 3.0)])
+            .unwrap();
+        g.s.set_weapon_pack(tool_pack()).unwrap();
+        g.s.install_packages(add_ons(), None).unwrap();
+        let host =
+            g.s.join("Host".into(), Vec3::new(4.5, 0.05, 3.0), true)
+                .unwrap();
+        for height in [0.1, 0.3, 0.5] {
+            g.plant(host, [4.5, height, 0.25]);
+        }
+        assert_eq!(
+            copy_box(&mut g, host, [4., 0., 0.], [5., 0.6, 0.5], 100).unwrap(),
+            3
+        );
+        let copy = g.s.blueprint(host).unwrap();
+        assert_eq!(copy.size, [2, 3, 1]);
+        assert!(copy.bricks.iter().all(|b| b.position[1] > 0.0));
+        let before = g.bricks();
+        g.notices(host);
+        // Retain the real sliced-copy budget, rather than running a synchronous
+        // engine-only group or allowing the free-placement phase to bypass it.
+        g.s.set_copy_work(30);
+        let reply = g.place(host, [0.5, -0.2, 0.0], 0, false);
+        assert!(
+            reply.is_ok(),
+            "the ordinary copy command must start: {reply:?}"
+        );
+        assert!(
+            g.s.copy_working(host),
+            "native checks must span ticks at this budget"
+        );
+        let mut ticks = 0;
+        while g.s.copy_working(host) {
+            if !accepted {
+                assert_eq!(
+                    g.bricks(),
+                    before,
+                    "preflight must publish no invalid member"
+                );
+            }
+            g.steps(1);
+            ticks += 1;
+            assert!(ticks < 200, "the bounded normal copy job stalled in {name}");
+        }
+        if accepted {
+            assert_eq!(
+                g.bricks().len(),
+                before.len() + 3,
+                "a clear connector remains usable in {name}"
+            );
+            assert!(g.bricks().values().any(
+                |b| (b.position[0] - 0.5).abs() < 0.001 && (b.position[1] + 0.1).abs() < 0.001
+            ));
+        } else {
+            assert_eq!(
+                g.bricks(),
+                before,
+                "the actual atomic copy must reject its floor-crossing member"
+            );
+        }
+    }
+}
+
+#[test]
+fn sliced_cut_and_paint_use_live_trust_after_an_ordinary_revocation() {
+    for command in ["cut", "fillcolor"] {
+        let mut g = Game::new();
+        let ann =
+            g.s.join_verified(
+                "Ann".into(),
+                Vec3::new(0., 0.05, 3.),
+                false,
+                Some(bri_admin::Principal([91; 32])),
+            )
+            .unwrap();
+        let bob =
+            g.s.join_verified(
+                "Bob".into(),
+                Vec3::new(2., 0.05, 3.),
+                false,
+                Some(bri_admin::Principal([92; 32])),
+            )
+            .unwrap();
+        let mut ids = Vec::new();
+        for x in 0..4 {
+            for z in 0..6 {
+                ids.push(g.plant_as(
+                    bob,
+                    "plate",
+                    [0.5 + x as f32, 0.1, -5.75 + z as f32 * 0.5],
+                    2,
+                ));
+            }
+        }
+        g.cmd(
+            bob,
+            Command::TrustInvite {
+                target: ann,
+                level: 2,
+            },
+        )
+        .unwrap();
+        g.cmd(ann, Command::AcceptTrust { from: bob }).unwrap();
+        assert_eq!(
+            copy_box(&mut g, ann, [0., 0., -6.], [4., 0.2, -3.], 100).unwrap(),
+            24
+        );
+        g.s.set_copy_work(32);
+        g.steps(121);
+        g.typed(ann, command);
+        assert!(
+            g.s.copy_working(ann),
+            "the real package mutation must have a later slice"
+        );
+        assert!(
+            ids.iter().all(|id| g
+                .bricks()
+                .get(id)
+                .is_some_and(|b| b.owner == bob && b.color == 2)),
+            "the initial budget should be spent on all-or-none trust checking"
+        );
+        g.cmd(
+            bob,
+            Command::DemoteTrust {
+                target: ann,
+                level: 0,
+            },
+        )
+        .unwrap();
+        let mut ticks = 0;
+        while g.s.copy_working(ann) {
+            g.steps(1);
+            ticks += 1;
+            assert!(ticks < 100, "the revoked {command} job failed to terminate");
+            let world = g.bricks();
+            assert!(
+                ids.iter().all(|id| world
+                    .get(id)
+                    .is_some_and(|b| b.owner == bob && b.color == 2)),
+                "a cached actor may not continue {command} after live trust revocation"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_sliced_required_copy_loses_its_preflight_when_the_anchor_is_cut() {
+    let mut g = Game::new();
+    let creator = host(&mut g);
+    let editor =
+        g.s.join("Anchor editor".into(), Vec3::new(0., 0.05, 3.), true)
+            .unwrap();
+    let anchor = g.plant(creator, [4.5, 0.1, 0.25]);
+    for n in 0..24 {
+        g.plant(creator, [8.5, 0.1 + n as f32 * 0.2, 0.25]);
+    }
+    assert_eq!(
+        copy_box(&mut g, creator, [8., 0., 0.], [9., 4.8, 0.5], 100).unwrap(),
+        24
+    );
+    assert_eq!(
+        copy_box(&mut g, editor, [4., 0., 0.], [5., 0.2, 0.5], 100).unwrap(),
+        1
+    );
+    g.s.set_copy_work(30);
+    g.place(creator, [4.5, 0.2, 0.], 0, false).unwrap();
+    assert!(g.s.copy_working(creator));
+    assert_eq!(g.bricks().len(), 25, "the copy must still be preflighting");
+    g.typed(editor, "cut");
+    for _ in 0..10 {
+        if !g.bricks().contains_key(&anchor) {
+            break;
+        }
+        g.steps(1);
+    }
+    assert!(
+        !g.bricks().contains_key(&anchor),
+        "ordinary cut really removes the sole anchor"
+    );
+    let originals = g.bricks();
+    for _ in 0..600 {
+        if !g.s.copy_working(creator) {
+            break;
+        }
+        g.steps(1);
+    }
+    assert!(
+        !g.s.copy_working(creator),
+        "invalidated work terminates within its original bound"
+    );
+    assert_eq!(
+        g.bricks(),
+        originals,
+        "no unsupported copy survives the anchor removal"
+    );
+}

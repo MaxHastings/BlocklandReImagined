@@ -401,3 +401,281 @@ fn long_targeting_rays_match_a_brute_force_search_of_every_brick() {
     }
     assert!(hits > 200, "only {hits} rays hit bricks");
 }
+
+#[test]
+fn support_cannot_admit_a_hanging_or_copied_brick_inside_authored_map_geometry() {
+    use bri_sim::simulation::PlantFailure;
+    // Closed authored floor volume, kept as triangles by the actual interior
+    // adapter. The brick below merely touches its top boundary and then lies
+    // inside; surface contact alone cannot establish its solid occupancy.
+    let vertices = [
+        [-10.0, -2.0, -10.0],
+        [-10.0, -2.0, 10.0],
+        [10.0, -2.0, 10.0],
+        [10.0, -2.0, -10.0],
+        [-10.0, 0.0, -10.0],
+        [-10.0, 0.0, 10.0],
+        [10.0, 0.0, 10.0],
+        [10.0, 0.0, -10.0],
+    ];
+    let triangles = [
+        [4, 5, 6],
+        [4, 6, 7],
+        [0, 2, 1],
+        [0, 3, 2],
+        [0, 4, 7],
+        [0, 7, 3],
+        [1, 2, 6],
+        [1, 6, 5],
+        [0, 1, 5],
+        [0, 5, 4],
+        [3, 7, 6],
+        [3, 6, 2],
+    ];
+    let detail = bri_content::interior::Detail {
+        minimum_pixels: 0,
+        materials: vec![],
+        surfaces: vec![],
+        lightmaps: vec![],
+        collision_triangles: triangles.map(|t| t.map(|i| vertices[i])).into(),
+        convex_hulls: vec![vertices.to_vec()],
+        ambient: [0; 4],
+        alarm_ambient: [0; 4],
+        has_alarm: false,
+    };
+    for (name, offset, rotation) in [
+        ("Slate atrium", Vec3::ZERO, 0.0),
+        ("Renamed copper workshop", Vec3::new(12.0, 4.0, -7.5), 0.73),
+    ] {
+        let transform =
+            glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(rotation), offset);
+        let mesh = bri_physics::content::interior_collider(&detail, transform).unwrap();
+        let mut layout = world();
+        layout.name = name.into();
+        let mut sim = Simulation::new(layout, definitions(), vec![mesh]).unwrap();
+        let owner = actor(1);
+        let builder = Builder {
+            actor: &owner,
+            position: offset + Vec3::Y,
+            reach: 50.0,
+        };
+        let placed = |height| {
+            let mut b = brick(height);
+            b.position = (Vec3::from(b.position) + offset).to_array();
+            b
+        };
+        sim.plant(&builder, placed(0.1)).unwrap();
+        let before = sim.state().clone();
+        let error = sim.plant(&builder, placed(-0.1)).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PlantFailure>(),
+            Some(&PlantFailure::Buried),
+            "support must not hide solid map occupancy in {name}: {error}"
+        );
+        assert_eq!(*sim.state(), before, "rejection must be atomic");
+        let error = sim
+            .plant_group(&owner, vec![placed(-0.1), placed(-0.3)])
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PlantFailure>(),
+            Some(&PlantFailure::Buried),
+            "a connected copied group must obey the same map occupancy rule: {error}"
+        );
+        assert_eq!(*sim.state(), before, "copied rejection must be atomic");
+        sim.plant_group(&owner, vec![placed(0.3), placed(0.5)])
+            .unwrap();
+    }
+}
+#[test]
+fn open_disconnected_map_surfaces_do_not_fill_the_space_between_them() {
+    // One native-adapter collider contains two upward-facing disconnected
+    // panels. Its broad AABB includes this free middle gap, but it is not
+    // a closed solid and the nearest upper panel edge cannot fill the gap.
+    let vertices = [
+        [-10., 0., -10.],
+        [-10., 0., 10.],
+        [-8., 0., 10.],
+        [-8., 0., -10.],
+        [2., 2., -10.],
+        [2., 2., 10.],
+        [4., 2., 10.],
+        [4., 2., -10.],
+    ];
+    let triangles = [[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]];
+    let detail = bri_content::interior::Detail {
+        minimum_pixels: 0,
+        materials: vec![],
+        surfaces: vec![],
+        lightmaps: vec![],
+        collision_triangles: triangles.map(|t| t.map(|i| vertices[i])).into(),
+        convex_hulls: vec![],
+        ambient: [0; 4],
+        alarm_ambient: [0; 4],
+        has_alarm: false,
+    };
+    let mesh = bri_physics::content::interior_collider(&detail, glam::Mat4::IDENTITY).unwrap();
+    let mut layout = world();
+    let mut support = brick(0.9);
+    support.owner = 1;
+    layout.bricks.insert(1, support);
+    layout.next_brick_id = 2;
+    let mut sim = Simulation::new(layout, definitions(), vec![mesh]).unwrap();
+    let owner = actor(1);
+    let builder = Builder {
+        actor: &owner,
+        position: Vec3::new(0.5, 1.1, 0.25),
+        reach: 50.,
+    };
+    let before = sim.state().bricks.len();
+    sim.plant(&builder, brick(1.1))
+        .expect("A supported brick in the open gap must remain plantable");
+    assert_eq!(sim.state().bricks.len(), before + 1);
+}
+#[test]
+fn copied_group_internal_connectors_cannot_cross_a_native_map_floor() {
+    let detail = bri_content::interior::Detail {
+        minimum_pixels: 0,
+        materials: vec![],
+        surfaces: vec![],
+        lightmaps: vec![],
+        collision_triangles: vec![
+            [[-10., 0., -10.], [-10., 0., 10.], [10., 0., 10.]],
+            [[-10., 0., -10.], [10., 0., 10.], [10., 0., -10.]],
+        ],
+        convex_hulls: vec![],
+        ambient: [0; 4],
+        alarm_ambient: [0; 4],
+        has_alarm: false,
+    };
+    let mesh = bri_physics::content::interior_collider(&detail, glam::Mat4::IDENTITY).unwrap();
+    let mut layout = world();
+    let mut anchor = brick(0.5);
+    anchor.owner = 1;
+    layout.bricks.insert(1, anchor);
+    layout.next_brick_id = 2;
+    let mut sim = Simulation::new(layout, definitions(), vec![mesh]).unwrap();
+    let owner = actor(1);
+    let before = sim.state().clone();
+    sim.plant_group(&owner, vec![brick(0.3), brick(0.1), brick(-0.1)])
+        .expect_err("A copied column must not connect internally through the map floor");
+    assert_eq!(*sim.state(), before, "Copied rejection must be atomic");
+}
+
+#[test]
+fn floor_dip_root_still_accepts_stacking_but_not_support_through_its_floor() {
+    use bri_sim::simulation::PlantFailure;
+    // The root's cell centre is exactly on the allowed floor-dip boundary.
+    // This is valid support from above, but cannot bridge that floor downward.
+    let raised_floor =
+        ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(0.0, -0.4, 0.0));
+    let mut sim = Simulation::new(world(), definitions(), vec![raised_floor]).unwrap();
+    let owner = actor(1);
+    let builder = Builder {
+        actor: &owner,
+        position: Vec3::Y,
+        reach: 50.0,
+    };
+    sim.plant(&builder, brick(0.1)).unwrap();
+    sim.plant(&builder, brick(0.3))
+        .expect("a floor-dipped root still supports a plate above");
+    let before = sim.state().clone();
+    let error = sim.plant(&builder, brick(-0.1)).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<PlantFailure>(),
+        Some(&PlantFailure::Buried)
+    );
+    assert_eq!(*sim.state(), before);
+}
+
+#[test]
+fn copied_group_keeps_a_clear_attachment_beside_a_partial_map_floor() {
+    // The plate spans two stud cells. Only the first connector is obstructed;
+    // the second is clear, so normal copied hanging support remains valid.
+    let detail = bri_content::interior::Detail {
+        minimum_pixels: 0,
+        materials: vec![],
+        surfaces: vec![],
+        lightmaps: vec![],
+        collision_triangles: vec![
+            [[0., 0., -10.], [0., 0., 10.], [0.5, 0., 10.]],
+            [[0., 0., -10.], [0.5, 0., 10.], [0.5, 0., -10.]],
+        ],
+        convex_hulls: vec![],
+        ambient: [0; 4],
+        alarm_ambient: [0; 4],
+        has_alarm: false,
+    };
+    let mesh = bri_physics::content::interior_collider(&detail, glam::Mat4::IDENTITY).unwrap();
+    let mut layout = world();
+    let mut anchor = brick(0.5);
+    anchor.owner = 1;
+    layout.bricks.insert(1, anchor);
+    layout.next_brick_id = 2;
+    let mut sim = Simulation::new(layout, definitions(), vec![mesh]).unwrap();
+    let owner = actor(1);
+    let before = sim.state().bricks.len();
+    let ids = sim
+        .plant_group(&owner, vec![brick(0.3), brick(0.1), brick(-0.1)])
+        .expect("An unblocked matching connector must preserve normal copied support");
+    assert_eq!(ids.len(), 3);
+    assert_eq!(sim.state().bricks.len(), before + 3);
+}
+
+#[test]
+fn pathological_map_blocked_attachment_query_refuses_with_a_limit_before_publication() {
+    let mut defs = definitions();
+    let mut wide = defs.entries["plate"].clone();
+    wide.mesh.id = "renamed-wide-attachment".into();
+    wide.mesh.footprint_studs = [64, 64];
+    wide.mesh.attachment_rows = vec!["b".repeat(64); 64];
+    wide.collision = CollisionBody {
+        id: wide.mesh.id.clone(),
+        parts: vec![Part::Box {
+            center: [0.0; 3],
+            size: [32.0, 0.2, 32.0],
+        }],
+    };
+    wide.shape = bri_physics::content::collider(&wide.collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    defs.entries.insert("renamed-wide-attachment".into(), wide);
+    let mut w = world();
+    let root = Brick::new(
+        ContentRef::Resolved("renamed-wide-attachment".into()),
+        [16.0, 0.1, 16.0],
+        1,
+    );
+    w.bricks.insert(1, root);
+    w.next_brick_id = 2;
+    let triangles = ColliderBuilder::trimesh(
+        vec![
+            Vector::new(-1.0, 0.0, -1.0),
+            Vector::new(-1.0, 0.0, 33.0),
+            Vector::new(33.0, 0.0, 33.0),
+            Vector::new(33.0, 0.0, -1.0),
+        ],
+        vec![[0, 1, 2], [0, 2, 3]],
+    )
+    .unwrap();
+    let mut sim = Simulation::new(w, defs, vec![triangles]).unwrap();
+    let owner = actor(1);
+    let builder = Builder {
+        actor: &owner,
+        position: Vec3::new(16.0, 1.0, 16.0),
+        reach: 50.0,
+    };
+    let before = sim.state().clone();
+    let hanging = Brick::new(
+        ContentRef::Resolved("renamed-wide-attachment".into()),
+        [16.0, -0.1, 16.0],
+        1,
+    );
+    let error = sim.plant(&builder, hanging).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<bri_sim::simulation::PlantFailure>(),
+        Some(&bri_sim::simulation::PlantFailure::Limit)
+    );
+    assert_eq!(*sim.state(), before);
+}

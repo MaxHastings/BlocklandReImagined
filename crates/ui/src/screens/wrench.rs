@@ -35,26 +35,14 @@ fn resource_menu(
     list: &[Choice],
     current: Option<&str>,
 ) -> Vec<Option<String>> {
-    let mut ids = vec![None];
-    let mut items = vec![(" NONE".into(), 0)];
-    for c in list {
-        items.push((c.name.clone(), ids.len() as i64));
-        ids.push(Some(c.id.clone()));
-    }
-    let selected = ids
-        .iter()
-        .position(|id| id.as_deref() == current)
-        .unwrap_or_else(|| {
-            items.push((
-                format!("Unavailable: {}", current.unwrap_or_default()),
-                ids.len() as i64,
-            ));
-            ids.push(current.map(str::to_string));
-            ids.len() - 1
-        });
-    view.state(node).items = items;
-    view.select(node, Some(selected as i64));
-    ids
+    resource_choices(
+        view,
+        node,
+        list.iter()
+            .map(|choice| (choice.id.as_str(), choice.name.as_str())),
+        current,
+        true,
+    )
 }
 
 fn suffix(field: WrenchField) -> &'static str {

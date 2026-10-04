@@ -721,10 +721,20 @@ fn ungrounded_collateral_on_the_same_input_is_not_omitted() {
         .0;
     assert!(s.simulation().state().bricks[&source].colliding);
     s.take_private_notices();
-    s.explain_rules(owner, source).unwrap();
+    sequence += 1;
+    s.command(
+        owner,
+        sequence,
+        Command::Package(bri_sim::session::PackageCommand {
+            package: String::new(),
+            command: "ruleexplain".into(),
+            args: vec![bri_sim::session::PackageArg::String(source.to_string())],
+        }),
+    )
+    .unwrap();
     let notices = s.take_private_notices();
     assert!(notices.iter().any(|(who, notice)| *who == owner
-        && matches!(notice, bri_sim::session::Notice::Chat(text) if text.starts_with("[NPC ") && text.contains("unsupported rule semantics"))), "creator Explain exposes bounded bot reason: {notices:?}");
+        && matches!(notice, bri_sim::session::Notice::Chat(text) if text.starts_with(&format!("[Events {source}] [NPC ")) && text.contains("unsupported rule semantics"))), "creator Explain exposes bounded bot reason: {notices:?}");
 }
 
 #[test]

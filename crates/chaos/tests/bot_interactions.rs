@@ -1183,3 +1183,166 @@ fn a_chassis_replans_or_stops_at_a_gap_only_a_pedestrian_can_fit() {
         g.diagnostics()
     );
 }
+
+/// The gunner may fire while the independent driver pursues a retreating
+/// visible human. All movement, boarding and firing are native controls.
+#[test]
+fn an_armed_crew_advances_while_its_visible_target_retreats() {
+    for (kind, driver_seat, gunner_seat) in [(ROVER, 2, 0), (CARRIER, 1, 2)] {
+        let mut g = Game::new(kind, 2, 1.0, false);
+        let (driver, gunner) = g.crew(driver_seat, gunner_seat);
+        let chassis = g.position();
+        let human = Vec3::from(
+            g.s.snapshot()
+                .players
+                .iter()
+                .find(|p| p.owner == g.human)
+                .unwrap()
+                .feet,
+        );
+        let away = Vec3::new(human.x - chassis.x, 0.0, human.z - chassis.z).normalize();
+        let input = MoveInput {
+            forward: 1.0,
+            yaw: away.x.atan2(-away.z),
+            ..Default::default()
+        };
+        let mut requested = 0;
+        let mut shots = std::collections::BTreeSet::new();
+        for _ in 0..120 * 4 {
+            g.steps_with_input(1, input);
+            let thought =
+                g.s.bot_thoughts()
+                    .into_iter()
+                    .find(|t| t.bot == driver)
+                    .unwrap();
+            requested += usize::from(
+                thought.visible == Some(g.human)
+                    && thought.behaviour == "chase"
+                    && thought.goal.is_some(),
+            );
+            for shot in g.s.weapon_view().fired().filter(|p| p.source.0 == gunner) {
+                shots.insert(shot.id);
+            }
+        }
+        let after = Vec3::from(
+            g.s.snapshot()
+                .players
+                .iter()
+                .find(|p| p.owner == g.human)
+                .unwrap()
+                .feet,
+        );
+        let human_retreat = (after - human).dot(away);
+        let advance = (g.position() - chassis).dot(away);
+        eprintln!(
+            "{kind} retreat: human_retreat={human_retreat:.3} chassis_advance={advance:.3} requested_driver_ticks={requested} observed_mounted_projectiles={}",
+            shots.len()
+        );
+        assert!(
+            human_retreat > 8.0,
+            "human actually retreated {human_retreat}; {}",
+            g.diagnostics()
+        );
+        assert!(
+            requested > 120,
+            "driver requested visible pursuit; {}",
+            g.diagnostics()
+        );
+        assert!(
+            advance > 3.0,
+            "ordinary wheels advanced {kind}: {advance}; {}",
+            g.diagnostics()
+        );
+        assert!(
+            !shots.is_empty(),
+            "actual gunner fired during pursuit; {}",
+            g.diagnostics()
+        );
+        assert_eq!(g.s.mounted(driver), Some((g.vehicle, driver_seat as u8)));
+        assert_eq!(g.s.mounted(gunner), Some((g.vehicle, gunner_seat as u8)));
+    }
+}
+
+/// Different unseen target transforms cannot steer the same chassis search.
+/// Ordinary admin DropPlayerAtCamera creates the paired human hiding setup;
+/// the bots themselves still choose and execute normal wheel controls.
+#[test]
+fn a_crew_pursues_only_the_last_observation_after_its_target_hides() {
+    for (kind, driver_seat, gunner_seat) in [(ROVER, 2, 0), (CARRIER, 1, 2)] {
+        let mut a = Game::new(kind, 2, 1.0, false);
+        let mut b = Game::new(kind, 2, 1.0, false);
+        let (driver, _) = a.crew(driver_seat, gunner_seat);
+        let (other_driver, _) = b.crew(driver_seat, gunner_seat);
+        assert_eq!(driver, other_driver);
+        a.steps(60);
+        b.steps(60);
+        let old =
+            a.s.bot_thoughts()
+                .into_iter()
+                .find(|t| t.bot == driver)
+                .unwrap()
+                .remembered
+                .expect("driver really observed the human");
+        let before = a.position();
+        let toward =
+            Vec3::new(old.position[0] - before.x, 0.0, old.position[2] - before.z).normalize();
+        for (g, x) in [(&mut a, -150.0), (&mut b, 150.0)] {
+            g.send(
+                g.human,
+                Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+                    eye: [x, 1.65, -150.0],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                })),
+            );
+        }
+        let mut searches = 0;
+        for _ in 0..120 * 2 {
+            a.steps(1);
+            b.steps(1);
+            let one =
+                a.s.bot_thoughts()
+                    .into_iter()
+                    .find(|t| t.bot == driver)
+                    .unwrap();
+            let two =
+                b.s.bot_thoughts()
+                    .into_iter()
+                    .find(|t| t.bot == driver)
+                    .unwrap();
+            assert_eq!(one.visible, None, "human is genuinely unseen");
+            assert_eq!(two.visible, None, "paired human is genuinely unseen");
+            for thought in [&one, &two] {
+                let evidence = thought.remembered.expect("dated observation remains valid");
+                assert_eq!(evidence.position, old.position);
+                assert_eq!(evidence.observed, old.observed);
+                assert_eq!(evidence.expires, old.expires);
+            }
+            assert_eq!(
+                one.goal, two.goal,
+                "hidden transforms cannot change requested travel"
+            );
+            assert_eq!(one.next, two.next);
+            assert!(
+                a.position().distance(b.position()) < 0.001,
+                "actual chassis trajectory ignores unseen transform"
+            );
+            searches += usize::from(one.behaviour == "search" && one.goal.is_some());
+        }
+        assert!(
+            searches > 60,
+            "driver actually requested last-observed search; {}",
+            a.diagnostics()
+        );
+        let advance = (a.position() - before).dot(toward);
+        eprintln!(
+            "{kind} hidden: chassis_advance_to_observation={advance:.3} search_with_goal_ticks={searches} fixed_evidence={old:?}"
+        );
+        assert!(
+            advance > 1.0,
+            "native chassis moves toward dated observation {advance}; {}",
+            a.diagnostics()
+        );
+        assert_eq!(a.s.mounted(driver), Some((a.vehicle, driver_seat as u8)));
+    }
+}

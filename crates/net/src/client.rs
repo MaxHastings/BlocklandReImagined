@@ -204,7 +204,7 @@ impl Client {
     }
     /// Joins like [`Client::connect_reporting`], downloading whatever the
     /// server runs that this client does not, exactly (by content hash):
-    /// client-only packages after joining (HUD panels, models), and when
+    /// all offered packages before admission (HUD panels, models), and when
     /// the server refuses because shared packages differ, every package it
     /// offers that the client lacks or has in another version, into
     /// `cache`, then joins once more. Shared packages the client runs and
@@ -214,8 +214,11 @@ impl Client {
     /// that list again. Nothing asks the player: a join downloads what it
     /// needs, as v20 did. What the server does not offer, or what fails to
     /// download or load, is joined without ([`Client::unavailable`]); the
-    /// server tells the player what is missing. `load` may run twice: once
-    /// more with nothing fetched when the fetched packages fail to load.
+    /// server tells the player what is missing. `load` runs before admission
+    /// and may run again for removed shared packages or load-error fallback.
+    /// A loader may return [`JoinPreparationPending`] to suspend admission
+    /// while its caller prepares the fetched content. This is not a load
+    /// failure and never takes the joining-without fallback.
     /// Returns what was fetched and what was left out.
     #[allow(clippy::too_many_arguments)]
     pub async fn connect_fetching(
@@ -237,6 +240,35 @@ impl Client {
         Vec<bri_package::environment::PackageRef>,
     )> {
         let have = packages.clone();
+        let mut packages = packages;
+        // Pin the same authenticated host for the download and game joins.
+        // The existing probe stops before Hello, so no player is admitted.
+        progress.begin(Stage::Connecting, Unit::Steps, None);
+        let found = probe(address, &pin, Duration::from_secs(10)).await?;
+        let pin = HostPin::Certificate(found.certificate);
+        let (mut fetched, fetch_failure) =
+            match crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
+                .await
+            {
+                Ok(fetched) => (fetched, None),
+                Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+            };
+        let offered_shared: Vec<_> = fetched
+            .iter()
+            .filter(|f| f.package.side == bri_package::packages::Side::Shared)
+            .map(|f| f.package.clone())
+            .collect();
+        if !fetched.is_empty() {
+            match load(&fetched, &[]) {
+                Ok(prepared) => packages = prepared,
+                Err(error) if error.is::<JoinPreparationPending>() => return Err(error),
+                Err(error) => {
+                    eprintln!("Joining without the server's Add-Ons: {error:#}");
+                    fetched.clear();
+                    packages = load(&[], &[])?;
+                }
+            }
+        }
         let refused = match Self::connect_pinned(
             address,
             pin.clone(),
@@ -250,16 +282,8 @@ impl Client {
         .await
         {
             Ok(client) => {
-                // Joined: every shared package matches. Client-only Add-Ons
-                // the server runs (HUD panels, models) come down now; a host
-                // that offers nothing leaves the join as it is.
-                let fetched =
-                    crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
-                        .await
-                        .unwrap_or_default();
-                if !fetched.is_empty() {
-                    load(&fetched, &[])?;
-                }
+                // Every shared package matches. The caller has already
+                // prepared client-only content before this admission.
                 return Ok((client, fetched, Vec::new()));
             }
             Err(error) => error,
@@ -267,6 +291,9 @@ impl Client {
         let Some(differ) = refused.downcast_ref::<PackagesDiffer>() else {
             return Err(refused);
         };
+        if let Some(error) = fetch_failure {
+            eprintln!("Joining without the server's Add-Ons: {error}");
+        }
         // Shared Add-Ons only this client runs sit this game out.
         let dropped: Vec<_> = differ
             .0
@@ -278,18 +305,9 @@ impl Client {
             .collect();
         // Whatever cannot be downloaded or loaded is joined without: the
         // server names it to the player once they are in.
-        let fetched =
-            match crate::packages::fetch_missing_pinned(address, &pin, cache, &progress, &have)
-                .await
-            {
-                Ok(fetched) => fetched,
-                Err(error) => {
-                    eprintln!("Joining without the server's Add-Ons: {error:#}");
-                    Vec::new()
-                }
-            };
         let (fetched, packages) = match load(&fetched, &dropped) {
             Ok(packages) => (fetched, packages),
+            Err(error) if error.is::<JoinPreparationPending>() => return Err(error),
             Err(error) if !fetched.is_empty() => {
                 eprintln!("Joining without the server's Add-Ons: {error:#}");
                 (Vec::new(), load(&[], &dropped)?)
@@ -300,7 +318,7 @@ impl Client {
             address,
             pin,
             name,
-            packages,
+            packages.clone(),
             None,
             host,
             Some(identity),
@@ -308,19 +326,24 @@ impl Client {
             true,
         )
         .await?;
-        client.unavailable = differ
-            .0
-            .iter()
-            .filter_map(|m| match m {
-                bri_package::environment::Mismatch::Missing(server)
-                | bri_package::environment::Mismatch::Different { server, .. }
-                    if m.blocks_join() && !fetched.iter().any(|f| f.package == *server) =>
-                {
-                    Some(server.clone())
-                }
-                _ => None,
-            })
+        // A callback may have declined a downloaded shared package, or a
+        // later load-error fallback may remove packages that matched the
+        // first Hello. Report the final declared content, not just downloads.
+        let mut unavailable: std::collections::BTreeMap<_, _> = offered_shared
+            .into_iter()
+            .filter(|package| !packages.contains(package))
+            .map(|package| (package.id.clone(), package))
             .collect();
+        for mismatch in &differ.0 {
+            if let bri_package::environment::Mismatch::Missing(server)
+            | bri_package::environment::Mismatch::Different { server, .. } = mismatch
+                && mismatch.blocks_join()
+                && !packages.contains(server)
+            {
+                unavailable.insert(server.id.clone(), server.clone());
+            }
+        }
+        client.unavailable = unavailable.into_values().collect();
         Ok((client, fetched, dropped))
     }
     /// Connects like [`Client::connect_with_identity`], reporting the
@@ -874,6 +897,18 @@ impl Drop for Client {
         self.endpoint.close(0_u32.into(), b"Client closed");
     }
 }
+
+/// A caller needs to prepare downloaded content before a game admission.
+/// `connect_fetching` propagates this control flow without the load-failure
+/// fallback. No Session player exists for this suspended join.
+#[derive(Debug)]
+pub struct JoinPreparationPending;
+impl std::fmt::Display for JoinPreparationPending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Loading the server's Add-Ons")
+    }
+}
+impl std::error::Error for JoinPreparationPending {}
 
 /// Why a join failed, in words a player can act on. Other failures stay as
 /// they are.

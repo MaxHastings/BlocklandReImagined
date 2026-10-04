@@ -88,6 +88,19 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
         options: snapshot.options.as_ref().map(options),
     }
 }
+/// Refresh uses an authenticated snapshot already received for this session.
+/// A command reply can reach the UI before the network worker republishes its
+/// latest view; never replace that newer state with the older cached view.
+pub fn refresh_state(
+    snapshot: &AdminSnapshot,
+    current: Option<&ui::AdminSnapshot>,
+) -> ui::AdminSnapshot {
+    match current {
+        Some(current) if current.revision > snapshot.revision => current.clone(),
+        _ => state(snapshot),
+    }
+}
+
 fn quotas(q: &bri_admin::Quotas) -> ui::AdminQuotas {
     ui::AdminQuotas {
         schedules: q.schedules,
@@ -932,6 +945,64 @@ mod tests {
             panic!("missing ban rows")
         };
         assert_eq!(rows[0].remaining_minutes, None);
+        Ok(())
+    }
+    #[test]
+    fn reopening_admin_after_a_newer_command_reply_cannot_leave_refresh_pending() -> Result<()> {
+        let mut cached = snapshot(Role::Admin);
+        cached.supported.insert(Capability::ChangeMap);
+        cached.revision = 4;
+        let mut reply = cached.clone();
+        reply.revision = 5;
+        reply.role = Role::Player; // A newer demotion must not be rolled back.
+        reply.local_host = false;
+        let mut model = ui::AdminModel::default();
+        model
+            .apply(ui::AdminUpdate::State(state(&reply)))
+            .map_err(anyhow::Error::msg)?;
+        model.pending.insert(91, ui::AdminAction::Refresh);
+        // This is the synchronous OpenAdmin path: cached connection view,
+        // followed immediately by its accepted local acknowledgement.
+        let refresh = refresh_state(&cached, model.snapshot.as_ref());
+        let _ = model.apply(ui::AdminUpdate::State(refresh));
+        model.result(91, &Ok(()));
+        assert!(
+            !model.busy(),
+            "an older cached view left the menu waiting for authoritative state"
+        );
+        assert_eq!(model.revision, 5);
+        assert_eq!(model.snapshot.as_ref().unwrap().role, ui::AdminRole::Player);
+        assert!(!model.available(ui::AdminFeature::Maps));
+        Ok(())
+    }
+
+    #[test]
+    fn admin_refresh_uses_the_newest_authenticated_state_in_either_direction() -> Result<()> {
+        let mut old = snapshot(Role::Player);
+        old.revision = 4;
+        old.local_host = false;
+        let mut host = snapshot(Role::SuperAdmin);
+        host.supported.insert(Capability::ChangeMap);
+        host.revision = 5;
+        host.local_host = true;
+        let old_ui = state(&old);
+        let host_ui = state(&host);
+        for (cached, current) in [
+            (&host, None),
+            (&host, Some(&old_ui)),
+            (&host, Some(&host_ui)),
+            (&old, Some(&host_ui)),
+        ] {
+            let mut model = ui::AdminModel::default();
+            model.pending.insert(91, ui::AdminAction::Refresh);
+            model
+                .apply(ui::AdminUpdate::State(refresh_state(cached, current)))
+                .map_err(anyhow::Error::msg)?;
+            model.result(91, &Ok(()));
+            assert!(!model.busy());
+            assert_eq!(model.revision, 5);
+            assert!(model.available(ui::AdminFeature::Maps));
+        }
         Ok(())
     }
 }

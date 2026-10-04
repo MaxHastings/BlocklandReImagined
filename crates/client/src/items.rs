@@ -2767,12 +2767,11 @@ mod add_on_icon_tests {
         let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
         assert_eq!(
             (icon.width, icon.height),
-            (printer.width, printer.height),
-            "framed like the Printer's"
+            (printer.height, printer.width),
+            "Printer canvas turned clockwise"
         );
-        // Framed like the Printer: a clear border on every side, and the
-        // drawing as wide or as tall as the Printer's (the models differ in
-        // shape, so not both).
+        // The Printer framing is turned clockwise: its width/height exchange,
+        // with the same clear border around the rotated drawing.
         let (gun_border, printer_border) = (
             crate::item_icon_render::clear_border(icon),
             crate::item_icon_render::clear_border(printer),
@@ -2792,8 +2791,8 @@ mod add_on_icon_tests {
         let (pw, ph) = span(printer_border, printer.width, printer.height);
         let near = |a: i32, b: i32| (a - b).abs() as f32 <= 0.12 * b as f32;
         assert!(
-            near(gw, pw.min(icon.width as i32 * 88 / 100))
-                || near(gh, ph.min(icon.height as i32 * 88 / 100)),
+            near(gw, ph.min(icon.width as i32 * 88 / 100))
+                || near(gh, pw.min(icon.height as i32 * 88 / 100)),
             "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}"
         );
         assert_eq!(icon.rgba[3], 0, "a clear background");
@@ -2803,7 +2802,30 @@ mod add_on_icon_tests {
         let spec = crate::item_icon_render::Spec::parse(&std::fs::read(manifest.join(
             "../../packages/showcase/gravity-gun-tool/assets/icons/gravity_gun.render.json",
         ))?)?;
+        assert_eq!(
+            spec.clockwise_quarter_turns, 1,
+            "the authored icon turns clockwise"
+        );
         let request = assets.icon_request(gun, "check", spec)?;
+        let mut unturned = request.clone();
+        unturned.spec.clockwise_quarter_turns = 0;
+        assert_ne!(
+            request.digest(),
+            unturned.digest(),
+            "old cached orientation is not reused"
+        );
+        let fitted = request.fit().context("Printer profile fits")?;
+        let before = unturned.draw_fitted(&fitted, None)?;
+        for y in 0..before.height as usize {
+            for x in 0..before.width as usize {
+                let from = (y * before.width as usize + x) * 4;
+                let to = (x * icon.width as usize + before.height as usize - 1 - y) * 4;
+                assert!(
+                    before.rgba[from..from + 4] == icon.rgba[to..to + 4],
+                    "clockwise pixel ({x},{y})"
+                );
+            }
+        }
         // Coloured as the gun is in play: its image's tint, its skin's veins.
         let look = &request.spec.look;
         assert_eq!(look.base, Some([0.35, 1.0, 0.8]));

@@ -359,6 +359,7 @@ impl ChunkedWorld {
             meshes,
             left_out,
             invalid: &invalid,
+            face_proofs: Default::default(),
         };
         let built = build_chunks(&jobs, &covers, palette, materials)?;
         // The budget counts triangles drawn, after covered faces are culled.

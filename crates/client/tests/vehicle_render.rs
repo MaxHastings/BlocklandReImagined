@@ -121,6 +121,7 @@ fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
         let poses: BTreeMap<u64, VehiclePose> = [(
             1,
             VehiclePose {
+                passage_frame: Default::default(),
                 id: 1,
                 tick: 1,
                 position: [0.0; 3],
@@ -202,6 +203,7 @@ fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
     let poses: BTreeMap<u64, VehiclePose> = [(
         1,
         VehiclePose {
+            passage_frame: Default::default(),
             id: 1,
             tick: 1,
             position: [0.0; 3],

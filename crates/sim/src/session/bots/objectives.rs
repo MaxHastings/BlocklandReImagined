@@ -1609,6 +1609,7 @@ impl Session {
             self.bots.brains.get_mut(&bot)?.objective = state;
             return None;
         }
+        let mut repair_hold = None;
         if let Some(step) = state.step.as_ref() {
             let same = step.validate(self, bot, tick % 30 == bot % 30);
             if !same {
@@ -1626,6 +1627,27 @@ impl Session {
             } else {
                 match step.progress(self, bot, tick).unwrap() {
                     Progress::Changed => {
+                        // The authoritative effect changed the model. Keep a
+                        // still-valid native grip for this repair turn while
+                        // the fair grounding budget selects the next step.
+                        // No completed rule/action is executed again.
+                        if let Executor::Physical(action) = &step.executor
+                            && matches!(
+                                action.method,
+                                super::physical_objectives::Method::Hold { .. }
+                            )
+                            && let Some(mut view) = step.view(self, bot)
+                            && view
+                                .held
+                                .is_some_and(|target| self.held_by(bot) == Some(target))
+                            && let Some((_, _, grip, _)) = self.bot_hold_geometry(bot)
+                        {
+                            view.point = self.peers[&bot].player.state().feet.into();
+                            view.aim = grip;
+                            view.waiting = true;
+                            view.physical_progress = false;
+                            repair_hold = Some(view);
+                        }
                         state.step = None;
                         state.failed.clear();
                         state.next = tick;
@@ -1770,7 +1792,11 @@ impl Session {
                 }
             }
         }
-        let result = state.step.as_ref().and_then(|s| s.view(self, bot));
+        let result = state
+            .step
+            .as_ref()
+            .and_then(|s| s.view(self, bot))
+            .or(repair_hold);
         self.bots.brains.get_mut(&bot)?.objective = state;
         result
     }

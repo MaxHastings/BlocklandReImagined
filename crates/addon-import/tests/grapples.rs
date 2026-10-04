@@ -407,7 +407,9 @@ impl Game {
                 c.to_client.push_back((c.tick + LAG, c.tick, ack, state));
                 while c.to_client.front().is_some_and(|(due, ..)| *due <= c.tick) {
                     let (_, tick, ack, state) = c.to_client.pop_front().unwrap();
-                    c.predictor.reconcile(tick, ack, state).unwrap();
+                    c.predictor
+                        .reconcile(tick, ack, state, Default::default())
+                        .unwrap();
                 }
             }
         }

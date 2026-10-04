@@ -1794,3 +1794,434 @@ fn semantic_team_loadout_and_body_choices_precede_deeper_authored_settings() {
     addon_event(&mut ui, "AOS_Apply", EventKind::Click);
     assert!(ui.drain_actions().iter().any(|(_, a)| matches!(a,UiAction::EditMiniGameAddOns {teams:Some(teams),..} if teams[0].settings.contains(&("orbit:body".into(),Some(MiniGameSettingValue::Text("runner".into())))) && teams[0].settings.contains(&("orbit:team_equipment".into(),Some(MiniGameSettingValue::Text("gun".into())))))));
 }
+
+fn creator_pick(ui: &mut Ui, name: &str, label: &str) {
+    let index = ui
+        .dialogs
+        .iter()
+        .rposition(|s| s.id() == ScreenId::MiniGameSettings)
+        .unwrap();
+    let view = ui.dialogs[index].view_mut();
+    let node = view.id(name).unwrap();
+    let value = view
+        .node(node)
+        .state
+        .items
+        .iter()
+        .find(|(text, _)| text == label)
+        .unwrap()
+        .1;
+    view.select(node, Some(value));
+    let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+    dialogs[index].on_event(
+        &ViewEvent {
+            node,
+            kind: EventKind::Changed,
+        },
+        core,
+    );
+}
+
+#[test]
+fn a_favorite_keeps_missing_body_and_equipment_until_explicit_recovery() {
+    let mut ui = test_ui();
+    ui.apply(UiUpdate::MiniGames(game_state()));
+    let favorite = MiniGameFavorite {
+        rules: MiniGameRules {
+            title: "Custom arena".into(),
+            player_type: "custom:body/runner".into(),
+            loadout: [Some("custom:item/rifle".into()), None, None, None, None],
+            ..Default::default()
+        },
+        color: None,
+    };
+    ui.core
+        .settings
+        .minigame_favorites
+        .insert(3, favorite.clone());
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    ui.drain_actions();
+    click(
+        &mut ui,
+        ScreenId::MiniGameSettings,
+        "CreateMiniGameGui.clickFav(3);",
+    );
+    for (name, expected) in [
+        ("CMG_PlayerDataBlock", "Unavailable: custom:body/runner"),
+        ("CMG_StartEquip0", "Unavailable: custom:item/rifle"),
+    ] {
+        let view = ui.screen(ScreenId::MiniGameSettings).unwrap().view();
+        assert_eq!(
+            view.selected_text(view.id(name).unwrap()).as_deref(),
+            Some(expected)
+        );
+    }
+    click(
+        &mut ui,
+        ScreenId::MiniGameSettings,
+        "CreateMiniGameGui.clickCreate();",
+    );
+    assert!(
+        !ui.drain_actions()
+            .iter()
+            .any(|(_, a)| matches!(a, UiAction::CreateMiniGame { .. }))
+    );
+    assert!(ui.core.minigames.status.contains("Player type"));
+    creator_pick(&mut ui, "CMG_PlayerDataBlock", "Standard Player");
+    click(
+        &mut ui,
+        ScreenId::MiniGameSettings,
+        "CreateMiniGameGui.clickCreate();",
+    );
+    assert!(
+        !ui.drain_actions()
+            .iter()
+            .any(|(_, a)| matches!(a, UiAction::CreateMiniGame { .. }))
+    );
+    assert!(ui.core.minigames.status.contains("Equipment slot 1"));
+    creator_pick(&mut ui, "CMG_StartEquip0", " NONE");
+    click(
+        &mut ui,
+        ScreenId::MiniGameSettings,
+        "CreateMiniGameGui.clickCreate();",
+    );
+    let rules = ui
+        .drain_actions()
+        .into_iter()
+        .find_map(|(_, a)| match a {
+            UiAction::CreateMiniGame { rules, .. } => Some(rules),
+            _ => None,
+        })
+        .expect("explicit recovery submits");
+    assert_eq!(rules.player_type, "v20.player.playerstandardarmor");
+    assert_eq!(rules.loadout[0], None);
+    assert_eq!(ui.core.settings.minigame_favorites[&3], favorite);
+}
+
+fn combined_favorite_ui() -> Ui {
+    let mut ui = test_ui();
+    ui.apply(UiUpdate::MiniGames(addon_state()));
+    ui.core.settings.addon_favorites.insert(
+        0,
+        AddOnFavorite {
+            rules: Some(MiniGameRules {
+                title: "Combined arena".into(),
+                ..Default::default()
+            }),
+            settings: [("slayer:lives".into(), MiniGameSettingValue::Int(7))].into(),
+            teams: vec![AddOnFavoriteTeam {
+                name: "Favorite team".into(),
+                color: 0,
+                settings: Default::default(),
+            }],
+        },
+    );
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    ui.drain_actions();
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    ui
+}
+fn addon_status(ui: &mut Ui) -> String {
+    let view = addon_view(ui);
+    view.edit_text(view.id("AOS_Status").unwrap())
+}
+
+#[test]
+fn combined_favorite_waits_for_rules_then_addons_and_only_then_reports_applied() {
+    let mut ui = combined_favorite_ui();
+    addon_event(&mut ui, "AOS_ApplyReset", EventKind::Click);
+    let actions = ui.drain_actions();
+    assert_eq!(
+        actions.len(),
+        1,
+        "only vanilla rules are sent before their acknowledgment"
+    );
+    let (rules_id, action) = &actions[0];
+    assert!(
+        matches!(action, UiAction::ConfigureMiniGame { rules, .. } if rules.title == "Combined arena")
+    );
+    ui.apply(UiUpdate::ActionResult {
+        id: *rules_id,
+        result: Ok(()),
+    });
+    let actions = ui.drain_actions();
+    assert_eq!(actions.len(), 1);
+    let (addons_id, action) = &actions[0];
+    assert!(
+        matches!(action, UiAction::EditMiniGameAddOns { settings, teams: Some(teams), reset: true, .. } if settings.contains(&("slayer:lives".into(), Some(MiniGameSettingValue::Int(7)))) && teams[0].name == "Favorite team")
+    );
+    assert_ne!(addon_status(&mut ui), "Applied.");
+    // A duplicate/late acknowledgment for stage one cannot complete stage two.
+    ui.apply(UiUpdate::ActionResult {
+        id: *rules_id,
+        result: Ok(()),
+    });
+    assert_ne!(addon_status(&mut ui), "Applied.");
+    ui.apply(UiUpdate::ActionResult {
+        id: *addons_id,
+        result: Ok(()),
+    });
+    assert_eq!(addon_status(&mut ui), "Applied.");
+}
+
+#[test]
+fn a_refused_first_stage_sends_no_addon_reset_and_keeps_the_favorite_for_retry() {
+    let mut ui = combined_favorite_ui();
+    let favorite = ui.core.settings.addon_favorites[&0].clone();
+    addon_event(&mut ui, "AOS_ApplyReset", EventKind::Click);
+    let actions = ui.drain_actions();
+    assert_eq!(actions.len(), 1);
+    let (id, _) = actions[0];
+    ui.apply(UiUpdate::ActionResult {
+        id,
+        result: Err("Unknown MiniGame item".into()),
+    });
+    assert!(
+        ui.drain_actions().is_empty(),
+        "no partial Add-On apply or reset"
+    );
+    assert!(addon_status(&mut ui).contains("Remaining changes were not sent"));
+    assert_eq!(ui.core.settings.addon_favorites[&0], favorite);
+    addon_event(&mut ui, "AOS_ApplyReset", EventKind::Click);
+    let actions = ui.drain_actions();
+    assert_eq!(actions.len(), 1);
+    assert!(
+        matches!(&actions[0].1, UiAction::ConfigureMiniGame { rules, .. } if rules.title == "Combined arena")
+    );
+}
+
+#[test]
+fn unsupported_favorite_values_warn_and_cannot_silently_overwrite_the_source_slot() {
+    let mut ui = combined_favorite_ui();
+    let favorite = ui.core.settings.addon_favorites.get_mut(&0).unwrap();
+    favorite.settings.insert(
+        "missing:roundpolicy".into(),
+        MiniGameSettingValue::Text("original policy".into()),
+    );
+    favorite.settings.insert(
+        "slayer:mode".into(),
+        MiniGameSettingValue::Text("removed mode".into()),
+    );
+    let original = favorite.clone();
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    ui.update(0);
+    assert!(
+        ui.is_open(ScreenId::MessageBox),
+        "the omitted settings are reported"
+    );
+    ui.core.pop(ScreenId::MessageBox);
+    ui.update(0);
+    addon_event(&mut ui, "AOS_FavSave", EventKind::Click);
+    assert_eq!(ui.core.settings.addon_favorites[&0], original);
+    assert!(addon_status(&mut ui).contains("Choose another slot"));
+    assert!(
+        !ui.drain_actions()
+            .iter()
+            .any(|(_, a)| matches!(a, UiAction::SaveSettings(_)))
+    );
+}
+
+#[test]
+fn refused_rules_only_favorite_survives_newer_listings_and_retries_the_same_rules() {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.games[0].teams.clear();
+    ui.apply(UiUpdate::MiniGames(state.clone()));
+    ui.core.settings.addon_favorites.insert(
+        0,
+        AddOnFavorite {
+            rules: Some(MiniGameRules {
+                title: "Pending favorite rules".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    let favorite = ui.core.settings.addon_favorites[&0].clone();
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    ui.drain_actions();
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let actions = ui.drain_actions();
+    assert_eq!(actions.len(), 1);
+    assert!(matches!(&actions[0].1, UiAction::ConfigureMiniGame { .. }));
+    let (id, _) = actions[0];
+    ui.apply(UiUpdate::ActionResult {
+        id,
+        result: Err("Missing player type".into()),
+    });
+    ui.core.pop(ScreenId::MessageBox);
+    ui.update(0);
+    state.revision += 1;
+    ui.apply(UiUpdate::MiniGames(state));
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let actions = ui.drain_actions();
+    assert_eq!(
+        actions.len(),
+        1,
+        "a listing cannot reset a rules-only favorite draft"
+    );
+    assert!(
+        matches!(&actions[0].1, UiAction::ConfigureMiniGame { rules, .. } if rules.title == "Pending favorite rules")
+    );
+    assert_eq!(ui.core.settings.addon_favorites[&0], favorite);
+}
+
+#[test]
+fn favorite_apply_freezes_mutation_across_both_replies_and_recovers_after_timeout() {
+    use bri_ui::input::{InputEvent, Key, Modifiers};
+    let mut ui = combined_favorite_ui();
+    let lives = addon_view(&mut ui).id("AOS_S1").unwrap();
+    addon_view(&mut ui).focus = Some(lives);
+    addon_event(&mut ui, "AOS_ApplyReset", EventKind::Click);
+    let (rules_id, _) = ui.drain_actions().into_iter().next().unwrap();
+    let other = AddOnFavorite {
+        rules: Some(MiniGameRules {
+            title: "Different favorite".into(),
+            ..Default::default()
+        }),
+        settings: [("slayer:lives".into(), MiniGameSettingValue::Int(99))].into(),
+        teams: vec![],
+    };
+    ui.core.settings.addon_favorites.insert(0, other.clone());
+    for name in ["AOS_S0", "AOS_S1", "AOS_FavLoad", "AOS_FavSave", "AOS_Favs"] {
+        let view = addon_view(&mut ui);
+        assert!(
+            !view.node(view.id(name).unwrap()).state.active,
+            "{name} is frozen while rules wait"
+        );
+    }
+    ui.handle_input(InputEvent::Char('9'));
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    addon_event(&mut ui, "AOS_FavSave", EventKind::Click);
+    assert!(ui.drain_actions().is_empty());
+    assert_eq!(ui.core.settings.addon_favorites[&0], other);
+    addon_event(&mut ui, "AOS_Teams", EventKind::Click);
+    let color = addon_view(&mut ui).id("AOS_T0_Color").unwrap();
+    addon_view(&mut ui).focus = Some(color);
+    ui.handle_input(InputEvent::KeyDown {
+        key: Key::Delete,
+        mods: Modifiers::default(),
+        repeat: false,
+    });
+    assert!(
+        addon_view(&mut ui).id("AOS_T0_Name").is_some(),
+        "Delete cannot remove the captured team"
+    );
+    ui.apply(UiUpdate::ActionResult {
+        id: rules_id,
+        result: Ok(()),
+    });
+    let actions = ui.drain_actions();
+    assert_eq!(actions.len(), 1);
+    assert!(
+        matches!(&actions[0].1, UiAction::EditMiniGameAddOns { settings, teams: Some(teams), reset: true, .. } if settings.contains(&("slayer:lives".into(), Some(MiniGameSettingValue::Int(7)))) && teams[0].name == "Favorite team")
+    );
+    assert_ne!(addon_status(&mut ui), "Applied.");
+    addon_event(&mut ui, "AOS_Setup", EventKind::Click);
+    let view = addon_view(&mut ui);
+    assert!(!view.node(view.id("AOS_S1").unwrap()).state.active);
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    assert!(ui.drain_actions().is_empty());
+    // The existing correlated deadline unfreezes the form on failure.
+    ui.update(Pending::MiniGame(MiniGameOperation::AddOnSettings).timeout_ms() + 1);
+    ui.core.pop(ScreenId::MessageBox);
+    ui.update(0);
+    for name in ["AOS_S1", "AOS_FavLoad", "AOS_FavSave"] {
+        let view = addon_view(&mut ui);
+        assert!(
+            view.node(view.id(name).unwrap()).state.active,
+            "{name} recovers after timeout"
+        );
+    }
+    assert_eq!(ui.core.settings.addon_favorites[&0], other);
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    let view = addon_view(&mut ui);
+    assert_eq!(view.edit_text(view.id("AOS_S1").unwrap()), "99");
+}
+
+#[test]
+fn server_addon_apply_freezes_fields_and_favorites_until_its_correlated_failure() {
+    use bri_ui::{
+        input::InputEvent,
+        models::admin::{
+            AdminAction, AdminFeature, AdminOptions, AdminRole, AdminSnapshot, AdminUpdate,
+        },
+    };
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.addon_settings = vec![MiniGameAddOnSetting {
+        key: "unknown-provider:limit".into(),
+        add_on: "Unfamiliar provider".into(),
+        category: "Options".into(),
+        title: "Limit".into(),
+        team: false,
+        server: true,
+        restart: false,
+        kind: MiniGameSettingKind::Int { min: 0, max: 99 },
+        default: MiniGameSettingValue::Int(0),
+        help: String::new(),
+        avatar: None,
+        shown_when: None,
+    }];
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(AdminSnapshot {
+        revision: 1,
+        role: AdminRole::SuperAdmin,
+        local_host: true,
+        legacy_lan: false,
+        supported: [AdminFeature::HostOptions].into_iter().collect(),
+        players: Vec::new(),
+        options: Some(AdminOptions::default()),
+    })));
+    ui.core.server_addon_settings = true;
+    ui.core.minigame_addons = None;
+    ui.core.settings.addon_favorites.insert(
+        0,
+        AddOnFavorite {
+            settings: [(
+                "unknown-provider:limit".into(),
+                MiniGameSettingValue::Int(3),
+            )]
+            .into(),
+            ..Default::default()
+        },
+    );
+    let favorite = ui.core.settings.addon_favorites[&0].clone();
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    ui.drain_actions();
+    let limit = addon_view(&mut ui).id("AOS_S0").unwrap();
+    addon_view(&mut ui).set_text(limit, "2");
+    addon_view(&mut ui).focus = Some(limit);
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let request = ui
+        .drain_actions()
+        .into_iter()
+        .find_map(|(id, action)| {
+            matches!(action, UiAction::Admin(AdminAction::ConfigureHost { .. })).then_some(id)
+        })
+        .unwrap();
+    assert!(!addon_view(&mut ui).node(limit).state.active);
+    ui.handle_input(InputEvent::Char('9'));
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    addon_event(&mut ui, "AOS_FavSave", EventKind::Click);
+    assert!(ui.drain_actions().is_empty());
+    assert_eq!(ui.core.settings.addon_favorites[&0], favorite);
+    assert_eq!(addon_view(&mut ui).edit_text(limit), "2");
+    ui.apply(UiUpdate::ActionResult {
+        id: request,
+        result: Err("Permission changed".into()),
+    });
+    ui.update(0);
+    let view = addon_view(&mut ui);
+    assert!(view.node(view.id("AOS_S0").unwrap()).state.active);
+    addon_event(&mut ui, "AOS_FavLoad", EventKind::Click);
+    let view = addon_view(&mut ui);
+    assert_eq!(view.edit_text(view.id("AOS_S0").unwrap()), "3");
+}
