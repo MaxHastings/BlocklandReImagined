@@ -90,6 +90,8 @@ fn the_steel_ball_sounds_clank_where_a_steel_ball_hits_and_draw_nothing() {
     let first = addon.frame(frame(0.0, &world)).unwrap().clone();
     assert!(first.draws.is_empty(), "the game draws the ball itself");
     assert!(first.sounds.is_empty(), "nothing hit anything yet");
+    // A shipped Add-On says nothing in every player's chat on starting.
+    assert!(first.log.is_empty(), "{:?}", first.log);
     // Next frame the first ball has stopped dead against something: it
     // clanks where it is. The jeep stopping as sharply makes no sound.
     let mut hit = ball(3, -3.0, 0.0);
@@ -242,9 +244,15 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
             .draws
             .clone()
     };
-    // Nobody holds anything: nothing drawn.
+    // Nobody holds anything: nothing drawn, and nothing said in every
+    // player's chat on starting.
     let idle = [0.0, 0.0, 0.0, 0.0];
-    assert!(draws(&mut addon, 0.0, gun_world(idle, [0.0, 2.0, -5.0])).is_empty());
+    let first = addon
+        .frame(frame(0.0, &Arc::new(gun_world(idle, [0.0, 2.0, -5.0]))))
+        .unwrap()
+        .clone();
+    assert!(first.draws.is_empty());
+    assert!(first.log.is_empty(), "{:?}", first.log);
     // The trigger held with nothing caught: a thinner beam (glow and
     // core) out to where it points, and a glow at the muzzle.
     let reaching = draws(
