@@ -68,6 +68,8 @@ fn brick(id: &str, at: [f32; 3]) -> Brick {
     Brick::new(ContentRef::Resolved(id.into()), at, 0)
 }
 
+/// The jeep (a synthetic stand-in with v20's id) for the jeep run.
+const JEEP: &str = bri_vehicles::testing::CAR;
 /// A synthetic ramp for the obstacle variation (not in the shipped save).
 const RAMP: &str = "test/brick/pitch-ramp";
 
@@ -79,6 +81,8 @@ struct Setup {
     red: usize,
     /// A short wall and a ramp in midfield.
     obstacles: bool,
+    /// A jeep on a pad at each touchline.
+    jeeps: bool,
     /// Per pad, Blue's then Red's: a shift of its position in world units.
     jitter: Vec<[f32; 2]>,
 }
@@ -90,6 +94,7 @@ impl Setup {
             blue,
             red,
             obstacles: false,
+            jeeps: false,
             jitter: vec![[0.0; 2]; blue + red],
         }
     }
@@ -105,6 +110,10 @@ impl Setup {
         self.jitter = (0..self.blue + self.red)
             .map(|_| [next(), next()])
             .collect();
+        self
+    }
+    fn jeeps(mut self) -> Self {
+        self.jeeps = true;
         self
     }
     fn obstacles(mut self) -> Self {
@@ -215,6 +224,11 @@ fn field(setup: &Setup) -> Vec<Brick> {
     bricks.push(pad(BALL, [0.0, 0.1, 0.0], KICKOFF, None));
     for (name, [x, z], team) in setup.pads() {
         bricks.push(pad(BOT, [x, 0.1, z], &name, Some(team)));
+    }
+    if setup.jeeps {
+        for (x, name) in [(-8.0, "west_jeep"), (8.0, "east_jeep")] {
+            bricks.push(pad(JEEP, [x, 0.1, 0.0], name, None));
+        }
     }
     if setup.obstacles {
         // A short wall left of centre and a low ramp right of it, facing
@@ -369,6 +383,10 @@ fn addon() -> Arc<bri_package_runtime::Catalog> {
 enum Kit {
     Hands,
     Hammer,
+    /// A rocket launcher: impulse at range.
+    Rocket,
+    /// A thrown spear.
+    Spear,
 }
 
 struct Match {
@@ -407,7 +425,7 @@ impl Match {
         s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())
             .unwrap();
         s.set_tool_catalog(ToolCatalog {
-            vehicles: [BOT.to_string(), BALL.to_string()].into(),
+            vehicles: [BOT.to_string(), BALL.to_string(), JEEP.to_string()].into(),
             vehicle_bricks: [PAD.into()].into(),
             ..Default::default()
         })
@@ -436,6 +454,20 @@ impl Match {
                 loadout: match kit {
                     Kit::Hands => [None, None, None, None, None],
                     Kit::Hammer => [Some(bri_weapons::HAMMER.into()), None, None, None, None],
+                    Kit::Rocket => [
+                        Some(bri_weapons::testing::ROCKET_ITEM.into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
+                    Kit::Spear => [
+                        Some(bri_weapons::testing::SPEAR_ITEM.into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
                 },
                 weapon_damage: false,
                 // Moving the ball is vehicle damage policy: on, or nobody may push it.
@@ -1135,4 +1167,62 @@ fn the_shipped_soccer_save_loads_a_ready_match() {
     let r = play_match(m, &setup, seconds);
     println!("shipped save: {r:?}");
     assert_clean("shipped save", &setup, &r);
+}
+
+/// Short runs with a rocket launcher, a spear, and jeeps parked at the
+/// touchlines: the match keeps going. Nobody's brain sticks or circles,
+/// the ball is never lost or left alone for long, and goals are scored.
+#[test]
+fn rockets_spears_and_jeeps_keep_the_match_going() {
+    let seconds: usize = env("BRI_SOCCER_SHORT", 60);
+    let mut failures = Vec::new();
+    for (label, setup) in [
+        ("rocket", Setup::new(Kit::Rocket, 2, 2)),
+        ("spear", Setup::new(Kit::Spear, 2, 2)),
+        ("jeeps", Setup::new(Kit::Hands, 2, 2).jeeps()),
+    ] {
+        let setup = setup.seeded(1);
+        let r = play(&setup, seconds);
+        println!("{label}: {r:?}");
+        let bot_time = (setup.blue + setup.red) as f32 * r.seconds;
+        let problems: Vec<String> = [
+            (r.goals.values().sum::<u32>() >= 1, "no goals".to_string()),
+            (
+                r.ball_lost == 0.0,
+                format!("ball lost {:.1} s", r.ball_lost),
+            ),
+            (
+                r.longest_untouched <= 10.0,
+                format!("ball unattended {:.1} s", r.longest_untouched),
+            ),
+            (
+                r.longest_ball_walled <= 8.0,
+                format!("ball on a wall {:.1} s", r.longest_ball_walled),
+            ),
+            (
+                r.stuck <= 0.10 * bot_time,
+                format!("stuck {:.1} bot-s", r.stuck),
+            ),
+            (
+                r.circling <= 0.02 * bot_time,
+                format!("circling {:.1} bot-s", r.circling),
+            ),
+            (
+                r.idle <= 0.05 * bot_time,
+                format!("idle {:.1} bot-s", r.idle),
+            ),
+            (
+                r.slowest_kickoff <= 8.0,
+                format!("slow kickoff {:.1} s", r.slowest_kickoff),
+            ),
+        ]
+        .into_iter()
+        .filter(|(ok, _)| !ok)
+        .map(|(_, why)| why)
+        .collect();
+        if !problems.is_empty() {
+            failures.push(format!("{label}: {problems:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
