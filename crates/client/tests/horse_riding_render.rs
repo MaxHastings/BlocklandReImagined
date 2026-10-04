@@ -265,6 +265,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back(f: &ContentRoot) ->
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

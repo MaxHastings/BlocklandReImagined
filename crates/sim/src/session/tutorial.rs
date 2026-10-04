@@ -1179,6 +1179,7 @@ impl Session {
             let spawn = bri_world::VehicleSpawn {
                 vehicle: ContentRef::Resolved(JEEP.into()),
                 recolor: true,
+                team: None,
             };
             if self.simulation.state().bricks[&pad].vehicle.as_deref() == Some(&spawn) {
                 self.respawn_vehicle_brick(pad)?;

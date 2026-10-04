@@ -417,6 +417,7 @@ impl Setup {
                     brick.vehicle = Some(Box::new(VehicleSpawn {
                         vehicle: ContentRef::Resolved(VEHICLES[i % VEHICLES.len()].into()),
                         recolor: false,
+                        team: None,
                     }));
                     add(brick);
                 }

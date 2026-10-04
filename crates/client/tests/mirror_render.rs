@@ -361,6 +361,7 @@ fn probe(
         spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
             recolor: false,
+            team: None,
         }));
         add(spawn);
         world.next_brick_id = next;

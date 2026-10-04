@@ -359,6 +359,7 @@ pub fn bind(world: &mut World, catalog: &Catalog, aliases: &Aliases) -> Result<R
                         brick.vehicle = Some(Box::new(VehicleSpawn {
                             vehicle: ContentRef::Resolved(id.into()),
                             recolor,
+                            team: None,
                         }));
                         report.vehicles += 1;
                     }

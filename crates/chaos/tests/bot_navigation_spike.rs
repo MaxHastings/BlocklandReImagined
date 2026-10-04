@@ -187,6 +187,7 @@ fn bot_session(
     spawner.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, spawner);
     for (i, mut goal) in goals.into_iter().enumerate() {

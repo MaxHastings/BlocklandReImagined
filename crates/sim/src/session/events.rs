@@ -1500,10 +1500,12 @@ impl EventHost<'_> {
             })?,
             BrickOp::Vehicle(vehicle) => self.edit(brick, |b| {
                 let recolor = b.vehicle.as_ref().is_some_and(|v| v.recolor);
+                let team = b.vehicle.as_ref().and_then(|v| v.team);
                 b.vehicle = vehicle.clone().map(|id| {
                     Box::new(bri_world::VehicleSpawn {
                         vehicle: bri_world::ContentRef::Resolved(id),
                         recolor,
+                        team,
                     })
                 })
             })?,

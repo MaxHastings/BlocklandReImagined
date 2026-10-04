@@ -621,7 +621,9 @@ impl ToolUi {
                 ensure!(
                     (*variant == WrenchVariant::Sound || data.sound.is_none())
                         && (*variant == WrenchVariant::VehicleSpawn
-                            || (data.vehicle.is_none() && !data.recolor_vehicle)),
+                            || (data.vehicle.is_none()
+                                && !data.recolor_vehicle
+                                && data.vehicle_team.is_none())),
                     "This brick cannot hold that sound or vehicle"
                 );
                 validate_choice(data.sound.as_deref(), &self.catalog.sounds, "music")?;
@@ -660,6 +662,7 @@ impl ToolUi {
                         raycast: data.raycasting,
                         colliding: data.colliding,
                         visible: data.rendering,
+                        vehicle_team: data.vehicle_team,
                     },
                 }
             }
@@ -785,6 +788,8 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
             .transpose()?
             .map(str::to_owned),
         recolor_vehicle: brick.vehicle.as_ref().is_some_and(|v| v.recolor),
+        vehicle_team: brick.vehicle.as_ref().and_then(|v| v.team),
+        builder: Some(brick.owner),
     })
 }
 

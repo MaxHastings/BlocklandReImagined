@@ -131,6 +131,7 @@ impl Game {
         hole.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(bot_kind.clone()),
             recolor: false,
+            team: None,
         }));
         if variant {
             hole.name = Some("Patient post".into());
@@ -145,6 +146,7 @@ impl Game {
             second.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(fixture::BOT.into()),
                 recolor: false,
+                team: None,
             }));
             world.bricks.insert(23, second);
         }

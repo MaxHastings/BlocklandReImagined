@@ -10,7 +10,9 @@ use bri_events::{Row, Slot, Target};
 use bri_sim::player::MoveInput;
 use bri_sim::session::{Command, MiniGameRequest, Reply, Session, TeamEdit, ToolCatalog};
 use bri_world::{
-    Brick, ContentRef, OwnerId, VehicleSpawn, World, authority::Edit, build::SavedBuild,
+    Brick, ContentRef, OwnerId, VehicleSpawn, World,
+    authority::{Edit, WrenchProperties},
+    build::SavedBuild,
 };
 use glam::Vec3;
 use serde_json::json;
@@ -125,6 +127,7 @@ impl Pitch {
                 b.vehicle = Some(Box::new(VehicleSpawn {
                     vehicle: ContentRef::Resolved(kind.into()),
                     recolor: false,
+                    team: None,
                 }));
                 b
             };
@@ -451,6 +454,131 @@ fn a_bot_scores_in_its_own_teams_goal_after_save_and_reset() {
     panic!(
         "no goal in 90 s: {trace:#?}; poses {:?}",
         p.s.vehicle_poses()
+    );
+}
+
+/// The bot spawn brick's Team choice, as its wrench sends it.
+fn set_brick_team(p: &mut Pitch, brick: &str, team: Option<u32>) {
+    let id = p.brick(brick);
+    let b = &p.s.simulation().state().bricks[&id];
+    let properties = WrenchProperties {
+        name: b.name.clone(),
+        vehicle: Some(fixture::BOT.into()),
+        vehicle_team: team,
+        raycast: b.raycast,
+        colliding: b.colliding,
+        visible: b.visible,
+        ..Default::default()
+    };
+    p.s.edit_brick(p.author, id, Edit::Properties(properties))
+        .unwrap();
+}
+
+/// The spawn bricks' bots, found by the name the Players list shows: the
+/// kind, then the brick's name.
+fn bots_by_brick(p: &Pitch) -> [OwnerId; 2] {
+    let names = p.s.names();
+    ["(west", "(east"].map(|brick| {
+        let found: Vec<_> = names
+            .iter()
+            .filter(|(o, n)| p.s.is_bot(**o) && n.contains(brick))
+            .map(|(o, _)| *o)
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "one bot is named after brick {brick}: {names:?}"
+        );
+        found[0]
+    })
+}
+
+/// A bot spawn brick's Team choice puts its bot on that team when the bot
+/// joins, keeps it there across a reset, and after the build is saved and
+/// loaded each bot is back on its brick's team. Bots of one kind are told
+/// apart in the Players list by their brick.
+#[test]
+fn a_spawn_bricks_team_choice_puts_its_bot_on_that_team_across_save_and_load() {
+    let mut p = Pitch::new(false, true);
+    p.mg(MiniGameRequest::Create {
+        color: 0,
+        settings: bri_minigames::Settings {
+            loadout: [None, None, None, None, None],
+            brick_damage: false,
+            ..Default::default()
+        },
+    });
+    p.steps(20);
+    p.save_teams(vec![(None, "Blue", 0), (None, "Red", 1)], false);
+    let (blue, red) = (p.team("Blue"), p.team("Red"));
+    let [west, east] = bots_by_brick(&p);
+    let names = p.s.names();
+    assert_ne!(names[&west], names[&east]);
+    for bot in [west, east] {
+        assert!(
+            names[&bot].starts_with("Blockhead Bot ("),
+            "the kind comes first: {names:?}"
+        );
+    }
+    assert_eq!((p.team_of(west), p.team_of(east)), (None, None));
+    set_brick_team(&mut p, "west_bot", Some(blue));
+    set_brick_team(&mut p, "east_bot", Some(red));
+    p.steps(60);
+    assert_eq!(
+        (p.team_of(west), p.team_of(east)),
+        (Some(blue), Some(red)),
+        "each bot plays for its brick's team"
+    );
+    let game = p.game();
+    p.mg(MiniGameRequest::Manage {
+        game,
+        request: Box::new(MiniGameRequest::Reset),
+    });
+    p.steps(60);
+    assert_eq!(bots_by_brick(&p), [west, east]);
+    assert_eq!((p.team_of(west), p.team_of(east)), (Some(blue), Some(red)));
+
+    let Reply::Saved(build) = p.run(Command::SaveBuild {
+        events: true,
+        ownership: false,
+    }) else {
+        panic!("not saved")
+    };
+    let mut fresh = Pitch::new(false, false);
+    fresh.run(Command::LoadBuild {
+        build,
+        ownership: false,
+    });
+    fresh.steps(90);
+    let (blue, red) = (fresh.team("Blue"), fresh.team("Red"));
+    let team_choice = |p: &Pitch, brick| {
+        p.s.simulation().state().bricks[&p.brick(brick)]
+            .vehicle
+            .as_ref()
+            .and_then(|v| v.team)
+    };
+    assert_eq!(
+        (
+            team_choice(&fresh, "west_bot"),
+            team_choice(&fresh, "east_bot")
+        ),
+        (Some(blue), Some(red)),
+        "the bricks' Team choices are saved"
+    );
+    let [west, east] = bots_by_brick(&fresh);
+    assert_eq!(
+        (fresh.team_of(west), fresh.team_of(east)),
+        (Some(blue), Some(red)),
+        "after loading, each bot is back on its brick's team"
+    );
+    // Changing the choice moves the bot; clearing it leaves the team to
+    // the game.
+    set_brick_team(&mut fresh, "west_bot", Some(red));
+    set_brick_team(&mut fresh, "east_bot", None);
+    fresh.steps(60);
+    assert_eq!(
+        (fresh.team_of(west), fresh.team_of(east)),
+        (Some(red), Some(red))
     );
 }
 

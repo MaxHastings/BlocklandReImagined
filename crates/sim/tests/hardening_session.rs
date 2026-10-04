@@ -321,6 +321,7 @@ fn properties(name: Option<&str>, visible: bool) -> WrenchProperties {
         raycast: true,
         colliding: true,
         visible,
+        vehicle_team: None,
     }
 }
 

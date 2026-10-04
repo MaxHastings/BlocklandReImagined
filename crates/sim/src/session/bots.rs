@@ -258,6 +258,13 @@ struct Brain {
     /// Where it took a mount's controls (the vehicle and its feet then):
     /// the anchor of a driver's leash under `BotMounted::anchor`.
     mount_anchor: Option<(u64, Vec3)>,
+    /// The spawn brick's Team choice last put into effect, with the game
+    /// it was applied in; a new life starts without one, so it is applied
+    /// again.
+    brick_team: Option<(bri_minigames::GameId, u32)>,
+    /// The name this brick bot last asked for (before a number makes it
+    /// unique).
+    named: String,
 }
 /// An enemy up where a bot flies to them ([`Session::air_chase`]).
 #[derive(Clone, Copy, Debug)]
@@ -364,6 +371,8 @@ impl Brain {
             vehicle_anchor: None,
             vehicle_since: None,
             mount_anchor: None,
+            brick_team: None,
+            named: String::new(),
         }
     }
     fn random(&mut self) -> f32 {
@@ -639,6 +648,7 @@ impl Session {
             return Ok(());
         };
         let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
+        let name = self.brick_bot_name(&kind, brick_id);
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
         if self.bots.brains.len() >= MAX_BOTS {
@@ -651,7 +661,7 @@ impl Session {
             );
             return Ok(());
         }
-        let joined = self.join_inner(kind.name.clone(), home, false, true, None);
+        let joined = self.join_inner(name.clone(), home, false, true, None);
         if joined.is_err() {
             self.notify(
                 builder,
@@ -675,9 +685,9 @@ impl Session {
                 return Ok(());
             }
             self.bots.by_brick.insert(brick_id, bot);
-            self.bots
-                .brains
-                .insert(bot, Brain::new(Some(brick_id), kind, home, bot, crossed));
+            let mut brain = Brain::new(Some(brick_id), kind, home, bot, crossed);
+            brain.named = name;
+            self.bots.brains.insert(bot, brain);
             self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
         }
         Ok(())
@@ -711,6 +721,7 @@ impl Session {
         if let Some(old) = self.bots.brains.get(&bot) {
             // Its movement sequence only moves forward.
             brain.sequence = old.sequence;
+            brain.named = old.named.clone();
         }
         self.bots.brains.insert(bot, brain);
         let player = self.peers[&bot].combat.player;
@@ -955,7 +966,109 @@ impl Session {
             .map(|(bot, _)| *bot)
             .collect()
     }
-    /// Minigame membership follows the spawn brick owner.
+    /// The game a spawn brick's bot plays in: its builder's.
+    fn spawn_brick_game(&self, brick: BrickId) -> Option<bri_minigames::GameId> {
+        let owner = self.simulation.state().bricks.get(&brick)?.owner;
+        let player = self.peers.get(&owner)?.combat.player;
+        self.minigames.player(player).ok()?.game
+    }
+    /// What a spawn brick's bot is called: its kind, then the brick's name
+    /// or else the team its Team choice names, so the Players list tells
+    /// one brick's bot from another's ("Blockhead Bot (Red)").
+    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId) -> String {
+        let Some(b) = self.simulation.state().bricks.get(&brick) else {
+            return kind.name.clone();
+        };
+        let label = b
+            .name
+            .as_deref()
+            .map(|n| n.trim().trim_start_matches('_').trim())
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
+                let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
+                Some(game.teams.get(team)?.name.clone())
+            });
+        // The label is shortened, not the kind or the closing bracket.
+        let room = MAX_PLAYER_NAME.saturating_sub(kind.name.chars().count() + 3);
+        match label {
+            Some(label) if room > 0 => {
+                let label: String = label.chars().take(room).collect();
+                format!("{} ({})", kind.name, label.trim_end())
+            }
+            _ => kind.name.clone(),
+        }
+    }
+    /// A brick bot takes the name its brick now gives it, without the
+    /// announcement a player's own rename makes.
+    fn rename_brick_bot(&mut self, bot: OwnerId, wanted: String) -> Result<()> {
+        let name = self.unique_name_except(&clean_player_name(&wanted), Some(bot));
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.named = wanted;
+        }
+        let peer = self.peers.get(&bot).context("No such bot")?;
+        if peer.name == name {
+            return Ok(());
+        }
+        let player = peer.combat.player;
+        self.admin.rename(bot, name.clone())?;
+        let _ = self.minigames.rename(player, name.clone());
+        self.peers.get_mut(&bot).context("No such bot")?.name = name;
+        Ok(())
+    }
+    /// The spawn brick's Team choice puts its bot on that team of the game
+    /// it plays in: when it joins, after each new life (a reset or a
+    /// respawn) and whenever the choice or the game changes. In between,
+    /// the game's own commands may move it. A team the game has not got
+    /// (yet) is tried again on the next pass.
+    fn apply_brick_team(
+        &mut self,
+        bot: OwnerId,
+        game: Option<bri_minigames::GameId>,
+        team: Option<u32>,
+    ) -> Result<()> {
+        let wanted = game.zip(team);
+        if self
+            .bots
+            .brains
+            .get(&bot)
+            .is_none_or(|b| b.brick_team == wanted)
+        {
+            return Ok(());
+        }
+        if let Some((game, slot)) = wanted {
+            let team = bri_minigames::TeamId(slot);
+            let has = self
+                .minigames
+                .game(game)
+                .is_ok_and(|g| g.teams.get(team).is_some());
+            if !has {
+                return Ok(());
+            }
+            let player = self.peers.get(&bot).context("No such bot")?.combat.player;
+            if self.minigames.team_of(player) != Some(team) {
+                let effects = self
+                    .minigames
+                    .assign_team(player, Some(team))
+                    .map_err(|e| anyhow::anyhow!("Team rejected: {e}"))?;
+                self.apply_minigame_effects(effects)?;
+                // It appears where its team does, as a rules bot put on a
+                // team does.
+                let effects = self
+                    .minigames
+                    .execute(bri_minigames::Command::ForceRespawn { target: player })
+                    .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
+                self.apply_minigame_effects(effects)?;
+            }
+        }
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.brick_team = wanted;
+        }
+        Ok(())
+    }
+    /// Minigame membership follows the spawn brick owner, and team the
+    /// brick's Team choice.
     fn sync_bot_minigames(&mut self) -> Result<()> {
         let bots: Vec<(OwnerId, BrickId)> = self
             .bots
@@ -964,7 +1077,13 @@ impl Session {
             .filter_map(|(o, b)| Some((*o, b.brick?)))
             .collect();
         for (bot, brick) in bots {
-            let Some(owner) = self.simulation.state().bricks.get(&brick).map(|b| b.owner) else {
+            let Some((owner, team)) = self
+                .simulation
+                .state()
+                .bricks
+                .get(&brick)
+                .map(|b| (b.owner, b.vehicle.as_ref().and_then(|v| v.team)))
+            else {
                 continue;
             };
             let wanted = self
@@ -983,6 +1102,14 @@ impl Session {
                     .host_place(player, wanted)
                     .map_err(|e| anyhow::anyhow!("Bot minigame: {e}"))?;
                 self.apply_minigame_effects(effects)?;
+            }
+            self.apply_brick_team(bot, wanted, team)?;
+            let named = self.bots.brains.get(&bot).and_then(|b| {
+                let name = self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick);
+                (name != b.named).then_some(name)
+            });
+            if let Some(name) = named {
+                self.rename_brick_bot(bot, name)?;
             }
         }
         Ok(())

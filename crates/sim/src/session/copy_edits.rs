@@ -181,6 +181,7 @@ pub(super) fn wrench_properties(brick: &Brick) -> WrenchProperties {
         raycast: brick.raycast,
         colliding: brick.colliding,
         visible: brick.visible,
+        vehicle_team: None,
     }
 }
 

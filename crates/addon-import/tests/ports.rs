@@ -1432,6 +1432,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     pad.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("test_plane:vehicle/standinplane".into()),
         recolor: true,
+        team: None,
     }));
     world.bricks.insert(1, pad);
     world.next_brick_id = 2;

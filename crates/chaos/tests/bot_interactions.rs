@@ -135,6 +135,7 @@ fn bot_brick(at: Vec3, owner: OwnerId) -> Brick {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     brick
 }

@@ -292,6 +292,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below(f: &ContentRoot) -> Re
     spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(next, spawn);
     world.next_brick_id = next + 1;

@@ -136,6 +136,7 @@ impl Game {
         brick.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(fixture::BOT.into()),
             recolor: false,
+            team: None,
         }));
         let mut world = World::new("Knowledge".into(), "chaos/map".into(), vec![[1.0; 4]]);
         world.bricks.insert(1, brick);
@@ -555,6 +556,7 @@ fn removing_a_rules_bot_releases_its_reservation_before_the_lease_expires() {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(CART.into()),
         recolor: false,
+        team: None,
     }));
     let mut world = World::new("Reservations".into(), "chaos/map".into(), vec![[1.0; 4]]);
     world.bricks.insert(1, brick);

@@ -53,6 +53,7 @@ impl Session {
             self.add_setting(&brick, id, &mut properties, |p| {
                 p.vehicle = Some(vehicle);
                 p.recolor_vehicle = spawn.recolor;
+                p.vehicle_team = spawn.team;
             });
         }
         if properties != plain {
