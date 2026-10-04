@@ -540,9 +540,10 @@ const MOVES_AHEAD: u64 = 4;
 /// for every move sent to have arrived and been run.
 const MOVES_SETTLE: u64 = 120;
 /// The host's poses of one vehicle, oldest first: the newest of the
-/// driver's moves each includes, its tick, and the nose's pitch.
+/// driver's moves each includes, its tick, the nose's pitch, and the
+/// driver's accumulated mouse steering pitch (positive dips the nose).
 #[derive(Default)]
-struct Poses(Vec<(u64, u64, f32)>);
+struct Poses(Vec<(u64, u64, f32, f32)>);
 impl Poses {
     fn note(&mut self, app: &App, vehicle: u64) {
         let Some(pose) = app
@@ -555,8 +556,12 @@ impl Poses {
             return;
         }
         let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
-        self.0
-            .push((pose.driver_input, pose.tick, forward.y.asin()));
+        self.0.push((
+            pose.driver_input,
+            pose.tick,
+            forward.y.asin(),
+            pose.mouse_steering[1],
+        ));
     }
     fn newest_move(&self) -> u64 {
         self.0.last().map_or(0, |p| p.0)
@@ -564,7 +569,7 @@ impl Poses {
     /// The host ran no move for `MOVES_SETTLE` ticks: a seated driver's
     /// queue runs at least one a tick, so it is empty.
     fn moves_settled(&self) -> bool {
-        let Some(&(newest, tick, _)) = self.0.last() else {
+        let Some(&(newest, tick, ..)) = self.0.last() else {
             return false;
         };
         self.0
@@ -605,16 +610,41 @@ fn hold_moves(
     }
 }
 
+/// How the host took a push of the mouse ([`mouse_up_pitch`]).
+struct Push {
+    /// How far the host's mouse steering pitch moved over the push's
+    /// moves: positive dips the nose.
+    host_steering: f32,
+    /// How far the host's nose pitched, up positive: reported, not checked
+    /// (see [`mouse_up_pitch`]).
+    host_nose: f32,
+    /// How far this client's predicted view pitched, up positive.
+    view: f32,
+}
+
 /// Through the whole app: take off in a Flying Wheeled Jeep (mouse-steered
 /// like the Stunt Plane) in first person, push the mouse up, and return how
-/// far the host's pose and this client's predicted view pitched. `invert`
-/// is Options' Invert Mouse In Vehicles; `None` leaves the default.
+/// the host steered and pitched and how far this client's predicted view
+/// pitched. `invert` is Options' Invert Mouse In Vehicles; `None` leaves the
+/// default.
+///
+/// The hosted server ticks on the wall clock and runs one of a seated
+/// driver's moves a tick, repeating the last when the next is late. The
+/// push is the same 60 moves however slow the machine, but on a loaded one
+/// the client cannot always send them as fast as the host ticks, so the
+/// host runs the push over more ticks than moves (the repeats turn
+/// nothing). Its accumulated mouse steering after the last move is the same
+/// either way: the push's turns added up. Its nose is not: a push stretched
+/// over more ticks dips the nose sooner, skimming the ground at take-off
+/// speed, and it can strike and bounce back up by the last move (+0.005
+/// after mouse up under gate load, against -0.07 predicted). The client
+/// predicts one tick a move, so its view pitches the same each run.
 fn mouse_up_pitch(
     f: &ContentRoot,
     invert: Option<bool>,
     gpu: &Headless,
     renderer: &mut UiRenderer,
-) -> Result<(f32, f32)> {
+) -> Result<Push> {
     let content = f.root.clone();
     let scratch = f.state()?;
     let state = scratch.path().to_path_buf();
@@ -712,9 +742,9 @@ fn mouse_up_pitch(
     // The predicted view as the push ends.
     render(&mut host, gpu, renderer)?;
     let view_after = host.rendered_camera().context("camera")?.2;
-    // The host's nose as the push ends: from the pose with the push's last
-    // move. With no more moves sent the host runs off what is queued and
-    // then repeats the last move, as it would were they still coming.
+    // The host as the push ends: from the pose with the push's last move.
+    // With no more moves sent the host runs off what is queued and then
+    // repeats the last move, as it would were they still coming.
     hold_moves(
         &mut host,
         vehicle,
@@ -727,21 +757,24 @@ fn mouse_up_pitch(
     // carries it, so it skims the ground on v20's springs, which damp only
     // compression: a moment later a dipped nose can strike the ground and
     // bounce up, whichever way the mouse went.
-    let after = poses.0.iter().find(|p| p.0 >= last).context("nose")?.2;
-    let before = poses
+    let after = *poses.0.iter().find(|p| p.0 >= last).context("nose")?;
+    let before = *poses
         .0
         .iter()
         .rev()
         .find(|p| p.0 + 2 * PUSH_LOOKS <= last)
-        .unwrap_or(&poses.0[0])
-        .2;
+        .unwrap_or(&poses.0[0]);
     request(&mut host, UiAction::Disconnect)?;
     host.gpu_stopped();
-    Ok((after - before, view_after - view_before))
+    Ok(Push {
+        host_steering: after.3 - before.3,
+        host_nose: after.2 - before.2,
+        view: view_after - view_before,
+    })
 }
 
 /// Stock v20's Invert Mouse In Vehicles is on: mouse up dips the nose, in
-/// the host's pose and in the view this client predicts. Turned off in
+/// the host's steering and in the view this client predicts. Turned off in
 /// Options, mouse up raises it.
 fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app(
     f: &ContentRoot,
@@ -749,12 +782,19 @@ fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app(
     let gpu = support::gpu::turn().context("offscreen renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for (invert, down) in [(None, true), (Some(false), false), (Some(true), true)] {
-        let (host, view) = mouse_up_pitch(f, invert, &gpu, &mut renderer)?;
-        println!("invert {invert:?}: host nose {host:+.3}, predicted view {view:+.3}");
+        let Push {
+            host_steering,
+            host_nose,
+            view,
+        } = mouse_up_pitch(f, invert, &gpu, &mut renderer)?;
+        println!(
+            "invert {invert:?}: host steering {host_steering:+.3} (nose {host_nose:+.3}), predicted view {view:+.3}"
+        );
         let sign = if down { -1.0 } else { 1.0 };
+        // Positive steering pitch dips the nose (`VehiclesWorld::step`).
         ensure!(
-            host * sign > 0.01,
-            "invert {invert:?}: host nose moved {host}"
+            -host_steering * sign > 0.01,
+            "invert {invert:?}: host steering moved {host_steering}"
         );
         ensure!(
             view * sign > 0.01,
