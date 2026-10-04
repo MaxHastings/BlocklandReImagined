@@ -1,5 +1,9 @@
 //! Physical/navigation feasibility evidence. Only ordinary motor inputs after
 //! initialization: no runtime transforms, invisible supports or teleports.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 use bri_chaos::fixture;
 use bri_sim::player::{MoveInput, Player, PlayerTuning};
 use bri_sim::{

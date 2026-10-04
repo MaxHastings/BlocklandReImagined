@@ -3,6 +3,7 @@
 //! lookups by name, and no allocation in steady state except when a streamed
 //! clip (music) loops or refills its small decode buffer.
 
+use bri_console::Clamp;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -287,7 +288,7 @@ impl Engine {
             peak = peak.max(a);
             if a > 1.0 {
                 clipped += 1;
-                *s = s.clamp(-1.0, 1.0);
+                *s = s.clamped(-1.0, 1.0);
             }
         }
         if clipped > 0 {
@@ -714,7 +715,7 @@ impl Engine {
 
 fn sanitize_gain(g: f32) -> f32 {
     if g.is_finite() {
-        g.clamp(0.0, 4.0)
+        g.clamped(0.0, 4.0)
     } else {
         0.0
     }

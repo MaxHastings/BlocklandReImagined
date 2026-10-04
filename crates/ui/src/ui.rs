@@ -15,6 +15,7 @@ use crate::pack::Pack;
 use crate::prefs::Prefs;
 use crate::screens::{self, Screen, ScreenId};
 use crate::view::{EventKind, ViewEvent};
+use bri_console::Clamp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -83,7 +84,7 @@ pub fn preferred_scale(prefs: &crate::prefs::Prefs, size: (u32, u32)) -> Option<
         return None;
     }
     let fit = (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0).max(0.5);
-    Some((percent as f32 / 100.0).clamp(1.0, 8.0).min(fit))
+    Some((percent as f32 / 100.0).clamped(1.0, 8.0).min(fit))
 }
 
 #[cfg(test)]
@@ -115,7 +116,7 @@ pub struct UiConfig {
 impl UiConfig {
     pub fn effective_scale(&self) -> f32 {
         match self.scale {
-            Some(s) if s.is_finite() && s > 0.0 => s.clamp(0.5, 8.0),
+            Some(s) if s.is_finite() && s > 0.0 => s.clamped(0.5, 8.0),
             _ => {
                 let fit = (self.size.0 as f32 / 640.0).min(self.size.1 as f32 / 480.0);
                 if fit >= 1.0 {
@@ -943,7 +944,7 @@ impl Core {
         let speed = self
             .prefs
             .f32_or(screens::options::KEYBOARD_TURN_SPEED, 0.5)
-            .clamp(0.02, 1.0);
+            .clamped(0.02, 1.0);
         let step = speed * KEYBOARD_TURN_RATE * (dt_ms.min(100) as f32 / 1000.0);
         self.game(GameAction::Look {
             yaw: yaw * step,
@@ -1965,7 +1966,7 @@ impl Ui {
             }
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
-                    c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
+                    c.whiteout = c.whiteout.max(amount.clamped(0.0, 1.0));
                 }
             }
             UiUpdate::Underwater(tints) => {
@@ -1976,7 +1977,9 @@ impl Ui {
                     .collect();
             }
             UiUpdate::Energy(energy) => {
-                c.energy = energy.filter(|e| e.is_finite()).map(|e| e.clamp(0.0, 1.0));
+                c.energy = energy
+                    .filter(|e| e.is_finite())
+                    .map(|e| e.clamped(0.0, 1.0));
             }
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {

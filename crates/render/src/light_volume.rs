@@ -16,6 +16,7 @@
 //! the brighter of their sun lighting and this volume, so maps with a bright
 //! sun keep their look and nothing gets darker.
 use crate::scene::{AlphaMode, MaterialKind, SceneData, SceneImage};
+use bri_console::Clamp;
 use glam::Vec3;
 
 /// Directions per cell. A Fibonacci sphere; enough to find a lamp shade.
@@ -532,7 +533,7 @@ impl Baker {
                 return [0; 4];
             }
             let light = sum / (RAYS - backfaces) as f32;
-            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0 + 0.5) as u8;
             let light = light.clamp(Vec3::ZERO, Vec3::ONE);
             [byte(light.x), byte(light.y), byte(light.z), 255]
         };

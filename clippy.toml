@@ -1,0 +1,7 @@
+# `f32::clamp` and `f64::clamp` panic inside `core` when a bound is NaN or
+# the bounds are reversed, and the report never names the caller. Use
+# `bri_console::Clamp::clamped`, which names it and does not end the game.
+disallowed-methods = [
+    { path = "f32::clamp", reason = "use bri_console::Clamp::clamped: it names a caller whose bounds are out of order" },
+    { path = "f64::clamp", reason = "use bri_console::Clamp::clamped: it names a caller whose bounds are out of order" },
+]

@@ -1,5 +1,6 @@
 //! Fixed-tick player motor. Inputs contain intentions, never a client position.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::Passages;
 /// A brick or other contact id (`user_data`), and a player owner id.
 type BrickId = u64;
@@ -277,8 +278,8 @@ impl Tether {
                     let rate = self.rate();
                     let stop = rate * rate / (2.0 * TETHER_HALT);
                     self.target = (self.length - f32::from(self.winding) * stop)
-                        .clamp(shortest, longest)
-                        .clamp(MIN_TETHER_LENGTH, MAX_TETHER_LENGTH);
+                        .clamped(shortest, longest)
+                        .clamped(MIN_TETHER_LENGTH, MAX_TETHER_LENGTH);
                 }
                 _ => {}
             }
@@ -288,7 +289,7 @@ impl Tether {
         // speed is not flung on past the end of the rope.
         let gap = self.target - self.length;
         let rate = self.rate();
-        let wound = self.length + gap.clamp(-rate * dt, rate * dt);
+        let wound = self.length + gap.clamped(-rate * dt, rate * dt);
         let out = Self::grip(feet, tuning) - anchor;
         let distance = out.length();
         // A body held back (something in the way) stalls the winch rather
@@ -1332,7 +1333,7 @@ impl Player {
         let input = MoveInput { jet, ..input };
         let drain = if jet { t.jet_drain } else { 0.0 };
         self.state.energy =
-            (self.state.energy - drain * dt + t.recharge * dt).clamp(0.0, t.max_energy);
+            (self.state.energy - drain * dt + t.recharge * dt).clamped(0.0, t.max_energy);
         let was_grounded = self.state.grounded;
         let was_crouched = self.state.crouched;
         let feet = Vec3::from(self.state.feet);

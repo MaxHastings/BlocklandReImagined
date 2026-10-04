@@ -9,6 +9,7 @@ use super::*;
 use crate::api::{AddOnRow, ConnectionState, DownloadState, UiAction};
 use crate::ui::Callback;
 use crate::view::{EventKind, check_cell};
+use bri_console::Clamp;
 
 const LIST: &str = "AO_List";
 const SEARCH: &str = "AO_Search";
@@ -650,7 +651,7 @@ impl PackageDownload {
         let fraction = if d.total_bytes == 0 {
             1.0
         } else {
-            (d.done_bytes as f64 / d.total_bytes as f64).clamp(0.0, 1.0) as f32
+            (d.done_bytes as f64 / d.total_bytes as f64).clamped(0.0, 1.0) as f32
         };
         if let Some(n) = self.view.id(DL_PROGRESS) {
             self.view.set_num(n, fraction);

@@ -21,6 +21,7 @@ use bri_client_sandbox::{
     host::Frame,
     trust::{CodeSummary, TRUST_FILE},
 };
+use bri_console::Clamp;
 use bri_package::packages::{PackageSet, Side};
 use std::path::Path;
 use std::sync::Arc;
@@ -431,7 +432,7 @@ impl ClientCode {
         self.view = view;
         let dt = self
             .last
-            .map_or(0.0, |last| (now - last).clamp(0.0, 0.25) as f32);
+            .map_or(0.0, |last| (now - last).clamped(0.0, 0.25) as f32);
         self.last = Some(now);
         self.time += dt;
         let messages = &mut self.messages;

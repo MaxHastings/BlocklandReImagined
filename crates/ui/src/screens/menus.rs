@@ -6,6 +6,7 @@ use crate::binds::{BindMap, DEFAULT_KEYBOARD, DEFAULT_MOUSE};
 use crate::models::chat::{ChatSend, chat_send};
 use crate::ui::{Callback, MessageBox};
 use crate::view::{EventKind, message_answer};
+use bri_console::Clamp;
 
 const SERVER_TYPE: &str = "$Pref::Net::ServerType";
 const MAX_PLAYERS: &str = "$Pref::Server::MaxPlayers";
@@ -576,7 +577,7 @@ impl NativeScreen {
                         self.view.set_num(
                             n,
                             if progress.is_finite() {
-                                progress.clamp(0.0, 1.0)
+                                progress.clamped(0.0, 1.0)
                             } else {
                                 0.0
                             },

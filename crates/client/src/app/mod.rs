@@ -7,6 +7,7 @@ use crate::{
     settings,
 };
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_net::{
     client::{Client, HostPin},
     server::{self, ServerOptions},
@@ -632,7 +633,7 @@ pub(crate) fn pivot_camera(
 ) -> (f32, Vec3, f32) {
     let lift = stand_height * 0.5 + (offset * pos + 0.75 * (1.0 - pos)) * scale;
     (
-        (max_dist * scale * pos).clamp(0.0, 40.0),
+        (max_dist * scale * pos).clamped(0.0, 40.0),
         feet + Vec3::Y * lift,
         tilt,
     )
@@ -745,7 +746,7 @@ fn name_tags(
     };
     let paint = |color: u8| {
         let rgba = view.world.palette.get(usize::from(color))?;
-        Some([0, 1, 2].map(|i| (rgba[i].clamp(0.0, 1.0) * 255.0).round() as u8))
+        Some([0, 1, 2].map(|i| (rgba[i].clamped(0.0, 1.0) * 255.0).round() as u8))
     };
     let mut tags = Vec::new();
     for (owner, name) in &view.names {

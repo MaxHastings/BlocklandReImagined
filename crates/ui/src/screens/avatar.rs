@@ -4,6 +4,7 @@ use super::*;
 use crate::api::{AvatarPrefs, IconRef, UiAction};
 use crate::schema::AvatarData;
 use crate::view::EventKind;
+use bri_console::Clamp;
 
 const PARTS: &[&str] = &[
     "Face",
@@ -872,7 +873,7 @@ impl Screen for Avatar {
             {
                 self.rotation[2] += (mouse.0 - previous.0) as f32 * 0.01;
                 self.rotation[0] =
-                    (self.rotation[0] + (mouse.1 - previous.1) as f32 * 0.01).clamp(-1.4, 1.4);
+                    (self.rotation[0] + (mouse.1 - previous.1) as f32 * 0.01).clamped(-1.4, 1.4);
                 self.preview(core);
             }
             self.last_mouse = Some(mouse);

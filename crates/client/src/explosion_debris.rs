@@ -10,6 +10,7 @@
 //! `elasticity`, and a fade over the last second. Models come from the
 //! vehicle pack; trail emitters follow each piece.
 use crate::weapon_debris::DebrisHit;
+use bri_console::Clamp;
 use bri_fx_runtime::SourceTransform;
 use bri_sim::presentation::{Cue, CueKind};
 use bri_weapons::debris::DebrisSpec;
@@ -114,7 +115,7 @@ impl ExplosionDebris {
         let count = spec.count as i64
             + rng.range_i(-(spec.count_variance as i64), spec.count_variance as i64);
         // `Explosion::launchDebris` starts every piece half a unit up.
-        let origin = at + Vec3::Y * 0.5 * scale.clamp(0.01, 100.0);
+        let origin = at + Vec3::Y * 0.5 * scale.clamped(0.01, 100.0);
         // A perpendicular to tip the launch direction by theta.
         let side = if axis.y.abs() < 0.999 {
             axis.cross(Vec3::Y)
@@ -171,7 +172,7 @@ impl ExplosionDebris {
     /// Move every piece; `sweep` finds static geometry between two points.
     pub fn advance(&mut self, dt: f32, mut sweep: impl FnMut(Vec3, Vec3) -> Option<DebrisHit>) {
         let mut left = if dt.is_finite() {
-            dt.clamp(0.0, 0.25)
+            dt.clamped(0.0, 0.25)
         } else {
             0.0
         };
@@ -221,7 +222,8 @@ impl ExplosionDebris {
                 // Torque moves the unit direction by the ray fraction times
                 // the share of the ray that was motion, then one step on.
                 let move_percent = length / (length + RADIUS);
-                p.position += dir * hit.fraction.clamp(0.0, 1.0) * move_percent + p.velocity * step;
+                p.position +=
+                    dir * hit.fraction.clamped(0.0, 1.0) * move_percent + p.velocity * step;
                 p.spin *= p.elasticity;
                 p.bounces -= 1;
                 if p.bounces <= 0 {
@@ -254,7 +256,7 @@ impl ExplosionDebris {
                 return None;
             }
             let alpha = if spec.fade {
-                p.life.clamp(0.0, 1.0)
+                p.life.clamped(0.0, 1.0)
             } else {
                 1.0
             };

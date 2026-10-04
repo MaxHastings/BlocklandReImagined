@@ -1,5 +1,6 @@
 //! The per-frame update, in its fixed order (see docs/architecture/client-app-split.md).
 use super::*;
+use bri_console::Clamp;
 
 impl App {
     pub(super) fn frame(&mut self, elapsed: Duration) -> Result<()> {
@@ -354,7 +355,7 @@ impl App {
                     {
                         self.mounts.tumble = Some(vehicle);
                         let seconds =
-                            (1.0 + (frame.velocity.length() - 10.0) / 50.0 * 7.0).clamp(1.0, 7.0);
+                            (1.0 + (frame.velocity.length() - 10.0) / 50.0 * 7.0).clamped(1.0, 7.0);
                         self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
@@ -390,7 +391,7 @@ impl App {
                     Some((
                         role,
                         forward.x.atan2(-forward.z),
-                        forward.y.clamp(-1.0, 1.0).asin(),
+                        forward.y.clamped(-1.0, 1.0).asin(),
                         seat_rotation.map(|r| {
                             let forward = r * Vec3::NEG_Z;
                             forward.x.atan2(-forward.z)
@@ -1384,7 +1385,7 @@ impl App {
                     }
                     let hit = building.target(from, delta / length, length).ok()??;
                     Some(crate::weapon_debris::DebrisHit {
-                        fraction: (hit.distance / length).clamp(0., 1.),
+                        fraction: (hit.distance / length).clamped(0., 1.),
                         normal: hit.normal.normalize_or(Vec3::Y),
                     })
                 });
@@ -1430,7 +1431,7 @@ impl App {
                         }
                         let hit = building.target(from, delta / length, length).ok()??;
                         Some(crate::weapon_debris::DebrisHit {
-                            fraction: (hit.distance / length).clamp(0., 1.),
+                            fraction: (hit.distance / length).clamped(0., 1.),
                             normal: hit.normal.normalize_or(Vec3::Y),
                         })
                     });

@@ -1,5 +1,6 @@
 //! Weapon, actor and world effects fed by the session's cues.
 use super::*;
+use bri_console::Clamp;
 
 /// Presentation effects: weapon, actor and world effects, debris, fades and the cue queues feeding them.
 pub(super) struct Effects {
@@ -97,7 +98,7 @@ impl App {
                         image: None,
                         hand: None,
                         direction: None,
-                        scale: (radius / 4.).clamp(0.5, 3.),
+                        scale: (radius / 4.).clamped(0.5, 3.),
                     },
                     ..cue
                 }

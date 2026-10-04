@@ -18,6 +18,7 @@
 //! frames; teleports snap. [`Ghosts`] adapts the replicated weapon view and
 //! package entities onto tracks, so any future replicated rigid body only
 //! needs to feed `observe` and read `pose`.
+use bri_console::Clamp;
 use bri_content::passage::{PAST, Passages};
 use bri_sim::session::{EntityInfo, WeaponView};
 use glam::{Quat, Vec3};
@@ -228,7 +229,7 @@ impl Clock {
             if error.abs() > CLOCK_SNAP {
                 target
             } else {
-                shown + error.clamp(-step, step)
+                shown + error.clamped(-step, step)
             }
         };
         let shown = self.shown.unwrap_or(offset);
@@ -256,7 +257,7 @@ impl Clock {
     }
     fn wanted_delay(&self) -> f64 {
         let interval = self.interval.max(1.0);
-        (interval + self.jitter + 1.0).clamp(interval, 4.0 * interval)
+        (interval + self.jitter + 1.0).clamped(interval, 4.0 * interval)
     }
 }
 
@@ -272,7 +273,7 @@ impl Tracks {
     /// Advance local time by one rendered frame.
     pub fn advance(&mut self, seconds: f32) {
         let seconds = if seconds.is_finite() {
-            seconds.clamp(0.0, 0.25)
+            seconds.clamped(0.0, 0.25)
         } else {
             0.0
         };
@@ -389,7 +390,7 @@ impl Track {
         let (newest_tick, newest) = *self.updates.back().expect("tracks hold an update");
         match self.mode {
             Mode::Simulated => {
-                let ticks = (now - newest_tick as f64).clamp(0.0, newest.horizon.max(0.0));
+                let ticks = (now - newest_tick as f64).clamped(0.0, newest.horizon.max(0.0));
                 let from = self
                     .checkpoint
                     .filter(|c| c.ticks <= ticks)
@@ -435,7 +436,7 @@ impl Track {
                     }
                 };
                 let limit = NOMINAL_INTERVAL.max(delay);
-                let ahead = (at - newest_tick as f64).clamp(0.0, limit);
+                let ahead = (at - newest_tick as f64).clamped(0.0, limit);
                 Pose {
                     position: newest.position + velocity * (ahead as f32 * TICK),
                     velocity,
@@ -454,7 +455,7 @@ pub fn simulate(
     ticks: f64,
     sweep: &mut impl FnMut(Vec3, Vec3) -> Option<Hit>,
 ) -> Pose {
-    let ticks = ticks.clamp(0.0, update.horizon.max(0.0));
+    let ticks = ticks.clamped(0.0, update.horizon.max(0.0));
     let (_, end) = fly(update, Flying::start(update), ticks, sweep);
     Pose {
         position: end.position,
@@ -507,7 +508,7 @@ fn step(
             body.ticks = to;
             return;
         };
-        let t = span * hit.fraction.clamp(0.0, 1.0);
+        let t = span * hit.fraction.clamped(0.0, 1.0);
         body.position = hit.position;
         body.velocity = v + a * t;
         body.ticks += f64::from(t) * TICK_RATE;

@@ -2,6 +2,10 @@
 //! Crash hunting (see `docs/crash-hunt.md`): a NaN scanner for anything the
 //! host replicates, synthetic and real-content chaos fixtures, bot brains,
 //! and runners in one process and over loopback QUIC.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 pub mod bots;
 pub mod fixture;
 pub mod local;

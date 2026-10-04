@@ -395,6 +395,7 @@ dependencies = [
 name = "bri-audio"
 version = "0.1.0"
 dependencies = [
+ "bri-console",
  "cpal",
  "rtrb",
  "serde",
@@ -637,6 +638,7 @@ name = "bri-fx-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-package",
  "bri-render",
@@ -676,6 +678,7 @@ name = "bri-motor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-physics",
  "glam 0.33.10",
@@ -755,6 +758,7 @@ name = "bri-physics"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "glam 0.33.10",
  "rapier3d",
@@ -770,6 +774,7 @@ name = "bri-render"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-package",
  "bytemuck",
@@ -866,6 +871,7 @@ name = "bri-vehicles"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-motor",
  "bri-package",
@@ -896,6 +902,7 @@ name = "bri-weapons"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-package",
  "bri-physics",

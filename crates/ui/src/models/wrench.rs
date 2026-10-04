@@ -4,6 +4,7 @@
 
 use crate::api::{EventCatalog, EventRow, WrenchData, WrenchVariant};
 use crate::models::events::EventsModel;
+use bri_console::Clamp;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(
@@ -274,7 +275,7 @@ pub fn clean_name(s: &str) -> String {
 pub fn respawn_ms(text: &str) -> u32 {
     let seconds = text.trim().parse::<f64>().unwrap_or(0.0);
     let seconds = if seconds.is_nan() { 0.0 } else { seconds };
-    (seconds.floor().clamp(1.0, 300.0) as u32) * 1000
+    (seconds.floor().clamped(1.0, 300.0) as u32) * 1000
 }
 
 #[cfg(test)]

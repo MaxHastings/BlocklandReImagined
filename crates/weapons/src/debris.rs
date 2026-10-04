@@ -6,6 +6,7 @@
 //! with the engine defaults (`ExplosionData` and `DebrisData` constructors),
 //! so current packs need no re-import.
 use crate::{Definition, Pack};
+use bri_console::Clamp;
 use std::collections::BTreeMap;
 
 /// One explosion's debris: how many pieces it throws, where, and how each
@@ -181,27 +182,27 @@ impl<'a> Fields<'a> {
             name: debris.name.clone(),
             model,
             emitters: self.trails(debris),
-            count: explosion("debrisnum", 1.0).clamp(0.0, 1000.0) as u32,
-            count_variance: explosion("debrisnumvariance", 0.0).clamp(0.0, 1000.0) as u32,
+            count: explosion("debrisnum", 1.0).clamped(0.0, 1000.0) as u32,
+            count_variance: explosion("debrisnumvariance", 0.0).clamped(0.0, 1000.0) as u32,
             theta: [
-                explosion("debristhetamin", 0.0).clamp(0.0, 180.0),
-                explosion("debristhetamax", 90.0).clamp(0.0, 180.0),
+                explosion("debristhetamin", 0.0).clamped(0.0, 180.0),
+                explosion("debristhetamax", 90.0).clamped(0.0, 180.0),
             ],
             phi: [
-                explosion("debrisphimin", 0.0).clamp(0.0, 360.0),
-                explosion("debrisphimax", 360.0).clamp(0.0, 360.0),
+                explosion("debrisphimin", 0.0).clamped(0.0, 360.0),
+                explosion("debrisphimax", 360.0).clamped(0.0, 360.0),
             ],
             launch_speed: explosion("debrisvelocity", 2.0),
             launch_variance: explosion("debrisvelocityvariance", 0.0).abs(),
             speed: num(debris, "velocity", 0.0),
             speed_variance: num(debris, "velocityvariance", 0.0).abs(),
-            lifetime: num(debris, "lifetime", 3.0).clamp(0.0, 60.0),
+            lifetime: num(debris, "lifetime", 3.0).clamped(0.0, 60.0),
             lifetime_variance: num(debris, "lifetimevariance", 0.0).abs(),
             spin: [spin[0].min(spin[1]), spin[0].max(spin[1])],
             elasticity: num(debris, "elasticity", 0.3),
             friction: num(debris, "friction", 0.2),
-            bounces: num(debris, "numbounces", 0.0).clamp(0.0, 64.0) as u32,
-            bounce_variance: num(debris, "bouncevariance", 0.0).clamp(0.0, 64.0) as u32,
+            bounces: num(debris, "numbounces", 0.0).clamped(0.0, 64.0) as u32,
+            bounce_variance: num(debris, "bouncevariance", 0.0).clamped(0.0, 64.0) as u32,
             static_on_max_bounce: flag(debris, "staticonmaxbounce", false),
             snap_on_max_bounce: flag(debris, "snaponmaxbounce", false),
             fade: flag(debris, "fade", true),
@@ -273,8 +274,8 @@ pub fn casings(pack: &Pack) -> BTreeMap<String, Casing> {
                 debris: f.debris(debris, None),
                 exit_direction: vector("shellexitdir", [1.0, 0.0, 1.0]),
                 exit_offset: vector("shellexitoffset", [0.0; 3]),
-                exit_variance: num("shellexitvariance", 20.0).clamp(0.0, 180.0),
-                velocity: num("shellvelocity", 1.0).clamp(0.0, 200.0),
+                exit_variance: num("shellexitvariance", 20.0).clamped(0.0, 180.0),
+                velocity: num("shellvelocity", 1.0).clamped(0.0, 200.0),
             },
         );
     }

@@ -1,4 +1,8 @@
 //! QUIC transport and bounded replication for native game sessions.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 mod admin_store;
 pub mod allocator;
 pub mod client;

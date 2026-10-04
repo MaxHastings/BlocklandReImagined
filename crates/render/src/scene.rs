@@ -2,6 +2,7 @@
 //! the swapchain/offscreen attachment, encoder and submission, so UI passes can
 //! follow this pass without another adapter/device or scene re-upload.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use glam::{Mat4, Vec3, Vec4};
 use std::{ops::Range, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -155,9 +156,9 @@ pub fn resolve_brick_vertex_color(
         // Retain the existing inherited-paint-alpha policy with its diagnostic.
         return Ok(BrickVertexColor {
             rgba: [
-                (paint[0] + c[0]).clamp(0., 1.),
-                (paint[1] + c[1]).clamp(0., 1.),
-                (paint[2] + c[2]).clamp(0., 1.),
+                (paint[0] + c[0]).clamped(0., 1.),
+                (paint[1] + c[1]).clamped(0., 1.),
+                (paint[2] + c[2]).clamped(0., 1.),
                 paint[3],
             ],
             provisional: paint[3] != 1.,
@@ -1535,7 +1536,7 @@ impl Footprints {
                 ]
             }));
         }
-        let [x0, y0, x1, y1] = union?.map(|v| v.clamp(-1.0, 1.0));
+        let [x0, y0, x1, y1] = union?.map(|v| v.clamped(-1.0, 1.0));
         // Clip y points up; texel rows go down.
         let left = ((x0 * 0.5 + 0.5) * size).floor() as u32;
         let right = ((x1 * 0.5 + 0.5) * size).ceil() as u32;
@@ -1652,7 +1653,7 @@ impl TextureFiltering {
     /// v20 stores anisotropy as a 0..1 slider value.
     pub fn from_v20(trilinear: bool, sharp: bool, anisotropy: f32) -> Self {
         let samples = if anisotropy.is_finite() {
-            1.0 + anisotropy.clamp(0.0, 1.0) * 15.0
+            1.0 + anisotropy.clamped(0.0, 1.0) * 15.0
         } else {
             1.0
         };

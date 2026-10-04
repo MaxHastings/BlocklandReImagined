@@ -40,7 +40,7 @@ fn local_offset(secs: i64) -> i64 {
         + i64::from(t.wSecond);
     // Zones are whole quarter hours; the two clocks were read apart.
     let offset = ((local - secs) as f64 / 900.0).round() as i64 * 900;
-    offset.clamp(-14 * 3_600, 14 * 3_600)
+    offset.clamped(-14 * 3_600, 14 * 3_600)
 }
 #[cfg(not(windows))]
 fn local_offset(_secs: i64) -> i64 {

@@ -24,6 +24,7 @@ use crate::local_physics::{MAX_STEPS, PUSHER_REACH, Pushers, STEP, Shots, Surrou
 pub use crate::local_physics::{Pusher, Shot};
 use crate::world_chunks::BrickPalette;
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform};
 use bri_sim::presentation::{BrickDeath, Cue, CueKind};
@@ -135,7 +136,7 @@ struct Body {
 impl Body {
     /// How opaque the body is at its age.
     fn fade(&self) -> f32 {
-        1.0 - ((self.age - SOLID_SECONDS) / FADE_SECONDS).clamp(0.0, 1.0)
+        1.0 - ((self.age - SOLID_SECONDS) / FADE_SECONDS).clamped(0.0, 1.0)
     }
 }
 
@@ -586,7 +587,7 @@ impl BrickDebris {
         // Small blasts (direct hits, events, hammer pops) throw at full force;
         // radius blasts weaken towards their edge.
         let falloff = if radius > 0.5 {
-            (1.0 - distance / radius).clamp(0.25, 1.0)
+            (1.0 - distance / radius).clamped(0.25, 1.0)
         } else {
             1.0
         };
@@ -736,7 +737,7 @@ impl BrickDebris {
             }
             let direction = (offset.normalize_or(Vec3::Y) + normal.unwrap_or(Vec3::ZERO) * 2.0)
                 .normalize_or(Vec3::Y);
-            let falloff = (1.0 - distance / radius).clamp(0.25, 1.0);
+            let falloff = (1.0 - distance / radius).clamped(0.25, 1.0);
             let speed = (force * FORCE_TO_SPEED * falloff).min(MAX_SPEED);
             let mut kick = direction * speed;
             if normal.is_some() {
@@ -822,7 +823,7 @@ impl BrickDebris {
                         1.0,
                         1.0,
                         1.0,
-                        g.fade * (g.left / GHOST_SECONDS).clamp(0.0, 1.0),
+                        g.fade * (g.left / GHOST_SECONDS).clamped(0.0, 1.0),
                     ],
                 },
             )

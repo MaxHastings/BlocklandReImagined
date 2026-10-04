@@ -4,6 +4,7 @@
 //! collision sweep. This module owns cosmetic casing state only: it never
 //! chooses gameplay hits or guesses an attachment pose.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::{animation::sample, shape::Shape};
 use bri_render::scene::{AlphaMode, Material, SceneData, SceneImage};
 use bri_render::shape_scene::ShapeInstance;
@@ -314,27 +315,29 @@ fn add_on_shell(model: &str, casing: &bri_weapons::debris::Casing) -> ShellDefin
     let d = &casing.debris;
     let finite = |v: f32, default: f32| if v.is_finite() { v } else { default };
     let direction = Vec3::from_array(casing.exit_direction);
-    let spin = d.spin.map(|v| finite(v, 0.).clamp(-100_000., 100_000.));
+    let spin = d.spin.map(|v| finite(v, 0.).clamped(-100_000., 100_000.));
     ShellDefinition {
         model: model.to_owned(),
-        lifetime_seconds: finite(d.lifetime, 3.).clamp(0.01, 30.),
+        lifetime_seconds: finite(d.lifetime, 3.).clamped(0.01, 30.),
         min_spin_degrees_per_second: spin[0].min(spin[1]),
         max_spin_degrees_per_second: spin[0].max(spin[1]),
-        elasticity: finite(d.elasticity, 0.3).clamp(0., 1.),
-        friction: finite(d.friction, 0.2).clamp(0., 1.),
+        elasticity: finite(d.elasticity, 0.3).clamped(0., 1.),
+        friction: finite(d.friction, 0.2).clamped(0., 1.),
         bounces: d.bounces.min(32),
         static_on_max_bounce: d.static_on_max_bounce,
         snap_on_max_bounce: d.snap_on_max_bounce,
         fade: d.fade,
-        gravity_multiplier: finite(d.gravity, 1.).clamp(0., 20.),
+        gravity_multiplier: finite(d.gravity, 1.).clamped(0., 20.),
         exit_direction: if direction.is_finite() && direction.length_squared() > 1e-8 {
             casing.exit_direction
         } else {
             [1., 1., 0.]
         },
-        exit_offset: casing.exit_offset.map(|v| finite(v, 0.).clamp(-100., 100.)),
-        exit_variance_degrees: finite(casing.exit_variance, 20.).clamp(0., 180.),
-        velocity: finite(casing.velocity, 1.).clamp(0., 200.),
+        exit_offset: casing
+            .exit_offset
+            .map(|v| finite(v, 0.).clamped(-100., 100.)),
+        exit_variance_degrees: finite(casing.exit_variance, 20.).clamped(0., 180.),
+        velocity: finite(casing.velocity, 1.).clamped(0., 200.),
     }
 }
 
@@ -512,7 +515,7 @@ impl WeaponDebris {
     fn fade(&self, body: &Body) -> f32 {
         let d = self.shell(body);
         if d.fade {
-            (1. - body.age / d.lifetime_seconds).clamp(0., 1.)
+            (1. - body.age / d.lifetime_seconds).clamped(0., 1.)
         } else {
             1.
         }
@@ -711,7 +714,7 @@ impl WeaponDebris {
                             self.bodies.remove(&id);
                             continue;
                         }
-                        body.position = from.lerp(to, hit.fraction.clamp(0., 1.));
+                        body.position = from.lerp(to, hit.fraction.clamped(0., 1.));
                         let normal = hit.normal.normalize();
                         let vn = body.velocity.dot(normal);
                         if vn < 0. {
@@ -960,7 +963,7 @@ mod tests {
                 |a, b| {
                     if a.y > 0. && b.y <= 0. {
                         Some(DebrisHit {
-                            fraction: (a.y / (a.y - b.y)).clamp(0., 1.),
+                            fraction: (a.y / (a.y - b.y)).clamped(0., 1.),
                             normal: Vec3::Y,
                         })
                     } else {

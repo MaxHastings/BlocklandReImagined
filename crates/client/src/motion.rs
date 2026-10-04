@@ -12,6 +12,7 @@
 use crate::crouch::{CROUCH_SECONDS, CrouchThread};
 use crate::network::View;
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_net::protocol::{POSE_INTERVAL, PublicWorld};
 use bri_sim::{
     player::{MoveInput, PlayerState},
@@ -365,7 +366,7 @@ impl Motion {
     /// without the correction.
     fn drawn_drive(&self) -> Option<(u64, Vec3, glam::Quat)> {
         let (id, previous, current) = self.predictor.as_ref()?.driven()?;
-        let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
+        let alpha = (self.accumulator / TICK).clamped(0.0, 1.0);
         let position = Vec3::from(previous.position).lerp(Vec3::from(current.position), alpha);
         let rotation = glam::Quat::from_array(previous.rotation)
             .normalize()
@@ -397,7 +398,7 @@ impl Motion {
     /// The vehicle's canonical travel middle, drawn on the same side as its pose.
     fn drawn_drive_centre(&self) -> Option<Vec3> {
         let (previous, current) = self.predictor.as_ref()?.driven_centres()?;
-        let alpha = (self.accumulator / TICK).clamp(0., 1.);
+        let alpha = (self.accumulator / TICK).clamped(0., 1.);
         let centre = previous.lerp(current, alpha);
         Some(
             match &self.unshown {
@@ -689,7 +690,7 @@ impl Motion {
         redundancy: usize,
     ) -> Result<Option<(u64, Vec<MoveInput>)>> {
         let seconds = if seconds.is_finite() {
-            seconds.clamp(0.0, 0.25)
+            seconds.clamped(0.0, 0.25)
         } else {
             0.0
         };
@@ -703,7 +704,7 @@ impl Motion {
             self.shown_offset = Some(if error.abs() > CLOCK_SNAP {
                 offset
             } else {
-                shown + error.clamp(-step, step)
+                shown + error.clamped(-step, step)
             });
         }
         let fade = (-CORRECTION_RATE * seconds).exp();
@@ -900,7 +901,7 @@ impl Motion {
             DELAY_SLEW_DOWN
         };
         let step = rate * TICK_RATE * self.frame_seconds;
-        *delay += error.clamp(-step, step);
+        *delay += error.clamped(-step, step);
         Some(server_tick - *delay)
     }
     /// The local player's presented state from its prediction, looking
@@ -932,7 +933,7 @@ impl Motion {
     fn drawn(&self, predictor: &Predictor) -> PlayerState {
         let current = predictor.state();
         let previous = self.previous.as_ref().unwrap_or(current);
-        let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
+        let alpha = (self.accumulator / TICK).clamped(0.0, 1.0);
         let mut state = blend(previous, current, alpha);
         state.feet = (Vec3::from(state.feet) + self.correction).to_array();
         match &self.unshown {
@@ -1062,7 +1063,7 @@ fn carried_input(input: MoveInput, carry: &glam::Affine3A) -> MoveInput {
     let (yaw, pitch, _) = crate::portal_view::carried_look((input.yaw, input.pitch, 0.0), carry);
     MoveInput {
         yaw,
-        pitch: pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
+        pitch: pitch.clamped(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
         ..input
     }
 }
@@ -1098,7 +1099,7 @@ pub fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
     (a + turn * t + PI).rem_euclid(2.0 * PI) - PI
 }
 fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
-    let t = t.clamp(0.0, 1.0);
+    let t = t.clamped(0.0, 1.0);
     let mut out = if t < 0.5 { a.clone() } else { b.clone() };
     // Bodies move on v20's 32 ms ticks; draw them between ticks.
     out.feet = Vec3::from(a.shown_feet())

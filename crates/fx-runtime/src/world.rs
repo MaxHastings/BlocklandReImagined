@@ -1,5 +1,6 @@
 use crate::EffectsPack;
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::Passages;
 use glam::{Mat4, Quat, Vec3, Vec4};
 use std::{collections::BTreeMap, sync::Arc};
@@ -656,10 +657,12 @@ impl EffectsWorld {
                     .as_ref()
                     .map_or(0., |f| f.fade_seconds);
                 let step = if fade > 0. { dt / fade } else { 1. };
-                source.flare += (source.options.flare_visibility - source.flare).clamp(-step, step);
+                source.flare +=
+                    (source.options.flare_visibility - source.flare).clamped(-step, step);
             } else if source.options.emitting {
                 while source.next <= end && source.next <= source.lifetime && budget > 0 {
-                    let t = ((source.next - source.age) / (end - source.age)).clamp(0., 1.) as f32;
+                    let t =
+                        ((source.next - source.age) / (end - source.age)).clamped(0., 1.) as f32;
                     let transform = source.previous.interpolate(source.transform, t);
                     let pre_age = if self.pack.library.emitters[source.definition].override_advance
                     {
@@ -962,7 +965,7 @@ impl EffectsWorld {
                     continue;
                 }
                 let weight = ((distance - f.near_distance) / (f.far_distance - f.near_distance))
-                    .clamp(0., 1.);
+                    .clamped(0., 1.);
                 let size = 2.
                     * s.flare
                     * f.constant_size

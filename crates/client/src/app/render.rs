@@ -1,5 +1,6 @@
 //! Rendering the scene each frame.
 use super::*;
+use bri_console::Clamp;
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -598,8 +599,8 @@ impl App {
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.fx.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let (forward, right, up) = rolled_view_basis(
-            yaw + shake.z.clamp(-0.3, 0.3),
-            pitch + shake.x.clamp(-0.3, 0.3),
+            yaw + shake.z.clamped(-0.3, 0.3),
+            pitch + shake.x.clamped(-0.3, 0.3),
             roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
@@ -924,7 +925,7 @@ impl App {
         let plant_light = std::array::from_fn(|i| {
             ((camera.ambient[i] + camera.sun_color[i] * live_up)
                 / (scene.ambient[i] + scene.sun_color[i] * baked_up).max(0.001))
-            .clamp(0.0, 4.0)
+            .clamped(0.0, 4.0)
         });
         self.foliage.set_illumination(plant_light)?;
         self.foliage.prepare(

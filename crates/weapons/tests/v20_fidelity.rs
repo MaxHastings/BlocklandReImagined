@@ -9,6 +9,7 @@
 //! play and sound (`soundProfile`) and deal `radiusDamage`. The record is
 //! written to `$CARGO_TARGET_TMPDIR/v20-fidelity-weapons.json` for
 //! docs/audits/v20-fidelity.md.
+use bri_console::Clamp;
 use bri_weapons::*;
 use glam::Vec3;
 use serde_json::json;
@@ -27,7 +28,7 @@ impl Query for Target {
             return None;
         }
         let t = (at - start).dot(segment) / segment.length_squared();
-        let closest = start + segment * t.clamp(0.0, 1.0);
+        let closest = start + segment * t.clamped(0.0, 1.0);
         ((0.0..=1.0).contains(&t) && closest.distance(at) < 1.5).then_some(Hit {
             target: TargetId::Actor(ActorId(2)),
             position: closest,
