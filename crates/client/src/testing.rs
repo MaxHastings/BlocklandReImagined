@@ -636,6 +636,19 @@ pub mod audio {
     }
 }
 
+/// Where a test writes a picture for a person to look at: the build's
+/// target folder (`CARGO_TARGET_DIR` when set, else the workspace's
+/// `target/`), made if it is missing. A build whose target folder is
+/// elsewhere has no `target/` in the checkout.
+#[cfg(test)]
+pub(crate) fn look_path(name: &str) -> anyhow::Result<std::path::PathBuf> {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| workspace.join("target"), |dir| workspace.join(dir));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join(name))
+}
+
 /// `synthetic_and_content!(Fixture: body, ...)` emits, for each `body`
 /// (`fn body(&Fixture) -> anyhow::Result<()>`), a module `body` holding the
 /// tests `synthetic` (on `Fixture::synthetic()`) and `content` (on
