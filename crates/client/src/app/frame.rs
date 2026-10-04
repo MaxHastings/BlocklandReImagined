@@ -702,7 +702,7 @@ impl App {
     }
 
     /// Step 22: the Add-On import, LAN query and firewall fix jobs.
-    fn poll_background_jobs(&mut self) {
+    pub(super) fn poll_background_jobs(&mut self) {
         self.poll_package_reload();
         if let Some(receiver) = &self.addons.add_on_sync {
             let mut notes = vec![];
@@ -735,6 +735,9 @@ impl App {
                 } else {
                     self.show_add_ons(view);
                 }
+            }
+            if done {
+                self.resume_after_sync();
             }
         }
         if let Some(receiver) = &self.lobby.lan_query

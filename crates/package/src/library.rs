@@ -109,6 +109,13 @@ impl PackageInfo {
     pub fn source(&self) -> Option<&str> {
         self.provenance.get("source").and_then(|s| s.as_str())
     }
+    /// Whether it ships with the game as a bundled original:
+    /// `tools/addon_bundle.py` marks each one's manifest
+    /// `provenance.bundled` (crediting its authors), which no conversion the
+    /// player makes carries. The classic Add-Ons folder never owns one.
+    pub fn bundled(&self) -> bool {
+        self.provenance.get("bundled").is_some_and(|b| !b.is_null())
+    }
     /// The side it loads on ([`side_for_package`]).
     pub fn side(&self) -> Option<Side> {
         side_for_package(
@@ -412,6 +419,11 @@ impl<'a> Beside<'a> {
 pub const DROP_DIR: &str = "Add-Ons";
 /// Where importing one writes its package.
 pub const IMPORT_DIR: &str = "addons";
+/// Where a conversion is written before it is moved into [`IMPORT_DIR`]
+/// ([`Library::install_staged`]), and where the copy it replaces waits
+/// until it is in. Discovery never looks here (it skips `.` folders), nor
+/// does anything that looks beside an Add-On for its host rules.
+pub const STAGING_DIR: &str = ".addon-staging";
 /// Legacy add-ons listed at most.
 pub const MAX_LEGACY: usize = 1024;
 
@@ -421,9 +433,14 @@ pub struct LegacyAddOn {
     /// File stem, as v20 named it (`Weapon_Shotgun`).
     pub name: String,
     pub path: PathBuf,
-    /// The installed package imported from it, matched by the provenance
-    /// the importer records (`Blockland Add-On <name> (...)`).
+    /// The installed package the player's conversion of it became, matched
+    /// by the provenance the importer records (`Blockland Add-On <name>
+    /// (...)`). Never a package the game ships ([`Self::included`]).
     pub imported_as: Option<String>,
+    /// The package the game ships as this Add-On ([`PackageInfo::bundled`]):
+    /// the dropped copy is not needed, so it is never converted, and the
+    /// shipped one is never replaced or removed with it.
+    pub included: Option<String>,
 }
 
 impl Library {
@@ -581,20 +598,7 @@ impl Library {
     /// A fresh directory under [`IMPORT_DIR`] for importing `name`: its
     /// lower-case, `_`-joined name, numbered if taken. Content-root relative.
     pub fn import_dir(&self, name: &str) -> String {
-        let mut stem: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        stem = stem.trim_matches('_').chars().take(64).collect();
-        if stem.is_empty() {
-            stem = "addon".into();
-        }
+        let stem = folder_stem(name);
         let mut dir = format!("{IMPORT_DIR}/{stem}");
         let mut n = 2;
         // A port's host rules go beside the import, in `<dir>-rules`.
@@ -603,6 +607,59 @@ impl Library {
             n += 1;
         }
         dir
+    }
+
+    /// Where the importer writes a new conversion of `name`
+    /// ([`Self::install_staged`] moves it in): under [`STAGING_DIR`], with
+    /// its host rules beside it in `<dir>-rules`. Content-root relative;
+    /// whatever an earlier, interrupted conversion left there is deleted.
+    pub fn staging_dir(&self, name: &str) -> Result<String> {
+        let dir = format!("{STAGING_DIR}/{}", folder_stem(name));
+        for d in [dir.clone(), format!("{dir}-rules")] {
+            let path = self.root.join(d);
+            if path.exists() {
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("Removing {}", path.display()))?;
+            }
+        }
+        std::fs::create_dir_all(self.root.join(STAGING_DIR))
+            .with_context(|| format!("Creating {}", self.root.join(STAGING_DIR).display()))?;
+        Ok(dir)
+    }
+
+    /// Whether `id` ships with the game: a bundled original
+    /// ([`PackageInfo::bundled`]) or the host rules that are part of one.
+    /// Only the player's own conversions are the Add-Ons folder's to
+    /// replace or remove.
+    pub fn shipped(&self, id: &str) -> bool {
+        let bundled = |id: &str| {
+            self.get(id)
+                .and_then(|e| e.info.as_ref())
+                .is_some_and(PackageInfo::bundled)
+        };
+        bundled(id) || self.companion_of(id).is_some_and(bundled)
+    }
+
+    /// The folder of the player's conversion `id`, which this game made
+    /// under [`IMPORT_DIR`] and so may replace or delete.
+    fn conversion_dir(&self, id: &str) -> Result<String> {
+        let entry = self
+            .get(id)
+            .with_context(|| format!("`{id}` is not installed"))?;
+        ensure!(
+            !self.shipped(id),
+            "{} comes with the game, so it is not removed",
+            entry.name()
+        );
+        let dir = entry.package.dir.clone();
+        ensure!(
+            dir.starts_with(&format!("{IMPORT_DIR}/"))
+                && !dir
+                    .split('/')
+                    .any(|p| p.is_empty() || p == ".." || p == "."),
+            "`{id}` was not converted by this game, so it is not removed"
+        );
+        Ok(dir)
     }
 
     /// The installed Add-On that names `id` its companion (an import whose
@@ -865,6 +922,242 @@ impl Library {
             .filter(|e| !e.discovered)
             .map(|e| e.package.clone())
             .collect();
+        self.write_lists(on, off)
+    }
+
+    /// Delete the player's converted Add-On `id`, which must live under
+    /// [`IMPORT_DIR`] and not ship with the game ([`Self::shipped`]): turned
+    /// off first, with its port's companion host rules beside it
+    /// (`<dir>-rules`) and whatever needs either, then both folders go. The
+    /// lists drop it at their next change. What else was turned off.
+    pub fn uninstall(&mut self, id: &str) -> Result<Vec<String>> {
+        let dir = self.conversion_dir(id)?;
+        let also = self.turn_off_with_rules(id, &dir)?;
+        for dir in [format!("{dir}-rules"), dir] {
+            let path = self.root.join(&dir);
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("Removing {}", path.display()))?;
+            }
+        }
+        *self = Self::scan(&self.root)?;
+        Ok(also)
+    }
+
+    /// Turn the conversion `id` in `dir` off, with its host rules
+    /// (`<id>-rules` in `<dir>-rules`) and whatever needs either. The rules
+    /// are part of it ([`Self::companion_of`]), so they go with it here
+    /// rather than being refused on their own. What else went off, the
+    /// rules aside.
+    fn turn_off_with_rules(&mut self, id: &str, dir: &str) -> Result<Vec<String>> {
+        let rules = format!("{id}-rules");
+        let rules_on = self
+            .get(&rules)
+            .is_some_and(|e| e.enabled && e.package.dir == format!("{dir}-rules"));
+        let mut plan = if self
+            .get(id)
+            .is_some_and(|e| e.enabled && e.package.dir == dir)
+        {
+            self.plan(id, false)
+        } else if rules_on {
+            Plan {
+                id: id.to_string(),
+                enable: false,
+                also: vec![],
+                refused: vec![],
+            }
+        } else {
+            return Ok(vec![]);
+        };
+        if rules_on {
+            for other in std::iter::once(rules.clone()).chain(self.dependents(&rules)) {
+                if other != id && !plan.also.contains(&other) {
+                    plan.also.push(other);
+                }
+            }
+        }
+        self.apply(&plan)?;
+        plan.also.retain(|a| *a != rules);
+        Ok(plan.also)
+    }
+
+    /// Move the conversion of the dropped Add-On `name` that the importer
+    /// wrote to `staged` ([`Self::staging_dir`], its host rules at
+    /// `<staged>-rules`) into [`IMPORT_DIR`]. Its id and folder.
+    ///
+    /// With `replaces`, the player's earlier conversion of it, the new copy
+    /// takes the old one's folder and its place in the lists: whether it is
+    /// on does not change, so neither do the Add-Ons that need it. The old
+    /// copy is deleted only once the new one is in; when anything fails it
+    /// is left as it was. The staged copy is gone either way. A new copy
+    /// that became a different Add-On (another id) replaces the old one as
+    /// a removal does, then is turned on if the old one was.
+    pub fn install_staged(
+        &mut self,
+        name: &str,
+        staged: &str,
+        replaces: Option<&str>,
+    ) -> Result<(String, String)> {
+        ensure!(
+            staged.starts_with(&format!("{STAGING_DIR}/")) && !staged.contains(".."),
+            "`{staged}` is not a staged conversion"
+        );
+        let result = self.install_staged_inner(name, staged, replaces);
+        for dir in [staged.to_string(), format!("{staged}-rules")] {
+            let path = self.root.join(dir);
+            if path.exists() {
+                let _ = std::fs::remove_dir_all(path);
+            }
+        }
+        *self = Self::scan(&self.root)?;
+        result
+    }
+
+    fn install_staged_inner(
+        &mut self,
+        name: &str,
+        staged: &str,
+        replaces: Option<&str>,
+    ) -> Result<(String, String)> {
+        let id = read_info(&self.root.join(staged).join(MANIFEST_FILE))
+            .context("the conversion has no readable package.json")?
+            .id;
+        let old = replaces.filter(|old| self.get(old).is_some());
+        if let Some(old) = old {
+            let dir = self.conversion_dir(old)?;
+            if old == id {
+                self.swap_in(staged, &dir)?;
+                self.relist(&dir)?;
+                return Ok((id, dir));
+            }
+        }
+        let was_on = old.is_some_and(|old| self.get(old).is_some_and(|e| e.enabled));
+        if let Some(old) = old {
+            self.uninstall(old)?;
+        }
+        let dir = self.import_dir(name);
+        let moves = [
+            (staged.to_string(), dir.clone()),
+            (format!("{staged}-rules"), format!("{dir}-rules")),
+        ];
+        self.move_all(&moves)?;
+        *self = Self::scan(&self.root)?;
+        if was_on {
+            let plan = self.plan(&id, true);
+            if plan.allowed() {
+                self.apply(&plan)?;
+            }
+        }
+        Ok((id, dir))
+    }
+
+    /// Put the staged conversion and its host rules in place of the copy in
+    /// `dir` and its rules: the old ones are moved aside, the new ones in,
+    /// and only then is the old copy deleted. On failure every move is
+    /// undone.
+    fn swap_in(&self, staged: &str, dir: &str) -> Result<()> {
+        let aside = [
+            (dir.to_string(), format!("{staged}.old")),
+            (format!("{dir}-rules"), format!("{staged}.old-rules")),
+        ];
+        for (_, to) in &aside {
+            let path = self.root.join(to);
+            if path.exists() {
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("Removing {}", path.display()))?;
+            }
+        }
+        let moved_aside = self.move_all(&aside)?;
+        let moves = [
+            (staged.to_string(), dir.to_string()),
+            (format!("{staged}-rules"), format!("{dir}-rules")),
+        ];
+        if let Err(error) = self.move_all(&moves) {
+            self.undo(&moved_aside);
+            return Err(error);
+        }
+        for (_, to) in &moved_aside {
+            let path = self.root.join(to);
+            std::fs::remove_dir_all(&path)
+                .with_context(|| format!("Removing {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Rename each existing `from` to `to`, all or none: what was moved.
+    fn move_all(&self, moves: &[(String, String)]) -> Result<Vec<(String, String)>> {
+        let mut done = vec![];
+        for (from, to) in moves {
+            let (source, target) = (self.root.join(from), self.root.join(to));
+            if !source.exists() {
+                continue;
+            }
+            let moved = match target.parent() {
+                Some(parent) => std::fs::create_dir_all(parent),
+                None => Ok(()),
+            }
+            .and_then(|()| std::fs::rename(&source, &target));
+            if let Err(error) = moved {
+                self.undo(&done);
+                return Err(error).with_context(|| {
+                    format!("Moving {} to {}", source.display(), target.display())
+                });
+            }
+            done.push((from.clone(), to.clone()));
+        }
+        Ok(done)
+    }
+
+    fn undo(&self, moved: &[(String, String)]) {
+        for (from, to) in moved.iter().rev() {
+            if let Err(error) = std::fs::rename(self.root.join(to), self.root.join(from)) {
+                // Nothing more can be done here; the copy is still at `to`.
+                eprintln!("Could not move {to} back to {from}: {error}");
+            }
+        }
+    }
+
+    /// After the copy in `dir` was replaced: the lists' entries for it and
+    /// its host rules follow the new copy's manifest (id, version and side),
+    /// and one whose folder is gone goes. Which are on does not change; host
+    /// rules only the new copy has turn on with it ([`follow_companions`]).
+    fn relist(&mut self, dir: &str) -> Result<()> {
+        *self = Self::scan(&self.root)?;
+        let rules = format!("{dir}-rules");
+        let root = self.root.clone();
+        let refresh = |e: &LibraryEntry| -> Option<PackageEntry> {
+            let mut p = e.package.clone();
+            if p.dir != dir && p.dir != rules {
+                return Some(p);
+            }
+            let info = read_info(&root.join(&p.dir).join(MANIFEST_FILE))?;
+            if p.role.is_none()
+                && let Some(side) = info.side()
+            {
+                p.side = side;
+            }
+            p.id = info.id;
+            p.version = info.version;
+            Some(p)
+        };
+        let on: Vec<PackageEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.enabled)
+            .filter_map(refresh)
+            .collect();
+        let off: Vec<PackageEntry> = self
+            .entries
+            .iter()
+            .filter(|e| !e.enabled && !e.discovered)
+            .filter_map(refresh)
+            .collect();
+        self.write_lists(on, off)
+    }
+
+    /// Write `packages.json` (`on`) and `packages-disabled.json` (`off`),
+    /// then rescan.
+    fn write_lists(&mut self, on: Vec<PackageEntry>, off: Vec<PackageEntry>) -> Result<()> {
         let enabled = PackageSet {
             schema_version: PACKAGES_SCHEMA,
             packages: on,
@@ -881,46 +1174,6 @@ impl Library {
         write_atomic(&self.root.join(PACKAGES_FILE), &enabled)?;
         *self = Self::scan(&self.root)?;
         Ok(())
-    }
-
-    /// Delete the converted Add-On `id`, which must live under
-    /// [`IMPORT_DIR`]: turned off first, with whatever needs it, and a
-    /// port's companion host rules beside it (`<dir>-rules`) with it. The
-    /// lists drop it at their next change. What else was turned off.
-    pub fn uninstall(&mut self, id: &str) -> Result<Vec<String>> {
-        let dir = self
-            .get(id)
-            .with_context(|| format!("`{id}` is not installed"))?
-            .package
-            .dir
-            .clone();
-        ensure!(
-            dir.starts_with(&format!("{IMPORT_DIR}/"))
-                && !dir
-                    .split('/')
-                    .any(|p| p.is_empty() || p == ".." || p == "."),
-            "`{id}` was not converted by this game, so it is not removed"
-        );
-        let rules = format!("{dir}-rules");
-        let mut also = vec![];
-        for (id, dir) in [(format!("{id}-rules"), rules), (id.to_string(), dir)] {
-            if self
-                .get(&id)
-                .is_some_and(|e| e.enabled && e.package.dir == dir)
-            {
-                let plan = self.plan(&id, false);
-                also.extend(plan.also.iter().cloned());
-                self.apply(&plan)?;
-            }
-            let path = self.root.join(&dir);
-            if path.is_dir() {
-                std::fs::remove_dir_all(&path)
-                    .with_context(|| format!("Removing {}", path.display()))?;
-            }
-        }
-        *self = Self::scan(&self.root)?;
-        also.retain(|a| a != &format!("{id}-rules"));
-        Ok(also)
     }
 
     /// Mark enabled packages whose dependencies are not enabled and
@@ -970,6 +1223,26 @@ impl Library {
             }
             e.problems.sort_by_key(|d| d.severity);
         }
+    }
+}
+
+/// A dropped Add-On's folder name: lower-case, `_`-joined.
+fn folder_stem(name: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let stem: String = stem.trim_matches('_').chars().take(64).collect();
+    if stem.is_empty() {
+        "addon".into()
+    } else {
+        stem
     }
 }
 
@@ -1139,19 +1412,22 @@ fn legacy(root: &Path, entries: &[LibraryEntry]) -> Vec<LegacyAddOn> {
                 return None;
             }
             let prefix = format!("Blockland Add-On {name} (");
-            let imported_as = entries
-                .iter()
-                .find(|p| {
-                    p.info
-                        .as_ref()
-                        .and_then(|i| i.source())
-                        .is_some_and(|s| s.starts_with(&prefix))
-                })
-                .map(|p| p.package.id.clone());
+            let made_from = |bundled: bool| {
+                entries
+                    .iter()
+                    .find(|p| {
+                        p.info.as_ref().is_some_and(|i| {
+                            i.bundled() == bundled
+                                && i.source().is_some_and(|s| s.starts_with(&prefix))
+                        })
+                    })
+                    .map(|p| p.package.id.clone())
+            };
             Some(LegacyAddOn {
+                imported_as: made_from(false),
+                included: made_from(true),
                 name,
                 path,
-                imported_as,
             })
         })
         .take(MAX_LEGACY)

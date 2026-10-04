@@ -250,7 +250,23 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
     for e in library.entries.iter().filter(|e| {
         !e.required && library.companion_of(e.id()).is_none() && !palette_only(library, e)
     }) {
-        out.push(row(library, e));
+        let mut row = row(library, e);
+        if let Some(copy) = library
+            .legacy
+            .iter()
+            .find(|l| l.included.as_deref() == Some(e.id()))
+        {
+            let already = format!(
+                "It comes with the game, so the copy of it in your Add-Ons folder ({}) is not needed and is not converted.",
+                copy.name
+            );
+            row.description = if row.description.is_empty() {
+                already
+            } else {
+                format!("{} {already}", row.description)
+            };
+        }
+        out.push(row);
     }
     // Base first, then categories in table order, then Other; the library's
     // order (load order, then name) inside each.
@@ -267,7 +283,13 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
     out.sort_by_key(|r| rank(&r.category));
     // Classic Add-Ons dropped in the Add-Ons folder and not converted yet
     // come last: converting, or why they could not be.
-    for l in library.legacy.iter().filter(|l| l.imported_as.is_none()) {
+    // A copy of one the game ships is not converted: the shipped one's row
+    // says so.
+    for l in library
+        .legacy
+        .iter()
+        .filter(|l| l.imported_as.is_none() && l.included.is_none())
+    {
         let failed = state.failed(l);
         out.push(AddOnRow {
             id: format!("{LEGACY}{}", l.name),
@@ -368,22 +390,71 @@ pub struct SyncNote {
 
 /// Bring the conversions in line with the Add-Ons folder on a worker
 /// thread ([`classic::plan`]): convert what was dropped or changed, remove
-/// what was taken out. The receiver yields its progress.
-pub fn start_sync(root: &Path, importer: &Path) -> Result<std::sync::mpsc::Receiver<SyncNote>> {
-    let steps = classic::plan(&Library::scan(root)?, &State::load(root));
+/// what was taken out. While a game runs (`in_game`), changes to Add-Ons
+/// that are on wait ([`outside_a_game`]). The receiver yields its progress.
+pub fn start_sync(
+    root: &Path,
+    importer: &Path,
+    in_game: bool,
+) -> Result<std::sync::mpsc::Receiver<SyncNote>> {
+    let library = Library::scan(root)?;
+    let mut steps = classic::plan(&library, &State::load(root));
+    let mut waiting = vec![];
+    if in_game {
+        (steps, waiting) = outside_a_game(&library, steps);
+    }
     let (send, receive) = std::sync::mpsc::channel();
     let (root, importer) = (root.to_path_buf(), importer.to_path_buf());
     std::thread::spawn(move || {
         let run = |input: &Path, out: &Path, reference: &Path| {
             run_importer(&importer, input, out, reference)
         };
-        let notice = sync(&root, &run, steps, &send);
+        let mut notice = sync(&root, &run, steps, &send);
+        if !waiting.is_empty() {
+            let wait = match waiting.as_slice() {
+                [one] => format!(
+                    "{one} is on in this game, so the change to it in your Add-Ons folder waits until you leave the game and open Add-Ons again."
+                ),
+                many => format!(
+                    "{} are on in this game, so the changes to them in your Add-Ons folder wait until you leave the game and open Add-Ons again.",
+                    many.join(", ")
+                ),
+            };
+            notice = if notice.is_empty() {
+                wait
+            } else {
+                format!("{notice} {wait}")
+            };
+        }
         let _ = send.send(SyncNote {
             notice,
             finished: true,
         });
     });
     Ok(receive)
+}
+
+/// The steps that leave the Add-Ons that are on as they are, and the
+/// dropped names of those that would not: a new copy of one that is on, or
+/// one taken out of the folder while on. A running game's host serves the
+/// Add-Ons it started with and refuses joining players once their files
+/// change, so those wait until no game is running.
+pub fn outside_a_game(library: &Library, steps: Vec<Step>) -> (Vec<Step>, Vec<String>) {
+    let on = |id: &str| library.get(id).is_some_and(|e| e.enabled);
+    let mut now = vec![];
+    let mut waiting = vec![];
+    for step in steps {
+        match &step {
+            Step::Import {
+                name,
+                replaces: Some(old),
+                ..
+            } if on(old) => waiting.push(name.clone()),
+            Step::Remove { name, id, .. } if !id.is_empty() && on(id) => waiting.push(name.clone()),
+            _ => now.push(step),
+        }
+    }
+    (now, waiting)
 }
 
 fn run_importer(importer: &Path, input: &Path, out: &Path, reference: &Path) -> Result<()> {
@@ -432,7 +503,7 @@ fn sync(
     steps: Vec<Step>,
     send: &std::sync::mpsc::Sender<SyncNote>,
 ) -> String {
-    let (mut converted, mut failed, mut removed) = (vec![], vec![], vec![]);
+    let (mut converted, mut failed, mut removed, mut included) = (vec![], vec![], vec![], vec![]);
     let mut state = State::load(root);
     for step in steps {
         match step {
@@ -446,6 +517,22 @@ fn sync(
                     id: Some(id),
                     dir,
                     error: None,
+                    included: None,
+                });
+            }
+            Step::Included { name, id, stamp } => {
+                let title = Library::scan(root)
+                    .ok()
+                    .and_then(|l| Some(l.get(&id)?.name().to_string()))
+                    .unwrap_or_else(|| id.clone());
+                included.push((name.clone(), title));
+                state.set(Record {
+                    name,
+                    stamp,
+                    id: None,
+                    dir: None,
+                    error: None,
+                    included: Some(id),
                 });
             }
             Step::Remove { name, id, .. } => {
@@ -455,8 +542,12 @@ fn sync(
                     bri_console::warn(format!("Removing {name}'s conversion: {error:#}"));
                     continue;
                 }
+                // A copy of one the game ships had nothing to remove.
+                let converted = state.get(&name).is_none_or(|r| r.included.is_none());
                 state.forget(&name);
-                removed.push(name);
+                if converted {
+                    removed.push(name);
+                }
             }
             Step::Import {
                 name,
@@ -474,6 +565,7 @@ fn sync(
                     id: None,
                     dir: None,
                     error: None,
+                    included: None,
                 };
                 match convert(root, run, &name, &path, replaces.as_deref()) {
                     Ok((id, dir)) => {
@@ -483,6 +575,14 @@ fn sync(
                     }
                     Err(error) => {
                         record.error = Some(format!("{error:#}"));
+                        // The earlier conversion is kept, and still goes
+                        // when its zip is taken out.
+                        if let Some(old) = &replaces {
+                            record.dir = Library::scan(root)
+                                .ok()
+                                .and_then(|l| Some(l.get(old)?.package.dir.clone()));
+                            record.id = record.dir.as_ref().map(|_| old.clone());
+                        }
                         failed.push(name);
                     }
                 }
@@ -515,13 +615,28 @@ fn sync(
             list(&removed)
         ));
     }
+    match included.as_slice() {
+        [] => {}
+        [(name, title)] => notice.push(format!(
+            "{name} is already included: {title} comes with the game, so the copy in your Add-Ons folder is not needed."
+        )),
+        many => notice.push(format!(
+            "Already included with the game, so the copies in your Add-Ons folder are not needed: {}.",
+            many.iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
     notice.join(" ")
 }
 
-/// Convert the dropped Add-On `name` at `input` with the importer, first
-/// removing `replaces`, its earlier conversion (kept on if it was on). The
-/// other Add-Ons in the folder are its reference, so one it requires
-/// (`ForceRequiredAddOn`) is found. Its id and folder.
+/// Convert the dropped Add-On `name` at `input` with the importer into a
+/// staging folder, then move it in ([`Library::install_staged`]) in place
+/// of `replaces`, its earlier conversion: what was on stays on, Add-Ons
+/// needing it included, and a conversion that fails leaves the earlier one
+/// as it was. The other Add-Ons in the folder are its reference, so one it
+/// requires (`ForceRequiredAddOn`) is found. Its id and folder.
 fn convert(
     root: &Path,
     run: &Run,
@@ -529,37 +644,16 @@ fn convert(
     input: &Path,
     replaces: Option<&str>,
 ) -> Result<(String, String)> {
-    let mut was_on = false;
-    if let Some(old) = replaces {
-        let mut library = Library::scan(root)?;
-        was_on = library.get(old).is_some_and(|e| e.enabled);
-        library.uninstall(old)?;
-    }
-    let dir = Library::scan(root)?.import_dir(name);
-    let out = root.join(&dir);
-    if let Err(error) = run(input, &out, root) {
+    let mut library = Library::scan(root)?;
+    let staged = library.staging_dir(name)?;
+    if let Err(error) = run(input, &root.join(&staged), root) {
         // Leave no half-written package behind.
-        let _ = std::fs::remove_dir_all(&out);
-        let mut rules = out.as_os_str().to_owned();
-        rules.push("-rules");
-        let _ = std::fs::remove_dir_all(std::path::PathBuf::from(rules));
+        for dir in [staged.clone(), format!("{staged}-rules")] {
+            let _ = std::fs::remove_dir_all(root.join(dir));
+        }
         return Err(error);
     }
-    let manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(out.join("package.json")).context("the conversion has no package.json")?,
-    )?;
-    let id = manifest["id"]
-        .as_str()
-        .context("the conversion's package.json has no id")?
-        .to_string();
-    if was_on {
-        let mut library = Library::scan(root)?;
-        let plan = library.plan(&id, true);
-        if plan.allowed() {
-            library.apply(&plan)?;
-        }
-    }
-    Ok((id, dir))
+    library.install_staged(name, &staged, replaces)
 }
 
 fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
@@ -1002,6 +1096,232 @@ mod tests {
         assert!(library.get("weapon_gun").is_none());
         assert!(!root.join("addons/weapon_gun").exists());
         assert!(library.get("weapon_bad").is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod reconvert_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A stand-in importer for two bots: Bot_Zombie needs Bot_Hole, whose
+    /// port brings host rules beside it. Each copy keeps the dropped bytes,
+    /// and one whose bytes say `bad` is refused.
+    fn fake_bots(input: &Path, out: &Path, _reference: &Path) -> Result<()> {
+        let bytes = std::fs::read(input)?;
+        anyhow::ensure!(bytes != b"bad", "not a zip file");
+        let name = input.file_stem().unwrap().to_string_lossy().to_string();
+        let id = name.to_ascii_lowercase();
+        std::fs::create_dir_all(out)?;
+        std::fs::write(out.join("copy.txt"), &bytes)?;
+        let mut info = json!({ "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
+            "provides": [{ "kind": "bots", "id": format!("{id}:bots/b"), "file": "b.json" }],
+            "provenance": { "source": format!("Blockland Add-On {name} (zip), sha256 00") } });
+        if id == "bot_zombie" {
+            info["dependencies"] = json!({ "bot_hole": "^1.0" });
+        }
+        if id == "bot_hole" && !bytes.ends_with(b"no rules") {
+            info["companions"] = json!(["bot_hole-rules"]);
+            let mut rules = out.as_os_str().to_owned();
+            rules.push("-rules");
+            let rules = std::path::PathBuf::from(rules);
+            std::fs::create_dir_all(&rules)?;
+            std::fs::write(
+                rules.join("package.json"),
+                json!({ "schema_version": 1, "id": "bot_hole-rules", "version": "1.0.0", "api": 1,
+                    "dependencies": { "bot_hole": "^1.0" },
+                    "provides": [{ "kind": "behaviour", "id": "bot_hole-rules:behaviour/b", "file": "b.json" }] })
+                .to_string(),
+            )?;
+        }
+        std::fs::write(out.join("package.json"), info.to_string())?;
+        Ok(())
+    }
+
+    fn sync_bots(root: &Path) -> String {
+        let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root));
+        let (send, _receive) = std::sync::mpsc::channel();
+        sync(root, &fake_bots, steps, &send)
+    }
+
+    fn on(root: &Path, id: &str) -> bool {
+        Library::scan(root)
+            .unwrap()
+            .get(id)
+            .is_some_and(|e| e.enabled)
+    }
+
+    #[test]
+    fn a_new_copy_of_an_add_on_others_need_keeps_them_on_and_a_failed_one_keeps_it() {
+        reconvert(true);
+    }
+
+    #[test]
+    fn a_new_copy_of_an_add_on_without_host_rules_keeps_what_needs_it_on() {
+        reconvert(false);
+    }
+
+    fn reconvert(rules: bool) {
+        let tag: &[u8] = if rules { b"" } else { b" no rules" };
+        let copy = |text: &str| [text.as_bytes(), tag].concat();
+        let root = std::env::temp_dir().join(format!(
+            "bri-add-ons-reconvert-{rules}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let drop = classic::folder(&root);
+        std::fs::create_dir_all(&drop).unwrap();
+        std::fs::write(drop.join("Bot_Hole.zip"), copy("PK one")).unwrap();
+        std::fs::write(drop.join("Bot_Zombie.zip"), b"PK zombie").unwrap();
+        sync_bots(&root);
+        set_enabled(&root, "bot_zombie", true).unwrap();
+        let ids: &[&str] = if rules {
+            &["bot_hole", "bot_hole-rules", "bot_zombie"]
+        } else {
+            &["bot_hole", "bot_zombie"]
+        };
+        for id in ids {
+            assert!(on(&root, id), "{id} is on");
+        }
+        // A new copy of the Add-On the Zombie needs: both stay on.
+        std::fs::write(drop.join("Bot_Hole.zip"), copy("PK two, longer")).unwrap();
+        sync_bots(&root);
+        assert_eq!(
+            std::fs::read(root.join("addons/bot_hole/copy.txt")).unwrap(),
+            copy("PK two, longer")
+        );
+        for id in ids {
+            assert!(on(&root, id), "{id} is still on");
+        }
+        // A copy that does not convert leaves the working one as it was.
+        std::fs::write(drop.join("Bot_Hole.zip"), b"bad").unwrap();
+        let notice = sync_bots(&root);
+        assert!(notice.contains("Could not convert Bot_Hole"), "{notice}");
+        assert_eq!(
+            std::fs::read(root.join("addons/bot_hole/copy.txt")).unwrap(),
+            copy("PK two, longer")
+        );
+        assert_eq!(
+            root.join("addons/bot_hole-rules/package.json").is_file(),
+            rules
+        );
+        for id in ids {
+            assert!(on(&root, id), "{id} is on after a failed copy");
+        }
+        // Taken out, the copy kept goes with it as any conversion does.
+        std::fs::remove_file(drop.join("Bot_Hole.zip")).unwrap();
+        sync_bots(&root);
+        assert!(!root.join("addons/bot_hole").exists());
+        assert!(!root.join("addons/bot_hole-rules").exists());
+        assert!(!on(&root, "bot_zombie"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod in_game_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn package(root: &Path, id: &str, name: &str, extra: serde_json::Value) {
+        let dir = root.join("addons").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut info = json!({ "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
+            "provides": [{ "kind": "bots", "id": format!("{id}:bots/b"), "file": "b.json" }],
+            "provenance": { "source": format!("Blockland Add-On {name} (zip), sha256 00") } });
+        for (k, v) in extra.as_object().unwrap() {
+            info[k] = v.clone();
+        }
+        std::fs::write(dir.join("package.json"), info.to_string()).unwrap();
+    }
+
+    #[test]
+    fn during_a_game_only_changes_to_add_ons_that_are_off_are_made() {
+        let root = std::env::temp_dir().join(format!("bri-add-ons-in-game-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let drop = classic::folder(&root);
+        std::fs::create_dir_all(&drop).unwrap();
+        for (id, name) in [
+            ("bot_on", "Bot_On"),
+            ("bot_off", "Bot_Off"),
+            ("bot_gone", "Bot_Gone"),
+        ] {
+            package(&root, id, name, json!({}));
+            std::fs::write(drop.join(format!("{name}.zip")), b"PK one").unwrap();
+        }
+        set_enabled(&root, "bot_on", true).unwrap();
+        set_enabled(&root, "bot_gone", true).unwrap();
+        let steps = classic::plan(&Library::scan(&root).unwrap(), &State::load(&root));
+        let (send, _receive) = std::sync::mpsc::channel();
+        sync(&root, &|_: &Path, _: &Path, _: &Path| Ok(()), steps, &send);
+        // Two changed, one taken out, one new.
+        for name in ["Bot_On", "Bot_Off"] {
+            std::fs::write(drop.join(format!("{name}.zip")), b"PK two, longer").unwrap();
+        }
+        std::fs::remove_file(drop.join("Bot_Gone.zip")).unwrap();
+        std::fs::write(drop.join("Bot_New.zip"), b"PK").unwrap();
+        let library = Library::scan(&root).unwrap();
+        let steps = classic::plan(&library, &State::load(&root));
+        let (now, waiting) = outside_a_game(&library, steps);
+        assert_eq!(waiting, ["Bot_Gone", "Bot_On"]);
+        let names: Vec<&str> = now
+            .iter()
+            .map(|s| match s {
+                Step::Import { name, .. }
+                | Step::Remove { name, .. }
+                | Step::Adopt { name, .. }
+                | Step::Included { name, .. } => name.as_str(),
+            })
+            .collect();
+        assert_eq!(names, ["Bot_New", "Bot_Off"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_dropped_copy_of_a_bundled_add_on_is_already_included() {
+        let root =
+            std::env::temp_dir().join(format!("bri-add-ons-included-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let drop = classic::folder(&root);
+        std::fs::create_dir_all(&drop).unwrap();
+        package(
+            &root,
+            "bot_shark",
+            "Bot_Shark",
+            json!({ "name": "Shark Bot", "provenance": {
+                "source": "Blockland Add-On Bot_Shark (zip), sha256 aa",
+                "bundled": "The authors' original Add-On, bundled with credit to them." } }),
+        );
+        set_enabled(&root, "bot_shark", true).unwrap();
+        std::fs::write(drop.join("Bot_Shark.zip"), b"PK").unwrap();
+        let steps = classic::plan(&Library::scan(&root).unwrap(), &State::load(&root));
+        let (send, _receive) = std::sync::mpsc::channel();
+        let never = |_: &Path, _: &Path, _: &Path| -> Result<()> { panic!("never converted") };
+        assert_eq!(
+            sync(&root, &never, steps, &send),
+            "Bot_Shark is already included: Shark Bot comes with the game, so the copy in your Add-Ons folder is not needed."
+        );
+        let rows = view(&root).rows;
+        assert!(!rows.iter().any(|r| r.id.starts_with(LEGACY)));
+        let shark = rows.iter().find(|r| r.id == "bot_shark").unwrap();
+        assert!(shark.enabled);
+        assert!(
+            shark.description.contains("(Bot_Shark) is not needed"),
+            "{}",
+            shark.description
+        );
+        // Taken out again: nothing is removed, nothing said.
+        std::fs::remove_file(drop.join("Bot_Shark.zip")).unwrap();
+        let steps = classic::plan(&Library::scan(&root).unwrap(), &State::load(&root));
+        assert_eq!(sync(&root, &never, steps, &send), "");
+        assert!(root.join("addons/bot_shark/package.json").is_file());
+        assert!(
+            Library::scan(&root)
+                .unwrap()
+                .get("bot_shark")
+                .is_some_and(|e| e.enabled)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
