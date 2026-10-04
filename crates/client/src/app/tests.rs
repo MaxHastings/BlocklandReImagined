@@ -484,10 +484,127 @@ fn small_state_files_update_in_place() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 use crate::testing::content_root::ContentRoot;
+/// Run the app until `ready`. Waits follow the game, not the wall clock:
+/// one fails when the server has run ten seconds of game time without
+/// `ready`, or when neither loading nor the server has moved for two
+/// minutes (a stopped game, not a machine busy building something else).
+fn until(
+    app: &mut super::App,
+    what: &str,
+    ready: impl Fn(&super::App) -> bool,
+) -> anyhow::Result<()> {
+    use super::*;
+    const TICKS: u64 = 1200;
+    const STALL: std::time::Duration = std::time::Duration::from_secs(120);
+    let moved = |app: &super::App| (app.loading_revision(), app.network_view().map(|v| v.tick));
+    let mut previous = std::time::Instant::now();
+    let mut seen = moved(app);
+    let mut since = previous;
+    let mut first_tick = None;
+    loop {
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("{what} failed: {reason}");
+        }
+        if ready(app) {
+            return Ok(());
+        }
+        let now_seen = moved(app);
+        if now_seen != seen {
+            seen = now_seen;
+            since = now;
+        }
+        let tick = seen.1;
+        first_tick = first_tick.or(tick);
+        ensure!(
+            tick.zip(first_tick).is_none_or(|(t, f)| t - f < TICKS),
+            "{what} timed out after {TICKS} server ticks: {:?}",
+            app.ui.core.conn
+        );
+        ensure!(
+            since.elapsed() < STALL,
+            "{what} stopped advancing: {:?}",
+            app.ui.core.conn
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
 crate::testing::synthetic_and_content!(
     ContentRoot: app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails,
     native_weapon_catalog_startup_and_headless_host,
+    a_save_covers_the_world_as_the_host_took_it,
 );
+
+/// Save Bricks' build is the world when the host answered; a brick placed
+/// while the file is still being written is not saved, so leaving still
+/// asks about it.
+fn a_save_covers_the_world_as_the_host_took_it(f: &ContentRoot) -> anyhow::Result<()> {
+    use super::*;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (320, 240))?;
+    app.ui.core.request(UiAction::HostGame {
+        map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Save revision test".into(),
+        password: String::new(),
+        admin_password: "headless-admin-fixture".into(),
+        super_admin_password: "headless-super-fixture".into(),
+    });
+    until(&mut app, "Hosting", |app| {
+        app.net
+            .attempt
+            .as_ref()
+            .is_some_and(|a| a.entered && a.view.is_some())
+    })?;
+    let mut a = app.net.attempt.take().context("no game")?;
+    let taken = a.view.as_ref().context("no view")?.world_revision;
+    let map = a.view.as_ref().context("no view")?.world.map_id.clone();
+    // The host's answer came at `taken`; the write is queued.
+    app.files.file_jobs.enqueue(crate::saves::Request {
+        id: 9001,
+        session: Some(a.id),
+        action: UiAction::SaveBricks {
+            name: "Covered.world.json".into(),
+            description: String::new(),
+            events: true,
+            ownership: true,
+            overwrite: false,
+        },
+        build: Some(Box::new(bri_world::build::SavedBuild::new(
+            bri_world::World::new("Covered".into(), map, vec![[1.0; 4]]),
+        ))),
+        revision: Some(taken),
+    })?;
+    // A brick lands before the file is written.
+    a.view.as_mut().context("no view")?.world_revision = taken + 1;
+    a.settling = None;
+    app.net.attempt = Some(a);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while app.files.save_picture.is_none() {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "the save was never written"
+        );
+        app.poll_files();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut a = app.net.attempt.take().context("no game")?;
+    assert_eq!(a.saved_revision, Some(taken));
+    app.track_unsaved(&mut a);
+    app.net.attempt = Some(a);
+    assert!(
+        app.ui.core.unsaved_changes,
+        "the brick placed while saving counts as saved"
+    );
+    Ok(())
+}
 
 fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
     f: &ContentRoot,
@@ -637,7 +754,6 @@ fn the_stock_weapons_pack_has_v20s_21_items() -> anyhow::Result<()> {
 
 fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::Result<()> {
     use super::*;
-    use std::time::Instant;
     let state_dir = f.state()?;
     let state = state_dir.path().to_path_buf();
     let mut app = App::load(&f.root, &state, (960, 720))?;
@@ -670,47 +786,6 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     // server has run ten seconds of game time without `ready`, or when
     // neither loading nor the server has moved for two minutes (a stopped
     // game, not a machine busy building something else).
-    fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
-        const TICKS: u64 = 1200;
-        const STALL: Duration = Duration::from_secs(120);
-        let moved = |app: &App| (app.loading_revision(), app.network_view().map(|v| v.tick));
-        let mut previous = Instant::now();
-        let mut seen = moved(app);
-        let mut since = previous;
-        let mut first_tick = None;
-        loop {
-            let now = Instant::now();
-            app.tick(now.duration_since(previous))?;
-            app.ui
-                .update(now.duration_since(previous).as_millis() as u64);
-            previous = now;
-            ensure!(app.pump()?.is_empty(), "Unexpected native window command");
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                anyhow::bail!("{what} failed: {reason}");
-            }
-            if ready(app) {
-                return Ok(());
-            }
-            let now_seen = moved(app);
-            if now_seen != seen {
-                seen = now_seen;
-                since = now;
-            }
-            let tick = seen.1;
-            first_tick = first_tick.or(tick);
-            ensure!(
-                tick.zip(first_tick).is_none_or(|(t, f)| t - f < TICKS),
-                "{what} timed out after {TICKS} server ticks: {:?}",
-                app.ui.core.conn
-            );
-            ensure!(
-                since.elapsed() < STALL,
-                "{what} stopped advancing: {:?}",
-                app.ui.core.conn
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
     until(&mut app, "Headless host", |app| {
         let Some(view) = app.network_view() else {
             return false;

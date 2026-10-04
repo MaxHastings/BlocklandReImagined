@@ -51,6 +51,7 @@ pub mod platform;
 pub mod playback;
 pub mod portal_view;
 pub mod quality;
+pub mod recovery;
 pub mod save_host;
 pub mod save_picture;
 pub mod saves;

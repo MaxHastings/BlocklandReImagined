@@ -64,6 +64,14 @@ impl App {
                 self.ui
                     .apply_session(id, UiUpdate::FailureQuestion(question));
             }
+            // A game this player hosted failed: its build waits to be kept.
+            if a.local
+                && let Some(left) = crate::recovery::left(&self.state_dir, &self.files.saves)
+            {
+                let question = crate::recovery::question(&left, Some("it hit an internal error"));
+                self.ui
+                    .apply_session(id, UiUpdate::FailureQuestion(question));
+            }
             if let Some(mismatch) = crate::add_ons::mismatch(&self.content.paths.root, &reason) {
                 self.ui.apply_session(id, UiUpdate::AddOnMismatch(mismatch));
             }
@@ -769,8 +777,12 @@ impl App {
                     };
                     self.ui.apply_session(a.id, update);
                 }
-                network::Event::Reply { request, result } => {
-                    self.accept_reply(a, request, result);
+                network::Event::Reply {
+                    request,
+                    result,
+                    revision,
+                } => {
+                    self.accept_reply(a, request, result, revision);
                 }
                 network::Event::Failed(reason) => {
                     failed = Some(reason);

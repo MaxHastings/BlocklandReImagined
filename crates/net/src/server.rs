@@ -23,6 +23,8 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
+pub use crate::recovery::Recovery;
+
 pub struct ServerOptions {
     pub bind: SocketAddr,
     /// Every package this server loaded; joining clients must agree on the
@@ -168,7 +170,8 @@ pub struct ServerHandle {
     discovery: Option<tokio::task::JoinHandle<()>>,
     router: Option<RouterPorts>,
     stop: Option<oneshot::Sender<()>>,
-    task: tokio::task::JoinHandle<Result<ServerReport>>,
+    recovery: mpsc::Sender<crate::recovery::Recovery>,
+    task: tokio::task::JoinHandle<ServerReport>,
 }
 /// How the host's simulation is keeping up, for the host's performance
 /// overlay. Measured on the host only; never sent to players.
@@ -246,6 +249,16 @@ pub struct ServerReport {
     pub final_world: PublicWorld,
     #[serde(skip)]
     pub native_world: bri_world::World,
+    /// The mini-game the host keeps with its world
+    /// (`Session::recovery_snapshot`), for a shutdown save.
+    #[serde(skip)]
+    pub minigame: Option<serde_json::Value>,
+    /// Why the host stopped by itself (it kept failing), when it did. The
+    /// final world above is kept either way.
+    pub failure: Option<String>,
+    /// The recovery snapshot the host wrote of its final world after a
+    /// failure ([`ServerHandle::keep_recovery`]).
+    pub recovery: Option<std::path::PathBuf>,
     pub notices: Vec<String>,
     /// Durable package state and world edits for the host to save.
     #[serde(skip)]
@@ -253,7 +266,23 @@ pub struct ServerReport {
     pub package_diagnostics: Vec<bri_package::diag::Diagnostic>,
     pub package_stats: bri_sim::session::PackageStats,
 }
+impl ServerReport {
+    /// The final world and mini-game as a build, for a shutdown save.
+    pub fn saved_build(&self) -> Result<bri_world::build::SavedBuild> {
+        let mut build = bri_world::build::SavedBuild::capture(&self.native_world, true, true)?;
+        build.minigame = self.minigame.clone();
+        build.validate()?;
+        Ok(build)
+    }
+}
 impl ServerHandle {
+    /// Keep a crash-recovery snapshot of the world at `recovery`'s path
+    /// while it changes; a clean stop deletes it ([`crate::recovery`]).
+    pub fn keep_recovery(&self, recovery: crate::recovery::Recovery) -> Result<()> {
+        self.recovery
+            .try_send(recovery)
+            .map_err(|_| anyhow::anyhow!("The host is not running"))
+    }
     /// Answer LAN discovery queries for this host until it stops.
     pub async fn advertise(
         &mut self,
@@ -333,7 +362,23 @@ impl ServerHandle {
         });
         self.router = Some(RouterPorts { task, slot });
     }
-    pub async fn stop(mut self) -> Result<ServerReport> {
+    /// Whether the host has stopped (by itself, when not asked to).
+    pub fn is_finished(&self) -> bool {
+        self.task.is_finished()
+    }
+    /// Stop the host and fail if it had stopped by itself with an error.
+    /// A host that saves its world uses [`ServerHandle::finish`], which
+    /// keeps the final world either way.
+    pub async fn stop(self) -> Result<ServerReport> {
+        let report = self.finish().await?;
+        if let Some(failure) = &report.failure {
+            anyhow::bail!("{failure}");
+        }
+        Ok(report)
+    }
+    /// Stop the host and take its final state, whether it stopped cleanly
+    /// or by itself after an error ([`ServerReport::failure`]).
+    pub async fn finish(mut self) -> Result<ServerReport> {
         self.router.take();
         if let Some(discovery) = self.discovery.take() {
             discovery.abort();
@@ -341,7 +386,7 @@ impl ServerHandle {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        self.task.await?
+        Ok(self.task.await?)
     }
 }
 /// The listing with the live player count.
@@ -566,11 +611,29 @@ pub fn start_with_admin_store_and_limit(
     start_configured(session, options, max_players, Some(store), true)
 }
 fn start_configured(
+    session: Session,
+    options: ServerOptions,
+    max_players: usize,
+    admin_store: Option<AdminStore>,
+    require_identity: bool,
+) -> Result<ServerHandle> {
+    start_stepping(
+        session,
+        options,
+        max_players,
+        admin_store,
+        require_identity,
+        Session::step,
+    )
+}
+/// [`start_configured`] with what one simulation step is (tests make it fail).
+fn start_stepping(
     mut session: Session,
     options: ServerOptions,
     max_players: usize,
     admin_store: Option<AdminStore>,
     require_identity: bool,
+    step: fn(&mut Session) -> Result<()>,
 ) -> Result<ServerHandle> {
     ensure!((1..=64).contains(&max_players), "Invalid player limit");
     ensure!(
@@ -592,6 +655,7 @@ fn start_configured(
     let endpoint = Endpoint::server(config, options.bind)?;
     let address = endpoint.local_addr()?;
     let (stop_tx, stop_rx) = oneshot::channel();
+    let (recovery, recovery_rx) = mpsc::channel(1);
     let mut bytes = [0; 32];
     getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS randomness failed: {e}"))?;
     let host_token = ResumeToken(bytes);
@@ -623,6 +687,8 @@ fn start_configured(
         require_identity,
         admin_store,
         stop_rx,
+        recovery_rx,
+        step,
     ));
     Ok(ServerHandle {
         address,
@@ -635,6 +701,7 @@ fn start_configured(
         discovery: None,
         router: None,
         stop: Some(stop_tx),
+        recovery,
         task,
     })
 }
@@ -1210,7 +1277,8 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
 /// error, logs it (the crash hook also writes a report with its backtrace)
 /// and keeps serving. A host that keeps panicking is broken, not unlucky, so
 /// past [`PanicFuse::LIMIT`] faults in [`PanicFuse::WINDOW`] it stops with
-/// the real error, which saves the world on the way out.
+/// the real error. Its final world is still in the report
+/// ([`ServerHandle::finish`]) and in its recovery snapshot.
 #[derive(Default)]
 struct PanicFuse {
     recent: std::collections::VecDeque<std::time::Instant>,
@@ -1269,7 +1337,9 @@ async fn run(
     require_identity: bool,
     mut admin_store: Option<AdminStore>,
     mut stop: oneshot::Receiver<()>,
-) -> Result<ServerReport> {
+    mut recovery: mpsc::Receiver<crate::recovery::Recovery>,
+    step: fn(&mut Session) -> Result<()>,
+) -> ServerReport {
     // The tick and pose sends wake on a 1 ms clock while hosting.
     let _timers = crate::timer_resolution::Guard::acquire();
     let (events, mut incoming) = mpsc::channel(256);
@@ -1332,8 +1402,12 @@ async fn run(
     let mut previous = std::time::Instant::now();
     let mut perf_window = PerfWindow::default();
     let mut fuse = PanicFuse::default();
-    let outcome:Result<()>=async {loop {tokio::select!{
+    let mut keeper = None::<crate::recovery::Keeper>;
+    // A panic outside the guarded work ends the loop like an error does:
+    // the session, owned out here, is still saved.
+    let outcome:std::thread::Result<Result<()>>=CatchUnwind(Box::pin(async {loop {tokio::select!{
         _=&mut stop=>break,
+        Some(slot)=recovery.recv()=>keeper=Some(crate::recovery::Keeper::new(slot,&session)),
         accepted=endpoint.accept()=>{
             if let Some(accepted)=accepted {
                 // Under load, make a source prove its address (a stateless
@@ -1438,7 +1512,7 @@ async fn run(
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
             let started=std::time::Instant::now();
-            let stepped=match fuse.guard("a server tick",||session.step())? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
+            let stepped=match fuse.guard("a server tick",||step(&mut session))? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
             perf_window.step(started.elapsed());
             // A failing gameplay adapter must not stop the host for everyone.
             if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
@@ -1484,21 +1558,37 @@ async fn run(
                 event_overload=(0,Some(now));
             }
             event_notes.log(now,session.take_event_diagnostics(),session.take_slow_event_ticks());
+            if let Some(keeper)=keeper.as_mut(){keeper.tick(now,&session);}
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {
                 *perf.lock().unwrap_or_else(|e|e.into_inner())=summary;
             }
         },
-    }}Ok(())}.await;
+    }}Ok(())})).await;
     endpoint.close(0_u32.into(), b"Server shutdown");
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
-    outcome?;
+    let failure = match outcome {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(format!("{error:#}")),
+        Err(panic) => Some(format!("The host failed: {}", panic_message(&*panic))),
+    };
+    if let Some(failure) = &failure {
+        eprintln!("Host stopped by itself: {failure}");
+    }
     if let Some(host) = &options.map_loader {
         host.outgoing(&session);
     }
-    Ok(ServerReport {
+    let recovery = match keeper {
+        Some(keeper) => keeper.finish(failure.is_some(), &session).await,
+        None => None,
+    };
+    let (native_world, minigame) = session.recovery_snapshot();
+    ServerReport {
+        failure,
+        recovery,
+        minigame,
         step_errors,
         weapon_adapter_gaps: session.weapon_adapter_gaps().clone(),
         ticks: session.simulation().state().tick,
@@ -1517,17 +1607,116 @@ async fn run(
                 bricks: public_bricks(&world.bricks),
             }
         },
-        native_world: session.saved_world(),
+        native_world,
         notices: session.take_notices(),
         packages: session.package_save(),
         package_diagnostics: session.package_diagnostics(),
         package_stats: session.package_stats(),
-    })
+    }
+}
+
+/// `future`, with a panic while polling it as its output.
+struct CatchUnwind<F>(std::pin::Pin<Box<F>>);
+impl<F: std::future::Future> std::future::Future for CatchUnwind<F> {
+    type Output = std::thread::Result<F::Output>;
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let future = self.0.as_mut();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| future.poll(cx))) {
+            Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+            Ok(std::task::Poll::Ready(output)) => std::task::Poll::Ready(Ok(output)),
+            Err(panic) => std::task::Poll::Ready(Err(panic)),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A host whose every tick panics stops by itself once its fuse blows,
+    /// and still hands over its final world: in the report, and in its
+    /// recovery snapshot, which a clean stop would have deleted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_host_that_keeps_failing_keeps_its_world() -> Result<()> {
+        let root = crate::testing::ScratchRoot::new()?;
+        let set = bri_package::packages::PackageSet::load_root(root.path())?;
+        let mut world =
+            bri_world::World::new("Kept".into(), crate::testing::MAP.into(), vec![[1.0; 4]]);
+        world.bricks.insert(
+            1,
+            bri_world::Brick::new(
+                bri_world::ContentRef::Resolved(crate::testing::MENU_BRICKS[0].0.into()),
+                [0.25, 5.1, 0.25],
+                0,
+            ),
+        );
+        world.next_brick_id = 2;
+        let host = crate::dedicated::load_packages(root.path(), &set, world)?;
+        assert_eq!(host.session.simulation().state().bricks.len(), 1);
+        let options = ServerOptions {
+            bind: "127.0.0.1:0".parse()?,
+            environment: host.environment.clone(),
+            spawn_points: host.spawn_points.clone(),
+            certificate: None,
+            map_loader: None,
+            packages: None,
+        };
+        let server = start_stepping(host.session, options, 4, None, false, |_| {
+            panic!("a bug in every tick")
+        })?;
+        let slot = tempfile::tempdir()?;
+        let path = slot.path().join("recovery.json");
+        server.keep_recovery(Recovery::new(path.clone()))?;
+        // About nine ticks blow the fuse.
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !server.is_finished() {
+            anyhow::ensure!(std::time::Instant::now() < deadline, "the host kept going");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let report = server.finish().await?;
+        let failure = report.failure.clone().context("no failure reported")?;
+        assert!(failure.contains("a bug in every tick"), "{failure}");
+        assert_eq!(report.native_world.bricks.len(), 1);
+        assert_eq!(report.saved_build()?.world.bricks.len(), 1);
+        assert_eq!(report.recovery.as_deref(), Some(path.as_path()));
+        let kept = bri_world::build::decode(&std::fs::read(&path)?)?;
+        assert_eq!(kept.world.bricks.len(), 1);
+        assert_eq!(kept.world.name, "Kept");
+        Ok(())
+    }
+    /// A clean stop leaves no recovery snapshot behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_clean_stop_deletes_the_recovery_snapshot() -> Result<()> {
+        let root = crate::testing::ScratchRoot::new()?;
+        let set = bri_package::packages::PackageSet::load_root(root.path())?;
+        let world =
+            bri_world::World::new("Kept".into(), crate::testing::MAP.into(), vec![[1.0; 4]]);
+        let host = crate::dedicated::load_packages(root.path(), &set, world)?;
+        let options = ServerOptions {
+            bind: "127.0.0.1:0".parse()?,
+            environment: host.environment.clone(),
+            spawn_points: host.spawn_points.clone(),
+            certificate: None,
+            map_loader: None,
+            packages: None,
+        };
+        let server = start(host.session, options)?;
+        let slot = tempfile::tempdir()?;
+        let path = slot.path().join("recovery.json");
+        // What a crashed earlier run would have left.
+        std::fs::write(&path, b"old")?;
+        server.keep_recovery(Recovery {
+            path: path.clone(),
+            every: Duration::from_millis(1),
+        })?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let report = server.stop().await?;
+        assert!(report.failure.is_none() && report.recovery.is_none());
+        assert!(!path.exists(), "a clean stop kept the recovery snapshot");
+        Ok(())
+    }
     #[test]
     fn a_panicking_request_is_answered_and_the_host_keeps_going_until_the_fuse_blows() {
         let mut fuse = PanicFuse::default();

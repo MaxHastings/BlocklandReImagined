@@ -182,6 +182,7 @@ impl App {
                 saves: crate::saves::Store::new(state_dir, &content, Some(old_saves.clone())),
                 old_saves,
                 old_saves_started: false,
+                recovery_offered: false,
                 save_refresh: None,
                 file_jobs: Default::default(),
                 color_load: None,

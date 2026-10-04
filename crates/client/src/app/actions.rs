@@ -279,6 +279,7 @@ impl App {
                         session: self.net.attempt.as_ref().map(|a| a.id),
                         action,
                         build: None,
+                        revision: None,
                     })
                 })();
                 if result.is_ok() {
@@ -424,6 +425,12 @@ impl App {
             UiAction::ForgetAddOnTrust => {
                 crate::client_code::ClientCode::forget_trust(&self.state_dir)
             }
+            UiAction::KeepRecoveredBuild => {
+                crate::recovery::keep(&self.state_dir, &self.files.saves).map(|name| {
+                    bri_console::echo(format!("The recovered build is in Load Bricks as {name}."));
+                })
+            }
+            UiAction::DiscardRecoveredBuild => crate::recovery::discard(&self.state_dir),
             UiAction::CancelConnect | UiAction::Disconnect => {
                 if self.net.attempt.as_ref().is_none_or(|a| a.id <= id) {
                     self.disconnect();
