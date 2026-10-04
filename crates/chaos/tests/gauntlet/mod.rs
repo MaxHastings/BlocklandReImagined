@@ -306,6 +306,7 @@ pub fn spawner(kind: &str, at: Vec3) -> Brick {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
+        team: None,
     }));
     brick
 }
