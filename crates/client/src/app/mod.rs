@@ -178,7 +178,12 @@ struct Attempt {
     id: RequestId,
     worker: Worker,
     scene: mpsc::Receiver<Prepared>,
+    /// What the player sees the server called: the typed address until the
+    /// host's listing names it, or the hosted game's name.
     name: String,
+    /// Joins: what the player joined, as they gave it (an address or an
+    /// invite with its key), for rejoining. Never the display name.
+    join_target: Option<String>,
     max_players: u32,
     local: bool,
     single: bool,

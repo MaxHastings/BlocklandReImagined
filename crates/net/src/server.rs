@@ -1448,8 +1448,12 @@ async fn run(
                     let supplied_host=if let Some(host)=&hello.host {ensure!(token_key(host)==host_key,"Invalid host credential");true}else{false};
                     let (owner,token)=if let Some(token)=hello.resume {
                         let Ticket{owner,host:ticket_host,principal:ticket_principal,..}=tickets.get(&token_key(&token)).context("Invalid resume credential")?;
-                        ensure!(!peers.contains_key(&owner),"Owner is still connected");
                         ensure!(ticket_principal==principal,"Resume identity does not match authenticated ticket");
+                        // The ticket's own connection is still here: the player's
+                        // network dropped and came back before the host timed it out.
+                        // Its ticket and identity prove it is them, so the new
+                        // connection replaces the stale one and keeps their number.
+                        if let Some(stale)=peers.remove(&owner){stale.connection.close(0_u32.into(),b"Replaced by a new connection");package_views.sent.remove(&owner);let _=session.disconnect(owner);}
                         let administrator=ticket_host || supplied_host;
                         let mut error=None;let mut found=false;for spawn in &spawn_points {match session.resume_verified(owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
                         tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o))?;

@@ -30,14 +30,19 @@ impl App {
             // automatically a few times; the host gives the player their
             // owner number, and so their bricks, back.
             let id = a.id;
-            let rejoin =
-                (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
-                    .then(|| a.name.clone());
-            if let Some(address) = rejoin
+            let rejoin = a
+                .join_target
+                .clone()
+                .filter(|_| a.entered && reason.contains(bri_net::client::CONNECTION_LOST));
+            if let Some(target) = rejoin
                 && self.net.reconnects < MAX_RECONNECTS
             {
                 self.net.reconnects += 1;
-                if self.join(id, address, String::new()).is_ok() {
+                let resume = a.view.as_ref().map(|view| view.resume.clone());
+                if self
+                    .join_resuming(id, target, String::new(), resume)
+                    .is_ok()
+                {
                     return Ok(());
                 }
             }
@@ -52,7 +57,7 @@ impl App {
                     None,
                     Some(addons::ReloadResume::Downloaded {
                         id,
-                        address: a.name.clone(),
+                        address: a.join_target.clone().unwrap_or_default(),
                     }),
                 )?;
                 return Ok(());
@@ -60,7 +65,13 @@ impl App {
             if a.identity_changed
                 .load(std::sync::atomic::Ordering::Relaxed)
             {
-                let question = self.identity_question(&a.name);
+                // The saved server is known by its address, not an invite.
+                let address = a
+                    .join_target
+                    .as_deref()
+                    .and_then(|t| bri_net::invite::JoinTarget::parse(t).ok())
+                    .map_or_else(|| a.name.clone(), |t| t.address());
+                let question = self.identity_question(&address);
                 self.ui
                     .apply_session(id, UiUpdate::FailureQuestion(question));
             }

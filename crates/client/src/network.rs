@@ -31,6 +31,9 @@ pub struct View {
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
     pub owner: OwnerId,
+    /// The host's ticket for this connection: a rejoin after the network
+    /// dropped presents it to come back as the same player.
+    pub resume: bri_net::protocol::ResumeToken,
     pub administrator: bool,
     pub world: Arc<PublicWorld>,
     /// Increments with every replica world change; `world_log` says what changed.
@@ -395,6 +398,7 @@ fn publish(
         weapons: client.replica.weapons.clone(),
         tools: client.replica.tools.clone(),
         owner: client.owner,
+        resume: client.resume.clone(),
         administrator: client.administrator,
         world: world.world.clone(),
         world_revision: world.revision,

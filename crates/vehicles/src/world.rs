@@ -369,6 +369,9 @@ struct Instance {
     steering_quiet: u8,
     /// Player-type mounts run on the player motor with their datablock.
     actor: Option<Player>,
+    /// Jumps instead of travel: host teleports and openings that carried
+    /// it ([`VehiclesWorld::relocations`]).
+    relocations: u64,
 }
 impl Instance {
     fn weapon_available(&self, d: &Definition) -> bool {
@@ -817,6 +820,7 @@ impl VehiclesWorld {
                 mouse_steering: [0.; 2],
                 steering_quiet: AUTO_RETURN_QUIET,
                 actor,
+                relocations: 0,
             },
         );
         Ok(())
@@ -1186,7 +1190,15 @@ impl VehiclesWorld {
             body.set_angvel(Vec3::ZERO, true);
         }
         v.previous_velocity = Vec3::ZERO;
+        v.relocations += 1;
         Ok(())
+    }
+    /// How many times vehicle `id` jumped instead of travelling: each
+    /// [`VehiclesWorld::set_transform`] and each opening that carried it.
+    /// Whoever follows its path between two looks treats a change as a
+    /// jump to the new place, never as the line between.
+    pub fn relocations(&self, id: VehicleId) -> Option<u64> {
+        self.instances.get(&id).map(|v| v.relocations)
     }
     /// Where a vehicle is, for what it passes through: its middle.
     pub fn centre(&self, world: &PhysicsWorld, id: VehicleId) -> Option<Vec3> {
@@ -1246,6 +1258,7 @@ impl VehiclesWorld {
             body.set_angvel(angular, true);
         }
         v.previous_velocity = turn * v.previous_velocity;
+        v.relocations += 1;
         Ok(())
     }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
@@ -1690,6 +1703,7 @@ impl VehiclesWorld {
                     &mut self.intents,
                 )? {
                     v.previous_velocity = carry.transform_vector3(v.previous_velocity);
+                    v.relocations += 1;
                     carried.push((*id, carry));
                 }
                 v.jump_held = c.jump;

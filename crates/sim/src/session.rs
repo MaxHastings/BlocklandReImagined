@@ -852,6 +852,80 @@ struct Peer {
     /// place of their mini-game's, until they leave it.
     respawn_ms: Option<u32>,
 }
+impl Peer {
+    /// A connection's player as it first arrives in a world: a new body and
+    /// everything else at its start. Joins, resumes and map changes build
+    /// on it, so state a field adds starts over unless one of them keeps it.
+    #[allow(clippy::too_many_arguments)]
+    fn fresh(
+        player: Player,
+        owner: OwnerId,
+        administrator: bool,
+        name: String,
+        principal: Option<bri_admin::Principal>,
+        combat: combat::Combat,
+        avatar: Option<bri_content::avatar::Appearance>,
+        tick: u64,
+    ) -> Self {
+        Self {
+            player,
+            actor: Actor {
+                owner,
+                administrator,
+                ..Default::default()
+            },
+            name,
+            principal,
+            combat,
+            special: Default::default(),
+            control: ControlObject::Player,
+            camera: None,
+            last_drop_tick: None,
+            tutorial: Default::default(),
+            temp_color: None,
+            temp_look: None,
+            uniform: BTreeMap::new(),
+            uniform_parts: None,
+            current_color: 0,
+            fx_can: None,
+            talking: false,
+            sitting: false,
+            ghost: None,
+            input: MoveInput::default(),
+            inputs: VecDeque::new(),
+            input_drain: InputDrain::default(),
+            processed_move: 0,
+            seated_pace: SeatedPace::default(),
+            seat_since: None,
+            clan: Clan::default(),
+            input_budget: INPUT_BURST,
+            last_sequence: 0,
+            last_move_sequence: 0,
+            last_input_tick: tick,
+            sport_datablock: None,
+            package_archetype: None,
+            overlays: None,
+            window_tick: tick,
+            actions: 0,
+            chats: 0,
+            last_chat: None,
+            plants: 0,
+            random_color: None,
+            saves: 0,
+            ghost_reports: 0,
+            inspection: None,
+            last_activate: None,
+            activate_level: 0,
+            thread_timers: Vec::new(),
+            water: Default::default(),
+            look_limits: None,
+            respawn_ms: None,
+            path: None,
+            orbit: None,
+            avatar,
+        }
+    }
+}
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
 /// Chat talks for 50 ms per character: 6 ticks at 120 ticks per second.
@@ -1385,65 +1459,20 @@ impl Session {
                 return Err(error);
             }
         };
+        let tick = self.simulation.state().tick;
+        let avatar = self.avatar_catalog.as_ref().map(|c| c.defaults.clone());
         self.peers.insert(
             owner,
-            Peer {
+            Peer::fresh(
                 player,
-                actor: Actor {
-                    owner,
-                    administrator: role.is_admin(),
-                    ..Default::default()
-                },
-                name: name.clone(),
+                owner,
+                role.is_admin(),
+                name.clone(),
                 principal,
                 combat,
-                special: Default::default(),
-                control: ControlObject::Player,
-                camera: None,
-                last_drop_tick: None,
-                tutorial: Default::default(),
-                temp_color: None,
-                temp_look: None,
-                uniform: BTreeMap::new(),
-                uniform_parts: None,
-                current_color: 0,
-                fx_can: None,
-                talking: false,
-                sitting: false,
-                ghost: None,
-                input: MoveInput::default(),
-                inputs: VecDeque::new(),
-                input_drain: InputDrain::default(),
-                processed_move: 0,
-                seated_pace: SeatedPace::default(),
-                seat_since: None,
-                clan: Clan::default(),
-                input_budget: INPUT_BURST,
-                last_sequence: 0,
-                last_move_sequence: 0,
-                last_input_tick: self.simulation.state().tick,
-                sport_datablock: None,
-                package_archetype: None,
-                overlays: None,
-                window_tick: self.simulation.state().tick,
-                actions: 0,
-                chats: 0,
-                last_chat: None,
-                plants: 0,
-                random_color: None,
-                saves: 0,
-                ghost_reports: 0,
-                inspection: None,
-                last_activate: None,
-                activate_level: 0,
-                thread_timers: Vec::new(),
-                water: Default::default(),
-                look_limits: None,
-                respawn_ms: None,
-                path: None,
-                orbit: None,
-                avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
-            },
+                avatar,
+                tick,
+            ),
         );
         // A fresh join replaces the dropped connection it took the number from.
         self.departed.remove(&owner);
@@ -1619,65 +1648,19 @@ impl Session {
                 return Err(error);
             }
         };
+        let tick = self.simulation.state().tick;
         self.peers.insert(
             owner,
-            Peer {
+            Peer::fresh(
                 player,
-                actor: Actor {
-                    owner,
-                    administrator: role.is_admin(),
-                    ..Default::default()
-                },
-                name: name.clone(),
+                owner,
+                role.is_admin(),
+                name.clone(),
                 principal,
                 combat,
-                special: Default::default(),
-                control: ControlObject::Player,
-                camera: None,
-                last_drop_tick: None,
-                tutorial: Default::default(),
-                temp_color: None,
-                temp_look: None,
-                uniform: BTreeMap::new(),
-                uniform_parts: None,
-                current_color: 0,
-                fx_can: None,
-                talking: false,
-                sitting: false,
-                ghost: None,
-                input: MoveInput::default(),
-                inputs: VecDeque::new(),
-                input_drain: InputDrain::default(),
-                processed_move: 0,
-                seated_pace: SeatedPace::default(),
-                seat_since: None,
-                clan: Clan::default(),
-                input_budget: INPUT_BURST,
-                last_sequence: 0,
-                last_move_sequence: 0,
-                last_input_tick: self.simulation.state().tick,
-                sport_datablock: None,
-                package_archetype: None,
-                overlays: None,
-                window_tick: self.simulation.state().tick,
-                actions: 0,
-                chats: 0,
-                last_chat: None,
-                plants: 0,
-                random_color: None,
-                saves: 0,
-                ghost_reports: 0,
-                inspection: None,
-                last_activate: None,
-                activate_level: 0,
-                thread_timers: Vec::new(),
-                water: Default::default(),
-                look_limits: None,
-                respawn_ms: None,
-                path: None,
-                orbit: None,
                 avatar,
-            },
+                tick,
+            ),
         );
         self.departed.remove(&owner);
         self.abandoned_at.remove(&owner);

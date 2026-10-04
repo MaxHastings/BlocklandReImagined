@@ -277,6 +277,7 @@ impl VehiclesWorld {
                     mouse_steering: saved.mouse_steering,
                     steering_quiet: saved.steering_quiet.min(AUTO_RETURN_QUIET),
                     actor,
+                    relocations: 0,
                 },
             );
         }
