@@ -557,7 +557,14 @@ pub struct ClientVehicles {
     passages: Passages,
     /// The vehicles drawn part way through an opening this frame.
     straddles: BTreeMap<u64, Straddle>,
+    /// Each vehicle's middle in its own frame, the point openings carry it
+    /// by (learned in `prepare`, which knows its definition).
+    middles: BTreeMap<u64, Vec3>,
+    /// Bodies as they collide ([`bri_vehicles::body_shape`]), by definition
+    /// and scale: what shoves this client's debris.
+    shapes: std::sync::Mutex<BodyShapes>,
 }
+type BodyShapes = BTreeMap<(String, u32), Option<(rapier3d::prelude::SharedShape, Vec3)>>;
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
 /// a disagreeing pose shifts the path, and the difference decays instead of
 /// popping (Torque's warp toward a corrected control object).
@@ -590,6 +597,49 @@ impl ClientVehicles {
     pub fn frame(&self, id: u64) -> Option<&VehicleFrame> {
         self.frames.get(&id)
     }
+    /// Vehicle `info` as drawn this frame, as what shoves client-only
+    /// bodies (debris, Add-On bodies): its body as it collides on the host,
+    /// at its scale, so a giant Steel Ball rolls debris aside as a ball
+    /// that size. Its id has the top bit set.
+    pub fn pusher(
+        &self,
+        info: &VehicleInfo,
+        d: &Definition,
+    ) -> Option<crate::local_physics::Pusher> {
+        let frame = self.frames.get(&info.id)?;
+        let scale = info.scale;
+        let (min, max) = (
+            Vec3::from(d.bounds_min) * scale,
+            Vec3::from(d.bounds_max) * scale,
+        );
+        let shape = self
+            .shapes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry((d.id.clone(), scale.to_bits()))
+            .or_insert_with(|| {
+                bri_vehicles::body_shape(d, scale)
+                    .ok()
+                    .map(|(shape, offset)| (shape, Vec3::from_array(offset.translation.to_array())))
+            })
+            .clone();
+        Some(match shape {
+            Some((shape, offset)) => crate::local_physics::Pusher {
+                id: info.id | 1 << 63,
+                center: frame.position + frame.rotation * offset,
+                rotation: frame.rotation,
+                half: (max - min).abs() * 0.5,
+                shape: Some(shape),
+            },
+            None => crate::local_physics::Pusher {
+                id: info.id | 1 << 63,
+                center: frame.position + frame.rotation * ((min + max) * 0.5),
+                rotation: frame.rotation,
+                half: (max - min).abs() * 0.5,
+                shape: None,
+            },
+        })
+    }
     /// Record replicated poses and compute this frame's transforms. The
     /// vehicle the local player drives is shown at its newest pose, lightly
     /// extrapolated, so steering feels immediate; others are interpolated.
@@ -602,6 +652,7 @@ impl ClientVehicles {
         passages: &bri_content::passage::Passages,
     ) {
         self.history.retain(|id, _| infos.contains_key(id));
+        self.middles.retain(|id, _| infos.contains_key(id));
         for (id, pose) in poses {
             let history = self.history.entry(*id).or_default();
             if history.back().is_none_or(|last| last.tick < pose.tick) {
@@ -638,7 +689,8 @@ impl ClientVehicles {
                     }
                 }
                 Some(now) if Some(*id) != driven => {
-                    sample(history, now - INTERPOLATION_TICKS, passages)
+                    let middle = self.middles.get(id).copied().unwrap_or(Vec3::ZERO);
+                    sample(history, now - INTERPOLATION_TICKS, passages, middle)
                 }
                 Some(now) => {
                     let mut frame = extrapolate(history, history.len() - 1, now);
@@ -776,6 +828,7 @@ impl ClientVehicles {
                 .max((high * info.scale - centre).abs())
                 .length()
                 * 2.0;
+            self.middles.insert(*id, centre);
             let middle = body.transform_point3(centre);
             let straddle = Straddle::find(&self.passages, middle, reach);
             if let Some(straddle) = straddle {
@@ -937,6 +990,7 @@ fn sample(
     history: &VecDeque<VehiclePose>,
     tick: f64,
     passages: &bri_content::passage::Passages,
+    middle: Vec3,
 ) -> VehicleFrame {
     let first = history.front().unwrap();
     if tick <= first.tick as f64 {
@@ -945,21 +999,29 @@ fn sample(
     for (a, b) in history.iter().zip(history.iter().skip(1)) {
         if tick <= b.tick as f64 {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick).max(1) as f64) as f32;
-            let (mut fa, fb) = (frame_of(a), frame_of(b));
-            // Gone through an opening in between: drawn moving on from the
-            // far side, never sliding across.
+            let (fa, mut fb) = (frame_of(a), frame_of(b));
+            let middle_of = |f: &VehicleFrame| f.position + f.rotation * middle;
+            // Gone through an opening in between: drawn coming up to it and
+            // cut there until its middle is through, then moving on from the
+            // far side, never sliding across. Blended past the partner from
+            // the start, a body not yet in would sit behind the far opening,
+            // which a doorway's back face shares, and draw cut at that face:
+            // its halves at the wrong doorways for a frame or two.
+            let mut carried = None;
             if !passages.is_empty()
-                && let Some(carry) = passages.bridge(fa.position, fb.position)
+                && let Some(carry) = passages.bridge(middle_of(&fa), middle_of(&fb))
             {
-                let (_, turn, _) = carry.to_scale_rotation_translation();
-                fa.position = carry.transform_point3(fa.position);
-                fa.rotation = (turn * fa.rotation).normalize();
-                fa.velocity = turn * fa.velocity;
+                let back = carry.inverse();
+                let (_, turn, _) = back.to_scale_rotation_translation();
+                fb.position = back.transform_point3(fb.position);
+                fb.rotation = (turn * fb.rotation).normalize();
+                fb.velocity = turn * fb.velocity;
+                carried = Some(carry);
             }
             let lerp = |x: &[f32], y: &[f32]| -> Vec<f32> {
                 x.iter().zip(y).map(|(p, q)| p + (q - p) * t).collect()
             };
-            return VehicleFrame {
+            let mut frame = VehicleFrame {
                 position: fa.position.lerp(fb.position, t),
                 rotation: fa.rotation.slerp(fb.rotation, t),
                 velocity: fa.velocity.lerp(fb.velocity, t),
@@ -975,6 +1037,18 @@ fn sample(
                     fa.turret_aim[1] + (fb.turret_aim[1] - fa.turret_aim[1]) * t,
                 ],
             };
+            if let Some(carry) = carried
+                && passages
+                    .travel(middle_of(&fa), middle_of(&frame))
+                    .1
+                    .is_some()
+            {
+                let (_, turn, _) = carry.to_scale_rotation_translation();
+                frame.position = carry.transform_point3(frame.position);
+                frame.rotation = (turn * frame.rotation).normalize();
+                frame.velocity = turn * frame.velocity;
+            }
+            return frame;
         }
     }
     let last = history.back().unwrap();
@@ -999,9 +1073,9 @@ pub fn body_tint(d: &Definition, info: &VehicleInfo) -> [f32; 4] {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    fn pose(tick: u64, x: f32) -> VehiclePose {
+    pub(crate) fn pose(tick: u64, x: f32) -> VehiclePose {
         VehiclePose {
             passage_frame: Default::default(),
             id: 1,
@@ -1481,11 +1555,59 @@ mod tests {
         d.authored.retain(|k, _| !k.starts_with("damageemitter"));
         assert!(d.wreck_emitters().is_empty());
     }
+    /// Max's video: a Steel Ball rolled through a doorway portal. Drawn
+    /// between two poses either side of it, the ball comes up to the
+    /// doorway it went in by, cut there, and only then rolls on out of the
+    /// partner: never cut at the partner's back face, its halves at the
+    /// wrong doorways (spinning, with its middle off its origin).
+    #[test]
+    fn a_ball_between_poses_through_a_doorway_draws_only_on_its_way() {
+        let (passages, carry) = crate::portal_view::doorways::pair();
+        let middle = Vec3::new(0.0, 0.3, 0.1);
+        let spin = Quat::from_rotation_x(-0.6);
+        let at = |tick, position: Vec3, rotation: Quat| {
+            let mut p = pose(tick, 0.0);
+            p.position = position.to_array();
+            p.rotation = rotation.to_array();
+            p.velocity = [0.0, 0.0, -30.0];
+            p
+        };
+        let before = at(10, Vec3::new(0.2, 1.0, 0.7), Quat::IDENTITY);
+        let (_, turn, _) = carry.to_scale_rotation_translation();
+        let after = at(
+            14,
+            carry.transform_point3(Vec3::new(0.2, 1.0, -0.7)),
+            turn * spin,
+        );
+        let history: VecDeque<_> = [before, after].into();
+        let mut wrong = Vec::new();
+        for step in 0..=40 {
+            let tick = 10.0 + 4.0 * step as f64 / 40.0;
+            let frame = sample(&history, tick, &passages, middle);
+            let drawn = frame.position + frame.rotation * middle;
+            if let Err(e) = crate::portal_view::doorways::drawn_on_its_way(drawn, 1.3) {
+                wrong.push(format!("tick {tick}: {e}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
     #[test]
     fn vehicle_samples_interpolate_between_poses() {
         let history: VecDeque<_> = [pose(10, 0.0), pose(13, 3.0)].into();
-        assert!((sample(&history, 11.5, &Default::default()).position.x - 1.5).abs() < 1e-5);
-        assert_eq!(sample(&history, 0.0, &Default::default()).position.x, 0.0);
+        assert!(
+            (sample(&history, 11.5, &Default::default(), Vec3::ZERO)
+                .position
+                .x
+                - 1.5)
+                .abs()
+                < 1e-5
+        );
+        assert_eq!(
+            sample(&history, 0.0, &Default::default(), Vec3::ZERO)
+                .position
+                .x,
+            0.0
+        );
     }
     /// Max, v0.1.9: dragged about by a Gravity Gun, the held player saw
     /// their own body stutter. Their tumble was drawn as if they drove it,
@@ -1557,13 +1679,13 @@ mod tests {
         let history = VecDeque::from(vec![a, b]);
         for step in 0..=20 {
             let tick = 10.0 + 2.0 * step as f64 / 20.0;
-            let [yaw, pitch] = sample(&history, tick, &Default::default()).turret_aim;
+            let [yaw, pitch] = sample(&history, tick, &Default::default(), Vec3::ZERO).turret_aim;
             // Off straight behind by at most the 0.1 each side it started.
             let off_back = PI - yaw.abs();
             assert!(off_back <= 0.1 + 1e-4, "tick {tick}: yaw {yaw} swung round");
             assert!((0.2..=0.4 + 1e-5).contains(&pitch));
         }
-        let [yaw, _] = sample(&history, 11.0, &Default::default()).turret_aim;
+        let [yaw, _] = sample(&history, 11.0, &Default::default(), Vec3::ZERO).turret_aim;
         assert!(
             (yaw.abs() - PI).abs() < 1e-4,
             "midway is straight behind, got {yaw}"

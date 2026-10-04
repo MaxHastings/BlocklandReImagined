@@ -1234,6 +1234,11 @@ impl App {
                 forward: forward.to_array(),
                 up: view_up.to_array(),
             };
+            // What is seen through a portal is heard through it.
+            self.audio.hear_through(crate::portal_view::hearing(
+                &self.motion.passages(),
+                listener,
+            ));
             // v20 tints the screen with the liquid the camera is in, and
             // colours player splashes and froth with the liquid they touch.
             self.ui
@@ -1255,6 +1260,7 @@ impl App {
             self.fx.weapon_effects.set_passages(&passages);
             self.fx.effects.world.set_passages(&passages);
             self.fx.actor_effects.set_passages(&passages);
+            self.fx.brick_debris.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
@@ -1515,7 +1521,7 @@ impl App {
                     .filter(|p| {
                         p.id & 1 << 63 != 0 || view.vitals.get(&p.id).is_none_or(|v| v.alive)
                     })
-                    .copied()
+                    .cloned()
                     .collect();
                 let moved = self.addons.client_code.advance_physics(
                     game_elapsed.as_secs_f32().min(0.25),

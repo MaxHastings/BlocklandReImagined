@@ -242,6 +242,8 @@ pub struct BrickDebris {
     threw: bool,
     ghosts: Vec<Ghost>,
     falling: Vec<Falling>,
+    /// The openings of linked bricks (portals) bodies fly through.
+    passages: bri_content::passage::Passages,
     pub diagnostics: BrickDebrisDiagnostics,
 }
 
@@ -271,7 +273,15 @@ impl BrickDebris {
             threw: false,
             ghosts: Vec::new(),
             falling: Vec::new(),
+            passages: Default::default(),
             diagnostics: Default::default(),
+        }
+    }
+    /// The openings of linked bricks: a body knocked into one flies on out
+    /// of its partner, as everything else that moves does.
+    pub fn set_passages(&mut self, passages: &bri_content::passage::Passages) {
+        if self.passages.list != passages.list {
+            self.passages = passages.clone();
         }
     }
     /// Forget everything (disconnect, new server). The limit and what
@@ -679,7 +689,15 @@ impl BrickDebris {
         for step in 1..=steps {
             self.pushers
                 .drive(&mut self.world, step as f32 / steps as f32);
+            let before = match self.passages.list.is_empty() {
+                true => Vec::new(),
+                false => crate::local_physics::middles(
+                    &self.world,
+                    self.bodies.values().map(|b| b.handle),
+                ),
+            };
             self.world.step();
+            crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
             self.age(STEP);
         }
         self.pushers.settle();
@@ -1560,6 +1578,7 @@ pub(crate) mod tests {
             center: feet + Vec3::Y * 1.2,
             rotation: Quat::IDENTITY,
             half: Vec3::new(0.5, 1.2, 0.5),
+            shape: None,
         }
     }
     /// A brick left lying (no throw) at `at`.
@@ -1602,6 +1621,117 @@ pub(crate) mod tests {
         );
     }
 
+    /// Max's video: a giant Steel Ball smashes a wall and rolls on through
+    /// the bricks it knocked loose. They are shoved aside by a ball its
+    /// size, as the host's ball collides, never left inside it (shoved by
+    /// an unscaled box) nor flung by a spinning box's corners.
+    #[test]
+    fn a_giant_steel_ball_rolls_debris_aside_as_a_ball_its_size() {
+        let pack = bri_vehicles::Pack::load(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/showcase/steel-ball-kit/assets/vehicles.json"
+        ))
+        .unwrap();
+        let d = pack
+            .definitions
+            .iter()
+            .find(|d| d.family == bri_vehicles::Family::Ball)
+            .unwrap()
+            .clone();
+        let scale = 3.0;
+        let radius = (d.bounds_max[0] - d.bounds_min[0]) * 0.5 * scale;
+        let info = bri_sim::session::VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![],
+            destroyed: false,
+            scale,
+        };
+        let infos = BTreeMap::from([(1, info.clone())]);
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        let mut cues = Vec::new();
+        for layer in 0..2 {
+            for x in -2..=2 {
+                let id = cues.len() as u64 + 1;
+                cues.push(lying(id, [x as f32 * 1.05, 0.3 + layer as f32 * 0.6, -8.0]));
+            }
+        }
+        debris.cues(&cues, &building).unwrap();
+        run(&mut debris, &building, 1.0);
+        let mut vehicles = crate::vehicles::ClientVehicles::default();
+        let speed = 12.0;
+        let (mut deepest, mut fastest) = (f32::INFINITY, 0.0f32);
+        for frame in 0..120u64 {
+            let z = 4.0 - speed * frame as f32 / 60.0;
+            let mut pose = crate::vehicles::tests::pose(frame + 1, 0.0);
+            pose.position = [0.0, radius, z];
+            // Rolling: spinning about x as fast as it goes.
+            pose.rotation = Quat::from_rotation_x(-(z - 4.0) / radius).to_array();
+            pose.velocity = [0.0, 0.0, -speed];
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, pose)]),
+                None,
+                None,
+                &Default::default(),
+            );
+            let pusher = vehicles.pusher(&info, &d).unwrap();
+            debris.push(&[pusher]);
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            let centre = Vec3::new(0.0, radius, z);
+            for p in debris.positions() {
+                deepest = deepest.min(p.distance(centre));
+            }
+            for b in debris.bodies.values() {
+                let v = debris.world.bodies[b.handle].linvel();
+                fastest = fastest.max(Vec3::from_array(v.to_array()).length());
+            }
+        }
+        // A brick's middle stays about half its size outside the ball.
+        assert!(
+            deepest > radius - 0.15,
+            "a brick {deepest} into a {radius} ball"
+        );
+        assert!(
+            fastest < 2.0 * speed,
+            "flung at {fastest} by a ball at {speed}"
+        );
+    }
+
+    /// A brick knocked into a doorway portal flies on out of its partner,
+    /// turned with it, instead of tumbling out of the doorway's back.
+    #[test]
+    fn debris_knocked_into_a_portal_flies_out_of_its_partner() {
+        let (passages, carry) = crate::portal_view::doorways::pair();
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.set_passages(&passages);
+        debris
+            .cues(&[lying(1, [0.2, 0.3, 3.0])], &building)
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        let handle = debris.bodies.values().next().unwrap().handle;
+        let thrown = Vec3::new(0.0, 3.0, -12.0);
+        debris.world.bodies[handle].set_linvel(thrown, true);
+        let mut out = None;
+        for _ in 0..60 {
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            let rb = &debris.world.bodies[handle];
+            let at = Vec3::from_array(rb.translation().to_array());
+            if out.is_none() && at.x > 20.0 {
+                out = Some((at, Vec3::from_array(rb.linvel().to_array())));
+            }
+        }
+        let (at, velocity) = out.expect("never came out of the partner");
+        // Out of B's -z face, going on the way B's -z faces.
+        let back = carry.inverse();
+        assert!(back.transform_point3(at).z < 0.0, "at {at}");
+        let along = back.transform_vector3(velocity);
+        assert!(along.z < -8.0, "going {velocity} ({along} as A sees it)");
+    }
+
     #[test]
     fn a_vehicle_ramming_a_pile_scatters_it() {
         let (building, _) = building(&[]);
@@ -1624,6 +1754,7 @@ pub(crate) mod tests {
                 center: Vec3::new(0.0, 0.8, z),
                 rotation: turned,
                 half: Vec3::new(1.2, 0.6, 2.0),
+                shape: None,
             }]);
             debris.advance(1.0 / 60.0, &building).unwrap();
         }

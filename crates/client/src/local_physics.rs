@@ -34,14 +34,21 @@ pub fn new_world() -> PhysicsWorld {
     world
 }
 
-/// A player or vehicle as this client draws it this frame: a box that
-/// shoves bodies out of its way. `id` must stay the same between frames.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A player or vehicle as this client draws it this frame: a box, or the
+/// body's own collision `shape`, that shoves bodies out of its way. `id`
+/// must stay the same between frames.
+#[derive(Clone, Debug)]
 pub struct Pusher {
     pub id: u64,
     pub center: Vec3,
     pub rotation: Quat,
+    /// Half its size each way: the box, or the box round `shape`.
     pub half: Vec3,
+    /// The shape it collides with as it does on the host (a vehicle's
+    /// [`bri_vehicles::body_shape`]: a Steel Ball's sphere, a hull), posed
+    /// at `center` and `rotation`; None for the box. A rolling ball shoved
+    /// debris as a spinning box would fling it like a paddle wheel.
+    pub shape: Option<SharedShape>,
 }
 /// A projectile as this client draws it this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -227,9 +234,13 @@ impl Pushers {
                 }
                 None => {
                     let h = p.half.max(Vec3::splat(0.05));
+                    let collider = match &p.shape {
+                        Some(shape) => ColliderBuilder::new(shape.clone()),
+                        None => ColliderBuilder::cuboid(h.x, h.y, h.z),
+                    };
                     let (handle, _) = world.insert(
                         RigidBodyBuilder::kinematic_position_based().pose(to),
-                        ColliderBuilder::cuboid(h.x, h.y, h.z).friction(0.3),
+                        collider.friction(0.3),
                     );
                     self.bodies.insert(
                         p.id,
@@ -273,6 +284,53 @@ impl Pushers {
     pub fn handle(&self, id: u64) -> Option<RigidBodyHandle> {
         self.bodies.get(&id).map(|p| p.handle)
     }
+}
+
+/// Where `bodies` are now (their origins, which openings carry them by): what [`carry_through_openings`] compares
+/// after the next step.
+pub fn middles(
+    world: &PhysicsWorld,
+    bodies: impl Iterator<Item = RigidBodyHandle>,
+) -> Vec<(RigidBodyHandle, Vec3)> {
+    bodies
+        .filter_map(|h| Some((h, world.bodies.get(h)?.translation())))
+        .collect()
+}
+
+/// Carry each body whose middle went in through an opening of a linked
+/// brick since `before` (each one's middle then) out of its partner, turned
+/// with its velocity and spin, as the host carries players and vehicles:
+/// debris knocked into a portal flies out of the other one instead of out
+/// of the doorway's back. Returns how many were carried.
+pub fn carry_through_openings(
+    world: &mut PhysicsWorld,
+    passages: &bri_content::passage::Passages,
+    before: &[(RigidBodyHandle, Vec3)],
+) -> usize {
+    if passages.list.is_empty() {
+        return 0;
+    }
+    let mut carried = 0;
+    for &(handle, from) in before {
+        let Some(body) = world.bodies.get_mut(handle) else {
+            continue;
+        };
+        let (_, Some(carry)) = passages.travel(from, body.translation()) else {
+            continue;
+        };
+        let (_, turn, _) = carry.to_scale_rotation_translation();
+        let position = *body.position();
+        let moved = Pose::from_parts(
+            carry.transform_point3(position.translation),
+            (turn * position.rotation).normalize(),
+        );
+        let (linear, angular) = (turn * body.linvel(), turn * body.angvel());
+        body.set_position(moved, true);
+        body.set_linvel(linear, true);
+        body.set_angvel(angular, true);
+        carried += 1;
+    }
+    carried
 }
 
 /// Projectiles passing through bodies: each strikes a body once.
