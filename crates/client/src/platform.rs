@@ -1093,7 +1093,7 @@ const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
 impl Screenshots {
     /// Whether any screenshot is still being copied, read back or written.
     #[cfg(test)]
-    fn busy(&self) -> bool {
+    pub(crate) fn busy(&self) -> bool {
         !self.copied.is_empty() || !self.reading.is_empty() || self.writing > 0
     }
     /// A copy queued in a frame's encoder, not yet submitted.

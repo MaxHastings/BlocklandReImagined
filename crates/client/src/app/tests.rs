@@ -1733,3 +1733,112 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
     }
     Ok(())
 }
+
+/// A save's picture is drawn and submitted on its own, before the frame
+/// that takes it records anything. Drawn into that frame's encoder, the
+/// frame's own buffer writes (camera, lights, indirect draw arguments), all
+/// applied at its one submit, replaced the picture's: its world chunks drew
+/// with another pass's arguments and bricks went missing from the picture.
+/// So the picture here is written while the frame's encoder is held back.
+#[test]
+fn a_save_picture_is_drawn_in_a_submission_of_its_own() -> anyhow::Result<()> {
+    use super::*;
+    const SIZE: (u32, u32) = (320, 240);
+    let f = ContentRoot::synthetic()?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
+    let gpu = bri_ui::gpu::Headless::new()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    app.gpu_ready(&gpu.device, &gpu.queue, format)?;
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("save picture test frame"),
+        size: wgpu::Extent3d {
+            width: SIZE.0,
+            height: SIZE.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let mut ui = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+    // A frame as the platform draws it, recorded into `encoder`.
+    let mut record = |app: &mut App, encoder: &mut wgpu::CommandEncoder| {
+        app.render_scene(&mut RenderContext {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder,
+            target: &view,
+            format,
+            size: SIZE,
+            ui_renderer: &mut ui,
+        })
+    };
+    app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Save picture test".into(),
+        password: String::new(),
+        admin_password: "save-picture-admin".into(),
+        super_admin_password: "save-picture-super".into(),
+    });
+    let start = std::time::Instant::now();
+    let mut previous = start;
+    loop {
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("hosting failed: {reason}");
+        }
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        let drew = record(&mut app, &mut encoder)?;
+        gpu.queue.submit([encoder.finish()]);
+        if drew && matches!(app.ui.core.conn, ConnectionState::InGame { .. }) {
+            break;
+        }
+        ensure!(
+            start.elapsed() < Duration::from_secs(300),
+            "never drew the game: {:?}",
+            app.ui.core.conn
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let picture = state.path().join("Picture.jpg");
+    app.files.save_picture = Some(picture.clone());
+    let mut held = gpu.device.create_command_encoder(&Default::default());
+    ensure!(record(&mut app, &mut held)?, "the frame drew no game");
+    ensure!(
+        app.files.save_picture.is_none(),
+        "the picture waited for another frame"
+    );
+    let start = std::time::Instant::now();
+    while app.files.save_shots.busy() {
+        ensure!(
+            start.elapsed() < Duration::from_secs(30),
+            "the picture waited on the frame's own submit"
+        );
+        gpu.device.poll(wgpu::PollType::Poll)?;
+        app.files.save_shots.poll(&gpu.device);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let written = image::open(&picture)?;
+    ensure!(
+        (written.width(), written.height()) == SIZE,
+        "the picture is the frame, unscaled: {}x{}",
+        written.width(),
+        written.height()
+    );
+    // The frame itself still submits after the picture.
+    gpu.queue.submit([held.finish()]);
+    Ok(())
+}

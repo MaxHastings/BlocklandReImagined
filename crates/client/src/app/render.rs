@@ -1348,9 +1348,7 @@ impl App {
         let effective = self
             .graphics
             .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
-        // The last frame, holding any picture copied then, was submitted.
         // Failures are logged by the writer; success is not news.
-        self.files.save_shots.submitted();
         self.files.save_shots.poll(frame.device);
         if let Some(path) = self.files.save_picture.take() {
             self.take_save_picture(frame, path)?;
