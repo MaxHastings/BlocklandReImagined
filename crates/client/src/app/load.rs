@@ -173,6 +173,7 @@ impl App {
                 ghost_look: None,
                 ghost_uploaded: u64::MAX,
                 gpu_name: String::new(),
+                opened: false,
                 gpu_passes: Vec::new(),
                 time_passes: false,
             },

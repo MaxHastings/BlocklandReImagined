@@ -395,6 +395,7 @@ impl App {
             });
         }
         if a.reloading
+            && self.scene_pipelines_ready()
             && let Some(view) = &a.view
             && self.scene.scene_map.as_deref() == Some(view.world.map_id.as_str())
             && self
@@ -869,6 +870,7 @@ impl App {
         if a.ready
             && !a.entered
             && self.scene.world_source.is_some()
+            && self.scene_pipelines_ready()
             && let Some(scene) = &self.scene.cpu_scene
         {
             self.ui.apply_session(

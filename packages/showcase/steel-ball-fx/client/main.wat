@@ -17,14 +17,12 @@
 ;;            +0 id  +4 in use  +8 velocity xyz  +20 last sound time
 ;;            +24 seen this frame
 (module
-  (import "bri" "log" (func $log (param i32 i32)))
   (import "bri" "vehicle_kind" (func $vehicle_kind (param i32 i32) (result i32)))
   (import "bri" "vehicles" (func $vehicles (param i32 i32) (result i32)))
   (import "bri" "sound_at" (func $sound_at (param i32 i32 f32 f32 f32 f32) (result i32)))
   (memory (export "memory") 1)
   (global $ball (mut i32) (i32.const -1))
   (data (i32.const 64) "steel-ball-kit:vehicle/steelball")
-  (data (i32.const 128) "steel ball ready")
   (data (i32.const 160) "client/sounds/clank.wav")
   (data (i32.const 192) "client/sounds/thud.wav")
 
@@ -87,8 +85,7 @@
     (f32.store offset=16 (local.get $slot) (f32.load offset=44 (local.get $at))))
 
   (func (export "init")
-    (global.set $ball (call $vehicle_kind (i32.const 64) (i32.const 32)))
-    (call $log (i32.const 128) (i32.const 16)))
+    (global.set $ball (call $vehicle_kind (i32.const 64) (i32.const 32))))
 
   (func (export "frame") (param $t f32) (param $dt f32)
     (local $count i32) (local $i i32) (local $at i32)

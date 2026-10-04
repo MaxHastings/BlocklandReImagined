@@ -205,6 +205,31 @@ impl WeaponEffects {
                 insert_binding(&mut bindings, symbol, &c.id, Kind::Composite)?;
             }
         }
+        // An Add-On's emitters and lights are named by their datablock
+        // names too, as v20's global datablock names are: another Add-On
+        // naming one it depends on (Tier+Tactical Tier 2's tracers trail
+        // Tier 1's pistolTrailEmitter) gets it. The first keeps a name.
+        for (id, kind) in weapons
+            .effects
+            .emitters
+            .iter()
+            .filter(|e| pack.library.emitters.iter().any(|x| x.id == e.id))
+            .map(|e| (&e.id, Kind::Emitter))
+            .chain(
+                weapons
+                    .effects
+                    .lights
+                    .iter()
+                    .filter(|l| pack.library.lights.iter().any(|x| x.id == l.id))
+                    .map(|l| (&l.id, Kind::Light)),
+            )
+        {
+            let symbol = bri_weapons::effect_symbol(id).to_ascii_lowercase();
+            bindings.entry(symbol).or_insert(Binding {
+                id: id.clone(),
+                kind,
+            });
+        }
         // An Add-On's explosion is named by its explosion's name, as the
         // base game's are; where that name is taken, the first keeps it.
         for c in &weapons.effects.explosions {

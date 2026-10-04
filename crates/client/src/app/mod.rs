@@ -1538,6 +1538,7 @@ impl PlatformApp for App {
             self.pick_quality(&device.adapter_info());
         }
         self.gpu.gpu_name = device.adapter_info().name;
+        self.gpu.opened = true;
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);

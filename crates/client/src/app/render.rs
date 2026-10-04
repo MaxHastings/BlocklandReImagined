@@ -44,12 +44,17 @@ impl App {
                 }
             }
         }
-        let renderer = self
+        // The world's pipelines compile on a worker (seconds with FXC); the
+        // loading screen stays up, and the window responsive, until then.
+        let Some(renderer) = self
             .gpu
             .renderer
             .as_mut()
             .context("Scene GPU not initialized")?
-            .wait();
+            .ready()
+        else {
+            return Ok(false);
+        };
         renderer.set_filtering(frame.device, self.graphics.filtering);
         let timing = self.gpu.time_passes || self.ui.core.perf.wants_net();
         renderer.time_passes(frame.device, frame.queue, timing);

@@ -565,6 +565,11 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     // States and trails name the emitter by id; the explosion is found by
     // its explosion's name, as the base game's are.
     assert!(fx.resolves("kit:emitter/flash"));
+    // Another Add-On names it by its datablock name, as v20's names are
+    // global (Tier 2's tracers trail Tier 1's pistolTrailEmitter); one left
+    // out answers to no name.
+    assert!(fx.resolves("Flash"));
+    assert!(!fx.resolves("lost"));
     assert!(fx.resolves("boom"));
     assert!(fx.resolves("kit:explosion/boom"));
     // A particle drawing a texture the game lacks is left out, with the
