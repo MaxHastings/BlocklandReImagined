@@ -72,6 +72,31 @@ impl MoveInput {
 }
 /// The most [`PlayerState::speed_scale`] may be.
 pub const MAX_SPEED_SCALE: f32 = 4.0;
+/// The farthest a body's feet may be from the origin on any axis.
+pub const MAX_FEET: f32 = 1_000_000.0;
+/// The fastest a body may move. The host keeps every state it writes within
+/// this and [`MAX_FEET`] ([`PlayerState::keep_in_bounds`]), and an
+/// authoritative correction outside them is rejected
+/// ([`PlayerState::check_bounds`]), so the two never disagree.
+pub const MAX_SPEED: f32 = 1000.0;
+/// A host correction this motor cannot take: one field's value is outside
+/// what a player state may hold. The session can go on (the correction is
+/// skipped or brought into bounds); a wrong owner is a different error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RejectedCorrection {
+    pub field: &'static str,
+    pub detail: String,
+}
+impl std::fmt::Display for RejectedCorrection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Invalid authoritative player correction: {} {}",
+            self.field, self.detail
+        )
+    }
+}
+impl std::error::Error for RejectedCorrection {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerState {
     pub owner: OwnerId,
@@ -371,6 +396,90 @@ impl Default for JumpState {
     }
 }
 impl PlayerState {
+    /// Bring feet and motion within [`MAX_FEET`] and [`MAX_SPEED`]: the
+    /// fastest stays the fastest, in the same direction. Non-finite values
+    /// are left for [`Self::check_bounds`] to refuse.
+    pub fn keep_in_bounds(&mut self) {
+        let velocity = Vec3::from(self.velocity);
+        if velocity.is_finite() {
+            self.velocity = velocity.clamp_length_max(MAX_SPEED).to_array();
+        }
+        let feet = Vec3::from(self.feet);
+        if feet.is_finite() {
+            self.feet = feet
+                .clamp(Vec3::splat(-MAX_FEET), Vec3::splat(MAX_FEET))
+                .to_array();
+        }
+    }
+    /// Whether every value of this state is one a player may hold, naming
+    /// the first field that is not.
+    pub fn check_bounds(&self) -> std::result::Result<(), RejectedCorrection> {
+        let reject = |field, detail| Err(RejectedCorrection { field, detail });
+        if !self
+            .feet
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= MAX_FEET)
+        {
+            return reject(
+                "feet",
+                format!(
+                    "{:?} (finite, magnitude per axis <= {MAX_FEET} required)",
+                    self.feet
+                ),
+            );
+        }
+        // The host keeps the speed (the length) within MAX_SPEED, so each
+        // axis is within it too.
+        if !self
+            .velocity
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= MAX_SPEED)
+        {
+            return reject(
+                "velocity",
+                format!(
+                    "{:?} (finite, magnitude per axis <= {MAX_SPEED} required)",
+                    self.velocity
+                ),
+            );
+        }
+        if !(self.yaw.is_finite() && self.pitch.is_finite()) {
+            return reject(
+                "look",
+                format!("yaw={} pitch={} (finite required)", self.yaw, self.pitch),
+            );
+        }
+        if self.tick.phase >= TICK_PARTS {
+            return reject(
+                "motor tick",
+                format!(
+                    "phase={} (less than {TICK_PARTS} required)",
+                    self.tick.phase
+                ),
+            );
+        }
+        if !self
+            .tick
+            .from
+            .iter()
+            .chain(&self.tick.feet)
+            .all(|v| v.is_finite())
+        {
+            return reject(
+                "motor tick",
+                format!(
+                    "from={:?} feet={:?} (finite required)",
+                    self.tick.from, self.tick.feet
+                ),
+            );
+        }
+        if let Some(tether) = &self.tether
+            && let Err(error) = tether.validate()
+        {
+            return reject("tether", format!("{tether:?}: {error}"));
+        }
+        Ok(())
+    }
     /// This state as it is once `carry` (an opening's) has taken the body
     /// through: feet, where it is drawn from, motion and heading, with the
     /// body upright and its middle `middle` above the feet.
@@ -785,7 +894,7 @@ impl Player {
     ) -> Result<Self> {
         tuning.validate()?;
         ensure!(
-            owner > 0 && feet.is_finite() && feet.abs().max_element() <= 1_000_000.0,
+            owner > 0 && feet.is_finite() && feet.abs().max_element() <= MAX_FEET,
             "Invalid player spawn"
         );
         let pose = tuning.pose(feet, false);
@@ -869,7 +978,7 @@ impl Player {
     /// Restored or scripted motion (`setVelocity`, checkpoints).
     pub fn set_motion(&mut self, velocity: Vec3, grounded: bool) {
         if velocity.is_finite() {
-            self.state.velocity = velocity.clamp_length_max(1000.0).to_array();
+            self.state.velocity = velocity.clamp_length_max(MAX_SPEED).to_array();
             self.state.grounded = grounded;
         }
     }
@@ -991,50 +1100,7 @@ impl Player {
             state.owner,
             self.state.owner
         );
-        ensure!(
-            state
-                .feet
-                .iter()
-                .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
-            "Invalid authoritative player correction: feet {:?} (finite, magnitude per axis <= 1000000 required)",
-            state.feet
-        );
-        ensure!(
-            state
-                .velocity
-                .iter()
-                .all(|v| v.is_finite() && v.abs() <= 1000.0),
-            "Invalid authoritative player correction: velocity {:?} (finite, magnitude per axis <= 1000 required)",
-            state.velocity
-        );
-        ensure!(
-            state.yaw.is_finite() && state.pitch.is_finite(),
-            "Invalid authoritative player correction: look yaw={} pitch={} (finite required)",
-            state.yaw,
-            state.pitch
-        );
-        ensure!(
-            state.tick.phase < TICK_PARTS,
-            "Invalid authoritative player correction: motor tick phase={} (less than {} required)",
-            state.tick.phase,
-            TICK_PARTS
-        );
-        ensure!(
-            state
-                .tick
-                .from
-                .iter()
-                .chain(&state.tick.feet)
-                .all(|v| v.is_finite()),
-            "Invalid authoritative player correction: motor tick from={:?} feet={:?} (finite required)",
-            state.tick.from,
-            state.tick.feet
-        );
-        ensure!(
-            state.tether.is_none_or(|t| t.validate().is_ok()),
-            "Invalid authoritative player correction: tether {:?}",
-            state.tether
-        );
+        state.check_bounds()?;
         if tuning != self.tuning {
             tuning.validate()?;
             self.tuning = tuning;
@@ -1073,7 +1139,7 @@ impl Player {
     /// Server relocation (spawn/respawn/teleport): clears motion state.
     pub fn teleport(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32) -> Result<()> {
         ensure!(
-            feet.is_finite() && feet.abs().max_element() <= 1_000_000.0 && yaw.is_finite(),
+            feet.is_finite() && feet.abs().max_element() <= MAX_FEET && yaw.is_finite(),
             "Invalid teleport"
         );
         let mut state = self.state.clone();
@@ -1090,13 +1156,16 @@ impl Player {
         state.tether = None;
         self.restore(physics, state, self.tuning.clone())
     }
-    /// Ride a vehicle seat: position and facing come from the seat node.
+    /// Ride a vehicle seat: position and facing come from the seat node,
+    /// and motion from the vehicle, within what a player may hold (a rider
+    /// of something faster than [`MAX_SPEED`] moves at it).
     pub fn place(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32, velocity: Vec3) {
         if !feet.is_finite() || !yaw.is_finite() || !velocity.is_finite() {
             return;
         }
         self.state.feet = feet.to_array();
         self.state.velocity = velocity.to_array();
+        self.state.keep_in_bounds();
         self.state.yaw =
             (yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         self.state.grounded = true;
@@ -1643,6 +1712,9 @@ impl Player {
                 .transform_vector3(Vec3::from(self.state.jump.normal))
                 .to_array();
         }
+        // A fall or a push past what a player may hold (a light body's long
+        // fall, strong jets) goes on at the limit.
+        self.state.keep_in_bounds();
         // Grounded idle motion need not produce a sweep callback. Include nearby
         // solid contacts so on-touch is an entry event, not a movement event.
         let end_pose = t.pose(Vec3::from(self.state.feet), self.state.crouched);

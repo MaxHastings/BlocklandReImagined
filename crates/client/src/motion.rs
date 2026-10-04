@@ -135,6 +135,9 @@ pub struct Motion {
     authoritative_vehicle_tick: u64,
     authoritative_body_frame: Option<bri_content::passage::PassageFrame>,
     frame_transition: Option<u64>,
+    /// The fields of host corrections this client has had to bring into
+    /// bounds or skip, each reported once.
+    rejected_fields: std::collections::BTreeSet<&'static str>,
 }
 
 /// The prediction moves the body through an opening on the tick its middle
@@ -556,6 +559,34 @@ impl Motion {
         {
             return Ok(());
         }
+        // A correction holding a value no player state may (a host fault)
+        // is not the end of the session: it is brought into bounds and
+        // taken, as a snap to the host's pose, or skipped when it cannot be
+        // (not finite), and prediction goes on until the next. Only a
+        // pose that is not this player's stays an error.
+        let bounded;
+        let pose = match pose.player.check_bounds() {
+            Ok(()) => pose,
+            Err(rejected) => {
+                let mut player = pose.player.clone();
+                player.keep_in_bounds();
+                let taken = player.check_bounds().is_ok();
+                if self.rejected_fields.insert(rejected.field) {
+                    bri_console::warn(format!(
+                        "Movement prediction {} a host correction: {rejected}",
+                        if taken { "bounded" } else { "skipped" }
+                    ));
+                }
+                if !taken {
+                    return Ok(());
+                }
+                bounded = bri_net::protocol::Pose {
+                    player,
+                    ..pose.clone()
+                };
+                &bounded
+            }
+        };
         ensure!(
             pose.passage_frame.valid()
                 && pose
@@ -1148,6 +1179,30 @@ mod tests {
             assert_eq!(motion.shown_frame, shown);
             assert_eq!(motion.predictor.as_ref().unwrap().state(), &state);
         }
+        Ok(())
+    }
+    /// A host correction no player state may hold neither ends the session
+    /// nor sticks: one faster than any player may move is taken at the
+    /// limit (a snap to the host's pose), one that is not finite is
+    /// skipped, and the next good one reconciles as usual.
+    #[test]
+    fn an_out_of_bounds_correction_resyncs_instead_of_disconnecting() -> Result<()> {
+        let mut motion = Motion::default();
+        motion.install(CollisionMirror::new(Default::default(), vec![], vec![]));
+        motion.observe_local(&pose(1, 0., 0.), &Default::default())?;
+        let feet = |motion: &Motion| motion.predictor.as_ref().unwrap().state().feet;
+        let mut fast = pose(2, 5., 0.);
+        fast.player.velocity = [5000., 0., 0.];
+        motion.observe_local(&fast, &Default::default())?;
+        assert_eq!(feet(&motion), [5., 0., 0.]);
+        let speed = Vec3::from(motion.predictor.as_ref().unwrap().state().velocity).length();
+        assert!((speed - bri_sim::player::MAX_SPEED).abs() < 0.01, "{speed}");
+        let mut broken = pose(3, 9., 0.);
+        broken.player.velocity = [f32::NAN, 0., 0.];
+        motion.observe_local(&broken, &Default::default())?;
+        assert_eq!(feet(&motion), [5., 0., 0.], "skipped");
+        motion.observe_local(&pose(4, 7., 0.), &Default::default())?;
+        assert_eq!(feet(&motion), [7., 0., 0.]);
         Ok(())
     }
     /// Poses every 3 ticks with 80 ms latency plus up to 60 ms jitter,
