@@ -88,6 +88,25 @@ bot does through the same code.
    `contest.engage` of it counts as progress, so the claim's lease does not
    lapse while the two sides fight over it. A step waiting on an admitted
    delivery holds no lease at all.
+
+   The contest piece also covers the other cases of a shared body:
+   - **Cover.** A bot whose claim is refused because a teammate holds the
+     body keeps its objective. It does not stand down into Wander: it holds
+     a cover point `contest.cover_distance` behind the body, against the
+     team's delivery heading, and `contest.cover_side` to the side. A lone
+     cover takes the side the working teammate is not on. Several covers
+     take id-ordered slots on both sides, each further pair further back and
+     wider. A cover point stops short of any wall between it and the body.
+     When an opponent drives the body back at the cover, the cover stands
+     beside the body's path instead, so the drive is not deflected off it.
+     When the claim frees, the cover takes the body up at once.
+   - **Clear.** A push or hammer on a body an opponent drives straight back
+     at it turns by `contest.clear_degrees` to the bot's side, knocking the
+     body out of its line rather than being carried back with it.
+   - **Walls.** When solid world geometry stands where a pusher would stand
+     (a wall or a corner behind the body), the push turns by the smallest of
+     30, 60, 90 or 120 degrees that leaves room. The body is worked along
+     and off the wall instead of being pressed into it.
    Physical pushing transfers only momentum stopped at actual motor contacts,
    through the same mechanism for humans and bots; mass and geometry determine
    the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
@@ -143,8 +162,11 @@ of a moving target infallible or change damage permissions.
   and:
   - `objective_radius`: how far around itself it looks for loose objects
     an objective can use (24 for the Blockhead).
-  - `contest` (`lead_seconds`, `max_lead`, `engage`): how it plays a body
-    an opponent is also working (above).
+  - `contest` (`lead_seconds`, `max_lead`, `engage`, `cover_distance`,
+    `cover_side`, `clear_degrees`): how it plays a body an opponent is also
+    working, and how it covers one a teammate works (above). A
+    `cover_distance` of 0 stands down as before, and a `clear_degrees` of
+    0 meets a drive head on.
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.
