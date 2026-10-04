@@ -296,6 +296,7 @@ impl App {
                 skip_add_on_reload: false,
                 package_models: Default::default(),
                 add_on_sync: None,
+                after_sync: None,
                 left_out_add_ons: None,
                 add_on_health: Default::default(),
             },
