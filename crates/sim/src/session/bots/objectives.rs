@@ -291,6 +291,8 @@ pub(super) struct View {
     pub enemy: Option<OwnerId>,
     pub enemy_evidence: Option<Knowledge>,
     pub physical_progress: bool,
+    /// The way a loose body is being delivered (`Directive::heading`).
+    pub heading: Vec3,
 }
 impl View {
     pub(super) fn locomotion(point: Vec3, aim: Vec3) -> Self {
@@ -308,6 +310,7 @@ impl View {
             enemy: None,
             enemy_evidence: None,
             physical_progress: false,
+            heading: Vec3::ZERO,
         }
     }
 }
@@ -2060,6 +2063,7 @@ impl Executor {
                 held: d.held,
                 drive: d.drive,
                 physical_progress: d.physical_progress,
+                heading: d.heading,
                 move_while_waiting: matches!(
                     action.method,
                     super::physical_objectives::Method::Hold { .. }

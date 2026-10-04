@@ -87,7 +87,7 @@ impl Session {
         self.teleport_cue(owner, center, scale, true);
     }
     /// Nearest terrain, interior or brick along a ray.
-    fn world_ray(&self, start: Vec3, dir: Vec3, range: f32) -> Option<f32> {
+    pub(super) fn world_ray(&self, start: Vec3, dir: Vec3, range: f32) -> Option<f32> {
         // Players (1) and vehicles (2) are not world geometry.
         let predicate = |_: ColliderHandle, c: &Collider| !matches!(c.user_data >> 64, 1 | 2);
         let ray = Ray::new(

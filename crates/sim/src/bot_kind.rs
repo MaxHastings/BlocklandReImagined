@@ -107,6 +107,16 @@ pub struct BotContest {
     /// Within this many world units of a contested body it is engaged: its
     /// intention stays live while it works the body against an opponent.
     pub engage: f32,
+    /// While a teammate holds the body, it covers instead of standing down:
+    /// this many world units behind the body, against the way the team
+    /// delivers it. 0 stands down as before.
+    pub cover_distance: f32,
+    /// And this many to the side of that line, on the side it already is.
+    pub cover_side: f32,
+    /// Degrees it turns its push off a body an opponent drives straight
+    /// back at it, to knock it aside rather than meet it head on. 0 meets
+    /// it head on.
+    pub clear_degrees: f32,
 }
 impl Default for BotContest {
     fn default() -> Self {
@@ -114,6 +124,9 @@ impl Default for BotContest {
             lead_seconds: 0.6,
             max_lead: 4.0,
             engage: 4.0,
+            cover_distance: 6.0,
+            cover_side: 3.0,
+            clear_degrees: 60.0,
         }
     }
 }
@@ -348,6 +361,19 @@ impl BotKind {
             ("contest.lead_seconds", self.contest.lead_seconds, 0.0, 5.0),
             ("contest.max_lead", self.contest.max_lead, 0.0, 32.0),
             ("contest.engage", self.contest.engage, 0.0, 32.0),
+            (
+                "contest.cover_distance",
+                self.contest.cover_distance,
+                0.0,
+                32.0,
+            ),
+            ("contest.cover_side", self.contest.cover_side, 0.0, 32.0),
+            (
+                "contest.clear_degrees",
+                self.contest.clear_degrees,
+                0.0,
+                90.0,
+            ),
             (
                 "mounted.chase_radius",
                 self.mounted.chase_radius,

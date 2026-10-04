@@ -1919,6 +1919,10 @@ impl Session {
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
+        // Where it would cover a body a teammate holds (`contest::cover`).
+        let cover = objective.and_then(|view| {
+            contest::cover(self, bot, view.resource?, feet, view.heading).map(|point| (point, view))
+        });
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2080,6 +2084,10 @@ impl Session {
                     selected_objective.unwrap().physical_progress || contest_engaged,
                     tick,
                 );
+            } else if let Some((point, view)) = cover {
+                // A teammate has the body: keep the objective and cover
+                // behind it instead, ready to take it up when the claim ends.
+                selected_objective = Some(objectives::View::locomotion(point, view.aim));
             } else {
                 // Advisory contention blocks this proposed action, never the
                 // authority/physics rules. It cannot grant tool or seat use.

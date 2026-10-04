@@ -15,7 +15,7 @@
       "alerts_allies": true,
       "behaviours": { "interact": 1, "objective": 1 },
       "objective_radius": 24,
-      "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4 },
+      "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4, "cover_distance": 6, "cover_side": 3, "clear_degrees": 60 },
       "mounted": {
         "anchor": "mount",
         "chase_radius": 96,
