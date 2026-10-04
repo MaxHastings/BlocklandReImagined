@@ -483,6 +483,23 @@ fn small_state_files_update_in_place() {
     assert_eq!(list, ["A.example.com", "b.example.com"]);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+/// Each game is told only about its own state folder's damaged files, so
+/// one running beside another (as tests do) never takes the other's.
+#[test]
+fn damaged_state_files_are_told_to_their_own_state_folder() {
+    let (one, two) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for dir in [&one, &two] {
+        std::fs::write(dir.path().join("servers.json"), b"{ torn").unwrap();
+        assert!(super::read_small_json::<Vec<String>>(&dir.path().join("servers.json")).is_none());
+    }
+    let told = super::take_damaged_files(two.path());
+    assert_eq!(told.len(), 1);
+    assert_eq!(told[0].0, two.path().join("servers.json"));
+    let told = super::take_damaged_files(one.path());
+    assert_eq!(told.len(), 1);
+    assert_eq!(told[0].0, one.path().join("servers.json"));
+    assert!(super::take_damaged_files(one.path()).is_empty());
+}
 use crate::testing::content_root::ContentRoot;
 /// Run the app until `ready`. Waits follow the game, not the wall clock:
 /// one fails when the server has run ten seconds of game time without

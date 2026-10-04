@@ -1852,8 +1852,16 @@ pub(crate) fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Op
 /// State files [`read_small_json`] found damaged and moved aside since
 /// last asked: (file, where its old contents are now).
 static DAMAGED_FILES: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
-pub(crate) fn take_damaged_files() -> Vec<(PathBuf, PathBuf)> {
-    std::mem::take(&mut *DAMAGED_FILES.lock().unwrap_or_else(|e| e.into_inner()))
+/// The damaged files under `state_dir`, taken from the list. Each game
+/// takes only its own state folder's, so two in one process (tests) never
+/// take each other's.
+pub(crate) fn take_damaged_files(state_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut all = DAMAGED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+        .into_iter()
+        .partition(|(file, _)| file.starts_with(state_dir));
+    *all = others;
+    mine
 }
 /// What the player is told about a damaged state file.
 fn damaged_file_message(file: &Path, copy: &Path) -> String {
@@ -1906,7 +1914,7 @@ fn body_straddle(
 impl App {
     /// Tell the player about state files found damaged (kept aside).
     pub(super) fn show_damaged_files(&mut self) {
-        for (file, copy) in take_damaged_files() {
+        for (file, copy) in take_damaged_files(&self.state_dir) {
             self.ui.apply(UiUpdate::MessageBox {
                 title: "Saved List Problem".into(),
                 text: damaged_file_message(&file, &copy),

@@ -84,7 +84,7 @@ fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| setup.host(entry)))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("panicked")));
         let result = match &outcome {
-            Ok(placed) => json!({ "placed": placed }),
+            Ok(hosted) => json!({ "placed": hosted.placed, "set_aside": hosted.set_aside }),
             Err(error) => {
                 failed += 1;
                 println!("FAILED {label}: {error:#}");

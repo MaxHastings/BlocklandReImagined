@@ -228,7 +228,7 @@ mod tests {
             .collect();
         assert_eq!(kept.len(), 1, "the old list was not kept");
         assert_eq!(std::fs::read(&kept[0]).unwrap(), original);
-        let told = crate::app::take_damaged_files();
+        let told = crate::app::take_damaged_files(dir.path());
         assert!(
             told.iter()
                 .any(|(file, copy)| file == &path && copy == &kept[0])
