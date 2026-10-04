@@ -109,6 +109,7 @@ impl Session {
                     package: package.clone(),
                     source: package.clone(),
                     source_line: 0,
+                    description: target.description.clone(),
                 });
             }
         }

@@ -766,6 +766,17 @@ impl Session {
         }
         allowed
     }
+    /// Whether `editor`'s brick group may author `builder`'s brick events:
+    /// the same group, or a player the server lets edit them (trust at
+    /// [`level::EVENTS`], administrators always), as `SetEvents` checks.
+    /// A region's rows see objects from such a player's spawn bricks.
+    pub(super) fn may_edit_events_of(&self, editor: OwnerId, builder: OwnerId) -> bool {
+        editor == builder
+            || self
+                .peers
+                .get(&editor)
+                .is_some_and(|p| p.actor.may_edit(builder, level::EVENTS))
+    }
     pub(super) fn brick_group_name(&self, owner: OwnerId) -> String {
         if let Some(peer) = self.peers.get(&owner) {
             peer.name.clone()

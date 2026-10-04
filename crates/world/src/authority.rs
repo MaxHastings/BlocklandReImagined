@@ -10,6 +10,10 @@ pub mod trust {
     pub const FULL: u8 = 2;
     /// The same brick group.
     pub const YOU: u8 = 3;
+    /// What editing a brick's events (the wrench's Events window) needs.
+    /// Whatever may author a group's rows also counts as that group where
+    /// its rows look at objects (`Actor::may_edit`).
+    pub const EVENTS: u8 = FULL;
 }
 
 /// Which brick groups trust an actor (v20 `getTrustLevel`).
@@ -49,6 +53,12 @@ impl Actor {
     /// Administrators may always edit; others need this much trust.
     pub fn trusted(&self, group: OwnerId, level: u8) -> bool {
         self.administrator || self.trust_level(group) >= level
+    }
+    /// Whether this actor may make an edit needing `level` to a brick of
+    /// `group`: the check every brick edit passes ([`trust::EVENTS`] for
+    /// its events). An unidentified actor (owner 0) edits nothing.
+    pub fn may_edit(&self, group: OwnerId, level: u8) -> bool {
+        self.administrator || (self.owner != 0 && self.trust_level(group) >= level)
     }
 }
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -260,7 +270,7 @@ impl Authority {
     }
     fn permission(actor: &Actor, brick: &Brick, level: u8) -> Result<()> {
         ensure!(
-            actor.administrator || (actor.owner != 0 && actor.trust_level(brick.owner) >= level),
+            actor.may_edit(brick.owner, level),
             "{}",
             match level {
                 trust::FULL => "That change needs full trust from the brick's owner.",
@@ -283,6 +293,7 @@ impl Authority {
             {
                 trust::BUILD
             }
+            Edit::Events(_) => trust::EVENTS,
             _ => trust::FULL,
         }
     }

@@ -56,6 +56,9 @@ const CP_TICK: usize = 12;
 const REGION: &str = "gamemode_slayer:brick/brickslyrregionboundarydata";
 const PATH_NODE: &str = "gamemode_slayer:brick/brickslyrbotpathnodedata";
 const CP_POINTS: i64 = 7;
+/// Plain plates for a soccer pitch: a ball spawn and goals.
+const BALL_SPAWN: &str = "test:brick/ballspawn";
+const GOAL: &str = "test:brick/goal";
 const RECOVERY_POINTS: i64 = 5;
 
 fn fixture(name: &str) -> PathBuf {
@@ -95,7 +98,7 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         probe.join("package.json"),
         r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
              "name": "Probe", "license": "CC0-1.0",
-             "capabilities": ["player", "brick_events", "world.edit", "damage"],
+             "capabilities": ["player", "brick_events", "world.edit", "damage", "physics"],
              "provides": [
                { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
                { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" } ] }"#,
@@ -111,7 +114,8 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
                            { "name": "poke", "args": ["int"] },
                            { "name": "unstock", "args": ["int"] },
                            { "name": "strip", "args": ["int"] },
-                           { "name": "kill", "args": ["int"] } ],
+                           { "name": "kill", "args": ["int"] },
+                           { "name": "kick", "args": ["int", "float", "float", "float"] } ],
              "state": { "global": { "colours": { "default": {}, "visible": "everyone" },
                                     "kits": { "default": {}, "visible": "everyone" } } } }"#,
     )
@@ -130,7 +134,8 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
          fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n\
          fn cmd_unstock(p, brick) { set_brick_item(brick, ()); }\n\
          fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n\
-         fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n",
+         fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n\
+         fn cmd_kick(p, v, x, y, z) { push(`vehicle:${v}`, x, y, z, p); }\n",
     )
     .unwrap();
     ids.push(("probe".into(), Side::Server));
@@ -205,6 +210,8 @@ fn definitions() -> Definitions {
             plate(CP, Special::None),
             plate(REGION, Special::None),
             plate(PATH_NODE, Special::None),
+            plate(BALL_SPAWN, Special::None),
+            plate(GOAL, Special::None),
         ]
         .into(),
     }
@@ -2991,5 +2998,321 @@ fn slayer_bricks_say_whose_they_are_and_follow_paint_and_names() {
         heard.iter().any(|(_, l)| l.contains("reset the")),
         "the resetter's line: {heard:?}"
     );
+    g.quiet();
+}
+
+/// Max's Slayer soccer: each goal is painted its attackers' colour, with
+/// onObjectEnter -> Team(Brick) -> IncScore 1 and Object resetObject after
+/// three seconds. A goal scores for the colour it is painted whoever
+/// knocked the ball in (own goals too), the ball comes back to its spawn
+/// for the next goal, and the first team to the points to win wins.
+/// Max (v0.2.3): Slayer Team Deathmatch, Points 5, Clear Scores on Reset,
+/// and a goal whose rows are only Team(Brick) IncScore 1 and an immediate
+/// Object resetObject. After a team won, the game reset and announced the
+/// win again forever. One win, one reset, and the next round starts at
+/// nothing and stays in play however long nobody scores.
+#[test]
+fn a_goal_won_round_resets_once_and_the_next_round_starts_at_nothing() {
+    use bri_sim::session::ToolCatalog;
+    use bri_world::authority::WrenchProperties;
+    let ball = bri_vehicles::testing::BALL;
+    let mut g = Game::new("goal-win");
+    with_events(&mut g);
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
+        .unwrap();
+    g.s.set_tool_catalog(ToolCatalog {
+        vehicles: [ball.to_owned()].into(),
+        vehicle_bricks: [BALL_SPAWN.to_owned()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (red, _blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "points"), Value::Int(5)),
+            (&key(SLAYER, "clear_scores"), Value::Bool(true)),
+        ],
+    );
+    let spawn = g.plant(owner, BALL_SPAWN, 0.0, 0.0, 2);
+    g.s.edit_brick(
+        owner,
+        spawn,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(ball.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let goal = g.plant(owner, GOAL, 12.0, 0.0, BLUE);
+    g.s.edit_brick(
+        owner,
+        goal,
+        Edit::Properties(WrenchProperties {
+            rule_region: Some([4.0, 12.0, 4.0]),
+            raycast: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    g.s.edit_brick(
+        owner,
+        goal,
+        Edit::Events(vec![
+            team_event(
+                "onObjectEnter",
+                "Team(Brick)",
+                "IncScore",
+                vec![EventValue::Int(1)],
+            ),
+            event("onObjectEnter", "Object", "resetObject", vec![]),
+        ]),
+    )
+    .unwrap();
+    g.steps(30);
+    let the_ball = |g: &Game| {
+        g.s.vehicle_infos()
+            .into_iter()
+            .find(|v| v.definition == ball)
+            .expect("the ball")
+            .id
+    };
+    let score = |g: &mut Game| {
+        g.s.take_private_notices();
+        g.teams(red, "score");
+        g.s.take_private_notices()
+            .iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(t) if *o == red => Some(readable(t)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let wins = |g: &mut Game| {
+        g.s.take_private_notices()
+            .iter()
+            .filter(|(o, n)| {
+                *o == red && matches!(n, Notice::Chat(t) if readable(t).contains("won this round"))
+            })
+            .count()
+    };
+    for goal in 1..=5 {
+        let v = the_ball(&g);
+        g.run(
+            red,
+            "probe",
+            "kick",
+            vec![
+                PackageArg::Int(v as i64),
+                PackageArg::Float(20.0),
+                PackageArg::Float(0.0),
+                PackageArg::Float(0.0),
+            ],
+        );
+        g.steps(120);
+        if goal < 5 {
+            let told = score(&mut g);
+            assert!(
+                told.contains(&format!("({goal}) Blue")),
+                "goal {goal}: {told}"
+            );
+            assert!(!g.round_over(), "goal {goal} does not win");
+            g.steps(60);
+        }
+    }
+    assert!(g.round_over(), "Blue's fifth goal wins");
+    let mut won = wins(&mut g);
+    // The reset, then long enough for any repeated win to show.
+    g.steps((BETWEEN_ROUNDS + 2) * 120);
+    won += wins(&mut g);
+    assert_eq!(won, 1, "one win announced");
+    assert!(!g.round_over(), "the next round started");
+    let told = score(&mut g);
+    assert!(
+        told.contains("(0) Blue") && told.contains("(0) Red"),
+        "a new round starts at nothing: {told}"
+    );
+    g.steps(BETWEEN_ROUNDS * 3 * 120);
+    assert_eq!(wins(&mut g), 0, "and nobody wins it again");
+    assert!(!g.round_over(), "the round stays in play");
+    g.quiet();
+}
+
+#[test]
+fn slayer_soccer_goals_score_for_their_colour_and_reset_the_ball() {
+    use bri_sim::session::ToolCatalog;
+    use bri_world::authority::WrenchProperties;
+    let ball = bri_vehicles::testing::BALL;
+    let mut g = Game::new("soccer");
+    with_events(&mut g);
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
+        .unwrap();
+    g.s.set_tool_catalog(ToolCatalog {
+        vehicles: [ball.to_owned()].into(),
+        vehicle_bricks: [BALL_SPAWN.to_owned()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(owner, &[(&key(SLAYER, "points"), Value::Int(3))]);
+    let spawn = g.plant(owner, BALL_SPAWN, 0.0, 0.0, 2);
+    g.s.edit_brick(
+        owner,
+        spawn,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(ball.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let mut reset = event("onObjectEnter", "Object", "resetObject", vec![]);
+    reset.delay_ms = 3000;
+    // Blue scores in the goal at +x (painted Blue), Red at -x. A third
+    // row checks the team's score just after the first row added to it:
+    // the team's own points count in an IF Team Score (Red is slot 1,
+    // Blue slot 2).
+    let mut goals = BTreeMap::new();
+    for (x, colour, slot) in [(12.0f32, BLUE, "2"), (-12.0, RED, "1")] {
+        let mut two = event(
+            "onObjectEnter",
+            "MiniGame",
+            "BottomPrintAll",
+            vec![
+                EventValue::Text(format!("team {slot} has two")),
+                EventValue::Int(3),
+                EventValue::Bool(true),
+            ],
+        );
+        two.conditions = vec![
+            serde_json::from_value(serde_json::json!({
+                "subject": "Team", "property": "Score", "key": slot,
+                "compare": "AtLeast", "value": { "Number": 2 }
+            }))
+            .unwrap(),
+        ];
+        let rows = vec![
+            team_event(
+                "onObjectEnter",
+                "Team(Brick)",
+                "IncScore",
+                vec![EventValue::Int(1)],
+            ),
+            two,
+            reset.clone(),
+        ];
+        let goal = g.plant(owner, GOAL, x, 0.0, colour);
+        g.s.edit_brick(
+            owner,
+            goal,
+            Edit::Properties(WrenchProperties {
+                rule_region: Some([4.0, 12.0, 4.0]),
+                raycast: true,
+                visible: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        g.s.edit_brick(owner, goal, Edit::Events(rows.clone()))
+            .unwrap();
+        goals.insert(colour, x);
+    }
+    g.steps(30);
+    // The ball: its id and where it is.
+    let the_ball = |g: &Game| {
+        let id =
+            g.s.vehicle_infos()
+                .into_iter()
+                .find(|v| v.definition == ball)
+                .expect("the ball")
+                .id;
+        let at =
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == id)
+                .unwrap();
+        (id, Vec3::from(at.position))
+    };
+    let home = the_ball(&g).1;
+    let score = |g: &mut Game| {
+        g.s.take_private_notices();
+        g.teams(red, "score");
+        g.s.take_private_notices()
+            .iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(t) if *o == red => Some(readable(t)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // A Red own goal, Blue, a Blue own goal, then Blue's third.
+    for (kicker, into, blue_points, red_points) in [
+        (red, BLUE, 1, 0),
+        (blue, BLUE, 2, 0),
+        (blue, RED, 2, 1),
+        (red, BLUE, 3, 1),
+    ] {
+        let (v, _) = the_ball(&g);
+        let toward = f64::from(goals[&into].signum() * 20.0);
+        g.run(
+            kicker,
+            "probe",
+            "kick",
+            vec![
+                PackageArg::Int(v as i64),
+                PackageArg::Float(toward),
+                PackageArg::Float(0.0),
+                PackageArg::Float(0.0),
+            ],
+        );
+        g.steps(120);
+        let printed =
+            g.s.take_private_notices()
+                .iter()
+                .any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text == "team 2 has two"));
+        assert_eq!(
+            printed,
+            blue_points >= 2 && into == BLUE,
+            "Blue's IF Team Score >= 2 after {blue_points} points"
+        );
+        let told = score(&mut g);
+        assert!(
+            told.contains(&format!("({blue_points}) Blue"))
+                && told.contains(&format!("({red_points}) Red")),
+            "after {kicker}'s kick into the {into} goal: {told}"
+        );
+        if blue_points == 3 {
+            assert!(g.round_over(), "Blue reached the points to win");
+            break;
+        }
+        g.steps(360);
+        let (back, at) = the_ball(&g);
+        assert_ne!(back, v, "the goal reset the ball");
+        assert!(
+            (at - home).length() < 0.5,
+            "the new ball is at its spawn: {at} vs {home}"
+        );
+    }
+    // Max (v0.2.3): after the win the game reset, then won and reset
+    // again forever. The next round starts at nothing and stays in play.
+    g.steps((BETWEEN_ROUNDS + 2) * 120);
+    assert!(!g.round_over(), "the next round started");
+    let told = score(&mut g);
+    assert!(
+        told.contains("(0) Blue") && told.contains("(0) Red"),
+        "a new round starts at nothing: {told}"
+    );
+    g.steps(BETWEEN_ROUNDS * 2 * 120);
+    assert!(!g.round_over(), "and nobody wins it again");
     g.quiet();
 }

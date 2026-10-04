@@ -2035,10 +2035,13 @@ impl ev::Host for EventHost<'_> {
             Class::Player | Class::Client => true,
             // The minigame rules check the brick owner's authority.
             Class::MiniGame => true,
+            // An object from the builder's spawn bricks, or from those of
+            // someone who may edit the builder's events: the objects the
+            // builder's regions see.
             Class::Vehicle => s
                 .vehicle_spawn_brick(bri_vehicles::VehicleId(target.id.index))
                 .and_then(|b| bricks.get(&b))
-                .is_some_and(|b| b.owner == owner),
+                .is_some_and(|b| s.may_edit_events_of(b.owner, owner)),
             Class::Projectile => {
                 context.targets.get(&Slot::Projectile) == Some(&target)
                     && s.events

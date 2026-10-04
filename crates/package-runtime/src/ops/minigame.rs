@@ -73,6 +73,27 @@ impl ScriptOp for SetScore {
     }
 }
 
+/// Set a team's own points, or with `add` change them by `value`
+/// (Slayer's `Slayer_TeamSO::incScore`): the points a team scored itself,
+/// apart from its members'. The engine keeps them with the game, so a
+/// rule's Team Score check, the scripts' `points` and the game's resets
+/// all read and clear the same points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetTeamPoints {
+    pub game: u64,
+    pub team: u64,
+    pub value: i64,
+    pub add: bool,
+}
+impl ScriptOp for SetTeamPoints {
+    const CAPABILITY: &str = "minigame";
+    const NAME: &str = "add_team_points";
+    fn bounded(&self) -> bool {
+        let SetTeamPoints { value, .. } = self;
+        value.abs() <= MAX_SCORE
+    }
+}
+
 /// Reset a mini-game (`MiniGameSO::reset`): every member respawns with
 /// a score of 0 and the game's bricks come back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

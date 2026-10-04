@@ -80,6 +80,10 @@ pub struct TargetDef {
     pub package: String,
     pub source: String,
     pub source_line: u32,
+    /// What it stands for, in one line, for the wrench (the Add-On's
+    /// `brick_targets` `description`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 /// What the running Add-Ons add to the event catalog: their inputs,
 /// targets and outputs. The host sends it to players so their wrench lists

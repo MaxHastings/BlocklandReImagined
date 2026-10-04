@@ -40,6 +40,8 @@ labels are retained so earlier progress notes remain traceable.
 | Client app split | `crates/client/src/app.rs` into modules | Code health audit | on main |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | on main |
 | Brick values | `set_brick_field`, `brick_field`: values rules keep on bricks, readable by every Add-On | Capture the Flag (Slayer) | on main |
+| Team points | `add_team_points`, `set_team_points`, a team's `points`: a team's own points kept with its mini-game (`MiniGame::team_points`), counted by `team_score` with its members' scores for wrench IF Team Score, MiniGame `addTeamScore` and Slayer's `IncScore` | Goal teams (v0.2.4) | branch fix/goal-teams |
+| Brick target descriptions | `brick_targets` `description`, `TargetDef::description`: one line the wrench shows for an Add-On's target | Goal teams (v0.2.4) | branch fix/goal-teams |
 | Drop key with empty hands | `Command::DropKey`, `on_drop_key` | Capture the Flag (Slayer) | on main |
 | Dropped item names | `Drop::name`, `name_drop`, name tags over drops | Capture the Flag (Slayer) | on main |
 | Image lights | `Image::light`, drawn at the mounted image in its paint | Capture the Flag (Slayer) | on main |
