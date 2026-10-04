@@ -31,6 +31,11 @@ Focused headless/offscreen checks do not replace your playtest.
   coordinated stacking. Complex rule arrangements can exceed the planner's
   finite depth/work limits even when a human can solve them. Resting pauses an
   approach's travel deadline; scheduled event delays keep passing in real time.
+- **Portals:** Add-On bodies such as ragdolls do not go through portals yet:
+  they drop out of the doorway's back. A Steel Ball rolled along the ground
+  bumps the doorway's sill and loses speed; one thrown through keeps it.
+  Stock portal bricks stand upright only, so floor and ceiling portals
+  can't be built.
 - **Firefight crash:** a Windows v0.2.0 main-thread NaN panic during a mixed
   Zombie/Blockhead battle remains unreproduced. The headless reproduction passes,
   but does not cover Windows rendering/audio. v0.2.1 improves crash reports and
@@ -73,7 +78,6 @@ Focused headless/offscreen checks do not replace your playtest.
   three fading); Physics Quality and load limits can retire older pieces early.
 
 - **Rule Workshop** is experimental. IF checks run when a delayed action is
-  due; regions use entity centers and sweep straight through portal/teleport
-  jumps. Authored rules save, while live counters do not. Team totals follow
+  due; regions use entity centers. Authored rules save, while live counters do not. Team totals follow
   current members' scores. The shipped Rule Workshop guides describe these
   choices and the remaining limits. Alpha save formats can change.

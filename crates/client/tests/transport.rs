@@ -78,7 +78,9 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
         let mut replies = Vec::new();
         while replies.len() < 2 {
             match worker.events.recv().await.context("Worker closed")? {
-                Event::Reply { request, result } => {
+                Event::Reply {
+                    request, result, ..
+                } => {
                     ensure!(matches!(result, Ok(Reply::Accepted)), "Rejected chat");
                     replies.push(request);
                 }

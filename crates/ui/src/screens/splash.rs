@@ -8,6 +8,7 @@ use crate::api::SplashView;
 use crate::draw::Filter;
 use crate::pack::TexKey;
 use crate::view::EventKind;
+use bri_console::Clamp;
 
 const CLOSE: &str = "Splash_Close";
 const TIP: &str = "Splash_Tip";
@@ -216,7 +217,7 @@ impl Screen for Splash {
         };
         let (w, h) = core.logical;
         let (sx, sy) = (w as f32 / 640.0, h as f32 / 480.0);
-        let tint = |a: f32| [255, 255, 255, (a.clamp(0.0, 1.0) * 255.0) as u8];
+        let tint = |a: f32| [255, 255, 255, (a.clamped(0.0, 1.0) * 255.0) as u8];
         for (texture, rect, fade_in) in &s.layers {
             let [x, y, rw, rh] = rect.unwrap_or([0, 0, 640, 480]);
             dl.image(

@@ -13,6 +13,7 @@ use crate::manifest::location;
 use crate::ops;
 use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, WorldShape};
 use crate::state::{Namespace, PlayerKey, check_value};
+use bri_console::Clamp;
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
 use serde::{Deserialize, Serialize};
@@ -1177,7 +1178,7 @@ fn world_shape(value: Dynamic) -> Fallible<WorldShape> {
     };
     let byte = |v: Dynamic, what: &str| -> Fallible<[u8; 4]> {
         let c = color::<4>(v, what)?;
-        Ok(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+        Ok(c.map(|v| (v.clamped(0.0, 1.0) * 255.0).round() as u8))
     };
     let rgba = |key: &str| -> Fallible<[u8; 4]> {
         match map.get(key).filter(|v| !v.is_unit()) {

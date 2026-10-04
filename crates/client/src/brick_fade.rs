@@ -19,6 +19,7 @@
 //! static batch. Once settled, the chunk is rebuilt with the brick in it
 //! before this drawing stops.
 use anyhow::Result;
+use bri_console::Clamp;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{GpuScene, SceneData, SceneRenderer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,7 +57,7 @@ pub const OUTLINE_ALPHA: f32 = 0.1;
 /// One frame of v20's easing. Returns the new drawn colour and whether it
 /// has reached the target.
 pub fn ease(drawn: [f32; 4], target: [f32; 4], dt: f32) -> ([f32; 4], bool) {
-    let k = RATE * dt.clamp(MIN_DT, MAX_DT);
+    let k = RATE * dt.clamped(MIN_DT, MAX_DT);
     let close = (0..4).all(|i| (drawn[i] - target[i]).abs() < SNAP_DISTANCE);
     if dt > SNAP_DT || k >= 1.0 || close {
         return (target, true);
@@ -226,15 +227,38 @@ impl BrickFades {
     }
 }
 
-/// GPU meshes of easing bricks, one per brick, rebuilt as their colour moves.
-#[derive(Default)]
-pub struct FadeModels {
-    models: BTreeMap<u64, FadeModel>,
+/// What a frame asks of the GPU for one easing brick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FadeWork {
+    /// A new mesh, or one whose layout changed: upload its geometry.
+    Upload,
+    /// Same layout, new colour: rewrite its vertices.
+    Vertices,
 }
-struct FadeModel {
-    gpu: GpuScene,
+
+/// Work counted across frames, for tests and diagnostics.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FadeDiagnostics {
+    /// Geometry uploads (new GPU buffers).
+    pub uploads: u64,
+    /// Vertex rewrites of an uploaded mesh.
+    pub vertex_updates: u64,
+    /// Images those uploads carried. The shared brick palette holds every
+    /// brick texture, so this stays 0: easing never uploads a texture.
+    pub images_uploaded: u64,
+}
+
+/// CPU meshes of easing bricks, one per brick, built against the shared
+/// brick material palette like chunks and debris: geometry only, no images.
+/// A colour change rebuilds a brick's geometry in place.
+#[derive(Default)]
+pub struct FadeMeshes {
+    meshes: BTreeMap<u64, FadeMesh>,
+    pub diagnostics: FadeDiagnostics,
+}
+struct FadeMesh {
+    data: SceneData,
     drawn: [f32; 4],
-    layout: Layout,
 }
 /// What must match for a colour change to be a vertex update only.
 #[derive(PartialEq)]
@@ -242,7 +266,6 @@ struct Layout {
     vertices: usize,
     indices: usize,
     batches: Vec<usize>,
-    materials: Vec<bri_render::scene::Material>,
 }
 impl Layout {
     fn of(data: &SceneData) -> Self {
@@ -250,20 +273,120 @@ impl Layout {
             vertices: data.vertices.len(),
             indices: data.indices.len(),
             batches: data.batches.iter().map(|b| b.material).collect(),
-            materials: data.materials.clone(),
         }
     }
 }
 
+impl FadeMeshes {
+    pub fn clear(&mut self) {
+        self.meshes.clear();
+    }
+    pub fn len(&self) -> usize {
+        self.meshes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
+    }
+    pub fn contains(&self, id: u64) -> bool {
+        self.meshes.contains_key(&id)
+    }
+    pub fn data(&self, id: u64) -> Option<&SceneData> {
+        self.meshes.get(&id).map(|m| &m.data)
+    }
+    /// Bring the meshes of the bricks `fades` draws this frame up to date
+    /// from the drawn `world`'s bricks, and say what each changed one needs.
+    pub fn update(
+        &mut self,
+        fades: &BrickFades,
+        left_out: &BTreeSet<u64>,
+        world: &PublicWorld,
+        meshes: &BTreeMap<String, bri_content::brick::Brick>,
+        palette: &crate::world_chunks::BrickPalette,
+        materials: &crate::materials::BrickMaterials,
+    ) -> Result<Vec<(u64, FadeWork)>> {
+        let shown: BTreeMap<u64, [f32; 4]> = fades.shown(left_out).collect();
+        self.meshes.retain(|id, _| shown.contains_key(id));
+        let mut work = Vec::new();
+        for (id, drawn) in shown {
+            if self.meshes.get(&id).is_some_and(|m| m.drawn == drawn) {
+                continue;
+            }
+            let Some((brick, colors)) = fade_brick(world, id, drawn) else {
+                self.meshes.remove(&id);
+                continue;
+            };
+            let same_palette = self
+                .meshes
+                .get(&id)
+                .is_some_and(|m| m.data.materials.len() == palette.scene.materials.len());
+            let job = match self.meshes.get_mut(&id).filter(|_| same_palette) {
+                Some(mesh) => {
+                    let before = Layout::of(&mesh.data);
+                    crate::world_chunks::rebuild_brick(
+                        &mut mesh.data,
+                        &brick,
+                        &colors,
+                        meshes,
+                        palette,
+                        Some(materials),
+                    )?;
+                    mesh.drawn = drawn;
+                    if Layout::of(&mesh.data) == before {
+                        FadeWork::Vertices
+                    } else {
+                        FadeWork::Upload
+                    }
+                }
+                None => {
+                    let data = crate::world_chunks::build_brick(
+                        &brick,
+                        &colors,
+                        meshes,
+                        palette,
+                        Some(materials),
+                    )?;
+                    self.meshes.insert(id, FadeMesh { data, drawn });
+                    FadeWork::Upload
+                }
+            };
+            let data = &self.meshes[&id].data;
+            if data.indices.is_empty() {
+                self.meshes.remove(&id);
+                continue;
+            }
+            match job {
+                FadeWork::Upload => {
+                    self.diagnostics.uploads += 1;
+                    self.diagnostics.images_uploaded += data.images.len() as u64;
+                }
+                FadeWork::Vertices => self.diagnostics.vertex_updates += 1,
+            }
+            work.push((id, job));
+        }
+        Ok(work)
+    }
+}
+
+/// GPU meshes of easing bricks, one per brick. They bind the shared brick
+/// palette's textures, so a brick starting to ease uploads two small
+/// buffers and a colour change rewrites its vertices.
+#[derive(Default)]
+pub struct FadeModels {
+    cpu: FadeMeshes,
+    models: BTreeMap<u64, GpuScene>,
+}
+
 impl FadeModels {
     pub fn clear(&mut self) {
+        self.cpu.clear();
         self.models.clear();
     }
-    /// Rebuild the meshes of the bricks `fades` draws this frame from the
-    /// drawn `world`'s bricks. Like the chunks and brick debris they draw
-    /// with the brick `palette`'s textures (`gpu_palette`), so a respawning
-    /// blast's hundreds of easing bricks upload geometry, not a copy of
-    /// every brick surface image each.
+    pub fn diagnostics(&self) -> &FadeDiagnostics {
+        &self.cpu.diagnostics
+    }
+    /// Bring the meshes of the bricks `fades` draws this frame up to date
+    /// from the drawn `world`'s bricks, against `gpu_palette` (the uploaded
+    /// `palette`).
     #[allow(clippy::too_many_arguments)] // GPU context plus the brick catalogs
     pub fn upload(
         &mut self,
@@ -278,37 +401,56 @@ impl FadeModels {
         gpu_palette: &GpuScene,
         materials: &crate::materials::BrickMaterials,
     ) -> Result<()> {
-        let shown: BTreeMap<u64, [f32; 4]> = fades.shown(left_out).collect();
-        self.models.retain(|id, _| shown.contains_key(id));
-        for (id, drawn) in shown {
-            if self.models.get(&id).is_some_and(|m| m.drawn == drawn) {
-                continue;
-            }
-            let Some(data) = brick_scene(world, id, drawn, meshes, palette, materials)? else {
-                self.models.remove(&id);
+        let work = self
+            .cpu
+            .update(fades, left_out, world, meshes, palette, materials)?;
+        let cpu = &self.cpu;
+        self.models.retain(|id, _| cpu.contains(*id));
+        for (id, job) in work {
+            let Some(data) = self.cpu.data(id) else {
                 continue;
             };
-            let layout = Layout::of(&data);
-            match self.models.get_mut(&id) {
-                Some(model) if model.layout == layout => {
+            match (job, self.models.get_mut(&id)) {
+                (FadeWork::Vertices, Some(gpu)) => {
                     let centers: Vec<_> = data.batches.iter().map(|b| b.center).collect();
-                    model.gpu.update_vertices(queue, &data.vertices, &centers)?;
-                    model.drawn = drawn;
+                    gpu.update_vertices(queue, &data.vertices, &centers)?;
                 }
                 _ => {
-                    let gpu = renderer.upload_palette_model(device, &data, gpu_palette)?;
-                    self.models.insert(id, FadeModel { gpu, drawn, layout });
+                    let gpu = renderer.upload_palette_model(device, data, gpu_palette)?;
+                    self.models.insert(id, gpu);
                 }
             }
         }
         Ok(())
     }
     pub fn scenes(&self) -> impl Iterator<Item = &GpuScene> {
-        self.models.values().map(|m| &m.gpu)
+        self.models.values()
     }
 }
 
-/// One brick where it stands in `world`, painted `drawn`.
+/// `id` as it stands in `world`, recoloured to index a one-colour palette
+/// painted `drawn`, or `None` when it is gone or drawn too faint to show.
+fn fade_brick(
+    world: &PublicWorld,
+    id: u64,
+    drawn: [f32; 4],
+) -> Option<(bri_world::Brick, [[f32; 4]; 1])> {
+    let brick = world.bricks.get(&id)?;
+    if drawn[3] < MIN_DRAWN_ALPHA {
+        return None;
+    }
+    // Every colour the brick names, its events' included, indexes the
+    // one-colour palette it is drawn with.
+    let mut brick = brick.clone();
+    brick.recolor(|_| 0);
+    // A brick fading out has already stopped rendering.
+    brick.visible = true;
+    Some((brick, [drawn.map(|v| v.clamped(0.0, 1.0))]))
+}
+
+/// One brick where it stands in `world`, painted `drawn`, against the
+/// shared brick palette.
+#[cfg(test)]
 fn brick_scene(
     world: &PublicWorld,
     id: u64,
@@ -317,21 +459,10 @@ fn brick_scene(
     palette: &crate::world_chunks::BrickPalette,
     materials: &crate::materials::BrickMaterials,
 ) -> Result<Option<SceneData>> {
-    let Some(brick) = world.bricks.get(&id) else {
+    let Some((brick, colors)) = fade_brick(world, id, drawn) else {
         return Ok(None);
     };
-    if drawn[3] < MIN_DRAWN_ALPHA {
-        return Ok(None);
-    }
-    // Every colour the brick names, its events' included, indexes the
-    // one-colour palette it is drawn with.
-    let mut brick = brick.clone();
-    brick.recolor(|_| 0);
-    // A brick fading out has already stopped rendering.
-    brick.visible = true;
-    let colors = [drawn.map(|v| v.clamp(0.0, 1.0))];
-    let data =
-        crate::world_chunks::build_brick(&brick, &colors, meshes, palette, Some(materials))?;
+    let data = crate::world_chunks::build_brick(&brick, &colors, meshes, palette, Some(materials))?;
     Ok((!data.indices.is_empty()).then_some(data))
 }
 
@@ -405,17 +536,14 @@ mod tests {
     fn a_brick_with_event_colours_eases() {
         let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
         let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
         let mut world = world(1, true);
         let brick = world.bricks.get_mut(&7).unwrap();
         brick.events = vec![crate::world_scene::tests::set_color(2)];
-        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
         let data = brick_scene(&world, 7, WHITE, &meshes, &palette, &materials)
             .unwrap()
             .unwrap();
         assert!(data.vertices.iter().all(|v| v.color == WHITE));
-        // Drawn with the chunks' palette: geometry only, no images of its own.
-        assert_eq!(data.materials, palette.scene.materials);
-        assert!(data.images.is_empty());
     }
 
     #[test]
@@ -504,6 +632,111 @@ mod tests {
         fades.chunks_applied(&out);
         fades.advance(dt, &out);
         assert!((fades.drawn(7).unwrap()[3] - RATE * dt).abs() < 1e-6);
+    }
+
+    /// `count` bricks in a row, all painted white, shown or not.
+    fn row(count: u64, visible: bool) -> PublicWorld {
+        let mut bricks = bri_world::Bricks::default();
+        for id in 1..=count {
+            let mut brick = Brick::new(ContentRef::Resolved("a".into()), [id as f32, 0.0, 0.0], 1);
+            brick.color = 1;
+            brick.visible = visible;
+            bricks.insert(id, brick);
+        }
+        PublicWorld {
+            name: "Test".into(),
+            map_id: "map/test".into(),
+            palette: vec![BLACK, WHITE],
+            bricks,
+        }
+    }
+
+    /// Max (v0.2.3): a few dozen bricks blown up in a minigame lag the game
+    /// when they come back, until they have all faded in. Each returning
+    /// brick eased in through a scene of its own that copied every brick
+    /// surface image, rebuilt every frame of the ~68-frame ease, and its
+    /// first upload made textures and mip chains per brick. Now an easing
+    /// brick binds the shared brick palette: no image is ever uploaded,
+    /// each brick uploads geometry once when it starts (and once more when
+    /// it turns opaque at the end), and every other frame only rewrites its
+    /// vertices.
+    #[test]
+    fn returning_bricks_fade_in_without_textures_or_per_frame_uploads() {
+        const RETURNING: u64 = 48;
+        let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
+        let (dead, back) = (row(RETURNING, false), row(RETURNING, true));
+        let mut fades = BrickFades::default();
+        fades.observe(&dead, &back, 1..=RETURNING);
+        let out = fades.left_out();
+        assert_eq!(out.len(), RETURNING as usize);
+        fades.chunks_applied(&out);
+        let mut cpu = FadeMeshes::default();
+        let mut frames = 0;
+        let mut uploading_frames = 0;
+        loop {
+            fades.advance(1.0 / 60.0, &out);
+            let work = cpu
+                .update(&fades, &out, &back, &meshes, &palette, &materials)
+                .unwrap();
+            frames += 1;
+            assert!(work.len() <= RETURNING as usize);
+            let uploads = work.iter().filter(|(_, w)| *w == FadeWork::Upload).count();
+            if uploads > 0 {
+                uploading_frames += 1;
+            }
+            // In place, the mesh is what a fresh build would be.
+            for id in [1, RETURNING] {
+                let drawn = fades.drawn(id).unwrap();
+                let fresh = brick_scene(&back, id, drawn, &meshes, &palette, &materials)
+                    .unwrap()
+                    .unwrap();
+                let kept = cpu.data(id).unwrap();
+                let vertices = |d: &SceneData| {
+                    d.vertices
+                        .iter()
+                        .map(|v| (v.position, v.normal, v.uv, v.lightmap_uv, v.color, v.fx))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(vertices(kept), vertices(&fresh));
+                assert_eq!(kept.indices, fresh.indices);
+                let batches = |d: &SceneData| {
+                    d.batches
+                        .iter()
+                        .map(|b| (b.indices.clone(), b.material, b.center))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(batches(kept), batches(&fresh));
+                assert!(kept.images.is_empty());
+            }
+            if fades.left_out().is_empty() {
+                break;
+            }
+            assert!(frames < 200, "never settles");
+        }
+        assert_eq!(frames, 68);
+        let d = &cpu.diagnostics;
+        eprintln!("{frames} frames, {uploading_frames} uploading: {d:?}");
+        assert_eq!(d.images_uploaded, 0, "{d:?}");
+        assert!(d.uploads <= 2 * RETURNING, "{d:?}");
+        assert!(
+            uploading_frames <= 2,
+            "uploads on {uploading_frames} frames"
+        );
+        assert_eq!(d.uploads + d.vertex_updates, RETURNING * frames, "{d:?}");
+        // The chunks take them back.
+        fades.chunks_applied(&BTreeSet::new());
+        cpu.update(
+            &fades,
+            &BTreeSet::new(),
+            &back,
+            &meshes,
+            &palette,
+            &materials,
+        )
+        .unwrap();
+        assert!(fades.is_empty() && cpu.is_empty());
     }
 
     #[test]

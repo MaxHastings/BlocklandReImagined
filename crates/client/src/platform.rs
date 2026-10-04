@@ -1,6 +1,7 @@
 //! Native window and GPU ownership. Nothing creates a window until `run` is
 //! explicitly called by the executable. Mapping tests never start an event loop.
 use anyhow::{Context, Result, bail};
+use bri_console::Clamp;
 use bri_ui::api::{DisplayModes, RequestId, UiUpdate};
 use bri_ui::binds::Platform;
 use bri_ui::gpu::UiRenderer;
@@ -1834,8 +1835,8 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
     if !delta.is_finite() {
         return 0.0;
     }
-    *acc = (*acc + delta).clamp(-4000.0, 4000.0);
-    let steps = (*acc / 40.0).trunc().clamp(-100.0, 100.0);
+    *acc = (*acc + delta).clamped(-4000.0, 4000.0);
+    let steps = (*acc / 40.0).trunc().clamped(-100.0, 100.0);
     *acc -= steps * 40.0;
     steps as f32
 }

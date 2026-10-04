@@ -19,6 +19,7 @@
 //! everything it is drawn from (`Request::digest`), and the game draws it
 //! off the load path (`crate::items::ItemAssets::draw_icons`).
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_render::scene::{MaterialKind, SceneData, SceneImage};
 use glam::{Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -345,9 +346,9 @@ impl Profile {
     fn clamped(self) -> Self {
         Self {
             side: self.side,
-            roll: self.roll.clamp(-MOST_ROLL, MOST_ROLL),
-            yaw: self.yaw.clamp(-MOST_TURN, MOST_TURN),
-            pitch: self.pitch.clamp(-MOST_TURN, MOST_TURN),
+            roll: self.roll.clamped(-MOST_ROLL, MOST_ROLL),
+            yaw: self.yaw.clamped(-MOST_TURN, MOST_TURN),
+            pitch: self.pitch.clamped(-MOST_TURN, MOST_TURN),
         }
     }
 }
@@ -835,7 +836,7 @@ fn render_oriented(mesh: &Mesh, pose: &Pose, look: &Look, label: &str, turns: u8
             } else {
                 Vec3::ZERO
             };
-            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
             rgba.extend([byte(c.x), byte(c.y), byte(c.z)]);
             rgba.push(((covered * 255) as f32 / (SAMPLES * SAMPLES) as f32).round() as u8);
         }
@@ -872,7 +873,7 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32
         + (q.y * 6.0 + 2.0 * (q.z * 4.0 + q.x * 5.0).sin()).sin()
         + 0.7 * (q.z * 8.0 + 1.5 * (q.x * 4.0 + q.y * 2.0).sin()).sin();
     // The wave changes about 22 a unit across the model.
-    let t = (w.abs() / (22.0 * 0.6 * pixel).max(0.16)).clamp(0.0, 1.0);
+    let t = (w.abs() / (22.0 * 0.6 * pixel).max(0.16)).clamped(0.0, 1.0);
     let lines = 1.0 - t * t * (3.0 - 2.0 * t);
     let flow = 0.5 + 0.5 * (local.y * 9.0).sin();
     let glow = vein * lines * 0.35 * (0.45 + 0.55 * flow);

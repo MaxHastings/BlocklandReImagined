@@ -22,6 +22,21 @@ pub(super) struct Avatars {
     pub(super) preview_time: f64,
 }
 
+impl Avatars {
+    /// Forget every GPU resource a body holds, players' and horses' alike,
+    /// and the preview: the device that made them is gone.
+    pub(super) fn gpu_stopped(&mut self) {
+        for mesh in self
+            .avatars
+            .values_mut()
+            .chain(self.mount_meshes.values_mut())
+        {
+            mesh.gpu_stopped();
+        }
+        self.avatar_preview = None;
+    }
+}
+
 impl App {
     pub(super) fn update_avatar_animation_inputs(
         avatar_actions: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,

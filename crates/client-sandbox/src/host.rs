@@ -20,6 +20,7 @@ use crate::capability::{self, Capability, Tier};
 use crate::shader::Shader;
 use crate::trust::TrustLevel;
 use crate::world::World;
+use bri_console::Clamp;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -832,7 +833,7 @@ fn queue_sound(
     frame.sounds.push(Sound {
         name,
         volume: if volume.is_finite() {
-            volume.clamp(0.0, 1.0)
+            volume.clamped(0.0, 1.0)
         } else {
             0.0
         },
@@ -1605,7 +1606,7 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
             let Some(direction) = direction.try_normalize() else {
                 return Ok(0);
             };
-            let reach = reach.clamp(0.0, 1000.0);
+            let reach = reach.clamped(0.0, 1000.0);
             let data = caller.data();
             let own = data
                 .bodies
@@ -1662,7 +1663,7 @@ fn link_physics(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
                     velocity: glam::Vec3::new(vx, vy, vz)
                         .clamp_length_max(bodies::MAX_SPEED)
                         .to_array(),
-                    max_accel: max_accel.clamp(0.0, bodies::MAX_ACCEL),
+                    max_accel: max_accel.clamped(0.0, bodies::MAX_ACCEL),
                 },
             )
         },

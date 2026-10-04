@@ -26,4 +26,4 @@ pub use command::{AudioEvent, CullReason, EntityKey, Placement, SoundHandle, Vol
 pub use engine::{EngineConfig, VoicePolicy};
 pub use error::AudioError;
 pub use runtime::{AudioRuntime, AudioStats, OutputKind, RuntimeConfig};
-pub use spatial::{GainCurve, Listener, Vec3};
+pub use spatial::{GainCurve, Listener, Vec3, Window};

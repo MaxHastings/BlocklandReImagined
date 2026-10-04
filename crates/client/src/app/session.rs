@@ -107,6 +107,7 @@ impl App {
             lines.clear();
         }
         self.gpu.hidden_uploaded = None;
+        self.gpu.hidden_outlines.clear();
         if let Some(lines) = &mut self.gpu.region_lines {
             lines.clear();
         }
@@ -120,6 +121,7 @@ impl App {
         }
         self.shapes_uploaded = None;
         self.fx.weapon_light_deferred = 0;
+        self.fx.effect_sprites_cut = 0;
         self.fx.weapon_effect_session = None;
         self.world_items.reset();
         if let Some(mut attempt) = self.net.attempt.take() {
@@ -369,6 +371,19 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
+        // This game's recovery snapshot takes the slot: a build an earlier
+        // game left there that the player has not answered for is kept as
+        // a save first, never overwritten.
+        if crate::recovery::left(&state_dir, &self.files.saves).is_some() {
+            match crate::recovery::keep(&state_dir, &self.files.saves) {
+                Ok(name) => bri_console::echo(format!(
+                    "The build an earlier game left unsaved is in Load Bricks as {name}."
+                )),
+                Err(error) => bri_console::warn(format!(
+                    "Could not keep the build an earlier game left unsaved: {error:#}"
+                )),
+            }
+        }
         let copies = Arc::new(crate::copies::CopyFiles::new(self.files.old_saves.clone()));
         let load_limit = self.load_limit.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
@@ -589,6 +604,10 @@ impl App {
                 state_dir.join("administration.json"),
             )?;
             drop(entered);
+            // Unless keeping it failed above, the slot is free.
+            if !crate::recovery::path(&state_dir).exists() {
+                host.keep_recovery(server::Recovery::new(crate::recovery::path(&state_dir)))?;
+            }
             let address = SocketAddr::from(([127, 0, 0, 1], host.address.port()));
             if !single {
                 // LAN players find this host (and its certificate) by broadcast;
@@ -646,6 +665,7 @@ impl App {
             worker,
             scene,
             name: local_name,
+            join_target: None,
             max_players,
             local: true,
             single,
@@ -712,6 +732,18 @@ impl App {
         saved.save(&path)
     }
     pub(super) fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
+        self.join_resuming(id, address, password, None)
+    }
+    /// [`App::join`] presenting `resume`, the lost connection's ticket, so
+    /// the host gives the player back their number (and so their bricks)
+    /// even before it has timed the old connection out.
+    pub(super) fn join_resuming(
+        &mut self,
+        id: RequestId,
+        address: String,
+        password: String,
+        resume: Option<bri_net::protocol::ResumeToken>,
+    ) -> Result<()> {
         ensure!(
             self.addons.reload.is_none(),
             "Add-On loading is still in progress"
@@ -807,11 +839,12 @@ impl App {
             let cache = bri_package::sync::Cache::open(&package_cache)?;
             let local = identity.client_packages();
             let mut mods = None;
-            let joined = Client::connect_fetching(
+            let joined = Client::connect_fetching_resuming(
                 address,
                 pin,
                 player,
                 local.clone(),
+                resume,
                 None,
                 &native_identity,
                 &cache,
@@ -930,6 +963,7 @@ impl App {
             worker,
             scene,
             name: typed.clone(),
+            join_target: Some(address.trim().to_string()),
             max_players: 64,
             local: false,
             single: false,
@@ -1008,6 +1042,7 @@ impl App {
         attempt: &Attempt,
         request: RequestId,
         result: std::result::Result<Reply, bri_sim::session::Rejection>,
+        revision: u64,
     ) {
         let Some(pending) = self.net.pending_actions.remove(&request) else {
             return;
@@ -1082,6 +1117,7 @@ impl App {
                     session: Some(attempt.id),
                     action: pending.action,
                     build: Some(build),
+                    revision: Some(revision),
                 }),
                 Ok(_) => Err(anyhow::anyhow!("Server returned an unexpected save reply")),
                 Err(error) => Err(anyhow::anyhow!(error)),

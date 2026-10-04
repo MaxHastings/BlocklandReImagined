@@ -198,4 +198,40 @@ mod tests {
             SavedServers::default()
         );
     }
+
+    /// A list this version cannot read (a field it does not know, a torn
+    /// edit) is moved aside before the next save writes a new one, and the
+    /// player is told: favourites are never wiped without a copy.
+    #[test]
+    fn an_unreadable_server_list_is_kept_before_it_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("servers.json");
+        let mut saved = SavedServers::default();
+        saved.toggle_favorite("play.example.com:28000", None, "Play");
+        let mut newer = serde_json::to_value(&saved).unwrap();
+        newer["from_a_newer_version"] = true.into();
+        let original = serde_json::to_vec(&newer).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let mut loaded = SavedServers::load(&path);
+        assert_eq!(loaded, SavedServers::default());
+        loaded.joined("other.example.com:28000", None, "Other", 1);
+        loaded.save(&path).unwrap();
+        let kept: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("servers.damaged-")
+            })
+            .collect();
+        assert_eq!(kept.len(), 1, "the old list was not kept");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), original);
+        let told = crate::app::take_damaged_files();
+        assert!(
+            told.iter()
+                .any(|(file, copy)| file == &path && copy == &kept[0])
+        );
+    }
 }

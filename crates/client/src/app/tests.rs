@@ -484,10 +484,179 @@ fn small_state_files_update_in_place() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 use crate::testing::content_root::ContentRoot;
+/// Run the app until `ready`. Waits follow the game, not the wall clock:
+/// one fails when the server has run ten seconds of game time without
+/// `ready`, or when neither loading nor the server has moved for two
+/// minutes (a stopped game, not a machine busy building something else).
+fn until(
+    app: &mut super::App,
+    what: &str,
+    ready: impl Fn(&super::App) -> bool,
+) -> anyhow::Result<()> {
+    use super::*;
+    const TICKS: u64 = 1200;
+    const STALL: std::time::Duration = std::time::Duration::from_secs(120);
+    let moved = |app: &super::App| (app.loading_revision(), app.network_view().map(|v| v.tick));
+    let mut previous = std::time::Instant::now();
+    let mut seen = moved(app);
+    let mut since = previous;
+    let mut first_tick = None;
+    loop {
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("{what} failed: {reason}");
+        }
+        if ready(app) {
+            return Ok(());
+        }
+        let now_seen = moved(app);
+        if now_seen != seen {
+            seen = now_seen;
+            since = now;
+        }
+        let tick = seen.1;
+        first_tick = first_tick.or(tick);
+        ensure!(
+            tick.zip(first_tick).is_none_or(|(t, f)| t - f < TICKS),
+            "{what} timed out after {TICKS} server ticks: {:?}",
+            app.ui.core.conn
+        );
+        ensure!(
+            since.elapsed() < STALL,
+            "{what} stopped advancing: {:?}",
+            app.ui.core.conn
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
 crate::testing::synthetic_and_content!(
     ContentRoot: app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails,
     native_weapon_catalog_startup_and_headless_host,
+    a_save_covers_the_world_as_the_host_took_it,
+    a_movement_fault_ends_the_session_not_the_game,
 );
+
+/// Save Bricks' build is the world when the host answered; a brick placed
+/// while the file is still being written is not saved, so leaving still
+/// asks about it.
+fn a_save_covers_the_world_as_the_host_took_it(f: &ContentRoot) -> anyhow::Result<()> {
+    use super::*;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (320, 240))?;
+    app.ui.core.request(UiAction::HostGame {
+        map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Save revision test".into(),
+        password: String::new(),
+        admin_password: "headless-admin-fixture".into(),
+        super_admin_password: "headless-super-fixture".into(),
+    });
+    until(&mut app, "Hosting", |app| {
+        app.net
+            .attempt
+            .as_ref()
+            .is_some_and(|a| a.entered && a.view.is_some())
+    })?;
+    let mut a = app.net.attempt.take().context("no game")?;
+    let taken = a.view.as_ref().context("no view")?.world_revision;
+    let map = a.view.as_ref().context("no view")?.world.map_id.clone();
+    // The host's answer came at `taken`; the write is queued.
+    app.files.file_jobs.enqueue(crate::saves::Request {
+        id: 9001,
+        session: Some(a.id),
+        action: UiAction::SaveBricks {
+            name: "Covered.world.json".into(),
+            description: String::new(),
+            events: true,
+            ownership: true,
+            overwrite: false,
+        },
+        build: Some(Box::new(bri_world::build::SavedBuild::new(
+            bri_world::World::new("Covered".into(), map, vec![[1.0; 4]]),
+        ))),
+        revision: Some(taken),
+    })?;
+    // A brick lands before the file is written.
+    a.view.as_mut().context("no view")?.world_revision = taken + 1;
+    a.settling = None;
+    app.net.attempt = Some(a);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while app.files.save_picture.is_none() {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "the save was never written"
+        );
+        app.poll_files();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut a = app.net.attempt.take().context("no game")?;
+    assert_eq!(a.saved_revision, Some(taken));
+    app.track_unsaved(&mut a);
+    app.net.attempt = Some(a);
+    assert!(
+        app.ui.core.unsaved_changes,
+        "the brick placed while saving counts as saved"
+    );
+    Ok(())
+}
+
+/// A fault in the local player's movement (here, a look that is not a
+/// number, which the predictor refuses) ends the session with its reason,
+/// as a network fault does; the frame itself succeeds, so the game window
+/// stays open on the failure screen instead of closing.
+fn a_movement_fault_ends_the_session_not_the_game(f: &ContentRoot) -> anyhow::Result<()> {
+    use super::*;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (320, 240))?;
+    app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Movement fault test".into(),
+        password: String::new(),
+        admin_password: "movement-fault-admin".into(),
+        super_admin_password: "movement-fault-super".into(),
+    });
+    let start = std::time::Instant::now();
+    let mut previous = start;
+    while !(app.motion.predicting() && app.net.attempt.as_ref().is_some_and(|a| a.entered)) {
+        ensure!(
+            start.elapsed() < Duration::from_secs(300),
+            "never entered: {:?}",
+            app.ui.core.conn
+        );
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("hosting failed: {reason}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.controls.yaw = f32::NAN;
+    // Long enough for a prediction tick to run the bad input.
+    app.tick(Duration::from_millis(100))?;
+    let ConnectionState::Failed { reason } = &app.ui.core.conn else {
+        anyhow::bail!("the session went on: {:?}", app.ui.core.conn);
+    };
+    ensure!(
+        reason.contains("look"),
+        "the movement fault's reason: {reason}"
+    );
+    ensure!(app.net.attempt.is_none(), "the session ended");
+    Ok(())
+}
 
 fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
     f: &ContentRoot,
@@ -637,7 +806,6 @@ fn the_stock_weapons_pack_has_v20s_21_items() -> anyhow::Result<()> {
 
 fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::Result<()> {
     use super::*;
-    use std::time::Instant;
     let state_dir = f.state()?;
     let state = state_dir.path().to_path_buf();
     let mut app = App::load(&f.root, &state, (960, 720))?;
@@ -670,47 +838,6 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     // server has run ten seconds of game time without `ready`, or when
     // neither loading nor the server has moved for two minutes (a stopped
     // game, not a machine busy building something else).
-    fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
-        const TICKS: u64 = 1200;
-        const STALL: Duration = Duration::from_secs(120);
-        let moved = |app: &App| (app.loading_revision(), app.network_view().map(|v| v.tick));
-        let mut previous = Instant::now();
-        let mut seen = moved(app);
-        let mut since = previous;
-        let mut first_tick = None;
-        loop {
-            let now = Instant::now();
-            app.tick(now.duration_since(previous))?;
-            app.ui
-                .update(now.duration_since(previous).as_millis() as u64);
-            previous = now;
-            ensure!(app.pump()?.is_empty(), "Unexpected native window command");
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                anyhow::bail!("{what} failed: {reason}");
-            }
-            if ready(app) {
-                return Ok(());
-            }
-            let now_seen = moved(app);
-            if now_seen != seen {
-                seen = now_seen;
-                since = now;
-            }
-            let tick = seen.1;
-            first_tick = first_tick.or(tick);
-            ensure!(
-                tick.zip(first_tick).is_none_or(|(t, f)| t - f < TICKS),
-                "{what} timed out after {TICKS} server ticks: {:?}",
-                app.ui.core.conn
-            );
-            ensure!(
-                since.elapsed() < STALL,
-                "{what} stopped advancing: {:?}",
-                app.ui.core.conn
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
     until(&mut app, "Headless host", |app| {
         let Some(view) = app.network_view() else {
             return false;
@@ -1059,19 +1186,72 @@ fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {
         lights: vec![],
     };
     let others = [weapon.clone(), actor.clone()];
-    let (combined, deferred) = super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO]);
+    let (combined, cuts) =
+        super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO], usize::MAX);
     assert_eq!(combined.particles[0].texture, 2);
     assert_eq!(combined.particles[1].texture, 7);
     assert_eq!(combined.lights.len(), bri_render::scene::MAX_POINT_LIGHTS);
     assert_eq!(combined.lights[0].handle.0, 9000);
-    assert_eq!(deferred, 1);
+    assert_eq!(cuts.lights, 1);
+    assert_eq!(cuts.sprites, 0);
     // A mirror's eye far down the row keeps the lights beside it: the
     // farthest from the player is kept, the next nearest dropped.
     let mirror = Vec3::new(1000. + bri_render::scene::MAX_POINT_LIGHTS as f32, 0., 0.);
-    let (combined, _) = super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror]);
+    let (combined, _) =
+        super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror], usize::MAX);
     let kept = |id: u64| combined.lights.iter().any(|l| l.handle.0 == id);
     assert!(kept(9000) && kept(bri_render::scene::MAX_POINT_LIGHTS as u64 - 1));
     assert!(!kept(0), "the light nearest neither eye goes");
+}
+/// Busy battles once closed the game: three effect worlds fed a renderer
+/// sized for two, and an over-full frame was a render error. The renderer
+/// is now sized from every world's limits, and a frame past its budget
+/// loses its farthest sprites instead of failing.
+#[test]
+fn three_full_effect_worlds_fit_the_renderer_and_overflow_drops_the_farthest() {
+    use glam::Vec3;
+    let limits = bri_fx_runtime::EffectsLimits::default();
+    let pack = bri_fx_runtime::testing::pack(|_| {});
+    let worlds: Vec<_> = (0..3)
+        .map(|seed| bri_fx_runtime::EffectsWorld::new(pack.clone(), limits, seed).unwrap())
+        .collect();
+    let budget = super::effects_instance_budget([&worlds[0], &worlds[1], &worlds[2]]);
+    // Every world's snapshot at its fullest: all particles and a flare per light.
+    let full = |texture| bri_fx_runtime::FrameEffects {
+        particles: (0..limits.max_sprites())
+            .rev()
+            .map(|i| bri_fx_runtime::ParticleInstance {
+                position: Vec3::new(i as f32, 0., 0.),
+                size: 1.,
+                color: Vec3::ONE.extend(1.),
+                spin: 0.,
+                axis: Vec3::ZERO,
+                texture,
+                blend: bri_fx_runtime::BlendMode::Alpha,
+                depth_test: true,
+            })
+            .collect(),
+        lights: Vec::new(),
+    };
+    let (combined, cuts) =
+        super::combine_effect_frames(full(0), [full(1), full(2)], &[Vec3::ZERO], budget);
+    assert_eq!(combined.particles.len(), 3 * limits.max_sprites());
+    assert_eq!(cuts.sprites, 0, "three full worlds fit the renderer");
+    // A smaller budget (a renderer capped below the worlds) keeps the nearest.
+    let (combined, cuts) =
+        super::combine_effect_frames(full(0), [full(1), full(2)], &[Vec3::ZERO], 10);
+    assert_eq!(
+        (combined.particles.len(), cuts.sprites),
+        (10, 3 * limits.max_sprites() - 10)
+    );
+    let far = |p: &bri_fx_runtime::ParticleInstance| p.position.x;
+    assert!(combined.particles.iter().all(|p| far(p) <= 3.));
+    assert!(
+        combined
+            .particles
+            .windows(2)
+            .all(|w| far(&w[0]) >= far(&w[1]))
+    );
 }
 #[test]
 fn remote_chat_cannot_inject_color_stack_or_markup() {
@@ -1366,5 +1546,47 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     assert_eq!(app.view.rendered_roll, 0.0);
     assert!(app.view.drawn_controls.is_none());
     assert!(app.scene.liquid_cache.is_none());
+    Ok(())
+}
+
+/// A joined game whose network drops is rejoined at the address it was
+/// joined at, even after the host's listing named the server.
+#[test]
+fn a_lost_connection_rejoins_the_address_not_the_server_name() -> anyhow::Result<()> {
+    use super::*;
+    let content = ContentRoot::synthetic()?;
+    let state = content.state()?;
+    let mut app = App::load(&content.root, state.path(), (320, 240))?;
+    let id = app.ui.core.request(UiAction::JoinServer {
+        address: "127.0.0.1:28000".into(),
+        password: String::new(),
+    });
+    app.join(id, "127.0.0.1:28000".into(), String::new())?;
+    let attempt = app
+        .net
+        .attempt
+        .as_mut()
+        .context("join started no attempt")?;
+    // In the game, with the host's listing name shown in place of the
+    // address, when the connection is lost.
+    attempt.entered = true;
+    attempt.name = "Blockland Server".into();
+    attempt.worker =
+        network::Worker::start(app.runtime.handle(), bri_progress::Progress::new(), async {
+            Err(anyhow::anyhow!(bri_net::client::CONNECTION_LOST))
+        });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app
+        .net
+        .attempt
+        .as_ref()
+        .is_some_and(|a| a.worker.events.is_empty())
+    {
+        assert!(std::time::Instant::now() < deadline, "no failure arrived");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.poll_network()?;
+    assert!(app.net.attempt.is_some(), "the lost game was not rejoined");
+    assert_eq!(app.net.reconnects, 1);
     Ok(())
 }

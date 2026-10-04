@@ -10,6 +10,7 @@
 //! renders this model with the original HUD art.
 
 use crate::api::{BrickInfo, PaintDivision, ToolInfo, UiAction};
+use bri_console::Clamp;
 
 pub const NUM_BRICK_SLOTS: usize = 10;
 /// FX column labels (`shiftPaintColumn`, c:4623). Index 8 is "Undulo" but
@@ -360,7 +361,7 @@ impl HudModel {
             return [1.0; 4];
         }
         let c = self.color(self.spray_index).unwrap_or([1.0; 4]);
-        [c[0], c[1], c[2], c[3].clamp(0.1, 1.0)]
+        [c[0], c[1], c[2], c[3].clamped(0.1, 1.0)]
     }
 
     /// Colour of the paint-can label (`updatePaintActive`: the swatch colour;

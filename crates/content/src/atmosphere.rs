@@ -10,6 +10,7 @@
 //! a day/night cycle costs the network nothing after it is set. Clients pass
 //! their smooth estimate of the server tick, so the sun turns every frame.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
 
@@ -291,7 +292,7 @@ pub fn angles(direction: [f32; 3]) -> (f32, f32) {
     }
     // Toward the sun, back in Torque Z-up.
     let (tx, ty, tz) = (-x / length, z / length, -y / length);
-    let elevation = tz.clamp(-1.0, 1.0).asin().to_degrees();
+    let elevation = tz.clamped(-1.0, 1.0).asin().to_degrees();
     let azimuth = if tx.abs() < 1e-6 && ty.abs() < 1e-6 {
         0.0
     } else {
@@ -301,7 +302,7 @@ pub fn angles(direction: [f32; 3]) -> (f32, f32) {
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    let t = ((x - edge0) / (edge1 - edge0)).clamped(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -314,7 +315,7 @@ fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
     a.map(|v| v * s)
 }
 fn clamp01(a: [f32; 3]) -> [f32; 3] {
-    a.map(|v| v.clamp(0.0, 1.0))
+    a.map(|v| v.clamped(0.0, 1.0))
 }
 
 /// Twilight's warm tint, the night's cool one, and the moon's light.
@@ -349,7 +350,7 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
         }
     }
     if fog_end > 0.0 {
-        fog_start = fog_start.clamp(0.0, fog_end);
+        fog_start = fog_start.clamped(0.0, fog_end);
     }
     let flare = settings
         .sun_flare
@@ -377,7 +378,7 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     // at `elevation` over `azimuth` at noon, down on the other at 0.75.
     let (yaw, noon) = (
         azimuth.to_radians(),
-        elevation.clamp(1.0, 90.0).to_radians(),
+        elevation.clamped(1.0, 90.0).to_radians(),
     );
     let at = |time: f64| -> [f32; 3] {
         let angle = TAU * (time as f32 - 0.5);

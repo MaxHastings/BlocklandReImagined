@@ -10,6 +10,7 @@
 //! straight line to where the aim meets the world: the line v20's
 //! projectile flew. Where it lands, and everything it does, is the host's.
 //! Nothing is sent for it.
+use bri_console::Clamp;
 use bri_sim::session::WeaponView;
 use bri_weapons::{ActorId, Projectile};
 use glam::Vec3;
@@ -71,7 +72,7 @@ impl ShotOrigins {
                 }
                 let direction = p.velocity / speed;
                 let range = range(p).max(MIN_REACH);
-                let reach = reach(p.origin, direction, range).clamp(MIN_REACH, range);
+                let reach = reach(p.origin, direction, range).clamped(MIN_REACH, range);
                 Some(Shot {
                     offset,
                     origin: p.origin,
@@ -102,7 +103,7 @@ fn drawn_share(shot: &Shot, p: &Projectile) -> f32 {
         return 0.0;
     }
     let travelled = (p.position - shot.origin).length();
-    (1.0 - travelled / shot.reach).clamp(0.0, 1.0)
+    (1.0 - travelled / shot.reach).clamped(0.0, 1.0)
 }
 
 #[cfg(test)]

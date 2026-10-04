@@ -10,6 +10,7 @@
 //! Stages name what this engine actually does, not Torque's mission phases.
 //! A stage whose total is unknown shows its name over an empty bar rather
 //! than an invented fraction.
+use bri_console::Clamp;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// What the engine is doing. Loads visit the stages they need in their own
@@ -95,7 +96,7 @@ impl Snapshot {
     pub fn fraction(&self) -> f32 {
         match self.total {
             Some(0) => 1.0,
-            Some(total) => (self.done as f64 / total as f64).clamp(0.0, 1.0) as f32,
+            Some(total) => (self.done as f64 / total as f64).clamped(0.0, 1.0) as f32,
             None => 0.0,
         }
     }

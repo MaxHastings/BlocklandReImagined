@@ -410,10 +410,18 @@ impl MiniGame {
 pub const MAX_TEAMS: usize = 64;
 /// Longest team name, in characters.
 pub const MAX_TEAM_NAME: usize = 50;
-/// A team of one mini-game. Ids are kept while the team exists, so a
-/// renamed or recoloured team keeps its members.
+/// A team of one mini-game: its slot, 1 to [`MAX_TEAMS`]. Ids are kept while
+/// the team exists, so a renamed or recoloured team keeps its members, and
+/// rules and saved builds name a team by it. 0 is never a team: a Team
+/// condition reads 0 for a player on none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TeamId(pub u32);
+impl TeamId {
+    /// Whether `id` is one of a game's team slots.
+    pub fn valid(id: TeamId) -> bool {
+        (1..=MAX_TEAMS as u32).contains(&id.0)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Team {
@@ -442,7 +450,9 @@ pub struct SettingChange {
     pub value: Option<SettingValue>,
 }
 /// One team as an Add-On asks for it: an existing `id` keeps that team and
-/// its members, `None` makes a new one.
+/// its members, an id the game has not got makes the team in that slot (a
+/// saved build's team comes back as itself), and `None` makes a new one in
+/// the lowest free slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamSpec {
     pub id: Option<TeamId>,
@@ -457,7 +467,6 @@ pub struct Teams {
     pub friendly_fire: bool,
     /// Teams of the same colour are allies (Slayer's `allySameColors`).
     pub ally_same_color: bool,
-    pub(crate) next: u32,
 }
 impl Teams {
     pub fn get(&self, id: TeamId) -> Option<&Team> {
@@ -476,7 +485,7 @@ impl Teams {
         }
         for t in &self.list {
             if !ids.insert(t.id)
-                || t.id.0 >= self.next
+                || !TeamId::valid(t.id)
                 || !valid_team_name(&t.name)
                 || !valid_addon_settings(&t.addon_settings)
             {

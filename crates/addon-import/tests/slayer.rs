@@ -2073,6 +2073,28 @@ const SKINS: [[f32; 4]; 5] = [
 ];
 const STANDARD: &str = "v20.player.playerstandardarmor";
 
+/// Change Map ends the mini-game: the new map's players wear their own
+/// avatars, not the team uniform an Add-On put on them on the old one.
+#[test]
+fn a_map_change_takes_off_the_old_maps_uniform() {
+    let mut g = Game::new("uniform-map-change");
+    let own = {
+        let a =
+            g.s.join("Solo".into(), Vec3::new(0.0, 0.05, 25.0), false)
+                .unwrap();
+        g.s.avatars()[&a].clone()
+    };
+    let (red, _blue) = two_teams(&mut g);
+    assert_ne!(g.s.avatars()[&red], own, "the team uniform is on");
+    let mut next = Game::new("uniform-map-change-next");
+    next.s.adopt(g.s, red).unwrap();
+    assert_eq!(
+        next.s.avatars()[&red],
+        own,
+        "the old map's uniform followed the player to the new map"
+    );
+}
+
 #[test]
 fn teams_dress_their_members_and_give_them_their_kit() {
     let mut g = Game::new("uniforms");

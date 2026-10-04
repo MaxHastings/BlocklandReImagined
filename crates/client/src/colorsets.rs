@@ -1,6 +1,7 @@
 //! Local host colorset files. The resulting palette belongs to the new world;
 //! joining clients receive that world palette through ordinary replication.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_ui::api::{HostColorset, PaintDivision};
 use std::{fs, io::Read, path::Path};
 
@@ -79,7 +80,7 @@ pub fn parse(text: &str) -> Result<Vec<PaintDivision>> {
             (values[0] / scale).min(1.0),
             (values[1] / scale).min(1.0),
             (values[2] / scale).min(1.0),
-            (values[3] / scale).clamp(1.0 / 255.0, 1.0),
+            (values[3] / scale).clamped(1.0 / 255.0, 1.0),
         ]);
         count += 1;
         ensure!(count <= 256, "Colorset has more than 256 colors");

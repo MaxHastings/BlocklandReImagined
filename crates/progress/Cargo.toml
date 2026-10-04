@@ -6,3 +6,4 @@ publish.workspace = true
 description = "Engine-wide loading progress: the current stage and its work done out of a known total"
 
 [dependencies]
+bri-console = { path = "../console" }

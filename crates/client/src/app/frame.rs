@@ -1,5 +1,6 @@
 //! The per-frame update, in its fixed order (see docs/architecture/client-app-split.md).
 use super::*;
+use bri_console::Clamp;
 
 impl App {
     pub(super) fn frame(&mut self, elapsed: Duration) -> Result<()> {
@@ -43,16 +44,8 @@ impl App {
         let game_elapsed = elapsed.mul_f32(scale);
         self.avatar.animation_time += game_elapsed.as_secs_f64().min(0.25);
         self.avatar.preview_time += elapsed.as_secs_f64().min(0.25);
-        if let Err(error) = self.poll_network() {
-            // A fault while following the session (a map's weather, a tool
-            // catalog, a closed connection) ends that session with its real
-            // reason, never the whole game.
-            bri_console::warn(format!("Session ended by a client error: {error:#}"));
-            self.ui.apply(UiUpdate::Connection(ConnectionState::Failed {
-                reason: format!("{error:#}"),
-            }));
-            self.disconnect();
-        }
+        let polled = self.poll_network();
+        self.end_session_on_fault(polled);
         // The server's settings decide some weapon fields: play the pack
         // they make, and the authored one outside a game.
         let values = self.net.attempt.as_ref().and_then(|a| a.view.as_ref());
@@ -151,7 +144,8 @@ impl App {
             .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
-        self.advance_local_game(alive, game_elapsed)?;
+        let advanced = self.advance_local_game(alive, game_elapsed);
+        self.end_session_on_fault(advanced);
         self.update_combat_presentation();
         self.update_perf();
         self.update_lag();
@@ -180,14 +174,28 @@ impl App {
         if let Some(building) = &mut self.build.building {
             building.set_passages(&self.motion.passages());
         }
-        self.advance_world_presentation(game_elapsed, third_person, &mut listener)?;
+        let presented = self.advance_world_presentation(game_elapsed, third_person, &mut listener);
+        self.end_session_on_fault(presented);
         self.audio.tick(elapsed.as_secs_f32(), listener);
         self.view.drawn_controls = Some(self.controls.clone());
         Ok(())
     }
 
+    /// A fault while following the session (a map's weather, a tool
+    /// catalog, a closed connection, the local player's movement) ends that
+    /// session with its real reason, never the whole game.
+    fn end_session_on_fault(&mut self, result: Result<()>) {
+        if let Err(error) = result {
+            bri_console::warn(format!("Session ended by a client error: {error:#}"));
+            self.ui.apply(UiUpdate::Connection(ConnectionState::Failed {
+                reason: format!("{error:#}"),
+            }));
+            self.disconnect();
+        }
+    }
     /// Steps 12-19 of the frame schedule: the local player's motion, then
-    /// mounts, vehicles, riders, loose models and music.
+    /// mounts, vehicles, riders, loose models and music. Every fault here is
+    /// the session's ([`Self::end_session_on_fault`]).
     fn advance_local_game(&mut self, alive: bool, game_elapsed: Duration) -> Result<()> {
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
             if let Some(view) = &a.view {
@@ -347,7 +355,7 @@ impl App {
                     {
                         self.mounts.tumble = Some(vehicle);
                         let seconds =
-                            (1.0 + (frame.velocity.length() - 10.0) / 50.0 * 7.0).clamp(1.0, 7.0);
+                            (1.0 + (frame.velocity.length() - 10.0) / 50.0 * 7.0).clamped(1.0, 7.0);
                         self.ui.apply(UiUpdate::Whiteout(seconds / 7.0));
                     }
                     let forward = frame.rotation * Vec3::NEG_Z;
@@ -383,7 +391,7 @@ impl App {
                     Some((
                         role,
                         forward.x.atan2(-forward.z),
-                        forward.y.clamp(-1.0, 1.0).asin(),
+                        forward.y.clamped(-1.0, 1.0).asin(),
                         seat_rotation.map(|r| {
                             let forward = r * Vec3::NEG_Z;
                             forward.x.atan2(-forward.z)
@@ -702,7 +710,7 @@ impl App {
     }
 
     /// Step 22: the Add-On import, LAN query and firewall fix jobs.
-    fn poll_background_jobs(&mut self) {
+    pub(super) fn poll_background_jobs(&mut self) {
         self.poll_package_reload();
         if let Some(receiver) = &self.addons.add_on_sync {
             let mut notes = vec![];
@@ -735,6 +743,9 @@ impl App {
                 } else {
                     self.show_add_ons(view);
                 }
+            }
+            if done {
+                self.resume_after_sync();
             }
         }
         if let Some(receiver) = &self.lobby.lan_query
@@ -841,6 +852,7 @@ impl App {
 
     /// Step 26, in game only: moving entities, ghosts, liquids, avatar
     /// animation, rider eyes and world effects; sets the audio `listener`.
+    /// Every fault here is the session's ([`Self::end_session_on_fault`]).
     fn advance_world_presentation(
         &mut self,
         game_elapsed: Duration,
@@ -1222,6 +1234,11 @@ impl App {
                 forward: forward.to_array(),
                 up: view_up.to_array(),
             };
+            // What is seen through a portal is heard through it.
+            self.audio.hear_through(crate::portal_view::hearing(
+                &self.motion.passages(),
+                listener,
+            ));
             // v20 tints the screen with the liquid the camera is in, and
             // colours player splashes and froth with the liquid they touch.
             self.ui
@@ -1243,6 +1260,7 @@ impl App {
             self.fx.weapon_effects.set_passages(&passages);
             self.fx.effects.world.set_passages(&passages);
             self.fx.actor_effects.set_passages(&passages);
+            self.fx.brick_debris.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
@@ -1376,7 +1394,7 @@ impl App {
                     }
                     let hit = building.target(from, delta / length, length).ok()??;
                     Some(crate::weapon_debris::DebrisHit {
-                        fraction: (hit.distance / length).clamp(0., 1.),
+                        fraction: (hit.distance / length).clamped(0., 1.),
                         normal: hit.normal.normalize_or(Vec3::Y),
                     })
                 });
@@ -1422,7 +1440,7 @@ impl App {
                         }
                         let hit = building.target(from, delta / length, length).ok()??;
                         Some(crate::weapon_debris::DebrisHit {
-                            fraction: (hit.distance / length).clamp(0., 1.),
+                            fraction: (hit.distance / length).clamped(0., 1.),
                             normal: hit.normal.normalize_or(Vec3::Y),
                         })
                     });
@@ -1504,7 +1522,7 @@ impl App {
                     .filter(|p| {
                         p.id & 1 << 63 != 0 || view.vitals.get(&p.id).is_none_or(|v| v.alive)
                     })
-                    .copied()
+                    .cloned()
                     .collect();
                 let moved = self.addons.client_code.advance_physics(
                     game_elapsed.as_secs_f32().min(0.25),

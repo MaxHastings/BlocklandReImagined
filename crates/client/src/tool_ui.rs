@@ -490,6 +490,7 @@ impl ToolUi {
                     .collect();
                 UiUpdate::OpenEvents {
                     brick: *brick_id,
+                    builder: Some(brick.owner),
                     rows: rows.clone(),
                     named_targets: names.into_iter().collect(),
                     allow_named: true,

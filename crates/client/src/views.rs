@@ -108,7 +108,9 @@ impl Layers<'_> {
             up: v.up,
         };
         let [world, weapon, actor] = self.effects.map(|e| e.snapshot_in_other_view(&camera));
-        let (sprites, _) = crate::app::combine_effect_frames(world, [weapon, actor], &[v.eye]);
+        let budget = self.sprites.max_instances();
+        let (sprites, _) =
+            crate::app::combine_effect_frames(world, [weapon, actor], &[v.eye], budget);
         self.sprites
             .prepare_view(frame.device, frame.queue, v.view, &camera, &sprites)?;
         let (fog_start, fog_end) = self.fog;

@@ -4,6 +4,7 @@
 
 use crate::api::{EventCatalog, EventRow, WrenchData, WrenchVariant};
 use crate::models::events::EventsModel;
+use bri_console::Clamp;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(
@@ -77,6 +78,9 @@ pub struct WrenchState {
     pub locks: BTreeSet<(u8, WrenchField)>,
     pub open: Option<OpenWrench>,
     pub events: Option<EventsModel>,
+    /// The builder (owner id) of the brick whose events are open: its rows
+    /// run in their mini-game, so its teams are the ones rows name.
+    pub events_builder: Option<u64>,
     /// Copy checkbox survives dialog closure. Only editable rows may cross bricks.
     pub events_copy: Option<EventsModel>,
     /// The fill wrench's ticked settings: its Copy boxes say which settings
@@ -242,6 +246,7 @@ impl WrenchState {
         allow_named: bool,
         catalog: &EventCatalog,
     ) {
+        self.events_builder = None;
         let mut incoming = EventsModel::open(brick, rows, named_targets, allow_named, catalog);
         if let Some(copy) = &self.events_copy {
             use crate::models::events::{EditRow, RowState};
@@ -274,7 +279,7 @@ pub fn clean_name(s: &str) -> String {
 pub fn respawn_ms(text: &str) -> u32 {
     let seconds = text.trim().parse::<f64>().unwrap_or(0.0);
     let seconds = if seconds.is_nan() { 0.0 } else { seconds };
-    (seconds.floor().clamp(1.0, 300.0) as u32) * 1000
+    (seconds.floor().clamped(1.0, 300.0) as u32) * 1000
 }
 
 #[cfg(test)]

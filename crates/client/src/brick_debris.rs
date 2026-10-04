@@ -24,6 +24,7 @@ use crate::local_physics::{MAX_STEPS, PUSHER_REACH, Pushers, STEP, Shots, Surrou
 pub use crate::local_physics::{Pusher, Shot};
 use crate::world_chunks::BrickPalette;
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform};
 use bri_sim::presentation::{BrickDeath, Cue, CueKind};
@@ -135,7 +136,7 @@ struct Body {
 impl Body {
     /// How opaque the body is at its age.
     fn fade(&self) -> f32 {
-        1.0 - ((self.age - SOLID_SECONDS) / FADE_SECONDS).clamp(0.0, 1.0)
+        1.0 - ((self.age - SOLID_SECONDS) / FADE_SECONDS).clamped(0.0, 1.0)
     }
 }
 
@@ -241,6 +242,8 @@ pub struct BrickDebris {
     threw: bool,
     ghosts: Vec<Ghost>,
     falling: Vec<Falling>,
+    /// The openings of linked bricks (portals) bodies fly through.
+    passages: bri_content::passage::Passages,
     pub diagnostics: BrickDebrisDiagnostics,
 }
 
@@ -270,7 +273,15 @@ impl BrickDebris {
             threw: false,
             ghosts: Vec::new(),
             falling: Vec::new(),
+            passages: Default::default(),
             diagnostics: Default::default(),
+        }
+    }
+    /// The openings of linked bricks: a body knocked into one flies on out
+    /// of its partner, as everything else that moves does.
+    pub fn set_passages(&mut self, passages: &bri_content::passage::Passages) {
+        if self.passages.list != passages.list {
+            self.passages = passages.clone();
         }
     }
     /// Forget everything (disconnect, new server). The limit and what
@@ -586,7 +597,7 @@ impl BrickDebris {
         // Small blasts (direct hits, events, hammer pops) throw at full force;
         // radius blasts weaken towards their edge.
         let falloff = if radius > 0.5 {
-            (1.0 - distance / radius).clamp(0.25, 1.0)
+            (1.0 - distance / radius).clamped(0.25, 1.0)
         } else {
             1.0
         };
@@ -654,6 +665,9 @@ impl BrickDebris {
             ghost.left -= dt;
         }
         self.ghosts.retain(|g| g.left > 0.0);
+        // Lifetimes run on frame time, not simulated steps: a slow frame
+        // drops steps, and debris must not outlive its time because of it.
+        self.age(dt);
         if self.bodies.is_empty() {
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
@@ -678,8 +692,15 @@ impl BrickDebris {
         for step in 1..=steps {
             self.pushers
                 .drive(&mut self.world, step as f32 / steps as f32);
+            let before = match self.passages.list.is_empty() {
+                true => Vec::new(),
+                false => crate::local_physics::middles(
+                    &self.world,
+                    self.bodies.values().map(|b| b.handle),
+                ),
+            };
             self.world.step();
-            self.age(STEP);
+            crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
         }
         self.pushers.settle();
         Ok(())
@@ -736,7 +757,7 @@ impl BrickDebris {
             }
             let direction = (offset.normalize_or(Vec3::Y) + normal.unwrap_or(Vec3::ZERO) * 2.0)
                 .normalize_or(Vec3::Y);
-            let falloff = (1.0 - distance / radius).clamp(0.25, 1.0);
+            let falloff = (1.0 - distance / radius).clamped(0.25, 1.0);
             let speed = (force * FORCE_TO_SPEED * falloff).min(MAX_SPEED);
             let mut kick = direction * speed;
             if normal.is_some() {
@@ -822,7 +843,7 @@ impl BrickDebris {
                         1.0,
                         1.0,
                         1.0,
-                        g.fade * (g.left / GHOST_SECONDS).clamp(0.0, 1.0),
+                        g.fade * (g.left / GHOST_SECONDS).clamped(0.0, 1.0),
                     ],
                 },
             )
@@ -905,44 +926,20 @@ impl DebrisModels {
         materials: &crate::materials::BrickMaterials,
         colors: &[[f32; 4]],
     ) -> Result<()> {
-        self.frame += 1;
-        for model in self.models.values_mut() {
-            model.transforms.clear();
-        }
-        for (look, transform) in debris.instances() {
-            if transform.tint[3] <= 0.0 {
-                continue;
-            }
-            if !self.models.contains_key(look) {
-                if usize::from(look.color) >= colors.len() {
-                    continue;
-                }
-                if self.models.len() >= MAX_LOOKS {
-                    self.evict();
-                }
-                let data = look_scene(look, meshes, palette, materials, colors)
-                    .with_context(|| format!("Debris model for {}", look.definition))?;
-                let gpu = data
-                    .map(|data| {
-                        self.diagnostics.looks_built += 1;
-                        self.diagnostics.images_uploaded += data.images.len() as u64;
-                        renderer.upload_palette_model(device, &data, gpu_palette)
-                    })
-                    .transpose()?;
-                self.models.insert(
-                    look.clone(),
-                    Model {
-                        gpu,
-                        instances: None,
-                        transforms: Vec::new(),
-                        used: self.frame,
-                    },
-                );
-            }
-            let model = self.models.get_mut(look).expect("model built above");
-            model.transforms.push(transform);
-            model.used = self.frame;
-        }
+        let (mut built, mut images) = (0, 0);
+        let framed = self.frame_models(debris.instances(), colors.len(), |look| {
+            let data = look_scene(look, meshes, palette, materials, colors)
+                .with_context(|| format!("Debris model for {}", look.definition))?;
+            data.map(|data| {
+                built += 1;
+                images += data.images.len() as u64;
+                renderer.upload_palette_model(device, &data, gpu_palette)
+            })
+            .transpose()
+        });
+        self.diagnostics.looks_built += built;
+        self.diagnostics.images_uploaded += images;
+        framed?;
         for model in self.models.values_mut() {
             if model.gpu.is_none() {
                 continue;
@@ -961,6 +958,60 @@ impl DebrisModels {
             if let Some(instances) = &mut model.instances {
                 instances.update(queue, &model.transforms)?;
             }
+        }
+        Ok(())
+    }
+    /// Give this frame's bodies to their looks' models, building (`build`)
+    /// the looks not kept yet. Every kept look this frame wears is marked
+    /// first, so making room for a new look ([`MAX_LOOKS`]) evicts only
+    /// looks no body wears now, never one the frame has not reached yet
+    /// (which would be built again further down the same frame). More
+    /// looks worn at once than the bound keeps them all for that frame.
+    fn frame_models<'a>(
+        &mut self,
+        instances: impl Iterator<Item = (&'a Look, SceneTransform)>,
+        colors: usize,
+        mut build: impl FnMut(&Look) -> Result<Option<GpuScene>>,
+    ) -> Result<()> {
+        self.frame += 1;
+        for model in self.models.values_mut() {
+            model.transforms.clear();
+        }
+        let mut missing = Vec::new();
+        for (look, transform) in instances {
+            if transform.tint[3] <= 0.0 {
+                continue;
+            }
+            match self.models.get_mut(look) {
+                Some(model) => {
+                    model.transforms.push(transform);
+                    model.used = self.frame;
+                }
+                None if usize::from(look.color) < colors => missing.push((look, transform)),
+                None => {}
+            }
+        }
+        for (look, transform) in missing {
+            if !self.models.contains_key(look) {
+                if self.models.len() >= MAX_LOOKS {
+                    self.evict();
+                }
+                let gpu = build(look)?;
+                self.models.insert(
+                    look.clone(),
+                    Model {
+                        gpu,
+                        instances: None,
+                        transforms: Vec::new(),
+                        used: self.frame,
+                    },
+                );
+            }
+            self.models
+                .get_mut(look)
+                .expect("model built above")
+                .transforms
+                .push(transform);
         }
         Ok(())
     }
@@ -1030,6 +1081,51 @@ pub(crate) mod tests {
     use super::*;
     use bri_content::collision::{CollisionBody, Part};
     use bri_sim::definitions::{Definition, Definitions};
+
+    /// A full look cache meeting a frame of new looks and kept ones evicts
+    /// only looks no body of this frame wears: a kept look the frame has not
+    /// reached yet is never thrown out and built again the same frame.
+    #[test]
+    fn a_full_look_cache_evicts_only_looks_nobody_wears() -> Result<()> {
+        let look = |i: usize| Look {
+            definition: format!("brick{i}"),
+            color: (i % 4) as u8,
+            color_effect: 0,
+            shape_effect: 0,
+            print: None,
+        };
+        let body = SceneTransform {
+            transform: Mat4::IDENTITY,
+            tint: [1.0; 4],
+        };
+        let mut models = DebrisModels::default();
+        let builds = std::cell::Cell::new(0);
+        let frame = |models: &mut DebrisModels, looks: &[Look]| {
+            models.frame_models(looks.iter().map(|l| (l, body)), 4, |_| {
+                builds.set(builds.get() + 1);
+                Ok(None)
+            })
+        };
+        let first: Vec<Look> = (0..MAX_LOOKS).map(look).collect();
+        frame(&mut models, &first)?;
+        // Half new looks first, then half the kept ones, as debris of a new
+        // blast lands beside the old.
+        let second: Vec<Look> = (MAX_LOOKS..MAX_LOOKS + MAX_LOOKS / 2)
+            .chain(MAX_LOOKS / 2..MAX_LOOKS)
+            .map(look)
+            .collect();
+        frame(&mut models, &second)?;
+        assert_eq!(
+            builds.get(),
+            MAX_LOOKS + MAX_LOOKS / 2,
+            "only the new looks build"
+        );
+        assert_eq!(models.models.len(), MAX_LOOKS);
+        for l in &second {
+            assert_eq!(models.models[l].transforms.len(), 1, "{l:?} drawn");
+        }
+        Ok(())
+    }
 
     /// A flat floor at y 0 and 1x0.6x1 bricks at `bricks`.
     pub(crate) fn building(bricks: &[(BrickId, [f32; 3])]) -> (Building, PublicWorld) {
@@ -1484,6 +1580,7 @@ pub(crate) mod tests {
             center: feet + Vec3::Y * 1.2,
             rotation: Quat::IDENTITY,
             half: Vec3::new(0.5, 1.2, 0.5),
+            shape: None,
         }
     }
     /// A brick left lying (no throw) at `at`.
@@ -1526,6 +1623,117 @@ pub(crate) mod tests {
         );
     }
 
+    /// Max's video: a giant Steel Ball smashes a wall and rolls on through
+    /// the bricks it knocked loose. They are shoved aside by a ball its
+    /// size, as the host's ball collides, never left inside it (shoved by
+    /// an unscaled box) nor flung by a spinning box's corners.
+    #[test]
+    fn a_giant_steel_ball_rolls_debris_aside_as_a_ball_its_size() {
+        let pack = bri_vehicles::Pack::load(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/showcase/steel-ball-kit/assets/vehicles.json"
+        ))
+        .unwrap();
+        let d = pack
+            .definitions
+            .iter()
+            .find(|d| d.family == bri_vehicles::Family::Ball)
+            .unwrap()
+            .clone();
+        let scale = 3.0;
+        let radius = (d.bounds_max[0] - d.bounds_min[0]) * 0.5 * scale;
+        let info = bri_sim::session::VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: None,
+            occupants: vec![],
+            destroyed: false,
+            scale,
+        };
+        let infos = BTreeMap::from([(1, info.clone())]);
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        let mut cues = Vec::new();
+        for layer in 0..2 {
+            for x in -2..=2 {
+                let id = cues.len() as u64 + 1;
+                cues.push(lying(id, [x as f32 * 1.05, 0.3 + layer as f32 * 0.6, -8.0]));
+            }
+        }
+        debris.cues(&cues, &building).unwrap();
+        run(&mut debris, &building, 1.0);
+        let mut vehicles = crate::vehicles::ClientVehicles::default();
+        let speed = 12.0;
+        let (mut deepest, mut fastest) = (f32::INFINITY, 0.0f32);
+        for frame in 0..120u64 {
+            let z = 4.0 - speed * frame as f32 / 60.0;
+            let mut pose = crate::vehicles::tests::pose(frame + 1, 0.0);
+            pose.position = [0.0, radius, z];
+            // Rolling: spinning about x as fast as it goes.
+            pose.rotation = Quat::from_rotation_x(-(z - 4.0) / radius).to_array();
+            pose.velocity = [0.0, 0.0, -speed];
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, pose)]),
+                None,
+                None,
+                &Default::default(),
+            );
+            let pusher = vehicles.pusher(&info, &d).unwrap();
+            debris.push(&[pusher]);
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            let centre = Vec3::new(0.0, radius, z);
+            for p in debris.positions() {
+                deepest = deepest.min(p.distance(centre));
+            }
+            for b in debris.bodies.values() {
+                let v = debris.world.bodies[b.handle].linvel();
+                fastest = fastest.max(Vec3::from_array(v.to_array()).length());
+            }
+        }
+        // A brick's middle stays about half its size outside the ball.
+        assert!(
+            deepest > radius - 0.15,
+            "a brick {deepest} into a {radius} ball"
+        );
+        assert!(
+            fastest < 2.0 * speed,
+            "flung at {fastest} by a ball at {speed}"
+        );
+    }
+
+    /// A brick knocked into a doorway portal flies on out of its partner,
+    /// turned with it, instead of tumbling out of the doorway's back.
+    #[test]
+    fn debris_knocked_into_a_portal_flies_out_of_its_partner() {
+        let (passages, carry) = crate::portal_view::doorways::pair();
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.set_passages(&passages);
+        debris
+            .cues(&[lying(1, [0.2, 0.3, 3.0])], &building)
+            .unwrap();
+        run(&mut debris, &building, 0.5);
+        let handle = debris.bodies.values().next().unwrap().handle;
+        let thrown = Vec3::new(0.0, 3.0, -12.0);
+        debris.world.bodies[handle].set_linvel(thrown, true);
+        let mut out = None;
+        for _ in 0..60 {
+            debris.advance(1.0 / 60.0, &building).unwrap();
+            let rb = &debris.world.bodies[handle];
+            let at = Vec3::from_array(rb.translation().to_array());
+            if out.is_none() && at.x > 20.0 {
+                out = Some((at, Vec3::from_array(rb.linvel().to_array())));
+            }
+        }
+        let (at, velocity) = out.expect("never came out of the partner");
+        // Out of B's -z face, going on the way B's -z faces.
+        let back = carry.inverse();
+        assert!(back.transform_point3(at).z < 0.0, "at {at}");
+        let along = back.transform_vector3(velocity);
+        assert!(along.z < -8.0, "going {velocity} ({along} as A sees it)");
+    }
+
     #[test]
     fn a_vehicle_ramming_a_pile_scatters_it() {
         let (building, _) = building(&[]);
@@ -1548,6 +1756,7 @@ pub(crate) mod tests {
                 center: Vec3::new(0.0, 0.8, z),
                 rotation: turned,
                 half: Vec3::new(1.2, 0.6, 2.0),
+                shape: None,
             }]);
             debris.advance(1.0 / 60.0, &building).unwrap();
         }
@@ -1660,6 +1869,24 @@ pub(crate) mod tests {
         debris.advance(5.0, &building).unwrap();
         assert!(debris.diagnostics.dropped_steps > 0);
         assert!(debris.positions().iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn debris_expires_on_frame_time_even_when_slow_frames_drop_steps() {
+        let (building, _) = building(&[]);
+        let cues = blast(24, 1, 4.0);
+        let mut debris = BrickDebris::new();
+        debris.cues(&cues, &building).unwrap();
+        assert!(!debris.is_empty());
+        // A slow machine: 5 frames a second, each over the step budget.
+        let frame = 0.2;
+        let mut elapsed = 0.0;
+        while elapsed < SOLID_SECONDS + FADE_SECONDS + frame {
+            debris.advance(frame, &building).unwrap();
+            elapsed += frame;
+        }
+        assert!(debris.diagnostics.dropped_steps > 0);
+        assert_eq!(debris.len(), 0, "debris outlived its {elapsed} s");
     }
 
     fn blast(n: u64, first: u64, radius: f32) -> Vec<Cue> {

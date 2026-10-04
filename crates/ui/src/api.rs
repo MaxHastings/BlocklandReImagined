@@ -733,6 +733,11 @@ pub enum UiAction {
     TrustAddOnCode,
     /// Stop trusting every server's Add-On code (Add-Ons screen).
     ForgetAddOnTrust,
+    /// Keep the build a hosted game that ended abnormally left as a save
+    /// (Recover Unsaved Build?'s Keep).
+    KeepRecoveredBuild,
+    /// Delete that build (Recover Unsaved Build?'s Discard).
+    DiscardRecoveredBuild,
     /// Cancel a pending connection attempt or leave the loading screen.
     CancelConnect,
     /// Leave the game (disconnect, or stop hosting).
@@ -1673,6 +1678,9 @@ pub enum UiUpdate {
     /// Rows for the events dialog of `brick`.
     OpenEvents {
         brick: u64,
+        /// The brick's builder (owner id), whose mini-game its rows run in;
+        /// `None` takes the local player's.
+        builder: Option<u64>,
         rows: Vec<EventRow>,
         named_targets: Vec<String>,
         allow_named: bool,

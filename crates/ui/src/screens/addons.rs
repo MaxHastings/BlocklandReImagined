@@ -9,6 +9,7 @@ use super::*;
 use crate::api::{AddOnRow, ConnectionState, DownloadState, UiAction};
 use crate::ui::Callback;
 use crate::view::{EventKind, check_cell};
+use bri_console::Clamp;
 
 const LIST: &str = "AO_List";
 const SEARCH: &str = "AO_Search";
@@ -63,6 +64,9 @@ pub struct AddOns {
     /// Rows ticked or unticked here and not yet answered by the host: the
     /// row shows the click at once and goes back if the host refuses.
     flips: Vec<(RequestId, String)>,
+    /// The selected row and details text the pane shows, so an unrelated
+    /// update leaves the pane where the player scrolled it.
+    details_shown: Option<(Option<String>, String)>,
 }
 
 impl AddOns {
@@ -169,6 +173,7 @@ impl AddOns {
             selected: None,
             requests: vec![],
             flips: vec![],
+            details_shown: None,
         };
         s.refresh(core);
         s
@@ -269,13 +274,17 @@ impl AddOns {
             None if core.add_ons.rows.is_empty() => "Looking for installed add-ons...".into(),
             None => "Pick an add-on to see what it does.\n\nClick the box beside an add-on to turn it on or off. Changes apply the next time you start a game.".into(),
         };
-        if let (Some(n), Some(scroll)) = (self.view.id(DETAILS), self.view.id(DETAIL_SCROLL)) {
+        let shown = (self.selected.clone(), text);
+        if self.details_shown.as_ref() != Some(&shown)
+            && let (Some(n), Some(scroll)) = (self.view.id(DETAILS), self.view.id(DETAIL_SCROLL))
+        {
             let width = self.view.node(n).ctrl.extent[0];
-            let h = View::ml_height(&core.pack, "GuiMLTextProfile", &text, width).max(16);
+            let h = View::ml_height(&core.pack, "GuiMLTextProfile", &shown.1, width).max(16);
             self.view.nodes[n].ctrl.extent[1] = h;
-            self.view.set_text(n, text);
+            self.view.set_text(n, shown.1.clone());
             self.view.scroll_to(scroll, 0);
             self.view.relayout();
+            self.details_shown = Some(shown);
         }
         if let Some(n) = self.view.id(ENABLED) {
             self.view
@@ -650,7 +659,7 @@ impl PackageDownload {
         let fraction = if d.total_bytes == 0 {
             1.0
         } else {
-            (d.done_bytes as f64 / d.total_bytes as f64).clamp(0.0, 1.0) as f32
+            (d.done_bytes as f64 / d.total_bytes as f64).clamped(0.0, 1.0) as f32
         };
         if let Some(n) = self.view.id(DL_PROGRESS) {
             self.view.set_num(n, fraction);

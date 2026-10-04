@@ -1,6 +1,7 @@
 //! CPU mip chains for uploaded RGBA8 images. sRGB images are averaged in
 //! linear light; colour is weighted by alpha so transparent texels do not
 //! darken edges and brick overlays keep their average pigment coverage.
+use bri_console::Clamp;
 use std::borrow::Cow;
 
 /// Level 0 (borrowed) through 1x1, as (width, height, pixels).
@@ -21,9 +22,9 @@ pub fn chain(width: u32, height: u32, rgba: &[u8], srgb: bool) -> Vec<(u32, u32,
         .collect();
     let encode = |v: f32| -> u8 {
         if srgb {
-            encode_table[(v.clamp(0.0, 1.0) * STEPS as f32 + 0.5) as usize]
+            encode_table[(v.clamped(0.0, 1.0) * STEPS as f32 + 0.5) as usize]
         } else {
-            (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+            (v.clamped(0.0, 1.0) * 255.0 + 0.5) as u8
         }
     };
     let decode = |v: u8| decode[usize::from(v)];
@@ -73,7 +74,7 @@ pub fn chain_preserving_coverage(
     srgb: bool,
     cutoff: f32,
 ) -> Vec<(u32, u32, Cow<'_, [u8]>)> {
-    let threshold = (cutoff.clamp(0.0, 1.0) * 255.0) as u32;
+    let threshold = (cutoff.clamped(0.0, 1.0) * 255.0) as u32;
     let coverage = |pixels: &[u8], scale: f32| {
         let passing = pixels
             .chunks_exact(4)

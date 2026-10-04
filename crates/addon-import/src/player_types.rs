@@ -2,6 +2,7 @@
 //! motor has constants for, over the datablock it inherits. Packages lay
 //! these over a player for a while (`push_archetype`, as Support_AltDatablock
 //! pushed them) or make a player one (`set_archetype`).
+use bri_console::Clamp;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -137,7 +138,7 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
             if let Some(n) = number(v) {
                 movement.insert(
                     "jump_delay_ticks".into(),
-                    json!((n * 4.0).round().clamp(0.0, 255.0) as u8),
+                    json!((n * 4.0).round().clamped(0.0, 255.0) as u8),
                 );
                 continue;
             }

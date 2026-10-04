@@ -81,9 +81,7 @@ fn save(folder: &Path, name: &str, copy: &SavedCopy, overwrite: bool) -> Result<
     // The same name in other case is the same copy.
     let path =
         find(folder, name, NATIVE).unwrap_or_else(|| folder.join(format!("{name}.{NATIVE}")));
-    let partial = path.with_extension("json.partial");
-    std::fs::write(&partial, serde_json::to_vec(copy)?)?;
-    std::fs::rename(&partial, &path)?;
+    bri_files::replace(&path, &serde_json::to_vec(copy)?)?;
     Ok(Saved::Written)
 }
 

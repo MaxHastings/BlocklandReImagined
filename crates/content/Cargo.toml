@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-console = { path = "../console" }
 serde.workspace = true
 anyhow.workspace = true
 glam.workspace = true

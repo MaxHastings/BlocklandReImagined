@@ -1,5 +1,6 @@
 //! Versioned native weapon content. No legacy parser is linked into this crate.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub mod debris;
@@ -248,7 +249,7 @@ impl Spin {
     /// state, from the speed it had on entering; `None` keeps it.
     pub fn speed(self, elapsed: f64, timeout: f64, entered: f64) -> f64 {
         let through = if timeout > 0. {
-            (elapsed / timeout).clamp(0., 1.)
+            (elapsed / timeout).clamped(0., 1.)
         } else {
             1.
         };

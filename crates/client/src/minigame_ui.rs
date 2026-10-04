@@ -1,6 +1,7 @@
 //! Replicated minigame state → the original Mini-Games dialogs, and dialog
 //! actions → authoritative minigame requests.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_minigames::Settings;
 use bri_package::setting::{SettingEditor, SettingScope, SettingType, SettingValue, ShownWhen};
 use bri_sim::session::{
@@ -401,7 +402,7 @@ pub fn with_addon_settings(
     state.teams_shown_when = teams_shown_when.map(|w| ui_shown_when(w.setting.clone(), w));
     state.palette = palette
         .iter()
-        .map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+        .map(|c| c.map(|v| (v.clamped(0.0, 1.0) * 255.0).round() as u8))
         .map(|[r, g, b, _]| [r, g, b])
         .collect();
     state

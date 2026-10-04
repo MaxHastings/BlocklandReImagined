@@ -340,6 +340,22 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back(f: &ContentRoot) ->
     )?;
     held(&mut app, HeldControl::Jump, false)?;
     held(&mut app, HeldControl::Forward, false)?;
+    // The device is lost while riding (a driver reset): recovery draws the
+    // horse on the new device, with nothing left from the old one.
+    app.gpu_lost();
+    app.gpu_stopped();
+    let replacement = Headless::new().context("replacement GPU device")?;
+    let mut renderer = UiRenderer::new(&replacement.device, &replacement.queue);
+    app.gpu_ready(
+        &replacement.device,
+        &replacement.queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+    )?;
+    run_for(&mut app, 0.3)?;
+    save(
+        &artifact.join("mounted-after-device-loss.png"),
+        &capture(&mut app, &replacement, &mut renderer)?,
+    )?;
     app.gpu_stopped();
     Ok(())
 }

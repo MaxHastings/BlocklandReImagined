@@ -60,6 +60,9 @@ pub struct GameModes {
     view: View,
     /// Mode id per list item; None is Custom.
     ids: Vec<Option<String>>,
+    /// The selected mode and details text the pane shows, so an unrelated
+    /// update leaves the pane where the player scrolled it.
+    details_shown: Option<(Option<String>, String)>,
 }
 
 impl GameModes {
@@ -110,7 +113,11 @@ impl GameModes {
         root.children.push(win);
         let mut view = View::new(&root);
         view.measure(&core.pack);
-        let mut s = Self { view, ids: vec![] };
+        let mut s = Self {
+            view,
+            ids: vec![],
+            details_shown: None,
+        };
         s.refresh(core);
         if let Some(n) = s.view.id(LIST) {
             let current = chosen(core).map(|m| m.id.clone());
@@ -145,14 +152,17 @@ impl GameModes {
     fn show_details(&mut self, core: &Core) {
         let id = self.selected();
         let mode = core.game_modes.iter().find(|m| Some(&m.id) == id.as_ref());
-        let text = details(mode, core);
-        if let (Some(n), Some(scroll)) = (self.view.id(DETAILS), self.view.id(DETAIL_SCROLL)) {
+        let shown = (id, details(mode, core));
+        if self.details_shown.as_ref() != Some(&shown)
+            && let (Some(n), Some(scroll)) = (self.view.id(DETAILS), self.view.id(DETAIL_SCROLL))
+        {
             let width = self.view.node(n).ctrl.extent[0];
-            let h = View::ml_height(&core.pack, "GuiMLTextProfile", &text, width).max(16);
+            let h = View::ml_height(&core.pack, "GuiMLTextProfile", &shown.1, width).max(16);
             self.view.nodes[n].ctrl.extent[1] = h;
-            self.view.set_text(n, text);
+            self.view.set_text(n, shown.1.clone());
             self.view.scroll_to(scroll, 0);
             self.view.relayout();
+            self.details_shown = Some(shown);
         }
     }
     fn choose(&mut self, core: &mut Core) {

@@ -2,6 +2,7 @@
 //! the swapchain/offscreen attachment, encoder and submission, so UI passes can
 //! follow this pass without another adapter/device or scene re-upload.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use glam::{Mat4, Vec3, Vec4};
 use std::{ops::Range, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -155,9 +156,9 @@ pub fn resolve_brick_vertex_color(
         // Retain the existing inherited-paint-alpha policy with its diagnostic.
         return Ok(BrickVertexColor {
             rgba: [
-                (paint[0] + c[0]).clamp(0., 1.),
-                (paint[1] + c[1]).clamp(0., 1.),
-                (paint[2] + c[2]).clamp(0., 1.),
+                (paint[0] + c[0]).clamped(0., 1.),
+                (paint[1] + c[1]).clamped(0., 1.),
+                (paint[2] + c[2]).clamped(0., 1.),
                 paint[3],
             ],
             provisional: paint[3] != 1.,
@@ -1535,7 +1536,7 @@ impl Footprints {
                 ]
             }));
         }
-        let [x0, y0, x1, y1] = union?.map(|v| v.clamp(-1.0, 1.0));
+        let [x0, y0, x1, y1] = union?.map(|v| v.clamped(-1.0, 1.0));
         // Clip y points up; texel rows go down.
         let left = ((x0 * 0.5 + 0.5) * size).floor() as u32;
         let right = ((x1 * 0.5 + 0.5) * size).ceil() as u32;
@@ -1652,7 +1653,7 @@ impl TextureFiltering {
     /// v20 stores anisotropy as a 0..1 slider value.
     pub fn from_v20(trilinear: bool, sharp: bool, anisotropy: f32) -> Self {
         let samples = if anisotropy.is_finite() {
-            1.0 + anisotropy.clamp(0.0, 1.0) * 15.0
+            1.0 + anisotropy.clamped(0.0, 1.0) * 15.0
         } else {
             1.0
         };
@@ -2165,6 +2166,21 @@ pub struct PointLight {
     pub color: [f32; 4],
 }
 
+/// Scenes a renderer has uploaded since it was made: what a frame's work
+/// probes compare from frame to frame, since a full upload (textures,
+/// mipmaps and bind groups) is the costly kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct UploadCounts {
+    /// Whole scenes ([`SceneRenderer::upload`]) and the textures they made.
+    pub scenes: u64,
+    pub textures: u64,
+    /// Geometry sharing another scene's materials and textures
+    /// ([`SceneRenderer::upload_geometry_shared`]).
+    pub shared_geometry: u64,
+    /// Geometry on the brick palette's materials (chunks, palette models).
+    pub palette_geometry: u64,
+}
+
 /// What the last frame's world and shadow passes recorded. Counts, unlike
 /// times, do not change with the load on the machine, so they make stable
 /// regression checks.
@@ -2294,6 +2310,7 @@ pub struct SceneRenderer {
     /// The lights' grid: cell table and per-cell lists (`light_grid`).
     light_grid: wgpu::Buffer,
     light_counts: std::cell::Cell<(u32, u32)>,
+    uploads: std::cell::Cell<UploadCounts>,
     volume: VolumeBinding,
     map_lights: MapLightBinding,
     probe: crate::environment_probe::ProbeBinding,
@@ -2604,6 +2621,7 @@ impl SceneRenderer {
             light_buffer,
             light_grid,
             light_counts: Default::default(),
+            uploads: Default::default(),
             volume,
             map_lights,
             probe: crate::environment_probe::ProbeBinding::new(device, color_format),
@@ -2750,6 +2768,15 @@ impl SceneRenderer {
     }
     /// Upload once. Construct another GpuScene for dynamic bricks/characters;
     /// replacing that handle leaves the map buffers and textures untouched.
+    /// What this renderer has uploaded since it was made.
+    pub fn upload_counts(&self) -> UploadCounts {
+        self.uploads.get()
+    }
+    fn count(&self, add: impl FnOnce(&mut UploadCounts)) {
+        let mut counts = self.uploads.get();
+        add(&mut counts);
+        self.uploads.set(counts);
+    }
     pub fn upload(
         &self,
         device: &wgpu::Device,
@@ -2757,6 +2784,10 @@ impl SceneRenderer {
         data: &SceneData,
     ) -> Result<GpuScene> {
         data.validate()?;
+        self.count(|c| {
+            c.scenes += 1;
+            c.textures += data.images.len() as u64;
+        });
         let limits = device.limits();
         ensure!(
             data.vertices.len() as u64 * std::mem::size_of::<SceneVertex>() as u64
@@ -2968,6 +2999,7 @@ impl SceneRenderer {
         palette: &GpuScene,
     ) -> Result<GpuScene> {
         data.validate_geometry()?;
+        self.count(|c| c.palette_geometry += 1);
         ensure!(
             data.materials == palette.material_descriptors,
             "Chunk geometry was built against a different material palette"
@@ -3079,6 +3111,7 @@ impl SceneRenderer {
         base: &GpuScene,
     ) -> Result<GpuScene> {
         data.validate()?;
+        self.count(|c| c.shared_geometry += 1);
         ensure!(
             data.materials == base.material_descriptors
                 && image_signatures(data) == base.image_signatures,

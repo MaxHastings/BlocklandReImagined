@@ -3,6 +3,7 @@
 //! cues and advance. The host provides animated attachment poses and consumes
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::Passages;
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
@@ -478,7 +479,7 @@ impl WeaponEffects {
             let options = SourceOptions {
                 paint: paint
                     .and_then(|p| self.palette.get(usize::from(p)))
-                    .map(|c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.))),
+                    .map(|c| [c[0], c[1], c[2]].map(|v| v.clamped(0., 1.))),
                 ..Default::default()
             };
             match self
@@ -549,7 +550,7 @@ impl WeaponEffects {
         for (owner, (resource, r, speed)) in desired {
             let length = r.from.distance(r.to);
             let options = SourceOptions {
-                time_scale: (length / (speed * dt.max(1e-3))).clamp(1e-3, 1000.),
+                time_scale: (length / (speed * dt.max(1e-3))).clamped(1e-3, 1000.),
                 ..SourceOptions::default()
             };
             let place = |position: Vec3| SourceTransform {
@@ -757,7 +758,7 @@ impl WeaponEffects {
 /// its authored blend.
 fn paint_recolor(color: [f32; 4], explosion: bool) -> Recolor {
     let opaque = color[3] > 0.99;
-    let mut rgb = [color[0], color[1], color[2]].map(|c| c.clamp(0., 1.));
+    let mut rgb = [color[0], color[1], color[2]].map(|c| c.clamped(0., 1.));
     if !opaque && rgb.iter().all(|c| *c < 8. / 255.) {
         rgb = [8. / 255.; 3];
     }

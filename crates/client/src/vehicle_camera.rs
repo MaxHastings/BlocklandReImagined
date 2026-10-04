@@ -9,6 +9,7 @@
 //! In first person riders see from their eye node through the seat; the rider
 //! of a player-type mount sees from its mount node ([`driver_eye`]).
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use glam::{Quat, Vec2, Vec3};
 
 /// The start of the camera ray sits this far above the vehicle's box center.
@@ -72,13 +73,16 @@ pub fn driver_view(
         .unwrap_or(Vec3::NEG_Z);
     // `cameraMinDist` is 0 on every stock vehicle (the data default).
     let center = position + rotation * bounds_center;
-    let back = center - heading * (camera.max_dist * pos.clamp(0.0, 1.0));
+    let back = center - heading * (camera.max_dist * pos.clamped(0.0, 1.0));
     // The camera's height over the vehicle's origin grows with its level
     // distance from it, reaching `cameraOffset` at `cameraMaxDist`.
     let rise = Vec2::new(back.x - position.x, back.z - position.z).length() / camera.max_dist;
     let end = Vec3::new(back.x, position.y + camera.offset * rise, back.z);
     let look = Vec3::new(heading.x, -camera.tilt, heading.z).normalize();
-    let (yaw, pitch) = (heading.x.atan2(-heading.z), look.y.clamp(-1.0, 1.0).asin());
+    let (yaw, pitch) = (
+        heading.x.atan2(-heading.z),
+        look.y.clamped(-1.0, 1.0).asin(),
+    );
     let start = center + Vec3::Y * RAY_LIFT;
     let reach = end - start;
     let length = reach.length();
@@ -95,7 +99,7 @@ pub fn driver_view(
             } else {
                 // Only the extra tenth hit: ease in as the wall nears.
                 let share =
-                    (1.0 - (distance - length) / (length * (RAY_REACH - 1.0))).clamp(0.0, 1.0);
+                    (1.0 - (distance - length) / (length * (RAY_REACH - 1.0))).clamped(0.0, 1.0);
                 end + back_off * share
             }
         }

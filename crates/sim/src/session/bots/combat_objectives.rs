@@ -5,7 +5,6 @@ use super::objectives::{self, Cause, GroundedAction, GroundingBudget, Transition
 use super::planning::{self, FactValue, Facts};
 use super::*;
 use bri_events::rules::{Condition, Property, Subject};
-use bri_events::{Class, Entity};
 
 #[derive(Clone, Debug)]
 pub(super) struct Action {
@@ -146,10 +145,7 @@ impl Session {
         }
         let world = self.events.world.as_ref().ok_or(F::Unsupported)?;
         let mut causes = Vec::new();
-        let entity = |owner| Entity {
-            class: Class::Player,
-            id: super::super::events::id(owner),
-        };
+        let entity = |owner| self.player_entity(owner);
         let transitions = [
             Transition {
                 target: entity(victim),

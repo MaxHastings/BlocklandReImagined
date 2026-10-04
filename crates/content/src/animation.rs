@@ -1,6 +1,7 @@
 //! Native animation sampling and posed geometry, independent of source formats.
 use crate::shape::{Animation, Shape};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use glam::{Mat4, Quat, Vec3};
 
 pub struct Pose {
@@ -28,7 +29,7 @@ fn frame_pair(animation: &Animation, time: f32) -> (usize, usize, f32) {
     let phase = if animation.looping {
         time.rem_euclid(animation.duration) / animation.duration
     } else {
-        (time / animation.duration).clamp(0.0, 1.0)
+        (time / animation.duration).clamped(0.0, 1.0)
     };
     let f = phase
         * if animation.looping {

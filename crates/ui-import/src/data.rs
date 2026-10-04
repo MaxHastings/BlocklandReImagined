@@ -1,6 +1,7 @@
 //! UI data recovered from decompiled scripts. Values are read as literals and
 //! the relevant script logic is re-implemented here with line references. No
 //! script is ever executed.
+use bri_console::Clamp;
 
 use crate::torque::{functions, unescape};
 use anyhow::{Context, Result, bail};
@@ -73,17 +74,17 @@ pub fn brick_colorset(server_script: &str) -> Result<Vec<ColorDivision>> {
             let unit = v.iter().all(|x| *x <= 1.0);
             let c = if fractional || unit {
                 [
-                    v[0].clamp(0.0, 1.0),
-                    v[1].clamp(0.0, 1.0),
-                    v[2].clamp(0.0, 1.0),
-                    v[3].clamp(1.0 / 255.0, 1.0),
+                    v[0].clamped(0.0, 1.0),
+                    v[1].clamped(0.0, 1.0),
+                    v[2].clamped(0.0, 1.0),
+                    v[3].clamped(1.0 / 255.0, 1.0),
                 ]
             } else {
                 [
-                    v[0].clamp(0.0, 255.0) / 255.0,
-                    v[1].clamp(0.0, 255.0) / 255.0,
-                    v[2].clamp(0.0, 255.0) / 255.0,
-                    v[3].clamp(1.0, 255.0) / 255.0,
+                    v[0].clamped(0.0, 255.0) / 255.0,
+                    v[1].clamped(0.0, 255.0) / 255.0,
+                    v[2].clamped(0.0, 255.0) / 255.0,
+                    v[3].clamped(1.0, 255.0) / 255.0,
                 ]
             };
             current.push(c);

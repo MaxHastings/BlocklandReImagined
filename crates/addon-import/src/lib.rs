@@ -7,6 +7,7 @@
 //! Nothing is executed. What only a script run would know is reported, with
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
+use bri_console::Clamp;
 pub mod behaviour;
 mod help;
 mod hole_bots;
@@ -2004,7 +2005,7 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
     }
     let tint = |on: bool, c: [f32; 4]| {
         if on {
-            c.map(|v| v.clamp(0.0, 1.0))
+            c.map(|v| v.clamped(0.0, 1.0))
         } else {
             [1.0; 4]
         }
