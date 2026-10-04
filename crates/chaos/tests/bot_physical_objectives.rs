@@ -4,8 +4,10 @@ use bri_chaos::fixture;
 use bri_events::rules::{Compare, Condition, Datum, Property, Subject};
 use bri_events::{Row, Slot, Target, Value};
 use bri_sim::player::MoveInput;
-use bri_sim::session::{Command, MiniGameRequest, Session, ToolCatalog};
-use bri_world::{Brick, ContentRef, ItemSpawn, VehicleSpawn, World, build::SavedBuild};
+use bri_sim::session::{Command, MiniGameRequest, Session, TeamEdit, ToolCatalog};
+use bri_world::{
+    Brick, ContentRef, ItemSpawn, VehicleSpawn, World, authority::Edit, build::SavedBuild,
+};
 use glam::Vec3;
 use serde_json::json;
 use std::sync::{
@@ -1241,4 +1243,512 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
             );
         }
     }
+}
+
+/// A minimal unrelated Add-On host: the Mini-Game window's ordinary team
+/// editor needs running Add-Ons. It supplies no bot, ball or goal policy.
+fn team_host(namespace: &str) -> Arc<bri_package_runtime::Catalog> {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    struct Temp(std::path::PathBuf);
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let root = Temp(std::env::temp_dir().join(format!(
+        "bri-pitch-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )));
+    let id = format!("{namespace}-host");
+    let dir = root.0.join(&id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.json"), json!({"schema_version":1,"id":id,"version":"1.0.0","api":1,"name":"Unrelated team host","license":"CC0-1.0","provides":[{"kind":"behaviour","id":format!("{id}:behaviour/main"),"file":"behaviour.json"},{"kind":"script","id":format!("{id}:script/main"),"file":"main.rhai"}]}).to_string()).unwrap();
+    std::fs::write(dir.join("behaviour.json"), json!({"schema_version":1,"script":"main.rhai","settings":[{"key":"hint","title":"Team hint","scope":"team","type":"bool","default":false}]}).to_string()).unwrap();
+    std::fs::write(dir.join("main.rhai"), "fn unused() {}\n").unwrap();
+    Arc::new(
+        bri_package_runtime::Catalog::load(
+            &root.0,
+            &PackageSet {
+                schema_version: 1,
+                packages: vec![PackageEntry {
+                    id: id.clone(),
+                    version: "1.0.0".into(),
+                    side: Side::Server,
+                    dir: id,
+                    role: None,
+                }],
+            },
+            true,
+        )
+        .unwrap(),
+    )
+}
+
+/// A two-team ball game built the way a creator builds the shipped ball-goal
+/// recipe: one loose body, a goal region per team whose rows award the
+/// actual instigator's team, win at a Team Score and reset the captured body
+/// after a delay. Teams and members come from the ordinary MiniGame commands;
+/// every team id compared below is the one those commands produced.
+struct Pitch {
+    s: Session,
+    human: u64,
+    seq: u64,
+    /// (bot, its team, the goal brick its team scores in)
+    players: [(u64, u32, u64); 2],
+    kind: String,
+}
+
+impl Pitch {
+    fn new(namespace: &str, mirrored: bool) -> Self {
+        let mut s = fixture::synthetic().unwrap().session;
+        let mut vehicles = bri_vehicles::testing::pack();
+        let mut orb = bri_vehicles::testing::definition(bri_vehicles::testing::BALL);
+        orb.id = format!("{namespace}:vehicle/orb");
+        orb.name = format!("{namespace} unfamiliar orb");
+        orb.bounds_min = [-0.6; 3];
+        orb.bounds_max = [0.6; 3];
+        orb.collision_hulls = vec![bri_vehicles::testing::box_hull(
+            orb.bounds_min,
+            orb.bounds_max,
+        )];
+        orb.mass = 60.0;
+        orb.restitution = 0.1;
+        let kind = orb.id.clone();
+        vehicles.definitions.push(orb);
+        s.set_vehicle_pack(
+            vehicles,
+            bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+                "../../../packages/blockhead_bot/assets/bots.json"
+            ))
+            .unwrap()
+            .bots,
+        )
+        .unwrap();
+        s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())
+            .unwrap();
+        s.install_packages(team_host(namespace), None).unwrap();
+        s.set_tool_catalog(ToolCatalog {
+            vehicles: [fixture::BOT.to_string(), kind.clone()].into(),
+            vehicle_bricks: [fixture::PLATE.into()].into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let human_point = Vec3::new(40.0, 0.05, 10.0);
+        s.set_spawn_points(vec![human_point]).unwrap();
+        let human = s.join("Referee".into(), human_point, true).unwrap();
+        let mut world = World::new(
+            "Unfamiliar pitch".into(),
+            "chaos/map".into(),
+            s.simulation().state().palette.clone(),
+        );
+        // A metamorphic variant mirrors the pitch across x and swaps which
+        // brick ids hold the bots and goals; the mechanics are unchanged.
+        let x = |v: f32| if mirrored { -v } else { v };
+        let plate =
+            |at: [f32; 3]| Brick::new(ContentRef::Resolved(fixture::PLATE.into()), at, human);
+        let spawner = |kind: &str, at: [f32; 3], name: &str| {
+            let mut b = plate(at);
+            b.name = Some(name.into());
+            b.vehicle = Some(Box::new(VehicleSpawn {
+                vehicle: ContentRef::Resolved(kind.into()),
+                recolor: false,
+            }));
+            b
+        };
+        let (striker_brick, rival_brick, low_goal, high_goal) =
+            if mirrored { (2, 1, 5, 4) } else { (1, 2, 4, 5) };
+        // The striker stands behind the body relative to the low goal; the
+        // rival starts off to one side and must come to the body to contest it.
+        let striker_at = [x(1.25), 0.1, 54.25];
+        world.bricks.insert(
+            striker_brick,
+            spawner(fixture::BOT, striker_at, &format!("{namespace}_a")),
+        );
+        world.bricks.insert(
+            rival_brick,
+            spawner(
+                fixture::BOT,
+                [x(-9.75), 0.1, 47.25],
+                &format!("{namespace}_b"),
+            ),
+        );
+        world.bricks.insert(
+            3,
+            spawner(&kind, [x(0.25), 0.1, 50.25], &format!("{namespace}_source")),
+        );
+        for (id, z) in [(low_goal, 38.25), (high_goal, 62.25)] {
+            let mut goal = plate([x(0.25), 0.1, z]);
+            goal.name = Some(format!("{namespace}_goal_{id}"));
+            goal.colliding = false;
+            goal.raycast = false;
+            goal.rule_region = Some([5.0, 4.0, 5.0]);
+            world.bricks.insert(id, goal);
+        }
+        world.next_brick_id = 6;
+        s.command(
+            human,
+            100,
+            Command::LoadBuild {
+                build: Box::new(SavedBuild::new(world)),
+                ownership: false,
+            },
+        )
+        .unwrap();
+        let mut seq = 1 << 40;
+        for _ in 0..20 {
+            seq += 1;
+            s.movement(human, seq, MoveInput::default()).unwrap();
+            s.step().unwrap();
+        }
+        s.command(
+            human,
+            101,
+            Command::MiniGame(MiniGameRequest::Create {
+                color: 0,
+                settings: bri_minigames::Settings {
+                    loadout: [None, None, None, None, None],
+                    brick_damage: false,
+                    ..Default::default()
+                },
+            }),
+        )
+        .unwrap();
+        let game = s.minigame_views()[0].id;
+        s.command(
+            human,
+            102,
+            Command::MiniGame(MiniGameRequest::AddOnSettings {
+                game,
+                settings: vec![],
+                teams: Some(
+                    ["Saffron", "Teal"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, name)| TeamEdit {
+                            id: None,
+                            name: format!("{namespace} {name}"),
+                            color: i as u8 + 1,
+                            settings: vec![],
+                        })
+                        .collect(),
+                ),
+                quiet: true,
+                reset: false,
+            }),
+        )
+        .unwrap();
+        let teams: Vec<u32> = s.minigame_views()[0].teams.iter().map(|t| t.id.0).collect();
+        assert_eq!(teams.len(), 2, "two real teams");
+        assert_ne!(teams[0], teams[1]);
+        let bots: Vec<u64> = s.names().keys().copied().filter(|p| s.is_bot(*p)).collect();
+        assert_eq!(bots.len(), 2, "both spawn bricks made their bot");
+        let striker_home = Vec3::from(striker_at);
+        let feet = |s: &Session, owner: u64| {
+            Vec3::from(
+                s.snapshot()
+                    .players
+                    .iter()
+                    .find(|p| p.owner == owner)
+                    .unwrap()
+                    .feet,
+            )
+        };
+        let striker = *bots
+            .iter()
+            .min_by(|a, b| {
+                feet(&s, **a)
+                    .distance(striker_home)
+                    .total_cmp(&feet(&s, **b).distance(striker_home))
+            })
+            .unwrap();
+        let rival = *bots.iter().find(|b| **b != striker).unwrap();
+        for (sequence, (target, team)) in [(103, (striker, teams[0])), (104, (rival, teams[1]))] {
+            s.command(
+                human,
+                sequence,
+                Command::MiniGame(MiniGameRequest::SetTeam {
+                    game,
+                    target,
+                    team: Some(team),
+                }),
+            )
+            .unwrap();
+        }
+        for (bot, team) in [(striker, teams[0]), (rival, teams[1])] {
+            assert_eq!(s.vitals()[&bot].team, Some(team), "ordinary assignment");
+        }
+        // The recipe's rows, each goal awarding the team that attacks it.
+        let source = format!("{namespace}_source");
+        let rows = |team: u32| {
+            let guards = |mut extra: Vec<Condition>| {
+                let mut c = vec![
+                    Condition {
+                        subject: Subject::MiniGame,
+                        property: Property::RoundOver,
+                        key: String::new(),
+                        compare: Compare::Equal,
+                        value: Datum::Bool(false),
+                    },
+                    bri_events::rules::default_condition(),
+                ];
+                c.append(&mut extra);
+                c.push(Condition {
+                    subject: Subject::Instigator,
+                    property: Property::Team,
+                    key: String::new(),
+                    compare: Compare::Equal,
+                    value: Datum::Number(i64::from(team)),
+                });
+                c
+            };
+            let object = || {
+                vec![
+                    Condition {
+                        subject: Subject::Object,
+                        property: Property::Kind,
+                        key: String::new(),
+                        compare: Compare::Equal,
+                        value: Datum::Text(kind.clone()),
+                    },
+                    Condition {
+                        subject: Subject::Object,
+                        property: Property::SpawnedBy,
+                        key: String::new(),
+                        compare: Compare::Equal,
+                        value: Datum::Text(source.clone()),
+                    },
+                ]
+            };
+            let row = |output: &str, target, params, conditions, delay_ms| Row {
+                enabled: true,
+                input: "onObjectEnter".into(),
+                output: output.into(),
+                target: Target::Slot(target),
+                params,
+                conditions,
+                delay_ms,
+                preserved: None,
+            };
+            let mut award = guards(vec![]);
+            award.extend(object());
+            let mut win = guards(vec![Condition {
+                subject: Subject::Team,
+                property: Property::Score,
+                key: String::new(),
+                compare: Compare::AtLeast,
+                value: Datum::Number(5),
+            }]);
+            win.extend(object());
+            vec![
+                row(
+                    "addTeamScore",
+                    Slot::Instigator,
+                    vec![Value::Int(1)],
+                    award,
+                    0,
+                ),
+                row("winRound", Slot::Instigator, vec![], win, 0),
+                row("resetObject", Slot::Object, vec![], object(), 3000),
+            ]
+        };
+        s.edit_brick(human, low_goal, Edit::Events(rows(teams[0])))
+            .unwrap();
+        s.edit_brick(human, high_goal, Edit::Events(rows(teams[1])))
+            .unwrap();
+        for _ in 0..20 {
+            seq += 1;
+            s.movement(human, seq, MoveInput::default()).unwrap();
+            s.step().unwrap();
+        }
+        Self {
+            s,
+            human,
+            seq,
+            players: [(striker, teams[0], low_goal), (rival, teams[1], high_goal)],
+            kind,
+        }
+    }
+
+    fn step(&mut self) {
+        self.seq += 1;
+        self.s
+            .movement(self.human, self.seq, MoveInput::default())
+            .unwrap();
+        self.s.step().unwrap();
+    }
+
+    fn ball(&self) -> Option<(u64, Vec3)> {
+        let id = self
+            .s
+            .vehicle_infos()
+            .iter()
+            .find(|v| v.definition == self.kind && !v.destroyed)?
+            .id;
+        let pose = self.s.vehicle_poses().into_iter().find(|p| p.id == id)?;
+        Some((id, pose.position.into()))
+    }
+
+    fn feet(&self, owner: u64) -> Vec3 {
+        Vec3::from(
+            self.s
+                .snapshot()
+                .players
+                .iter()
+                .find(|p| p.owner == owner)
+                .unwrap()
+                .feet,
+        )
+    }
+}
+
+#[test]
+fn two_team_ball_game_bots_attack_their_own_goal_contest_the_ball_and_score() {
+    for (namespace, mirrored) in [("amber-pitch", false), ("renamed-court", true)] {
+        let mut g = Pitch::new(namespace, mirrored);
+        let (first_ball, _) = g.ball().expect("the authored spawner made its body");
+        let mut targeted = [0usize; 2];
+        let mut contested_ticks = 0usize;
+        let mut rival_nearest = f32::INFINITY;
+        let mut scored: Option<u64> = None;
+        let mut reset_seen = false;
+        let mut retargeted = false;
+        let mut trace = Vec::new();
+        let mut previous = String::new();
+        // Ticks since both players first had a grounded objective, and how
+        // many of those each spent fighting or chasing the other player.
+        let mut started = false;
+        let mut played = 0usize;
+        let mut combat = [0usize; 2];
+        for _ in 0..120 * 60 {
+            g.step();
+            let thoughts = g.s.bot_thoughts();
+            started |= g.players.iter().all(|(bot, _, _)| {
+                thoughts
+                    .iter()
+                    .any(|t| t.bot == *bot && t.objective.is_some())
+            });
+            let ball = g.ball();
+            let mut pursuing = [false; 2];
+            for (i, (bot, team, goal)) in g.players.iter().enumerate() {
+                let t = thoughts.iter().find(|t| t.bot == *bot).unwrap();
+                assert_ne!(
+                    t.objective_diagnostic,
+                    Some("objective resource claimed"),
+                    "an opponent's claim on the ball must not stand a bot down ({namespace}); trace={trace:?}"
+                );
+                if started {
+                    played += usize::from(i == 0);
+                    combat[i] += usize::from(matches!(t.behaviour, "fight" | "chase"));
+                }
+                if let Some(source) = t.objective {
+                    let defended = g.players[1 - i].2;
+                    assert_ne!(
+                        source, defended,
+                        "bot {bot} on team {team} must never attack the goal its team defends ({namespace})"
+                    );
+                    if source == *goal {
+                        targeted[i] += 1;
+                        pursuing[i] = t
+                            .objective_detail
+                            .as_ref()
+                            .is_some_and(|d| d.provider == "native physical contact");
+                    }
+                }
+            }
+            if let Some((id, at)) = ball {
+                if id == first_ball && pursuing == [true, true] {
+                    contested_ticks += 1;
+                    let rival = g.players[1].0;
+                    rival_nearest = rival_nearest.min(flat_distance(g.feet(rival), at));
+                }
+                if let Some(scorer) = scored
+                    && id != first_ball
+                {
+                    reset_seen = true;
+                    retargeted |= thoughts
+                        .iter()
+                        .find(|t| t.bot == scorer)
+                        .and_then(|t| t.objective_detail.as_ref())
+                        .is_some_and(|d| d.action.contains(&format!("/onObjectEnter/{id}/")));
+                }
+            }
+            let state = format!(
+                "{:?}",
+                thoughts
+                    .iter()
+                    .map(|t| (
+                        t.bot,
+                        t.behaviour,
+                        t.objective,
+                        t.objective_diagnostic,
+                        t.objective_detail.as_ref().map(|d| d.phase)
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            if state != previous && trace.len() < 60 {
+                trace.push((g.s.simulation().state().tick, state.clone(), ball));
+                previous = state;
+            }
+            if scored.is_none() {
+                for (bot, _, _) in g.players {
+                    if g.s.vitals()[&bot].score > 0 {
+                        scored = Some(bot);
+                    }
+                }
+            }
+            if retargeted {
+                break;
+            }
+        }
+        let scorer = scored.unwrap_or_else(|| {
+            panic!(
+                "no bot scored a goal ({namespace}): targeted={targeted:?} contested={contested_ticks} trace={trace:?} thoughts={:?} poses={:?} events={:?}",
+                g.s.bot_thoughts(),
+                g.s.vehicle_poses(),
+                g.s.take_event_diagnostics()
+            )
+        });
+        assert!(
+            targeted[0] > 120 && targeted[1] > 120,
+            "each bot pursued the goal its own team scores in ({namespace}): {targeted:?}; trace={trace:?}"
+        );
+        assert!(
+            contested_ticks > 120,
+            "both sides worked the same ball at once ({namespace}): {contested_ticks}; trace={trace:?}"
+        );
+        assert!(
+            rival_nearest < 3.0,
+            "the opponent physically reached the contested ball ({namespace}): {rival_nearest}; trace={trace:?}"
+        );
+        assert!(
+            combat.iter().all(|c| c * 10 <= played),
+            "unarmed players spend their time playing, not fighting each other ({namespace}): {combat:?} of {played}; trace={trace:?}"
+        );
+        let (striker, rival) = (g.players[0].0, g.players[1].0);
+        let other = if scorer == striker { rival } else { striker };
+        let team = g.players.iter().find(|p| p.0 == scorer).unwrap().1;
+        assert_eq!(g.s.vitals()[&scorer].score, 1, "one canonical goal");
+        assert_eq!(g.s.vitals()[&other].score, 0);
+        assert_eq!(g.s.vitals()[&scorer].team, Some(team));
+        let game = g.s.minigame_views()[0].id;
+        assert!(
+            !g.s.round_results().any(|r| r.game == game),
+            "one goal does not win a five-goal round"
+        );
+        assert!(
+            reset_seen,
+            "the authored delayed reset replaced the scored ball ({namespace})"
+        );
+        assert!(
+            retargeted,
+            "the scorer composed its next goal with the replacement ball ({namespace}): trace={trace:?}"
+        );
+        assert!(g.s.take_event_diagnostics().is_empty());
+    }
+}
+
+fn flat_distance(a: Vec3, b: Vec3) -> f32 {
+    Vec3::new(a.x - b.x, 0.0, a.z - b.z).length()
 }
