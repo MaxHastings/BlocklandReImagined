@@ -1078,10 +1078,10 @@ pub(crate) mod tests {
             tint: [1.0; 4],
         };
         let mut models = DebrisModels::default();
-        let mut builds = 0;
-        let mut frame = |models: &mut DebrisModels, looks: &[Look]| {
+        let builds = std::cell::Cell::new(0);
+        let frame = |models: &mut DebrisModels, looks: &[Look]| {
             models.frame_models(looks.iter().map(|l| (l, body)), 4, |_| {
-                builds += 1;
+                builds.set(builds.get() + 1);
                 Ok(None)
             })
         };
@@ -1094,9 +1094,8 @@ pub(crate) mod tests {
             .map(look)
             .collect();
         frame(&mut models, &second)?;
-        drop(frame);
         assert_eq!(
-            builds,
+            builds.get(),
             MAX_LOOKS + MAX_LOOKS / 2,
             "only the new looks build"
         );
