@@ -356,6 +356,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-admin",
+ "bri-console",
  "bri-content",
  "bri-convert",
  "bri-minigames",
@@ -384,6 +385,7 @@ dependencies = [
 name = "bri-admin"
 version = "0.1.0"
 dependencies = [
+ "bri-console",
  "bri-content",
  "bri-package",
  "serde",
@@ -409,6 +411,7 @@ name = "bri-audio-import"
 version = "0.1.0"
 dependencies = [
  "bri-audio",
+ "bri-console",
  "serde",
  "serde_json",
  "sha2",
@@ -420,6 +423,7 @@ name = "bri-bls"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-events",
  "bri-world",
@@ -514,6 +518,7 @@ name = "bri-client-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-package",
  "bytemuck",
@@ -540,6 +545,7 @@ name = "bri-content"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "glam 0.33.10",
  "image",
  "serde",
@@ -553,6 +559,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-bls",
+ "bri-console",
  "bri-content",
  "bri-events",
  "bri-world",
@@ -579,6 +586,7 @@ name = "bri-events"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-package",
  "glam 0.33.10",
  "serde",
@@ -595,6 +603,7 @@ name = "bri-foliage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-package",
  "bri-physics",
@@ -693,6 +702,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-admin",
+ "bri-console",
  "bri-content",
  "bri-crash",
  "bri-events",
@@ -743,6 +753,7 @@ name = "bri-package-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-package",
  "bri-weapons",
@@ -768,6 +779,9 @@ dependencies = [
 [[package]]
 name = "bri-progress"
 version = "0.1.0"
+dependencies = [
+ "bri-console",
+]
 
 [[package]]
 name = "bri-render"
@@ -858,6 +872,7 @@ name = "bri-ui-import"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-ui",
  "image",
  "serde",
@@ -917,6 +932,7 @@ name = "bri-weapons-import"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-convert",
  "bri-weapons",
  "regex",
@@ -930,6 +946,7 @@ name = "bri-weather"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-package",
  "bri-render",
  "bytemuck",

@@ -6,6 +6,7 @@ rust-version = "1.93"
 publish = false
 
 [dependencies]
+bri-console = { path = "../console" }
 bri-content = { path = "../content" }
 bri-package = { path = "../package" }
 serde.workspace = true

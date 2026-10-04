@@ -3,6 +3,7 @@
 //! the animations its model plays (`playThread`, `setThreadDir`) and the
 //! images it mounts (`mountImage`), each possibly chosen by the vehicle's
 //! speed. Read, never run.
+use bri_console::Clamp;
 use bri_convert::tscript::{Function, Script};
 use bri_vehicles::schema::AnimationThread;
 use std::collections::BTreeMap;
@@ -63,7 +64,7 @@ pub fn setup(scripts: &[Script], datablock: &str, fields: &BTreeMap<String, Stri
         match callee.as_str() {
             "setwheelsteering" => {
                 if let Ok(v) = value.parse::<f32>() {
-                    out.steering.push((index, v.clamp(-1., 1.)));
+                    out.steering.push((index, v.clamped(-1., 1.)));
                 }
             }
             "setwheelpowered" => {

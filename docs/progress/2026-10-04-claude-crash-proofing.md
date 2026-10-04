@@ -104,14 +104,14 @@ disallows `f32::clamp` and `f64::clamp` (verified clippy 1.93 accepts
 primitive paths); clippy cannot tell constant bounds apart, so every float
 clamp in client, render, ui, motor, vehicles, fx-runtime, audio, weapons
 and physics (all targets) is migrated, found by the compiler (integer and
-glam clamps keep `clamp`). Crate roots outside those nine that still call
-`.clamp(` carry an explicit
-`#![allow(clippy::disallowed_methods, reason = ...)]` until migrated:
-addon-import, admin, audio-import, bls, chaos (+ its bot_navigation_spike
-test), client-sandbox, content, convert, events, foliage, net,
-package-runtime, progress, sim (+ tests/pong.rs), ui-import, weapons-import,
-weather. Next: migrate content, sim, client-sandbox, weather and foliage,
-which also run in the client process.
+glam clamps keep `clamp`). A follow-up (branch `fix/clamp-migration`) migrated the remaining
+crates the same way: addon-import, admin, audio-import, bls,
+client-sandbox, content, convert, events, foliage, net, package-runtime,
+progress, ui-import, weapons-import and weather now depend on bri-console
+and use `clamped` for every float clamp; their crate-level allows are gone.
+Only sim (+ tests/pong.rs) and chaos (+ its bot_navigation_spike test)
+still carry `#![allow(clippy::disallowed_methods, reason = ...)]`, left for
+the lane editing those crates.
 
 Guard: `bri-console` `clamp::tests::a_nan_bound_reports_the_callers_location_once`
 (the panic names this test's own file and line; the site is recorded

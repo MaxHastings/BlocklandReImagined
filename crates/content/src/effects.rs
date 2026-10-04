@@ -1,5 +1,6 @@
 //! Native effect definitions. All timings are seconds and all references native IDs.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -111,12 +112,12 @@ pub struct Particle {
 }
 impl Particle {
     pub fn sample(&self, age: f32) -> ([f32; 4], f32) {
-        let age = age.clamp(0.0, 1.0);
+        let age = age.clamped(0.0, 1.0);
         for pair in self.keys.windows(2) {
             if age <= pair[1].time {
                 let span = pair[1].time - pair[0].time;
                 let t = if span > 0.0 {
-                    ((age - pair[0].time) / span).clamp(0.0, 1.0)
+                    ((age - pair[0].time) / span).clamped(0.0, 1.0)
                 } else {
                     1.0
                 };

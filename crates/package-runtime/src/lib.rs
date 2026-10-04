@@ -35,10 +35,6 @@
 //! call past a share waits or is refused with a named reason (`command.busy`,
 //! `state.budget`); state is budgeted against the save file's limit
 //! ([`state::MAX_STATE_BYTES`]) so admitted state can always be saved.
-#![allow(
-    clippy::disallowed_methods,
-    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
-)]
 pub mod bot_objectives;
 pub mod check;
 pub mod content;

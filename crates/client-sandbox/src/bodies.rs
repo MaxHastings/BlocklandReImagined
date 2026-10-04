@@ -20,6 +20,7 @@
 //! and reads back what the game reports ([`BodyState`]); the game runs the
 //! physics between frames, so a body created in one frame is first
 //! reported the next.
+use bri_console::Clamp;
 
 /// Floats one `rigid_create` record holds.
 pub const BODY_RECORD: usize = 28;
@@ -271,12 +272,12 @@ pub fn body_spec(r: &[f32]) -> Result<BodySpec, String> {
         rotation: unit_quaternion([r[10], r[11], r[12], r[13]])?,
         velocity: clamp_length([r[14], r[15], r[16]], MAX_SPEED),
         spin: clamp_length([r[17], r[18], r[19]], MAX_SPIN),
-        density: r[20].clamp(0.01, 100.0),
-        friction: r[21].clamp(0.0, 4.0),
-        bounce: r[22].clamp(0.0, 1.0),
+        density: r[20].clamped(0.01, 100.0),
+        friction: r[21].clamped(0.0, 4.0),
+        bounce: r[22].clamped(0.0, 1.0),
         group: group as u32,
-        linear_damping: r[24].clamp(0.0, 100.0),
-        angular_damping: r[25].clamp(0.0, 100.0),
+        linear_damping: r[24].clamped(0.0, 100.0),
+        angular_damping: r[25].clamped(0.0, 100.0),
         shared: r[26] == 1.0,
     })
 }
@@ -296,9 +297,9 @@ pub fn joint_spec(r: &[f32]) -> Result<JointSpec, String> {
     Ok(JointSpec {
         anchor,
         axis: axis.to_array(),
-        swing: r[6].clamp(0.0, pi),
-        twist: r[7].clamp(0.0, pi),
-        friction: r[8].clamp(0.0, 100.0),
+        swing: r[6].clamped(0.0, pi),
+        twist: r[7].clamped(0.0, pi),
+        friction: r[8].clamped(0.0, 100.0),
     })
 }
 

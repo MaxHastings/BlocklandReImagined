@@ -2,6 +2,7 @@
 //! world clock. Original BLS/Torque parsing stays in the offline importers.
 use crate::*;
 use anyhow::{Context, Result, bail, ensure};
+use bri_console::Clamp;
 use serde_json::Value as Json;
 pub fn row_selection(text: &str) -> Result<RowSelection> {
     if text.trim().eq_ignore_ascii_case("ALL") {
@@ -90,7 +91,7 @@ pub fn normalize_ui_row(catalog: &Catalog, mut row: Row) -> Result<Row> {
             && let Value::Float(v) = p
         {
             ensure!(v.is_finite(), "Nonfinite event float");
-            *v = *min + (((v.clamp(*min, *max) - *min) / *step) + 1e-5).floor() * *step;
+            *v = *min + (((v.clamped(*min, *max) - *min) / *step) + 1e-5).floor() * *step;
         }
         if matches!(s, Param::IntList { .. })
             && let Value::Text(text) = p

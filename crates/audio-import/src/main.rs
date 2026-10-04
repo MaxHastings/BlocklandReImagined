@@ -8,10 +8,6 @@
 //! ```
 //! The installation is only read. Scripts are scanned as text, never executed.
 //! An existing output directory is never overwritten.
-#![allow(
-    clippy::disallowed_methods,
-    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
-)]
 
 mod convert;
 mod model;
