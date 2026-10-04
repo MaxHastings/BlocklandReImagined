@@ -43,16 +43,8 @@ impl App {
         let game_elapsed = elapsed.mul_f32(scale);
         self.avatar.animation_time += game_elapsed.as_secs_f64().min(0.25);
         self.avatar.preview_time += elapsed.as_secs_f64().min(0.25);
-        if let Err(error) = self.poll_network() {
-            // A fault while following the session (a map's weather, a tool
-            // catalog, a closed connection) ends that session with its real
-            // reason, never the whole game.
-            bri_console::warn(format!("Session ended by a client error: {error:#}"));
-            self.ui.apply(UiUpdate::Connection(ConnectionState::Failed {
-                reason: format!("{error:#}"),
-            }));
-            self.disconnect();
-        }
+        let polled = self.poll_network();
+        self.end_session_on_fault(polled);
         // The server's settings decide some weapon fields: play the pack
         // they make, and the authored one outside a game.
         let values = self.net.attempt.as_ref().and_then(|a| a.view.as_ref());
@@ -151,7 +143,8 @@ impl App {
             .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
-        self.advance_local_game(alive, game_elapsed)?;
+        let advanced = self.advance_local_game(alive, game_elapsed);
+        self.end_session_on_fault(advanced);
         self.update_combat_presentation();
         self.update_perf();
         self.update_lag();
@@ -180,14 +173,28 @@ impl App {
         if let Some(building) = &mut self.build.building {
             building.set_passages(&self.motion.passages());
         }
-        self.advance_world_presentation(game_elapsed, third_person, &mut listener)?;
+        let presented = self.advance_world_presentation(game_elapsed, third_person, &mut listener);
+        self.end_session_on_fault(presented);
         self.audio.tick(elapsed.as_secs_f32(), listener);
         self.view.drawn_controls = Some(self.controls.clone());
         Ok(())
     }
 
+    /// A fault while following the session (a map's weather, a tool
+    /// catalog, a closed connection, the local player's movement) ends that
+    /// session with its real reason, never the whole game.
+    fn end_session_on_fault(&mut self, result: Result<()>) {
+        if let Err(error) = result {
+            bri_console::warn(format!("Session ended by a client error: {error:#}"));
+            self.ui.apply(UiUpdate::Connection(ConnectionState::Failed {
+                reason: format!("{error:#}"),
+            }));
+            self.disconnect();
+        }
+    }
     /// Steps 12-19 of the frame schedule: the local player's motion, then
-    /// mounts, vehicles, riders, loose models and music.
+    /// mounts, vehicles, riders, loose models and music. Every fault here is
+    /// the session's ([`Self::end_session_on_fault`]).
     fn advance_local_game(&mut self, alive: bool, game_elapsed: Duration) -> Result<()> {
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
             if let Some(view) = &a.view {
@@ -841,6 +848,7 @@ impl App {
 
     /// Step 26, in game only: moving entities, ghosts, liquids, avatar
     /// animation, rider eyes and world effects; sets the audio `listener`.
+    /// Every fault here is the session's ([`Self::end_session_on_fault`]).
     fn advance_world_presentation(
         &mut self,
         game_elapsed: Duration,

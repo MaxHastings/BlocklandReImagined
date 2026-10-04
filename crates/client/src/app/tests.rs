@@ -487,7 +487,59 @@ use crate::testing::content_root::ContentRoot;
 crate::testing::synthetic_and_content!(
     ContentRoot: app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails,
     native_weapon_catalog_startup_and_headless_host,
+    a_movement_fault_ends_the_session_not_the_game,
 );
+
+/// A fault in the local player's movement (here, a look that is not a
+/// number, which the predictor refuses) ends the session with its reason,
+/// as a network fault does; the frame itself succeeds, so the game window
+/// stays open on the failure screen instead of closing.
+fn a_movement_fault_ends_the_session_not_the_game(f: &ContentRoot) -> anyhow::Result<()> {
+    use super::*;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (320, 240))?;
+    app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Movement fault test".into(),
+        password: String::new(),
+        admin_password: "movement-fault-admin".into(),
+        super_admin_password: "movement-fault-super".into(),
+    });
+    let start = std::time::Instant::now();
+    let mut previous = start;
+    while !(app.motion.predicting() && app.net.attempt.as_ref().is_some_and(|a| a.entered)) {
+        ensure!(
+            start.elapsed() < Duration::from_secs(300),
+            "never entered: {:?}",
+            app.ui.core.conn
+        );
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("hosting failed: {reason}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.controls.yaw = f32::NAN;
+    // Long enough for a prediction tick to run the bad input.
+    app.tick(Duration::from_millis(100))?;
+    let ConnectionState::Failed { reason } = &app.ui.core.conn else {
+        anyhow::bail!("the session went on: {:?}", app.ui.core.conn);
+    };
+    ensure!(
+        reason.contains("look"),
+        "the movement fault's reason: {reason}"
+    );
+    ensure!(app.net.attempt.is_none(), "the session ended");
+    Ok(())
+}
 
 fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
     f: &ContentRoot,
