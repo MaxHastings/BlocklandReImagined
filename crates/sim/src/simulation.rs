@@ -22,6 +22,10 @@ pub const FLOOR_DIP: f32 = 0.1;
 /// Synchronous placement cannot yield. Refuse pathological support queries
 /// explicitly instead of scanning millions of cells or buckets in one tick.
 const SUPPORT_QUERY_LIMIT: u32 = 256;
+// Footprint queries have a different bounded cost from neighbor/connector
+// queries. Admit up to 64x64 authored cells without spending their allowance
+// on bucket visits, contacts, or one another.
+const FOOTPRINT_CELL_LIMIT: u32 = 64 * 64;
 /// Why a brick could not be planted. Clients show the original plant-error
 /// icons for these rather than a generic rejection message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2045,8 +2049,9 @@ fn check_placement_support(
     // Terrain is judged by `buried_bounded` below, not by contact: v20 deploys a
     // ghost aimed at terrain 0.1 into it, and a level brick on a slope dips
     // into the uphill side, so terrain may reach above a brick's bottom.
+    let mut contact_work = SUPPORT_QUERY_LIMIT;
     for (handle, obstacle) in query.intersect_aabb_conservative(aabb) {
-        probe_spend(&mut work_left)?;
+        probe_spend(&mut contact_work)?;
         let eligible = (obstacle.user_data == MAP_TAG && !is_terrain(handle))
             || (!obstacle.is_sensor()
                 && obstacle
@@ -2079,14 +2084,20 @@ fn check_placement_support(
             }
         }
     }
-    if let Some(t) = terrain
-        && buried_bounded(t, bounds, &mut work_left)?
-    {
-        return Err(PlantFailure::Buried.into());
+    if let Some(t) = terrain {
+        let mut terrain_work = footprint_probe_budget(bounds, 1)?;
+        if buried_bounded(t, bounds, &mut terrain_work)? {
+            return Err(PlantFailure::Buried.into());
+        }
     }
     // Preserve the normal floor-dip/terrain root rule even when a different
     // neighboring connection is obstructed. Any clear stud connection suffices.
-    let grounded = !supported && ground_probe(physics, terrain, bounds, Some(&mut work_left))?;
+    let grounded = if supported {
+        false
+    } else {
+        let mut floor_work = footprint_probe_budget(bounds, if terrain.is_some() { 2 } else { 1 })?;
+        ground_probe(physics, terrain, bounds, Some(&mut floor_work))?
+    };
     Ok((supported || grounded, obstructed_support))
 }
 /// A stud pair is a local physical connection, not a volume classification.
@@ -2107,6 +2118,13 @@ fn map_connector_clear(query: &QueryPipeline<'_>, cell: [i32; 3], neighbor: [i32
             // remains valid. Joining through the floor from below does not.
             delta.y < 0.0 && hit.normal.y > 0.7 && hit.time_of_impact >= reach - 0.002
         })
+}
+fn footprint_probe_budget(bounds: Bounds, probes_per_cell: u32) -> Result<u32> {
+    let cells = (bounds.size[0] as u64).saturating_mul(bounds.size[2] as u64);
+    if cells > u64::from(FOOTPRINT_CELL_LIMIT) {
+        return Err(PlantFailure::Limit.into());
+    }
+    Ok(cells as u32 * probes_per_cell)
 }
 fn probe_spend(left: &mut u32) -> Result<()> {
     if *left == 0 {

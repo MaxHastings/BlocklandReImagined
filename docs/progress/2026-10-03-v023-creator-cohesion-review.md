@@ -255,3 +255,47 @@ combined patch. Temp Rust formatting and `git apply --check` passed; Cargo and
 behavioral before/after evidence remain root-owned. The generated companion
 `behaviour.json` must be refreshed alongside `shark.rhai` for its state
 declaration; application to source alone does not update a packaged Add-On.
+
+## Exact-commit gate: synthetic topology favorite/resource recovery
+
+Root's exact-commit gate receipt `../.bri-gate/logs/56fa1f82811e.log`
+failed `screens_reach_the_server_in_every_topology::synthetic`, including its
+isolated retry. The generated-content variant passed. The full synthetic
+failure identifies Create MiniGame in all three topologies: settings stays
+open, pending requests are zero, and no game is created. The synthetic content
+catalog lacks some stock v20 default equipment IDs. The new screen correctly
+preserves those authored defaults as Unavailable and refuses submission until
+explicit recovery; the old topology helper relied on their silent NONE fallback.
+
+`/tmp/bri-v023-topology-recovery/screen-topology-recovery.patch` changes only
+that test's ordinary create journey. It verifies each absent default remains
+visibly bound to its exact Unavailable ID, chooses the existing NONE entry
+through the normal popup click/type/Return helper, and then submits Create.
+An added assertion checks the complete chosen loadout in every client's
+authoritative game summary. Available defaults in the native-content case
+remain untouched. No production resource validation/acknowledgment guard,
+button visibility, existing acceptance assertion or timeout is weakened.
+Temp Rust formatting required skip_children because the copied file lacks its
+support module; the corrected formatting and patch applicability passed.
+Cargo before/after and renewed exact-commit gate remain root-owned.
+
+## Topology rerun exposed exact clear-choice keyboard defect
+
+Root's `/tmp/bri-v023-topology-recovery.log` rerun passed native content but
+synthetic recovery still failed: CMG_StartEquip4 retained its unavailable
+rocket launcher after typing the dropdown's NONE label and pressing Return.
+This was not a viewport/hit overlap. Shared `View::refilter_popup` deliberately
+skipped every pinned row when choosing the highlighted search match. An exact
+NONE (or event-editor '-') query therefore had no highlighted row; Enter closed
+without changing the choice. The helper also copied NONE's leading space,
+while runtime popup queries did not reuse the existing trimmed search key.
+
+`/tmp/bri-v023-popup-clear/popup-clear.patch` corrects these two shared popup
+lines: normalize through `search_key`, then admit an exact pinned-key match as
+the highlight. Ordinary searches still choose their non-pinned match, and
+unknown searches retain the existing no-selection behavior. The actual View
+mouse-open/type/Return regression covers NONE, whitespace/case, '-', then a
+normal Gun search to prove clearing cannot steal unrelated searches. Existing
+unknown-query and broader popup assertions are unchanged. The original topology
+recovery uses normal input and needs no special bypass. Formatting and patch
+applicability passed; root owns baseline/after runs and the renewed full gate.

@@ -540,6 +540,44 @@ fn typing_into_an_open_popup_filters_completes_and_keys_pick() {
 }
 
 #[test]
+fn typing_an_exact_clear_choice_then_enter_selects_it() {
+    for (clear, query) in [(" NONE", "NONE"), (" NONE", " none "), ("-", "-")] {
+        let pack = Pack::from_parts(UiPack::default(), ".".into());
+        let mut v = View::new(&layout());
+        v.layout(640, 480);
+        let pop = v.id("pop").unwrap();
+        v.state(pop).items = vec![
+            (clear.into(), 0),
+            ("Gun".into(), 1),
+            ("Unavailable: missing:weapon/rocket".into(), 2),
+        ];
+        v.select(pop, Some(2));
+        click(&mut v, &pack, 20, 185);
+        typed(&mut v, query);
+        assert_eq!(
+            v.popup_highlight().map(|(_, id)| id),
+            Some(0),
+            "query {query:?}"
+        );
+        let mut out = Vec::new();
+        assert!(v.key(Key::Return, Modifiers::NONE, &mut out));
+        assert_eq!(v.selected(pop), Some(0), "query {query:?}");
+        assert_eq!(v.open_popup_node(), None);
+        assert!(out.contains(&ViewEvent {
+            node: pop,
+            kind: EventKind::Changed
+        }));
+
+        // The clear choice remains visible, but cannot steal an ordinary search.
+        click(&mut v, &pack, 20, 185);
+        typed(&mut v, "gun");
+        assert_eq!(v.popup_highlight().map(|(_, id)| id), Some(1));
+        v.key(Key::Return, Modifiers::NONE, &mut out);
+        assert_eq!(v.selected(pop), Some(1));
+    }
+}
+
+#[test]
 fn popup_filter_stays_fast_on_long_lists() {
     let pack = Pack::from_parts(UiPack::default(), ".".into());
     let mut v = View::new(&layout());

@@ -679,3 +679,42 @@ fn pathological_map_blocked_attachment_query_refuses_with_a_limit_before_publica
     );
     assert_eq!(*sim.state(), before);
 }
+
+#[test]
+fn ordinary_large_footprints_keep_floor_samples_independent_of_query_overhead() {
+    for width in [16, 64] {
+        let id = format!("renamed-footprint-{width}");
+        let mut defs = bri_sim::testing::definitions();
+        defs.entries.insert(
+            id.clone(),
+            bri_sim::testing::definition(
+                &id,
+                [width, width],
+                1,
+                bri_sim::definitions::Special::None,
+                false,
+            ),
+        );
+        let mut sim = Simulation::new(world(), defs, vec![floor()]).unwrap();
+        let owner = actor(1);
+        let plate = Brick::new(ContentRef::Resolved(id.clone()), [0.0, 1.1, 0.0], 1);
+        let ids = sim.plant_group_floating(&owner, vec![plate]).unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(sim.state().bricks[&ids[0]].base_plate);
+        assert_eq!(sim.state().bricks[&ids[0]].position, [0.0, 1.1, 0.0]);
+        // The limited floor covers only the middle of the 64x64 footprint,
+        // so this legitimate root needs more than 256 misses before its hit.
+        let builder = Builder {
+            actor: &owner,
+            position: Vec3::Y,
+            reach: 50.0,
+        };
+        let grounded = sim
+            .plant(
+                &builder,
+                Brick::new(ContentRef::Resolved(id), [0.0, 0.1, 0.0], 1),
+            )
+            .unwrap();
+        assert_eq!(sim.state().bricks[&grounded].position, [0.0, 0.1, 0.0]);
+    }
+}

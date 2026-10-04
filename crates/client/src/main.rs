@@ -203,8 +203,8 @@ fn report_installed(done: Option<bri_package::defaults::Installed>) {
 fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
     // The GPU opens while the content loads.
     let early_gpu = platform::EarlyGpu::start();
-    install_default_add_ons(content)?;
-    for notice in bri_client::add_on_choices::restore(content, state)? {
+    install_default_add_ons(content).context("Loading the game")?;
+    for notice in bri_client::add_on_choices::restore(content, state).context("Loading the game")? {
         bri_console::warn(notice);
     }
     // Executing the game opts into the normal game window and audio device.

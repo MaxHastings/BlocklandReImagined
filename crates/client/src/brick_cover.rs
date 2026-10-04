@@ -55,15 +55,27 @@ pub fn bounds(brick: &Brick, meshes: &BTreeMap<String, BrickMesh>) -> Option<Bou
 }
 
 /// A conservative opaque rectangle on the actual tagged touching plane.
-/// Quilt rectangles may form one filled region (native bottom loop + edges);
-/// triangles, holes and disconnected patches are left visible rather than
-/// guessing coverage from the mesh's logical volume. Only chunk rebuilds ask.
+/// Planar rendered triangles may form one filled rectangle (native bottom
+/// loop + trapezoid edges). Holes and disconnected patches retain faces;
+/// logical volume alone never proves coverage. Only chunk rebuilds ask.
 // Proof work is finite even for valid unfamiliar very detailed meshes.
 const MAX_PROOF_QUADS: usize = 64;
 const MAX_COVER_CELLS: i64 = 16_384;
 /// Shared for one rebuild's chunk workers; geometry and authored alpha are
 /// immutable during that build. Opaque paint has the same inherited alpha.
 pub type FaceProofs = std::sync::Mutex<BTreeMap<usize, [Option<(Vec3, Vec3)>; 6]>>;
+// v20's generated BRICK skin grows outward by this amount (converter
+// brick::standard). Coverage remains on the authored stud/plate boundary.
+const GRID_SKIN: f32 = 0.0012;
+const MAX_PROOF_BREAKS: usize = 4096;
+type Point = [f64; 2];
+fn cross(a: Point, b: Point) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+fn sub(a: Point, b: Point) -> Point {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
 fn authored_face_region(mesh: &BrickMesh, face: usize) -> Option<(Vec3, Vec3)> {
     if mesh.quads.len() > MAX_PROOF_QUADS {
         return None;
@@ -75,8 +87,9 @@ fn authored_face_region(mesh: &BrickMesh, face: usize) -> Option<(Vec3, Vec3)> {
         1 => [0, 2],
         _ => [0, 1],
     };
-    let plane = direction[axis] * mesh.half_size()[axis];
-    let mut rects = Vec::new();
+    let half = mesh.half_size();
+    let plane = direction[axis] * half[axis];
+    let mut triangles = Vec::new();
     for quad in mesh
         .quads
         .iter()
@@ -90,65 +103,110 @@ fn authored_face_region(mesh: &BrickMesh, face: usize) -> Option<(Vec3, Vec3)> {
         }) {
             return None;
         }
-        let positions = quad.vertices.map(|v| Vec3::from(v.position));
-        if positions.iter().any(|p| (p[axis] - plane).abs() > 0.0001) {
-            return None;
-        }
-        let points = positions.map(|p| [p[axes[0]], p[axes[1]]]);
-        let lo = [0, 1].map(|a| points.iter().map(|p| p[a]).fold(f32::INFINITY, f32::min));
-        let hi = [0, 1].map(|a| {
-            points
-                .iter()
-                .map(|p| p[a])
-                .fold(f32::NEG_INFINITY, f32::max)
-        });
-        if (0..2).any(|a| hi[a] - lo[a] <= 0.0001) {
-            return None;
-        }
-        let mut corners = 0u8;
-        let mut rectangle = true;
-        for i in 0..4 {
-            let p = points[i];
-            let next = points[(i + 1) % 4];
-            if ((p[0] - next[0]).abs() < 0.0001) == ((p[1] - next[1]).abs() < 0.0001) {
-                rectangle = false;
-                break;
-            }
-            let mut corner = 0;
-            for a in 0..2 {
-                if (p[a] - hi[a]).abs() < 0.0001 {
-                    corner |= 1 << a;
-                } else if (p[a] - lo[a]).abs() >= 0.0001 {
-                    rectangle = false;
+        let mut positions = quad.vertices.map(|v| Vec3::from(v.position));
+        for p in &mut positions {
+            // Only the tiny outward skin is normalized. Inset or distant
+            // faces and geometry outside its declared footprint retain faces.
+            for a in 0..3 {
+                if p[a].abs() > half[a] {
+                    if p[a].abs() - half[a] > GRID_SKIN + 0.0001 {
+                        return None;
+                    }
+                    if a == axis {
+                        p[a] = p[a].signum() * half[a];
+                    }
                 }
             }
-            corners |= 1 << corner;
+            if (p[axis] - plane).abs() > 0.0001 {
+                return None;
+            }
         }
-        if !rectangle || corners != 15 {
-            return None;
+        let points = positions.map(|p| [f64::from(p[axes[0]]), f64::from(p[axes[1]])]);
+        // Rendered quads use these two triangles. One-wide native bricks
+        // include repeated vertices; their zero-area triangles cover nothing.
+        for indices in [[0, 1, 2], [0, 2, 3]] {
+            let triangle = indices.map(|i| points[i]);
+            if cross(sub(triangle[1], triangle[0]), sub(triangle[2], triangle[0])) != 0. {
+                triangles.push(triangle);
+            }
         }
-        rects.push((lo, hi));
     }
-    if rects.is_empty() {
+    if triangles.is_empty() {
         return None;
     }
-    let lo = [0, 1].map(|a| rects.iter().map(|r| r.0[a]).fold(f32::INFINITY, f32::min));
-    let hi = [0, 1].map(|a| {
-        rects
+    let lo = [0, 1].map(|a| {
+        triangles
             .iter()
-            .map(|r| r.1[a])
-            .fold(f32::NEG_INFINITY, f32::max)
+            .flatten()
+            .map(|p| p[a])
+            .fold(f64::INFINITY, f64::min)
     });
-    // Exact union of axis-aligned rectangles; never add overlapping area.
-    let mut xs: Vec<_> = rects.iter().flat_map(|r| [r.0[0], r.1[0]]).collect();
-    xs.sort_by(f32::total_cmp);
-    xs.dedup();
-    for x in xs.windows(2) {
-        let mut spans: Vec<_> = rects
+    let hi = [0, 1].map(|a| {
+        triangles
             .iter()
-            .filter(|r| r.0[0] <= x[0] && r.1[0] >= x[1])
-            .map(|r| (r.0[1], r.1[1]))
-            .collect();
+            .flatten()
+            .map(|p| p[a])
+            .fold(f64::NEG_INFINITY, f64::max)
+    });
+    if (0..2).any(|a| hi[a] <= lo[a]) {
+        return None;
+    }
+    let edges: Vec<_> = triangles
+        .iter()
+        .flat_map(|t| (0..3).map(move |i| (t[i], t[(i + 1) % 3])))
+        .collect();
+    let mut xs: Vec<_> = triangles.iter().flatten().map(|p| p[0]).collect();
+    // Endpoint ordering can change only at vertices or edge intersections.
+    // Including both makes a midpoint union proof exact within each strip.
+    for (i, (a, b)) in edges.iter().enumerate() {
+        let r = sub(*b, *a);
+        for (c, d) in &edges[i + 1..] {
+            let s = sub(*d, *c);
+            let denominator = cross(r, s);
+            if denominator == 0. {
+                continue;
+            }
+            let t = cross(sub(*c, *a), s) / denominator;
+            let u = cross(sub(*c, *a), r) / denominator;
+            if (0. ..=1.).contains(&t) && (0. ..=1.).contains(&u) {
+                xs.push(a[0] + t * r[0]);
+                if xs.len() > MAX_PROOF_BREAKS {
+                    return None;
+                }
+            }
+        }
+    }
+    xs.sort_by(f64::total_cmp);
+    xs.dedup();
+    for window in xs.windows(2) {
+        if window[0] == window[1] {
+            continue;
+        }
+        let x = window[0] + (window[1] - window[0]) * 0.5;
+        if !(x > window[0] && x < window[1]) {
+            return None;
+        }
+        let mut spans = Vec::new();
+        for triangle in &triangles {
+            let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+            for i in 0..3 {
+                let (mut a, mut b) = (triangle[i], triangle[(i + 1) % 3]);
+                // Shared quilt edges calculate identical intersections even
+                // when the neighbouring triangle winds them oppositely.
+                if a[0] > b[0] {
+                    std::mem::swap(&mut a, &mut b);
+                }
+                if a[0] == b[0] || x < a[0] || x > b[0] {
+                    continue;
+                }
+                let y = a[1] + (x - a[0]) * (b[1] - a[1]) / (b[0] - a[0]);
+                low = low.min(y);
+                high = high.max(y);
+            }
+            if high > low {
+                spans.push((low, high));
+            }
+        }
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut edge = lo[1];
         for (low, high) in spans {
@@ -164,8 +222,8 @@ fn authored_face_region(mesh: &BrickMesh, face: usize) -> Option<(Vec3, Vec3)> {
     let mut min = Vec3::splat(plane);
     let mut max = min;
     for a in 0..2 {
-        min[axes[a]] = lo[a];
-        max[axes[a]] = hi[a];
+        min[axes[a]] = lo[a] as f32;
+        max[axes[a]] = hi[a] as f32;
     }
     Some((min, max))
 }
@@ -255,14 +313,17 @@ impl Covers<'_> {
             let b = transform.transform_point3(local_max);
             let min = a.min(b);
             let max = a.max(b);
-            // The whole target tagged face must be a complete cell-aligned rectangle.
-            // A sparse face cannot be hidden by coverage elsewhere in its logical box.
+            // The actual projected quilt must first fill its rectangle. The
+            // tiny outward skin may overlap logical cell edges, but projected
+            // vertices are never moved: skew slivers and holes remain real.
+            // A sparse face cannot be hidden by coverage outside its region.
             let target_lo = [0, 1].map(|a| whole_cell_boundary(min[axes[a]], axes[a], true));
             let target_hi = [0, 1].map(|a| whole_cell_boundary(max[axes[a]], axes[a], false));
             if (0..2).any(|a| {
-                (min[axes[a]] / bri_sim::grid::CELL[axes[a]] - target_lo[a] as f32).abs() > 0.0001
-                    || (max[axes[a]] / bri_sim::grid::CELL[axes[a]] - target_hi[a] as f32).abs()
-                        > 0.0001
+                (min[axes[a]] - target_lo[a] as f32 * bri_sim::grid::CELL[axes[a]]).abs()
+                    > GRID_SKIN + 0.0001
+                    || (max[axes[a]] - target_hi[a] as f32 * bri_sim::grid::CELL[axes[a]]).abs()
+                        > GRID_SKIN + 0.0001
             }) {
                 continue;
             }

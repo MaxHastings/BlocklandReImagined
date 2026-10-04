@@ -270,3 +270,194 @@ fn a_sparse_target_face_is_not_hidden_by_a_neighbour_outside_its_actual_region()
         );
     }
 }
+
+// A faithful geometric shape of the native four trapezoid rims plus loop.
+// Its outward skin, degenerate triangles and surface names are mechanisms;
+// unfamiliar identities must receive exactly the same proof.
+fn quilt(id: &str, inner: f32, centre: bool) -> Mesh {
+    let mut mesh = block(id, [2, 2], 1);
+    let template = mesh
+        .quads
+        .iter()
+        .find(|q| q.face == Face::Bottom)
+        .unwrap()
+        .clone();
+    mesh.quads.retain(|q| q.face != Face::Bottom);
+    let outer = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+    let inside = [
+        [-inner, -inner],
+        [inner, -inner],
+        [inner, inner],
+        [-inner, inner],
+    ];
+    let quad = |points: [[f32; 2]; 4]| {
+        let mut q = template.clone();
+        for (vertex, point) in q.vertices.iter_mut().zip(points) {
+            vertex.position = [point[0], -0.1, point[1]];
+        }
+        q
+    };
+    for i in 0..4 {
+        let next = (i + 1) % 4;
+        mesh.quads
+            .push(quad([outer[i], outer[next], inside[next], inside[i]]));
+    }
+    if centre {
+        mesh.quads.push(quad(inside));
+    }
+    let half = mesh.half_size();
+    for quad in &mut mesh.quads {
+        for vertex in &mut quad.vertices {
+            for axis in 0..3 {
+                if vertex.position[axis].abs() == half[axis] {
+                    vertex.position[axis] += vertex.position[axis].signum() * 0.0012;
+                }
+            }
+        }
+    }
+    mesh
+}
+#[test]
+fn outward_grid_skin_and_complete_trapezoid_or_triangle_quilts_keep_native_culling() {
+    for inner in [0., 0.25] {
+        let upper = quilt("fixture/unknown-quilt", inner, inner != 0.);
+        let lower = block("fixture/support", [2, 2], 1);
+        let meshes = [upper, lower]
+            .into_iter()
+            .map(|m| (m.id.clone(), m))
+            .collect();
+        for turn in 0..4 {
+            let mut top = at("fixture/unknown-quilt", [0., 0.3, 0.]);
+            top.quarter_turns = turn;
+            let pair = vec![at("fixture/support", [0., 0.1, 0.]), top];
+            assert_ne!(
+                hidden(&meshes, pair.clone(), 1) & 1,
+                0,
+                "real opaque quilt covers the lower face, including repeated triangle vertices"
+            );
+            assert_ne!(
+                hidden(&meshes, pair, 2) & 2,
+                0,
+                "complete native-like underside is hidden by its support"
+            );
+            let mut right = at("fixture/unknown-quilt", [1., 0.1, 0.]);
+            right.quarter_turns = turn;
+            assert_eq!(
+                (hidden(
+                    &meshes,
+                    vec![at("fixture/support", [0., 0.1, 0.]), right],
+                    1
+                ) & 0b111100)
+                    .count_ones(),
+                1,
+                "outward skinned native side still covers its logical touching plane"
+            );
+        }
+    }
+}
+#[test]
+fn a_real_hole_in_a_trapezoid_quilt_cannot_cover_the_missing_region() {
+    let meshes = [
+        block("fixture/support", [2, 2], 1),
+        quilt("fixture/gapped-quilt", 0.25, false),
+    ]
+    .into_iter()
+    .map(|m| (m.id.clone(), m))
+    .collect();
+    assert_eq!(
+        hidden(
+            &meshes,
+            vec![
+                at("fixture/support", [0., 0.1, 0.]),
+                at("fixture/gapped-quilt", [0., 0.3, 0.])
+            ],
+            1
+        ) & 1,
+        0
+    );
+}
+#[test]
+#[ignore = "requires generated native content; CPU geometry only"]
+fn native_standard_and_ramp_bottom_quilts_cull_with_renamed_geometry() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("content");
+    let definitions = bri_sim::definitions::Definitions::load(
+        &bri_package::testing::pack_dir(&root, "brick_catalog"),
+        &bri_package::testing::pack_dir(&root, "geometry"),
+    )
+    .unwrap();
+    for (upper_id, support_id, xz) in [
+        ("v20/brick/brick1x1data", "v20/brick/brick1x1fdata", 0.25),
+        ("v20/brick/brick2x2data", "v20/brick/brick2x2fdata", 0.),
+        ("v20/brick/brick2x2rampdata", "v20/brick/brick2x2fdata", 0.),
+        (
+            "v20/brick/brick2x2rampupdata",
+            "v20/brick/brick2x2fdata",
+            0.,
+        ),
+    ] {
+        let mut upper = definitions.entries[upper_id].mesh.clone();
+        let mut support = definitions.entries[support_id].mesh.clone();
+        upper.id = "fixture/renamed-native-quilt".into();
+        support.id = "fixture/renamed-support".into();
+        let y = 0.2 + upper.half_size().y;
+        let meshes = [upper, support]
+            .into_iter()
+            .map(|m| (m.id.clone(), m))
+            .collect();
+        for turn in 0..4 {
+            let mut top = at("fixture/renamed-native-quilt", [xz, y, xz]);
+            top.quarter_turns = turn;
+            assert_ne!(
+                hidden(
+                    &meshes,
+                    vec![at("fixture/renamed-support", [xz, 0.1, xz]), top],
+                    2
+                ) & 2,
+                0,
+                "actual native standard/ramp underside remains cullable: {upper_id}, turn{turn}"
+            );
+        }
+    }
+}
+
+#[test]
+fn outward_skin_never_moves_projected_vertices_into_an_authored_sliver_hole() {
+    let mut top = block("fixture/skewed-quilt", [2, 2], 1);
+    let template = top
+        .quads
+        .iter()
+        .find(|q| q.face == Face::Bottom)
+        .unwrap()
+        .clone();
+    top.quads.retain(|q| q.face != Face::Bottom);
+    for points in [
+        [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.45], [-0.5, 0.45]],
+        [[-0.5, 0.45], [0.49, 0.45], [0.5, 0.5], [-0.5, 0.5]],
+        [[0.495, 0.45], [0.5, 0.45], [0.5, 0.5], [0.5, 0.5]],
+        [[0.5012, 0.5012], [0.49, 0.45], [0.495, 0.45], [0.495, 0.45]],
+    ] {
+        let mut quad = template.clone();
+        for (vertex, point) in quad.vertices.iter_mut().zip(points) {
+            vertex.position = [point[0], -0.1, point[1]];
+        }
+        top.quads.push(quad);
+    }
+    let meshes = [block("fixture/support", [2, 2], 1), top]
+        .into_iter()
+        .map(|m| (m.id.clone(), m))
+        .collect();
+    assert_eq!(
+        hidden(
+            &meshes,
+            vec![
+                at("fixture/support", [0., 0.1, 0.]),
+                at("fixture/skewed-quilt", [0., 0.3, 0.])
+            ],
+            1
+        ) & 1,
+        0,
+        "clamping the skew apex would invent coverage of an actual missing sliver"
+    );
+}

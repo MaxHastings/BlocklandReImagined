@@ -601,3 +601,49 @@ actual jet ejection and PrevSeat promotion into seat zero. They assert unchanged
 paired markers, rejection of the real cached former-driver pose, and successful
 prediction startup from the genuine current-driver pose. Their execution and
 the final full Motion rerun remain root-owned.
+
+
+The full gate on 56fa1f82811e exposed three additional lane failures. The shifted
+rotation fixture assumed absolute f32 rotation/subtraction commutes within
+1e-5; its corrected local-frame rotation assertion retains that tolerance and
+the translated-world hull/trigger checks. The guarded tool-loss negative removed
+the instrument after one meter, relying on the former remote-grab launch to
+reach an elevated goal. Its revised authored trigger waits for an observed
+inbound region approach, then removes the tool/revokes the due guard without
+changing velocity or physics. The first nine-tick forecast proved actual loss
+404, native release409, free entry410 in one transformed world but the second
+entered before release. An incremental eighteen-tick forecast was handed off;
+the stronger actual free-entry and guard-skip assertions remain unchanged.
+Root owns its remaining verification.
+
+Workshop's normal synthetic race recipe selected a 16x16 baseplate, whose
+256 unsupported floor samples exhausted a single 256 allowance already spent
+on bucket/contact work. The first proposed 512 combined allowance was rejected
+and superseded. Root applied separate finite stages: existing support/connector
+256, raw contacts256, and floor/terrain samples based on exact declared footprint
+with an explicit 4096-cell cap. Renamed ordinary16x16 and64x64 controls require
+valid floating publication and ground support after more than256 misses on a
+partial floor; the existing blocked large attachment still must refuse Limit.
+This restores bounded ordinary footprint capability without relaxing a test or
+allowing million-ray attachment scans. Gate retries/full validation remain
+root-owned.
+
+Independent review of the native face-quilt draw correction found its bounded
+strip proof coherent but flagged coordinate-wise in-plane skin clamping: moving
+a skew outward apex to the logical corner can fill a real tiny authored gap.
+The author/root received the exact four-quad counterexample and the narrow
+normal-axis-only normalization correction. Runtime/offscreen verification and
+this review's final closure remain pending.
+
+
+Native face-quilt review is now closed. Final source normalizes only the
+face-normal outward skin and retains every authored in-plane vertex. The exact
+skew/sliver four-quad negative is included, so normalization cannot invent its
+missing projected wedge. Critical vertex/edge intersections preserve the strip
+proof, the midpoint must be strictly representable inside each interval, and
+64-quad/4096-breakpoint/16384-cell limits retain bounded conservative fallback.
+Root's `/tmp/bri-v023-gate-corrections-final.log` records the unchanged largest
+stock draw budget **1/1**, actual face coverage **10/10**, and both screen
+topologies **2/2** passing. No remaining concrete blocker was found in the
+scoped independent native-cover source review. Final full gate/publication and
+remaining NPC gate-retry receipts stay root-owned.

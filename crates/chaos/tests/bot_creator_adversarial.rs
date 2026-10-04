@@ -123,8 +123,25 @@ fn on_tick() {
         let key=`${p.id}/${o.ref}`;
         if !(key in tracked) {tracked[key]=[o.x,o.y,o.z,o.ref];continue;}
         let old=tracked[key];let dx=o.x-old[0];let dy=o.y-old[1];let dz=o.z-old[2];
-        if dx*dx+dy*dy+dz*dz > 1.0 {
-            set("loss_sample",#{actor:p.id,baseline_ref:old[3],current_ref:o.ref,baseline:[old[0],old[1],old[2]],current:[o.x,o.y,o.z],distance2:dx*dx+dy*dy+dz*dz});
+        let loss_ready = !REVOKE;
+        if REVOKE {
+            // Wait for a genuine inbound approach near this authored region.
+            // The earlier one-meter trigger depended on the old remote-grab
+            // launch. Project eighteen ticks ahead to allow the native release
+            // hook to clear; the assertions still require actual free entry.
+            for b in bricks("PLATE") {
+                if b.name == "GOAL" {
+                    let now_inside = (o.x-b.x).abs() <= 1.5 &&
+                                     (o.y-b.y).abs() <= 2.0 &&
+                                     (o.z-b.z).abs() <= 1.5;
+                    let x=o.x+o.vx*0.15; let y=o.y+o.vy*0.15; let z=o.z+o.vz*0.15;
+                    loss_ready = !now_inside && (x-b.x).abs() < 1.5 &&
+                                 (y-b.y).abs() < 2.0 && (z-b.z).abs() < 1.5;
+                }
+            }
+        }
+        if dx*dx+dy*dy+dz*dz > 1.0 && loss_ready {
+            set("loss_sample",#{actor:p.id,baseline_ref:old[3],current_ref:o.ref,baseline:[old[0],old[1],old[2]],current:[o.x,o.y,o.z],velocity:[o.vx,o.vy,o.vz],distance2:dx*dx+dy*dy+dz*dz});
             take_item(p.id,"TOOL:weapon/gravitygun");
             if REVOKE {
                 for b in bricks("PLATE") {
@@ -938,7 +955,11 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
     assert_eq!(g.s.vitals()[&g.author].score, 0);
     if revoke_goal {
         assert!(g.s.round_results().next_back().is_none());
-        if first_entry.is_some() {
+        if let Some(entered) = first_entry {
+            assert!(
+                first_hold_clear.is_some_and(|released| released < entered),
+                "guard evaluation must follow a real free coast, not retained grip: {causal_trace:#?}"
+            );
             let trace = saved_rule_trace(&mut g, goal);
             assert!(
                 trace

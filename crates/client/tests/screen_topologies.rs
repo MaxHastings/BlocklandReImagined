@@ -1154,6 +1154,43 @@ fn create_minigame(apps: &mut [&mut App], who: usize, title: &str) -> Result<()>
         "$MiniGame::Title",
         title,
     )?;
+    // The made-up catalog does not provide every stock default item. Keep
+    // the unavailable authored choice visible, then recover it through the
+    // same dropdown a player uses instead of relying on silent NONE fallback.
+    let mut expected_loadout = apps[who].ui.core.minigames.rules_draft().loadout;
+    for (slot, selected) in expected_loadout.iter_mut().enumerate() {
+        let Some(id) = selected.as_deref() else {
+            continue;
+        };
+        if apps[who]
+            .ui
+            .core
+            .minigames
+            .items
+            .iter()
+            .any(|item| item.id == id)
+        {
+            continue;
+        }
+        let popup = format!("CMG_StartEquip{slot}");
+        let v = view(apps[who], ScreenId::MiniGameSettings)?;
+        let node = find(v, &popup).with_context(|| format!("{popup} is missing"))?;
+        let unavailable = format!("Unavailable: {id}");
+        ensure!(
+            v.selected_text(node).as_deref() == Some(unavailable.as_str()),
+            "{popup} must preserve the unavailable authored item {id} before recovery"
+        );
+        let none = v
+            .node(node)
+            .state
+            .items
+            .iter()
+            .find(|(text, _)| text.trim() == "NONE")
+            .map(|(text, _)| text.clone())
+            .context("equipment dropdown has no NONE choice")?;
+        pick(apps[who], ScreenId::MiniGameSettings, &popup, &none)?;
+        *selected = None;
+    }
     click(
         apps[who],
         ScreenId::MiniGameSettings,
@@ -1168,7 +1205,24 @@ fn create_minigame(apps: &mut [&mut App], who: usize, title: &str) -> Result<()>
             a.iter()
                 .all(|app| app.ui.core.minigames.games.iter().any(|g| g.title == title))
         },
-    )
+    )?;
+    for app in apps.iter() {
+        let game = app
+            .ui
+            .core
+            .minigames
+            .games
+            .iter()
+            .find(|game| game.title == title)
+            .context("created mini-game disappeared")?;
+        ensure!(
+            game.rules.loadout == expected_loadout,
+            "created loadout differs from the explicitly recovered dropdown choices: {:?} != {:?}",
+            game.rules.loadout,
+            expected_loadout
+        );
+    }
+    Ok(())
 }
 
 fn join_minigame(apps: &mut [&mut App], who: usize, title: &str) -> Result<()> {

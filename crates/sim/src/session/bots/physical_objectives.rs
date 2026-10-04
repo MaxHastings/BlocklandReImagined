@@ -847,11 +847,23 @@ mod tests {
                         "counterfactual must reproduce the old through-body shortcut"
                     );
                 }
+                // Test rotation in the object's local frame. Rotating absolute
+                // shifted f32 positions rounds before their later subtraction;
+                // that numerical cancellation is not an approach invariant.
+                let local_feet = feet - centre;
+                let local =
+                    hold_acquisition_approach(local_feet, Vec3::ZERO, toward, 4.54, 1.0).unwrap();
                 let turn = glam::Quat::from_rotation_y(0.73);
-                let rotated =
-                    hold_acquisition_approach(turn * feet, turn * centre, turn * toward, 4.54, 1.0)
-                        .unwrap();
-                assert!(rotated.0.abs_diff_eq(turn * point, 1e-5));
+                let rotated = hold_acquisition_approach(
+                    turn * local_feet,
+                    Vec3::ZERO,
+                    turn * toward,
+                    4.54,
+                    1.0,
+                )
+                .unwrap();
+                assert!(rotated.0.abs_diff_eq(turn * local.0, 1e-5));
+                assert_eq!(local.1, ready);
                 assert_eq!(rotated.1, ready);
             }
             let rear = centre - flat(toward).normalize() * 4.54;

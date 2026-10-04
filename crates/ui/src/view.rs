@@ -1981,7 +1981,7 @@ impl View {
         let Some(mut p) = self.popup else {
             return;
         };
-        let q = self.popup_query.to_lowercase();
+        let q = search_key(&self.popup_query);
         self.popup_shown.clear();
         let state = &self.nodes[p.node].state;
         if !q.is_empty() {
@@ -2039,7 +2039,9 @@ impl View {
             })
         } else {
             self.popup_shown.iter().position(|row| match row {
-                PopupRow::Item(i) => !pinned_key(&self.popup_keys[*i]),
+                // A clear choice stays pinned during ordinary searches, but
+                // typing its exact name is itself a deliberate selection.
+                PopupRow::Item(i) => !pinned_key(&self.popup_keys[*i]) || self.popup_keys[*i] == q,
                 _ => false,
             })
         };
