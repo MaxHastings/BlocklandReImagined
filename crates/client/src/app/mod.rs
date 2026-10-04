@@ -1539,6 +1539,7 @@ impl PlatformApp for App {
         }
         self.gpu.gpu_name = device.adapter_info().name;
         self.gpu.opened = true;
+        self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -1667,6 +1668,7 @@ impl PlatformApp for App {
         self.addons.client_code.device_lost();
     }
     fn gpu_stopped(&mut self) {
+        self.gpu.device = None;
         self.addons.client_code.gpu_stopped();
         self.addons.item_skins.gpu_stopped();
         self.item_ui.gpu_stopped();

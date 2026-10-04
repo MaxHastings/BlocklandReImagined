@@ -169,6 +169,7 @@ impl App {
                 gpu_chunk_bricks: HashMap::new(),
                 chunk_uploads: BTreeSet::new(),
                 gpu_restart: false,
+                device: None,
                 ghost_gpu: None,
                 ghost_look: None,
                 ghost_uploaded: u64::MAX,
