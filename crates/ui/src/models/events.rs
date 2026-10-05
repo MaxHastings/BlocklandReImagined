@@ -6,6 +6,7 @@
 
 use crate::api::{EventCatalog, EventLine, EventRow, ParamValue};
 use crate::schema::ParamSpec;
+use bri_console::Clamp;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const NAMED_BRICK: &str = "<NAMED BRICK>";
@@ -164,13 +165,13 @@ pub fn clamp_param(spec: &ParamSpec, v: ParamValue) -> ParamValue {
             } else {
                 x
             };
-            ParamValue::Float(s.clamp(*min, *max))
+            ParamValue::Float(s.clamped(*min, *max))
         }
         (ParamSpec::String { max_length, .. }, ParamValue::Text(t)) => {
             ParamValue::Text(t.chars().take(*max_length as usize).collect())
         }
         (ParamSpec::Vector { max }, ParamValue::Vector(v)) if *max > 0.0 => {
-            ParamValue::Vector(v.map(|c| c.clamp(-max, *max)))
+            ParamValue::Vector(v.map(|c| c.clamped(-max, *max)))
         }
         (_, v) => v,
     }

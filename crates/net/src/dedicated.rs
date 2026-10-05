@@ -182,6 +182,15 @@ pub fn load_packages(
         load_map: Some(maps.loader(palette)),
         copies: None,
         game_version: None,
+        // `/botreload` reads the Add-Ons' bots.json again; a dedicated
+        // server keeps no user overrides.
+        bot_tuning: Some(bri_sim::session::BotTuning {
+            reload: Some({
+                let (root, packages) = (content_root.to_path_buf(), packages.clone());
+                std::sync::Arc::new(move || content_identity::bot_kinds(&root, &packages))
+            }),
+            overrides: None,
+        }),
     };
     let hosted = setup.hosted(&map.simulation.state().map_id)?;
     let unresolved_items = map.unresolved_items;
@@ -278,6 +287,169 @@ pub fn blank_world(content_root: &Path, name: &str) -> Result<bri_world::World> 
         crate::map_content::ui_palette(&packages.role_dir(content_root, "ui_pack")?)?,
         name,
     )
+}
+
+/// The dedicated server's crash-recovery slot in its state folder
+/// ([`crate::recovery`]).
+pub fn recovery_path(state_dir: &Path) -> std::path::PathBuf {
+    state_dir.join("recovery.json")
+}
+
+/// A recovery snapshot left by a run that did not stop cleanly (a crash, a
+/// killed process, a power cut) becomes the world save of that run, the
+/// one `resume` continues from, named by when it was written. Returns it.
+pub fn adopt_recovery(state_dir: &Path) -> Result<Option<std::path::PathBuf>> {
+    let slot = recovery_path(state_dir);
+    let written = match std::fs::metadata(&slot) {
+        Ok(meta) => meta.modified()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let millis = written
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    // A shutdown save of the same millisecond is never replaced.
+    let world = (millis..)
+        .map(|m| state_dir.join(format!("world-{m}.json")))
+        .find(|p| !p.exists())
+        .context("No free world save name")?;
+    std::fs::rename(&slot, &world)?;
+    Ok(Some(world))
+}
+
+/// Save the stopped host's final world, with its mini-game, as a new
+/// `world-<unix millis>.json` in `state_dir`, the newest world `resume`
+/// continues from.
+pub fn save_stopped(
+    state_dir: &Path,
+    report: &crate::server::ServerReport,
+) -> Result<std::path::PathBuf> {
+    let bytes = bri_world::build::encode(&report.saved_build()?)?;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let path = state_dir.join(format!("world-{millis}.json"));
+    bri_files::create_new(&path, &bytes)?;
+    Ok(path)
+}
+
+/// What asks the server to stop: Ctrl+C; SIGTERM (a service manager,
+/// `kill`, a container stopping) or SIGHUP (its terminal closed) on Unix;
+/// the console window closing, the user logging off or Windows shutting
+/// down on Windows. Watched from [`Shutdown::watch`] on, so a request that
+/// comes while the server is still starting is not missed.
+pub struct Shutdown {
+    #[cfg(unix)]
+    signals: [(tokio::signal::unix::Signal, &'static str); 3],
+    #[cfg(windows)]
+    signals: (
+        tokio::signal::windows::CtrlC,
+        tokio::sync::oneshot::Receiver<()>,
+    ),
+}
+impl Shutdown {
+    pub fn watch() -> Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            Ok(Self {
+                signals: [
+                    (signal(SignalKind::interrupt())?, "Ctrl+C"),
+                    (signal(SignalKind::terminate())?, "SIGTERM"),
+                    (signal(SignalKind::hangup())?, "SIGHUP"),
+                ],
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                signals: (tokio::signal::windows::ctrl_c()?, console::install()?),
+            })
+        }
+    }
+    /// Resolves when the server is asked to stop, saying how.
+    pub async fn requested(&mut self) -> &'static str {
+        #[cfg(unix)]
+        {
+            let [(interrupt, a), (terminate, b), (hangup, c)] = &mut self.signals;
+            tokio::select! {
+                _ = interrupt.recv() => a,
+                _ = terminate.recv() => b,
+                _ = hangup.recv() => c,
+            }
+        }
+        #[cfg(windows)]
+        {
+            let (ctrl_c, closing) = &mut self.signals;
+            tokio::select! {
+                _ = ctrl_c.recv() => "Ctrl+C",
+                _ = closing => "the console closing",
+            }
+        }
+    }
+}
+
+/// Call once the world is saved after [`Shutdown::requested`]: Windows
+/// ends a closing console's process as soon as its close handler returns,
+/// so the handler waits for this (up to the few seconds Windows allows).
+pub fn shutdown_saved() {
+    #[cfg(windows)]
+    console::saved();
+}
+
+#[cfg(windows)]
+mod console {
+    use std::sync::{Condvar, Mutex, OnceLock};
+    use windows_sys::Win32::System::Console::{
+        CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, SetConsoleCtrlHandler,
+    };
+    struct State {
+        notify: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        saved: (Mutex<bool>, Condvar),
+    }
+    static STATE: OnceLock<State> = OnceLock::new();
+    /// Windows runs this on a thread of its own and ends the process when it
+    /// returns, so it waits for the save.
+    unsafe extern "system" fn handler(event: u32) -> windows_sys::core::BOOL {
+        if ![CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT].contains(&event) {
+            return 0; // Ctrl+C and Ctrl+Break go to tokio's handler.
+        }
+        let Some(state) = STATE.get() else { return 0 };
+        if let Some(notify) = state
+            .notify
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            let _ = notify.send(());
+        }
+        let (lock, done) = &state.saved;
+        let saved = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = done.wait_timeout_while(saved, std::time::Duration::from_secs(30), |s| !*s);
+        1
+    }
+    pub(super) fn install() -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let state = STATE.get_or_init(|| State {
+            notify: Mutex::new(None),
+            saved: (Mutex::new(false), Condvar::new()),
+        });
+        *state.notify.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        // SAFETY: `handler` is a plain function that stays valid for the
+        // life of the process.
+        anyhow::ensure!(
+            unsafe { SetConsoleCtrlHandler(Some(handler), 1) } != 0,
+            "Could not watch for the console closing"
+        );
+        Ok(rx)
+    }
+    pub(super) fn saved() {
+        if let Some(state) = STATE.get() {
+            let (lock, done) = &state.saved;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            done.notify_all();
+        }
+    }
 }
 
 #[cfg(test)]

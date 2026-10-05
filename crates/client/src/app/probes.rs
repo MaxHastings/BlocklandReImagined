@@ -2,12 +2,49 @@
 use super::*;
 
 impl App {
+    /// Whether the world's pipelines have compiled, so entering a game or
+    /// a new map draws it at once instead of stalling the window on the
+    /// compile. Without a GPU (headless) there is nothing to wait for.
+    pub fn scene_pipelines_ready(&mut self) -> bool {
+        if !self.gpu.opened {
+            return true;
+        }
+        // A map change rebuilds the renderers before its next frame.
+        !self.gpu.gpu_restart
+            && self
+                .gpu
+                .renderer
+                .as_mut()
+                .is_some_and(|r| r.ready().is_some())
+    }
+    pub fn work_counters(&self) -> crate::perf::WorkCounters {
+        crate::perf::WorkCounters {
+            chunk_jobs: self.scene.chunk_jobs,
+            chunks_rebuilt: self.scene.chunks_rebuilt,
+            uploads: self
+                .gpu
+                .renderer
+                .as_ref()
+                .and_then(|r| r.finished())
+                .map(|r| r.upload_counts()),
+            item_model_builds: self.world_items.diagnostics.model_builds,
+            item_model_uploads: self.world_items.diagnostics.model_uploads,
+            debris_looks_built: self.fx.debris_models.diagnostics.looks_built,
+            music_full_scans: self.audio.music_bricks.full_scans,
+            music_visited: self.audio.music_bricks.visited,
+            hidden_outlines: self.gpu.hidden_outlines.diagnostics,
+        }
+    }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
         &self.item_assets
     }
     /// Names of the Add-Ons whose client code runs in the game entered.
     pub fn add_on_code_running(&self) -> Vec<&str> {
         self.addons.client_code.running()
+    }
+    /// Bodies of knocked-out bricks still flying or fading.
+    pub fn brick_debris_count(&self) -> usize {
+        self.fx.brick_debris.len()
     }
     /// Gun casings currently tumbling or resting.
     pub fn weapon_shell_count(&self) -> usize {
@@ -188,6 +225,16 @@ impl App {
                 .is_some_and(|source| Arc::ptr_eq(source, &view.world))
         })
     }
+    /// The map's lighting has finished loading and is on the GPU. A
+    /// lighting source or bake landing later uploads the whole map scene
+    /// again with all its textures, whenever its worker finishes: waits
+    /// that measure steady play wait for this, not for the clock.
+    pub fn map_lighting_settled(&self) -> bool {
+        self.world_render_ready()
+            && self.lighting.light_volume.settled()
+            && !self.switchable_sheets_due()
+            && self.gpu.gpu_scene.is_some()
+    }
     /// Presented (predicted and interpolated) local state and camera eye.
     pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
         let view = self.network_view()?;
@@ -232,6 +279,7 @@ impl App {
             "weapon_effects": world(self.fx.weapon_effects.world()),
             "actor_effects": world(self.fx.actor_effects.world()),
             "particles_drawn": drawn.map_or(0, |s| s.instances),
+            "particles_cut": self.fx.effect_sprites_cut,
             "particle_draw_calls": drawn.map_or(0, |s| s.draw_calls),
             "particle_upload_bytes": drawn.map_or(0, |s| s.uploaded_bytes),
             "avatars": self.avatar.avatars.len(),

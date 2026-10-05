@@ -53,8 +53,10 @@
     { "name": "IncScore", "class": "Slayer_TeamSO", "params": {{out_team_inc_score|event_params}} }
   ],
   "brick_targets": [
-    { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
-    { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
+    { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client",
+      "description": "The team of whoever set this row off" },
+    { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self",
+      "description": "The teams whose colour this brick is painted (or a brick named Team_<colour>)" }
   ],
   "commands": [
     {
@@ -585,6 +587,18 @@
       "editor": "admin",
       "min": -1,
       "max": 99
+    },
+    {
+      "key": "ffa_bots",
+      "title": "Bots (free-for-all)",
+      "category": "Bots",
+      "type": "int",
+      "default": 0,
+      "editor": "admin",
+      "min": 0,
+      "max": 16,
+      "shown_when": { "setting": "mode", "is": ["{{dm_class}}"] },
+      "help": "Not in Slayer itself (a Blockland ReImagined addition): in a mode without teams, how many Blockhead Bots play, each everyone's enemy. Team modes use each team's Preferred Player Count instead."
     },
     {
       "key": "team_uniform",
@@ -1522,10 +1536,6 @@
         "default": {},
         "persist": false
       },
-      "team_points": {
-        "default": {},
-        "persist": false
-      },
       "kits": {
         "default": {},
         "persist": false
@@ -1543,6 +1553,10 @@
         "persist": false
       },
       "team_lives": {
+        "default": {},
+        "persist": false
+      },
+      "bot_short": {
         "default": {},
         "persist": false
       },

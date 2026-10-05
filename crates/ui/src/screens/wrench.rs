@@ -83,6 +83,111 @@ enum Operation {
     Respawn,
 }
 
+/// The vehicle spawn wrench's Team menu: a bot spawn brick's team.
+const TEAM_ROW: i32 = 30;
+
+/// Add the vehicle spawn wrench's Team row under its recovered fields, above
+/// the footer actions, styled as its Vehicles menu and that menu's label.
+fn add_team_row(window: &mut Control, layout: &str, prefix: &str) {
+    let node = format!("{prefix}_Team");
+    let vehicles = format!("{prefix}_Vehicles");
+    let Some(menu) = window
+        .children
+        .iter()
+        .find(|c| c.name.as_deref() == Some(vehicles.as_str()))
+        .cloned()
+    else {
+        return;
+    };
+    if window
+        .children
+        .iter()
+        .any(|c| c.name.as_deref() == Some(node.as_str()))
+    {
+        return;
+    }
+    let footer_commands = [
+        format!("{layout}.send();"),
+        format!("{layout}.respawn();"),
+        format!("canvas.popDialog({layout});"),
+        "canvas.pushDialog(WrenchEventsDlg);".into(),
+    ];
+    let top = window
+        .children
+        .iter()
+        .filter(|c| {
+            c.command
+                .as_ref()
+                .is_some_and(|command| footer_commands.contains(command))
+        })
+        .map(|c| c.position[1])
+        .min()
+        .unwrap_or(window.extent[1]);
+    // The Vehicles menu's label: plain text left of it on its row.
+    let label = window
+        .children
+        .iter()
+        .filter(|c| {
+            c.class == "GuiTextCtrl"
+                && (c.position[1] - menu.position[1]).abs() <= 6
+                && c.position[0] + c.extent[0] <= menu.position[0] + 4
+        })
+        .max_by_key(|c| c.position[0])
+        .cloned();
+    for control in &mut window.children {
+        if control.position[1] >= top {
+            control.position[1] += TEAM_ROW;
+        } else if control
+            .name
+            .as_deref()
+            .is_some_and(|name| name.ends_with("Blocker"))
+            && control.position[1] + control.extent[1] > top
+        {
+            control.extent[1] += TEAM_ROW;
+        }
+    }
+    window.extent[1] += TEAM_ROW;
+    let y = top + (TEAM_ROW - menu.extent[1]) / 2;
+    let mut team = named(menu.clone(), node);
+    team.position[1] = y;
+    team.command = None;
+    team.text = None;
+    let label = match label {
+        Some(mut label) => {
+            let colon = label
+                .text
+                .as_deref()
+                .is_some_and(|t| t.trim_end().ends_with(':'));
+            label.name = None;
+            label.command = None;
+            label.position[1] = y + (menu.extent[1] - label.extent[1]) / 2;
+            label.text = Some(if colon { "Team:" } else { "Team" }.into());
+            label
+        }
+        None => text(
+            "GuiDefaultProfile",
+            Rect::new(14, y, (menu.position[0] - 18).max(40), menu.extent[1]),
+            "Team:",
+        ),
+    };
+    window.children.push(label);
+    window.children.push(team);
+}
+
+/// The teams of the mini-game `builder` plays in (`None`: the local
+/// player's).
+fn builder_teams(core: &Core, builder: Option<u64>) -> Vec<crate::api::MiniGameTeam> {
+    core.minigames
+        .games
+        .iter()
+        .find(|g| match builder {
+            Some(b) => g.members.iter().any(|m| m.id.0 == b),
+            None => Some(g.id) == core.minigames.active_game,
+        })
+        .map(|g| g.teams.clone())
+        .unwrap_or_default()
+}
+
 /// Extend the recovered wrench without modifying generated original layouts.
 fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View {
     let Some(mut root) = core.pack.data.layouts.get(layout).cloned() else {
@@ -94,6 +199,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         .iter_mut()
         .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
     {
+        add_team_row(window, layout, prefix);
         let old_height = window.extent[1];
         // Share an existing action row when its neighboring space is free.
         // Imported layouts with a crowded footer still receive a separate row.
@@ -366,6 +472,28 @@ impl Wrench {
                 _ => {}
             }
         }
+        if let Some(n) = self.view.id(&format!("{}_Team", self.prefix)) {
+            // "No team" as a Team check says it; a slot the builder's game
+            // has not got stays chosen until changed.
+            let mut ids = vec![None];
+            let mut items = vec![("No team".to_string(), 0)];
+            for team in builder_teams(core, data.builder) {
+                items.push((team.name, ids.len() as i64));
+                ids.push(Some(team.id.to_string()));
+            }
+            let current = data.vehicle_team.map(|t| t.to_string());
+            let selected = ids.iter().position(|id| *id == current).unwrap_or_else(|| {
+                items.push((
+                    format!("Team {}", current.as_deref().unwrap_or_default()),
+                    ids.len() as i64,
+                ));
+                ids.push(current.clone());
+                ids.len() - 1
+            });
+            self.view.state(n).items = items;
+            self.view.select(n, Some(selected as i64));
+            self.menus.insert(n, ids);
+        }
         if let Some(n) = self.view.id(&format!("{}_Window", self.prefix)) {
             let open = core.wrench.open.as_ref();
             let title = match open.and_then(|o| o.fill) {
@@ -493,6 +621,14 @@ impl Wrench {
                 RecolorVehicle => data.recolor_vehicle = self.view.bool_value(n),
                 _ => {}
             }
+        }
+        if let Some(n) = self.view.id(&format!("{}_Team", self.prefix)) {
+            data.vehicle_team = self
+                .view
+                .selected(n)
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| self.menus.get(&n)?.get(i).cloned().flatten())
+                .and_then(|id| id.parse().ok());
         }
         core.wrench.set_values(self.variant, data);
     }
@@ -722,6 +858,7 @@ enum Binding {
     ConditionProperty(usize, usize),
     ConditionCompare(usize, usize),
     ConditionKey(usize, usize),
+    ConditionTeam(usize, usize),
     ConditionValue(usize, usize),
 }
 
@@ -807,13 +944,50 @@ fn condition_properties(
         })
         .collect()
 }
-fn active_teams(core: &Core) -> Vec<crate::api::MiniGameTeam> {
-    core.minigames
-        .games
+/// Team slots the wrench offers while the brick's builder has no mini-game
+/// with teams yet: a row keeps its slot, and shows the team's real name
+/// once a game has it.
+const UNNAMED_TEAM_SLOTS: u32 = 8;
+/// The teams a brick's Team checks, `setTeam` and the MiniGame team outputs
+/// name: those of the mini-game its rows run in, its builder's (v20's brick
+/// events act in the brick owner's mini-game), whoever has the wrench open.
+/// A builder in no game yet (building the goals first) gets the teams of a
+/// game they own, else numbered slots, never only "No team".
+fn rule_teams(core: &Core) -> Vec<crate::api::MiniGameTeam> {
+    let builder = core.wrench.events_builder;
+    let games = &core.minigames.games;
+    let game = match builder {
+        Some(b) => games
+            .iter()
+            .find(|g| g.members.iter().any(|m| m.id.0 == b))
+            .or_else(|| games.iter().find(|g| g.owner.0 == b && !g.teams.is_empty())),
+        None => games
+            .iter()
+            .find(|g| Some(g.id) == core.minigames.active_game),
+    };
+    match game.map(|g| g.teams.clone()) {
+        Some(teams) if !teams.is_empty() => teams,
+        _ => (1..=UNNAMED_TEAM_SLOTS)
+            .map(|id| crate::api::MiniGameTeam {
+                id,
+                name: format!("Team {id}"),
+                color: 0,
+                settings: Default::default(),
+            })
+            .collect(),
+    }
+}
+/// The rows a team menu lists: the rule's teams by slot, then `current`
+/// when no team has it (a saved row's slot is never lost).
+fn team_items(teams: &[crate::api::MiniGameTeam], current: i64) -> Vec<(String, i64)> {
+    let mut items: Vec<_> = teams
         .iter()
-        .find(|g| Some(g.id) == core.minigames.active_game)
-        .map(|g| g.teams.clone())
-        .unwrap_or_default()
+        .map(|t| (t.name.clone(), i64::from(t.id)))
+        .collect();
+    if current > 0 && !items.iter().any(|(_, i)| *i == current) {
+        items.push((format!("Team {current} (no such team yet)"), current));
+    }
+    items
 }
 fn property_label(p: Property) -> &'static str {
     if p == Property::Team {
@@ -948,7 +1122,7 @@ impl WrenchEvents {
             error: None,
             datablocks: core.datablocks.clone(),
             paint: core.hud.paint.clone(),
-            teams: active_teams(core),
+            teams: rule_teams(core),
         };
         s.preserve_unsupported();
         s.build(core);
@@ -1412,11 +1586,42 @@ impl WrenchEvents {
                         self.event_menu_hints(output, false, Some(&class), core);
                     }
                     y = action_y + 25;
-                    if e.target.as_deref() == Some(NAMED_BRICK) {
+                    if let Some(note) = e
+                        .target
+                        .as_deref()
+                        .and_then(|t| self.catalog.target_notes.get(t))
+                    {
                         self.view.add(
                             body,
-                            text("GuiDefaultProfile", Rect::new(4, y, 80, 22), "Named brick:"),
+                            named(
+                                text("GuiDefaultProfile", Rect::new(88, y, bw - 92, 18), note),
+                                format!("WrenchEvent_{row}_target_note"),
+                            ),
                         );
+                        y += 20;
+                    }
+                    if e.target.as_deref() == Some(NAMED_BRICK) {
+                        // Names are the brick's builder's (v20's brick
+                        // groups): say whose when they are not yours.
+                        if let Some(builder) = &core.wrench.events_builder_name {
+                            self.view.add(
+                                body,
+                                named(
+                                    text(
+                                        "GuiDefaultProfile",
+                                        Rect::new(4, y, bw - 8, 18),
+                                        &format!("Named brick ({builder}'s bricks):"),
+                                    ),
+                                    format!("WrenchEvent_{row}_named_label"),
+                                ),
+                            );
+                            y += 20;
+                        } else {
+                            self.view.add(
+                                body,
+                                text("GuiDefaultProfile", Rect::new(4, y, 80, 22), "Named brick:"),
+                            );
+                        }
                         let node = self.widget(
                             body,
                             "GuiPopUpMenuCtrl",
@@ -1435,7 +1640,12 @@ impl WrenchEvents {
                         y += 25;
                     }
                     let specs = self.model.as_ref().unwrap().param_specs(row, &self.catalog);
-                    let labels = parameter_labels(e.output.as_deref().unwrap_or(""));
+                    let labels = if self.team_output(row) && e.output.as_deref() != Some("setTeam")
+                    {
+                        &["Team", "Points"][..]
+                    } else {
+                        parameter_labels(e.output.as_deref().unwrap_or(""))
+                    };
                     let split_vector = matches!(
                         e.output.as_deref(),
                         Some("setRegionSize" | "setObjectVelocity" | "setVelocity" | "addVelocity")
@@ -1602,6 +1812,20 @@ impl WrenchEvents {
             .is_some_and(|r| matches!(r, RowState::Editable(e) if e.conditions.len() < rules::MAX_CONDITIONS))
     }
 
+    /// Whether `row`'s output takes a team slot first: `setTeam`, or the
+    /// MiniGame `addTeamScore` and `winRound` that name the team.
+    fn team_output(&self, row: usize) -> bool {
+        let Some(RowState::Editable(e)) = self.model.as_ref().and_then(|m| m.rows.get(row)) else {
+            return false;
+        };
+        match e.output.as_deref() {
+            Some("setTeam") => true,
+            Some("addTeamScore" | "winRound") => self
+                .target_class(row)
+                .is_some_and(|c| c.eq_ignore_ascii_case("MiniGame")),
+            _ => false,
+        }
+    }
     fn target_class(&self, row: usize) -> Option<String> {
         let RowState::Editable(e) = self.model.as_ref()?.rows.get(row)? else {
             return None;
@@ -1766,7 +1990,27 @@ impl WrenchEvents {
         );
         self.view.add(body, remove);
         let vy = y + 47;
-        let value_x = if c.property == Property::Variable {
+        let team_check = c.subject == Subject::Team && c.property != Property::Variable;
+        let value_x = if team_check {
+            self.view.add(
+                body,
+                text("GuiDefaultProfile", Rect::new(4, vy, 80, 22), "Which team:"),
+            );
+            let n = self.widget(
+                body,
+                "GuiPopUpMenuCtrl",
+                Rect::new(88, vy, 124, 22),
+                row,
+                &format!("if{index}_team"),
+                Binding::ConditionTeam(row, index),
+            );
+            let current = c.team_slot().map_or(0, i64::from);
+            let mut items = vec![("Instigator's team".into(), 0)];
+            items.extend(team_items(&self.teams, current));
+            self.view.state(n).items = items;
+            self.view.select(n, Some(current));
+            212 + 50
+        } else if c.property == Property::Variable {
             self.view.add(
                 body,
                 text("GuiDefaultProfile", Rect::new(4, vy, 80, 22), "Variable:"),
@@ -1791,7 +2035,7 @@ impl WrenchEvents {
             Property::Score => "Points:",
             _ => "Value:",
         };
-        let label_x = if c.property == Property::Variable {
+        let label_x = if c.property == Property::Variable || team_check {
             216
         } else {
             4
@@ -1803,7 +2047,7 @@ impl WrenchEvents {
                 Rect::new(
                     label_x,
                     vy,
-                    if c.property == Property::Variable {
+                    if c.property == Property::Variable || team_check {
                         46
                     } else {
                         80
@@ -1871,22 +2115,12 @@ impl WrenchEvents {
                 );
             }
             Property::Team => {
-                let teams = core
-                    .minigames
-                    .games
-                    .iter()
-                    .find(|g| Some(g.id) == core.minigames.active_game)
-                    .map(|g| g.teams.as_slice())
-                    .unwrap_or(&[]);
                 let current = match c.value {
                     Datum::Number(n) => n,
                     _ => 0,
                 };
                 let mut items = vec![("No team".into(), 0)];
-                items.extend(teams.iter().map(|t| (t.name.clone(), i64::from(t.id))));
-                if !items.iter().any(|(_, i)| *i == current) {
-                    items.push((format!("Team {current} (unavailable)"), current));
-                }
+                items.extend(team_items(&self.teams, current));
                 self.view.state(n).items = items;
                 self.view.select(n, Some(current));
             }
@@ -1997,14 +2231,7 @@ impl WrenchEvents {
         core: &Core,
     ) {
         let (row, index) = address;
-        let team_parameter = self
-            .model
-            .as_ref()
-            .and_then(|m| m.rows.get(row))
-            .is_some_and(
-                |r| matches!(r,RowState::Editable(e) if e.output.as_deref()==Some("setTeam")),
-            )
-            && index == 0;
+        let team_parameter = index == 0 && self.team_output(row);
         let class = if team_parameter {
             "GuiPopUpMenuCtrl"
         } else {
@@ -2029,22 +2256,7 @@ impl WrenchEvents {
                 ParamValue::Int(v) => v,
                 _ => 1,
             };
-            let mut items = core
-                .minigames
-                .games
-                .iter()
-                .find(|g| Some(g.id) == core.minigames.active_game)
-                .map(|g| {
-                    g.teams
-                        .iter()
-                        .map(|t| (t.name.clone(), i64::from(t.id)))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            if !items.iter().any(|(_, i)| *i == current) {
-                items.push((format!("Team {current} (unavailable)"), current));
-            }
-            self.view.state(node).items = items;
+            self.view.state(node).items = team_items(&self.teams, current);
             self.view.select(node, Some(current));
             return;
         }
@@ -2523,6 +2735,10 @@ impl Screen for WrenchEvents {
                     && let Some(c) = self.condition_mut(row, index)
                 {
                     c.subject = value;
+                    // Only a Team check names a team in its key.
+                    if c.property != Property::Variable && value != Subject::Team {
+                        c.key.clear();
+                    }
                 }
                 let class = self.target_class(row);
                 if let Some(c) = self.condition_mut(row, index)
@@ -2568,6 +2784,17 @@ impl Screen for WrenchEvents {
                 let text = self.view.edit_text(ev.node);
                 if let Some(c) = self.condition_mut(row, index) {
                     c.key = text;
+                }
+                rebuild = false;
+            }
+            Binding::ConditionTeam(row, index) => {
+                let slot = self.view.selected(ev.node).unwrap_or(0);
+                if let Some(c) = self.condition_mut(row, index) {
+                    c.key = if slot > 0 {
+                        slot.to_string()
+                    } else {
+                        String::new()
+                    };
                 }
                 rebuild = false;
             }
@@ -2696,12 +2923,12 @@ impl Screen for WrenchEvents {
         if catalog != self.catalog
             || self.datablocks != core.datablocks
             || self.paint != core.hud.paint
-            || self.teams != active_teams(core)
+            || self.teams != rule_teams(core)
         {
             self.catalog = catalog;
             self.datablocks = core.datablocks.clone();
             self.paint = core.hud.paint.clone();
-            self.teams = active_teams(core);
+            self.teams = rule_teams(core);
             self.preserve_unsupported();
             self.save_draft(core);
             self.build(core);
@@ -2852,8 +3079,9 @@ mod tests {
                     view.node(view.id("WrenchVehicleSpawn_Window").unwrap())
                         .rect
                         .h,
-                    295,
-                    "neither collapsed nor expanded regions add spare vertical space"
+                    295 + TEAM_ROW,
+                    "neither collapsed nor expanded regions add spare vertical space \
+                     (the Team row adds its own)"
                 );
                 let mut sound = region_view(&ui.core, "wrenchSoundDlg", "WrenchSound", expanded);
                 sound.layout(logical.0, logical.1);
@@ -3019,6 +3247,7 @@ mod tests {
             },
         );
         ui.core.events = EventCatalog {
+            target_notes: Default::default(),
             inputs: vec![
                 EventInputInfo {
                     name: "onActivate".into(),
@@ -3855,6 +4084,471 @@ mod tests {
         assert_eq!(line.conditions[0].value, Datum::Text("MatchBall".into()));
     }
 
+    /// A goal's Team check names the teams of the mini-game its rows run in,
+    /// its builder's, even when whoever has the wrench open plays in none,
+    /// and each team by its own id (never "No team"'s 0).
+    /// The vehicle spawn wrench's Team row: added above the footer of a
+    /// recovered layout without covering its controls, listing the brick
+    /// builder's mini-game teams and sending the chosen slot.
+    #[test]
+    fn vehicle_spawn_team_menu_offers_the_builders_teams_and_sends_the_slot() {
+        let pack = crate::testing::screens_pack();
+        let mut ui = fixture();
+        ui.core.pack = pack.clone();
+        let original = pack.data.layouts["wrenchVehicleSpawnDlg"]
+            .children
+            .iter()
+            .find(|c| c.name.as_deref() == Some("WrenchVehicleSpawn_Window"))
+            .unwrap()
+            .clone();
+        let mut view = region_view(
+            &ui.core,
+            "wrenchVehicleSpawnDlg",
+            "WrenchVehicleSpawn",
+            false,
+        );
+        view.layout(ui.core.logical.0, ui.core.logical.1);
+        let team = view.node(view.id("WrenchVehicleSpawn_Team").unwrap()).rect;
+        let window = view
+            .node(view.id("WrenchVehicleSpawn_Window").unwrap())
+            .rect;
+        assert_eq!(window.intersect(&team), Some(team), "inside the window");
+        let vehicles = view
+            .node(view.id("WrenchVehicleSpawn_Vehicles").unwrap())
+            .rect;
+        assert_eq!((team.x, team.w), (vehicles.x, vehicles.w));
+        for control in original.children.iter().filter(|c| c.visible) {
+            let id = control
+                .name
+                .as_deref()
+                .and_then(|name| view.id(name))
+                .or_else(|| control.command.as_deref().and_then(|c| view.by_command(c)));
+            let Some(id) = id else { continue };
+            assert!(
+                view.node(id).rect.intersect(&team).is_none(),
+                "the Team row covers {control:?}"
+            );
+        }
+        let send = view
+            .node(view.by_command("wrenchVehicleSpawnDlg.send();").unwrap())
+            .rect;
+        assert!(
+            send.y >= team.bottom(),
+            "the footer stays below the Team row"
+        );
+
+        let mut ui = fixture();
+        let team = |id: u32, name: &str| crate::api::MiniGameTeam {
+            id,
+            name: name.into(),
+            color: 0,
+            settings: Default::default(),
+        };
+        ui.core.minigames.active_game = None;
+        ui.core.minigames.games.push(crate::api::MiniGameSummary {
+            id: crate::api::MiniGameId(1),
+            title: "Soccer".into(),
+            owner: crate::api::MiniGamePlayerId(5),
+            owner_name: "Max".into(),
+            color: 0,
+            member_count: 1,
+            invite_only: false,
+            rules: crate::api::MiniGameRules::default(),
+            teams: vec![team(1, "Blue"), team(3, "Red")],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: vec![crate::api::MiniGameTeamMember {
+                id: crate::api::MiniGamePlayerId(5),
+                name: "Max".into(),
+                team: None,
+            }],
+        });
+        ui.core.wrench.open(
+            16,
+            WrenchVariant::VehicleSpawn,
+            "Max".into(),
+            WrenchData {
+                builder: Some(5),
+                vehicle_team: Some(1),
+                ..Default::default()
+            },
+            false,
+            true,
+        );
+        let mut s = Wrench::new(&ui.core, WrenchVariant::VehicleSpawn);
+        let menu = s.view().id("WrenchVehicleSpawn_Team").unwrap();
+        assert_eq!(
+            s.view().node(menu).state.items,
+            vec![("No team".into(), 0), ("Blue".into(), 1), ("Red".into(), 2)]
+        );
+        assert_eq!(s.view().selected(menu), Some(1), "the brick's choice");
+        choose(&mut s, "WrenchVehicleSpawn_Team", "Red", &mut ui.core);
+        click(&mut s, "WrenchVehicleSpawn_Send", &mut ui.core);
+        assert!(
+            ui.drain_actions().iter().any(|(_, a)| matches!(a,
+                UiAction::SendWrench { brick: 16, data, .. } if data.vehicle_team == Some(3))),
+            "the chosen team's slot is sent"
+        );
+        // A slot the builder's game has not got stays chosen.
+        ui.core.wrench.close();
+        ui.core.wrench.open(
+            17,
+            WrenchVariant::VehicleSpawn,
+            "Max".into(),
+            WrenchData {
+                builder: Some(5),
+                vehicle_team: Some(9),
+                ..Default::default()
+            },
+            false,
+            true,
+        );
+        let mut s = Wrench::new(&ui.core, WrenchVariant::VehicleSpawn);
+        let menu = s.view().id("WrenchVehicleSpawn_Team").unwrap();
+        assert_eq!(s.view().node(menu).state.items[3], ("Team 9".into(), 3));
+        click(&mut s, "WrenchVehicleSpawn_Send", &mut ui.core);
+        assert!(ui.drain_actions().iter().any(|(_, a)| matches!(a,
+            UiAction::SendWrench { brick: 17, data, .. } if data.vehicle_team == Some(9))));
+    }
+
+    #[test]
+    fn team_checks_offer_the_builders_mini_game_teams() {
+        let mut ui = fixture();
+        ui.core.events.inputs.push(EventInputInfo {
+            name: "onObjectEnter".into(),
+            supported: true,
+            targets: vec![
+                ("Self".into(), "fxDTSBrick".into()),
+                ("Player".into(), "Player".into()),
+                ("Instigator".into(), "Player".into()),
+                ("Object".into(), "Vehicle".into()),
+            ],
+        });
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "core:rules".into(),
+            class: "Player".into(),
+            name: "winRound".into(),
+            params: vec![],
+            supported: true,
+        });
+        let team = |id: u32, name: &str| crate::api::MiniGameTeam {
+            id,
+            name: name.into(),
+            color: 0,
+            settings: Default::default(),
+        };
+        ui.core.minigames.active_game = None;
+        ui.core.minigames.games.push(crate::api::MiniGameSummary {
+            id: crate::api::MiniGameId(1),
+            title: "Soccer".into(),
+            owner: crate::api::MiniGamePlayerId(5),
+            owner_name: "Max".into(),
+            color: 0,
+            member_count: 1,
+            invite_only: false,
+            rules: crate::api::MiniGameRules::default(),
+            teams: vec![team(1, "Blue"), team(2, "Red")],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: vec![crate::api::MiniGameTeamMember {
+                id: crate::api::MiniGamePlayerId(5),
+                name: "Max".into(),
+                team: None,
+            }],
+        });
+        ui.apply(UiUpdate::OpenEvents {
+            brick: 3,
+            builder: Some(5),
+            builder_name: None,
+            rows: vec![],
+            named_targets: vec![],
+            allow_named: true,
+        });
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "Instigator", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "winRound", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Player", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_property", "Team", &mut ui.core);
+        let value = s.view().id("WrenchEvent_0_if0_value").unwrap();
+        assert_eq!(
+            s.view().node(value).state.items,
+            vec![("No team".into(), 0), ("Blue".into(), 1), ("Red".into(), 2)]
+        );
+        choose(&mut s, "WrenchEvent_0_if0_value", "Red", &mut ui.core);
+        let value = s.view().id("WrenchEvent_0_if0_value").unwrap();
+        assert_eq!(
+            s.view().node(value).state.value,
+            crate::view::Value::Selected(Some(2))
+        );
+    }
+
+    /// A goal brick's catalog: onObjectEnter with the rule targets, the
+    /// Player and MiniGame score and win outputs.
+    fn goal_catalog(ui: &mut Ui) {
+        ui.core.events.inputs.push(EventInputInfo {
+            name: "onObjectEnter".into(),
+            supported: true,
+            targets: vec![
+                ("Self".into(), "fxDTSBrick".into()),
+                ("Player".into(), "Player".into()),
+                ("MiniGame".into(), "MiniGame".into()),
+                ("Instigator".into(), "Player".into()),
+                ("Object".into(), "Vehicle".into()),
+            ],
+        });
+        let slot = ParamSpec::Int {
+            min: 1,
+            max: 64,
+            default: 1,
+        };
+        let points = ParamSpec::Int {
+            min: -1_000_000,
+            max: 1_000_000,
+            default: 1,
+        };
+        for (class, name, params) in [
+            ("Player", "winRound", vec![]),
+            ("MiniGame", "addTeamScore", vec![slot.clone(), points]),
+            ("MiniGame", "winRound", vec![slot]),
+        ] {
+            ui.core.events.outputs.push(EventOutputInfo {
+                provider: "core:rules".into(),
+                class: class.into(),
+                name: name.into(),
+                params,
+                supported: true,
+            });
+        }
+    }
+    fn soccer_game(teams: &[(u32, &str)], members: Vec<u64>) -> crate::api::MiniGameSummary {
+        crate::api::MiniGameSummary {
+            id: crate::api::MiniGameId(1),
+            title: "Soccer".into(),
+            owner: crate::api::MiniGamePlayerId(5),
+            owner_name: "Max".into(),
+            color: 0,
+            member_count: members.len() as u32,
+            invite_only: false,
+            rules: crate::api::MiniGameRules::default(),
+            teams: teams
+                .iter()
+                .map(|(id, name)| crate::api::MiniGameTeam {
+                    id: *id,
+                    name: (*name).into(),
+                    color: 0,
+                    settings: Default::default(),
+                })
+                .collect(),
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: members
+                .into_iter()
+                .map(|id| crate::api::MiniGameTeamMember {
+                    id: crate::api::MiniGamePlayerId(id),
+                    name: "Max".into(),
+                    team: None,
+                })
+                .collect(),
+        }
+    }
+    fn open_goal(ui: &mut Ui, rows: Vec<EventRow>) -> WrenchEvents {
+        ui.apply(UiUpdate::OpenEvents {
+            brick: 3,
+            builder: Some(5),
+            builder_name: None,
+            rows,
+            named_targets: vec![],
+            allow_named: true,
+        });
+        WrenchEvents::new(&ui.core)
+    }
+    fn items(s: &WrenchEvents, name: &str) -> Vec<(String, i64)> {
+        let n = s.view().id(name).unwrap();
+        s.view().node(n).state.items.clone()
+    }
+    fn sent_conditions(s: &mut WrenchEvents, ui: &mut Ui) -> Vec<crate::api::EventLine> {
+        click(s, "Events_Send", &mut ui.core);
+        let actions = ui.drain_actions();
+        let Some(rows) = actions.iter().find_map(|(_, a)| match a {
+            UiAction::SendEvents { rows, .. } => Some(rows),
+            _ => None,
+        }) else {
+            panic!("no SendEvents in {actions:?} ({:?})", s.error)
+        };
+        rows.iter()
+            .map(|r| match r {
+                EventRow::Editable(line) => line.clone(),
+                _ => panic!(),
+            })
+            .collect()
+    }
+    /// Max (v0.2.3) could not pick Team 1 or Team 2 in a goal's IF while he
+    /// built the goals before any game had teams, or had made the game but
+    /// not joined it, or asked "Who/what: Team". Each way now offers the
+    /// team slots, and a saved row reopens on its slot.
+    #[test]
+    fn a_goals_team_checks_offer_team_slots_however_the_builder_starts() {
+        let instigator_items = |ui: &mut Ui| {
+            let mut s = open_goal(ui, vec![]);
+            choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+            choose(&mut s, "WrenchEvent_0_target", "Instigator", &mut ui.core);
+            choose(&mut s, "WrenchEvent_0_output", "winRound", &mut ui.core);
+            click(&mut s, "Rule_0_add_if", &mut ui.core);
+            choose(
+                &mut s,
+                "WrenchEvent_0_if0_subject",
+                "Instigator",
+                &mut ui.core,
+            );
+            choose(&mut s, "WrenchEvent_0_if0_property", "Team", &mut ui.core);
+            items(&s, "WrenchEvent_0_if0_value")
+        };
+        // In no game yet: numbered slots.
+        let mut ui = fixture();
+        goal_catalog(&mut ui);
+        let slots = instigator_items(&mut ui);
+        assert_eq!(slots[0], ("No team".into(), 0));
+        assert_eq!(slots[1], ("Team 1".into(), 1));
+        assert_eq!(slots[2], ("Team 2".into(), 2));
+        // The game Max owns but has not joined: its teams.
+        ui.core
+            .minigames
+            .games
+            .push(soccer_game(&[(1, "Blue"), (2, "Red")], vec![]));
+        assert_eq!(
+            instigator_items(&mut ui),
+            vec![("No team".into(), 0), ("Blue".into(), 1), ("Red".into(), 2)]
+        );
+        // Who/what: Team names which team, and the row keeps it.
+        let mut s = open_goal(&mut ui, vec![]);
+        choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "Instigator", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "winRound", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Team", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_property", "Score", &mut ui.core);
+        assert_eq!(
+            items(&s, "WrenchEvent_0_if0_team"),
+            vec![
+                ("Instigator's team".into(), 0),
+                ("Blue".into(), 1),
+                ("Red".into(), 2)
+            ]
+        );
+        choose(&mut s, "WrenchEvent_0_if0_team", "Red", &mut ui.core);
+        let lines = sent_conditions(&mut s, &mut ui);
+        assert_eq!(lines[0].conditions[0].subject, Subject::Team);
+        assert_eq!(lines[0].conditions[0].key, "2");
+        assert!(lines[0].conditions[0].validate().is_ok());
+        // Reopened (on another brick: this test's first dialog is still
+        // the Ui's) with the game gone, the row keeps slot 2.
+        ui.core.minigames.games.clear();
+        ui.apply(UiUpdate::OpenEvents {
+            brick: 4,
+            builder: Some(5),
+            builder_name: None,
+            rows: vec![EventRow::Editable(lines[0].clone())],
+            named_targets: vec![],
+            allow_named: true,
+        });
+        let s = WrenchEvents::new(&ui.core);
+        let n = s.view().id("WrenchEvent_0_if0_team").unwrap();
+        assert_eq!(
+            s.view().node(n).state.value,
+            crate::view::Value::Selected(Some(2))
+        );
+        assert!(items(&s, "WrenchEvent_0_if0_team").contains(&("Team 2".into(), 2)));
+    }
+    /// A goal credits a fixed team: MiniGame addTeamScore picks the team
+    /// from the same team menu, then the points.
+    #[test]
+    fn minigame_add_team_score_names_its_team_from_the_team_menu() {
+        let mut ui = fixture();
+        goal_catalog(&mut ui);
+        ui.core
+            .minigames
+            .games
+            .push(soccer_game(&[(1, "Blue"), (2, "Red")], vec![5]));
+        let mut s = open_goal(&mut ui, vec![]);
+        choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "MiniGame", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "addTeamScore", &mut ui.core);
+        assert_eq!(
+            items(&s, "WrenchEvent_0_param0"),
+            vec![("Blue".into(), 1), ("Red".into(), 2)]
+        );
+        choose(&mut s, "WrenchEvent_0_param0", "Red", &mut ui.core);
+        let lines = sent_conditions(&mut s, &mut ui);
+        assert_eq!(
+            lines[0].params,
+            vec![ParamValue::Int(2), ParamValue::Int(1)]
+        );
+    }
+    /// On another builder's brick, `<NAMED BRICK>` lists that builder's
+    /// names (v20's brick groups) and says whose they are.
+    #[test]
+    fn named_bricks_say_whose_names_they_list_on_another_builders_brick() {
+        let mut ui = fixture();
+        for (who, expected) in [(None, false), (Some("Bob"), true)] {
+            ui.apply(UiUpdate::OpenEvents {
+                brick: 3,
+                builder: Some(9),
+                builder_name: who.map(str::to_owned),
+                rows: vec![],
+                named_targets: vec!["door".into()],
+                allow_named: true,
+            });
+            let mut s = WrenchEvents::new(&ui.core);
+            choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+            choose(&mut s, "WrenchEvent_0_target", NAMED_BRICK, &mut ui.core);
+            let label = s.view().id("WrenchEvent_0_named_label");
+            assert_eq!(label.is_some(), expected, "{who:?}");
+            if let Some(n) = label {
+                assert_eq!(
+                    s.view().node(n).ctrl.text.as_deref(),
+                    Some("Named brick (Bob's bricks):")
+                );
+            }
+        }
+    }
+    /// An Add-On's target says what it stands for while a row aims at it.
+    #[test]
+    fn an_add_on_target_shows_its_description_when_chosen() {
+        let mut ui = fixture();
+        ui.core.events.inputs.push(EventInputInfo {
+            name: "onObjectEnter".into(),
+            supported: true,
+            targets: vec![
+                ("Self".into(), "fxDTSBrick".into()),
+                ("Team(Brick)".into(), "Slayer_TeamSO".into()),
+            ],
+        });
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "slayer".into(),
+            class: "Slayer_TeamSO".into(),
+            name: "IncScore".into(),
+            params: vec![],
+            supported: true,
+        });
+        ui.core.events.target_notes.insert(
+            "Team(Brick)".into(),
+            "The teams whose colour this brick is painted".into(),
+        );
+        let mut s = open_goal(&mut ui, vec![]);
+        choose(&mut s, "WrenchEvent_0_input", "onObjectEnter", &mut ui.core);
+        assert!(s.view().id("WrenchEvent_0_target_note").is_none());
+        choose(&mut s, "WrenchEvent_0_target", "Team(Brick)", &mut ui.core);
+        let n = s.view().id("WrenchEvent_0_target_note").unwrap();
+        assert_eq!(
+            s.view().node(n).ctrl.text.as_deref(),
+            Some("The teams whose colour this brick is painted")
+        );
+    }
     #[test]
     fn exact_ball_goal_copies_independently_and_delayed_puzzle_keeps_its_state() {
         let mut ui = fixture();

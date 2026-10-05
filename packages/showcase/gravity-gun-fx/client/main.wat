@@ -62,7 +62,6 @@
 ;;   65536  mesh indices being built
 ;;   98304  creature records, 8 f32 (32 bytes) each, up to 64
 (module
-  (import "bri" "log" (func $log (param i32 i32)))
   (import "bri" "random" (func $random (result i32)))
   (import "bri" "shader" (func $shader (param i32 i32) (result i32)))
   (import "bri" "mesh_create" (func $mesh_create (param i32 i32 i32 i32) (result i32)))
@@ -117,7 +116,6 @@
   (data (i32.const 64) "client/spark.wgsl")
   (data (i32.const 128) "gravity-gun")
   (data (i32.const 144) "beam")
-  (data (i32.const 160) "gravity gun effects ready")
   (data (i32.const 192) "client/sounds/grab.wav")
   (data (i32.const 224) "client/sounds/drop.wav")
   (data (i32.const 288) "client/sounds/reach.wav")
@@ -255,8 +253,7 @@
     (f32.store (i32.const 1024) (f32.const 1))
     (f32.store (i32.const 1044) (f32.const 1))
     (f32.store (i32.const 1064) (f32.const 1))
-    (f32.store (i32.const 1084) (f32.const 1))
-    (call $log (i32.const 160) (i32.const 25)))
+    (f32.store (i32.const 1084) (f32.const 1)))
 
   ;; ---- Drawing ----
 

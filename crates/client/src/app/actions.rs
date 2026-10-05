@@ -213,6 +213,27 @@ impl App {
         let host_needs_content =
             matches!(action, UiAction::HostGame { .. } | UiAction::StartTutorial)
                 && !self.addons.packages_from_tools;
+        if session && self.addons.add_on_sync.is_some() {
+            // The Add-Ons folder is still converting, which can replace or
+            // remove Add-Ons that are on: a game started now would have
+            // them change under it. It starts once that is done, as it
+            // waits for loading.
+            if self.ui.session_request() != Some(id) {
+                return Ok(());
+            }
+            self.disconnect();
+            self.ui.apply_session(
+                id,
+                UiUpdate::Connection(ConnectionState::Connecting {
+                    text: "Converting Add-Ons…".into(),
+                }),
+            );
+            self.addons.after_sync = Some(addons::ReloadResume::Action {
+                id,
+                action: Box::new(action),
+            });
+            return Ok(());
+        }
         if session && (host_needs_content || self.addons.reload.is_some()) {
             if self.ui.session_request() != Some(id) {
                 return Ok(());
@@ -258,6 +279,7 @@ impl App {
                         session: self.net.attempt.as_ref().map(|a| a.id),
                         action,
                         build: None,
+                        revision: None,
                     })
                 })();
                 if result.is_ok() {
@@ -403,6 +425,12 @@ impl App {
             UiAction::ForgetAddOnTrust => {
                 crate::client_code::ClientCode::forget_trust(&self.state_dir)
             }
+            UiAction::KeepRecoveredBuild => {
+                crate::recovery::keep(&self.state_dir, &self.files.saves).map(|name| {
+                    bri_console::echo(format!("The recovered build is in Load Bricks as {name}."));
+                })
+            }
+            UiAction::DiscardRecoveredBuild => crate::recovery::discard(&self.state_dir),
             UiAction::CancelConnect | UiAction::Disconnect => {
                 if self.net.attempt.as_ref().is_none_or(|a| a.id <= id) {
                     self.disconnect();

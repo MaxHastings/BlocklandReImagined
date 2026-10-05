@@ -365,3 +365,138 @@ fn a_round_ends_once_until_a_reset() {
     );
     assert!(w.end_round(game, vec![], vec![]).is_ok(), "nobody won");
 }
+
+/// Team ids are the game's team slots, 1 to `MAX_TEAMS`: 0 is what a Team
+/// condition reads for a player on no team, so no team may have it, and a
+/// re-added team takes the lowest free slot so ids stay inside the range
+/// rules can name. A team named by a slot it does not have yet (a saved
+/// build's) comes back with that same id.
+#[test]
+fn team_ids_are_slots_from_one_that_never_read_as_no_team() {
+    let (mut w, game, [a, ..], [red, blue]) = red_blue();
+    assert_eq!((red, blue), (TeamId(1), TeamId(2)));
+    for round in 0..(MAX_TEAMS * 2) {
+        let (ids, _) = w
+            .set_teams(
+                game,
+                vec![
+                    TeamSpec {
+                        id: Some(blue),
+                        name: "Blue".into(),
+                        color: 3,
+                    },
+                    spec(&format!("New {round}"), 1),
+                ],
+                false,
+                false,
+            )
+            .unwrap();
+        assert_eq!(ids, vec![blue, TeamId(1)], "round {round}");
+    }
+    let (ids, _) = w
+        .set_teams(
+            game,
+            vec![TeamSpec {
+                id: Some(TeamId(7)),
+                name: "Restored".into(),
+                color: 2,
+            }],
+            false,
+            false,
+        )
+        .unwrap();
+    assert_eq!(ids, vec![TeamId(7)]);
+    w.assign_team(a, Some(TeamId(7))).unwrap();
+    assert_eq!(w.team_of(a), Some(TeamId(7)));
+    let saved = w.save().unwrap();
+    let back = MinigamesWorld::restore(&saved, Catalog::minimal_vanilla()).unwrap();
+    assert_eq!(back.team_of(a), Some(TeamId(7)));
+    for bad in [0, MAX_TEAMS as u32 + 1] {
+        assert_eq!(
+            w.set_teams(
+                game,
+                vec![TeamSpec {
+                    id: Some(TeamId(bad)),
+                    name: "Out of range".into(),
+                    color: 0,
+                }],
+                false,
+                false,
+            )
+            .map(|_| ()),
+            Err(Error::StaleTeam)
+        );
+    }
+}
+
+/// Max (v0.2.3): a team that won on its own points kept them through the
+/// reset, so the next round was won the moment it began, forever. The
+/// reset itself zeroes the teams' points and members' scores, with no
+/// package's reset handler needed; a game that keeps scores keeps both.
+#[test]
+fn a_reset_starts_team_points_again_unless_scores_are_kept() {
+    let (mut w, game, [a, b, _], [red, blue]) = red_blue();
+    w.assign_team(a, Some(red)).unwrap();
+    w.assign_team(b, Some(blue)).unwrap();
+    w.event_team_score(game, blue, 5, true).unwrap();
+    w.event_score(b, 2, false).unwrap();
+    assert_eq!(w.team_score(game, blue), Ok(7));
+    w.end_round(game, vec![blue], vec![]).unwrap();
+    for _ in 0..600 {
+        w.step().unwrap();
+    }
+    let out = w
+        .execute(Command::Reset {
+            game,
+            authority: EventAuthority::System,
+        })
+        .unwrap();
+    assert!(out.contains(&Effect::TeamScore {
+        game,
+        team: blue,
+        value: 0
+    }));
+    assert_eq!(w.team_score(game, blue), Ok(0), "a new round at nothing");
+    assert_eq!(w.team_score(game, red), Ok(0));
+
+    w.set_keep_scores(game, true).unwrap();
+    w.event_team_score(game, blue, 3, true).unwrap();
+    for _ in 0..600 {
+        w.step().unwrap();
+    }
+    w.execute(Command::Reset {
+        game,
+        authority: EventAuthority::System,
+    })
+    .unwrap();
+    assert_eq!(w.team_score(game, blue), Ok(3), "kept scores stay");
+}
+
+#[test]
+fn a_new_team_in_a_removed_teams_slot_starts_fresh() {
+    let (mut w, game, [_, b, _], [red, blue]) = red_blue();
+    w.assign_team(b, Some(blue)).unwrap();
+    w.event_team_score(game, blue, 5, true).unwrap();
+    w.set_addon_settings(
+        game,
+        vec![SettingChange {
+            team: Some(blue),
+            key: "slayer:lives".into(),
+            value: Some(SettingValue::Int(5)),
+        }],
+    )
+    .unwrap();
+    // Blue goes; a new team takes its free slot.
+    let kept = TeamSpec {
+        id: Some(red),
+        name: "Red".into(),
+        color: 0,
+    };
+    let (ids, _) = w
+        .set_teams(game, vec![kept, spec("Green", 2)], false, false)
+        .unwrap();
+    assert_eq!(ids[1], blue, "the lowest free slot");
+    let g = w.game(game).unwrap();
+    assert!(g.teams.get(blue).unwrap().addon_settings.is_empty());
+    assert_eq!(w.team_score(game, blue), Ok(0));
+}

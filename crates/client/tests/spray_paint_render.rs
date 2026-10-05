@@ -302,10 +302,7 @@ fn spray_mist_and_splash_use_the_palette_colour_offscreen(f: &Fixture) -> Result
     readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(std::time::Duration::from_secs(30)),
-    })?;
+    support::gpu::wait(&gpu.device, "the spray paint frame")?;
     rx.recv_timeout(std::time::Duration::from_secs(30))??;
     let mapped = readback.slice(..).get_mapped_range()?;
     let mut pixels = Vec::new();

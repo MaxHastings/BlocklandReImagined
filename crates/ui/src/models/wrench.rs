@@ -4,6 +4,7 @@
 
 use crate::api::{EventCatalog, EventRow, WrenchData, WrenchVariant};
 use crate::models::events::EventsModel;
+use bri_console::Clamp;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(
@@ -77,6 +78,11 @@ pub struct WrenchState {
     pub locks: BTreeSet<(u8, WrenchField)>,
     pub open: Option<OpenWrench>,
     pub events: Option<EventsModel>,
+    /// The builder (owner id) of the brick whose events are open: its rows
+    /// run in their mini-game, so its teams are the ones rows name.
+    pub events_builder: Option<u64>,
+    /// That builder's brick group name, when it is not the local player.
+    pub events_builder_name: Option<String>,
     /// Copy checkbox survives dialog closure. Only editable rows may cross bricks.
     pub events_copy: Option<EventsModel>,
     /// The fill wrench's ticked settings: its Copy boxes say which settings
@@ -136,6 +142,10 @@ impl WrenchState {
         cur.rule_region = data.rule_region;
         cur.rule_region_default = data.rule_region_default;
         cur.region_inputs = data.region_inputs;
+        // So do its builder and its bot's Team choice, whose slots belong
+        // to the builder's game.
+        cur.builder = data.builder;
+        cur.vehicle_team = data.vehicle_team;
         let l = |f| self.locked(variant, f);
         use WrenchField::*;
         if !l(Name) {
@@ -242,6 +252,8 @@ impl WrenchState {
         allow_named: bool,
         catalog: &EventCatalog,
     ) {
+        self.events_builder = None;
+        self.events_builder_name = None;
         let mut incoming = EventsModel::open(brick, rows, named_targets, allow_named, catalog);
         if let Some(copy) = &self.events_copy {
             use crate::models::events::{EditRow, RowState};
@@ -274,7 +286,7 @@ pub fn clean_name(s: &str) -> String {
 pub fn respawn_ms(text: &str) -> u32 {
     let seconds = text.trim().parse::<f64>().unwrap_or(0.0);
     let seconds = if seconds.is_nan() { 0.0 } else { seconds };
-    (seconds.floor().clamp(1.0, 300.0) as u32) * 1000
+    (seconds.floor().clamped(1.0, 300.0) as u32) * 1000
 }
 
 #[cfg(test)]
@@ -302,6 +314,7 @@ mod tests {
     fn event_copy_survives_close_without_copying_opaque_tokens() {
         use crate::api::{EventInputInfo, EventLine, EventOutputInfo};
         let catalog = EventCatalog {
+            target_notes: Default::default(),
             inputs: vec![EventInputInfo {
                 name: "onActivate".into(),
                 targets: vec![("Self".into(), "fxDTSBrick".into())],

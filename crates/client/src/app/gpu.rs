@@ -17,10 +17,10 @@ pub(super) struct GpuState {
     /// last uploaded.
     pub(super) selection_lines: Option<bri_render::lines::LineRenderer>,
     pub(super) selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
+    /// None: rebuild the outlines whatever `hidden_outlines` finds.
     pub(super) hidden_uploaded: Option<bool>,
-    /// `BrickFades::outlined` when the outlines were built: bricks fading
-    /// in or out gain or lose theirs as they pass v20's alpha 0.1.
-    pub(super) hidden_fading: Vec<(u64, bool)>,
+    /// The hidden bricks the outlines draw, kept from world changes.
+    pub(super) hidden_outlines: crate::hidden_outlines::HiddenOutlines,
     pub(super) effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     pub(super) gpu_scene: Option<GpuScene>,
     pub(super) gpu_broken: BTreeSet<u32>,
@@ -34,14 +34,23 @@ pub(super) struct GpuState {
     pub(super) gpu_chunk_bricks:
         HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
     pub(super) chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
-    /// Rebuild GPU renderers before the next frame (the map changed).
+    /// Rebuild GPU renderers before the next frame (the map changed while
+    /// no device was open).
     pub(super) gpu_restart: bool,
+    /// The device the renderers were built on (`gpu_ready`), until it
+    /// stops. A map change rebuilds them on it at once rather than on the
+    /// next frame: a window that draws no frames (minimized) still
+    /// finishes the change, and the compile starts as early as it can.
+    pub(super) device: Option<(wgpu::Device, wgpu::Queue, wgpu::TextureFormat)>,
     /// The ghost built at the origin and the one transform that places it.
     pub(super) ghost_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
     /// What `ghost_gpu` was built from: moving the ghost only moves it.
     pub(super) ghost_look: Option<GhostLook>,
     pub(super) ghost_uploaded: u64,
     pub(super) gpu_name: String,
+    /// A device has been given (`gpu_ready`): the world waits for its
+    /// pipelines. Headless Apps never draw and never wait.
+    pub(super) opened: bool,
     /// GPU time per world pass, in ms, from the latest timed frame: while
     /// the expanded performance overlay shows, or always once
     /// `time_gpu_passes` asks.

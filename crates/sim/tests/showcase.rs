@@ -1043,6 +1043,38 @@ fn a_hurled_steel_ball_punches_through_walls_only_in_minigames() {
     assert!(at.z > -20.5, "but not out of it: at {at}");
 }
 
+/// Max's video: a Steel Ball launched into a portal (in the air, as the
+/// gun throws it) comes out of its partner at the speed it went in, and
+/// punches through the bricks standing beyond the partner as it would
+/// through bricks on this side. (Rolled along the ground it bumps the
+/// doorway's 0.2 sill, as the brick's frame is built, and loses speed.)
+#[test]
+fn a_steel_ball_hurled_into_a_portal_smashes_the_wall_beyond_its_partner() {
+    let mut g = Game::with(portal_world());
+    let a = g.join("Alpha", Vec3::new(12.0, 0.05, 6.0));
+    let b = g.join("Bravo", Vec3::new(-12.0, 0.05, 6.0));
+    g.steps(30);
+    g.minigame(a, &[b]);
+    let beyond = wall(&mut g, a, BEYOND.x, -16.0);
+    let ball =
+        g.s.spawn_vehicle_at(
+            b,
+            BALL,
+            Vec3::new(0.0, 3.0, 0.0),
+            0.0,
+            Vec3::new(0.0, 0.0, -25.0),
+        )
+        .unwrap();
+    g.steps(150);
+    let knocked = beyond.len() - standing(&g, &beyond);
+    assert!(knocked >= 3, "it broke {knocked} bricks beyond the portal");
+    let (at, v) = g.vehicle(ball).unwrap();
+    assert!(
+        (at.x - BEYOND.x).abs() < 3.0 && at.z < -18.0 && v.z < -8.0,
+        "it went through and rolled on through the wall: at {at}, moving {v}"
+    );
+}
+
 /// A ball owned by Alpha rolled at `speed` into Bravo (or into Alpha,
 /// `at_owner`), in a minigame or not: whether the target was bowled over,
 /// their health after, and whether they were pushed.
@@ -1277,6 +1309,7 @@ fn bot_world() -> World {
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

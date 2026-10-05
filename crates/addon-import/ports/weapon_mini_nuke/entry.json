@@ -1,0 +1,23 @@
+{
+  "addon": "Weapon_Mini_nuke",
+  "title": "Mini-Nuke",
+  "port": "weapon_mini_nuke",
+  "status": "verified",
+  "sha256": [
+    "7d3e6507f35fc80f3e59477edf83ff178b90e7c9f108df18ceeca949424c8ea3"
+  ],
+  "covers": {
+    "mininukeLauncherImage::onMount": {
+      "parent": "parent::onmount\\s*\\(",
+      "both_arms": "playthread\\s*\\(\\s*\\d+\\s*,\\s*\"?armreadyboth\"?\\s*\\)"
+    },
+    "mininukeLauncherImage::onUnMount": {
+      "lowers": "playthread\\s*\\(\\s*\\d+\\s*,\\s*\"?root\"?\\s*\\)"
+    }
+  },
+  "tests": [
+    "weapon_mini_nuke/checks.json",
+    "crates/addon-import/tests/ports.rs mini_nuke_port_holds_it_up_with_both_arms",
+    "crates/addon-import/tests/import.rs real_steam_mini_nuke"
+  ]
+}

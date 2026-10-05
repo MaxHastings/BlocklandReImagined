@@ -50,7 +50,8 @@ fn mode_name(game) {
         minigame(game).title
     }
 }
-fn is_key(keys, key) { keys.contains(`{{rules}}:${key}`) }
+// A `settings` event's `keys` are a map of the changed `namespace:key`s.
+fn is_key(keys, key) { `{{rules}}:${key}` in keys }
 
 // One round of a mini-game: when its clock started (after the pre-round
 // countdown), the countdown and time announcements already made, and once
@@ -166,11 +167,12 @@ fn members(g, team) {
     out
 }
 // `Slayer_TeamSO::getArtificialScore`: points the team scored itself
-// (`IncScore`), apart from its members'.
+// (`IncScore`), apart from its members'. The engine keeps them, so a
+// brick's Team Score check counts them too.
 fn team_points(game, team) {
-    let all = get("team_points");
-    let key = `${game}:${team}`;
-    if key in all { all[key] } else { 0 }
+    let g = minigame(game);
+    let t = if g == () { () } else { team_by_id(g, team) };
+    if t == () { 0 } else { t.points }
 }
 // `Slayer_TeamSO::getScore`: its own points and its members' scores
 // together.
@@ -820,31 +822,46 @@ fn number(word) {
 // `BlockheadHoleBot`s ("this should be changeable") and needed Bot_Hole and
 // Bot_Blockhead; the Blockhead Bot Add-On is ours of both.
 fn bot_kind() { "bot.blockhead" }
-fn bot_kind_view() {
-    for k in bot_kinds() {
-        if k.id == bot_kind() {
-            return k;
-        }
-    }
-    ()
-}
+fn bot_kind_view() { bot_kind(bot_kind()) }
 // "Bot " and a random first name (`"Bot" SPC getRandomFirstName()`).
 // `getRandomFirstName` draws from Slayer's own first-names.txt
-// (Module_Names).
+// (Module_Names), a line at a time: the whole list is longer than a
+// script may hold. A line's first word, as much of it as a bot's name
+// holds after "Bot " (`bot_name_limit()`), so a copy whose lines carry
+// more than a name (a census list's columns) or a long name still names
+// a bot.
 fn bot_name(kind, n) {
-    let names = data_lines("first_names").filter(|line| line != "");
-    if names.is_empty() {
+    let count = data_line_count("first_names");
+    if count == () || count == 0 {
         return "Bot";
     }
-    let i = (hash3(seed(), tick(), n, names.len()) * names.len()).to_int();
-    `Bot ${names[i]}`
+    let i = (hash3(seed(), tick(), n, count) * count).to_int();
+    let line = data_line("first_names", i);
+    if line == () {
+        return "Bot";
+    }
+    // `split()`: by any whitespace, tabs too.
+    let ws = line.split().filter(|w| w != "");
+    if ws.is_empty() {
+        return "Bot";
+    }
+    let first = ws[0];
+    let most = bot_name_limit() - 4;
+    if first.len() > most {
+        first = first.sub_string(0, most);
+    }
+    `Bot ${first}`
 }
 // `Slayer_TeamSO::botFillTeam`: bots go while the team has more members
 // than its count, and come while it has fewer. `room` is how many more
 // bots the server takes; what is left of it comes back.
 fn bot_fill(g, team, room) {
     let limit = team_setting(g.id, team.id, "team_bot_fill");
-    let list = members(g, team.id);
+    bot_fill_to(g, team, members(g, team.id), limit, room)
+}
+// `list`'s members brought to `limit` with bots on `team` (`()`: none):
+// `[room left, how many the room kept out]`.
+fn bot_fill_to(g, team, list, limit, room) {
     let n = list.len();
     for m in list {
         if n <= limit {
@@ -858,33 +875,69 @@ fn bot_fill(g, team, room) {
     }
     let kind = bot_kind_view();
     if kind == () {
-        return room;
+        return [room, 0];
     }
+    let seed = if team == () { 0 } else { team.id };
     while n < limit && room > 0 {
-        add_bot(g.id, #{ kind: kind.id, team: team.id, name: bot_name(kind, n * 64 + team.id) });
+        let bot = #{ kind: kind.id, name: bot_name(kind, n * 64 + seed) };
+        if team != () {
+            bot.team = team.id;
+        }
+        add_bot(g.id, bot);
         n += 1;
         room -= 1;
     }
-    room
+    [room, max(limit - n, 0)]
 }
 // Every team filled, and bots without a team taken away
 // (`Slayer_TeamSO::onRemove`'s `deleteAllBots`).
+//
+// Without teams (Deathmatch), Slayer took every bot away. Ours, not
+// Slayer's: Bots (free-for-all) keeps that many teamless bots in the game
+// instead, each everyone's enemy, spawning where players do.
 fn fill_bots(g) {
-    if !uses_teams(g.id) {
+    let room = bot_limit() - bots().len();
+    let short = 0;
+    if uses_teams(g.id) {
         for b in game_bots(g) {
-            remove_bot(b.id);
+            if b.team == () || team_by_id(g, b.team) == () {
+                remove_bot(b.id);
+                room += 1;
+            }
         }
+        for t in g.teams {
+            let r = bot_fill(g, t, room);
+            room = r[0];
+            short += r[1];
+        }
+    } else {
+        let free = [];
+        for b in game_bots(g) {
+            if b.team != () {
+                remove_bot(b.id);
+                room += 1;
+            } else {
+                free.push(b);
+            }
+        }
+        let r = bot_fill_to(g, (), free, max(setting(g.id, "ffa_bots"), 0), room);
+        short = r[1];
+    }
+    tell_bots_short(g, short);
+}
+// Whoever runs the game hears when the server's bot limit keeps bots out,
+// once each time how many it keeps out changes.
+fn tell_bots_short(g, short) {
+    let told = get("bot_short");
+    let key = `${g.id}`;
+    let was = if key in told { told[key] } else { 0 };
+    if short == was {
         return;
     }
-    let room = bot_limit() - bots().len();
-    for b in game_bots(g) {
-        if b.team == () || team_by_id(g, b.team) == () {
-            remove_bot(b.id);
-            room += 1;
-        }
-    }
-    for t in g.teams {
-        room = bot_fill(g, t, room);
+    told[key] = short;
+    set("bot_short", told);
+    if short > 0 && g.owner != () {
+        tell(g.owner, `${c5()}The server runs at most ${c3()}${bot_limit()} ${c5()}bots: ${c3()}${short} ${c5()}more could not join ${c3()}${g.title}${c5()}.`);
     }
 }
 // `AiPlayer::useRandomTool`: of the slots up to the last tool, each a
@@ -1126,16 +1179,8 @@ fn start_round(g) {
     r.custom = ();
     r.lives = setting(g.id, "lives");
     // `Slayer_TeamSO::onMinigameReset`: teams' own points start again with
-    // Clear Scores or a points limit, as members' scores do.
-    if setting(g.id, "clear_scores") || setting(g.id, "points") > 0 {
-        let points = get("team_points");
-        for key in points.keys() {
-            if key.starts_with(`${g.id}:`) {
-                points.remove(key);
-            }
-        }
-        set("team_points", points);
-    }
+    // Clear Scores or a points limit, as members' scores do. The engine's
+    // reset clears both unless scores are kept (`set_keep_scores`).
     for p in everyone() {
         if p.minigame == g.id {
             set_player(p.id, "out", false);
@@ -2279,8 +2324,10 @@ fn mode_changed(g) {
 
 // `Slayer_TeamSO::updateBotFillLimit`: the teams filled to their new
 // counts, unless there are no bots to fill them with; then the count goes
-// back to -1 and whoever runs the game is told.
-fn bot_fill_changed(g) {
+// back to -1 and whoever runs the game is told. `fill`: false when the
+// same change already filled them (a new mode): this call's bots arrive
+// only as it ends, so a second fill would add them twice.
+fn bot_fill_changed(g, fill) {
     if bot_kind_view() == () {
         let refused = false;
         for t in g.teams {
@@ -2292,9 +2339,17 @@ fn bot_fill_changed(g) {
         if refused && g.owner != () {
             message_box(g.owner, "Slayer | Error", "You must enable the Blockhead Bot Add-On to use the Preferred Player Count setting.");
         }
+        if setting(g.id, "ffa_bots") > 0 {
+            set_setting(g.id, "ffa_bots", 0);
+            if g.owner != () {
+                message_box(g.owner, "Slayer | Error", "You must enable the Blockhead Bot Add-On to use the Bots (free-for-all) setting.");
+            }
+        }
         return;
     }
-    fill_bots(g);
+    if fill {
+        fill_bots(g);
+    }
 }
 
 // `Slayer_TeamHandlerSG::onNewTeam`, for each team the game did not have:
@@ -2376,14 +2431,18 @@ fn announce_changes(g, event) {
     if event.quiet {
         return;
     }
-    for c in event.changes {
-        let info = setting_info(c.key);
+    // `changes`: each changed key to the teams it changed for (`()` for
+    // the game's own), walked a key at a time.
+    for key in event.changes {
+        let info = setting_info(key);
         if info == () || info.quiet || info.scope == "server" {
             continue;
         }
-        let text = if c.team == () { setting_text(g.id, c.key) } else { team_setting_text(g.id, c.team, c.key) };
-        let plus = if c.team == () { " + " } else { " + + " };
-        tell_game(g, `${c3()}${plus}${c5()}[${c3()}${info.category}${c5()}|${c3()}${info.title}${c5()}] is now ${c3()}${text}`);
+        for team in event.changes[key] {
+            let text = if team == () { setting_text(g.id, key) } else { team_setting_text(g.id, team, key) };
+            let plus = if team == () { " + " } else { " + + " };
+            tell_game(g, `${c3()}${plus}${c5()}[${c3()}${info.category}${c5()}|${c3()}${info.title}${c5()}] is now ${c3()}${text}`);
+        }
     }
 }
 // `serverCmdSlayer_getPrefs_End`: the teams the editor added.
@@ -2563,8 +2622,8 @@ fn mg_settings(g, event) {
     if is_key(event.keys, "mode") {
         mode_changed(g);
     }
-    if is_key(event.keys, "team_bot_fill") {
-        bot_fill_changed(g);
+    if is_key(event.keys, "team_bot_fill") || is_key(event.keys, "ffa_bots") {
+        bot_fill_changed(g, !is_key(event.keys, "mode"));
     }
     if is_key(event.keys, "lives") {
         lives_changed(g);
@@ -2604,21 +2663,28 @@ fn mg_settings(g, event) {
         r.minutes = now;
         set_round(g.id, r);
     }
-    for c in event.changes {
-        if c.key == `{{rules}}:team_lives` && c.team != () {
-            team_lives_changed(g, c.team);
+    let lives = `{{rules}}:team_lives`;
+    if lives in event.changes {
+        for team in event.changes[lives] {
+            if team != () {
+                team_lives_changed(g, team);
+            }
         }
     }
 }
 
 fn mg_joined(g, event) {
+    // Gone again before this was heard: nobody to set up.
+    let me = player(event.player);
+    if me == () {
+        return;
+    }
     // `Slayer_MiniGameSO::addMember`: the game's lives, then a team.
     set_player(event.player, "lives", setting(g.id, "lives"));
     set_player(event.player, "out", false);
     set_player(event.player, "wins", 0);
     // A bot comes with its team, and no greeting or `onMinigameJoin`.
-    let me = player(event.player);
-    if me != () && own_bot(me) {
+    if own_bot(me) {
         set_player(event.player, "kills", 0);
         set_player(event.player, "deaths", 0);
         return;
@@ -3223,19 +3289,20 @@ fn team_event(output, target, params, info) {
             "RespawnAll" => {
                 for m in members(g, t.id) { respawn(m.id); }
             }
-            "IncScore" => add_team_points(g, t.id, params[0]),
+            "IncScore" => inc_team_points(g, t.id, params[0]),
         }
     }
 }
 // `Slayer_TeamSO::incScore`: the team's own points
-// (`setArtificialScore`), then whether they reach the points to win.
-fn add_team_points(g, team, n) {
-    let all = get("team_points");
-    let key = `${g.id}:${team}`;
-    all[key] = team_points(g.id, team) + n;
-    set("team_points", all);
-    if running(g.id) {
-        check_points(minigame(g.id));
+// (`setArtificialScore`), then whether they reach the points to win
+// (`victoryCheck_Points`). The engine keeps the points and adds them when
+// this call returns, so the check counts them in itself.
+fn inc_team_points(g, team, n) {
+    add_team_points(g.id, team, n);
+    let points = setting(g.id, "points");
+    if running(g.id) && points > 0 && uses_teams(g.id) && !spectating(g.id, team)
+        && team_score(g, team) + n >= points {
+        end_round(g.id, #{ teams: [team] });
     }
 }
 // `minigameCanUse(client, brick)`: the brick is of the client's game.

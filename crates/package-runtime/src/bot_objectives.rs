@@ -206,7 +206,7 @@ pub fn decode(value: &rhai::Dynamic) -> Result<Vec<DesiredState>, String> {
         }) {
             return Err("counter path exceeds bounds".into());
         }
-        let goal: DesiredState = rhai::serde::from_dynamic(item)
+        let goal: DesiredState = rhai::serde::from_dynamic(&crate::script::view::plain(item))
             .map_err(|e| format!("unsupported package objective: {e}"))?;
         bytes += goal.validate()?;
         if bytes > MAX_TEXT_BYTES {

@@ -20,6 +20,7 @@ use bri_client::{
     platform::PlatformApp,
     playback::{self, Frame},
 };
+use bri_console::Clamp;
 use bri_ui::{
     api::{BindInput, ConnectionState},
     input::{InputEvent, Key, Modifiers, MouseButton},
@@ -312,8 +313,8 @@ impl Player {
     /// Move the mouse toward a view, at most `max` radians this frame.
     fn steer(&mut self, yaw: f32, pitch: f32, max: f32) {
         let (y, p) = self.angles();
-        let dy = wrap(yaw - y).clamp(-max, max);
-        let dp = (pitch - p).clamp(-max, max);
+        let dy = wrap(yaw - y).clamped(-max, max);
+        let dp = (pitch - p).clamped(-max, max);
         if dy.abs() > 1e-4 || dp.abs() > 1e-4 {
             self.input.push(InputEvent::MouseDelta {
                 dx: dy / self.gain.0,
@@ -397,7 +398,7 @@ impl Player {
                     self.situation()
                 );
                 let yaw = d.x.atan2(-d.y);
-                self.steer(yaw, pitch.clamp(-0.3, 0.0), 0.35);
+                self.steer(yaw, pitch.clamped(-0.3, 0.0), 0.35);
                 let aligned = wrap(yaw - self.angles().0).abs() < 0.6;
                 if aligned != forward {
                     self.set("moveforward", aligned)?;

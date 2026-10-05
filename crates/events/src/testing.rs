@@ -75,6 +75,7 @@ pub fn catalog() -> Catalog {
                 }],
             ),
             output("fxDTSBrick", "setRendering", vec![Param::Bool]),
+            output("fxDTSBrick", "respawnVehicle", vec![]),
             output(
                 "fxDTSBrick",
                 "setEventEnabled",

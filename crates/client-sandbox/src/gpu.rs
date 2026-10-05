@@ -15,6 +15,7 @@
 use crate::host::{AddOn, Blend, Budgets, Frame, Layer, Space, Stopped, VERTEX_BYTES, Vertex};
 use crate::shader::{DEFAULT_LOOP_LIMIT, MAX_LOOP_LIMIT, Shader};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -64,7 +65,7 @@ impl Camera {
     /// Each space's view-projection, in [`Space::ALL`] order.
     fn projections(&self) -> [Mat4; 3] {
         let aspect = self.aspect();
-        let fov = self.normal_fov.clamp(5.0, 140.0).to_radians();
+        let fov = self.normal_fov.clamped(5.0, 140.0).to_radians();
         let fov_y = 2.0 * ((fov / 2.0).tan() / aspect).atan();
         [
             self.view_proj,
@@ -104,6 +105,38 @@ pub struct GpuSpeed {
 /// driver reset.
 const WORST_FIRST_FRAME_MS: f64 = 500.0;
 
+/// How many times [`too_heavy`] measures the GPU again before it believes a
+/// refusal.
+const REMEASURES: u32 = 2;
+
+/// How long shaders doing `work` a frame (as [`base_work`] counts it) take
+/// at `speed`, in ms, when that is over `refuse`; `None` when they fit.
+/// Load from anything else on the machine only ever makes the GPU seem
+/// slower, so one measurement taken while it was busy (shaders compiling at
+/// startup, another program, other tests) could stop an Add-On that fits
+/// easily. Before refusing, the GPU is measured again with `measure` and
+/// the fastest speed seen is kept in `speed`; only shaders still too heavy
+/// at that speed are refused.
+fn too_heavy(
+    work: f64,
+    refuse: f64,
+    speed: &mut GpuSpeed,
+    mut measure: impl FnMut() -> Option<GpuSpeed>,
+) -> Option<f64> {
+    for _ in 0..REMEASURES {
+        if work / speed.work_per_ms <= refuse {
+            return None;
+        }
+        if let Some(fresh) = measure()
+            && fresh.work_per_ms > speed.work_per_ms
+        {
+            *speed = fresh;
+        }
+    }
+    let ms = work / speed.work_per_ms;
+    (ms > refuse).then_some(ms)
+}
+
 /// Fragments per screen pixel the loop cap assumes an Add-On draws; more
 /// overdraw than this is caught by timing.
 pub const OVERDRAW: f64 = 2.0;
@@ -131,7 +164,7 @@ pub fn loop_limit(
     };
     let work = base_work(cost, pixels, vertices).max(1.0);
     let iterations = speed.work_per_ms * f64::from(target_ms) / work * scale - 1.0;
-    iterations.clamp(0.0, f64::from(MAX_LOOP_LIMIT)) as u32
+    iterations.clamped(0.0, f64::from(MAX_LOOP_LIMIT)) as u32
 }
 
 /// Timestamps around an Add-On's draws, read back a few frames later.
@@ -507,9 +540,9 @@ impl LayerRenderer {
         } else {
             (budgets.gpu_ms_per_frame, f64::from(budgets.gpu_stop_ms))
         };
-        if let Some(speed) = self.speed {
-            let ms = base_work(cost, camera.pixels(), vertices) / speed.work_per_ms;
-            if ms > refuse {
+        if let Some(speed) = &mut self.speed {
+            let work = base_work(cost, camera.pixels(), vertices);
+            if let Some(ms) = too_heavy(work, refuse, speed, || calibrate(device, queue)) {
                 return Err(addon.stop(Stopped::Gpu(format!(
                     "its shaders would take about {ms:.0} ms a frame on this graphics card at this screen size"
                 ))));
@@ -849,10 +882,17 @@ const CALIBRATION_SIZE: u32 = 128;
 /// Calibration stops raising the work once a pass takes this long.
 const CALIBRATION_MS: f64 = 10.0;
 
+/// Times a pass that seems long enough up to this many times, keeping the
+/// fastest.
+const CALIBRATION_SAMPLES: u32 = 3;
+
 /// Measure how much Add-On shader work the GPU does per millisecond, by
 /// timing a small offscreen pass at rising loop caps (4 to 4096 iterations
-/// over 128x128 pixels) until one takes about 10 ms. Takes well under a
-/// second on any GPU that can run the game. `None` when the pass fails.
+/// over 128x128 pixels) until one takes about 10 ms. Passes are timed on the
+/// GPU where it has timestamps, so waiting behind other programs' work or
+/// for this thread to be scheduled is not counted; otherwise by the clock.
+/// Takes well under a second on any GPU that can run the game. `None` when
+/// the pass fails.
 pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed> {
     let shader = crate::shader::compile("calibration.wgsl", CALIBRATION).ok()?;
     let cost = f64::from(shader.fragment_cost);
@@ -906,6 +946,43 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
         params: [[0.0; 4]; 4],
     };
     queue.write_buffer(&renderer.draw_buffer, 0, bytemuck::bytes_of(&draw));
+    let timer = device
+        .features()
+        .contains(wgpu::Features::TIMESTAMP_QUERY)
+        .then(|| {
+            let buffer = |label, usage| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: 16,
+                    usage,
+                    mapped_at_creation: false,
+                })
+            };
+            (
+                device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("addon calibration"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 2,
+                }),
+                buffer(
+                    "addon calibration resolve",
+                    wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                ),
+                buffer(
+                    "addon calibration readback",
+                    wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                ),
+            )
+        });
+    let period_ns = f64::from(queue.get_timestamp_period());
+    let wait = || {
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(10)),
+            })
+            .ok()
+    };
     let run = |limit: u32| -> Option<f64> {
         let uniform = FrameUniform {
             view_proj: Mat4::IDENTITY.to_cols_array(),
@@ -928,7 +1005,13 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timer.as_ref().map(|(queries, _, _)| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set: queries,
+                        beginning_of_pass_write_index: Some(0),
+                        end_of_pass_write_index: Some(1),
+                    }
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -940,28 +1023,62 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..3, 0, 0..1);
         }
+        if let Some((queries, resolve, readback)) = &timer {
+            encoder.resolve_query_set(queries, 0..2, resolve, 0);
+            encoder.copy_buffer_to_buffer(resolve, 0, readback, 0, 16);
+        }
         let started = Instant::now();
         queue.submit([encoder.finish()]);
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(10)),
-            })
-            .ok()?;
-        Some(started.elapsed().as_secs_f64() * 1000.0)
+        wait()?;
+        let clock_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let Some((_, _, readback)) = &timer else {
+            return Some(clock_ms);
+        };
+        let slice = readback.slice(..);
+        let (send, receive) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = send.send(result);
+        });
+        wait()?;
+        receive.recv().ok()?.ok()?;
+        let ticks: [u64; 2] = bytemuck::pod_read_unaligned(&slice.get_mapped_range().ok()?[..16]);
+        readback.unmap();
+        // A driver that writes no timestamps leaves the clock to time it.
+        Some(if ticks[1] > ticks[0] {
+            (ticks[1] - ticks[0]) as f64 * period_ns / 1e6
+        } else {
+            clock_ms
+        })
     };
+    let pixels = f64::from(CALIBRATION_SIZE * CALIBRATION_SIZE);
+    speed_from_passes(pixels * cost, run)
+}
+
+/// The GPU's speed from `run(limit)`, the time in ms of a calibration pass
+/// at loop cap `limit` doing `work` per loop iteration, raising the cap
+/// fourfold until a pass takes [`CALIBRATION_MS`]. Load from anything else
+/// on the machine only ever adds time, and one pass slowed by it at a low
+/// cap would make the GPU look many times slower than it is (and stop
+/// Add-Ons that fit easily), so a pass long enough to stop at is timed again
+/// and the fastest time counts.
+fn speed_from_passes(work: f64, mut run: impl FnMut(u32) -> Option<f64>) -> Option<GpuSpeed> {
     // Warm up, then the cost of a pass that runs no loop at all.
     run(0)?;
     let empty = run(0)?.min(run(0)?);
-    let pixels = f64::from(CALIBRATION_SIZE * CALIBRATION_SIZE);
     let mut limit = 3;
     loop {
-        let ms = run(limit)? - empty;
-        if ms >= CALIBRATION_MS || limit >= MAX_LOOP_LIMIT {
+        let mut ms = run(limit)? - empty;
+        let last = limit >= MAX_LOOP_LIMIT;
+        for _ in 1..CALIBRATION_SAMPLES {
+            if ms < CALIBRATION_MS && !last {
+                break;
+            }
+            ms = ms.min(run(limit)? - empty);
+        }
+        if ms >= CALIBRATION_MS || last {
             // Timer noise on a very fast GPU only makes this lower.
-            let work = pixels * cost * f64::from(limit + 1);
             return Some(GpuSpeed {
-                work_per_ms: work / ms.max(0.5),
+                work_per_ms: work * f64::from(limit + 1) / ms.max(0.5),
             });
         }
         limit = (limit + 1) * 4 - 1;
@@ -1223,4 +1340,88 @@ pub fn write_png(image: &Image, path: &std::path::Path) -> Result<()> {
     encoder.set_depth(png::BitDepth::Eight);
     encoder.write_header()?.write_image_data(&image.pixels)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A calibration pass at loop cap `limit` on a GPU doing `speed` work
+    /// per ms, `work` per iteration, plus a small fixed cost.
+    fn pass_ms(speed: f64, work: f64, limit: u32) -> f64 {
+        0.05 + work * f64::from(limit + 1) / speed
+    }
+
+    #[test]
+    fn one_pass_slowed_by_load_does_not_make_the_gpu_look_slow() {
+        let (speed, work) = (1.0e7, 128.0 * 128.0 * 100.0);
+        let mut busy = true;
+        let measured = speed_from_passes(work, |limit| {
+            let ms = pass_ms(speed, work, limit);
+            // Another program's work lands on the first pass with a loop:
+            // alone, it would pass for a GPU sixty times slower.
+            Some(if limit > 0 && std::mem::take(&mut busy) {
+                ms + 40.0
+            } else {
+                ms
+            })
+        })
+        .unwrap();
+        assert!(!busy, "the slow pass was taken");
+        let error = measured.work_per_ms / speed - 1.0;
+        assert!(error.abs() < 0.05, "measured {measured:?}");
+    }
+
+    #[test]
+    fn a_failed_pass_fails_calibration() {
+        assert_eq!(
+            speed_from_passes(1.0, |limit| (limit == 0).then_some(0.1)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_refusal_from_a_busy_measurement_is_measured_again() {
+        let real = GpuSpeed { work_per_ms: 1.0e7 };
+        // The first measurement was taken while the GPU was busy: 40 times
+        // too slow, so 50 ms of work looks like 2000.
+        let mut speed = GpuSpeed {
+            work_per_ms: real.work_per_ms / 40.0,
+        };
+        let work = real.work_per_ms * 50.0;
+        let mut measures = 0;
+        let refused = too_heavy(work, WORST_FIRST_FRAME_MS, &mut speed, || {
+            measures += 1;
+            Some(real)
+        });
+        assert_eq!(refused, None, "it fits at the GPU's real speed");
+        assert_eq!(speed, real, "and the renderer keeps that speed");
+        assert_eq!(measures, 1);
+        // Once known, the next frame needs no measuring.
+        assert_eq!(
+            too_heavy(work, WORST_FIRST_FRAME_MS, &mut speed, || unreachable!()),
+            None
+        );
+    }
+
+    #[test]
+    fn shaders_too_heavy_at_the_fastest_speed_seen_are_still_refused() {
+        let mut speed = GpuSpeed { work_per_ms: 1.0e7 };
+        let work = speed.work_per_ms * 2000.0;
+        let mut measures = 0;
+        let refused = too_heavy(work, WORST_FIRST_FRAME_MS, &mut speed, || {
+            measures += 1;
+            // A slower measurement never lowers the speed.
+            Some(GpuSpeed { work_per_ms: 1.0e6 })
+        });
+        assert_eq!(refused, Some(2000.0));
+        assert_eq!(measures, REMEASURES);
+        assert_eq!(speed.work_per_ms, 1.0e7);
+        let mut failing = GpuSpeed { work_per_ms: 1.0e7 };
+        assert_eq!(
+            too_heavy(work, WORST_FIRST_FRAME_MS, &mut failing, || None),
+            Some(2000.0),
+            "a measurement that fails refuses as before"
+        );
+    }
 }

@@ -12,6 +12,7 @@
 use crate::crouch::{CROUCH_SECONDS, CrouchThread};
 use crate::network::View;
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_net::protocol::{POSE_INTERVAL, PublicWorld};
 use bri_sim::{
     player::{MoveInput, PlayerState},
@@ -135,6 +136,9 @@ pub struct Motion {
     authoritative_vehicle_tick: u64,
     authoritative_body_frame: Option<bri_content::passage::PassageFrame>,
     frame_transition: Option<u64>,
+    /// The fields of host corrections this client has had to bring into
+    /// bounds or skip, each reported once.
+    rejected_fields: std::collections::BTreeSet<&'static str>,
 }
 
 /// The prediction moves the body through an opening on the tick its middle
@@ -362,7 +366,7 @@ impl Motion {
     /// without the correction.
     fn drawn_drive(&self) -> Option<(u64, Vec3, glam::Quat)> {
         let (id, previous, current) = self.predictor.as_ref()?.driven()?;
-        let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
+        let alpha = (self.accumulator / TICK).clamped(0.0, 1.0);
         let position = Vec3::from(previous.position).lerp(Vec3::from(current.position), alpha);
         let rotation = glam::Quat::from_array(previous.rotation)
             .normalize()
@@ -394,7 +398,7 @@ impl Motion {
     /// The vehicle's canonical travel middle, drawn on the same side as its pose.
     fn drawn_drive_centre(&self) -> Option<Vec3> {
         let (previous, current) = self.predictor.as_ref()?.driven_centres()?;
-        let alpha = (self.accumulator / TICK).clamp(0., 1.);
+        let alpha = (self.accumulator / TICK).clamped(0., 1.);
         let centre = previous.lerp(current, alpha);
         Some(
             match &self.unshown {
@@ -556,6 +560,34 @@ impl Motion {
         {
             return Ok(());
         }
+        // A correction holding a value no player state may (a host fault)
+        // is not the end of the session: it is brought into bounds and
+        // taken, as a snap to the host's pose, or skipped when it cannot be
+        // (not finite), and prediction goes on until the next. Only a
+        // pose that is not this player's stays an error.
+        let bounded;
+        let pose = match pose.player.check_bounds() {
+            Ok(()) => pose,
+            Err(rejected) => {
+                let mut player = pose.player.clone();
+                player.keep_in_bounds();
+                let taken = player.check_bounds().is_ok();
+                if self.rejected_fields.insert(rejected.field) {
+                    bri_console::warn(format!(
+                        "Movement prediction {} a host correction: {rejected}",
+                        if taken { "bounded" } else { "skipped" }
+                    ));
+                }
+                if !taken {
+                    return Ok(());
+                }
+                bounded = bri_net::protocol::Pose {
+                    player,
+                    ..pose.clone()
+                };
+                &bounded
+            }
+        };
         ensure!(
             pose.passage_frame.valid()
                 && pose
@@ -658,7 +690,7 @@ impl Motion {
         redundancy: usize,
     ) -> Result<Option<(u64, Vec<MoveInput>)>> {
         let seconds = if seconds.is_finite() {
-            seconds.clamp(0.0, 0.25)
+            seconds.clamped(0.0, 0.25)
         } else {
             0.0
         };
@@ -672,7 +704,7 @@ impl Motion {
             self.shown_offset = Some(if error.abs() > CLOCK_SNAP {
                 offset
             } else {
-                shown + error.clamp(-step, step)
+                shown + error.clamped(-step, step)
             });
         }
         let fade = (-CORRECTION_RATE * seconds).exp();
@@ -869,7 +901,7 @@ impl Motion {
             DELAY_SLEW_DOWN
         };
         let step = rate * TICK_RATE * self.frame_seconds;
-        *delay += error.clamp(-step, step);
+        *delay += error.clamped(-step, step);
         Some(server_tick - *delay)
     }
     /// The local player's presented state from its prediction, looking
@@ -901,7 +933,7 @@ impl Motion {
     fn drawn(&self, predictor: &Predictor) -> PlayerState {
         let current = predictor.state();
         let previous = self.previous.as_ref().unwrap_or(current);
-        let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
+        let alpha = (self.accumulator / TICK).clamped(0.0, 1.0);
         let mut state = blend(previous, current, alpha);
         state.feet = (Vec3::from(state.feet) + self.correction).to_array();
         match &self.unshown {
@@ -1031,7 +1063,7 @@ fn carried_input(input: MoveInput, carry: &glam::Affine3A) -> MoveInput {
     let (yaw, pitch, _) = crate::portal_view::carried_look((input.yaw, input.pitch, 0.0), carry);
     MoveInput {
         yaw,
-        pitch: pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
+        pitch: pitch.clamped(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
         ..input
     }
 }
@@ -1053,9 +1085,26 @@ fn blend_through(
             )
         })
         .flatten();
-    match carry {
-        Some(carry) => blend(&a.carried(&carry, middle), b, t),
-        None => blend(a, b, t),
+    let Some(carry) = carry else {
+        return blend(a, b, t);
+    };
+    // Drawn on `a`'s side until its middle reaches the opening, then moving
+    // on from the partner: blended where it went in, and carried once the
+    // blend is through. Blended past the partner from the start, a body not
+    // yet in would sit behind the far opening, which a doorway's back face
+    // shares, and draw cut at that face: its halves at the wrong doorways
+    // for the frames before it is through.
+    let back = blend(a, &b.carried(&carry.inverse(), middle), t);
+    let through = passages
+        .travel(
+            Vec3::from(a.shown_feet()) + lift,
+            Vec3::from(back.feet) + lift,
+        )
+        .1
+        .is_some();
+    match through {
+        true => back.carried(&carry, middle),
+        false => back,
     }
 }
 /// The angle `t` of the way from `a` to `b` (radians), turning the short way
@@ -1067,7 +1116,7 @@ pub fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
     (a + turn * t + PI).rem_euclid(2.0 * PI) - PI
 }
 fn blend(a: &PlayerState, b: &PlayerState, t: f32) -> PlayerState {
-    let t = t.clamp(0.0, 1.0);
+    let t = t.clamped(0.0, 1.0);
     let mut out = if t < 0.5 { a.clone() } else { b.clone() };
     // Bodies move on v20's 32 ms ticks; draw them between ticks.
     out.feet = Vec3::from(a.shown_feet())
@@ -1117,6 +1166,36 @@ mod tests {
             player: state(x, yaw),
         }
     }
+    /// A body drawn between two poses either side of a doorway portal is
+    /// drawn coming up to the doorway it went in by, cut there, and only
+    /// then moving on out of the partner: never cut at the partner's back
+    /// face (its halves at the wrong doorways for the frames before the
+    /// drawn middle reaches the opening).
+    #[test]
+    fn a_remote_body_between_poses_through_a_doorway_draws_only_on_its_way() {
+        let (passages, carry) = crate::portal_view::doorways::pair();
+        let lift = Vec3::Y * bri_sim::player::nominal_middle(1.0);
+        let at = |tick, feet: Vec3| {
+            let mut p = pose(tick, 0.0, 0.0);
+            p.player.feet = feet.to_array();
+            p.player.velocity = [0.0, 0.0, -30.0];
+            p
+        };
+        let before = at(10, Vec3::new(0.2, 0.0, 0.5));
+        let mut after = at(14, Vec3::new(0.2, 0.0, -0.5));
+        after.player = after.player.carried(&carry, lift.y);
+        let history: imbl::Vector<_> = [before, after].into_iter().collect();
+        let mut wrong = Vec::new();
+        for step in 0..=40 {
+            let tick = 10.0 + 4.0 * step as f64 / 40.0;
+            let drawn = sample(&history, tick, &passages);
+            let middle = Vec3::from(drawn.feet) + lift;
+            if let Err(e) = crate::portal_view::doorways::drawn_on_its_way(middle, 1.5) {
+                wrong.push(format!("tick {tick}: {e}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
     #[test]
     fn stale_own_spawn_or_ack_cannot_mutate_presentation_before_pose_admission() -> Result<()> {
         for mounted in [false, true] {
@@ -1148,6 +1227,30 @@ mod tests {
             assert_eq!(motion.shown_frame, shown);
             assert_eq!(motion.predictor.as_ref().unwrap().state(), &state);
         }
+        Ok(())
+    }
+    /// A host correction no player state may hold neither ends the session
+    /// nor sticks: one faster than any player may move is taken at the
+    /// limit (a snap to the host's pose), one that is not finite is
+    /// skipped, and the next good one reconciles as usual.
+    #[test]
+    fn an_out_of_bounds_correction_resyncs_instead_of_disconnecting() -> Result<()> {
+        let mut motion = Motion::default();
+        motion.install(CollisionMirror::new(Default::default(), vec![], vec![]));
+        motion.observe_local(&pose(1, 0., 0.), &Default::default())?;
+        let feet = |motion: &Motion| motion.predictor.as_ref().unwrap().state().feet;
+        let mut fast = pose(2, 5., 0.);
+        fast.player.velocity = [5000., 0., 0.];
+        motion.observe_local(&fast, &Default::default())?;
+        assert_eq!(feet(&motion), [5., 0., 0.]);
+        let speed = Vec3::from(motion.predictor.as_ref().unwrap().state().velocity).length();
+        assert!((speed - bri_sim::player::MAX_SPEED).abs() < 0.01, "{speed}");
+        let mut broken = pose(3, 9., 0.);
+        broken.player.velocity = [f32::NAN, 0., 0.];
+        motion.observe_local(&broken, &Default::default())?;
+        assert_eq!(feet(&motion), [5., 0., 0.], "skipped");
+        motion.observe_local(&pose(4, 7., 0.), &Default::default())?;
+        assert_eq!(feet(&motion), [7., 0., 0.]);
         Ok(())
     }
     /// Poses every 3 ticks with 80 ms latency plus up to 60 ms jitter,
@@ -1524,6 +1627,7 @@ mod tests {
         brick.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(bri_vehicles::testing::CAR.into()),
             recolor: true,
+            team: None,
         }));
         world.bricks.insert(1, brick);
         world.next_brick_id = 2;
@@ -1800,6 +1904,7 @@ mod tests {
             spawn_brick.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(definition.into()),
                 recolor: true,
+                team: None,
             }));
             world.bricks.insert(1, spawn_brick);
             let destination = if overlap {
@@ -2244,6 +2349,7 @@ mod tests {
             spawn_brick.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(definition.into()),
                 recolor: true,
+                team: None,
             }));
             world.bricks.insert(1, spawn_brick);
             for (id, position, turns) in [(2, [0., 3., -24.25], 0), (3, [30.25, 3., -24.], 1)] {

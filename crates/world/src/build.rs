@@ -11,7 +11,7 @@ pub const MAX_BUILD_BYTES: u64 = crate::persistence::MAX_SAVE_BYTES;
 /// Saved builds start with this, then a compressed header (everything but
 /// the bricks, so a save list reads only that) and the compressed packed
 /// bricks ([`crate::packed`]). Builds saved as JSON before still load.
-const MAGIC: &[u8] = b"BRI-BUILD";
+pub const MAGIC: &[u8] = b"BRI-BUILD";
 #[derive(Serialize, Deserialize)]
 struct FileHead {
     schema_version: u32,
@@ -230,8 +230,11 @@ impl SavedBuild {
                     && (ownership || !tag.eq_ignore_ascii_case("+-OWNER"))
             });
         };
-        crate::update_bricks(&mut world.bricks, strip);
-        world.unloaded.iter_mut().for_each(strip);
+        // Keeping both strips nothing: the bricks stay shared, uncopied.
+        if !events || !ownership {
+            crate::update_bricks(&mut world.bricks, strip);
+            world.unloaded.iter_mut().for_each(strip);
+        }
         if !ownership {
             world.owners.clear();
         } else {

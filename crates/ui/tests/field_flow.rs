@@ -848,6 +848,37 @@ fn datablocks(u: &mut Ui) {
 fn open_wrench(u: &mut Ui, variant: WrenchVariant) {
     in_game(u, false, false);
     datablocks(u);
+    // The brick's builder plays in a mini-game with two teams: the vehicle
+    // spawn wrench's Team menu lists them.
+    let team = |id: u32, name: &str| MiniGameTeam {
+        id,
+        name: name.into(),
+        color: 0,
+        settings: Default::default(),
+    };
+    u.apply(UiUpdate::MiniGames(MiniGameUiState {
+        ready: true,
+        games: vec![MiniGameSummary {
+            id: MiniGameId(1),
+            title: "Field flow".into(),
+            owner: MiniGamePlayerId(7),
+            owner_name: "Builder".into(),
+            color: 0,
+            member_count: 1,
+            invite_only: false,
+            rules: MiniGameRules::default(),
+            teams: vec![team(1, "Blue"), team(2, "Red")],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: vec![MiniGameTeamMember {
+                id: MiniGamePlayerId(7),
+                name: "Builder".into(),
+                team: None,
+            }],
+        }],
+        ..Default::default()
+    }));
     u.apply(UiUpdate::OpenWrench {
         brick: 42,
         variant,
@@ -858,6 +889,7 @@ fn open_wrench(u: &mut Ui, variant: WrenchVariant) {
             raycasting: true,
             colliding: true,
             rendering: true,
+            builder: Some(7),
             ..Default::default()
         },
         admin_override: false,
@@ -897,6 +929,8 @@ fn open_events(u: &mut Ui) {
     answer_all(u);
     u.apply(UiUpdate::OpenEvents {
         brick: 42,
+        builder: None,
+        builder_name: None,
         rows: vec![EventRow::Editable(EventLine {
             conditions: vec![],
             enabled: true,
@@ -1801,6 +1835,10 @@ fn scenarios() -> Vec<Scenario> {
                 (
                     "WrenchVehicleSpawn_ReColorVehicle",
                     Sent(&["actions.SendWrench.data.recolor_vehicle"]),
+                ),
+                (
+                    "WrenchVehicleSpawn_Team",
+                    Sent(&["actions.SendWrench.data.vehicle_team"]),
                 ),
                 (
                     "WrenchVehicleSpawn_Rendering",

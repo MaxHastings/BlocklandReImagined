@@ -1,5 +1,6 @@
 //! Native administration foundation. The host supplies authenticated connections;
 //! request bytes never select the acting connection, role, or host authority.
+use bri_console::Clamp;
 use bri_package::setting::{self, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1026,7 +1027,7 @@ impl Administration {
             Action::ClearVehicles => GameplayCommand::ClearVehicles,
             Action::ClearBots => GameplayCommand::ClearBots,
             Action::Warp => GameplayCommand::Warp,
-            Action::TimeScale { scale } => GameplayCommand::TimeScale(scale.clamp(0.2, 2.0)),
+            Action::TimeScale { scale } => GameplayCommand::TimeScale(scale.clamped(0.2, 2.0)),
             Action::SetEnvironment { settings } => {
                 GameplayCommand::SetEnvironment(Box::new(settings))
             }

@@ -1,6 +1,7 @@
 //! Native window and GPU ownership. Nothing creates a window until `run` is
 //! explicitly called by the executable. Mapping tests never start an event loop.
 use anyhow::{Context, Result, bail};
+use bri_console::Clamp;
 use bri_ui::api::{DisplayModes, RequestId, UiUpdate};
 use bri_ui::binds::Platform;
 use bri_ui::gpu::UiRenderer;
@@ -33,6 +34,7 @@ type Opened = (
     wgpu::Device,
     wgpu::Queue,
     UiRenderer,
+    ShaderCompiler,
 );
 
 /// The GPU opened on a worker thread while the game loads its content, so
@@ -52,13 +54,22 @@ impl EarlyGpu {
         let thread = std::thread::Builder::new()
             .name("open GPU".into())
             .spawn(move || -> Result<Opened> {
-                let mut descriptor =
-                    wgpu::InstanceDescriptor::new_without_display_handle_from_env();
-                descriptor.backends = backends;
-                let instance = wgpu::Instance::new(descriptor);
-                let (adapter, device, queue) = request_device(&instance, None, software)?;
-                let renderer = UiRenderer::new(&device, &queue);
-                Ok((instance, adapter, device, queue, renderer))
+                let descriptor = || {
+                    let mut descriptor =
+                        wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+                    descriptor.backends = backends;
+                    descriptor
+                };
+                let gpu = open_device(&descriptor, None, software)?;
+                let renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+                Ok((
+                    gpu.instance,
+                    gpu.adapter,
+                    gpu.device,
+                    gpu.queue,
+                    renderer,
+                    gpu.compiler,
+                ))
             })
             .ok()?;
         Some(Self(thread))
@@ -78,7 +89,7 @@ impl EarlyGpu {
             ));
             return None;
         }
-        log_adapter(&opened.1, &[]);
+        log_adapter(&opened.1, &[], opened.5);
         Some((opened, surface))
     }
 }
@@ -119,12 +130,168 @@ fn request_device(
     Ok((adapter, device, queue))
 }
 
-fn log_adapter(adapter: &wgpu::Adapter, failures: &[String]) {
+/// A GPU opened on one instance, with the surface made from that instance.
+struct OpenedDevice {
+    instance: wgpu::Instance,
+    surface: Option<wgpu::Surface<'static>>,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    compiler: ShaderCompiler,
+}
+
+/// Makes the surface for a freshly created instance.
+type SurfaceMaker<'a> = &'a dyn Fn(&wgpu::Instance) -> Result<wgpu::Surface<'static>>;
+
+/// Open a device on a new instance from `descriptor`. On DirectX 12 a tiny
+/// pipeline is built first with the compiler wgpu chose. DXC without
+/// Microsoft's dxil.dll (which the release does not ship) cannot sign DXIL
+/// with the validator's proprietary hash, and a D3D12 runtime that does not
+/// accept the unsigned form refuses every pipeline: a black screen. When the
+/// test pipeline is refused, the GPU is opened again with FXC, whose
+/// bytecode every D3D12 runtime accepts. No Windows version table: the
+/// runtime itself answers.
+fn open_device(
+    descriptor: &dyn Fn() -> wgpu::InstanceDescriptor,
+    surface: Option<SurfaceMaker<'_>>,
+    software: bool,
+) -> Result<OpenedDevice> {
+    let open = |compiler: Option<wgpu::Dx12Compiler>| -> Result<_> {
+        let mut descriptor = descriptor();
+        if let Some(compiler) = compiler {
+            descriptor.backend_options.dx12.shader_compiler = compiler;
+        }
+        let chosen = descriptor.backend_options.dx12.shader_compiler.clone();
+        let instance = wgpu::Instance::new(descriptor);
+        let surface = surface.map(|make| make(&instance)).transpose()?;
+        let (adapter, device, queue) = request_device(&instance, surface.as_ref(), software)?;
+        Ok((
+            chosen,
+            OpenedDevice {
+                instance,
+                surface,
+                adapter,
+                device,
+                queue,
+                compiler: ShaderCompiler::NotDx12,
+            },
+        ))
+    };
+    let (chosen, mut gpu) = open(None)?;
+    gpu.compiler = match dx12_compiler_check(gpu.adapter.get_info().backend, &chosen) {
+        Dx12CompilerCheck::NotDx12 => ShaderCompiler::NotDx12,
+        Dx12CompilerCheck::Fxc => ShaderCompiler::FxcRequested,
+        Dx12CompilerCheck::ProbeDxc => match probe_pipeline(&gpu.device) {
+            Ok(()) => ShaderCompiler::DxcAccepted,
+            Err(reason) => {
+                bri_console::warn(format!(
+                    "DirectX 12 refused a test shader ({reason}); reopening the GPU with FXC."
+                ));
+                // Release the first device (and its surface) before the second.
+                drop(gpu);
+                let (_, mut gpu) = open(Some(wgpu::Dx12Compiler::Fxc))?;
+                gpu.compiler = ShaderCompiler::DxcRejected;
+                return Ok(gpu);
+            }
+        },
+    };
+    Ok(gpu)
+}
+
+/// Whether a device's shader compiler needs checking against its runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dx12CompilerCheck {
+    /// Not DirectX 12: no DXIL, nothing to check.
+    NotDx12,
+    /// FXC was asked for (`WGPU_DX12_COMPILER=fxc`); its bytecode needs no
+    /// DXIL signature.
+    Fxc,
+    /// wgpu may compile with DXC: build a test pipeline before trusting it.
+    ProbeDxc,
+}
+
+fn dx12_compiler_check(backend: wgpu::Backend, compiler: &wgpu::Dx12Compiler) -> Dx12CompilerCheck {
+    match (backend, compiler) {
+        (wgpu::Backend::Dx12, wgpu::Dx12Compiler::Fxc) => Dx12CompilerCheck::Fxc,
+        (wgpu::Backend::Dx12, _) => Dx12CompilerCheck::ProbeDxc,
+        _ => Dx12CompilerCheck::NotDx12,
+    }
+}
+
+/// What the opened device compiles its shaders with, for the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShaderCompiler {
+    NotDx12,
+    FxcRequested,
+    /// The test pipeline built: wgpu's own choice (DXC when dxcompiler.dll
+    /// loads, else FXC) works on this runtime.
+    DxcAccepted,
+    /// The runtime refused the test pipeline, so the GPU uses FXC.
+    DxcRejected,
+}
+
+/// Build a minimal render pipeline, which compiles a vertex and a fragment
+/// shader and hands both to the driver, and report any error the device
+/// raised doing it.
+fn probe_pipeline(device: &wgpu::Device) -> std::result::Result<(), String> {
+    let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("shader compiler probe"),
+        source: wgpu::ShaderSource::Wgsl(
+            "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+                 return vec4<f32>(f32(i & 1u), f32(i >> 1u), 0.0, 1.0);
+             }
+             @fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
+                .into(),
+        ),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("shader compiler probe"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::TextureFormat::Rgba8Unorm.into())],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    drop(pipeline);
+    let errors = [
+        pollster::block_on(internal.pop()),
+        pollster::block_on(validation.pop()),
+        pollster::block_on(out_of_memory.pop()),
+    ];
+    match errors.into_iter().flatten().next() {
+        Some(error) => Err(error.to_string()),
+        None => Ok(()),
+    }
+}
+
+fn log_adapter(adapter: &wgpu::Adapter, failures: &[String], compiler: ShaderCompiler) {
     let info = adapter.get_info();
     bri_console::echo(format!(
         "GPU: {} ({:?}, {:?}, driver {} {})",
         info.name, info.backend, info.device_type, info.driver, info.driver_info
     ));
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    if let Some(line) = dx12_shader_compiler(beside.as_deref(), compiler) {
+        bri_console::echo(line);
+    }
     if !failures.is_empty() {
         bri_console::warn(format!(
             "Fell back to {:?} after: {}",
@@ -132,6 +299,32 @@ fn log_adapter(adapter: &wgpu::Adapter, failures: &[String]) {
             failures.join("; ")
         ));
     }
+}
+
+/// Which compiler DirectX 12 shaders use, or None off DirectX 12. A Windows
+/// release ships DXC's dxcompiler.dll beside the game
+/// (tools/shader-compiler.json), which wgpu's default compiler choice loads:
+/// about 3 s for the world's shaders. Without it, or when the D3D12 runtime
+/// refuses DXC's shaders, wgpu uses the system's FXC: about 20 s, minutes
+/// on a busy CPU.
+fn dx12_shader_compiler(
+    game_folder: Option<&std::path::Path>,
+    compiler: ShaderCompiler,
+) -> Option<&'static str> {
+    Some(match compiler {
+        ShaderCompiler::NotDx12 => return None,
+        ShaderCompiler::FxcRequested => "Shader compiler: FXC (WGPU_DX12_COMPILER asked for it)",
+        ShaderCompiler::DxcRejected => {
+            "Shader compiler: FXC (DXC shaders rejected by this D3D12 runtime)"
+        }
+        ShaderCompiler::DxcAccepted => {
+            if game_folder.is_some_and(|dir| dir.join("dxcompiler.dll").is_file()) {
+                "Shader compiler: DXC (dxcompiler.dll beside the game)"
+            } else {
+                "Shader compiler: FXC (no dxcompiler.dll beside the game; the first map's shaders compile slowly)"
+            }
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -240,21 +433,32 @@ fn open_gpu(
 )> {
     let mut failures = Vec::new();
     for (backends, software) in backend_order() {
-        let mut descriptor =
-            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display.clone()));
-        descriptor.backends = backends;
-        let instance = wgpu::Instance::new(descriptor);
-        let attempt = (|| -> Result<_> {
-            let surface = instance
+        let descriptor = || {
+            let mut descriptor =
+                wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display.clone()));
+            descriptor.backends = backends;
+            descriptor
+        };
+        let surface = |instance: &wgpu::Instance| {
+            instance
                 .create_surface(window.clone())
-                .context("creating the render surface")?;
-            let (adapter, device, queue) = request_device(&instance, Some(&surface), software)?;
-            Ok((surface, adapter, device, queue))
-        })();
-        match attempt {
-            Ok((surface, adapter, device, queue)) => {
-                log_adapter(&adapter, &failures);
+                .context("creating the render surface")
+        };
+        match open_device(&descriptor, Some(&surface), software) {
+            Ok(OpenedDevice {
+                instance,
+                surface: Some(surface),
+                adapter,
+                device,
+                queue,
+                compiler,
+            }) => {
+                log_adapter(&adapter, &failures, compiler);
                 return Ok((instance, surface, adapter, device, queue));
+            }
+            // open_device always makes a surface when given a maker.
+            Ok(OpenedDevice { surface: None, .. }) => {
+                failures.push(format!("{backends:?}: no render surface"))
             }
             Err(error) => failures.push(format!(
                 "{backends:?}{}: {error:#}",
@@ -281,14 +485,19 @@ impl Graphics {
         display: winit::event_loop::OwnedDisplayHandle,
         early: Option<EarlyGpu>,
     ) -> Result<Self> {
-        let ((instance, adapter, device, queue, renderer), surface) =
+        let ((instance, adapter, device, queue, renderer, _), surface) =
             match early.and_then(|early| early.finish(&window)) {
                 Some(opened) => opened,
                 None => {
                     let (instance, surface, adapter, device, queue) =
                         open_gpu(&window, display.clone())?;
                     let renderer = UiRenderer::new(&device, &queue);
-                    ((instance, adapter, device, queue, renderer), surface)
+                    // open_gpu already logged the compiler; the slot goes unread.
+                    let logged = ShaderCompiler::NotDx12;
+                    (
+                        (instance, adapter, device, queue, renderer, logged),
+                        surface,
+                    )
                 }
             };
         let caps = surface.get_capabilities(&adapter);
@@ -963,7 +1172,7 @@ impl Runner {
         if self.last_present.is_none() {
             crate::perf::startup::mark("first frame drawn");
         }
-        self.screenshots.submitted();
+        self.screenshots.submitted(&g.queue);
         for text in self.screenshots.poll(&g.device) {
             self.config
                 .app
@@ -1085,28 +1294,42 @@ struct Reading {
     shot: Shot,
     capture: Capture,
     mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
-    since: Instant,
+    /// Set once the GPU has finished the submission holding the copy.
+    copied: Arc<std::sync::atomic::AtomicBool>,
+    /// When a poll first saw the copy finished.
+    since: Option<Instant>,
 }
-/// How long a readback may wait for the GPU before the screenshot fails.
+/// How long a readback may stay unmapped after the GPU has finished its
+/// copy before the screenshot fails. The GPU's own time is not limited: a
+/// software adapter can take many seconds over a frame, and a GPU that
+/// stops altogether is lost, which fails the mapping with an error.
 const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
 impl Screenshots {
     /// Whether any screenshot is still being copied, read back or written.
     #[cfg(test)]
-    fn busy(&self) -> bool {
+    pub(crate) fn busy(&self) -> bool {
         !self.copied.is_empty() || !self.reading.is_empty() || self.writing > 0
     }
     /// A copy queued in a frame's encoder, not yet submitted.
     pub(crate) fn copied(&mut self, shot: Shot, capture: Capture) {
         self.copied.push((shot, capture));
     }
-    /// Every encoder holding a copy so far has been submitted: start
-    /// reading those copies back.
-    pub(crate) fn submitted(&mut self) {
+    /// Every encoder holding a copy so far has been submitted to `queue`:
+    /// start reading those copies back.
+    pub(crate) fn submitted(&mut self, queue: &wgpu::Queue) {
+        if self.copied.is_empty() {
+            return;
+        }
+        let copied = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = copied.clone();
+        queue.on_submitted_work_done(move || {
+            done.store(true, std::sync::atomic::Ordering::Release);
+        });
         for (shot, capture) in std::mem::take(&mut self.copied) {
-            self.start(shot, capture);
+            self.start(shot, capture, copied.clone());
         }
     }
-    fn start(&mut self, shot: Shot, capture: Capture) {
+    fn start(&mut self, shot: Shot, capture: Capture, copied: Arc<std::sync::atomic::AtomicBool>) {
         let (tx, mapped) = std::sync::mpsc::channel();
         capture
             .buffer
@@ -1118,8 +1341,21 @@ impl Screenshots {
             shot,
             capture,
             mapped,
-            since: Instant::now(),
+            copied,
+            since: None,
         });
+    }
+    /// A failed screenshot: news for a player's shot; for a save's picture,
+    /// which is written quietly, a console warning.
+    fn failed(shot: &Shot, error: impl std::fmt::Display, messages: &mut Vec<String>) {
+        if shot.fit.is_some() {
+            bri_console::warn(format!(
+                "Save picture {} failed: {error}",
+                shot.path.display()
+            ));
+        } else {
+            messages.push(format!("Screenshot failed: {error}"));
+        }
     }
     /// Hand finished readbacks to writer threads and return the messages
     /// for screenshots written or failed since the last call. Never blocks.
@@ -1129,11 +1365,17 @@ impl Screenshots {
             let _ = device.poll(wgpu::PollType::Poll);
             let (done, _) = self.written.get_or_insert_with(std::sync::mpsc::channel);
             let mut waiting = Vec::new();
-            for reading in self.reading.drain(..) {
+            for mut reading in self.reading.drain(..) {
+                if reading.since.is_none()
+                    && reading.copied.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    reading.since = Some(Instant::now());
+                }
                 match reading.mapped.try_recv() {
                     Ok(Ok(())) => {
                         let done = done.clone();
                         let Reading { shot, capture, .. } = reading;
+                        let failed_shot = shot.clone();
                         let spawned = std::thread::Builder::new().name("screenshot".into()).spawn(
                             move || {
                                 let result = capture.write(&shot.path, shot.fit);
@@ -1142,19 +1384,27 @@ impl Screenshots {
                         );
                         match spawned {
                             Ok(_) => self.writing += 1,
-                            Err(error) => messages.push(format!("Screenshot failed: {error}")),
+                            Err(error) => Self::failed(&failed_shot, error, &mut messages),
                         }
                     }
-                    Ok(Err(error)) => {
-                        messages.push(format!("Screenshot failed: screenshot readback: {error}"))
-                    }
+                    Ok(Err(error)) => Self::failed(
+                        &reading.shot,
+                        format_args!("screenshot readback: {error}"),
+                        &mut messages,
+                    ),
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        messages.push("Screenshot failed: the GPU dropped the readback".into())
+                        Self::failed(&reading.shot, "the GPU dropped the readback", &mut messages)
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty)
-                        if reading.since.elapsed() >= SCREENSHOT_READBACK_LIMIT =>
+                        if reading
+                            .since
+                            .is_some_and(|since| since.elapsed() >= SCREENSHOT_READBACK_LIMIT) =>
                     {
-                        messages.push("Screenshot failed: the GPU did not finish the copy".into())
+                        Self::failed(
+                            &reading.shot,
+                            "the copy finished but its readback never mapped",
+                            &mut messages,
+                        )
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(reading),
                 }
@@ -1834,8 +2084,8 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
     if !delta.is_finite() {
         return 0.0;
     }
-    *acc = (*acc + delta).clamp(-4000.0, 4000.0);
-    let steps = (*acc / 40.0).trunc().clamp(-100.0, 100.0);
+    *acc = (*acc + delta).clamped(-4000.0, 4000.0);
+    let steps = (*acc / 40.0).trunc().clamped(-100.0, 100.0);
     *acc -= steps * 40.0;
     steps as f32
 }
@@ -1843,6 +2093,80 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_names_dxc_only_when_it_ships_beside_the_game() -> Result<()> {
+        let accepted = ShaderCompiler::DxcAccepted;
+        let directory = tempfile::tempdir()?;
+        let line = |folder| dx12_shader_compiler(folder, accepted).unwrap_or_default();
+        assert!(line(Some(directory.path())).contains("FXC"));
+        assert!(line(None).contains("FXC"));
+        std::fs::write(directory.path().join("dxcompiler.dll"), b"stand-in")?;
+        assert!(line(Some(directory.path())).contains("DXC (dxcompiler.dll"));
+        Ok(())
+    }
+
+    #[test]
+    fn dx12_tests_dxc_unless_fxc_was_asked_for() {
+        use wgpu::{Backend, Dx12Compiler};
+        let dxc = Dx12Compiler::DynamicDxc {
+            dxc_path: "dxcompiler.dll".into(),
+        };
+        for compiler in [Dx12Compiler::Auto, dxc, Dx12Compiler::StaticDxc] {
+            assert_eq!(
+                dx12_compiler_check(Backend::Dx12, &compiler),
+                Dx12CompilerCheck::ProbeDxc,
+                "{compiler:?}"
+            );
+            for other in [Backend::Vulkan, Backend::Metal, Backend::Gl, Backend::Noop] {
+                assert_eq!(
+                    dx12_compiler_check(other, &compiler),
+                    Dx12CompilerCheck::NotDx12
+                );
+            }
+        }
+        assert_eq!(
+            dx12_compiler_check(Backend::Dx12, &Dx12Compiler::Fxc),
+            Dx12CompilerCheck::Fxc
+        );
+    }
+
+    #[test]
+    fn a_refused_dxc_logs_fxc_even_with_dxcompiler_beside_the_game() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        std::fs::write(directory.path().join("dxcompiler.dll"), b"stand-in")?;
+        let folder = Some(directory.path());
+        assert_eq!(
+            dx12_shader_compiler(folder, ShaderCompiler::DxcRejected),
+            Some("Shader compiler: FXC (DXC shaders rejected by this D3D12 runtime)")
+        );
+        assert!(
+            dx12_shader_compiler(folder, ShaderCompiler::FxcRequested)
+                .is_some_and(|line| line.contains("FXC"))
+        );
+        assert_eq!(dx12_shader_compiler(folder, ShaderCompiler::NotDx12), None);
+        Ok(())
+    }
+
+    /// The probe pipeline is valid WGSL and a valid pipeline: on a GPU that
+    /// accepts shaders it must pass, or every DX12 player would be pushed to
+    /// FXC. Runs on whatever adapter this machine has; without one there is
+    /// nothing to check.
+    #[test]
+    fn the_shader_compiler_probe_passes_on_a_working_gpu() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+        else {
+            return;
+        };
+        assert_eq!(probe_pipeline(&device), Ok(()));
+    }
 
     #[test]
     fn screenshot_jpeg_and_png_use_their_real_formats() -> Result<()> {
@@ -1917,7 +2241,7 @@ mod tests {
         ];
         for copies in frames {
             // The app reads back what it copied in the frame before.
-            app.submitted();
+            app.submitted(&gpu.queue);
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             for (by_app, shot) in copies {
                 let capture = capture_copy(&gpu.device, &mut encoder, &texture, format)?;
@@ -1925,7 +2249,7 @@ mod tests {
                 owner.copied(shot.clone(), capture);
             }
             gpu.queue.submit([encoder.finish()]);
-            window.submitted();
+            window.submitted(&gpu.queue);
             window.poll(&gpu.device);
             app.poll(&gpu.device);
         }

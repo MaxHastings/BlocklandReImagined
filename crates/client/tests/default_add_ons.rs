@@ -59,11 +59,11 @@ impl Checkout {
         // packages/: the list and the default Add-Ons, as committed.
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
         let packages = checkout.root.join("packages");
-        std::fs::create_dir_all(&packages)?;
-        std::fs::copy(
-            repo.join(defaults::LIST_FILE),
-            packages.join(defaults::LIST_FILE),
-        )?;
+        std::fs::create_dir_all(&packages)
+            .with_context(|| format!("Creating {}", packages.display()))?;
+        let list = repo.join(defaults::LIST_FILE);
+        std::fs::copy(&list, packages.join(defaults::LIST_FILE))
+            .with_context(|| format!("Copying {}", list.display()))?;
         for path in defaults::list().iter().filter_map(|a| a.path.as_ref()) {
             copy_dir(&repo.join(path), &packages.join(path), false)?;
         }
@@ -107,29 +107,40 @@ impl Drop for Checkout {
 /// `from` (the stand-in) copied to `to` as the Add-On `id`: its manifest
 /// and vehicles name `id` where they named the stand-in's.
 fn stand_in_as(from: &Path, to: &Path, id: &str) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
+    std::fs::create_dir_all(to).with_context(|| format!("Creating {}", to.display()))?;
+    for entry in std::fs::read_dir(from).with_context(|| format!("Reading {}", from.display()))? {
+        let entry = entry.with_context(|| format!("Reading {}", from.display()))?;
         let target = to.join(entry.file_name());
         let name = entry.file_name();
-        if entry.file_type()?.is_dir() {
-            stand_in_as(&entry.path(), &target, id)?;
+        let path = entry.path();
+        if entry
+            .file_type()
+            .with_context(|| format!("Reading {}", path.display()))?
+            .is_dir()
+        {
+            stand_in_as(&path, &target, id)?;
         } else if name == "package.json" || name == "vehicles.json" {
-            let text = std::fs::read_to_string(entry.path())?;
-            std::fs::write(&target, text.replace(STAND_IN_ID, id))?;
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("Reading {}", path.display()))?;
+            std::fs::write(&target, text.replace(STAND_IN_ID, id))
+                .with_context(|| format!("Writing {}", target.display()))?;
         } else {
-            std::fs::copy(entry.path(), &target)?;
+            std::fs::copy(&path, &target).with_context(|| format!("Copying {}", path.display()))?;
         }
     }
     Ok(())
 }
 
 fn copy_dir(from: &Path, to: &Path, link: bool) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
+    std::fs::create_dir_all(to).with_context(|| format!("Creating {}", to.display()))?;
+    for entry in std::fs::read_dir(from).with_context(|| format!("Reading {}", from.display()))? {
+        let entry = entry.with_context(|| format!("Reading {}", from.display()))?;
         let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        if entry
+            .file_type()
+            .with_context(|| format!("Reading {}", entry.path().display()))?
+            .is_dir()
+        {
             copy_dir(&entry.path(), &target, link)?;
         } else if !link || std::fs::hard_link(entry.path(), &target).is_err() {
             std::fs::copy(entry.path(), &target)
@@ -272,6 +283,7 @@ fn load_plane_spawn(app: &mut App, state: &Path) -> Result<()> {
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(PLANE.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
@@ -630,7 +642,8 @@ fn bundled_shared_geometry_hosts_and_real_doors_change_footprint() -> Result<()>
     let content = checkout.content();
     for id in ["bot_hole", "bot_shark", "brick_doors"] {
         let destination = content.join("addons").join(id);
-        std::fs::remove_dir_all(&destination)?;
+        std::fs::remove_dir_all(&destination)
+            .with_context(|| format!("Removing {}", destination.display()))?;
         copy_dir(&source.join("addons").join(id), &destination, false)?;
     }
     defaults::install(
@@ -675,12 +688,14 @@ fn bundled_shared_geometry_hosts_and_real_doors_change_footprint() -> Result<()>
         administrator: true,
         ..Default::default()
     };
+    let materials = paths.brick_materials.join("brick-materials.json");
     let tools = bri_sim::session::ToolCatalog::from_native(
         &catalog,
         &app.content.effects,
-        &serde_json::from_slice(&std::fs::read(
-            paths.brick_materials.join("brick-materials.json"),
-        )?)?,
+        &serde_json::from_slice(
+            &std::fs::read(&materials)
+                .with_context(|| format!("Reading {}", materials.display()))?,
+        )?,
     )?;
     for (i, door) in doors.iter().enumerate() {
         let mesh = &map.simulation.definitions.entries[&door.id].mesh;

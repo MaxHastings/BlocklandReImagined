@@ -411,6 +411,7 @@ fn bot_and_plate(s: &mut Session, builder: OwnerId, rows: Vec<EventRow>) -> (Own
     spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
+        team: None,
     }));
     let mut plate = bri_world::Brick::new(
         bri_world::ContentRef::Resolved("plate".into()),

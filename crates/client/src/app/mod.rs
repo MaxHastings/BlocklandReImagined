@@ -7,6 +7,7 @@ use crate::{
     settings,
 };
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_net::{
     client::{Client, HostPin},
     server::{self, ServerOptions},
@@ -177,7 +178,12 @@ struct Attempt {
     id: RequestId,
     worker: Worker,
     scene: mpsc::Receiver<Prepared>,
+    /// What the player sees the server called: the typed address until the
+    /// host's listing names it, or the hosted game's name.
     name: String,
+    /// Joins: what the player joined, as they gave it (an address or an
+    /// invite with its key), for rejoining. Never the display name.
+    join_target: Option<String>,
     max_players: u32,
     local: bool,
     single: bool,
@@ -573,7 +579,11 @@ impl App {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<()> {
-        let limits = bri_fx_runtime::EffectsLimits::default();
+        let budget = effects_instance_budget([
+            &self.fx.effects.world,
+            self.fx.weapon_effects.world(),
+            self.fx.actor_effects.world(),
+        ]);
         self.gpu.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
             device,
             queue,
@@ -581,7 +591,7 @@ impl App {
             format,
             bri_render::scene::DEPTH_FORMAT,
             self.graphics.samples,
-            limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
+            budget,
         )?);
         Ok(())
     }
@@ -628,7 +638,7 @@ pub(crate) fn pivot_camera(
 ) -> (f32, Vec3, f32) {
     let lift = stand_height * 0.5 + (offset * pos + 0.75 * (1.0 - pos)) * scale;
     (
-        (max_dist * scale * pos).clamp(0.0, 40.0),
+        (max_dist * scale * pos).clamped(0.0, 40.0),
         feet + Vec3::Y * lift,
         tilt,
     )
@@ -741,7 +751,7 @@ fn name_tags(
     };
     let paint = |color: u8| {
         let rgba = view.world.palette.get(usize::from(color))?;
-        Some([0, 1, 2].map(|i| (rgba[i].clamp(0.0, 1.0) * 255.0).round() as u8))
+        Some([0, 1, 2].map(|i| (rgba[i].clamped(0.0, 1.0) * 255.0).round() as u8))
     };
     let mut tags = Vec::new();
     for (owner, name) in &view.names {
@@ -1386,17 +1396,39 @@ type LightVolumeReceiver = std::sync::mpsc::Receiver<Baked>;
 /// Bedroom lamp's bulb and the Kitchen's fluorescent tubes.
 const LIGHT_SHAPES: &[&str] = &["lightBulbA", "fluorescentLight"];
 
+/// What [`combine_effect_frames`] left out of a frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EffectFrameCuts {
+    /// Lights past the scene's point-light slots.
+    pub lights: usize,
+    /// The farthest sprites past the renderer's instance budget.
+    pub sprites: usize,
+}
+/// One renderer instance budget for the three effect worlds: the sum of
+/// what each world's snapshot can hold, so the renderer fits every sprite
+/// the worlds can make, capped where the renderer stops.
+pub(crate) fn effects_instance_budget(worlds: [&bri_fx_runtime::EffectsWorld; 3]) -> usize {
+    worlds
+        .iter()
+        .map(|w| w.limits().max_sprites())
+        .fold(0usize, usize::saturating_add)
+        .min(bri_fx_runtime::gpu::MAX_INSTANCES)
+}
 /// One frame of sprites from the three effect worlds, farthest first. Each
 /// world's snapshot is already sorted from `eyes[0]`, so they merge in one
 /// pass; equally distant sprites keep world order, as a stable sort of the
-/// three lists end to end would. The lights every view shares are the ones
-/// nearest any of `eyes` ([`crate::views::eyes`]), so a mirror or portal
-/// keeps the lights beside what it shows.
+/// three lists end to end would. At most `budget` sprites (the renderer's
+/// [`bri_fx_runtime::gpu::EffectsRenderer::max_instances`]) are kept: past
+/// it the farthest go first, counted in [`EffectFrameCuts::sprites`], so a
+/// busy frame draws less instead of failing. The lights every view shares
+/// are the ones nearest any of `eyes` ([`crate::views::eyes`]), so a mirror
+/// or portal keeps the lights beside what it shows.
 pub(crate) fn combine_effect_frames(
     mut world: bri_fx_runtime::FrameEffects,
     others: [bri_fx_runtime::FrameEffects; 2],
     eyes: &[Vec3],
-) -> (bri_fx_runtime::FrameEffects, usize) {
+    budget: usize,
+) -> (bri_fx_runtime::FrameEffects, EffectFrameCuts) {
     let eye = eyes.first().copied().unwrap_or_default();
     let [weapon, actor] = others;
     let lists = [
@@ -1404,10 +1436,12 @@ pub(crate) fn combine_effect_frames(
         weapon.particles,
         actor.particles,
     ];
-    let total = lists.iter().map(Vec::len).sum();
+    let total: usize = lists.iter().map(Vec::len).sum();
+    // The merge is far-first, so the sprites past the budget are its first.
+    let cut = total.saturating_sub(budget);
     let mut heads = [0usize; 3];
-    let mut merged = Vec::with_capacity(total);
-    while merged.len() < total {
+    let mut merged = Vec::with_capacity(total - cut);
+    for taken in 0..total {
         let mut best: Option<(usize, f32)> = None;
         for (i, list) in lists.iter().enumerate() {
             if let Some(p) = list.get(heads[i]) {
@@ -1419,7 +1453,9 @@ pub(crate) fn combine_effect_frames(
             }
         }
         let (i, _) = best.expect("a list with sprites left");
-        merged.push(lists[i][heads[i]]);
+        if taken >= cut {
+            merged.push(lists[i][heads[i]]);
+        }
         heads[i] += 1;
     }
     world.particles = merged;
@@ -1433,12 +1469,18 @@ pub(crate) fn combine_effect_frames(
     world
         .lights
         .sort_by(|a, b| nearest(a.position).total_cmp(&nearest(b.position)));
-    let deferred = world
+    let lights = world
         .lights
         .len()
         .saturating_sub(bri_render::scene::MAX_POINT_LIGHTS);
     world.lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
-    (world, deferred)
+    (
+        world,
+        EffectFrameCuts {
+            lights,
+            sprites: cut,
+        },
+    )
 }
 /// Show a drop folder (saves, Add-Ons) in the file browser, making it first
 /// so a player can always find where files go. A folder that cannot be made
@@ -1496,6 +1538,8 @@ impl PlatformApp for App {
             self.pick_quality(&device.adapter_info());
         }
         self.gpu.gpu_name = device.adapter_info().name;
+        self.gpu.opened = true;
+        self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -1624,6 +1668,7 @@ impl PlatformApp for App {
         self.addons.client_code.device_lost();
     }
     fn gpu_stopped(&mut self) {
+        self.gpu.device = None;
         self.addons.client_code.gpu_stopped();
         self.addons.item_skins.gpu_stopped();
         self.item_ui.gpu_stopped();
@@ -1633,11 +1678,7 @@ impl PlatformApp for App {
         self.fx.beams.gpu_stopped();
         self.fx.tutorial_targets.gpu_stopped();
         self.gpu.shell_gpu = None;
-        for avatar in self.avatar.avatars.values_mut() {
-            avatar.gpu = None;
-            avatar.instance = None;
-        }
-        self.avatar.avatar_preview = None;
+        self.avatar.gpu_stopped();
         self.gpu.renderer = None;
         self.lighting.reflections = None;
         self.lighting.environment_probe = None;
@@ -1772,14 +1813,70 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// A small JSON file in the client state folder, or None when missing or
-/// unreadable.
+/// A small JSON file in the client state folder (saved servers, host
+/// pins), or None when missing. One that cannot be read as what it holds
+/// is moved aside as `<name>.damaged-<unix seconds>.json` (as damaged
+/// settings are kept) before anything writes a new one, and the player is
+/// told ([`take_damaged_files`]): favourites and host pins are never wiped
+/// without a copy.
 pub(crate) fn read_small_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    std::fs::metadata(path)
-        .ok()
-        .filter(|m| m.len() <= 1024 * 1024)
-        .and_then(|_| std::fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    let bytes = match std::fs::metadata(path) {
+        Ok(meta) if meta.len() <= 1024 * 1024 => std::fs::read(path),
+        Ok(_) => Err(std::io::Error::other("it is too big")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => Err(error),
+    };
+    let error = match bytes.map(|bytes| serde_json::from_slice(&bytes)) {
+        Ok(Ok(value)) => return Some(value),
+        Ok(Err(error)) => error.to_string(),
+        Err(error) => error.to_string(),
+    };
+    let copy = crate::settings::damaged_copy(path);
+    let moved = std::fs::rename(path, &copy);
+    bri_console::warn(format!(
+        "{} could not be read ({error}){}",
+        path.display(),
+        if moved.is_ok() {
+            format!("; moved to {}", copy.display())
+        } else {
+            String::new()
+        }
+    ));
+    // Not moved (in use, no permission): reading it again tries again.
+    if moved.is_ok() {
+        DAMAGED_FILES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((path.to_path_buf(), copy));
+    }
+    None
+}
+
+/// State files [`read_small_json`] found damaged and moved aside since
+/// last asked: (file, where its old contents are now).
+static DAMAGED_FILES: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+/// The damaged files under `state_dir`, taken from the list. Each game
+/// takes only its own state folder's, so two in one process (tests) never
+/// take each other's.
+pub(crate) fn take_damaged_files(state_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut all = DAMAGED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+        .into_iter()
+        .partition(|(file, _)| file.starts_with(state_dir));
+    *all = others;
+    mine
+}
+/// What the player is told about a damaged state file.
+fn damaged_file_message(file: &Path, copy: &Path) -> String {
+    let what = match file.file_name().and_then(|n| n.to_str()) {
+        Some("servers.json") => "Your saved and favourite servers",
+        Some("trusted-hosts.json") => "The servers you trusted",
+        _ => "A saved list",
+    };
+    format!(
+        "{what} could not be read, so the list starts empty. The old file was kept as {}.",
+        copy.display()
+    )
 }
 
 /// Read, change and crash-safely write back a small JSON state file.
@@ -1814,6 +1911,18 @@ fn body_straddle(
             avatar.middle(),
             avatar.bounding_sphere().1,
         ),
+    }
+}
+
+impl App {
+    /// Tell the player about state files found damaged (kept aside).
+    pub(super) fn show_damaged_files(&mut self) {
+        for (file, copy) in take_damaged_files(&self.state_dir) {
+            self.ui.apply(UiUpdate::MessageBox {
+                title: "Saved List Problem".into(),
+                text: damaged_file_message(&file, &copy),
+            });
+        }
     }
 }
 

@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-console = { path = "../console" }
 anyhow.workspace = true
 serde.workspace = true
 bri-content = { path = "../content" }

@@ -24,16 +24,18 @@ pub fn load(path: &Path) -> Result<World> {
         .read_to_end(&mut bytes)?;
     decode(&bytes)
 }
-/// Dedicated startup accepts both running checkpoints and client build saves.
-/// A build save never resumes an event queue from its originating session.
-pub fn load_startup(path: &Path) -> Result<World> {
+/// Dedicated startup accepts both running checkpoints and build saves (a
+/// player's, or the host's own shutdown and recovery saves, which keep its
+/// mini-game). A build save never resumes an event queue from its
+/// originating session.
+pub fn load_startup(path: &Path) -> Result<crate::build::SavedBuild> {
     let mut bytes = Vec::new();
     File::open(path)?
         .take(MAX_SAVE_BYTES + 1)
         .read_to_end(&mut bytes)?;
     match decode(&bytes) {
-        Ok(world) => Ok(world),
-        Err(_) => Ok(crate::build::decode(&bytes)?.world),
+        Ok(world) => Ok(crate::build::SavedBuild::new(world)),
+        Err(_) => crate::build::decode(&bytes),
     }
 }
 /// Publish a new world file crash-safely and without overwriting (see

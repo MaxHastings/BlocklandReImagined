@@ -1,5 +1,6 @@
 //! Minimal WAV writer for offline evidence renders (never plays audio).
 
+use bri_console::Clamp;
 use std::io::{self, Write};
 
 /// Write interleaved f32 samples as 16-bit PCM WAV (clamped, TPDF-free rounding).
@@ -26,7 +27,7 @@ pub fn write_pcm16<W: Write>(
     w.write_all(&data_len.to_le_bytes())?;
     for s in samples {
         let v = if s.is_finite() {
-            (s.clamp(-1.0, 1.0) * 32767.0).round() as i16
+            (s.clamped(-1.0, 1.0) * 32767.0).round() as i16
         } else {
             0
         };

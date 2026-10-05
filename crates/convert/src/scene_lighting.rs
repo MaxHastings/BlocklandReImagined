@@ -9,6 +9,7 @@
 //! each lexel. Everything runs in native Y-up world space except the terrain
 //! sweep, which works on the original grid exactly as the engine did.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::{
     interior::Interior,
     scene::{Kind, Node, Scene},
@@ -88,7 +89,7 @@ pub fn suns(scene: &Scene) -> Result<Vec<Sun>> {
 
 /// `ColorI = ColorF`: round to the nearest byte.
 fn to_byte(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    (v.clamped(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 // --- Occlusion ---------------------------------------------------------------

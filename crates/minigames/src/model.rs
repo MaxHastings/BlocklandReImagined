@@ -338,6 +338,11 @@ pub struct MiniGame {
     /// (`setShapeNameDistance`; Slayer's Name Distance), or v20's own.
     #[serde(default)]
     pub name_distance: Option<u32>,
+    /// Each team's own points, apart from its members' scores: what a
+    /// rule's MiniGame `addTeamScore` gives a team (Slayer's
+    /// `setArtificialScore`). A reset clears them unless scores are kept.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub team_points: BTreeMap<TeamId, i64>,
 }
 /// Farthest a name may show (v20's default shape name distance).
 pub const MAX_NAME_DISTANCE: u32 = 8192;
@@ -402,6 +407,7 @@ impl MiniGame {
             claims_bricks: false,
             shared: false,
             name_distance: None,
+            team_points: BTreeMap::new(),
         }
     }
 }
@@ -410,10 +416,18 @@ impl MiniGame {
 pub const MAX_TEAMS: usize = 64;
 /// Longest team name, in characters.
 pub const MAX_TEAM_NAME: usize = 50;
-/// A team of one mini-game. Ids are kept while the team exists, so a
-/// renamed or recoloured team keeps its members.
+/// A team of one mini-game: its slot, 1 to [`MAX_TEAMS`]. Ids are kept while
+/// the team exists, so a renamed or recoloured team keeps its members, and
+/// rules and saved builds name a team by it. 0 is never a team: a Team
+/// condition reads 0 for a player on none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TeamId(pub u32);
+impl TeamId {
+    /// Whether `id` is one of a game's team slots.
+    pub fn valid(id: TeamId) -> bool {
+        (1..=MAX_TEAMS as u32).contains(&id.0)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Team {
@@ -442,7 +456,9 @@ pub struct SettingChange {
     pub value: Option<SettingValue>,
 }
 /// One team as an Add-On asks for it: an existing `id` keeps that team and
-/// its members, `None` makes a new one.
+/// its members, an id the game has not got makes the team in that slot (a
+/// saved build's team comes back as itself), and `None` makes a new one in
+/// the lowest free slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamSpec {
     pub id: Option<TeamId>,
@@ -457,7 +473,6 @@ pub struct Teams {
     pub friendly_fire: bool,
     /// Teams of the same colour are allies (Slayer's `allySameColors`).
     pub ally_same_color: bool,
-    pub(crate) next: u32,
 }
 impl Teams {
     pub fn get(&self, id: TeamId) -> Option<&Team> {
@@ -476,7 +491,7 @@ impl Teams {
         }
         for t in &self.list {
             if !ids.insert(t.id)
-                || t.id.0 >= self.next
+                || !TeamId::valid(t.id)
                 || !valid_team_name(&t.name)
                 || !valid_addon_settings(&t.addon_settings)
             {
@@ -578,6 +593,12 @@ pub enum Effect {
     },
     Score {
         player: PlayerId,
+        value: i64,
+    },
+    /// A team's own points changed (see [`MiniGame::team_points`]).
+    TeamScore {
+        game: GameId,
+        team: TeamId,
         value: i64,
     },
     /// A member's team changed (`None`: no team, as on leaving the game).

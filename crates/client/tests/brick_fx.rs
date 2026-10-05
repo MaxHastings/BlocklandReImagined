@@ -2,6 +2,8 @@
 //! The textured scenes run on a synthetic materials pack and bricks
 //! (`support::brick_fixture`), and again, ignored, on the generated v20
 //! packs.
+use bri_console::Clamp;
+
 #[macro_use]
 mod support;
 
@@ -343,7 +345,7 @@ fn literal_rgb_candidates_offscreen(f: &BrickFixture) -> Result<()> {
     for vertex in &mut clamp_candidate.vertices {
         if literal(vertex) {
             for c in &mut vertex.color[..3] {
-                *c = c.clamp(0., 1.);
+                *c = c.clamped(0., 1.);
             }
         }
     }

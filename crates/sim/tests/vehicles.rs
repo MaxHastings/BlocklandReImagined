@@ -36,10 +36,36 @@ fn vehicle_world(f: &Fixture, vehicle: &str) -> World {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(vehicle.into()),
         recolor: true,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     world
+}
+/// The test world with its car changed by `change`, and nobody in it yet.
+/// With a `builder`, the spawn brick is theirs: they join as owner 1 with
+/// [`BUILDER`].
+const BUILDER: bri_admin::Principal = bri_admin::Principal([7; 32]);
+fn session_changing(
+    f: &Fixture,
+    builder: Option<&str>,
+    change: impl FnOnce(&mut bri_vehicles::Definition),
+) -> anyhow::Result<Session> {
+    let car = f.vehicle(Vehicle::Car);
+    let mut pack = f.vehicles();
+    change(pack.definitions.iter_mut().find(|d| d.id == car).unwrap());
+    let mut world = vehicle_world(f, car);
+    if let Some(name) = builder {
+        world.bricks.get_mut(&1).unwrap().owner = 1;
+        world
+            .owners
+            .insert(1, bri_world::OwnerRecord::new(BUILDER.0, name.into()));
+    }
+    let mut s = Session::new(Simulation::new(world, f.bricks(), vec![ground()])?);
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(pack, Vec::new())?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
+    Ok(s)
 }
 fn session_with(f: &Fixture, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     let mut s = Session::new(Simulation::new(
@@ -148,6 +174,85 @@ fn wrench_send_recolors_the_existing_vehicle_without_respawning(f: &Fixture) -> 
         let replicated: Vec<bri_sim::session::VehicleInfo> = serde_json::from_slice(&serde_json::to_vec(&s.vehicle_infos())?)?;
         assert_eq!(replicated, expected);
     }
+    Ok(())
+}
+}
+
+on_both! {
+/// Spraying a recolouring spawn brick repaints the vehicle it owns at once,
+/// wherever it is, without a Send or a respawn; turning Re-Color Vehicle off
+/// and on by an ordinary brick edit (no wrench Send) does the same.
+fn painting_a_spawn_brick_recolors_its_live_vehicle(f: &Fixture) -> anyhow::Result<()> {
+    use bri_sim::{player::PlayerTuning, session::{ActionAim, ToolCatalog, WrenchProperties}};
+    use bri_world::authority::Edit;
+    let (mut s, _driver) = session(f)?;
+    s.set_tool_catalog(ToolCatalog {
+        vehicles: [f.vehicle(Vehicle::Car).to_string()].into(),
+        vehicle_bricks: [f.vehicle_spawn_brick().to_string()].into(),
+        ..Default::default()
+    })?;
+    let (min, max) = s.simulation().brick_box(1).unwrap();
+    let edge = Vec3::new(max.x - 0.3, max.y - 0.05, max.z - 0.3);
+    assert!(edge.x > min.x && edge.z > min.z);
+    let painter = s.join("Painter".into(), Vec3::new(edge.x, 0.05, max.z + 1.5), true)?;
+    for _ in 0..120 {
+        common::hold_still(&mut s, painter);
+        s.step()?;
+    }
+    let red = Some([1.0, 0.0, 0.0, 1.0]);
+    let blue = Some([0.0, 0.0, 1.0, 1.0]);
+    let parked = s.vehicle_infos();
+    assert_eq!(parked.len(), 1);
+    assert_eq!(parked[0].color, red, "spawned in the brick's colour");
+    let id = parked[0].id;
+    let pose = s.vehicle_poses()[0].position;
+    // An ordinary spray: blue can, aim at the spawn's exposed corner, fire.
+    s.command(painter, 1, Command::UseSprayCan { color: 1 })?;
+    let player = s.snapshot().players.into_iter().find(|p| p.owner == painter).unwrap();
+    let d = edge - player.eye(&PlayerTuning::default());
+    let aim = ActionAim { yaw: d.x.atan2(-d.z), pitch: d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()) };
+    s.command_with_aim(painter, 2, Command::WeaponTrigger { down: true }, Some(aim))?;
+    let mut painted_at = None;
+    for tick in 0..60 {
+        common::hold_still(&mut s, painter);
+        s.step()?;
+        if painted_at.is_none() && s.simulation().state().bricks[&1].color == 1 {
+            painted_at = Some(tick);
+        }
+        if let Some(at) = painted_at
+            && tick > at
+        {
+            break;
+        }
+    }
+    s.command(painter, 3, Command::WeaponTrigger { down: false })?;
+    assert!(painted_at.is_some(), "the spray can painted the spawn brick");
+    let infos = s.vehicle_infos();
+    assert_eq!((infos.len(), infos[0].id), (1, id), "the same vehicle, not a respawn");
+    assert_eq!(infos[0].color, blue, "the live vehicle took the brick's new colour within a tick");
+    let moved = Vec3::from(s.vehicle_poses()[0].position).distance(Vec3::from(pose));
+    assert!(moved < 0.05, "painting left the vehicle where it was ({moved})");
+    // Re-Color Vehicle off and on again through an ordinary brick edit.
+    let properties = |recolor_vehicle| WrenchProperties {
+        vehicle: Some(f.vehicle(Vehicle::Car).into()), recolor_vehicle,
+        raycast: true, colliding: true, visible: true, ..Default::default()
+    };
+    for (recolor, color) in [(false, None), (true, blue)] {
+        s.edit_brick(painter, 1, Edit::Properties(properties(recolor)))?;
+        common::hold_still(&mut s, painter);
+        s.step()?;
+        let infos = s.vehicle_infos();
+        assert_eq!((infos.len(), infos[0].id), (1, id));
+        assert_eq!(infos[0].color, color, "Re-Color Vehicle {recolor}");
+    }
+    // With it off, brick paint leaves the vehicle's own appearance alone.
+    s.edit_brick(painter, 1, Edit::Properties(properties(false)))?;
+    s.edit_brick(painter, 1, Edit::Color(0))?;
+    s.step()?;
+    assert_eq!(s.vehicle_infos()[0].color, None);
+    let replicated: Vec<bri_sim::session::VehicleInfo> =
+        serde_json::from_slice(&serde_json::to_vec(&s.vehicle_infos())?)?;
+    assert_eq!(replicated, s.vehicle_infos());
     Ok(())
 }
 }
@@ -1158,6 +1263,7 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider(f: &Fixture) -> anyhow::
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
@@ -1972,4 +2078,139 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes(f: &Fixture) -> anyhow::Resul
     assert_eq!(s.steering_prefs(owner), DEFAULT_STEERING);
     Ok(())
 }
+}
+
+/// `WheeledVehicleData::onCollision` damages with the vehicle as source, so
+/// a runover is its driver's kill. The victim walking into the jeep pushes
+/// it and so becomes its mover; that once turned every runover into the
+/// victim's suicide (Slayer's -1), since the mover's credit came first.
+#[test]
+fn a_runover_is_the_drivers_kill_even_when_the_victim_walks_into_it() -> anyhow::Result<()> {
+    use bri_sim::session::MiniGameRequest;
+    let f = &Fixture::synthetic();
+    // One hit at driving speed kills, so the first contact decides.
+    // The driver's own jeep, which their mini-game lets them use.
+    let mut s = session_changing(f, Some("Driver"), |d| d.runover_damage = 50.0)?;
+    let driver = s.join_verified(
+        "Driver".into(),
+        Vec3::new(0.0, 0.05, 0.0),
+        true,
+        Some(BUILDER),
+    )?;
+    assert_eq!(driver, 1, "the spawn brick's builder");
+    s.command(
+        driver,
+        1,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                use_all_players_bricks: true,
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )?;
+    let game = s.minigame_views()[0].id;
+    // The victim joins far ahead of the jeep, facing it.
+    let ahead = Vec3::new(0.0, 0.05, -40.0);
+    s.set_spawn_points(vec![ahead])?;
+    let victim = s.join("Victim".into(), ahead, true)?;
+    s.command(victim, 1, Command::MiniGame(MiniGameRequest::Join { game }))?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
+    let mut p = Feeder {
+        owner: driver,
+        sequence: 0,
+    };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    assert_eq!(s.mounted(driver).map(|m| m.1), Some(0), "driving");
+    let mut walk = 0;
+    for _ in 0..120 * 8 {
+        p.sequence += 1;
+        s.movement(
+            driver,
+            p.sequence,
+            MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        )?;
+        walk += 1;
+        let toward = MoveInput {
+            forward: 1.0,
+            yaw: std::f32::consts::PI,
+            ..Default::default()
+        };
+        s.movement(victim, walk, toward)?;
+        s.step()?;
+        if !s.is_alive(victim) {
+            break;
+        }
+    }
+    assert!(!s.is_alive(victim), "the jeep ran the victim over");
+    let death = s
+        .death_results()
+        .rev()
+        .find(|d| d.victim == victim)
+        .cloned()
+        .expect("the runover is a recorded death");
+    assert_eq!(death.killer, Some(driver), "the driver's kill: {death:?}");
+    assert_eq!(s.vitals()[&victim].score, 0, "not a suicide");
+    Ok(())
+}
+
+/// A body that died on a parked jeep and respawns elsewhere jumps there:
+/// it must not sweep through the jeep at the speed of the jump. Its
+/// kinematic body once took the respawn as one step's travel, over 1000
+/// u/s, and the contact solver threw the jeep with it (bots that died on a
+/// jeep's roof sent it off the map in the gauntlet).
+#[test]
+fn respawning_from_a_parked_jeeps_roof_leaves_it_parked() -> anyhow::Result<()> {
+    let f = &Fixture::synthetic();
+    // No seats, so landing on its roof does not board it (as for a bot).
+    let mut s = session_changing(f, None, |d| d.seats.clear())?;
+    for _ in 0..120 {
+        s.step()?;
+    }
+    let jeep = |s: &Session| {
+        let v = &s.vehicle_poses()[0];
+        (
+            Vec3::from(v.position),
+            Vec3::from(v.velocity),
+            Vec3::from(v.angular_velocity),
+        )
+    };
+    let (at, _, _) = jeep(&s);
+    let owner = s.join("Standing".into(), at + Vec3::Y * 2.5, true)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    let feet = Vec3::from(
+        s.snapshot()
+            .players
+            .into_iter()
+            .find(|q| q.owner == owner)
+            .unwrap()
+            .feet,
+    );
+    assert!(feet.y > at.y + 1.0, "standing on the roof: {feet} {at}");
+    p.sequence += 1;
+    s.command(owner, p.sequence, Command::Suicide)?;
+    p.feed(&mut s, MoveInput::default(), 200)?;
+    let (parked, _, _) = jeep(&s);
+    p.sequence += 1;
+    s.command(owner, p.sequence, Command::Respawn)?;
+    assert!(s.is_alive(owner));
+    let (mut fastest, mut spin) = (0.0f32, 0.0f32);
+    for _ in 0..60 {
+        p.feed(&mut s, MoveInput::default(), 1)?;
+        let (_, v, w) = jeep(&s);
+        fastest = fastest.max(v.length());
+        spin = spin.max(w.length());
+    }
+    let (after, _, _) = jeep(&s);
+    assert!(
+        fastest < 1.0 && spin < 1.0 && after.distance(parked) < 0.2,
+        "the parked jeep was thrown: {fastest} u/s, {spin} rad/s, {parked} -> {after}"
+    );
+    Ok(())
 }

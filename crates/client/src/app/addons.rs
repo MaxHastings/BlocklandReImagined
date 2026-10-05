@@ -26,6 +26,10 @@ pub(super) struct AddOns {
     /// Add-On import in progress: request, row id and the worker's answer.
     /// Converting the Add-Ons folder (`add_ons::start_sync`).
     pub(super) add_on_sync: Option<mpsc::Receiver<crate::add_ons::SyncNote>>,
+    /// Hosting or joining asked for while [`Self::add_on_sync`] runs: it
+    /// starts once the conversions are done, with the lists they leave, so
+    /// no game's Add-Ons change under it.
+    pub(super) after_sync: Option<ReloadResume>,
     /// The Add-On list last asked for, the list that loaded without the
     /// Add-Ons that broke it, and why each was left out.
     pub(super) left_out_add_ons: Option<(
@@ -144,9 +148,29 @@ impl App {
             self.addons.add_on_sync = Some(crate::add_ons::start_sync(
                 &self.content.paths.root,
                 &importer,
+                self.net.attempt.is_some(),
             )?);
         }
         Ok(())
+    }
+    /// The Add-Ons folder's conversions are done: the game asked for
+    /// meanwhile loads the lists they left, then starts.
+    pub(super) fn resume_after_sync(&mut self) {
+        let Some(resume) = self.addons.after_sync.take() else {
+            return;
+        };
+        let id = match &resume {
+            ReloadResume::Action { id, .. } | ReloadResume::Downloaded { id, .. } => *id,
+        };
+        if self.ui.session_request() != Some(id) {
+            // Cancelled while it waited.
+            return;
+        }
+        let result = bri_package::packages::PackageSet::load_root(&self.content.paths.root)
+            .and_then(|set| self.queue_package_reload(set, None, Some(resume)));
+        if let Err(error) = result {
+            self.answer(id, Err(error));
+        }
     }
     /// The lists changed: show them now and load them later
     /// ([`UiAction::ApplyAddOns`], or hosting), never on the click.
@@ -156,6 +180,18 @@ impl App {
     }
     pub(super) fn add_ons_changed(&mut self, mut view: AddOnsView) {
         self.addons.packages_from_tools = false;
+        if self.net.attempt.is_some() {
+            // A game keeps the Add-Ons it started with; the next one loads
+            // the lists as they are then.
+            view.notice = format!(
+                "{} Changes apply the next time you start a game.",
+                view.notice
+            )
+            .trim_start()
+            .to_string();
+            self.show_add_ons(view);
+            return;
+        }
         let root = self.content.paths.root.clone();
         let applied = bri_package::packages::PackageSet::load_root(&root)
             .and_then(|set| self.queue_package_reload(set, None, None));
@@ -444,6 +480,35 @@ impl App {
         let owners = crate::add_on_health::Owners::new(&root, &requested);
         self.addons.add_on_health = crate::add_on_health::AddOnHealth::new(owners, problems);
         self.write_add_on_health();
+    }
+    /// What this game's own server ran into in Add-On scripts since the
+    /// last look (a script error, an operation such as a bot joining that
+    /// was refused or failed): listed under the Add-On and written to
+    /// `add-on-health.json` like a loading problem. The server has already
+    /// logged it and told the admins in chat.
+    pub(super) fn update_host_problems(&mut self) {
+        let Some(held) = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.worker.probes.get())
+            .and_then(|p| p.host_problems.clone())
+        else {
+            return;
+        };
+        let taken = {
+            let Ok(mut held) = held.try_lock() else {
+                return;
+            };
+            std::mem::take(&mut *held)
+        };
+        if taken.is_empty() {
+            return;
+        }
+        let problems = taken.iter().map(crate::add_on_health::script_problem);
+        if self.addons.add_on_health.add(problems) {
+            self.write_add_on_health();
+        }
     }
     fn write_add_on_health(&self) {
         match self.addons.add_on_health.write_report(&self.state_dir) {
@@ -1172,6 +1237,56 @@ mod tests {
         assert!(app.addons.reload.is_none());
         assert_eq!(app.content.maps[0].name, original);
         assert!(app.ui.is_open(ScreenId::MessageBox));
+        Ok(())
+    }
+
+    /// The Add-Ons folder's conversions can replace or remove Add-Ons that
+    /// are on: a game asked for meanwhile waits for them, as it waits for
+    /// loading, and starts with the lists they leave.
+    #[test]
+    fn hosting_waits_for_the_add_ons_folder_to_finish_converting() -> Result<()> {
+        let (_content, _state, mut app) = app()?;
+        let (send, receive) = mpsc::channel();
+        app.addons.add_on_sync = Some(receive);
+        let action = UiAction::HostGame {
+            map: app.content.maps[0].id.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 8,
+            server_name: "Test".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        };
+        let id = app.ui.core.request(action.clone());
+        app.dispatch_action(id, action, &mut Vec::new())?;
+        assert!(app.net.attempt.is_none());
+        assert!(
+            app.addons.reload.is_none(),
+            "nothing loads while the folder converts"
+        );
+        app.poll_background_jobs();
+        assert!(app.addons.reload.is_none() && app.net.attempt.is_none());
+        send.send(crate::add_ons::SyncNote {
+            notice: String::new(),
+            finished: true,
+        })
+        .ok();
+        app.poll_background_jobs();
+        assert!(app.addons.add_on_sync.is_none());
+        let waiting = app.addons.reload_pending.as_ref().map(|r| &r.resume).or(app
+            .addons
+            .reload
+            .as_ref()
+            .map(|j| &j.request.resume));
+        assert!(
+            matches!(waiting, Some(Some(ReloadResume::Action { id: waiting, .. })) if *waiting == id),
+            "the host starts once the lists are loaded"
+        );
+        // Not here: cancelled, it starts no server.
+        app.ui.core.request(UiAction::CancelConnect);
+        wait(&mut app);
+        assert!(app.net.attempt.is_none());
         Ok(())
     }
 }

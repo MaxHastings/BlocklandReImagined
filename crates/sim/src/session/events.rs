@@ -30,6 +30,21 @@ pub(super) fn entity(class: Class, index: u64) -> Entity {
     }
 }
 
+impl Session {
+    /// `owner`'s body as an event target: its generation is the body
+    /// ([`super::combat::Combat::body`]), so what a delayed row scheduled on
+    /// one body never reaches the next. A Client target outlives deaths.
+    pub(in crate::session) fn player_entity(&self, owner: OwnerId) -> Entity {
+        Entity {
+            class: Class::Player,
+            id: Id {
+                index: owner,
+                generation: self.peers.get(&owner).map_or(1, |p| p.combat.body),
+            },
+        }
+    }
+}
+
 type ObjectiveInputKey = (BrickId, OwnerId, String, Option<u64>);
 type ObjectiveInputObservation = (u64, u64);
 
@@ -605,9 +620,7 @@ impl Session {
             // quotas. An NPC has no GameConnection/Client target. This
             // deliberately replaces v20's absent Player/MiniGame bot slots.
             if slots.contains(&Slot::Bot) {
-                trigger
-                    .targets
-                    .insert(Slot::Bot, entity(Class::Player, bot));
+                trigger.targets.insert(Slot::Bot, self.player_entity(bot));
             }
             let driver = self
                 .riding
@@ -617,7 +630,7 @@ impl Session {
             if let Some(driver) = driver.filter(|_| slots.contains(&Slot::Driver)) {
                 trigger
                     .targets
-                    .insert(Slot::Driver, entity(Class::Player, driver));
+                    .insert(Slot::Driver, self.player_entity(driver));
             }
             let player = |o: &OwnerId| self.peers.contains_key(o) && !self.is_bot(*o);
             let client = self
@@ -651,7 +664,7 @@ impl Session {
         {
             trigger
                 .targets
-                .insert(Slot::Instigator, entity(Class::Player, owner));
+                .insert(Slot::Instigator, self.player_entity(owner));
         }
         if let Some(object) = extra.object {
             trigger
@@ -679,12 +692,12 @@ impl Session {
             if slots.contains(&Slot::Instigator) {
                 trigger
                     .targets
-                    .insert(Slot::Instigator, entity(Class::Player, killer));
+                    .insert(Slot::Instigator, self.player_entity(killer));
             }
             if slots.contains(&Slot::KillerPlayer) && self.is_alive(killer) {
                 trigger
                     .targets
-                    .insert(Slot::KillerPlayer, entity(Class::Player, killer));
+                    .insert(Slot::KillerPlayer, self.player_entity(killer));
             }
             if slots.contains(&Slot::KillerClient) && !self.is_bot(killer) {
                 trigger
@@ -706,7 +719,7 @@ impl Session {
         if slots.contains(&Slot::Player) {
             trigger
                 .targets
-                .insert(Slot::Player, entity(Class::Player, owner));
+                .insert(Slot::Player, self.player_entity(owner));
         }
         if slots.contains(&Slot::Client) {
             trigger
@@ -747,7 +760,7 @@ impl Session {
             .filter(|o| self.peers.contains_key(o) && !self.is_bot(*o));
         if let Some(owner) = owner {
             if slots.contains(&Slot::OwnerPlayer) {
-                targets.insert(Slot::OwnerPlayer, entity(Class::Player, owner));
+                targets.insert(Slot::OwnerPlayer, self.player_entity(owner));
             }
             if slots.contains(&Slot::OwnerClient) {
                 targets.insert(Slot::OwnerClient, entity(Class::Client, owner));
@@ -967,7 +980,12 @@ impl Session {
         hit.sort_unstable();
         hit.dedup();
         let kills = self
-            .breakable_bricks(source, &hit, impact.max_volume)
+            .breakable_bricks(
+                source,
+                &hit,
+                impact.max_volume,
+                Some(impact.max_floating_volume),
+            )
             .into_iter()
             .map(|(brick, _)| {
                 // v20 throws direct hits with a 0.02 falloff radius.
@@ -989,12 +1007,15 @@ impl Session {
     /// breaks bricks up to `max_volume`, each with its volume (studs x
     /// studs x plates): standing, not a baseplate or indestructible, and
     /// allowed by the minigame's brick damage or, outside minigames, the
-    /// rocket's rules.
+    /// rocket's rules. A projectile's blast gives `max_floating_volume`
+    /// and follows v20's `canExplode` (see [`Self::can_explode`]); without
+    /// it only `max_volume` counts.
     pub(super) fn breakable_bricks(
         &self,
         source: OwnerId,
         bricks: &[BrickId],
         max_volume: f32,
+        max_floating_volume: Option<f32>,
     ) -> Vec<(BrickId, f32)> {
         let mut out = Vec::new();
         let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
@@ -1024,7 +1045,7 @@ impl Session {
                 || !b.colliding
                 || b.base_plate
                 || definition.indestructible
-                || volume > max_volume
+                || !self.can_explode(brick, b, volume, max_volume, max_floating_volume)
             {
                 continue;
             }
@@ -1056,6 +1077,62 @@ impl Session {
             }
         }
         out
+    }
+    /// `fxDTSBrick::canExplode(maxVolume, maxFloatingVolume)`
+    /// (blocklandv20.exe 0x5381f0). The brick's volume, studs x studs x
+    /// plates, counts a quarter (rounded down) when its paint's alpha is
+    /// under 0.95. Within `max_volume` it breaks; beyond the larger of the
+    /// two limits it never does; in between it breaks only when it is not
+    /// held between a live brick below and a live brick above (0x534e80:
+    /// a brick on the floor or with nothing on top counts as floating).
+    fn can_explode(
+        &self,
+        id: BrickId,
+        brick: &bri_world::Brick,
+        volume: f32,
+        max_volume: f32,
+        max_floating_volume: Option<f32>,
+    ) -> bool {
+        let Some(max_floating_volume) = max_floating_volume else {
+            return volume <= max_volume;
+        };
+        let alpha = self
+            .simulation
+            .state()
+            .palette
+            .get(usize::from(brick.color))
+            .map_or(1.0, |c| c[3]);
+        let volume = if alpha < 0.95 {
+            (volume * 0.25).floor()
+        } else {
+            volume
+        };
+        if volume <= max_volume {
+            return true;
+        }
+        volume <= max_volume.max(max_floating_volume) && !self.held_above_and_below(id)
+    }
+    /// Whether a live (not knocked-out) brick joins `id` from below and
+    /// another from above.
+    fn held_above_and_below(&self, id: BrickId) -> bool {
+        let Ok(joined) = self.simulation.connected_bricks(id) else {
+            return false;
+        };
+        let own = self.simulation.index_bounds(id);
+        let (top, bottom) = (own.min[1] + own.size[1], own.min[1]);
+        let (mut below, mut above) = (false, false);
+        for other in joined {
+            if self.events.respawns.contains_key(&other) {
+                continue;
+            }
+            let bounds = self.simulation.index_bounds(other);
+            if bounds.min[1] >= top {
+                above = true;
+            } else if bounds.min[1] + bounds.size[1] <= bottom {
+                below = true;
+            }
+        }
+        below && above
     }
     /// Knock `kills` out together (one collision refresh) for the
     /// minigame's brick respawn time, then fire each one's `onBlownUp`.
@@ -1500,10 +1577,12 @@ impl EventHost<'_> {
             })?,
             BrickOp::Vehicle(vehicle) => self.edit(brick, |b| {
                 let recolor = b.vehicle.as_ref().is_some_and(|v| v.recolor);
+                let team = b.vehicle.as_ref().and_then(|v| v.team);
                 b.vehicle = vehicle.clone().map(|id| {
                     Box::new(bri_world::VehicleSpawn {
                         vehicle: bri_world::ContentRef::Resolved(id),
                         recolor,
+                        team,
                     })
                 })
             })?,
@@ -1927,7 +2006,11 @@ impl ev::Host for EventHost<'_> {
         let s = &self.session;
         match entity.class {
             Class::Brick => s.simulation.state().bricks.contains_key(&entity.id.index),
-            Class::Player => s.is_alive(entity.id.index),
+            // The same body, alive: a respawned player is a new `Player`.
+            Class::Player => {
+                s.is_alive(entity.id.index)
+                    && s.peers[&entity.id.index].combat.body == entity.id.generation
+            }
             Class::Client => s.peers.contains_key(&entity.id.index),
             Class::MiniGame => s.minigames.game(mg::GameId(entity.id.index)).is_ok(),
             Class::Vehicle => s
@@ -1954,10 +2037,13 @@ impl ev::Host for EventHost<'_> {
             Class::Player | Class::Client => true,
             // The minigame rules check the brick owner's authority.
             Class::MiniGame => true,
+            // An object from the builder's spawn bricks, or from those of
+            // someone who may edit the builder's events: the objects the
+            // builder's regions see.
             Class::Vehicle => s
                 .vehicle_spawn_brick(bri_vehicles::VehicleId(target.id.index))
                 .and_then(|b| bricks.get(&b))
-                .is_some_and(|b| b.owner == owner),
+                .is_some_and(|b| s.may_edit_events_of(b.owner, owner)),
             Class::Projectile => {
                 context.targets.get(&Slot::Projectile) == Some(&target)
                     && s.events

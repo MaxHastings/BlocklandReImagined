@@ -9,6 +9,7 @@ use crate::input::Chord;
 use crate::prefs::Prefs;
 use crate::ui::Callback;
 use crate::view::EventKind;
+use bri_console::Clamp;
 use std::collections::HashMap;
 
 /// Local screenshot encoding. JPEG uses the client's high-quality encoder;
@@ -148,7 +149,7 @@ const VISIBLE_DISTANCE_RANGE: (f32, f32) = (110.0, 1000.0);
 pub fn visible_distance_max(p: &Prefs) -> f32 {
     let v = p.f32_or(VISIBLE_DISTANCE_MAX, VISIBLE_DISTANCE_RANGE.1);
     if v.is_finite() {
-        v.clamp(VISIBLE_DISTANCE_RANGE.0, VISIBLE_DISTANCE_RANGE.1)
+        v.clamped(VISIBLE_DISTANCE_RANGE.0, VISIBLE_DISTANCE_RANGE.1)
     } else {
         VISIBLE_DISTANCE_RANGE.1
     }
@@ -450,14 +451,14 @@ fn readout(slider: &str, value: f32) -> String {
         FOV_SLIDER | DISTANCE_SLIDER => format!("{value:.0}"),
         "SliderGraphicsAnisotropy" => {
             // As `TextureFiltering::from_v20` rounds it.
-            let samples = 1.0 + value.clamp(0.0, 1.0) * 15.0;
+            let samples = 1.0 + value.clamped(0.0, 1.0) * 15.0;
             match [16, 8, 4, 2].into_iter().find(|n| samples >= *n as f32) {
                 Some(n) => format!("{n}x"),
                 None => "Off".into(),
             }
         }
         "SliderControlsMouseSensitivity" | "slider_KeyboardTurnSpeed" => format!("{value:.2}"),
-        _ => format!("{:.0}%", value.clamp(0.0, 1.0) * 100.0),
+        _ => format!("{:.0}%", value.clamped(0.0, 1.0) * 100.0),
     }
 }
 
@@ -465,7 +466,7 @@ fn readout(slider: &str, value: f32) -> String {
 pub fn volume(p: &Prefs, pref: &str) -> f32 {
     let v = p.f32_or(pref, 1.0);
     if v.is_finite() {
-        v.clamp(0.0, 1.0)
+        v.clamped(0.0, 1.0)
     } else {
         1.0
     }
@@ -562,7 +563,7 @@ fn put_display(p: &mut Prefs, d: DisplaySettings) {
 pub fn default_fov(p: &Prefs) -> f32 {
     let fov = p.f32_or(DEFAULT_FOV, 90.0);
     if fov.is_finite() {
-        fov.round().clamp(FOV_RANGE.0, FOV_RANGE.1)
+        fov.round().clamped(FOV_RANGE.0, FOV_RANGE.1)
     } else {
         90.0
     }
@@ -575,7 +576,7 @@ pub const MOUSE_SENSITIVITY_RANGE: (f32, f32) = (0.02, 2.0);
 pub fn mouse_sensitivity(p: &Prefs) -> f32 {
     let v = p.f32_or(MOUSE_SENSITIVITY, 0.75);
     if v.is_finite() {
-        v.clamp(MOUSE_SENSITIVITY_RANGE.0, MOUSE_SENSITIVITY_RANGE.1)
+        v.clamped(MOUSE_SENSITIVITY_RANGE.0, MOUSE_SENSITIVITY_RANGE.1)
     } else {
         0.75
     }
@@ -596,7 +597,7 @@ pub const ZOOM_FOV_RANGE: (f32, f32) = (5.0, 85.0);
 pub fn zoom_fov(p: &Prefs) -> f32 {
     let v = p.f32_or(ZOOM_FOV, 10.0);
     if v.is_finite() {
-        v.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
+        v.clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
     } else {
         10.0
     }
@@ -1076,7 +1077,9 @@ impl Options {
         );
         s.slider(
             "slider_KeyboardTurnSpeed",
-            core.prefs.f32_or(KEYBOARD_TURN_SPEED, 0.5).clamp(0.02, 1.0),
+            core.prefs
+                .f32_or(KEYBOARD_TURN_SPEED, 0.5)
+                .clamped(0.02, 1.0),
         );
         for (name, pref, fallback) in [
             ("Opt_ChatLineTime", "$Pref::Chat::LineTime", 6500),
@@ -1089,7 +1092,7 @@ impl Options {
         }
         for &(name, _, pref, min, max) in TEMP_BRICK_FIELDS {
             if let Some(n) = s.view.id(name) {
-                let v = core.prefs.f32_or(pref, min).clamp(min, max);
+                let v = core.prefs.f32_or(pref, min).clamped(min, max);
                 s.view.set_text(n, v.to_string());
             }
         }
@@ -1103,7 +1106,7 @@ impl Options {
         s.slider(
             "SliderGraphicsAnisotropy",
             if anisotropy.is_finite() {
-                anisotropy.clamp(0.0, 1.0)
+                anisotropy.clamped(0.0, 1.0)
             } else {
                 0.0
             },
@@ -1742,7 +1745,7 @@ impl Options {
                 if !v.is_finite() {
                     return Err("Sliders must hold finite numbers.".into());
                 }
-                self.draft.set(pref, v.clamp(lo, hi).to_string());
+                self.draft.set(pref, v.clamped(lo, hi).to_string());
             }
         }
         if let Some(n) = self.view.id(FOV_SLIDER) {
@@ -1750,7 +1753,7 @@ impl Options {
             if !v.is_finite() {
                 return Err("Sliders must hold finite numbers.".into());
             }
-            let fov = v.round().clamp(FOV_RANGE.0, FOV_RANGE.1);
+            let fov = v.round().clamped(FOV_RANGE.0, FOV_RANGE.1);
             self.draft.set(DEFAULT_FOV, fov.to_string());
             self.view.set_num(n, fov);
         }
@@ -1809,7 +1812,7 @@ impl Options {
                 if !v.is_finite() {
                     return Err("Volume must be a finite number.".into());
                 }
-                self.draft.set(pref, v.clamp(0.0, 1.0).to_string());
+                self.draft.set(pref, v.clamped(0.0, 1.0).to_string());
             }
         }
         for (name, label, pref, min, max) in [
@@ -1850,7 +1853,7 @@ impl Options {
                     .ok()
                     .filter(|v| v.is_finite())
                     .ok_or_else(|| format!("{label} must be a number."))?
-                    .clamp(min, max);
+                    .clamped(min, max);
                 self.draft.set(pref, v.to_string());
                 self.view.set_text(n, v.to_string());
             }
@@ -2015,7 +2018,7 @@ impl Screen for Options {
                     self.previewed = true;
                     core.request(UiAction::SetVolume {
                         channel: channel.into(),
-                        value: value.clamp(0.0, 1.0),
+                        value: value.clamped(0.0, 1.0),
                     });
                 }
             }

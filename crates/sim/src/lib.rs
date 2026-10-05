@@ -1,4 +1,8 @@
 //! Shared simulation adapters used by solo and multiplayer authority.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 pub mod archetype;
 pub mod blueprint;
 pub mod bot_kind;
@@ -19,6 +23,7 @@ pub mod player;
 pub mod player_types;
 pub mod prediction;
 pub mod presentation;
+pub mod route;
 pub mod session;
 pub mod simulation;
 pub mod spawn;

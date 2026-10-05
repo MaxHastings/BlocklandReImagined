@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod bots;
-pub use bots::{BotEvidence, BotObjectiveDetail, BotTask, BotThought};
+pub use bots::{
+    BotCandidate, BotDecision, BotDrive, BotEvidence, BotNotice, BotObjectiveDetail, BotReload,
+    BotSurpriseView, BotTask, BotTeamView, BotThought, BotTuning,
+};
 mod breakables;
 mod build_load;
 pub use build_load::LoadPace;
@@ -28,6 +31,7 @@ pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera,
 pub mod camera_path;
 pub use camera_path::CameraPath;
 mod debris;
+pub use debris::MAX_BLAST_DEBRIS;
 mod dirty;
 mod events;
 pub use events::{
@@ -852,6 +856,80 @@ struct Peer {
     /// place of their mini-game's, until they leave it.
     respawn_ms: Option<u32>,
 }
+impl Peer {
+    /// A connection's player as it first arrives in a world: a new body and
+    /// everything else at its start. Joins, resumes and map changes build
+    /// on it, so state a field adds starts over unless one of them keeps it.
+    #[allow(clippy::too_many_arguments)]
+    fn fresh(
+        player: Player,
+        owner: OwnerId,
+        administrator: bool,
+        name: String,
+        principal: Option<bri_admin::Principal>,
+        combat: combat::Combat,
+        avatar: Option<bri_content::avatar::Appearance>,
+        tick: u64,
+    ) -> Self {
+        Self {
+            player,
+            actor: Actor {
+                owner,
+                administrator,
+                ..Default::default()
+            },
+            name,
+            principal,
+            combat,
+            special: Default::default(),
+            control: ControlObject::Player,
+            camera: None,
+            last_drop_tick: None,
+            tutorial: Default::default(),
+            temp_color: None,
+            temp_look: None,
+            uniform: BTreeMap::new(),
+            uniform_parts: None,
+            current_color: 0,
+            fx_can: None,
+            talking: false,
+            sitting: false,
+            ghost: None,
+            input: MoveInput::default(),
+            inputs: VecDeque::new(),
+            input_drain: InputDrain::default(),
+            processed_move: 0,
+            seated_pace: SeatedPace::default(),
+            seat_since: None,
+            clan: Clan::default(),
+            input_budget: INPUT_BURST,
+            last_sequence: 0,
+            last_move_sequence: 0,
+            last_input_tick: tick,
+            sport_datablock: None,
+            package_archetype: None,
+            overlays: None,
+            window_tick: tick,
+            actions: 0,
+            chats: 0,
+            last_chat: None,
+            plants: 0,
+            random_color: None,
+            saves: 0,
+            ghost_reports: 0,
+            inspection: None,
+            last_activate: None,
+            activate_level: 0,
+            thread_timers: Vec::new(),
+            water: Default::default(),
+            look_limits: None,
+            respawn_ms: None,
+            path: None,
+            orbit: None,
+            avatar,
+        }
+    }
+}
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
 /// Chat talks for 50 ms per character: 6 ticks at 120 ticks per second.
@@ -919,6 +997,10 @@ pub struct Session {
             Option<bri_admin::Principal>,
         ),
     >,
+    /// A restarted host's mini-game (a recovery or shutdown save's), set up
+    /// again for the player who ran it when they join
+    /// ([`Session::hold_minigame`]).
+    held_minigame: Option<serde_json::Value>,
     dirty: dirty::Dirty,
     load_pace: build_load::LoadPace,
     load_clock: build_load::LoadClock,
@@ -1050,6 +1132,7 @@ impl Session {
             chat: VecDeque::new(),
             next_chat: 1,
             departed: BTreeMap::new(),
+            held_minigame: None,
             dirty: dirty::Dirty::default(),
             load_pace: build_load::LoadPace::Budget,
             load_clock: Default::default(),
@@ -1380,65 +1463,20 @@ impl Session {
                 return Err(error);
             }
         };
+        let tick = self.simulation.state().tick;
+        let avatar = self.avatar_catalog.as_ref().map(|c| c.defaults.clone());
         self.peers.insert(
             owner,
-            Peer {
+            Peer::fresh(
                 player,
-                actor: Actor {
-                    owner,
-                    administrator: role.is_admin(),
-                    ..Default::default()
-                },
-                name: name.clone(),
+                owner,
+                role.is_admin(),
+                name.clone(),
                 principal,
                 combat,
-                special: Default::default(),
-                control: ControlObject::Player,
-                camera: None,
-                last_drop_tick: None,
-                tutorial: Default::default(),
-                temp_color: None,
-                temp_look: None,
-                uniform: BTreeMap::new(),
-                uniform_parts: None,
-                current_color: 0,
-                fx_can: None,
-                talking: false,
-                sitting: false,
-                ghost: None,
-                input: MoveInput::default(),
-                inputs: VecDeque::new(),
-                input_drain: InputDrain::default(),
-                processed_move: 0,
-                seated_pace: SeatedPace::default(),
-                seat_since: None,
-                clan: Clan::default(),
-                input_budget: INPUT_BURST,
-                last_sequence: 0,
-                last_move_sequence: 0,
-                last_input_tick: self.simulation.state().tick,
-                sport_datablock: None,
-                package_archetype: None,
-                overlays: None,
-                window_tick: self.simulation.state().tick,
-                actions: 0,
-                chats: 0,
-                last_chat: None,
-                plants: 0,
-                random_color: None,
-                saves: 0,
-                ghost_reports: 0,
-                inspection: None,
-                last_activate: None,
-                activate_level: 0,
-                thread_timers: Vec::new(),
-                water: Default::default(),
-                look_limits: None,
-                respawn_ms: None,
-                path: None,
-                orbit: None,
-                avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
-            },
+                avatar,
+                tick,
+            ),
         );
         // A fresh join replaces the dropped connection it took the number from.
         self.departed.remove(&owner);
@@ -1465,6 +1503,7 @@ impl Session {
         self.join_server_game(owner)?;
         if !is_bot {
             self.notify_music_tracks(owner);
+            self.restore_held_minigame(owner);
         }
         Ok(owner)
     }
@@ -1613,65 +1652,19 @@ impl Session {
                 return Err(error);
             }
         };
+        let tick = self.simulation.state().tick;
         self.peers.insert(
             owner,
-            Peer {
+            Peer::fresh(
                 player,
-                actor: Actor {
-                    owner,
-                    administrator: role.is_admin(),
-                    ..Default::default()
-                },
-                name: name.clone(),
+                owner,
+                role.is_admin(),
+                name.clone(),
                 principal,
                 combat,
-                special: Default::default(),
-                control: ControlObject::Player,
-                camera: None,
-                last_drop_tick: None,
-                tutorial: Default::default(),
-                temp_color: None,
-                temp_look: None,
-                uniform: BTreeMap::new(),
-                uniform_parts: None,
-                current_color: 0,
-                fx_can: None,
-                talking: false,
-                sitting: false,
-                ghost: None,
-                input: MoveInput::default(),
-                inputs: VecDeque::new(),
-                input_drain: InputDrain::default(),
-                processed_move: 0,
-                seated_pace: SeatedPace::default(),
-                seat_since: None,
-                clan: Clan::default(),
-                input_budget: INPUT_BURST,
-                last_sequence: 0,
-                last_move_sequence: 0,
-                last_input_tick: self.simulation.state().tick,
-                sport_datablock: None,
-                package_archetype: None,
-                overlays: None,
-                window_tick: self.simulation.state().tick,
-                actions: 0,
-                chats: 0,
-                last_chat: None,
-                plants: 0,
-                random_color: None,
-                saves: 0,
-                ghost_reports: 0,
-                inspection: None,
-                last_activate: None,
-                activate_level: 0,
-                thread_timers: Vec::new(),
-                water: Default::default(),
-                look_limits: None,
-                respawn_ms: None,
-                path: None,
-                orbit: None,
                 avatar,
-            },
+                tick,
+            ),
         );
         self.departed.remove(&owner);
         self.abandoned_at.remove(&owner);
@@ -1681,6 +1674,7 @@ impl Session {
         self.packages_joined(owner);
         self.join_server_game(owner)?;
         self.notify_music_tracks(owner);
+        self.restore_held_minigame(owner);
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the
@@ -2630,7 +2624,10 @@ impl Session {
             }
         };
         contain("events", self.start_event_tick(tick + 1));
-        contain("bots", self.step_bots());
+        let thinking = std::time::Instant::now();
+        let bots = self.step_bots();
+        self.bots.think_nanos += thinking.elapsed().as_nanos() as u64;
+        contain("bots", bots);
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
@@ -2834,6 +2831,7 @@ impl Session {
         self.follow_player_mounts();
         self.drive_package_entities(entity_moves);
         contain("packages", self.step_packages());
+        self.tell_package_problems();
         self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
         contain("physics", self.simulation.step());

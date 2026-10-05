@@ -3,6 +3,7 @@
 //! and sounds, converted into its weapons pack. Vehicles share the emitter
 //! conversion.
 use super::*;
+use bri_console::Clamp;
 use bri_content::effects::{Curve, Emitter, Light, Particle};
 use bri_convert::{effect_script::Declaration, effects};
 
@@ -295,7 +296,7 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                     .then(|| format!("v20/emitter/{}", v.to_ascii_lowercase()))
             }
         };
-        let lifetime = (number("lifetimems", 1000.0) / 1000.0).clamp(0.001, 3600.0);
+        let lifetime = (number("lifetimems", 1000.0) / 1000.0).clamped(0.001, 3600.0);
         let mut effect = bri_weapons::ExplosionEffect {
             id: content_id(&cx.ns, "explosion", &d.name),
             lifetime,
@@ -335,7 +336,7 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
             let id = named(cx, pack, &v);
             settle(cx, &v, &id);
             if let Some(id) = id {
-                let count = number("particledensity", 10.0).clamp(0.0, 32768.0) as u32;
+                let count = number("particledensity", 10.0).clamped(0.0, 32768.0) as u32;
                 effect.burst = Some((id, count, number("particleradius", 1.0).max(0.0)));
             }
         }
@@ -485,7 +486,7 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
         let volume = get("volume")
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|v| v.is_finite())
-            .map_or(1.0, |v| v.clamp(0.0, 1.0));
+            .map_or(1.0, |v| v.clamped(0.0, 1.0));
         // Converted files sit under `assets/`, beside `weapons.json`.
         let lower = rel.to_ascii_lowercase();
         if !(lower.ends_with(".wav") || lower.ends_with(".ogg")) {

@@ -55,6 +55,7 @@ name = "bri-bls"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "bri-content",
  "bri-events",
  "bri-world",
@@ -65,10 +66,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-console"
+version = "0.1.0"
+
+[[package]]
 name = "bri-content"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "glam",
  "image",
  "serde",
@@ -82,6 +88,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-bls",
+ "bri-console",
  "bri-content",
  "bri-events",
  "bri-world",
@@ -100,6 +107,7 @@ name = "bri-events"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-console",
  "glam",
  "serde",
  "serde_json",

@@ -5,6 +5,8 @@
 //! Converted content maps Torque `(x, y, z)` to native `(x, z, -y)`; distances
 //! are unchanged by that rotation, so authored audio distances apply as-is.
 
+use bri_console::Clamp;
+
 /// Native world-space vector `[x, y(up), z]`.
 pub type Vec3 = [f32; 3];
 
@@ -83,7 +85,7 @@ pub fn torque_attenuation(distance: f32, reference: f32, max: f32) -> f32 {
     if max <= reference {
         return if distance <= reference { 1.0 } else { 0.0 };
     }
-    let d = distance.clamp(reference, max);
+    let d = distance.clamped(reference, max);
     1.0 - (d - reference) / (max - reference)
 }
 
@@ -144,7 +146,7 @@ pub fn pan_gains(listener: &Listener, position: Vec3) -> (f32, f32) {
     let rel = sub(position, listener.position);
     let dist = length(rel);
     let pan = if dist > 1e-4 {
-        (dot(rel, listener.right()) / dist).clamp(-1.0, 1.0)
+        (dot(rel, listener.right()) / dist).clamped(-1.0, 1.0)
     } else {
         0.0
     };
@@ -152,9 +154,108 @@ pub fn pan_gains(listener: &Listener, position: Vec3) -> (f32, f32) {
     (angle.cos(), angle.sin())
 }
 
+/// Most windows ([`Window`]) the listener hears through at once.
+pub const MAX_WINDOWS: usize = 16;
+
+/// A window the listener also hears through: an opening that shows (and
+/// carries bodies, shots and sight to) somewhere else, a portal. A source
+/// beyond it is heard from `ear`, the listener as the window carries it to
+/// the far side, when the straight way from `ear` to the source goes out
+/// through the window's far face; it is heard by whichever way, direct or
+/// through a window, is shortest. So a crash seen through a portal sounds
+/// as near and from where it shows, not from wherever it is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Window {
+    /// The listener carried to the far side.
+    pub ear: Listener,
+    /// The window's far face: its middle, unit normal pointing out into the
+    /// far side (where the sources it lets through stand), unit in-plane
+    /// axes and the half size along each.
+    pub centre: Vec3,
+    pub normal: Vec3,
+    pub u: Vec3,
+    pub v: Vec3,
+    pub half: [f32; 2],
+}
+
+impl Window {
+    pub fn is_valid(&self) -> bool {
+        self.ear.is_valid()
+            && [self.centre, self.normal, self.u, self.v]
+                .iter()
+                .all(|v| finite3(*v))
+            && self.half.iter().all(|h| h.is_finite() && *h >= 0.0)
+    }
+    /// Whether the straight way from the ear to `position` goes out through
+    /// the far face.
+    fn lets_through(&self, position: Vec3) -> bool {
+        let side = |p: Vec3| dot(self.normal, sub(p, self.centre));
+        let (a, b) = (side(self.ear.position), side(position));
+        if !(a <= 0.0 && b > 0.0) {
+            return false;
+        }
+        let t = -a / (b - a);
+        let rel = sub(position, self.ear.position);
+        let at = [
+            self.ear.position[0] + rel[0] * t,
+            self.ear.position[1] + rel[1] * t,
+            self.ear.position[2] + rel[2] * t,
+        ];
+        let d = sub(at, self.centre);
+        dot(d, self.u).abs() <= self.half[0] && dot(d, self.v).abs() <= self.half[1]
+    }
+}
+
+/// The ear `position` is heard by, of the listener and its windows: the
+/// nearest that hears it, and how far it is from that ear.
+pub fn heard<'a>(
+    listener: &'a Listener,
+    windows: &'a [Window],
+    position: Vec3,
+) -> (&'a Listener, f32) {
+    let direct = (listener, length(sub(position, listener.position)));
+    windows
+        .iter()
+        .filter(|w| w.lets_through(position))
+        .map(|w| (&w.ear, length(sub(position, w.ear.position))))
+        .fold(direct, |best, way| if way.1 < best.1 { way } else { best })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_source_beyond_a_window_is_heard_as_near_as_it_shows() {
+        // A window in the plane z = -2 in front of the listener leads 100
+        // along x, facing the same way; the far face is at x = 100.
+        let listener = Listener::default();
+        let ear = Listener {
+            position: [100.0, 0.0, 0.0],
+            ..listener
+        };
+        let window = Window {
+            ear,
+            centre: [100.0, 0.0, -2.0],
+            normal: [0.0, 0.0, -1.0],
+            u: [1.0, 0.0, 0.0],
+            v: [0.0, 1.0, 0.0],
+            half: [1.0, 1.5],
+        };
+        assert!(window.is_valid());
+        let windows = [window];
+        // Five past the far face, straight ahead of the ear.
+        let (from, d) = heard(&listener, &windows, [100.0, 0.0, -5.0]);
+        assert_eq!(from.position, ear.position);
+        assert!((d - 5.0).abs() < 1e-5);
+        // Off to the side of the far face: only the long way.
+        let (from, d) = heard(&listener, &windows, [110.0, 0.0, -5.0]);
+        assert_eq!(from.position, listener.position);
+        assert!(d > 100.0);
+        // Behind the far face (the ear's side): direct.
+        let (from, _) = heard(&listener, &windows, [100.0, 0.0, 3.0]);
+        assert_eq!(from.position, listener.position);
+    }
 
     #[test]
     fn attenuation_matches_torque_linear_model() {

@@ -233,6 +233,7 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(CAR.into()),
         recolor: true,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

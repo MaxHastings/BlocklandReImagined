@@ -10,6 +10,7 @@ default = ["gpu"]
 gpu = ["dep:wgpu", "dep:bytemuck"]
 
 [dependencies]
+bri-console = { path = "../console" }
 bri-render = { path = "../render" }
 anyhow.workspace = true
 serde.workspace = true

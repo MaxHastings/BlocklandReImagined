@@ -15,6 +15,7 @@ pub mod natpmp;
 pub mod packages;
 pub mod protocol;
 pub mod reach;
+pub mod recovery;
 pub mod replica;
 pub mod server;
 pub mod stream;

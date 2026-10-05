@@ -1,5 +1,4 @@
 //! Editable native content. This crate has no dependency on legacy readers.
-
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 

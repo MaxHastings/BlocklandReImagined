@@ -172,6 +172,20 @@ pub fn rules_problem(diagnostic: &bri_package::diag::Diagnostic) -> Problem {
     )
 }
 
+/// A problem an Add-On's script ran into while the game ran (a script
+/// error, an operation refused or failed), from the host's package
+/// diagnostics: one per Add-On and kind of problem, the first one's words.
+pub fn script_problem(diagnostic: &bri_package::diag::Diagnostic) -> Problem {
+    let at = diagnostic.location.as_deref().unwrap_or_default();
+    let add_on = at.split('/').next().unwrap_or(at);
+    Problem::new(
+        add_on,
+        Kind::Script,
+        &diagnostic.code,
+        diagnostic.message.trim_end_matches('.'),
+    )
+}
+
 /// An Add-On that stopped the game loading and was left out, from
 /// `ClientContent::load_leaving_out_broken`'s `id: reason`.
 pub fn left_out_problem(line: &str) -> Problem {
@@ -208,6 +222,24 @@ impl AddOnHealth {
         }
         Self { health, owners }
     }
+    /// Add `problems` found since the load, logging each new one once;
+    /// true when any was new.
+    pub fn add(&mut self, problems: impl IntoIterator<Item = Problem>) -> bool {
+        let mut added = false;
+        for mut problem in problems {
+            problem.add_on = self.owners.id(&problem.add_on);
+            let line = format!(
+                "Add-On {}: {}",
+                self.owners.name(&problem.add_on),
+                problem.line()
+            );
+            if self.health.note(problem) {
+                bri_console::warn(line);
+                added = true;
+            }
+        }
+        added
+    }
     /// The one line for an admin entering a game, if anything is wrong.
     pub fn summary(&self) -> Option<String> {
         self.health.summary(|id| self.owners.name(id))
@@ -239,6 +271,26 @@ mod tests {
             assert_eq!(nested, [problem("three")]);
         });
         assert_eq!(outer, [problem("two"), problem("three")]);
+    }
+
+    #[test]
+    fn script_problems_found_while_playing_join_the_health_once() {
+        let d =
+            bri_package::diag::Diagnostic::warning("op.failed", "Server is limited to 16 bots.")
+                .at("gamemode_slayer-rules");
+        let p = script_problem(&d);
+        assert_eq!(
+            (p.add_on.as_str(), p.kind, p.reference.as_str()),
+            ("gamemode_slayer-rules", Kind::Script, "op.failed")
+        );
+        assert_eq!(p.effect, "Server is limited to 16 bots");
+        let mut health = AddOnHealth::default();
+        assert!(health.add([p.clone()]));
+        assert!(!health.add([p]), "told once");
+        assert_eq!(
+            health.lines_for("gamemode_slayer-rules", ""),
+            ["script op.failed: Server is limited to 16 bots"]
+        );
     }
 
     #[test]

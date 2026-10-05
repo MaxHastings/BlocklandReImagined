@@ -205,8 +205,9 @@ pub struct Rules {
     /// id, as the importer names them (Slayer CTF reads Slayer's settings).
     #[serde(default)]
     pub needs: BTreeMap<String, String>,
-    /// Text files of the Add-On the rules read as data (`data_lines(id)`):
-    /// id to the file's path in the Add-On (Slayer's bot first names,
+    /// Text files of the Add-On the rules read as data
+    /// (`data_line_count(id)`, `data_line(id, i)`): id to the file's path in
+    /// the Add-On (Slayer's bot first names,
     /// `server/modules/module_names/first-names.txt`). Copied from the
     /// player's own copy at import, never shipped with the port.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

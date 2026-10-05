@@ -18,7 +18,8 @@ pub(super) struct RuleState {
     variables: BTreeMap<StateKey, i64>,
     pending: Vec<(String, mg::GameId, Option<OwnerId>, Option<OwnerId>)>,
     occupants: BTreeSet<(BrickId, u8, u64)>,
-    previous: BTreeMap<(u8, u64), Vec3>,
+    /// Each object's place at the last look and its relocation count then.
+    previous: BTreeMap<(u8, u64), (Vec3, u64)>,
     trace: VecDeque<(BrickId, u16, String)>,
     traced: BTreeSet<BrickId>,
 }
@@ -119,6 +120,25 @@ impl Session {
     }
     pub(super) fn rule_query(&self, cx: &Trigger, target: Entity, c: &Condition) -> Option<Datum> {
         let entity = self.rule_subject(cx, target, c.subject);
+        // A Team check that names a slot reads that team of the rule's
+        // mini-game, whoever set it off.
+        if let Some(slot) = c.team_slot() {
+            let game = mg::GameId(entity?.id.index);
+            let team = mg::TeamId(slot);
+            return match c.property {
+                Property::Exists => Some(Datum::Bool(
+                    self.minigames
+                        .game(game)
+                        .is_ok_and(|g| g.teams.get(team).is_some()),
+                )),
+                Property::Score => self
+                    .minigames
+                    .team_score(game, team)
+                    .ok()
+                    .map(Datum::Number),
+                _ => None,
+            };
+        }
         if c.property == Property::Exists && c.subject == Subject::Team {
             return Some(Datum::Bool(
                 self.rule_actor(cx)
@@ -187,13 +207,7 @@ impl Session {
                 .player(self.peers.get(&actor)?.combat.player)
                 .ok()?;
             let team = player.team?;
-            let game = self.minigames.game(player.game?).ok()?;
-            let score = game
-                .members
-                .iter()
-                .filter_map(|id| self.minigames.player(*id).ok())
-                .filter(|p| p.team == Some(team))
-                .fold(0i64, |sum, p| sum.saturating_add(p.score));
+            let score = self.minigames.team_score(player.game?, team).ok()?;
             return Some(Datum::Number(score));
         }
         let compatible = match c.property {
@@ -553,6 +567,22 @@ impl Session {
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 self.apply_minigame_effects(effects)?;
             }
+            RuleOp::TeamPoints { team, points } => {
+                let game = self.rule_game(d)?;
+                let effects = self
+                    .minigames
+                    .event_team_score(game, mg::TeamId(*team), i64::from(*points), true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                self.apply_minigame_effects(effects)?;
+            }
+            RuleOp::TeamWin(team) => {
+                let game = self.rule_game(d)?;
+                let effects = self
+                    .minigames
+                    .end_round(game, vec![mg::TeamId(*team)], vec![])
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                self.apply_minigame_effects(effects)?;
+            }
             RuleOp::WinRound | RuleOp::EndRound => {
                 let game = self.rule_game(d)?;
                 let (teams, players) = if matches!(op, RuleOp::WinRound) {
@@ -619,8 +649,8 @@ impl Session {
                         .state()
                         .bricks
                         .get(&brick)
-                        .is_some_and(|b| b.owner == owner),
-                    "Rule owner does not own the object spawner"
+                        .is_some_and(|b| self.may_edit_events_of(b.owner, owner)),
+                    "The object's spawner is neither the rule owner's nor trusted to edit its events"
                 );
                 self.respawn_vehicle_brick(brick)?;
             }
@@ -707,6 +737,9 @@ impl Session {
                     self.fire_rule_game_fact("onRuleScoreChanged", game, Some(owner), None);
                 }
             }
+            mg::Effect::TeamScore { game, .. } => {
+                self.fire_rule_game_fact("onRuleScoreChanged", *game, None, None);
+            }
             mg::Effect::Ended { game } => {
                 self.events.rules.variables.retain(|key, _| key.1 != game.0)
             }
@@ -780,11 +813,17 @@ impl Session {
             self.events.rules.occupants.clear();
             return Ok(());
         }
-        let mut objects: Vec<(u8, u64, Vec3, Option<u64>)> = self
+        // (kind, id, position, credit, relocations): a changed relocation
+        // count is a jump (a teleport, a respawn, a portal), which enters
+        // only the region it lands in, not those on the line between.
+        let mut objects: Vec<(u8, u64, Vec3, Option<u64>, u64)> = self
             .peers
             .iter()
             .filter(|(_, p)| p.combat.alive)
-            .map(|(o, p)| (0, *o, Vec3::from(p.player.state().feet) + Vec3::Y, Some(*o)))
+            .map(|(o, p)| {
+                let feet = Vec3::from(p.player.state().feet);
+                (0, *o, feet + Vec3::Y, Some(*o), p.player.relocations())
+            })
             .collect();
         let drivers: BTreeMap<_, _> = self
             .vehicle_infos()
@@ -803,7 +842,13 @@ impl Session {
         for v in self.vehicle_poses() {
             let driver = drivers.get(&v.id).copied().flatten();
             let by = self.mover_credit(ObjectRef::Vehicle(v.id)).or(driver);
-            objects.push((1, v.id, Vec3::from(v.position), by));
+            let relocations = self
+                .vehicles
+                .world
+                .as_ref()
+                .and_then(|w| w.relocations(VehicleId(v.id)))
+                .unwrap_or_default();
+            objects.push((1, v.id, Vec3::from(v.position), by, relocations));
         }
         let mut current = BTreeSet::new();
         let mut observations = vec![];
@@ -817,7 +862,7 @@ impl Session {
                 continue;
             };
             let (lo, hi) = bri_world::regions::bounds(source.rule_region, (min, max));
-            for (kind, id, position, by) in &objects {
+            for (kind, id, position, by, relocations) in &objects {
                 // Players share the builder's game, including None in free build.
                 if *kind == 0 && self.game_of(*id) != builder_game {
                     continue;
@@ -831,11 +876,14 @@ impl Session {
                 {
                     continue;
                 }
+                // Objects from the builder's spawn bricks, or from those of
+                // anyone who may edit the builder's events (an
+                // administrator editing a loaded build).
                 if *kind == 1
                     && self
                         .vehicle_spawn_brick(VehicleId(*id))
                         .and_then(|b| self.simulation.state().bricks.get(&b))
-                        .is_none_or(|b| b.owner != builder)
+                        .is_none_or(|b| !self.may_edit_events_of(b.owner, builder))
                 {
                     continue;
                 }
@@ -852,7 +900,8 @@ impl Session {
                     }
                 } else if was {
                     observations.push((brick, format!("{prefix}Leave"), *by, *kind, *id));
-                } else if let Some(previous) = self.events.rules.previous.get(&(*kind, *id))
+                } else if let Some((previous, then)) = self.events.rules.previous.get(&(*kind, *id))
+                    && then == relocations
                     && segment_box(*previous, *position, lo, hi)
                 {
                     observations.push((brick, format!("{prefix}Enter"), *by, *kind, *id));
@@ -863,7 +912,7 @@ impl Session {
         self.events.rules.occupants = current;
         self.events.rules.previous = objects
             .iter()
-            .map(|(k, id, pos, _)| ((*k, *id), *pos))
+            .map(|(k, id, pos, _, relocations)| ((*k, *id), (*pos, *relocations)))
             .collect();
         for (brick, fact, by, kind, object) in observations {
             let game = self
@@ -1074,14 +1123,20 @@ impl Session {
                                 condition.value = Datum::Number(i64::from(teams[0].0));
                             }
                         }
-                    } else if matches!(row.output.as_str(), "addTeamScore" | "winRound") {
-                        row.conditions.push(Condition {
-                            subject: Subject::Instigator,
-                            property: Property::Team,
-                            key: String::new(),
-                            compare: ev::rules::Compare::Equal,
-                            value: Datum::Number(i64::from(teams[1 - index].0)),
-                        });
+                    } else {
+                        // Each goal credits the team attacking it, by slot,
+                        // whoever knocked the ball in.
+                        let scorer = teams[1 - index].0;
+                        if matches!(row.output.as_str(), "addTeamScore" | "winRound")
+                            && let Some(ev::Value::Int(slot)) = row.params.first_mut()
+                        {
+                            *slot = i64::from(scorer);
+                        }
+                        for condition in &mut row.conditions {
+                            if condition.team_slot().is_some() {
+                                condition.key = scorer.to_string();
+                            }
+                        }
                     }
                 }
             }
@@ -1198,6 +1253,7 @@ impl Session {
                     Box::new(bri_world::VehicleSpawn {
                         vehicle: bri_world::ContentRef::Resolved(v),
                         recolor: true,
+                        team: None,
                     })
                 });
             }
@@ -1377,26 +1433,41 @@ pub fn lab_programs(mode: &str) -> Vec<(String, Vec<ev::Row>)> {
                 ),
             ],
         )],
+        // Goal 1 scores for the second team, goal 2 for the first, by slot
+        // (the lab puts its game's own slots in): an own goal counts for
+        // the attackers too. A ball scores once, however it bounces before
+        // its reset (its Object variable), and the next ball is new.
         "soccer" => (0..2)
             .map(|index| {
+                let scorer = 2 - index;
+                let fresh = || variable(Subject::Object, "scored", 0);
                 let mut reset = row("onObjectEnter", Slot::Object, "resetObject", vec![], vec![]);
                 reset.delay_ms = 3000;
+                let mut won = score(Subject::Team, 5);
+                won.key = scorer.to_string();
                 (
                     format!("Goal {}", index + 1),
                     vec![
                         row(
                             "onObjectEnter",
-                            Slot::Instigator,
+                            Slot::MiniGame,
                             "addTeamScore",
-                            vec![Value::Int(1)],
-                            vec![running(), exists()],
+                            vec![Value::Int(scorer), Value::Int(1)],
+                            vec![running(), fresh()],
                         ),
                         row(
                             "onObjectEnter",
-                            Slot::Instigator,
+                            Slot::MiniGame,
                             "winRound",
+                            vec![Value::Int(scorer)],
+                            vec![running(), fresh(), won],
+                        ),
+                        row(
+                            "onObjectEnter",
+                            Slot::SelfBrick,
+                            "setVariable",
+                            state(4, "scored", 1),
                             vec![],
-                            vec![running(), exists(), score(Subject::Team, 5)],
                         ),
                         reset,
                     ],
@@ -2272,9 +2343,11 @@ mod tests {
                 .unwrap();
         }
         let center = s.object_centre(ObjectRef::Vehicle(object.0)).unwrap();
-        let mut row = lab_programs("soccer")[0].1[0].clone();
-        row.output = "addPlayerScore".into();
-        row.conditions.clear();
+        let row = goal_row(
+            ev::Target::Slot(Slot::Instigator),
+            "addPlayerScore",
+            vec![ev::Value::Int(1)],
+        );
         s.simulation
             .mutate(ids[0], |b| {
                 b.position = center.to_array();
@@ -2589,6 +2662,8 @@ mod tests {
     #[test]
     fn free_build_object_observation_keeps_owned_spawners_regardless_of_mover_game() {
         let (mut s, p, q) = setup();
+        // q is a stranger to p's bricks (a LAN host trusts everyone).
+        s.set_lan_host(false);
         let ids = s.create_rule_lab(p, "soccer").unwrap();
         s.respawn_vehicle_brick(ids[2]).unwrap();
         s.minigame_request(p, MiniGameRequest::Leave).unwrap();
@@ -2765,10 +2840,22 @@ mod tests {
         let object = s.vehicle_infos()[0].id;
         let center = s.object_centre(ObjectRef::Vehicle(object)).unwrap();
         s.simulation.mutate(ids[0], |b| b.events.clear()).unwrap();
+        // A player's own points need a credited mover; the recipe's reset
+        // follows.
+        let reset = lab_programs("soccer")[1].1.last().unwrap().clone();
+        assert_eq!(reset.output, "resetObject");
         s.simulation
             .mutate(ids[1], |b| {
                 b.position = center.to_array();
                 b.rule_region = Some([10.0; 3]);
+                b.events = vec![
+                    goal_row(
+                        ev::Target::Slot(Slot::Instigator),
+                        "addPlayerScore",
+                        vec![ev::Value::Int(1)],
+                    ),
+                    reset,
+                ];
             })
             .unwrap();
         s.dirty.extend([ids[1], ids[0]]);
@@ -2811,6 +2898,115 @@ mod tests {
         );
     }
     #[test]
+    fn life_epoch_teleport_over_a_region_never_enters_it() {
+        let (mut s, p, _q) = setup();
+        let ids = s.create_rule_lab(p, "hill").unwrap();
+        let mut enter = lab_programs("puzzle")[0].1[1].clone();
+        enter.input = "onRegionEnter".into();
+        enter.conditions.clear();
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.events = vec![enter];
+                b.color = 0;
+            })
+            .unwrap();
+        s.dirty.insert(ids[0]);
+        s.step_events(&BTreeSet::new()).unwrap();
+        let center = Vec3::from(s.simulation.state().bricks[&ids[0]].position);
+        s.peers.get_mut(&p).unwrap().player.place(
+            &mut s.simulation.physics,
+            center - Vec3::Y + Vec3::X * 30.,
+            0.,
+            Vec3::ZERO,
+        );
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        // A server teleport (instantRespawn, a reset, a teleport event) to the far side.
+        s.peers
+            .get_mut(&p)
+            .unwrap()
+            .player
+            .teleport(
+                &mut s.simulation.physics,
+                center - Vec3::Y - Vec3::X * 30.,
+                0.,
+            )
+            .unwrap();
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert_eq!(
+            s.simulation.state().bricks[&ids[0]].color,
+            0,
+            "a teleport that never entered the region fired onRegionEnter"
+        );
+    }
+    #[test]
+    fn life_epoch_rule_respawn_time_ends_with_its_minigame() {
+        let (mut s, p, q) = setup();
+        s.minigame_request(
+            p,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        join_game(&mut s, p, q);
+        // Slayer's team respawn time / teamkill penalty (`set_respawn_time`).
+        s.peers.get_mut(&q).unwrap().respawn_ms = Some(60_000);
+        s.minigame_request(q, MiniGameRequest::Leave).unwrap();
+        assert_eq!(s.game_of(q), None);
+        for _ in 0..400 {
+            s.step().unwrap();
+        }
+        s.kill(q, None, super::super::combat::DamageKind::Suicide)
+            .unwrap();
+        let tick = s.simulation.state().tick;
+        let wait = s.peers[&q].combat.respawn_tick - tick;
+        assert!(wait <= 240, "free-build respawn waits {wait} ticks");
+    }
+    #[test]
+    fn life_epoch_delayed_player_output_dies_with_its_life() {
+        let (mut s, p, _q) = setup();
+        let ids = s.create_rule_lab(p, "hill").unwrap();
+        s.minigame_request(p, MiniGameRequest::Leave).unwrap();
+        let row = ev::Row {
+            conditions: vec![],
+            preserved: None,
+            enabled: true,
+            input: "onActivate".into(),
+            delay_ms: 5000,
+            target: ev::Target::Slot(Slot::Player),
+            output: "kill".into(),
+            params: vec![],
+        };
+        s.simulation
+            .mutate(ids[0], |b| b.events = vec![row])
+            .unwrap();
+        s.dirty.insert(ids[0]);
+        for _ in 0..400 {
+            s.step().unwrap();
+        }
+        s.start_event_tick(s.simulation.state().tick).unwrap();
+        s.fire_input(ids[0], "onActivate", Some(p));
+        s.step_events(&BTreeSet::new()).unwrap();
+        // Dies some other way, then respawns.
+        s.kill(p, None, super::super::combat::DamageKind::Suicide)
+            .unwrap();
+        for _ in 0..130 {
+            s.step().unwrap();
+        }
+        s.request_respawn(p).unwrap();
+        assert!(s.is_alive(p));
+        for _ in 0..(6 * 120) {
+            s.step().unwrap();
+        }
+        assert!(
+            s.is_alive(p),
+            "the old life's delayed kill killed the new body"
+        );
+    }
+    #[test]
     fn swept_regions_detect_fast_passage_without_false_parallel_hit() {
         assert!(segment_box(
             Vec3::new(-5.0, 0.0, 0.0),
@@ -2824,5 +3020,339 @@ mod tests {
             Vec3::splat(-1.0),
             Vec3::splat(1.0)
         ));
+    }
+    /// A goal on its own: the soccer lab's first goal brick, east of its
+    /// ball spawn, with `rows` and a region that leaves the spawn outside.
+    fn lone_goal(rows: Vec<ev::Row>) -> (Session, OwnerId, Vec<BrickId>, Vec3, Vec3) {
+        let (mut s, p, ids, home, goal) = lone_goal_with(|events| *events = rows);
+        s.simulation
+            .mutate(ids[2], |b| b.name = Some("_ballspawn".into()))
+            .unwrap();
+        s.dirty.insert(ids[2]);
+        s.step().unwrap();
+        (s, p, ids, home, goal)
+    }
+    /// [`lone_goal`] keeping the lab's own goal rows, changed by `edit`.
+    fn lone_goal_with(
+        edit: impl FnOnce(&mut Vec<ev::Row>),
+    ) -> (Session, OwnerId, Vec<BrickId>, Vec3, Vec3) {
+        let (mut s, p, _) = setup();
+        let ids = s.create_rule_lab(p, "soccer").unwrap();
+        // The practice ball stays out of the way.
+        s.simulation
+            .mutate(ids[3], |b| b.position = [-30.0, 1.1, -30.0])
+            .unwrap();
+        s.respawn_vehicle_brick(ids[3]).unwrap();
+        s.respawn_vehicle_brick(ids[2]).unwrap();
+        let ball = ball_of(&s, ids[2]);
+        let home = s.object_centre(ObjectRef::Vehicle(ball)).unwrap();
+        let goal = home + Vec3::new(12.0, 0.0, 0.0);
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.position = goal.to_array();
+                b.rule_region = Some([4.0, 12.0, 4.0]);
+                b.colliding = false;
+                edit(&mut b.events);
+            })
+            .unwrap();
+        s.simulation.mutate(ids[1], |b| b.events.clear()).unwrap();
+        s.dirty.extend(ids.iter().copied());
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        let home = s
+            .object_centre(ObjectRef::Vehicle(ball_of(&s, ids[2])))
+            .unwrap();
+        (s, p, ids, home, goal)
+    }
+    fn ball_of(s: &Session, spawner: BrickId) -> u64 {
+        s.vehicle_infos()
+            .into_iter()
+            .find(|v| s.vehicle_spawn_brick(VehicleId(v.id)) == Some(spawner))
+            .expect("the spawner's ball")
+            .id
+    }
+    /// Moves `ball` to `at` as a credited kick would leave it, and runs a
+    /// quarter second.
+    fn place_ball(s: &mut Session, ball: u64, at: Vec3, by: OwnerId) {
+        let transform = bri_vehicles::Transform {
+            position: at.to_array(),
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        s.vehicles
+            .world
+            .as_mut()
+            .unwrap()
+            .set_transform(&mut s.simulation.physics, VehicleId(ball), &transform)
+            .unwrap();
+        s.credit(ObjectRef::Vehicle(ball), by);
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+    }
+    /// Kicks `ball` into `at` from a few units west, the way a credited
+    /// push does, and runs one second: it rolls in rather than jumping.
+    fn kick_ball(s: &mut Session, ball: u64, at: Vec3, by: OwnerId) {
+        let transform = bri_vehicles::Transform {
+            position: (at - Vec3::X * 6.0).to_array(),
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        s.vehicles
+            .world
+            .as_mut()
+            .unwrap()
+            .set_transform(&mut s.simulation.physics, VehicleId(ball), &transform)
+            .unwrap();
+        s.step().unwrap();
+        s.push_object(ObjectRef::Vehicle(ball), Vec3::X * 20.0)
+            .unwrap();
+        s.credit(ObjectRef::Vehicle(ball), by);
+        for _ in 0..120 {
+            s.step().unwrap();
+        }
+    }
+    fn goal_row(target: ev::Target, output: &str, params: Vec<ev::Value>) -> ev::Row {
+        ev::Row {
+            conditions: vec![],
+            preserved: None,
+            enabled: true,
+            input: "onObjectEnter".into(),
+            delay_ms: 0,
+            target,
+            output: output.into(),
+            params,
+        }
+    }
+    fn score_row() -> ev::Row {
+        goal_row(
+            ev::Target::Slot(Slot::Instigator),
+            "addPlayerScore",
+            vec![ev::Value::Int(1)],
+        )
+    }
+    /// Runs three goals with `reset` as the goal's reset row: each must
+    /// score once, and bring a new ball back to its spawn brick at rest.
+    fn assert_goals_rearm(reset: ev::Row) {
+        let delay = reset.delay_ms;
+        let (mut s, p, ids, home, goal) = lone_goal(vec![score_row(), reset]);
+        for goals in 1..=3 {
+            let ball = ball_of(&s, ids[2]);
+            if goals == 2 {
+                kick_ball(&mut s, ball, goal, p);
+            } else {
+                place_ball(&mut s, ball, goal, p);
+            }
+            assert_eq!(score(&s, p), goals, "entry {goals} with a {delay} ms reset");
+            for _ in 0..(delay as usize * 120 / 1000 + 30) {
+                s.step().unwrap();
+            }
+            let back = ball_of(&s, ids[2]);
+            assert_ne!(back, ball, "a reset spawns a new ball");
+            let at = s.object_centre(ObjectRef::Vehicle(back)).unwrap();
+            assert!(
+                (at - home).length() < 0.5,
+                "the reset ball is at its spawn: {at:?} vs {home:?}"
+            );
+            let speed = s
+                .object_velocity(ObjectRef::Vehicle(back))
+                .unwrap()
+                .length();
+            assert!(speed < 0.5, "the reset ball is at rest: {speed}");
+        }
+    }
+    /// Max (v0.2.3): after the ball went in, the goal never fired again.
+    /// Each Object resetObject (now or after a delay) brings a new ball
+    /// back to its spawn brick at rest, and each entry of it scores again.
+    #[test]
+    fn a_goal_fires_again_for_each_ball_its_reset_brings_back() {
+        for delay in [0, 500] {
+            let mut reset = goal_row(ev::Target::Slot(Slot::Object), "resetObject", vec![]);
+            reset.delay_ms = delay;
+            assert_goals_rearm(reset);
+        }
+    }
+    /// The v20 way: the goal's row names the builder's ball spawn brick
+    /// and respawns its vehicle.
+    #[test]
+    fn a_named_spawn_brick_respawn_vehicle_resets_the_ball_and_rearms_the_goal() {
+        for delay in [0, 500] {
+            let mut reset = goal_row(
+                ev::Target::Named("_ballspawn".into()),
+                "respawnVehicle",
+                vec![],
+            );
+            reset.delay_ms = delay;
+            assert_goals_rearm(reset);
+        }
+    }
+    /// A ball that leaves the region and comes back enters it again.
+    #[test]
+    fn a_goal_fires_again_when_the_ball_leaves_and_comes_back() {
+        let (mut s, p, ids, home, goal) = lone_goal(vec![score_row()]);
+        let ball = ball_of(&s, ids[2]);
+        place_ball(&mut s, ball, goal, p);
+        assert_eq!(score(&s, p), 1);
+        place_ball(&mut s, ball, goal, p);
+        assert_eq!(score(&s, p), 1, "staying inside is not a new entry");
+        place_ball(&mut s, ball, home, p);
+        place_ball(&mut s, ball, goal, p);
+        assert_eq!(score(&s, p), 2);
+        place_ball(&mut s, ball, home, p);
+        kick_ball(&mut s, ball, goal, p);
+        assert_eq!(score(&s, p), 3, "a ball rolling back in enters again");
+    }
+    /// The goal's ball resets (a new ball) once it goes in: whether the
+    /// goal's rows saw it.
+    fn goal_reacts(s: &mut Session, ids: &[BrickId], goal: Vec3, by: OwnerId) -> bool {
+        let ball = ball_of(s, ids[2]);
+        place_ball(s, ball, goal, by);
+        ball_of(s, ids[2]) != ball
+    }
+    fn reset_goal() -> Vec<ev::Row> {
+        vec![goal_row(
+            ev::Target::Slot(Slot::Object),
+            "resetObject",
+            vec![],
+        )]
+    }
+    /// Max loaded someone else's build with its ownership kept: the goal
+    /// is its builder's, the ball spawn the host's own. The host may edit
+    /// the goal's events, so its rows see the host's ball.
+    #[test]
+    fn a_loaded_goal_sees_the_ball_of_an_administrator_who_may_edit_it() {
+        let (mut s, p, ids, _, goal) = lone_goal(reset_goal());
+        s.set_lan_host(false);
+        let builder = 4242;
+        s.simulation.mutate(ids[0], |b| b.owner = builder).unwrap();
+        s.dirty.insert(ids[0]);
+        s.step().unwrap();
+        assert!(s.is_administrator(p));
+        assert!(goal_reacts(&mut s, &ids, goal, p));
+    }
+    /// A stranger's ball leaves another builder's goal alone until the
+    /// builder trusts them enough to edit its events.
+    #[test]
+    fn a_goal_sees_a_strangers_ball_only_once_they_may_edit_its_events() {
+        let (mut s, _, ids, _, goal) = lone_goal(reset_goal());
+        s.set_lan_host(false);
+        let verified = |s: &mut Session, name: &str, key: u8| {
+            s.join_verified(
+                name.into(),
+                Vec3::new(f32::from(key) * 3.0, 0.1, 8.0),
+                false,
+                Some(bri_admin::Principal([key; 32])),
+            )
+            .unwrap()
+        };
+        let ann = verified(&mut s, "Ann", 1);
+        let bob = verified(&mut s, "Bob", 2);
+        s.simulation.mutate(ids[0], |b| b.owner = ann).unwrap();
+        s.simulation.mutate(ids[2], |b| b.owner = bob).unwrap();
+        s.dirty.extend([ids[0], ids[2]]);
+        s.respawn_vehicle_brick(ids[2]).unwrap();
+        s.step().unwrap();
+        assert!(!goal_reacts(&mut s, &ids, goal, bob), "Bob is a stranger");
+        s.command(
+            ann,
+            1,
+            Command::TrustInvite {
+                target: bob,
+                level: bri_world::authority::trust::BUILD,
+            },
+        )
+        .unwrap();
+        s.command(bob, 1, Command::AcceptTrust { from: ann })
+            .unwrap();
+        assert!(
+            !goal_reacts(&mut s, &ids, goal, bob),
+            "build trust is not enough"
+        );
+        s.command(
+            ann,
+            2,
+            Command::TrustInvite {
+                target: bob,
+                level: bri_world::authority::trust::EVENTS,
+            },
+        )
+        .unwrap();
+        s.command(bob, 2, Command::AcceptTrust { from: ann })
+            .unwrap();
+        assert!(
+            goal_reacts(&mut s, &ids, goal, bob),
+            "Bob may edit Ann's events"
+        );
+    }
+    /// Named targets stay per builder: another builder's spawn brick of
+    /// the same name is not the goal's.
+    #[test]
+    fn a_goal_never_respawns_another_builders_named_spawn() {
+        let reset = goal_row(
+            ev::Target::Named("_ballspawn".into()),
+            "respawnVehicle",
+            vec![],
+        );
+        let (mut s, p, ids, _, goal) = lone_goal(vec![reset]);
+        let guest = s.peers.keys().copied().find(|o| *o != p).unwrap();
+        s.simulation.mutate(ids[2], |b| b.owner = guest).unwrap();
+        s.dirty.insert(ids[2]);
+        s.respawn_vehicle_brick(ids[2]).unwrap();
+        s.step().unwrap();
+        // The LAN host trusts everyone, so the goal sees the guest's ball;
+        // the name still resolves only among the goal builder's bricks.
+        assert!(!goal_reacts(&mut s, &ids, goal, p));
+    }
+    /// The shipped soccer goal credits the team attacking it by slot,
+    /// whoever knocked the ball in: a defender's own goal counts for the
+    /// attackers, and their own score is untouched. A ball scores once
+    /// however it bounces before its reset; the next ball scores again. The
+    /// win row, after the score row, sees the new score in the same firing.
+    #[test]
+    fn the_soccer_goal_credits_its_attackers_once_per_ball_even_for_an_own_goal() {
+        let (mut s, p, ids, home, goal) = lone_goal_with(|rows| {
+            for row in rows {
+                for c in &mut row.conditions {
+                    if c.property == Property::Score {
+                        c.value = Datum::Number(2);
+                    }
+                }
+            }
+        });
+        let game = s.game_of(p).unwrap();
+        let teams: Vec<_> = s
+            .minigames
+            .game(game)
+            .unwrap()
+            .teams
+            .list
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let defender = s.minigames.player(s.peers[&p].combat.player).unwrap().team;
+        assert_eq!(
+            defender,
+            Some(teams[0]),
+            "the lab puts its builder on the first team"
+        );
+        let attackers = |s: &Session| s.minigames.team_score(game, teams[1]).unwrap();
+        let ball = ball_of(&s, ids[2]);
+        place_ball(&mut s, ball, goal, p);
+        assert_eq!(attackers(&s), 1, "an own goal counts for the attackers");
+        assert_eq!(score(&s, p), 0, "and not for whoever knocked it in");
+        assert_eq!(s.minigames.team_score(game, teams[0]).unwrap(), 0);
+        // It bounces out and back in before its reset: no second point.
+        place_ball(&mut s, ball, home, p);
+        place_ball(&mut s, ball, goal, p);
+        assert_eq!(attackers(&s), 1, "one ball, one goal");
+        assert_eq!(s.round_results().count(), 0);
+        for _ in 0..400 {
+            s.step().unwrap();
+        }
+        let next = ball_of(&s, ids[2]);
+        assert_ne!(next, ball);
+        place_ball(&mut s, next, goal, p);
+        assert_eq!(attackers(&s), 2);
+        let result = s.round_results().last().expect("the second goal wins");
+        assert_eq!(result.teams, vec![teams[1]]);
     }
 }

@@ -68,6 +68,10 @@ REFERENCE_FILES = 'docs/vanilla-reference-files.json'
 WEAPON_EFFECTS = 'docs/research/weapon-effects/importer/Cargo.toml'
 WEAPON_DEBRIS = 'docs/research/weapon-debris/importer/Cargo.toml'
 
+# Builds made for this game that ship with it, by map save folder
+# (`saves/Slate/...`): the worlds pack carries them beside the stock saves.
+BUNDLED_SAVES = 'saves'
+
 # Step -> (packs it reads, importer sources, other repository inputs, recipe).
 # Sources are ('cargo', package) including its local path dependencies, or
 # ('files', path). Bump a recipe number when a step's command line changes.
@@ -90,7 +94,7 @@ STEP_INPUTS = {
     'events': ([], [('files', 'crates/events-import')], [], 1),
     'weather': (['map_bundle'], [('cargo', 'bri-weather-import')], [], 1),
     'foliage': (['map_bundle'], [('cargo', 'bri-foliage-import')], [], 1),
-    'worlds': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 1),
+    'worlds': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [BUNDLED_SAVES], 2),
     'tutorial': (['brick_catalog', 'effects', 'events', 'audio', 'weapons', 'vehicles'], CONVERT, [], 2),
 }
 PACK_STEPS = list(STEP_INPUTS)
@@ -622,7 +626,7 @@ class Pipeline:
     def worlds(self):
         unbound = self.fresh_scratch('worlds-unbound')
         run(self.bin('import_saves'), self.v20 / 'saves', self.pack('brick_catalog') / 'stock-catalog.json',
-            unbound, self.pack('effects') / 'effects.json')
+            unbound, self.pack('effects') / 'effects.json', '--bundled', REPO / BUNDLED_SAVES)
         self.bind(unbound, self.pack('worlds'))
 
     def tutorial(self):

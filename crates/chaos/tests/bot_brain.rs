@@ -33,6 +33,7 @@ fn spawn_brick(kind: &str, at: [f32; 3], owner: OwnerId) -> Brick {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
+        team: None,
     }));
     brick
 }
@@ -944,6 +945,53 @@ fn a_bot_enters_through_a_brick_building_doorway() {
     assert!(closest < 3.5, "reached the builder inside: {closest}");
 }
 
+/// Four allies make for one narrow doorway at once. Each one ahead going
+/// the same way is followed, not walked round, so the file keeps moving:
+/// every bot gets through and none is left wedged at the jambs.
+#[test]
+fn allies_file_through_one_narrow_doorway_without_deadlock() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.melee = Some(bite(5.0));
+        k.side = Some("file".into());
+    });
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 30.0)])
+        .unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let mut bricks = glass_wall(8.0, 22.0, 38.0, human);
+    bricks.retain(|b| !(29.5..=30.5).contains(&(b.position[2] - 0.25)));
+    for z in [27.0, 29.0, 31.0, 33.0] {
+        bricks.push(bot_brick([16.0, 0.1, z], human));
+    }
+    load(&mut s, human, bricks);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let all = bots(&s);
+    assert_eq!(all.len(), 4);
+    let mut through = std::collections::BTreeMap::new();
+    for tick in 0..120 * 30 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        for bot in &all {
+            if feet(&s, *bot).x < 8.0 {
+                through.entry(*bot).or_insert(tick);
+            }
+        }
+        if through.len() == all.len() {
+            break;
+        }
+    }
+    eprintln!("through the doorway at ticks {through:?}");
+    assert_eq!(
+        through.len(),
+        all.len(),
+        "every bot got through: {through:?}"
+    );
+}
+
 #[test]
 fn a_jetting_bot_closes_on_an_enemy_on_a_high_brick_platform() {
     let mut s = session();
@@ -990,4 +1038,62 @@ fn a_jetting_bot_closes_on_an_enemy_on_a_high_brick_platform() {
         "it stayed controlled near melee: {late_farthest}"
     );
     assert!(s.vitals()[&human].health < 100.0, "it reached melee range");
+}
+
+/// One bot whose thinking fails every tick does not stop the others: the
+/// near bot still sees the enemy and warns its side, and the far one comes
+/// to look, while the failing bot stays (and is told about, once).
+#[test]
+fn a_bot_that_fails_to_think_leaves_the_others_thinking() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.sight = 32.0;
+        k.wander_radius = 0.0;
+        k.side = Some("pack".into());
+        k.alerts_allies = true;
+        k.melee = Some(bite(5.0));
+    });
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(
+        &mut s,
+        human,
+        vec![
+            bot_brick([10.0, 0.1, 24.0], human),
+            bot_brick([10.0, 0.1, 38.0], human),
+            bot_brick([-14.0, 0.1, 40.0], human),
+        ],
+    );
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let all = bots(&s);
+    assert_eq!(all.len(), 3);
+    // The one off to the side fails; it may come first or last in a tick.
+    let broken = *all
+        .iter()
+        .min_by(|a, b| feet(&s, **a).x.total_cmp(&feet(&s, **b).x))
+        .unwrap();
+    let far = *all
+        .iter()
+        .filter(|b| **b != broken)
+        .max_by(|a, b| feet(&s, **a).z.total_cmp(&feet(&s, **b).z))
+        .unwrap();
+    s.fail_bot_steps(Some(broken));
+    let start = feet(&s, far).distance(feet(&s, human));
+    steps(&mut s, &[human], 120 * 3, &mut sequence);
+    let now = feet(&s, far).distance(feet(&s, human));
+    assert!(
+        now < start - 6.0,
+        "the warned bot came to look: {start} to {now}"
+    );
+    assert!(bots(&s).contains(&broken), "the failing bot stays");
+    let told = s
+        .package_diagnostics()
+        .iter()
+        .filter(|d| d.code == "bot.step")
+        .count();
+    assert!(told <= 1, "told {told} times in three seconds");
 }

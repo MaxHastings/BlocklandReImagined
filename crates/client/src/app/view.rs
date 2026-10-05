@@ -1,5 +1,6 @@
 //! The camera: whose eyes, which mode, where it looks.
 use super::*;
+use bri_console::Clamp;
 
 /// What the camera shows beyond the controls: observer and rendered eyes, the drawn controls, crosshair and wheels.
 pub(super) struct ViewState {
@@ -123,7 +124,7 @@ impl App {
         let camera = &assets.definition(&info.definition)?.camera;
         let frame = vehicles.frame(vehicle)?;
         Some((
-            camera.max_dist.clamp(1.0, 40.0),
+            camera.max_dist.clamped(1.0, 40.0),
             frame.position + Vec3::Y * camera.offset,
             camera.tilt,
         ))
@@ -183,24 +184,13 @@ impl App {
                     center: Vec3::from(p.feet) + Vec3::Y * height * 0.5,
                     rotation: glam::Quat::IDENTITY,
                     half: Vec3::new(t.width * 0.5, height * 0.5, t.width * 0.5),
+                    shape: None,
                 }
             })
             .collect();
-        for (id, info) in &view.vehicles {
-            let (Some(frame), Some(d)) = (
-                vehicles.frame(*id),
-                vehicle_assets.definition(&info.definition),
-            ) else {
-                continue;
-            };
-            let (min, max) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
-            pushers.push(crate::local_physics::Pusher {
-                id: id | 1 << 63,
-                center: frame.position + frame.rotation * ((min + max) * 0.5),
-                rotation: frame.rotation,
-                half: (max - min) * 0.5,
-            });
-        }
+        pushers.extend(view.vehicles.values().filter_map(|info| {
+            vehicles.pusher(info, vehicle_assets.definition(&info.definition)?)
+        }));
         pushers
     }
     /// The local rider's first-person eye, from their posed `eye` node
@@ -353,7 +343,7 @@ impl App {
         let (yaw, pitch) =
             mount.map_or_else(|| controls.camera_angles(), |m| controls.mount_look(m));
         // `minLookAngle`/`maxLookAngle`: exactly straight down and up.
-        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+        let pitch = pitch.clamped(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
         if controls.observer().is_some() || pos == 0.0 {
             let ride = controls
                 .ride_view()
@@ -499,7 +489,7 @@ impl App {
             )),
             passages,
         )?;
-        let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
+        let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamped(-1.56, 1.56));
         Ok((eye, yaw, pitch, 0.0, boom))
     }
     /// Seated where v20's `armor::onTrigger` fires the mount's gun instead

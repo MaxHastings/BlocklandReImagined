@@ -161,10 +161,7 @@ fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<V
     buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
+    support::gpu::wait(&gpu.device, "the shadow frame")?;
     rx.recv_timeout(Duration::from_secs(5))??;
     let mapped = buffer
         .slice(..)
@@ -292,6 +289,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below(f: &ContentRoot) -> Re
     spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(next, spawn);
     world.next_brick_id = next + 1;

@@ -4,10 +4,7 @@ use bri_net::{
     dedicated,
     server::{self, ServerOptions},
 };
-use std::{
-    path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{path::PathBuf, time::Duration};
 /// mimalloc: the persistent world maps and replication allocate heavily.
 /// On a 200k-brick world it cut world build 17%, wire decode 20%, JSON
 /// load 16% and collider inserts 18% against the system allocator (Linux;
@@ -18,12 +15,15 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[tokio::main]
 async fn main() -> Result<()> {
     bri_net::allocator::tune();
+    // Watched from the start: a stop asked for while loading still saves.
+    let mut shutdown = dedicated::Shutdown::watch()?;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
         args.len() == 4 || args.len() == 5,
         "Usage: bri-server <content-root> <map | world.json | resume> <state-dir> <listen-address> [run-seconds]
          <map> starts an empty world on a base map by name (slate, bedroom, kitchen, slopes, ...).
-         `resume` continues from the newest world this server saved in <state-dir> when it last stopped.
+         `resume` continues from the newest world this server saved in <state-dir> when it last stopped
+         (or, after a crash, the world it kept for recovery).
          <state-dir>/server.json holds the admin passwords and server settings (written with defaults on first start).
          <listen-address> is usually 0.0.0.0:28000 (UDP).
          The content root's packages.json lists the packages to load (the base game's list and the default Add-Ons when absent)."
@@ -37,6 +37,14 @@ async fn main() -> Result<()> {
         println!("Installed the default Add-Ons {}.", done.ids().join(", "));
     }
     let state_dir = PathBuf::from(&args[2]);
+    std::fs::create_dir_all(&state_dir)?;
+    // The last run did not stop cleanly: what it kept is that run's world.
+    if let Some(world) = dedicated::adopt_recovery(&state_dir)? {
+        println!(
+            "The server did not stop cleanly last time; the world it kept is {} (`resume` continues from it).",
+            world.display()
+        );
+    }
     let start = args[1].to_string_lossy();
     let world_path = if start == "resume" {
         let newest = bri_world::persistence::newest_world(&state_dir)
@@ -66,9 +74,12 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let world = match &world_path {
-        Some(path) => bri_world::persistence::load_startup(path)?,
-        None => dedicated::blank_world(&content_root, &start)?,
+    let (world, minigame) = match &world_path {
+        Some(path) => {
+            let build = bri_world::persistence::load_startup(path)?;
+            (build.world, build.minigame)
+        }
+        None => (dedicated::blank_world(&content_root, &start)?, None),
     };
     let config = dedicated::ServerConfig::load_or_create(&state_dir)?;
     let map_name = world
@@ -98,6 +109,11 @@ async fn main() -> Result<()> {
     } = host;
     for note in &merge_notes {
         eprintln!("{note}");
+    }
+    let mut session = session;
+    // The mini-game it was saved with comes back for whoever ran it.
+    if let Some(minigame) = minigame {
+        session.hold_minigame(minigame);
     }
     let content_id = environment.digest();
     let initial_static_items = session.weapon_view().static_items.len();
@@ -133,7 +149,7 @@ async fn main() -> Result<()> {
     {
         eprintln!("Not listed on the LAN: {error:#}");
     }
-    std::fs::create_dir_all(&state_dir)?;
+    server.keep_recovery(server::Recovery::new(dedicated::recovery_path(&state_dir)))?;
     std::fs::write(state_dir.join("server-cert.der"), &server.certificate)?;
     std::fs::write(
         state_dir.join("host.json"),
@@ -162,12 +178,24 @@ async fn main() -> Result<()> {
     if let Some(seconds) = seconds {
         tokio::time::sleep(Duration::from_secs(seconds)).await;
     } else {
-        tokio::signal::ctrl_c().await?;
+        // A host that stopped by itself (it kept failing) is saved too.
+        let ended = async {
+            while !server.is_finished() {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        };
+        tokio::select! {
+            why = shutdown.requested() => println!("Stopping ({why}); saving the world."),
+            () = ended => println!("The server stopped by itself; saving the world."),
+        }
     }
-    let report = server.stop().await?;
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-    let save = state_dir.join(format!("world-{timestamp}.json"));
-    bri_world::persistence::save_new(&save, &report.native_world)?;
+    // The final world is saved however the host ended, before any error.
+    let report = server.finish().await?;
+    let save = dedicated::save_stopped(&state_dir, &report);
+    dedicated::shutdown_saved();
+    let save = save?;
+    // The saved world supersedes the recovery snapshot a failure kept.
+    let _ = std::fs::remove_file(dedicated::recovery_path(&state_dir));
     std::fs::write(
         state_dir.join("last-run.json"),
         serde_json::to_vec_pretty(
@@ -179,5 +207,8 @@ async fn main() -> Result<()> {
         report.ticks,
         save.display()
     );
+    if let Some(failure) = report.failure {
+        anyhow::bail!("The server stopped by itself: {failure}");
+    }
     Ok(())
 }

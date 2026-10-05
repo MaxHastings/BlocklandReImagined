@@ -136,6 +136,7 @@ impl Game {
         brick.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(fixture::BOT.into()),
             recolor: false,
+            team: None,
         }));
         let mut world = World::new("Knowledge".into(), "chaos/map".into(), vec![[1.0; 4]]);
         world.bricks.insert(1, brick);
@@ -546,7 +547,10 @@ fn removing_a_rules_bot_releases_its_reservation_before_the_lease_expires() {
     })
     .unwrap();
     s.install_packages(rules_catalog(), None).unwrap();
-    let human = s.join("Reservation target".into(), SEEN, true).unwrap();
+    // Far enough off that walking to the cart, boarding and driving gets
+    // there sooner than walking: only then does the seat serve the chase.
+    let far = HOME + Vec3::new(0.0, -0.05, 36.0);
+    let human = s.join("Reservation target".into(), far, true).unwrap();
     let mut brick = Brick::new(
         ContentRef::Resolved(fixture::PLATE.into()),
         (HOME + Vec3::new(8.25, 0.0, 0.25)).to_array(),
@@ -555,6 +559,7 @@ fn removing_a_rules_bot_releases_its_reservation_before_the_lease_expires() {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(CART.into()),
         recolor: false,
+        team: None,
     }));
     let mut world = World::new("Reservations".into(), "chaos/map".into(), vec![[1.0; 4]]);
     world.bricks.insert(1, brick);
@@ -574,6 +579,7 @@ fn removing_a_rules_bot_releases_its_reservation_before_the_lease_expires() {
     );
     g.steps(5);
     assert_eq!(g.s.simulation().state().bricks.len(), 1);
+    g.s.set_spawn_points(vec![far]).unwrap();
     g.send(
         human,
         Command::MiniGame(MiniGameRequest::Create {

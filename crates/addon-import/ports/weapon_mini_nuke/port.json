@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "notes": "The launcher rests on the shoulder with both arms up. onMount raises both arms (armReadyBoth) and onUnMount plays root, which lowers them; the image's both_arms holds both arms up while it is held and lets them go when it goes. onUnMount calls Parent::onMount, not Parent::onUnMount: that only sets the emptied slot's ammo and skips the stock thread-2 root, and the launcher plays nothing on thread 2, so a player sees no difference. Everything else (the shot, the missile, the blast, its brick damage, debris, light, shake and sounds) is the Add-On's own data.",
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "weapon_mini_nuke:image/mininukelauncherimage": {
+          "both_arms": true
+        }
+      }
+    }
+  }
+}

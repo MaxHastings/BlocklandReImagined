@@ -3,6 +3,7 @@
 //! cues and advance. The host provides animated attachment poses and consumes
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::Passages;
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
@@ -203,6 +204,41 @@ impl WeaponEffects {
             if let Some(symbol) = c.id.strip_prefix("v20/explosion/") {
                 insert_binding(&mut bindings, symbol, &c.id, Kind::Composite)?;
             }
+        }
+        // An Add-On's emitters and lights are named by their datablock
+        // names too, as v20's global datablock names are: another Add-On
+        // naming one it depends on (Tier+Tactical Tier 2's tracers trail
+        // Tier 1's pistolTrailEmitter) gets it. The first keeps a name.
+        for (id, kind) in weapons
+            .effects
+            .emitters
+            .iter()
+            .filter(|e| pack.library.emitters.iter().any(|x| x.id == e.id))
+            .map(|e| (&e.id, Kind::Emitter))
+            .chain(
+                weapons
+                    .effects
+                    .lights
+                    .iter()
+                    .filter(|l| pack.library.lights.iter().any(|x| x.id == l.id))
+                    // An explosion's light is part of its `ExplosionData`,
+                    // not a datablock of its own: its symbol is the
+                    // explosion's name, which the explosion keeps.
+                    .filter(|l| {
+                        !weapons
+                            .effects
+                            .explosions
+                            .iter()
+                            .any(|x| x.light.as_ref() == Some(&l.id))
+                    })
+                    .map(|l| (&l.id, Kind::Light)),
+            )
+        {
+            let symbol = bri_weapons::effect_symbol(id).to_ascii_lowercase();
+            bindings.entry(symbol).or_insert(Binding {
+                id: id.clone(),
+                kind,
+            });
         }
         // An Add-On's explosion is named by its explosion's name, as the
         // base game's are; where that name is taken, the first keeps it.
@@ -478,7 +514,7 @@ impl WeaponEffects {
             let options = SourceOptions {
                 paint: paint
                     .and_then(|p| self.palette.get(usize::from(p)))
-                    .map(|c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.))),
+                    .map(|c| [c[0], c[1], c[2]].map(|v| v.clamped(0., 1.))),
                 ..Default::default()
             };
             match self
@@ -549,7 +585,7 @@ impl WeaponEffects {
         for (owner, (resource, r, speed)) in desired {
             let length = r.from.distance(r.to);
             let options = SourceOptions {
-                time_scale: (length / (speed * dt.max(1e-3))).clamp(1e-3, 1000.),
+                time_scale: (length / (speed * dt.max(1e-3))).clamped(1e-3, 1000.),
                 ..SourceOptions::default()
             };
             let place = |position: Vec3| SourceTransform {
@@ -757,7 +793,7 @@ impl WeaponEffects {
 /// its authored blend.
 fn paint_recolor(color: [f32; 4], explosion: bool) -> Recolor {
     let opaque = color[3] > 0.99;
-    let mut rgb = [color[0], color[1], color[2]].map(|c| c.clamp(0., 1.));
+    let mut rgb = [color[0], color[1], color[2]].map(|c| c.clamped(0., 1.));
     if !opaque && rgb.iter().all(|c| *c < 8. / 255.) {
         rgb = [8. / 255.; 3];
     }
@@ -811,6 +847,8 @@ fn insert_binding(
 /// effect texture is a layer of one array as large as the largest.
 pub const ADD_ON_TEXTURES: usize = 64;
 pub const ADD_ON_TEXTURE_SIDE: u32 = 256;
+/// What a particle draws when its texture does not load.
+pub const MISSING_PARTICLE_TEXTURE: &str = "base/data/particles/cloud";
 
 /// The textures an Add-On's particles draw that the effects pack lacks,
 /// from `texture` (keyed as the particle names it), each fitted within
@@ -935,6 +973,17 @@ fn add_pack_effects(
         }
         if library.textures.contains_key(&p.texture) {
             library.particles.push(p.clone());
+        } else if library.textures.contains_key(MISSING_PARTICLE_TEXTURE) {
+            // v20's `ParticleData` preload (0x558c60) loads the cloud
+            // whenever a named texture does not load, and never fails.
+            notes.push(format!(
+                "{}: texture {} is missing, so it draws {MISSING_PARTICLE_TEXTURE} as v20 did",
+                p.id, p.texture
+            ));
+            library.particles.push(bri_content::effects::Particle {
+                texture: MISSING_PARTICLE_TEXTURE.into(),
+                ..p.clone()
+            });
         } else {
             fault(
                 notes,

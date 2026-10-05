@@ -74,7 +74,7 @@ fn other_file(listed: &Entry, source: &Path) -> bool {
         stem(listed) != stem(source)
     })
 }
-fn modified_date(seconds: u64) -> String {
+pub(crate) fn modified_date(seconds: u64) -> String {
     // Gregorian calendar in March-based 400-year eras. Fixed-width UTC text
     // keeps the existing UI's lexicographic date sort chronological.
     let days = seconds / 86400 + 719468;
@@ -115,7 +115,19 @@ impl Store {
             map_names,
             old,
         };
-        for world in &content.worlds {
+        // The converted originals, then the builds made for this game that
+        // ship beside them in the worlds pack.
+        let templates = content
+            .worlds
+            .iter()
+            .map(|w| (w, "Converted original", "Original converted build"))
+            .chain(
+                content
+                    .bundled_saves
+                    .iter()
+                    .map(|w| (w, "Bundled build", "Made for Blockland ReImagined")),
+            );
+        for (world, modified, description) in templates {
             let Some(name) = v20_save_name(&world.name) else {
                 continue;
             };
@@ -123,8 +135,8 @@ impl Store {
                 info: SaveFileInfo {
                     name,
                     map: store.map_name(&world.map_id),
-                    modified: "Converted original".into(),
-                    description: "Original converted build".into(),
+                    modified: modified.into(),
+                    description: description.into(),
                     brick_count: Some(world.brick_count as u32),
                     damaged: false,
                 },
@@ -457,6 +469,9 @@ pub struct Request {
     pub session: Option<RequestId>,
     pub action: UiAction,
     pub build: Option<Box<SavedBuild>>,
+    /// A Save Bricks write: the world revision its build was taken at
+    /// (when the host's answer came), which the save covers once written.
+    pub revision: Option<u64>,
 }
 pub enum Outcome {
     Listed(Vec<Entry>),
@@ -774,7 +789,7 @@ mod tests {
             vec!["Second"]
         );
         assert_eq!(
-            bri_world::persistence::load_startup(&saved_path)?,
+            bri_world::persistence::load_startup(&saved_path)?.world,
             store.load("Map", "Original.world.json")?.world
         );
         assert!(

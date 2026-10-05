@@ -1334,7 +1334,7 @@ fn imported_v20_add_ons_play() -> Result<()> {
         "The dropped zip is not listed as converting"
     );
     // The Add-Ons folder's worker, which opening Add-Ons starts.
-    let notes = bri_client::add_ons::start_sync(&root, &importer)?;
+    let notes = bri_client::add_ons::start_sync(&root, &importer, false)?;
     let notice = loop {
         let note = notes.recv_timeout(Duration::from_secs(300))?;
         println!("sync: {note:?}");
@@ -1652,6 +1652,7 @@ fn jeep_save(host_state: &Path, app: &App) -> Result<(String, String)> {
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("v20.vehicle.jeepvehicle".into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

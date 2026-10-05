@@ -95,6 +95,10 @@ pub struct ClientContent<P = Rc<Pack>> {
     pub paint: Vec<PaintDivision>,
     pub datablocks: DatablockMenus,
     pub worlds: Vec<WorldEntry>,
+    /// Builds made for this game that ship with it (the repository's
+    /// `saves/<Map>/`, carried in the worlds pack): Load Bricks lists them
+    /// beside the converted originals.
+    pub bundled_saves: Vec<WorldEntry>,
     pub effects: Library,
     pub weapons: bri_net::content_identity::WeaponContent,
     pub item_physics: bri_net::content_identity::ItemPhysicsContent,
@@ -120,6 +124,7 @@ impl<P> ClientContent<P> {
             paint,
             datablocks,
             worlds,
+            bundled_saves,
             effects,
             weapons,
             item_physics,
@@ -139,6 +144,7 @@ impl<P> ClientContent<P> {
             paint,
             datablocks,
             worlds,
+            bundled_saves,
             effects,
             weapons,
             item_physics,
@@ -202,6 +208,10 @@ struct MeshEntry {
 struct WorldReport {
     schema_version: u32,
     saves: Vec<WorldRecord>,
+    /// Builds made for this game, copied in as they are (`import_saves`'s
+    /// bundled folder); absent from a pack made before they shipped.
+    #[serde(default)]
+    bundled: Vec<WorldRecord>,
 }
 #[derive(Deserialize)]
 struct WorldRecord {
@@ -646,6 +656,7 @@ impl ClientContent {
                 .collect(),
         );
         let worlds = world_index(&paths.worlds)?;
+        let bundled_saves = bundled_index(&paths.worlds)?;
         if !bundle.unresolved_textures.is_empty() {
             warnings.push(format!(
                 "Map bundle reports {} unresolved textures",
@@ -675,6 +686,7 @@ impl ClientContent {
             paint,
             datablocks,
             worlds,
+            bundled_saves,
             effects,
             weapons,
             item_physics,
@@ -1157,15 +1169,34 @@ pub fn map_for_save_folder(folder: &str) -> Option<&'static str> {
     })
 }
 
+/// The bundled builds of a worlds pack (`WorldReport::bundled`): native
+/// builds made for this game, each named after its file in a map's save
+/// folder (`Slate/Soccer 2v2.world.json`).
+fn bundled_index(root: &Path) -> Result<Vec<WorldEntry>> {
+    let report: WorldReport = read_json(&file(root, "report.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
+    entries(root, report.bundled, ".world.json", "bri/build")
+}
+
 fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
     let report: WorldReport = read_json(&file(root, "report.json", INDEX_LIMIT)?, INDEX_LIMIT)?;
     ensure!(
         report.schema_version == 1,
         "Unsupported reference-world index schema"
     );
+    entries(root, report.saves, ".bls", "v20/world")
+}
+
+/// A worlds pack's records as Load Bricks entries: each source is
+/// `<map save folder>/<name><suffix>`, its id `<prefix>/<folder>/<name>`.
+fn entries(
+    root: &Path,
+    records: Vec<WorldRecord>,
+    suffix: &str,
+    prefix: &str,
+) -> Result<Vec<WorldEntry>> {
     let mut ids = BTreeSet::new();
     let mut out = Vec::new();
-    for entry in report.saves {
+    for entry in records {
         relative_name(&entry.source)?;
         ensure!(
             entry.file.ends_with(".world.json") && entry.bricks <= bri_world::MAX_BRICKS,
@@ -1177,11 +1208,11 @@ fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
             .split_once('/')
             .context("Reference-world source lacks map folder")?;
         let name = name
-            .strip_suffix(".bls")
-            .context("Reference-world source lacks BLS provenance suffix")?;
+            .strip_suffix(suffix)
+            .with_context(|| format!("Reference-world source lacks its {suffix} suffix"))?;
         let map_id = map_for_save_folder(folder).unwrap_or("").to_string();
         let id = format!(
-            "v20/world/{}/{}",
+            "{prefix}/{}/{}",
             folder.to_ascii_lowercase(),
             name.to_ascii_lowercase()
         );
@@ -1335,6 +1366,35 @@ mod tests {
         assert_eq!(index[1].map_id, LOADABLE_MAPS[3]);
         assert!(!index[2].loadable);
         assert!(bri_world::persistence::load(&fixture.0.join(&index[0].file)).is_err());
+    }
+
+    #[test]
+    fn bundled_builds_are_indexed_apart_from_the_converted_originals() {
+        let fixture = Fixture::new();
+        fs::write(fixture.0.join("field.world.json"), b"not decoded").unwrap();
+        fs::write(
+            fixture.0.join("report.json"),
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,
+                "saves":[{"source":"Bedroom/Example.bls","file":"field.world.json","bricks":1}],
+                "bundled":[{"source":"Slate/Soccer 2v2.world.json","file":"field.world.json","bricks":90}]}))
+            .unwrap(),
+        )
+        .unwrap();
+        let originals = world_index(&fixture.0).unwrap();
+        assert_eq!(originals.len(), 1);
+        let bundled = bundled_index(&fixture.0).unwrap();
+        assert_eq!(bundled.len(), 1);
+        assert_eq!(bundled[0].id, "bri/build/slate/soccer 2v2");
+        assert_eq!(bundled[0].name, "Soccer 2v2");
+        assert_eq!(bundled[0].map_id, LOADABLE_MAPS[3]);
+        assert_eq!(bundled[0].brick_count, 90);
+        // A pack made before builds shipped has none.
+        fs::write(
+            fixture.0.join("report.json"),
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,"saves":[]})).unwrap(),
+        )
+        .unwrap();
+        assert!(bundled_index(&fixture.0).unwrap().is_empty());
     }
 
     #[test]

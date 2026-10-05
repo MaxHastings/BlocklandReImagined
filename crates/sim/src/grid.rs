@@ -37,6 +37,24 @@ impl Bounds {
         }
         Ok(Self { min, size })
     }
+    /// The position nearest `position` at which a brick of `mesh`, turned
+    /// `quarter_turns`, sits on the stud and plate grid: the same position
+    /// when it already does.
+    pub fn snapped(position: [f32; 3], quarter_turns: u8, mesh: &Mesh) -> [f32; 3] {
+        let [w, d] = mesh.footprint_studs.map(f64::from);
+        let h = f64::from(mesh.height_plates);
+        let size = if quarter_turns.is_multiple_of(2) {
+            [w, h, d]
+        } else {
+            [d, h, w]
+        };
+        std::array::from_fn(|axis| {
+            let cell = [0.5_f64, 0.2, 0.5][axis];
+            let half = size[axis] * cell * 0.5;
+            let lower = f64::from(position[axis]) - half;
+            ((lower / cell).round() * cell + half) as f32
+        })
+    }
     pub fn max(self) -> [i32; 3] {
         std::array::from_fn(|a| self.min[a] + self.size[a])
     }
@@ -334,6 +352,47 @@ impl Index {
             }
         }
     }
+    /// [`Self::remove`] for many bricks at once: each bucket they leave is
+    /// filtered once, not shifted once per brick (a blast through a big
+    /// build changes thousands of bricks in one update).
+    pub fn remove_many(&mut self, ids: impl IntoIterator<Item = BrickId>) {
+        let mut leaving: FxHashMap<(i32, i32, i32), Vec<BrickId>> = FxHashMap::default();
+        for id in ids {
+            if let Some(bounds) = self.bounds.remove(id) {
+                for key in keys(bounds) {
+                    leaving.entry(key).or_default().push(id);
+                }
+            }
+        }
+        for (key, mut ids) in leaving {
+            let Some(bucket) = self.buckets.get_mut(&key) else {
+                continue;
+            };
+            ids.sort_unstable();
+            bucket.retain(|(id, _)| ids.binary_search(id).is_err());
+            if bucket.is_empty() {
+                self.buckets.remove(&key);
+            }
+        }
+    }
+    /// [`Self::insert`] for many bricks at once; a brick named twice keeps
+    /// its last bounds. Each bucket they join is sorted once.
+    pub fn insert_many(&mut self, bricks: impl IntoIterator<Item = (BrickId, Bounds)>) {
+        let bricks: FxHashMap<BrickId, Bounds> = bricks.into_iter().collect();
+        self.remove_many(bricks.keys().copied());
+        let mut joining: FxHashMap<(i32, i32, i32), Vec<(BrickId, Bounds)>> = FxHashMap::default();
+        for (&id, &bounds) in &bricks {
+            for key in keys(bounds) {
+                joining.entry(key).or_default().push((id, bounds));
+            }
+            self.bounds.insert(id, bounds);
+        }
+        for (key, new) in joining {
+            let bucket = self.buckets.entry(key).or_default();
+            bucket.extend(new);
+            bucket.sort_unstable_by_key(|(id, _)| *id);
+        }
+    }
     pub fn query(&self, bounds: Bounds) -> BTreeSet<BrickId> {
         let mut out = BTreeSet::new();
         self.any(bounds, |id| {
@@ -417,6 +476,25 @@ impl Index {
 mod tests {
     use super::*;
     use bri_world::ContentRef;
+    /// A brick saved off its grid (a save made where it had another size)
+    /// moves to the nearest grid position, under half a cell; one on it
+    /// stays put, turned or not.
+    #[test]
+    fn a_brick_off_its_grid_snaps_to_the_nearest_cell() {
+        let odd = crate::testing::definition("odd", [3, 5], 2, Default::default(), false).mesh;
+        assert!(Bounds::at([0.0, 0.1, 0.0], 0, &odd).is_err());
+        let snapped = Bounds::snapped([0.0, 0.1, 0.0], 0, &odd);
+        assert!(Bounds::at(snapped, 0, &odd).is_ok(), "{snapped:?}");
+        for axis in 0..3 {
+            let moved = (snapped[axis] - [0.0, 0.1, 0.0][axis]).abs();
+            assert!(moved <= [0.25, 0.1, 0.25][axis] + 1e-6, "{snapped:?}");
+        }
+        let turned = Bounds::snapped([0.0, 0.1, 0.0], 1, &odd);
+        assert!(Bounds::at(turned, 1, &odd).is_ok(), "{turned:?}");
+        let on = [0.25, 0.2, 0.75];
+        assert!(Bounds::at(on, 0, &odd).is_ok());
+        assert_eq!(Bounds::snapped(on, 0, &odd), on);
+    }
     #[test]
     fn faces_are_shared_side_by_side_and_stacked_never_at_edges() {
         let b = |min: [i32; 3], size: [i32; 3]| Bounds { min, size };
@@ -430,6 +508,56 @@ mod tests {
         assert!(!share_face(plate, b([2, 1, 0], [1, 1, 1])));
         assert!(!share_face(plate, b([2, 1, 1], [1, 1, 1])));
         assert!(!share_face(plate, b([1, 0, 0], [2, 1, 1])));
+    }
+    /// Removing and inserting thousands of bricks at once (a blast through a
+    /// big build) leaves the index exactly as one brick at a time does.
+    #[test]
+    fn batched_changes_match_one_brick_at_a_time() {
+        let bounds = |id: u64| Bounds {
+            min: [
+                (id % 40) as i32 * 2,
+                (id / 1600) as i32 * 3,
+                ((id / 40) % 40) as i32 * 2,
+            ],
+            size: [2 + (id % 3) as i32 * 16, 3, 2],
+        };
+        let (mut one, mut many) = (Index::default(), Index::default());
+        for id in 1..=4000 {
+            one.insert(id, bounds(id));
+        }
+        many.insert_many((1..=4000).map(|id| (id, bounds(id))));
+        let gone: Vec<u64> = (1..=4000).filter(|id| id % 3 != 0).collect();
+        for id in &gone {
+            one.remove(*id);
+        }
+        many.remove_many(gone.iter().copied());
+        // Back with new bounds, one named twice: the last wins.
+        let back: Vec<(u64, Bounds)> = gone
+            .iter()
+            .step_by(2)
+            .map(|id| (*id, bounds(id + 7)))
+            .chain([(1, bounds(99))])
+            .collect();
+        for (id, b) in &back {
+            one.insert(*id, *b);
+        }
+        many.insert_many(back);
+        let everywhere = Bounds {
+            min: [-10, -10, -10],
+            size: [200, 50, 200],
+        };
+        assert_eq!(one.query(everywhere), many.query(everywhere));
+        for id in 1..=4000 {
+            assert_eq!(one.bounds.get(id), many.bounds.get(id), "brick {id}");
+        }
+        let mut keys: Vec<_> = one.buckets.keys().collect();
+        keys.sort();
+        let mut other: Vec<_> = many.buckets.keys().collect();
+        other.sort();
+        assert_eq!(keys, other);
+        for key in keys {
+            assert_eq!(one.buckets[key], many.buckets[key]);
+        }
     }
     #[test]
     fn sparse_large_query_uses_occupied_buckets_and_exact_bounds() {

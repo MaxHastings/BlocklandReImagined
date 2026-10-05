@@ -5,6 +5,7 @@
 //! cannot place stops the port with its name.
 use super::datablocks::{Datablocks, id_of, set};
 use anyhow::{Context, Result, bail, ensure};
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -590,7 +591,7 @@ pub fn limit_ray_damage(patch: &mut Value, limit: f32) {
         if let Some(damage) = shot.pointer_mut("/hitscan/damage")
             && let Some(d) = damage.as_f64()
         {
-            *damage = json!((d as f32).clamp(-limit, limit));
+            *damage = json!((d as f32).clamped(-limit, limit));
         }
     };
     for image in patch["images"]
@@ -687,7 +688,7 @@ pub fn hitscans(
         }
         let mut damage = number(name, &Some(h.damage.clone()))?.unwrap_or(0.0);
         if let Some(limit) = h.damage_limit {
-            damage = damage.clamp(-limit, limit);
+            damage = damage.clamped(-limit, limit);
         }
         let damage_type = blocks.field(name, &h.damage_type).unwrap_or_default();
         // The ray is the image's own projectile carrying the image's hit.

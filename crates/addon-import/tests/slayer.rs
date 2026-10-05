@@ -55,7 +55,12 @@ const CP: &str = "gamemode_slayer:brick/brickslyrcpdata";
 const CP_TICK: usize = 12;
 const REGION: &str = "gamemode_slayer:brick/brickslyrregionboundarydata";
 const PATH_NODE: &str = "gamemode_slayer:brick/brickslyrbotpathnodedata";
+/// A plain plate, the bulk of a big build.
+const PLAIN: &str = "test:brick/plain";
 const CP_POINTS: i64 = 7;
+/// Plain plates for a soccer pitch: a ball spawn and goals.
+const BALL_SPAWN: &str = "test:brick/ballspawn";
+const GOAL: &str = "test:brick/goal";
 const RECOVERY_POINTS: i64 = 5;
 
 fn fixture(name: &str) -> PathBuf {
@@ -64,9 +69,17 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// An Add-On with as many settings as one may declare, each with as long a
+/// key as one may have, for a server running far more Add-Ons than Max.
+const FILLER: &str = "filler_add_on_with_many_settings";
+fn filler_key(i: usize) -> String {
+    format!("{FILLER}:a_rather_long_setting_key_for_filler_number_{i:03}")
+}
+
 /// The imports, their host rules, and a probe that moves players and reads
-/// their teams.
-fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
+/// their teams; with `long_names`, Slayer's first-names list as long as
+/// the real one, and with `many`, [`FILLER`] too.
+fn content(root: &Path, long_names: bool, many: bool) -> (Arc<Catalog>, bri_weapons::Pack) {
     let ports = Ports::builtin();
     let mut ids = vec![];
     for (addon, ns) in [
@@ -89,13 +102,30 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         ids.push((ns.to_owned(), Side::Shared));
         ids.push((rules.id.clone(), Side::Server));
     }
+    if long_names {
+        // As long as Slayer's own first-names.txt (36 KB): far more text
+        // than a script may hold at once.
+        let names: String = (0..5000)
+            .map(|i| {
+                format!(
+                    "Name{i}
+"
+                )
+            })
+            .collect();
+        std::fs::write(
+            root.join("addons/gamemode_slayer-rules/data/first_names.txt"),
+            names,
+        )
+        .unwrap();
+    }
     let probe = root.join("probe");
     std::fs::create_dir_all(&probe).unwrap();
     std::fs::write(
         probe.join("package.json"),
         r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
              "name": "Probe", "license": "CC0-1.0",
-             "capabilities": ["player", "brick_events", "world.edit", "damage"],
+             "capabilities": ["player", "brick_events", "world.edit", "damage", "physics"],
              "provides": [
                { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
                { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" } ] }"#,
@@ -111,9 +141,13 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
                            { "name": "poke", "args": ["int"] },
                            { "name": "unstock", "args": ["int"] },
                            { "name": "strip", "args": ["int"] },
-                           { "name": "kill", "args": ["int"] } ],
+                           { "name": "kill", "args": ["int"] },
+                           { "name": "hurts", "args": ["int", "int"] },
+                           { "name": "kill_by", "args": ["int", "int"] },
+                           { "name": "kick", "args": ["int", "float", "float", "float"] } ],
              "state": { "global": { "colours": { "default": {}, "visible": "everyone" },
-                                    "kits": { "default": {}, "visible": "everyone" } } } }"#,
+                                    "kits": { "default": {}, "visible": "everyone" },
+                                    "hurts": { "default": {}, "visible": "everyone" } } } }"#,
     )
     .unwrap();
     std::fs::write(
@@ -130,17 +164,49 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
          fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n\
          fn cmd_unstock(p, brick) { set_brick_item(brick, ()); }\n\
          fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n\
-         fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n",
+         fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n\
+         fn cmd_hurts(p, a, b) { let h = get(\"hurts\"); h[`${a}:${b}`] = can_damage(a, b); set(\"hurts\", h); }\n\
+         fn cmd_kill_by(p, a, t) { damage(t, 1000.0, a); }\n\
+         fn cmd_kick(p, v, x, y, z) { push(`vehicle:${v}`, x, y, z, p); }\n",
     )
     .unwrap();
     ids.push(("probe".into(), Side::Server));
+    if many {
+        let dir = root.join(FILLER);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            serde_json::json!({ "schema_version": 1, "id": FILLER, "version": "1.0.0", "api": 1,
+                "name": "Filler", "license": "CC0-1.0", "capabilities": [],
+                "provides": [
+                    { "kind": "behaviour", "id": format!("{FILLER}:behaviour/main"), "file": "behaviour.json" },
+                    { "kind": "script", "id": format!("{FILLER}:script/main"), "file": "main.rhai" } ] })
+            .to_string(),
+        )
+        .unwrap();
+        let settings: Vec<_> = (0..bri_package::setting::MAX_SETTINGS)
+            .map(|i| {
+                let key = filler_key(i);
+                serde_json::json!({ "key": key.split_once(':').unwrap().1,
+                    "title": format!("Filler {i}"), "type": "int", "default": 0, "min": 0, "max": 9 })
+            })
+            .collect();
+        std::fs::write(
+            dir.join("behaviour.json"),
+            serde_json::json!({ "schema_version": 1, "script": "main.rhai", "settings": settings })
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.rhai"), "fn unused() {}\n").unwrap();
+        ids.push((FILLER.into(), Side::Server));
+    }
     let set = PackageSet {
         schema_version: 1,
         packages: ids
             .into_iter()
             .map(|(id, side)| PackageEntry {
-                dir: if id == "probe" {
-                    "probe".into()
+                dir: if id == "probe" || id == FILLER {
+                    id.clone()
                 } else {
                     format!("addons/{id}")
                 },
@@ -205,6 +271,9 @@ fn definitions() -> Definitions {
             plate(CP, Special::None),
             plate(REGION, Special::None),
             plate(PATH_NODE, Special::None),
+            plate(PLAIN, Special::None),
+            plate(BALL_SPAWN, Special::None),
+            plate(GOAL, Special::None),
         ]
         .into(),
     }
@@ -277,10 +346,22 @@ impl Drop for Root {
 
 impl Game {
     fn new(name: &str) -> Self {
+        Self::with(name, false, false)
+    }
+    /// [`Game::new`], Slayer's first-names list as long as the real one
+    /// when `long_names`.
+    fn with_names(name: &str, long_names: bool) -> Self {
+        Self::with(name, long_names, false)
+    }
+    /// With [`FILLER`]'s settings as well.
+    fn with_many_add_ons(name: &str) -> Self {
+        Self::with(name, false, true)
+    }
+    fn with(name: &str, long_names: bool, many: bool) -> Self {
         let root =
             Root(std::env::temp_dir().join(format!("bri-slayer-{}-{name}", std::process::id())));
         let _ = std::fs::remove_dir_all(&root.0);
-        let (catalog, pack) = content(&root.0);
+        let (catalog, pack) = content(&root.0, long_names, many);
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
@@ -293,6 +374,8 @@ impl Game {
                         [0.9, 0.1, 0.1, 1.0],
                         [0.2, 0.4, 1.0, 1.0],
                         [0.1, 0.8, 0.1, 1.0],
+                        [0.9, 0.9, 0.1, 1.0],
+                        [0.6, 0.2, 0.8, 1.0],
                     ],
                 ),
                 definitions(),
@@ -2073,6 +2156,28 @@ const SKINS: [[f32; 4]; 5] = [
 ];
 const STANDARD: &str = "v20.player.playerstandardarmor";
 
+/// Change Map ends the mini-game: the new map's players wear their own
+/// avatars, not the team uniform an Add-On put on them on the old one.
+#[test]
+fn a_map_change_takes_off_the_old_maps_uniform() {
+    let mut g = Game::new("uniform-map-change");
+    let own = {
+        let a =
+            g.s.join("Solo".into(), Vec3::new(0.0, 0.05, 25.0), false)
+                .unwrap();
+        g.s.avatars()[&a].clone()
+    };
+    let (red, _blue) = two_teams(&mut g);
+    assert_ne!(g.s.avatars()[&red], own, "the team uniform is on");
+    let mut next = Game::new("uniform-map-change-next");
+    next.s.adopt(g.s, red).unwrap();
+    assert_eq!(
+        next.s.avatars()[&red],
+        own,
+        "the old map's uniform followed the player to the new map"
+    );
+}
+
 #[test]
 fn teams_dress_their_members_and_give_them_their_kit() {
     let mut g = Game::new("uniforms");
@@ -2328,15 +2433,23 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     g.set_team(owner, BLUE, &[(&fill, Value::Int(2))]);
     g.steps(4);
     assert_eq!(bots_by_team(&g), (1, 1, 0));
+    // Each named by a line's first word, cut to fit: the fixture's lines
+    // carry census columns, a tab and a name too long for a bot.
     let names = g.s.names();
     for (o, _) in g.s.vitals() {
         if g.s.is_bot(o) {
+            let name = &names[&o];
             assert!(
-                ["Quill", "Marrow", "Tansy", "Orrin", "Willet"]
-                    .iter()
-                    .any(|n| names[&o].starts_with(&format!("Bot {n}"))),
-                "{}",
-                names[&o]
+                [
+                    "Bot Quill",
+                    "Bot Marrow",
+                    "Bot Tansy",
+                    "Bot Orrin",
+                    "Bot Willetsworthington-"
+                ]
+                .iter()
+                .any(|n| name == n || name.strip_prefix(n).is_some_and(|r| r.starts_with(' '))),
+                "{name}"
             );
             assert!(g.s.vitals()[&o].alive);
         }
@@ -2383,6 +2496,783 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     );
     g.steps(4);
     assert_eq!(bots_by_team(&g), (0, 0, 0));
+    g.quiet();
+}
+
+/// The Mini-Game window's Save & Reset, as `minigame_addons` sends it:
+/// every team's Preferred Player Count, the game's settings and the reset
+/// in one request, with the Blockhead Bot Add-On's bots as an enabled
+/// Add-On provides them and team spawns on each side. Both teams fill.
+#[test]
+fn save_and_reset_with_both_teams_counts_fills_them_with_bots() {
+    let mut g = Game::new("bots-save-reset");
+    // Before anyone joins, as a host installs its Add-Ons' bot kinds.
+    let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/blockhead_bot/assets")
+        .canonicalize()
+        .unwrap();
+    let kinds =
+        bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
+            .unwrap();
+    g.s.set_bot_kinds(kinds).unwrap();
+    two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    for i in 0..4 {
+        let z = i as f32 * 3.0 - 4.5;
+        g.plant(owner, TEAM_SPAWN, -15.5, z, RED);
+        g.plant(owner, TEAM_SPAWN, 15.5, z, BLUE);
+    }
+    let fill = key(SLAYER, "team_bot_fill");
+    let view = g.s.minigame_views()[0].clone();
+    let teams = view
+        .teams
+        .iter()
+        .map(|t| TeamEdit {
+            id: Some(t.id.0),
+            name: t.name.clone(),
+            color: t.color,
+            settings: vec![SettingEdit {
+                key: fill.clone(),
+                value: Some(Value::Int(2)),
+            }],
+        })
+        .collect();
+    g.s.take_private_notices();
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::AddOnSettings {
+            quiet: false,
+            reset: true,
+            game: view.id,
+            settings: vec![SettingEdit {
+                key: key(SLAYER, "mode"),
+                value: Some(Value::Text(TEAM_MODE.into())),
+            }],
+            teams: Some(teams),
+        }),
+    )
+    .unwrap();
+    g.steps(4);
+    let notices = g.s.take_private_notices();
+    assert_eq!(bots_by_team(&g), (1, 1, 0), "{notices:?}");
+    // Through the new round's start as well.
+    g.steps(BETWEEN_ROUNDS * 120 + 240);
+    assert_eq!(bots_by_team(&g), (1, 1, 0));
+    g.quiet();
+}
+
+/// A host alone in a Deathmatch game (Slayer's default mode) with the
+/// Blockhead Bot Add-On's bots, as an enabled Add-On provides them;
+/// returns the host.
+fn host_alone_in_deathmatch(g: &mut Game) -> OwnerId {
+    let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/blockhead_bot/assets")
+        .canonicalize()
+        .unwrap();
+    let kinds =
+        bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
+            .unwrap();
+    g.s.set_bot_kinds(kinds).unwrap();
+    let max =
+        g.s.join("Max".into(), Vec3::new(0.0, 0.05, 20.0), true)
+            .unwrap();
+    g.cmd(
+        max,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    max
+}
+
+/// A host alone in a Team Deathmatch game with the Blockhead Bot Add-On's
+/// bots, as an enabled Add-On provides them; returns the host.
+fn host_alone_in_team_deathmatch(g: &mut Game) -> OwnerId {
+    let max = host_alone_in_deathmatch(g);
+    g.set(
+        max,
+        &[(&key(SLAYER, "mode"), Value::Text(TEAM_MODE.into()))],
+    );
+    max
+}
+
+/// This game's Slayer bots: (without a team, on one).
+fn free_and_team_bots(g: &Game) -> (Vec<OwnerId>, usize) {
+    let mut free = vec![];
+    let mut teamed = 0;
+    for (owner, v) in g.s.vitals() {
+        if g.s.is_bot(owner) {
+            match v.team {
+                None => free.push(owner),
+                Some(_) => teamed += 1,
+            }
+        }
+    }
+    (free, teamed)
+}
+
+/// Ours, not Slayer's: in Deathmatch, Bots (free-for-all) keeps that many
+/// teamless bots in the game. Each is everyone's enemy, so they hurt each
+/// other and a kill scores; a count of 0 takes them away.
+#[test]
+fn deathmatch_bots_fill_the_game_with_everyones_enemies() {
+    let mut g = Game::new("bots-ffa");
+    let max = host_alone_in_deathmatch(&mut g);
+    assert_eq!(free_and_team_bots(&g), (vec![], 0), "none by default");
+    let ffa = key(SLAYER, "ffa_bots");
+    g.set(max, &[(&ffa, Value::Int(4))]);
+    g.steps(4);
+    let (bots, teamed) = free_and_team_bots(&g);
+    assert_eq!((bots.len(), teamed), (4, 0));
+    assert!(g.s.vitals().values().all(|v| v.team.is_none()));
+    // Past their spawn protection.
+    g.steps(310);
+    let (a, b) = (bots[0], bots[1]);
+    g.run(
+        max,
+        "probe",
+        "hurts",
+        vec![PackageArg::Int(a as i64), PackageArg::Int(b as i64)],
+    );
+    let hurts =
+        g.s.package_state()
+            .packages
+            .get("probe")
+            .and_then(|ns| ns.global.get("hurts").cloned())
+            .and_then(|h| h.get(format!("{a}:{b}")).cloned());
+    assert_eq!(hurts, Some(serde_json::Value::Bool(true)), "enemies");
+    let before = g.score(a);
+    g.run(
+        max,
+        "probe",
+        "kill_by",
+        vec![PackageArg::Int(a as i64), PackageArg::Int(b as i64)],
+    );
+    g.steps(2);
+    assert!(!g.s.vitals()[&b].alive);
+    assert!(g.score(a) > before, "the kill scores");
+    g.set(max, &[(&ffa, Value::Int(0))]);
+    g.steps(4);
+    assert_eq!(free_and_team_bots(&g), (vec![], 0), "0 takes them away");
+    g.quiet();
+}
+
+/// Teams wanting more bots than the server runs take as many as it has
+/// room for, and whoever runs the game is told how many could not join,
+/// once, not at every fill.
+#[test]
+fn bots_the_server_has_no_room_for_are_told_to_the_owner() {
+    let mut g = Game::new("bots-no-room");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    for c in 1..=2u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 9.0, 0.0, c);
+    }
+    let _ = g.s.take_private_notices();
+    save_and_reset_new_teams(&mut g, max, &[1, 2], 20, vec![]);
+    g.steps(4);
+    let (free, teamed) = free_and_team_bots(&g);
+    assert!(free.is_empty());
+    assert_eq!(teamed, 16, "the server's bot limit");
+    assert!(g.heard("could not join"), "the owner is told");
+    g.steps(60);
+    assert!(!g.heard("could not join"), "once");
+    g.quiet();
+}
+
+/// Switching a Deathmatch with free-for-all bots to Team Deathmatch takes
+/// them away, and the teams' Preferred Player Counts fill instead.
+#[test]
+fn deathmatch_bots_give_way_to_the_team_fill_in_team_deathmatch() {
+    let mut g = Game::new("bots-ffa-to-teams");
+    let max = host_alone_in_deathmatch(&mut g);
+    for c in 1..=2u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 9.0, 0.0, c);
+    }
+    g.set(max, &[(&key(SLAYER, "ffa_bots"), Value::Int(4))]);
+    g.steps(4);
+    assert_eq!(free_and_team_bots(&g).0.len(), 4);
+    save_and_reset_new_teams(
+        &mut g,
+        max,
+        &[1, 2],
+        1,
+        vec![SettingEdit {
+            key: key(SLAYER, "mode"),
+            value: Some(Value::Text(TEAM_MODE.into())),
+        }],
+    );
+    g.steps(4);
+    let (free, teamed) = free_and_team_bots(&g);
+    assert!(free.is_empty(), "{free:?}");
+    let members = team_members(&g);
+    assert!(
+        members.values().all(|&(n, _)| n == 1),
+        "one member a team: {members:?}"
+    );
+    assert_eq!(teamed, 1, "{members:?}");
+    g.quiet();
+}
+
+/// The Mini-Game window's Save & Reset adding `colors.len()` new teams
+/// (no ids yet), each with Preferred Player Count `fill`, with `settings`.
+fn save_and_reset_new_teams(
+    g: &mut Game,
+    by: OwnerId,
+    colors: &[u8],
+    fill: i64,
+    settings: Vec<SettingEdit>,
+) {
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(
+        by,
+        Command::MiniGame(MiniGameRequest::AddOnSettings {
+            quiet: false,
+            reset: true,
+            game,
+            settings,
+            teams: Some(
+                colors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &color)| TeamEdit {
+                        id: None,
+                        name: format!("Team {}", i + 1),
+                        color,
+                        settings: vec![SettingEdit {
+                            key: key(SLAYER, "team_bot_fill"),
+                            value: Some(Value::Int(fill)),
+                        }],
+                    })
+                    .collect(),
+            ),
+        }),
+    )
+    .unwrap();
+}
+
+/// Members of each team by colour, and how many of them are bots.
+fn team_members(g: &Game) -> BTreeMap<u8, (usize, usize)> {
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let mut out: BTreeMap<u8, (usize, usize)> = teams.iter().map(|t| (t.color, (0, 0))).collect();
+    for (owner, v) in g.s.vitals() {
+        if let Some(t) = v.team.and_then(|t| teams.iter().find(|x| x.id.0 == t)) {
+            let e = out.get_mut(&t.color).unwrap();
+            e.0 += 1;
+            if g.s.is_bot(owner) {
+                e.1 += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Max's minimal repro: a Team Deathmatch game with a team spawn in each
+/// of four colours, four new teams added in the window in those colours,
+/// each at Preferred Player Count 1, and one Save & Reset. Each team but
+/// the host's gets its bot straight away, with nothing else to set the
+/// fill off again, and no Add-On problem along the way.
+#[test]
+fn new_teams_with_their_counts_in_one_save_and_reset_fill_at_once() {
+    let mut g = Game::new("bots-new-teams");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    for c in 1..=4u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 15.0, 0.0, c);
+    }
+    save_and_reset_new_teams(&mut g, max, &[1, 2, 3, 4], 1, vec![]);
+    g.steps(4);
+    let members = team_members(&g);
+    assert_eq!(members.len(), 4, "{members:?}");
+    assert!(
+        members.values().all(|&(n, _)| n == 1),
+        "one member a team: {members:?}"
+    );
+    assert_eq!(
+        members.values().map(|&(_, bots)| bots).sum::<usize>(),
+        3,
+        "{members:?}"
+    );
+    g.quiet();
+}
+
+/// A deathmatch of bots alone, as Slayer allows it: Team Deathmatch with
+/// four teams of Preferred Player Count 1 and the host on none. Each team
+/// has its bot, bots of different teams may hurt each other, and a kill
+/// scores.
+#[test]
+fn four_one_bot_teams_make_a_bots_only_deathmatch() {
+    let mut g = Game::new("bots-only");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    for c in 1..=4u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 15.0, 0.0, c);
+    }
+    save_and_reset_new_teams(
+        &mut g,
+        max,
+        &[1, 2, 3, 4],
+        1,
+        ["auto_sort", "balance_teams", "balance_new_teams"]
+            .into_iter()
+            .map(|k| SettingEdit {
+                key: key(SLAYER, k),
+                value: Some(Value::Bool(false)),
+            })
+            .collect(),
+    );
+    g.steps(4);
+    let members = team_members(&g);
+    assert_eq!(members.len(), 4, "{members:?}");
+    assert!(
+        members.values().all(|&m| m == (1, 1)),
+        "one bot a team: {members:?}"
+    );
+    assert_eq!(g.s.vitals()[&max].team, None);
+    let bots: Vec<OwnerId> =
+        g.s.vitals()
+            .keys()
+            .copied()
+            .filter(|o| g.s.is_bot(*o))
+            .collect();
+    assert_eq!(bots.len(), 4);
+    // Past their spawn protection.
+    g.steps(310);
+    let (a, b) = (bots[0], bots[1]);
+    assert_ne!(g.s.vitals()[&a].team, g.s.vitals()[&b].team);
+    g.run(
+        max,
+        "probe",
+        "hurts",
+        vec![PackageArg::Int(a as i64), PackageArg::Int(b as i64)],
+    );
+    let hurts =
+        g.s.package_state()
+            .packages
+            .get("probe")
+            .and_then(|ns| ns.global.get("hurts").cloned())
+            .and_then(|h| h.get(format!("{a}:{b}")).cloned());
+    assert_eq!(hurts, Some(serde_json::Value::Bool(true)), "enemies");
+    let before = g.score(a);
+    g.run(
+        max,
+        "probe",
+        "kill_by",
+        vec![PackageArg::Int(a as i64), PackageArg::Int(b as i64)],
+    );
+    g.steps(2);
+    assert!(!g.s.vitals()[&b].alive);
+    assert!(g.score(a) > before, "the kill scores");
+    g.quiet();
+}
+
+/// Max's minimal repro in a world the size of his "Soccer Field Goo"
+/// (52 000 bricks, loaded from a build): a Save & Reset adding four new
+/// teams at Preferred Player Count 1 still fills them at once and starts
+/// the round from nothing, with no Add-On problem: Slayer's reset does not
+/// run out of its budget over the bricks.
+#[test]
+fn a_big_builds_save_and_reset_fills_the_teams_and_starts_the_round() {
+    const BRICKS: usize = 52_000;
+    let mut g = Game::new("bots-big-world");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    for c in 1..=4u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 15.0, 0.0, c);
+    }
+    let mut build = match g
+        .cmd(
+            max,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        )
+        .unwrap()
+    {
+        Reply::Saved(build) => build,
+        other => panic!("{other:?}"),
+    };
+    // Rows of plates beyond the spawns, layer on layer.
+    let mut next = build.world.next_brick_id;
+    for i in 0..BRICKS {
+        let (layer, rest) = (i / 15_000, i % 15_000);
+        let (row, col) = (rest / 125, rest % 125);
+        let at = [
+            col as f32 - 62.0,
+            0.1 + layer as f32 * 0.2,
+            35.25 + row as f32 * 0.5,
+        ];
+        build.world.bricks.insert(
+            next,
+            bri_world::Brick::new(bri_world::ContentRef::Resolved(PLAIN.into()), at, 0),
+        );
+        next += 1;
+    }
+    build.world.next_brick_id = next;
+    g.cmd(
+        max,
+        Command::LoadBuild {
+            build,
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(13);
+    assert!(g.s.simulation().bricks_of(PLAIN).count() == BRICKS);
+    save_and_reset_new_teams(&mut g, max, &[1, 2, 3, 4], 1, vec![]);
+    g.steps(4);
+    g.quiet();
+    let members = team_members(&g);
+    assert_eq!(members.len(), 4, "{members:?}");
+    assert_eq!(
+        members.values().map(|&(_, bots)| bots).sum::<usize>(),
+        3,
+        "{members:?}"
+    );
+    assert!(!g.round_over());
+    for owner in g.s.vitals().keys() {
+        assert_eq!(g.score(*owner), 0);
+    }
+}
+
+/// A server with far more Add-Ons than Max's 23: an Add-On with as many
+/// settings as one may declare, all changed in the same Save & Reset, and
+/// as many bot kinds as the server takes, each with a full name list. What
+/// Slayer hears and asks stays its own size: the new teams fill at once,
+/// the host is sorted onto one, and no Add-On problem comes up.
+#[test]
+fn far_more_add_ons_than_max_leave_slayers_save_and_reset_working() {
+    let mut g = Game::with_many_add_ons("bots-many-add-ons");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/blockhead_bot/assets")
+        .canonicalize()
+        .unwrap();
+    let mut kinds =
+        bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
+            .unwrap();
+    let first = kinds[0].clone();
+    while kinds.len() < bri_sim::bot_kind::MAX_KINDS {
+        let mut more = first.clone();
+        more.id = format!("filler.bot.with.a.long.identifying.name.{:03}", kinds.len());
+        more.name = format!("Filler Bot {}", kinds.len());
+        more.first_names = (0..bri_sim::bot_kind::MAX_FIRST_NAMES)
+            .map(|i| format!("Fillername{i:06}"))
+            .collect();
+        kinds.insert(0, more);
+    }
+    g.s.set_bot_kinds(kinds).unwrap();
+    for c in 1..=4u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 15.0, 0.0, c);
+    }
+    let filler: Vec<SettingEdit> = (0..bri_package::setting::MAX_SETTINGS)
+        .map(|i| SettingEdit {
+            key: filler_key(i),
+            value: Some(Value::Int(1 + (i % 9) as i64)),
+        })
+        .collect();
+    save_and_reset_new_teams(&mut g, max, &[1, 2, 3, 4], 1, filler);
+    g.steps(4);
+    g.quiet();
+    let members = team_members(&g);
+    assert_eq!(members.len(), 4, "{members:?}");
+    assert!(
+        members.values().all(|&(n, _)| n == 1),
+        "one member a team: {members:?}"
+    );
+    assert_eq!(
+        members.values().map(|&(_, bots)| bots).sum::<usize>(),
+        3,
+        "{members:?}"
+    );
+    assert!(g.s.vitals()[&max].team.is_some(), "the host is sorted");
+}
+
+/// A build with 500 Team Spawns (250 a team): Slayer lists them all when
+/// it picks a spawn (once more than one script value could hold), each
+/// new team fills with its bots, and every bot appears on one of its own
+/// team's spawns.
+#[test]
+fn five_hundred_team_spawns_still_spawn_each_team_on_its_own() {
+    const EACH: usize = 250;
+    let mut g = Game::new("bots-many-spawns");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    let mut build = match g
+        .cmd(
+            max,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        )
+        .unwrap()
+    {
+        Reply::Saved(build) => build,
+        other => panic!("{other:?}"),
+    };
+    let mut next = build.world.next_brick_id;
+    for (color, x0) in [(1u8, -45.0f32), (2u8, 21.0f32)] {
+        for i in 0..EACH {
+            let at = [x0 + (i % 25) as f32, 0.1, -40.25 + (i / 25) as f32 * 2.0];
+            let mut brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved(TEAM_SPAWN.into()), at, max);
+            brick.color = color;
+            build.world.bricks.insert(next, brick);
+            next += 1;
+        }
+    }
+    build.world.next_brick_id = next;
+    g.cmd(
+        max,
+        Command::LoadBuild {
+            build,
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(13);
+    assert_eq!(g.s.simulation().bricks_of(TEAM_SPAWN).count(), 2 * EACH);
+    save_and_reset_new_teams(&mut g, max, &[1, 2], 3, vec![]);
+    g.steps(4);
+    g.quiet();
+    let members = team_members(&g);
+    assert_eq!(
+        members.values().map(|&(n, _)| n).collect::<Vec<_>>(),
+        vec![3, 3],
+        "{members:?}"
+    );
+    assert_eq!(
+        members.values().map(|&(_, bots)| bots).sum::<usize>(),
+        5,
+        "{members:?}"
+    );
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let vitals = g.s.vitals();
+    for (owner, v) in &vitals {
+        let color = teams
+            .iter()
+            .find(|t| Some(t.id.0) == v.team)
+            .map(|t| t.color)
+            .unwrap();
+        let x = g.feet(*owner).x;
+        let on_own = if color == 1 { x < -10.0 } else { x > 10.0 };
+        assert!(on_own, "{owner} of colour {color} at x {x}");
+    }
+}
+
+/// Max's "Soccer Field Goo": a host alone in a build whose saved mini-game
+/// is Team Deathmatch with Team 1 and Team 2 at Preferred Player Count 2,
+/// Reset When Empty and the sorting settings on, and four team spawns a
+/// side. Loading it fills the teams, and so does the window's Save & Reset
+/// with both teams' counts in it.
+#[test]
+fn a_loaded_builds_game_fills_its_teams_with_bots() {
+    loaded_build_fills(true);
+}
+
+/// The same build loaded into the game its loader is running.
+#[test]
+fn a_build_loaded_into_a_running_game_fills_its_teams_with_bots() {
+    loaded_build_fills(false);
+}
+
+fn loaded_build_fills(end_first: bool) {
+    // (Max's second team is paint colour 7; this world has three.)
+    const TEAM_2: u8 = 2;
+    let mut g = Game::new(if end_first {
+        "bots-loaded"
+    } else {
+        "bots-loaded-into"
+    });
+    let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/blockhead_bot/assets")
+        .canonicalize()
+        .unwrap();
+    let kinds =
+        bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
+            .unwrap();
+    g.s.set_bot_kinds(kinds).unwrap();
+    let max =
+        g.s.join("Max".into(), Vec3::new(0.0, 0.05, 20.0), true)
+            .unwrap();
+    g.cmd(
+        max,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    let fill = key(SLAYER, "team_bot_fill");
+    let count = |g: &Game| -> (usize, usize, usize) {
+        let teams =
+            g.s.minigame_views()
+                .first()
+                .map(|v| v.teams.clone())
+                .unwrap_or_default();
+        let mut out = (0, 0, 0);
+        for (owner, v) in g.s.vitals() {
+            if !g.s.is_bot(owner) {
+                continue;
+            }
+            match v
+                .team
+                .and_then(|t| teams.iter().find(|x| x.id.0 == t))
+                .map(|t| t.color)
+            {
+                Some(RED) => out.0 += 1,
+                Some(TEAM_2) => out.1 += 1,
+                _ => out.2 += 1,
+            }
+        }
+        out
+    };
+    let max_team = |g: &Game| -> u8 {
+        let teams = g.s.minigame_views()[0].teams.clone();
+        let t = g.s.vitals()[&max].team.unwrap();
+        teams.iter().find(|x| x.id.0 == t).unwrap().color
+    };
+    let expect = |g: &Game| {
+        if max_team(g) == RED {
+            (1, 2, 0)
+        } else {
+            (2, 1, 0)
+        }
+    };
+    let game = g.s.minigame_views()[0].id;
+    let on = |k: &str, v: Value| SettingEdit {
+        key: key(SLAYER, k),
+        value: Some(v),
+    };
+    g.cmd(
+        max,
+        Command::MiniGame(MiniGameRequest::AddOnSettings {
+            quiet: false,
+            reset: true,
+            game,
+            settings: vec![
+                on("mode", Value::Text(TEAM_MODE.into())),
+                on("points", Value::Int(5)),
+                on("time_between_rounds", Value::Int(5)),
+                on("reset_when_empty", Value::Bool(true)),
+                on("auto_sort", Value::Bool(true)),
+                on("balance_teams", Value::Bool(true)),
+                on("balance_new_teams", Value::Bool(true)),
+                on("default_minigame", Value::Bool(true)),
+            ],
+            teams: Some(
+                [("Team 1", RED), ("Team 2", TEAM_2)]
+                    .into_iter()
+                    .map(|(name, color)| TeamEdit {
+                        id: None,
+                        name: name.into(),
+                        color,
+                        settings: vec![SettingEdit {
+                            key: fill.clone(),
+                            value: Some(Value::Int(2)),
+                        }],
+                    })
+                    .collect(),
+            ),
+        }),
+    )
+    .unwrap();
+    g.steps(13);
+    for i in 0..4 {
+        let z = i as f32 * 3.0 - 4.5;
+        g.plant(max, TEAM_SPAWN, -15.5, z, RED);
+        g.plant(max, TEAM_SPAWN, 15.5, z, TEAM_2);
+    }
+    assert_eq!(count(&g), expect(&g), "a fresh game");
+
+    let build = match g
+        .cmd(
+            max,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        )
+        .unwrap()
+    {
+        Reply::Saved(build) => {
+            bri_world::build::decode(&bri_world::build::encode(&build).unwrap()).unwrap()
+        }
+        other => panic!("{other:?}"),
+    };
+    if end_first {
+        g.cmd(max, Command::MiniGame(MiniGameRequest::End)).unwrap();
+        g.steps(5 * 120);
+        assert!(g.s.minigame_views().is_empty());
+        assert_eq!(count(&g), (0, 0, 0));
+    }
+    g.cmd(
+        max,
+        Command::LoadBuild {
+            build: Box::new(build),
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(13);
+    let view = g.s.minigame_views()[0].clone();
+    assert_eq!(
+        view.teams
+            .iter()
+            .map(|t| t.addon_settings.get(&fill).cloned())
+            .collect::<Vec<_>>(),
+        vec![Some(Value::Int(2)); 2]
+    );
+    assert_eq!(count(&g), expect(&g), "the loaded build's game");
+
+    // The window's Save & Reset with both teams' counts (set again from a
+    // favourite: the same values) in one request.
+    let teams = view
+        .teams
+        .iter()
+        .map(|t| TeamEdit {
+            id: Some(t.id.0),
+            name: t.name.clone(),
+            color: t.color,
+            settings: vec![SettingEdit {
+                key: fill.clone(),
+                value: Some(Value::Int(2)),
+            }],
+        })
+        .collect();
+    g.s.take_private_notices();
+    g.cmd(
+        max,
+        Command::MiniGame(MiniGameRequest::AddOnSettings {
+            quiet: false,
+            reset: true,
+            game: view.id,
+            settings: vec![],
+            teams: Some(teams),
+        }),
+    )
+    .unwrap();
+    g.steps(4);
+    let notices = g.s.take_private_notices();
+    assert_eq!(count(&g), expect(&g), "Save & Reset: {notices:?}");
+    g.steps(BETWEEN_ROUNDS * 120 + 240);
+    assert_eq!(count(&g), expect(&g), "the next round");
     g.quiet();
 }
 
@@ -2970,4 +3860,677 @@ fn slayer_bricks_say_whose_they_are_and_follow_paint_and_names() {
         "the resetter's line: {heard:?}"
     );
     g.quiet();
+}
+
+/// Max's Slayer soccer: each goal is painted its attackers' colour, with
+/// onObjectEnter -> Team(Brick) -> IncScore 1 and Object resetObject after
+/// three seconds. A goal scores for the colour it is painted whoever
+/// knocked the ball in (own goals too), the ball comes back to its spawn
+/// for the next goal, and the first team to the points to win wins.
+/// Max (v0.2.3): Slayer Team Deathmatch, Points 5, Clear Scores on Reset,
+/// and a goal whose rows are only Team(Brick) IncScore 1 and an immediate
+/// Object resetObject. After a team won, the game reset and announced the
+/// win again forever. One win, one reset, and the next round starts at
+/// nothing and stays in play however long nobody scores.
+#[test]
+fn a_goal_won_round_resets_once_and_the_next_round_starts_at_nothing() {
+    use bri_sim::session::ToolCatalog;
+    use bri_world::authority::WrenchProperties;
+    let ball = bri_vehicles::testing::BALL;
+    let mut g = Game::new("goal-win");
+    with_events(&mut g);
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
+        .unwrap();
+    g.s.set_tool_catalog(ToolCatalog {
+        vehicles: [ball.to_owned()].into(),
+        vehicle_bricks: [BALL_SPAWN.to_owned()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (red, _blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "points"), Value::Int(5)),
+            (&key(SLAYER, "clear_scores"), Value::Bool(true)),
+        ],
+    );
+    let spawn = g.plant(owner, BALL_SPAWN, 0.0, 0.0, 2);
+    g.s.edit_brick(
+        owner,
+        spawn,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(ball.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let goal = g.plant(owner, GOAL, 12.0, 0.0, BLUE);
+    g.s.edit_brick(
+        owner,
+        goal,
+        Edit::Properties(WrenchProperties {
+            rule_region: Some([4.0, 12.0, 4.0]),
+            raycast: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    g.s.edit_brick(
+        owner,
+        goal,
+        Edit::Events(vec![
+            team_event(
+                "onObjectEnter",
+                "Team(Brick)",
+                "IncScore",
+                vec![EventValue::Int(1)],
+            ),
+            event("onObjectEnter", "Object", "resetObject", vec![]),
+        ]),
+    )
+    .unwrap();
+    g.steps(30);
+    let the_ball = |g: &Game| {
+        g.s.vehicle_infos()
+            .into_iter()
+            .find(|v| v.definition == ball)
+            .expect("the ball")
+            .id
+    };
+    let score = |g: &mut Game| {
+        g.s.take_private_notices();
+        g.teams(red, "score");
+        g.s.take_private_notices()
+            .iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(t) if *o == red => Some(readable(t)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let wins = |g: &mut Game| {
+        g.s.take_private_notices()
+            .iter()
+            .filter(|(o, n)| {
+                *o == red && matches!(n, Notice::Chat(t) if readable(t).contains("won this round"))
+            })
+            .count()
+    };
+    for goal in 1..=5 {
+        let v = the_ball(&g);
+        g.run(
+            red,
+            "probe",
+            "kick",
+            vec![
+                PackageArg::Int(v as i64),
+                PackageArg::Float(20.0),
+                PackageArg::Float(0.0),
+                PackageArg::Float(0.0),
+            ],
+        );
+        g.steps(120);
+        if goal < 5 {
+            let told = score(&mut g);
+            assert!(
+                told.contains(&format!("({goal}) Blue")),
+                "goal {goal}: {told}"
+            );
+            assert!(!g.round_over(), "goal {goal} does not win");
+            g.steps(60);
+        }
+    }
+    assert!(g.round_over(), "Blue's fifth goal wins");
+    let mut won = wins(&mut g);
+    // The reset, then long enough for any repeated win to show.
+    g.steps((BETWEEN_ROUNDS + 2) * 120);
+    won += wins(&mut g);
+    assert_eq!(won, 1, "one win announced");
+    assert!(!g.round_over(), "the next round started");
+    let told = score(&mut g);
+    assert!(
+        told.contains("(0) Blue") && told.contains("(0) Red"),
+        "a new round starts at nothing: {told}"
+    );
+    g.steps(BETWEEN_ROUNDS * 3 * 120);
+    assert_eq!(wins(&mut g), 0, "and nobody wins it again");
+    assert!(!g.round_over(), "the round stays in play");
+    g.quiet();
+}
+
+#[test]
+fn slayer_soccer_goals_score_for_their_colour_and_reset_the_ball() {
+    use bri_sim::session::ToolCatalog;
+    use bri_world::authority::WrenchProperties;
+    let ball = bri_vehicles::testing::BALL;
+    let mut g = Game::new("soccer");
+    with_events(&mut g);
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
+        .unwrap();
+    g.s.set_tool_catalog(ToolCatalog {
+        vehicles: [ball.to_owned()].into(),
+        vehicle_bricks: [BALL_SPAWN.to_owned()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(owner, &[(&key(SLAYER, "points"), Value::Int(3))]);
+    let spawn = g.plant(owner, BALL_SPAWN, 0.0, 0.0, 2);
+    g.s.edit_brick(
+        owner,
+        spawn,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(ball.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let mut reset = event("onObjectEnter", "Object", "resetObject", vec![]);
+    reset.delay_ms = 3000;
+    // Blue scores in the goal at +x (painted Blue), Red at -x. A third
+    // row checks the team's score just after the first row added to it:
+    // the team's own points count in an IF Team Score (Red is slot 1,
+    // Blue slot 2).
+    let mut goals = BTreeMap::new();
+    for (x, colour, slot) in [(12.0f32, BLUE, "2"), (-12.0, RED, "1")] {
+        let mut two = event(
+            "onObjectEnter",
+            "MiniGame",
+            "BottomPrintAll",
+            vec![
+                EventValue::Text(format!("team {slot} has two")),
+                EventValue::Int(3),
+                EventValue::Bool(true),
+            ],
+        );
+        two.conditions = vec![
+            serde_json::from_value(serde_json::json!({
+                "subject": "Team", "property": "Score", "key": slot,
+                "compare": "AtLeast", "value": { "Number": 2 }
+            }))
+            .unwrap(),
+        ];
+        let rows = vec![
+            team_event(
+                "onObjectEnter",
+                "Team(Brick)",
+                "IncScore",
+                vec![EventValue::Int(1)],
+            ),
+            two,
+            reset.clone(),
+        ];
+        let goal = g.plant(owner, GOAL, x, 0.0, colour);
+        g.s.edit_brick(
+            owner,
+            goal,
+            Edit::Properties(WrenchProperties {
+                rule_region: Some([4.0, 12.0, 4.0]),
+                raycast: true,
+                visible: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        g.s.edit_brick(owner, goal, Edit::Events(rows.clone()))
+            .unwrap();
+        goals.insert(colour, x);
+    }
+    g.steps(30);
+    // The ball: its id and where it is.
+    let the_ball = |g: &Game| {
+        let id =
+            g.s.vehicle_infos()
+                .into_iter()
+                .find(|v| v.definition == ball)
+                .expect("the ball")
+                .id;
+        let at =
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == id)
+                .unwrap();
+        (id, Vec3::from(at.position))
+    };
+    let home = the_ball(&g).1;
+    let score = |g: &mut Game| {
+        g.s.take_private_notices();
+        g.teams(red, "score");
+        g.s.take_private_notices()
+            .iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Chat(t) if *o == red => Some(readable(t)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // A Red own goal, Blue, a Blue own goal, then Blue's third.
+    for (kicker, into, blue_points, red_points) in [
+        (red, BLUE, 1, 0),
+        (blue, BLUE, 2, 0),
+        (blue, RED, 2, 1),
+        (red, BLUE, 3, 1),
+    ] {
+        let (v, _) = the_ball(&g);
+        let toward = f64::from(goals[&into].signum() * 20.0);
+        g.run(
+            kicker,
+            "probe",
+            "kick",
+            vec![
+                PackageArg::Int(v as i64),
+                PackageArg::Float(toward),
+                PackageArg::Float(0.0),
+                PackageArg::Float(0.0),
+            ],
+        );
+        g.steps(120);
+        let printed =
+            g.s.take_private_notices()
+                .iter()
+                .any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text == "team 2 has two"));
+        assert_eq!(
+            printed,
+            blue_points >= 2 && into == BLUE,
+            "Blue's IF Team Score >= 2 after {blue_points} points"
+        );
+        let told = score(&mut g);
+        assert!(
+            told.contains(&format!("({blue_points}) Blue"))
+                && told.contains(&format!("({red_points}) Red")),
+            "after {kicker}'s kick into the {into} goal: {told}"
+        );
+        if blue_points == 3 {
+            assert!(g.round_over(), "Blue reached the points to win");
+            break;
+        }
+        g.steps(360);
+        let (back, at) = the_ball(&g);
+        assert_ne!(back, v, "the goal reset the ball");
+        assert!(
+            (at - home).length() < 0.5,
+            "the new ball is at its spawn: {at} vs {home}"
+        );
+    }
+    // Max (v0.2.3): after the win the game reset, then won and reset
+    // again forever. The next round starts at nothing and stays in play.
+    g.steps((BETWEEN_ROUNDS + 2) * 120);
+    assert!(!g.round_over(), "the next round started");
+    let told = score(&mut g);
+    assert!(
+        told.contains("(0) Blue") && told.contains("(0) Red"),
+        "a new round starts at nothing: {told}"
+    );
+    g.steps(BETWEEN_ROUNDS * 2 * 120);
+    assert!(!g.round_over(), "and nobody wins it again");
+    g.quiet();
+}
+
+/// The Mini-Game window's Save & Reset as a lone host uses it: the team
+/// mode on and `teams` as edited.
+fn window_save(g: &mut Game, owner: OwnerId, teams: Vec<TeamEdit>) {
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::AddOnSettings {
+            quiet: false,
+            reset: true,
+            game,
+            settings: vec![SettingEdit {
+                key: key(SLAYER, "mode"),
+                value: Some(Value::Text(TEAM_MODE.into())),
+            }],
+            teams: Some(teams),
+        }),
+    )
+    .unwrap();
+    g.steps(30);
+}
+
+/// Four new teams of one in a lone host's game each take a bot but the
+/// host's, with Slayer's full first-names list (once more text than a
+/// script may hold, which stopped every mini-game event before the fill).
+#[test]
+fn four_teams_of_one_fill_with_bots_named_from_a_long_list() {
+    let mut g = Game::with_names("bots-window", true);
+    let host =
+        g.s.join("Host".into(), Vec3::new(0.0, 0.05, 20.0), true)
+            .unwrap();
+    g.cmd(
+        host,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let fill = vec![SettingEdit {
+        key: key(SLAYER, "team_bot_fill"),
+        value: Some(Value::Int(1)),
+    }];
+    let teams = (0..4u8)
+        .map(|color| TeamEdit {
+            id: None,
+            name: format!("Team {}", color + 1),
+            color,
+            settings: fill.clone(),
+        })
+        .collect();
+    window_save(&mut g, host, teams);
+    let limits: Vec<String> =
+        g.s.package_diagnostics()
+            .iter()
+            .filter(|d| d.code == "script.limit")
+            .map(|d| d.message.clone())
+            .collect();
+    assert!(limits.is_empty(), "{limits:?}");
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let vitals = g.s.vitals();
+    let host_team = vitals[&host].team.expect("the host is sorted onto a team");
+    let names = g.s.names();
+    for t in &teams {
+        let bots: Vec<_> = vitals
+            .iter()
+            .filter(|(o, v)| g.s.is_bot(**o) && v.team == Some(t.id.0))
+            .map(|(o, _)| names[o].clone())
+            .collect();
+        let want = if t.id.0 == host_team { 0 } else { 1 };
+        assert_eq!(bots.len(), want, "{} has {bots:?}", t.name);
+        for name in bots {
+            assert!(name.starts_with("Bot Name"), "{name}");
+        }
+    }
+}
+
+/// What a Slayer soccer match with team-fill bots came to.
+#[derive(Debug, Default)]
+struct BotMatch {
+    goals: u32,
+    deaths: u32,
+    /// Team score changes that came with no goal (a kill scoring).
+    scored_without_a_goal: Vec<(u64, i64)>,
+    /// Bot-ticks in all, and those up in the air well above the pitch.
+    bot_ticks: u64,
+    high: u64,
+    /// Bot-ticks standing on the parked tank, and right beside it.
+    on_tank: u64,
+    by_tank: u64,
+}
+
+/// Max's Slayer soccer with bots: Slayer Team Deathmatch, its teams filled
+/// with bots by Preferred Player Count (not spawn bricks), a goal at each
+/// end painted the colour that scores there (onObjectEnter -> Team(Brick)
+/// -> IncScore 1, then Object resetObject), kills worth nothing (Slayer's
+/// Kill Bot and Friendly Fire, and the game's own kill, suicide and death
+/// points, all 0), and a tank parked by the pitch. `armed` gives everyone
+/// the test gun.
+fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
+    use bri_sim::session::ToolCatalog;
+    use bri_world::authority::WrenchProperties;
+    let ball = bri_vehicles::testing::BALL;
+    let tank = bri_vehicles::testing::TANK;
+    let mut g = Game::new(if armed {
+        "bot-soccer-armed"
+    } else {
+        "bot-soccer"
+    });
+    with_events(&mut g);
+    let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/blockhead_bot/assets")
+        .canonicalize()
+        .unwrap();
+    let kinds =
+        bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
+            .unwrap();
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), kinds.clone())
+        .unwrap();
+    g.s.set_bot_kinds(kinds).unwrap();
+    let gun = bri_weapons::testing::GUN_ITEM;
+    if armed {
+        g.s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+    }
+    g.s.set_tool_catalog(ToolCatalog {
+        items: if armed {
+            [gun.to_owned()].into()
+        } else {
+            Default::default()
+        },
+        vehicles: [ball.to_owned(), tank.to_owned()].into(),
+        vehicle_bricks: [BALL_SPAWN.to_owned()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let max =
+        g.s.join("Max".into(), Vec3::new(0.0, 0.05, -60.0), true)
+            .unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    if armed {
+        loadout[0] = Some(gun.into());
+    }
+    g.cmd(
+        max,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout,
+                points_kill_player: 0,
+                points_kill_self: 0,
+                points_die: 0,
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    g.set(
+        max,
+        &[
+            (&key(SLAYER, "mode"), Value::Text(TEAM_MODE.into())),
+            (&key(SLAYER, "points_kill_bot"), Value::Int(0)),
+            (&key(SLAYER, "points_friendly_fire"), Value::Int(0)),
+        ],
+    );
+    // Team spawns at each end, behind the goal it defends.
+    g.plant(max, TEAM_SPAWN, -18.0, 0.0, RED);
+    g.plant(max, TEAM_SPAWN, 18.0, 0.0, BLUE);
+    let spawn = g.plant(max, BALL_SPAWN, 0.0, 0.0, 2);
+    g.s.edit_brick(
+        max,
+        spawn,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(ball.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    // Blue scores at -x (Red's end, painted Blue), Red at +x.
+    for (x, colour) in [(-12.0f32, BLUE), (12.0, RED)] {
+        let goal = g.plant(max, GOAL, x, 0.0, colour);
+        g.s.edit_brick(
+            max,
+            goal,
+            Edit::Properties(WrenchProperties {
+                rule_region: Some([2.0, 6.0, 8.0]),
+                raycast: true,
+                visible: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        g.s.edit_brick(
+            max,
+            goal,
+            Edit::Events(vec![
+                team_event(
+                    "onObjectEnter",
+                    "Team(Brick)",
+                    "IncScore",
+                    vec![EventValue::Int(1)],
+                ),
+                event("onObjectEnter", "Object", "resetObject", vec![]),
+            ]),
+        )
+        .unwrap();
+    }
+    // A tank parked beside the pitch.
+    let parked = g.plant(max, BALL_SPAWN, 0.0, 12.0, 3);
+    g.s.edit_brick(
+        max,
+        parked,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(tank.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    // Two bots a side: Max's own team takes one fewer.
+    save_and_reset_new_teams(
+        &mut g,
+        max,
+        &[RED, BLUE],
+        2,
+        vec![SettingEdit {
+            key: key(SLAYER, "mode"),
+            value: Some(Value::Text(TEAM_MODE.into())),
+        }],
+    );
+    g.steps(240);
+    let bots: Vec<OwnerId> =
+        g.s.vitals()
+            .keys()
+            .copied()
+            .filter(|o| g.s.is_bot(*o))
+            .collect();
+    assert!(bots.len() >= 3, "the team fill made bots: {bots:?}");
+    let the = |g: &Game, def: &str| {
+        g.s.vehicle_infos()
+            .into_iter()
+            .find(|v| v.definition == def)
+            .map(|v| v.id)
+    };
+    let team_scores = |g: &Game| -> BTreeMap<u32, i64> {
+        let mut out = BTreeMap::new();
+        for v in g.s.vitals().values() {
+            if let Some(t) = v.team {
+                *out.entry(t).or_default() += v.score;
+            }
+        }
+        out
+    };
+    let mut m = BotMatch::default();
+    let mut ball_was = the(&g, ball);
+    let mut scores = team_scores(&g);
+    let mut alive: BTreeMap<OwnerId, bool> =
+        g.s.vitals().iter().map(|(o, v)| (*o, v.alive)).collect();
+    let mut last_goal = 0u64;
+    for tick in 0..(seconds * 120) as u64 {
+        g.steps(1);
+        let now_ball = the(&g, ball);
+        if now_ball != ball_was && ball_was.is_some() {
+            m.goals += 1;
+            last_goal = tick;
+        }
+        ball_was = now_ball.or(ball_was);
+        let now = team_scores(&g);
+        for (team, score) in &now {
+            let was = scores.get(team).copied().unwrap_or(0);
+            // A goal resets the ball the tick it scores; a score with no
+            // goal near it came from something else.
+            if *score != was && tick.saturating_sub(last_goal) > 3 {
+                m.scored_without_a_goal.push((tick, score - was));
+            }
+        }
+        scores = now;
+        let tank_box = the(&g, tank).and_then(|id| {
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == id)
+                .map(|v| Vec3::from(v.position))
+        });
+        for (o, v) in g.s.vitals() {
+            if alive.insert(o, v.alive) == Some(true) && !v.alive {
+                m.deaths += 1;
+            }
+            if !g.s.is_bot(o) || !v.alive {
+                continue;
+            }
+            m.bot_ticks += 1;
+            let feet = g.feet(o);
+            if feet.y > 4.0 {
+                m.high += 1;
+            }
+            if let Some(at) = tank_box {
+                let across = Vec3::new(feet.x - at.x, 0.0, feet.z - at.z).length();
+                if across < 2.0 && feet.y > at.y + 0.8 {
+                    m.on_tank += 1;
+                }
+                if across < 3.0 {
+                    m.by_tank += 1;
+                }
+            }
+        }
+    }
+    eprintln!("bot soccer (armed {armed}): {m:?}");
+    m
+}
+
+/// Bots filled in by Slayer's team counts play the ball and score; kills
+/// score nothing; they do not all fly up empty-handed (Max: "they all just
+/// fly upward") nor pile onto and stand on a parked tank.
+#[test]
+fn team_fill_bots_play_slayer_soccer_with_or_without_weapons() {
+    for armed in [false, true] {
+        let m = bot_soccer(armed, 90);
+        assert!(m.goals >= 2, "armed {armed}: only {} goals: {m:?}", m.goals);
+        assert!(
+            m.scored_without_a_goal.is_empty(),
+            "armed {armed}: a kill or death scored: {m:?}"
+        );
+        let share = |n: u64| n as f32 / m.bot_ticks.max(1) as f32;
+        assert!(
+            share(m.high) < 0.02,
+            "armed {armed}: up in the air {:.3}",
+            share(m.high)
+        );
+        assert!(
+            share(m.on_tank) < 0.01,
+            "armed {armed}: on the tank {:.3}",
+            share(m.on_tank)
+        );
+        assert!(
+            share(m.by_tank) < 0.1,
+            "armed {armed}: by the tank {:.3}",
+            share(m.by_tank)
+        );
+    }
 }

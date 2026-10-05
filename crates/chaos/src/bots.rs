@@ -338,6 +338,7 @@ impl Bot {
                     Box::new(VehicleSpawn {
                         vehicle: ContentRef::Resolved(v.clone()),
                         recolor: self.rng.chance(0.5),
+                        team: None,
                     })
                 });
             }
@@ -346,6 +347,7 @@ impl Bot {
                     Box::new(VehicleSpawn {
                         vehicle: ContentRef::Resolved(v.clone()),
                         recolor: true,
+                        team: None,
                     })
                 });
             }

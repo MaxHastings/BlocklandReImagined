@@ -146,6 +146,7 @@ fn game_scene_kind_with_packages(
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
@@ -569,8 +570,14 @@ fn nearby_blast_risk_selects_the_safe_second_inventory_slot() {
     assert!(s.vitals()[&human].health < 100.0);
 }
 
+/// A ranged bot with a blast weapon starts under a low roof, close to an
+/// enemy standing on a column above it. Before the route planner it flew
+/// (the Fly behaviour) and had to recover its blast clearance in the air;
+/// now flying is only a route leg, and a ranged weapon fights from where it
+/// can reach up: it backs out to its band in the open and delivers a safe
+/// blast, never jetting against the roof.
 #[test]
-fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
+fn a_close_ranged_bot_backs_out_from_under_a_low_roof_and_delivers_a_safe_blast() {
     let geometry = vec![
         Brick::new(
             ContentRef::Resolved(fixture::TALL.into()),
@@ -590,31 +597,31 @@ fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
         [-24.75, 0.1, 31.25],
         geometry,
     );
-    let mut saw_close_fly = false;
-    let mut saw_released_lift = false;
+    let mut started_close = false;
     let mut escaped = false;
+    let mut roofed_jetting = 0;
     let mut observed = BTreeSet::new();
     for _ in 0..120 * 25 {
         ticks(&mut s, human, &mut seq, 1);
         let distance = feet(&s, bot).distance(feet(&s, human));
-        let flying = s
-            .bot_thoughts()
-            .iter()
-            .any(|t| t.bot == bot && t.behaviour == "fly");
-        if flying && distance < 7.0 {
-            saw_close_fly = true;
-            saw_released_lift |= s
-                .snapshot()
+        started_close |= distance < 7.0;
+        escaped |= started_close && distance >= 7.0;
+        let at = feet(&s, bot);
+        // The roof: an 8 x 8 baseplate 6.2 up over z 27.25 to 35.25.
+        if (27.25..35.25).contains(&at.z)
+            && (-28.75..-20.75).contains(&at.x)
+            && s.snapshot()
                 .players
                 .iter()
-                .any(|p| p.owner == bot && !p.jetting);
+                .any(|p| p.owner == bot && p.jetting)
+        {
+            roofed_jetting += 1;
         }
-        escaped |= saw_close_fly && distance >= 7.0;
         for p in s.weapon_view().fired().filter(|p| p.source.0 == bot) {
             if observed.insert(p.id) {
                 assert!(
                     p.origin.distance(feet(&s, human)) > 7.0,
-                    "unsafe blast during flight recovery"
+                    "unsafe blast while backing out"
                 );
             }
         }
@@ -622,9 +629,15 @@ fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
             break;
         }
     }
-    assert!(saw_close_fly, "authored scene never exercised close Fly");
-    assert!(saw_released_lift, "kept jetting in close blast range");
+    assert!(
+        started_close,
+        "the authored scene starts inside blast range"
+    );
     assert!(escaped, "never regained blast clearance");
+    assert!(
+        roofed_jetting < 30,
+        "jetted under the roof for {roofed_jetting} ticks"
+    );
     assert!(
         s.vitals()[&human].health < 100.0,
         "no actual delivery after recovery: {:?}",
@@ -738,7 +751,7 @@ fn a_depleted_stored_magazine_switches_to_the_usable_undrawn_slot() {
                 traces.push((cue.tick, cue.position, feet(&s, bot), feet(&s, human)));
             }
         }
-        if s.vitals()[&human].health <= 80.0 {
+        if traces.len() >= 2 {
             break;
         }
     }
@@ -751,10 +764,13 @@ fn a_depleted_stored_magazine_switches_to_the_usable_undrawn_slot() {
         "depleted first slot blocked usable new equipment: {:?}",
         s.bot_thoughts()
     );
-    assert_eq!(
-        s.vitals()[&human].health,
-        80.0,
-        "both actual one-round magazines must deliver damage without a fabricated refill: traces={traces:?} states={states:?} thoughts={:?}",
+    // Fair aim (`perception`) can miss a single round at 20 units while the
+    // bot moves, so whether each round lands is aim, not ammunition: the
+    // damage must come only from those two rounds, ten apiece.
+    let health = s.vitals()[&human].health;
+    assert!(
+        health >= 80.0 && (100.0 - health) % 10.0 == 0.0,
+        "damage beyond the two actual one-round magazines: health={health} traces={traces:?} states={states:?} thoughts={:?}",
         s.bot_thoughts()
     );
     assert_eq!(traces.len(), 2, "one shot from each finite magazine");
@@ -765,7 +781,7 @@ fn a_depleted_stored_magazine_switches_to_the_usable_undrawn_slot() {
     // Remaining inventory must not be repeatedly redrawn to refill its empty
     // stored magazine or the shared exhausted reserve.
     ticks(&mut s, human, &mut seq, 120 * 3);
-    assert_eq!(s.vitals()[&human].health, 80.0);
+    assert_eq!(s.vitals()[&human].health, health);
     assert!(!s.take_cues().iter().any(|cue| {
         matches!(cue.kind, bri_sim::presentation::CueKind::Tracer { actor, .. } if actor == bot)
     }));
@@ -983,4 +999,119 @@ fn an_alternative_weapon_cannot_replace_a_live_charge_during_a_real_range_excurs
         mounted_hand_state(&s, bot),
         s.bot_thoughts()
     );
+}
+
+/// The image a bot holds in its hand, if any.
+fn held_image(s: &Session, bot: u64) -> Option<String> {
+    s.weapon_view()
+        .images
+        .get(&bot)
+        .and_then(|images| images.iter().find(|i| i.hand == 0).map(|i| i.image.clone()))
+}
+
+/// A pack with a weak and a strong copy of the gun; `scripted` gives both
+/// a two-projectile shot, which the native profile does not describe, so
+/// only their data ranks them.
+fn weak_and_strong(scripted: bool) -> Pack {
+    let mut p = pack();
+    for (name, damage) in [("weak", 2.0), ("strong", 40.0)] {
+        alias(
+            &mut p,
+            testing::GUN_ITEM,
+            testing::GUN_IMAGE,
+            testing::GUN_PROJECTILE,
+            &format!("tactics:weapon/{name}"),
+        );
+        p.projectiles
+            .get_mut(&format!("tactics:projectile/{name}"))
+            .unwrap()
+            .damage = damage;
+        if scripted {
+            p.images
+                .get_mut(&format!("tactics:image/{name}"))
+                .unwrap()
+                .shot = Some(
+                serde_json::from_value(serde_json::json!({ "projectiles": 2, "spread": 0.0 }))
+                    .unwrap(),
+            );
+        }
+    }
+    p
+}
+
+#[test]
+fn the_strongest_weapon_is_used_not_the_first() {
+    for scripted in [false, true] {
+        let (mut s, human, bot, mut seq) = game(
+            weak_and_strong(scripted),
+            &[
+                "tactics:weapon/weak",
+                "tactics:weapon/weak",
+                "tactics:weapon/strong",
+            ],
+            14.0,
+        );
+        let mut strong_ticks = 0;
+        let mut weak_ticks = 0;
+        for _ in 0..120 * 12 {
+            ticks(&mut s, human, &mut seq, 1);
+            match held_image(&s, bot).as_deref() {
+                Some("tactics:image/strong") => strong_ticks += 1,
+                Some("tactics:image/weak") => weak_ticks += 1,
+                _ => {}
+            }
+            if s.vitals()[&human].health <= 20.0 {
+                break;
+            }
+        }
+        assert!(
+            strong_ticks > weak_ticks * 4,
+            "scripted={scripted}: strong {strong_ticks} weak {weak_ticks} thoughts={:?}",
+            s.bot_thoughts()
+        );
+        assert!(
+            s.vitals()[&human].health < 100.0,
+            "scripted={scripted}: never hit"
+        );
+    }
+}
+
+#[test]
+fn a_splash_weapon_aims_low_more_often_than_not() {
+    // A rocket kills in a couple of hits, so several fresh duels at a few
+    // ranges give the count.
+    let (mut low, mut chest) = (0, 0);
+    for distance in [14.0, 18.0, 22.0, 26.0, 30.0, 16.0] {
+        let (mut s, human, bot, mut seq) = game(pack(), &[B], distance);
+        let mut seen = BTreeSet::new();
+        for _ in 0..120 * 20 {
+            ticks(&mut s, human, &mut seq, 1);
+            let fired: Vec<u64> = s
+                .weapon_view()
+                .fired()
+                .filter(|p| p.source.0 == bot)
+                .map(|p| p.id)
+                .collect();
+            for id in fired {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+                let aim = thought
+                    .surprise
+                    .decisions
+                    .iter()
+                    .find(|d| d.domain == "aim");
+                match aim.map(|d| d.chosen.as_str()) {
+                    Some("feet" | "surface") => low += 1,
+                    _ => chest += 1,
+                }
+            }
+            if s.vitals()[&human].health <= 0.0 || seen.len() >= 6 {
+                break;
+            }
+        }
+    }
+    assert!(low + chest >= 6, "only {} rockets", low + chest);
+    assert!(low > chest, "aimed low {low} times, at the chest {chest}");
 }

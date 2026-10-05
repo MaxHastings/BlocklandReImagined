@@ -1,5 +1,6 @@
 use crate::EffectsPack;
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::passage::Passages;
 use glam::{Mat4, Quat, Vec3, Vec4};
 use std::{collections::BTreeMap, sync::Arc};
@@ -139,6 +140,14 @@ impl Default for EffectsLimits {
             lights: 256,
             emissions_per_advance: 32768,
         }
+    }
+}
+impl EffectsLimits {
+    /// The most sprites one snapshot of a world with these limits can hold:
+    /// every live particle plus one flare per light source. A renderer that
+    /// draws several worlds is sized from the sum of theirs.
+    pub fn max_sprites(&self) -> usize {
+        self.particles.saturating_add(self.lights)
     }
 }
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
@@ -367,6 +376,10 @@ impl EffectsWorld {
             flare_texture,
             passages: Passages::default(),
         })
+    }
+    /// The limits this world was made with.
+    pub fn limits(&self) -> EffectsLimits {
+        self.limits
     }
     pub fn pack(&self) -> &Arc<EffectsPack> {
         &self.pack
@@ -644,10 +657,12 @@ impl EffectsWorld {
                     .as_ref()
                     .map_or(0., |f| f.fade_seconds);
                 let step = if fade > 0. { dt / fade } else { 1. };
-                source.flare += (source.options.flare_visibility - source.flare).clamp(-step, step);
+                source.flare +=
+                    (source.options.flare_visibility - source.flare).clamped(-step, step);
             } else if source.options.emitting {
                 while source.next <= end && source.next <= source.lifetime && budget > 0 {
-                    let t = ((source.next - source.age) / (end - source.age)).clamp(0., 1.) as f32;
+                    let t =
+                        ((source.next - source.age) / (end - source.age)).clamped(0., 1.) as f32;
                     let transform = source.previous.interpolate(source.transform, t);
                     let pre_age = if self.pack.library.emitters[source.definition].override_advance
                     {
@@ -950,7 +965,7 @@ impl EffectsWorld {
                     continue;
                 }
                 let weight = ((distance - f.near_distance) / (f.far_distance - f.near_distance))
-                    .clamp(0., 1.);
+                    .clamped(0., 1.);
                 let size = 2.
                     * s.flare
                     * f.constant_size

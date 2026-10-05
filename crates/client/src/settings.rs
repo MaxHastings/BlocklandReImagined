@@ -71,6 +71,22 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+/// Where a damaged state file (`settings.json`, `servers.json`) is kept
+/// beside itself before anything replaces it: `<name>.damaged-<unix
+/// seconds>.<extension>`.
+pub(crate) fn damaged_copy(path: &Path) -> std::path::PathBuf {
+    let stem = path
+        .file_stem()
+        .map_or_else(|| "state".into(), |s| s.to_string_lossy());
+    let extension = path
+        .extension()
+        .map_or_else(|| "json".into(), |s| s.to_string_lossy());
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    path.with_file_name(format!("{stem}.damaged-{seconds}.{extension}"))
+}
+
 /// Settings for startup, and what the player should be told when the file
 /// could not be used as it was.
 #[derive(Debug)]
@@ -109,12 +125,7 @@ pub fn recover(path: &Path) -> Recovered {
         }
     };
     let (settings, kept) = salvage(&bytes);
-    let backup = path.with_file_name(format!(
-        "settings.damaged-{}.json",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    ));
+    let backup = damaged_copy(path);
     let backed_up = bri_files::create_new(&backup, &bytes).is_ok();
     bri_console::warn(format!(
         "Settings file was damaged ({error:#}); kept {kept} section(s){}",

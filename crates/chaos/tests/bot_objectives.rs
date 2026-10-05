@@ -78,6 +78,7 @@ fn game_with_loadout(
     spawn.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     if spawner {
         world.bricks.insert(1, spawn);

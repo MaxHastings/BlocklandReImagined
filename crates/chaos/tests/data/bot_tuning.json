@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "note": "The bot tuning tools' settings (docs/architecture/bots.md, Tuning). Dials are read by path from packages/blockhead_bot/assets/bots.json: every section's `strength` is found by itself, plus each path listed here that bots.json has (a missing one is reported and skipped). BRI_TUNING_DIALS=a.b,c.d replaces the list.",
+  "dials": [
+    "surprise.strength",
+    "behaviours.interact",
+    "behaviours.objective",
+    "team.teamwork"
+  ],
+  "on_value": 1.0,
+  "on_note": "on: each dial shipped off (0) is set to this ON value in the all-on run (all_dials_on) and the perf bar; a dial shipped on keeps its value; one not listed uses on_value.",
+  "grid": {
+    "surprise.strength": [0, 0.5, 1]
+  },
+  "unchanged": {
+    "note": "An ablation moving every metric less than this is 'no measurable change': a cut candidate. Frame cost is reported but not judged (timing noise).",
+    "objective_share": 0.05,
+    "variety": 0.05,
+    "goof": 0.005,
+    "goof_waves": 0.005,
+    "stuck": 0.005,
+    "team_kills": 0.5
+  },
+  "weights": {
+    "note": "Sweep score: stay inside every band first (each band broken, and each scenario that failed its own checks, costs its weight), then the most variety and goof waves, then the least stuck time and frame cost (relative to the base point).",
+    "band": 10.0,
+    "broken": 20.0,
+    "variety": 1.0,
+    "goof_waves": 20.0,
+    "stuck": 5.0,
+    "frame": 0.5
+  },
+  "fair": {
+    "note": "The fair metric (fair_hit_rate): one bot per weapon class against a scripted player who strafes and hops, at each range. The steady hit rate (after steady_after seconds of an engagement) should sit in min..max: never near-perfect, never hopeless. Enforced (fair_hit_rate): every class together and the gun and the bow each. fair_by_dial moves the first of `dials` bots.json has (perception.strength: more human, fewer hits) and checks the rate moves its way.",
+    "min": 0.15,
+    "max": 0.6,
+    "first_seconds": 2,
+    "steady_after": 4,
+    "seconds": 25,
+    "ranges": [10, 25],
+    "dials": [
+      { "path": "perception.strength", "sign": -1 }
+    ]
+  },
+  "on": {
+    "surprise.strength": 0.6
+  },
+  "perf": {
+    "note": "bot_think_time_16 (16 bots, the busiest scenario, every dial on): the most bot think time per tick a build may take, in microseconds. Debug: the base measured 7528 us (2026-10-05, shared 4-core container), bar at twice that. Release: not measured here; 2000 us is a quarter of the 8333 us tick, to be confirmed on a release build.",
+    "debug_us": 15000,
+    "release_us": 2000
+  }
+}

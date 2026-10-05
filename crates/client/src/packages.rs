@@ -2,6 +2,7 @@
 //! replicated package state, their keys, and entity box models. All of it is
 //! data from client-side packages; the client never runs package code.
 use anyhow::{Context, Result};
+use bri_console::Clamp;
 use bri_net::protocol::PublicWorld;
 use bri_package::diag::Diagnostic;
 use bri_package_runtime::{Catalog, content};
@@ -51,7 +52,7 @@ pub fn load_set(
 }
 
 fn rgba(c: [f32; 4]) -> [u8; 4] {
-    c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+    c.map(|v| (v.clamped(0.0, 1.0) * 255.0).round() as u8)
 }
 fn show(value: Option<&serde_json::Value>) -> String {
     match value {
@@ -334,7 +335,7 @@ pub fn place_boxes<'a>(
                         Quat::IDENTITY,
                         Vec3::from(b.center),
                     ),
-                tint: color.map(|v| v.clamp(0.0, 1.0)),
+                tint: color.map(|v| v.clamped(0.0, 1.0)),
             });
         }
     }

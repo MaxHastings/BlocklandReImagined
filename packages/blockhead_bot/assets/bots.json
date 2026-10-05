@@ -7,13 +7,26 @@
       "sight": 80,
       "wander_radius": 12,
       "chase_radius": 48,
-      "reaction_seconds": 0.35,
-      "turn_degrees": 300,
-      "aim_error_degrees": 5,
-      "memory_seconds": 8,
       "fights_bots": true,
       "alerts_allies": true,
       "behaviours": { "interact": 1, "objective": 1 },
+      "objective_radius": 24,
+      // The four main dials (docs/architecture/bots.md, "Tuning"). Every
+      // other number is fixed in code.
+      // Surprise, 0 to 1: how much its choices vary and how often it goofs (about
+      // every half minute of play at 0.5). 0 is the plain brain.
+      "surprise": { "strength": 0.6 },
+      // Teamwork, 0 to 1: how much teammates' intents (where they go, what
+      // they use, where they shoot) move its own choices; never an order. A choice an ally's intent changed may be
+      // said in team chat, keyed by the term that changed it.
+      "team": { "teamwork": 0.6, "callouts": { "uses": "Coming!", "harm": "Moving!" } },
+      // Perception, 0 to 4: how human its noticing, reactions and aim are
+      // (more is slower to notice, fewer hits).
+      "perception": { "strength": 1 },
+      // Extras, 0 to 1: idle play with a loose body or a teammate's vehicle,
+      // crouching under fire, hopping out of a projectile's path, opening
+      // doors, handing a spare weapon to an unarmed teammate.
+      "extras": { "strength": 1 },
       "first_names": [
         "Alex",
         "Ben",

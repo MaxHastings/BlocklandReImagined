@@ -484,6 +484,8 @@ fn main() -> Result<()> {
         render(&ui, "wrench", &mut renderer, &mut report)?;
         ui.apply(UiUpdate::OpenEvents {
             brick: 1,
+            builder: None,
+            builder_name: None,
             rows: vec![
                 EventRow::Editable(EventLine {
                     conditions: vec![],

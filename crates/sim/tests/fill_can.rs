@@ -572,6 +572,7 @@ fn a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone() {
         brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(PLANE.into()),
             recolor,
+            team: None,
         }));
         brick
     };

@@ -488,6 +488,20 @@ def prepare_worktree(root, sha):
     return worktree
 
 
+def gate_env(environ, content):
+    """The environment every gate step runs in.
+
+    Content-backed tests find generated v20 content through BRI_CONTENT.
+    Without it they panic asking for it, so the gate points it at the main
+    checkout's real folder (not the worktree's junction, which the game
+    refuses to load packages through) unless the caller already set one.
+    """
+    env = dict(environ, CARGO_TERM_COLOR="never", CARGO_INCREMENTAL="0")
+    env.pop("CARGO_TARGET_DIR", None)
+    env.setdefault("BRI_CONTENT", str(content))
+    return env
+
+
 def tree_intact(worktree, sha):
     """The gate worktree still holds exactly sha, with no tracked changes."""
     head = git("rev-parse", "HEAD", cwd=worktree).strip()
@@ -533,7 +547,7 @@ def save_corpus_result(output, code):
     return True, "ok (coverage not reported)"
 
 
-def save_corpus(binaries, log):
+def save_corpus(binaries, log, env=None):
     """Host the fixed save corpus; True when it passed or found no saves."""
     owners = [b for b in binaries if b[0] == SAVE_CORPUS_TARGET]
     if not owners:
@@ -544,7 +558,7 @@ def save_corpus(binaries, log):
     label, executable, cwd, header = owners[0]
     output, code = run_binary(label, executable,
                               ["--include-ignored", "--exact", SAVE_CORPUS_TEST, "--nocapture"],
-                              cwd)
+                              cwd, env)
     with open(log, "a", encoding="utf-8", errors="replace") as handle:
         handle.write(f"\n===== save corpus =====\n{header}\n{output}\n")
     ok, summary = save_corpus_result(output, code)
@@ -575,8 +589,7 @@ def full_gate(sha, root, changed=()):
         # The target dir goes on the command line, never in CARGO_TARGET_DIR:
         # sccache hashes every CARGO_* variable, so that variable alone made
         # every gate compile miss the cache the lanes fill.
-        env = dict(os.environ, CARGO_TERM_COLOR="never", CARGO_INCREMENTAL="0")
-        env.pop("CARGO_TARGET_DIR", None)
+        env = gate_env(os.environ, main_checkout() / "content")
         target = ["--target-dir", str(root / "target")]
         started = time.time()
         steps = [
@@ -610,7 +623,7 @@ def full_gate(sha, root, changed=()):
             say("a test target failed to compile")
             return False
         run_binaries(binaries, ["--include-ignored", *skip_args], log, TEST_JOBS,
-                     port_bound_targets(worktree))
+                     port_bound_targets(worktree), env)
         say(f"test: ran {len(binaries)} binaries in {time.time() - test_started:.0f}s")
         if not tree_intact(worktree, sha):
             return False
@@ -650,7 +663,7 @@ def full_gate(sha, root, changed=()):
             with open(retry, "a", encoding="utf-8", errors="replace") as handle:
                 for label, executable, cwd, header in owners:
                     output, _ = run_binary(label, executable,
-                                           ["--include-ignored", "--exact", name], cwd)
+                                           ["--include-ignored", "--exact", name], cwd, env)
                     handle.write(f"{header}\n{output}\n")
             say(f"retry {name}: done in {time.time() - started_retry:.0f}s")
             text = retry.read_text(encoding="utf-8", errors="replace")
@@ -665,7 +678,7 @@ def full_gate(sha, root, changed=()):
                 print(f"    {key}")
             say(f"full log: {log}")
             return False
-        if touches_saves(changed) and not save_corpus(binaries, log):
+        if touches_saves(changed) and not save_corpus(binaries, log, env):
             say(f"full log: {log}")
             return False
         if not tree_intact(worktree, sha):
@@ -794,10 +807,14 @@ def stop_tree(process):
         process.kill()
 
 
-def run_binary(label, executable, args, cwd):
-    """Run one test binary to completion; returns (output, exit code)."""
+def run_binary(label, executable, args, cwd, env=None):
+    """Run one test binary to completion; returns (output, exit code).
+
+    `env` is the gate's step environment (`gate_env`); without it the binary
+    inherits this process's, which lacks BRI_CONTENT."""
     process = subprocess.Popen([executable, *args], cwd=cwd, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, errors="replace")
+                               stderr=subprocess.STDOUT, text=True, errors="replace",
+                               env=env)
     try:
         output, _ = process.communicate(timeout=BINARY_TIMEOUT)
         return output, process.returncode
@@ -814,7 +831,7 @@ def run_binary(label, executable, args, cwd):
         return output, 1
 
 
-def run_binaries(binaries, args, log, jobs, exclusive=()):
+def run_binaries(binaries, args, log, jobs, exclusive=(), env=None):
     """Run test binaries in parallel, appending each one's output to log in
     listing order. Returns True when every binary passed.
 
@@ -825,7 +842,7 @@ def run_binaries(binaries, args, log, jobs, exclusive=()):
     def one(entry):
         label, executable, cwd, header = entry
         started = time.time()
-        output, code = run_binary(label, executable, args, cwd)
+        output, code = run_binary(label, executable, args, cwd, env)
         return header, output, code, time.time() - started, label
 
     def is_heavy(label):
@@ -880,9 +897,19 @@ def ci_test():
         output, code = run_binary(label, executable, [], cwd)
         print(output, end="", flush=True)
         if code:
-            failed.append(label)
+            failed.append((label, output))
     if failed:
-        say(f"failing test targets: {', '.join(failed)}")
+        # The CI log viewer keeps only the end of a long log, so repeat each
+        # failing target's libtest failure report here.
+        for label, output in failed:
+            lines = output.splitlines()
+            if "failures:" in lines:
+                lines = lines[lines.index("failures:") :]
+            else:
+                lines = lines[-200:]
+            say(f"failures in {label}:")
+            print("\n".join(lines[:200]), flush=True)
+        say(f"failing test targets: {', '.join(label for label, _ in failed)}")
         return False
     say("all content-free test targets passed")
     return True

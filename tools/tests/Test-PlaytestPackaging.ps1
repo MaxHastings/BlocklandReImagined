@@ -15,6 +15,7 @@ try {
     Copy-Item (Join-Path $repo 'docs/TESTER-GUIDE.md') (Join-Path $fixture 'docs/TESTER-GUIDE.md')
     Copy-Item (Join-Path $repo 'docs/FEATURES.md') (Join-Path $fixture 'docs/FEATURES.md')
     Copy-Item (Join-Path $repo 'docs/DEDICATED-SERVER.md') (Join-Path $fixture 'docs/DEDICATED-SERVER.md')
+    Copy-Item (Join-Path $repo 'docs/rule-workshop') (Join-Path $fixture 'docs/rule-workshop') -Recurse
     $fields = @('map_bundle','brick_catalog','geometry','effects','worlds','ui_pack','brick_materials','avatar','effects_runtime','audio','weather','foliage','weapons','item_presentation','weapon_debris','vehicles','events','tutorial')
     $packages = @()
     foreach ($field in $fields) {
@@ -79,8 +80,40 @@ try {
     $exe = Join-Path $fixture 'bin/bri-client.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]](0x4d,0x5a,0x01,0x02))
     $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+    # A stand-in DirectX Shader Compiler release and its pin
+    # (tools/shader-compiler.json): the packager takes the pinned files out
+    # of the verified archive and puts them beside the game.
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $dxcFiles = [ordered]@{ 'bin/x64/dxcompiler.dll' = 'dxcompiler.dll'; 'LICENSE-LLVM.txt' = 'licenses/DirectXShaderCompiler/LICENSE-LLVM.txt' }
+    $dxcSource = Join-Path $temp 'dxc-source'
+    $ships = @()
+    foreach ($from in $dxcFiles.Keys) {
+        $path = Join-Path $dxcSource $from
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $path)) | Out-Null
+        [IO.File]::WriteAllText($path, "stand-in $from")
+        $ships += [ordered]@{ from = $from; to = $dxcFiles[$from]; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+    }
+    $dxcArchive = Join-Path $temp 'dxc-standin.zip'
+    # Entry names with forward slashes, as the real release's.
+    $writing = [IO.Compression.ZipFile]::Open($dxcArchive, [IO.Compression.ZipArchiveMode]::Create)
+    foreach ($from in $dxcFiles.Keys) {
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($writing, (Join-Path $dxcSource $from), $from) | Out-Null
+    }
+    $writing.Dispose()
+    $pin = [ordered]@{ schema_version = 1; name = 'DirectX Shader Compiler'; version = 'stand-in'; url = 'https://example.invalid/dxc.zip'
+        sha256 = (Get-FileHash $dxcArchive -Algorithm SHA256).Hash.ToLowerInvariant(); ships = $ships }
+    [IO.Directory]::CreateDirectory((Join-Path $fixture 'tools')) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $fixture 'tools/shader-compiler.json'), (ConvertTo-Json $pin -Depth 4))
+    # An archive that is not the pinned one is refused.
+    $tampered = Join-Path $temp 'dxc-tampered.zip'
+    Copy-Item $dxcArchive $tampered
+    [IO.File]::AppendAllText($tampered, 'x')
+    $caught = $false
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot (Join-Path $temp 'dist-tampered') -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() -ShaderCompilerArchive $tampered } catch { $caught = $_.Exception.Message }
+    if ($caught -notlike '*not the pinned*') { throw "Packager accepted a shader compiler archive that is not the pinned one: $caught" }
     $dist = Join-Path $temp 'dist'
-    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @()
+    & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() -ShaderCompilerArchive $dxcArchive
     $package = Join-Path $dist 'BlocklandReImagined-test-fixture-windows'
     if (-not (Test-Path (Join-Path $package 'Launch.cmd'))) { throw 'Expected package launcher Launch.cmd.' }
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }
@@ -90,9 +123,11 @@ try {
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
     # After the base game, in the list's order, on the sides the game derives.
     $listed = @($shippedList.packages | Select-Object -Skip $fields.Count | ForEach-Object { "$($_.id)=$($_.side)@$($_.dir)" }) -join ' '
-    # The Duplicator's host rules right after it, host-only.
+    # The Duplicator's host rules right after it, host-only; the Rule
+    # Workshop toys are rules only, so host-only too.
     $expected = @($shipping | Where-Object { $null -eq $_.PSObject.Properties['enabled'] -or $_.enabled } | ForEach-Object {
-        "$($_.id)=shared@addons/$($_.id)"
+        $side = if ($_.id -eq 'rule-workshop-toys') { 'server' } else { 'shared' }
+        "$($_.id)=$side@addons/$($_.id)"
         if ($_.id -eq 'tool_duplicator') { "tool_duplicator-rules=server@addons/tool_duplicator-rules" } }) -join ' '
     if ($listed -cne $expected) { throw "Expected the default Add-Ons turned on as $expected, got $listed." }
     foreach ($addOn in $shipping) {
@@ -101,6 +136,8 @@ try {
         if ($copied -ne @(Get-ChildItem -LiteralPath $source -Recurse -File).Count) { throw "Expected every file of $($addOn.id) in the release." }
     }
     if (-not (Test-Path (Join-Path $package 'content/addons/tool_duplicator-rules/behaviour.json'))) { throw "Expected the Duplicator's host rules in the release." }
+    # The shader compiler sits beside the game, with its licence.
+    foreach ($to in $dxcFiles.Values) { if (-not (Test-Path (Join-Path $package $to) -PathType Leaf)) { throw "Expected $to in the release." } }
     # The download keeps one name across versions and holds the versioned folder.
     $zip = Join-Path $dist 'BlocklandReImagined-windows.zip'
     if (-not (Test-Path $zip -PathType Leaf)) { throw 'Expected BlocklandReImagined-windows.zip beside the folder.' }
@@ -117,6 +154,18 @@ try {
     $caught = $false
     try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $package } catch { $caught = $true }
     if (-not $caught) { throw 'Verifier accepted an unlisted immutable file.' }
+
+    # A release without the shader compiler, manifest and all, is refused.
+    $withoutDxc = Join-Path $temp 'without-dxc'
+    Copy-Item -LiteralPath $package -Destination $withoutDxc -Recurse
+    Remove-Item -LiteralPath (Join-Path $withoutDxc 'unexpected.txt')
+    Remove-Item -LiteralPath (Join-Path $withoutDxc 'dxcompiler.dll')
+    $manifest = Get-Content (Join-Path $withoutDxc 'MANIFEST.json') -Raw | ConvertFrom-Json
+    $manifest.files = @($manifest.files | Where-Object { $_.path -cne 'dxcompiler.dll' })
+    [IO.File]::WriteAllText((Join-Path $withoutDxc 'MANIFEST.json'), (ConvertTo-Json $manifest -Depth 10))
+    $caught = $false
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $withoutDxc } catch { $caught = $_.Exception.Message -like '*dxcompiler.dll*' }
+    if (-not $caught) { throw 'Verifier accepted a release without the shader compiler.' }
 
     # A release that turns the Stunt Plane off, or a build without it, is refused.
     $withoutPlane = Join-Path $temp 'without-plane'
@@ -136,8 +185,8 @@ try {
     if (-not $caught) { throw 'Verifier accepted a release without the Stunt Plane.' }
     Remove-Item -LiteralPath (Join-Path $bundle 'addons/vehicle_stunt_plane') -Recurse -Force
     $caught = $false
-    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot (Join-Path $temp 'dist2') -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() } catch { $caught = $_.Exception.Message -like '*sources failed*vehicle_stunt_plane*' }
-    if (-not $caught) { throw 'Packager built a release without the Stunt Plane.' }
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot (Join-Path $temp 'dist2') -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() -ShaderCompilerArchive $dxcArchive } catch { $caught = $_.Exception.Message }
+    if ($caught -notlike '*lacks Vehicle_Stunt_Plane (vehicle_stunt_plane)*') { throw "Packager built a release without the Stunt Plane: $caught" }
 
     Write-Host 'Packaging fixture tests passed.'
 } finally {

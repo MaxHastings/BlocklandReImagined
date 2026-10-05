@@ -1,5 +1,6 @@
 use crate::{FIXED_DT, schema::*};
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_motor::player::{MoveInput, Player, PlayerState, PlayerTuning, TORQUE_TICK};
 use glam::{Quat, Vec3};
 use rapier3d::parry::query::ShapeCastOptions;
@@ -73,7 +74,7 @@ const AUTO_RETURN_QUIET: u8 = 4;
 const SIDE_HIT: f32 = 0.7;
 fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
     if f.max_forward_vel > 0. {
-        ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
+        ((speed - f.stall_speed) / f.max_forward_vel).clamped(0., 1.)
     } else {
         0.
     }
@@ -310,7 +311,10 @@ pub enum Intent {
     },
     RunOver {
         vehicle: VehicleId,
+        /// The driver at contact, else the vehicle's spawn owner.
         owner: OwnerId,
+        /// Whoever held the control seat at contact: the runover is theirs.
+        driver: Option<OwnerId>,
         target: OccupantId,
         damage: f32,
         velocity: [f32; 3],
@@ -368,6 +372,9 @@ struct Instance {
     steering_quiet: u8,
     /// Player-type mounts run on the player motor with their datablock.
     actor: Option<Player>,
+    /// Jumps instead of travel: host teleports and openings that carried
+    /// it ([`VehiclesWorld::relocations`]).
+    relocations: u64,
 }
 impl Instance {
     fn weapon_available(&self, d: &Definition) -> bool {
@@ -422,7 +429,7 @@ pub fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
         });
     let size = (max - min).max(Vec3::splat(0.1));
     let authored = |key: &str| d.authored.get(key).and_then(|v| v.parse::<f32>().ok());
-    let slope = d.run_surface_angle.clamp(1., 89.);
+    let slope = d.run_surface_angle.clamped(1., 89.);
     let [uf, ub, us] = d.underwater_speeds;
     PlayerTuning {
         width: size.x.max(size.z),
@@ -445,9 +452,11 @@ pub fn actor_tuning(d: &Definition, scale: f32) -> PlayerTuning {
         density: d.density.max(0.05),
         drag: d.drag.max(0.001),
         slope_degrees: slope,
-        jump_surface_degrees: authored("jumpsurfaceangle").unwrap_or(slope).clamp(1., 89.),
+        jump_surface_degrees: authored("jumpsurfaceangle")
+            .unwrap_or(slope)
+            .clamped(1., 89.),
         // `jumpDelay` in 32 ms ticks, at 120 Hz.
-        jump_delay_ticks: (authored("jumpdelay").unwrap_or(0.) * 3.75).clamp(0., 255.) as u8,
+        jump_delay_ticks: (authored("jumpdelay").unwrap_or(0.) * 3.75).clamped(0., 255.) as u8,
         can_jet: false,
         max_energy: d.energy.maximum.max(0.),
         recharge: d.energy.recharge_per_32ms.max(0.) / TORQUE_TICK,
@@ -814,6 +823,7 @@ impl VehiclesWorld {
                 mouse_steering: [0.; 2],
                 steering_quiet: AUTO_RETURN_QUIET,
                 actor,
+                relocations: 0,
             },
         );
         Ok(())
@@ -929,7 +939,7 @@ impl VehiclesWorld {
             for (i, (w, def)) in v.wheels.iter_mut().zip(&d.wheels).enumerate() {
                 *w = WheelState {
                     extension: (motion.wheel_suspension[i] / (def.rest_length * v.spawn.scale))
-                        .clamp(0., 1.),
+                        .clamped(0., 1.),
                     contact: motion.wheel_contact[i],
                     rotation: motion.wheel_rotation[i],
                     tire: motion.wheel_tire[i],
@@ -1183,7 +1193,15 @@ impl VehiclesWorld {
             body.set_angvel(Vec3::ZERO, true);
         }
         v.previous_velocity = Vec3::ZERO;
+        v.relocations += 1;
         Ok(())
+    }
+    /// How many times vehicle `id` jumped instead of travelling: each
+    /// [`VehiclesWorld::set_transform`] and each opening that carried it.
+    /// Whoever follows its path between two looks treats a change as a
+    /// jump to the new place, never as the line between.
+    pub fn relocations(&self, id: VehicleId) -> Option<u64> {
+        self.instances.get(&id).map(|v| v.relocations)
     }
     /// Where a vehicle is, for what it passes through: its middle.
     pub fn centre(&self, world: &PhysicsWorld, id: VehicleId) -> Option<Vec3> {
@@ -1243,6 +1261,7 @@ impl VehiclesWorld {
             body.set_angvel(angular, true);
         }
         v.previous_velocity = turn * v.previous_velocity;
+        v.relocations += 1;
         Ok(())
     }
     /// Script onWreck equivalent; root starts deathVehicle and clears weapon ski state.
@@ -1255,7 +1274,7 @@ impl VehiclesWorld {
         let intent = if let Some(occupant) = v.seats[0] {
             let b = &world.bodies[v.body];
             let speed = b.linvel().length();
-            let ticks = ((((speed - 10.) / 50.) * 7. + 1.).clamp(1., 7.) * 120.).round() as u64;
+            let ticks = ((((speed - 10.) / 50.) * 7. + 1.).clamped(1., 7.) * 120.).round() as u64;
             Some(Intent::TumbleRequested {
                 vehicle: id,
                 occupant,
@@ -1441,15 +1460,23 @@ impl VehiclesWorld {
                 default
             }
         };
-        let minimum =
-            authored(d.runover_speed, 2.).clamp(2., 999.) + if driver.is_none() { 2. } else { 0. };
+        let minimum = authored(d.runover_speed, 2.).clamped(2., 999.)
+            + if driver.is_none() { 2. } else { 0. };
         let speed = velocity.length();
         self.intents.push(Intent::RunOver {
             vehicle: id,
             owner: driver.map_or(v.spawn.owner, |o| o.owner),
+            driver: driver.map(|o| o.owner),
             target,
+            // An authored scale of 0 is harmless; only an unset one (out of
+            // range) takes Torque's default.
             damage: if speed > minimum {
-                speed * authored(d.runover_damage, 5.)
+                speed
+                    * if (0. ..1e30).contains(&d.runover_damage) {
+                        d.runover_damage
+                    } else {
+                        5.
+                    }
             } else {
                 0.
             },
@@ -1587,7 +1614,7 @@ impl VehiclesWorld {
                 };
                 if driven {
                     for (axis, turn) in steering.iter_mut().zip(turn) {
-                        *axis = (*axis + turn).clamp(-limit, limit);
+                        *axis = (*axis + turn).clamped(-limit, limit);
                     }
                 } else {
                     steering = [0.; 2];
@@ -1687,6 +1714,7 @@ impl VehiclesWorld {
                     &mut self.intents,
                 )? {
                     v.previous_velocity = carry.transform_vector3(v.previous_velocity);
+                    v.relocations += 1;
                     carried.push((*id, carry));
                 }
                 v.jump_held = c.jump;
@@ -1758,7 +1786,7 @@ impl VehiclesWorld {
                             }
                             // Lift along the roof, truncated to a whole number
                             // and capped whatever the pitch or stall.
-                            force += up * (d.lift * speed).trunc().clamp(0., WHEELED_LIFT_CAP);
+                            force += up * (d.lift * speed).trunc().clamped(0., WHEELED_LIFT_CAP);
                             let bite = bite(f, speed);
                             // Squared mouse steering over maxSteeringAngle;
                             // a positive pitch (mouse up with v20's default
@@ -2177,7 +2205,7 @@ impl VehiclesWorld {
                 },
                 weapon_control
                     .aim_pitch
-                    .clamp(d.look_pitch[0], d.look_pitch[1]),
+                    .clamped(d.look_pitch[0], d.look_pitch[1]),
             ],
             turret_damage: v.turret_damage,
             turret_transform: d
@@ -2237,7 +2265,7 @@ fn actor_step(
         actor.state().yaw
     };
     let (throttle, strafe) = if driven {
-        (c.throttle.clamp(-1., 1.), c.strafe.clamp(-1., 1.))
+        (c.throttle.clamped(-1., 1.), c.strafe.clamped(-1., 1.))
     } else {
         (0., 0.)
     };
@@ -2305,7 +2333,7 @@ fn weapon_step(
     if d.is_actor() {
         c.aim_yaw = 0.;
     }
-    c.aim_pitch = c.aim_pitch.clamp(d.look_pitch[0], d.look_pitch[1]);
+    c.aim_pitch = c.aim_pitch.clamped(d.look_pitch[0], d.look_pitch[1]);
     let ready = v
         .last_shot
         .is_none_or(|last| tick - last >= weapon.cooldown_ticks);
@@ -2392,6 +2420,56 @@ fn weapon_step(
     }
 }
 
+/// A vehicle's body as it collides, at `scale`: its shape and where that
+/// sits in the vehicle's frame. Everything that stands for the body in a
+/// physics world (the host's, a client's cosmetic debris) uses this one.
+pub fn body_shape(d: &Definition, scale: f32) -> Result<(SharedShape, Pose)> {
+    let mut parts = vec![];
+    for hull in &d.collision_hulls {
+        let points: Vec<_> = hull.iter().map(|p| Vec3::from_array(*p) * scale).collect();
+        parts.push((
+            Pose::IDENTITY,
+            SharedShape::convex_hull(&points).context("degenerate vehicle hull")?,
+        ));
+    }
+    let mut offset = Pose::IDENTITY;
+    let shape = if d.family == Family::Skis {
+        // The box around skivehicle.dts's collision hulls (the main hull is
+        // a box with a slightly tapered, not quite flat base). Rapier gave
+        // those near-degenerate faces sideways contact normals that kicked
+        // sliding skis into spins; the box slides true.
+        let (min, max) = d
+            .collision_hulls
+            .iter()
+            .flatten()
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+            });
+        offset = Pose::from_translation((min + max) * 0.5 * scale);
+        let half = (max - min) * 0.5 * scale;
+        SharedShape::cuboid(half.x, half.y, half.z)
+    } else if d.family == Family::Ball {
+        let min = Vec3::from_array(d.bounds_min);
+        let max = Vec3::from_array(d.bounds_max);
+        SharedShape::ball((max - min).max_element() * 0.5 * scale)
+    } else if d.is_actor() {
+        // A player's box, as the character controller sweeps it.
+        let (min, max) = d
+            .collision_hulls
+            .iter()
+            .flatten()
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
+            });
+        offset = Pose::from_translation((min + max) * 0.5 * scale);
+        let half = (max - min) * 0.5 * scale;
+        SharedShape::cuboid(half.x, half.y, half.z)
+    } else {
+        SharedShape::compound(parts)
+    };
+    Ok((shape, offset))
+}
+
 fn prepare_spawn(
     s: &Spawn,
     d: &Definition,
@@ -2421,52 +2499,7 @@ fn prepare_spawn(
         s.transform.position.iter().all(|x| x.abs() < 1e7),
         "spawn position outside native bounds"
     );
-    let mut parts = vec![];
-    for hull in &d.collision_hulls {
-        let points: Vec<_> = hull
-            .iter()
-            .map(|p| Vec3::from_array(*p) * s.scale)
-            .collect();
-        parts.push((
-            Pose::IDENTITY,
-            SharedShape::convex_hull(&points).context("degenerate vehicle hull")?,
-        ));
-    }
-    let mut offset = Pose::IDENTITY;
-    let shape = if d.family == Family::Skis {
-        // The box around skivehicle.dts's collision hulls (the main hull is
-        // a box with a slightly tapered, not quite flat base). Rapier gave
-        // those near-degenerate faces sideways contact normals that kicked
-        // sliding skis into spins; the box slides true.
-        let (min, max) = d
-            .collision_hulls
-            .iter()
-            .flatten()
-            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
-                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
-            });
-        offset = Pose::from_translation((min + max) * 0.5 * s.scale);
-        let half = (max - min) * 0.5 * s.scale;
-        SharedShape::cuboid(half.x, half.y, half.z)
-    } else if d.family == Family::Ball {
-        let min = Vec3::from_array(d.bounds_min);
-        let max = Vec3::from_array(d.bounds_max);
-        SharedShape::ball((max - min).max_element() * 0.5 * s.scale)
-    } else if d.is_actor() {
-        // A player's box, as the character controller sweeps it.
-        let (min, max) = d
-            .collision_hulls
-            .iter()
-            .flatten()
-            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
-                (lo.min(Vec3::from_array(*p)), hi.max(Vec3::from_array(*p)))
-            });
-        offset = Pose::from_translation((min + max) * 0.5 * s.scale);
-        let half = (max - min) * 0.5 * s.scale;
-        SharedShape::cuboid(half.x, half.y, half.z)
-    } else {
-        SharedShape::compound(parts)
-    };
+    let (shape, offset) = body_shape(d, s.scale)?;
     let mut builder = if d.is_actor() {
         RigidBodyBuilder::kinematic_position_based()
     } else {

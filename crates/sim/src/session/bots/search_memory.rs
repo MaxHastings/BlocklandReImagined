@@ -64,12 +64,15 @@ impl State {
     /// Last-known anchor, then at most four unchecked probes. Failure means
     /// the caller's existing bounded route ended/failed at its current probe.
     /// Repeated calls cannot refresh the evidence's deadline or retry a probe.
+    /// A probe is reached within `reach` of it (half a vehicle's footprint
+    /// for a driver), and never less than a pedestrian's arrival.
     pub(super) fn next(
         &mut self,
         evidence: Knowledge,
         feet: Vec3,
         tick: u64,
         mut route_failed: bool,
+        reach: f32,
     ) -> Option<Vec3> {
         if self.evidence.is_none_or(|old| {
             old.subject != evidence.subject
@@ -93,7 +96,7 @@ impl State {
             } else {
                 PROBE_TICKS
             };
-            if flat(point - feet).length() <= ARRIVAL
+            if flat(point - feet).length() <= ARRIVAL.max(reach)
                 || route_failed
                 || tick.saturating_sub(started) >= timeout
             {
@@ -134,34 +137,43 @@ mod tests {
         }
     }
     #[test]
+    fn a_probe_counts_as_reached_within_the_searchers_own_reach() {
+        let mut s = State::default();
+        let e = evidence(1, Vec3::ZERO);
+        // Two away: a pedestrian is not there yet; a jeep's side is.
+        assert_eq!(s.next(e, Vec3::X * 2.0, 2, false, 0.0), Some(Vec3::ZERO));
+        assert_ne!(s.next(e, Vec3::X * 2.0, 3, false, 2.5), Some(Vec3::ZERO));
+    }
+
+    #[test]
     fn anchor_then_unchecked_space_uses_only_observed_direction() {
         let mut s = State::default();
         s.observe(evidence(1, Vec3::ZERO), Vec3::Z * 8.0);
         let e = evidence(2, Vec3::X);
         s.observe(e, Vec3::Z * 8.0);
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 10, false), Some(Vec3::X));
-        assert_eq!(s.next(e, Vec3::X, 11, false), Some(Vec3::X * 4.5));
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 10, false, 0.0), Some(Vec3::X));
+        assert_eq!(s.next(e, Vec3::X, 11, false, 0.0), Some(Vec3::X * 4.5));
         assert_eq!(s.phase(), "unchecked-space probe");
     }
     #[test]
     fn failed_probe_advances_instead_of_restarting() {
         let mut s = State::default();
         let e = evidence(1, Vec3::ZERO);
-        let first = s.next(e, Vec3::Z * 8.0, 2, false).unwrap();
-        let next = s.next(e, Vec3::Z * 8.0, 3, true).unwrap();
+        let first = s.next(e, Vec3::Z * 8.0, 2, false, 0.0).unwrap();
+        let next = s.next(e, Vec3::Z * 8.0, 3, true, 0.0).unwrap();
         assert_ne!(first, next);
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 4, false), Some(next));
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 4, false, 0.0), Some(next));
     }
     #[test]
     fn five_failed_destinations_exhaust_without_an_extra_route() {
         let mut s = State::default();
         let e = evidence(1, Vec3::ZERO);
-        assert!(s.next(e, Vec3::Z * 8.0, 2, false).is_some());
+        assert!(s.next(e, Vec3::Z * 8.0, 2, false, 0.0).is_some());
         for tick in 3..7 {
-            assert!(s.next(e, Vec3::Z * 8.0, tick, true).is_some());
+            assert!(s.next(e, Vec3::Z * 8.0, tick, true, 0.0).is_some());
         }
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 7, true), None);
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 8, false), None);
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 7, true, 0.0), None);
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 8, false, 0.0), None);
         assert_eq!(s.phase(), "bounded search exhausted");
     }
     #[test]
@@ -169,31 +181,31 @@ mod tests {
         let mut s = State::default();
         let mut e = evidence(1, Vec3::ZERO);
         e.expires = 10000;
-        assert!(s.next(e, Vec3::Z * 8.0, 2, false).is_some());
+        assert!(s.next(e, Vec3::Z * 8.0, 2, false, 0.0).is_some());
         for tick in [362, 482, 602, 722] {
-            assert!(s.next(e, Vec3::Z * 8.0, tick, false).is_some());
+            assert!(s.next(e, Vec3::Z * 8.0, tick, false, 0.0).is_some());
         }
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 842, false), None);
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 842, false, 0.0), None);
     }
     #[test]
     fn relayed_evidence_cannot_extend_expiry() {
         let mut s = State::default();
         let mut e = evidence(1, Vec3::ZERO);
         e.expires = 10;
-        assert!(s.next(e, Vec3::Z * 8.0, 2, false).is_some());
+        assert!(s.next(e, Vec3::Z * 8.0, 2, false, 0.0).is_some());
         e.expires = 1000;
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 10, false), None);
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 10, false, 0.0), None);
         assert_eq!(s.phase(), "dated evidence expired");
-        assert_eq!(s.next(e, Vec3::Z * 8.0, 11, false), None);
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 11, false, 0.0), None);
     }
     #[test]
     fn newer_observation_restarts_with_the_new_anchor() {
         let mut s = State::default();
         let old = evidence(1, Vec3::ZERO);
-        s.next(old, Vec3::Z * 8.0, 2, false);
-        s.next(old, Vec3::Z * 8.0, 3, true);
+        s.next(old, Vec3::Z * 8.0, 2, false, 0.0);
+        s.next(old, Vec3::Z * 8.0, 3, true, 0.0);
         let new = evidence(4, Vec3::X * 12.0);
-        assert_eq!(s.next(new, Vec3::Z * 8.0, 5, true), Some(new.at));
+        assert_eq!(s.next(new, Vec3::Z * 8.0, 5, true, 0.0), Some(new.at));
         assert_eq!(s.phase(), "last observed position");
     }
 }

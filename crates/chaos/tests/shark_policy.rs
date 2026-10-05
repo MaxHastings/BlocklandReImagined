@@ -919,6 +919,7 @@ fn physical_scene(
     hole.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(kind_id.clone()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(2, hole);
     world.next_brick_id = 3;

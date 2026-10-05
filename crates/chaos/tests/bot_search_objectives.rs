@@ -131,6 +131,7 @@ impl Game {
         hole.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(bot_kind.clone()),
             recolor: false,
+            team: None,
         }));
         if variant {
             hole.name = Some("Patient post".into());
@@ -145,6 +146,7 @@ impl Game {
             second.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(fixture::BOT.into()),
                 recolor: false,
+                team: None,
             }));
             world.bricks.insert(23, second);
         }
@@ -439,7 +441,7 @@ fn a_different_visible_hostile_preempts_then_resumes_the_intended_dated_subject(
         }
         g.step(MoveInput::default());
     }
-    let original = original.expect("intended real A must be hidden with a retained Enemy plan");
+    let mut original = original.expect("intended real A must be hidden with a retained Enemy plan");
     let game = g.s.minigame_views()[0].id;
     let b =
         g.s.join(
@@ -479,6 +481,13 @@ fn a_different_visible_hostile_preempts_then_resumes_the_intended_dated_subject(
                 .into_iter()
                 .find(|t| t.bot == g.bot)
                 .unwrap();
+        // Seeing A again for real dates new knowledge of A; only hidden
+        // evidence newer than the last real sight would be invented.
+        if thought.visible == Some(g.human)
+            && let Some(evidence) = thought.remembered.filter(|k| k.subject == g.human)
+        {
+            original = evidence;
+        }
         if thought.visible.is_none()
             && let Some(evidence) = thought.remembered.filter(|k| k.subject == g.human)
         {
@@ -589,9 +598,11 @@ fn explicit_teams_override_shared_builder_and_kind_defaults_for_real_elimination
                 "explicit opposed bots never saw each other: {:?}",
                 g.s.bot_thoughts()
             );
+            // The kill that ended the round: when the two trade shots, the
+            // first one killed can be the first killer, a tick later.
             let death =
                 g.s.death_results()
-                    .find(|r| {
+                    .rfind(|r| {
                         (r.victim == g.bot && r.killer == Some(other))
                             || (r.victim == other && r.killer == Some(g.bot))
                     })

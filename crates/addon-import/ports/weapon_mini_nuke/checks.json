@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "weapon_mini_nuke:weapon/mininukelauncheritem",
+      "projectiles": 1,
+      "recoil": null,
+      "max_spread_degrees": 0.01,
+      "why": "mininukeLauncherImage: the stock WeaponImage::onFire, one missile a click"
+    }
+  ]
+}

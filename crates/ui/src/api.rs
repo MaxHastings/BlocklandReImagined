@@ -138,6 +138,10 @@ pub type DatablockMenus = BTreeMap<String, Vec<Choice>>;
 pub struct EventCatalog {
     pub inputs: Vec<EventInputInfo>,
     pub outputs: Vec<EventOutputInfo>,
+    /// One line about an Add-On's target, by its name, that the wrench
+    /// shows while a row aims at it.
+    #[serde(default)]
+    pub target_notes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -182,6 +186,7 @@ impl EventCatalog {
         supported_outputs: &[(&str, &str)],
     ) -> Self {
         EventCatalog {
+            target_notes: BTreeMap::new(),
             inputs: t
                 .inputs
                 .iter()
@@ -258,6 +263,14 @@ pub struct WrenchData {
     pub sound: Option<String>,
     pub vehicle: Option<String>,
     pub recolor_vehicle: bool,
+    /// A bot spawn brick's Team choice: a team slot of its builder's
+    /// mini-game; `None` leaves the bot's team to the game.
+    #[serde(default)]
+    pub vehicle_team: Option<u32>,
+    /// The inspected brick's builder (owner id): the Team menu lists the
+    /// teams of the mini-game they play in.
+    #[serde(default)]
+    pub builder: Option<u64>,
 }
 
 /// One event row as the dialog edits it.
@@ -733,6 +746,11 @@ pub enum UiAction {
     TrustAddOnCode,
     /// Stop trusting every server's Add-On code (Add-Ons screen).
     ForgetAddOnTrust,
+    /// Keep the build a hosted game that ended abnormally left as a save
+    /// (Recover Unsaved Build?'s Keep).
+    KeepRecoveredBuild,
+    /// Delete that build (Recover Unsaved Build?'s Discard).
+    DiscardRecoveredBuild,
     /// Cancel a pending connection attempt or leave the loading screen.
     CancelConnect,
     /// Leave the game (disconnect, or stop hosting).
@@ -1673,6 +1691,12 @@ pub enum UiUpdate {
     /// Rows for the events dialog of `brick`.
     OpenEvents {
         brick: u64,
+        /// The brick's builder (owner id), whose mini-game its rows run in;
+        /// `None` takes the local player's.
+        builder: Option<u64>,
+        /// The builder's brick group name when the brick is not the local
+        /// player's: `<NAMED BRICK>` lists their named bricks.
+        builder_name: Option<String>,
         rows: Vec<EventRow>,
         named_targets: Vec<String>,
         allow_named: bool,

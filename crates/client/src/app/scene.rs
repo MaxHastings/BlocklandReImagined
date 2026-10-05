@@ -39,4 +39,7 @@ pub(super) struct SceneState {
     pub(super) query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// The replica log and revision `query_source` came from.
     pub(super) query_log: Option<(Arc<network::WorldLog>, u64)>,
+    /// Chunk rebuild jobs started and chunks they rebuilt, since load.
+    pub(super) chunk_jobs: u64,
+    pub(super) chunks_rebuilt: u64,
 }

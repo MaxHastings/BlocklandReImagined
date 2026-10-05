@@ -52,6 +52,10 @@ pub struct TeamView {
     pub name: String,
     /// The team's paint palette index.
     pub color: u8,
+    /// The team's own points (`add_team_points`), apart from its members'
+    /// scores.
+    #[serde(default)]
+    pub points: i64,
 }
 /// A brick as scripts see it (`bricks(kind)`, `brick(id)`): #{ id, kind,
 /// x, y, z, turns, min, max, color, owner, game, name, item, ui_name }.
@@ -99,6 +103,7 @@ fn team_map(t: &TeamView) -> Dynamic {
         ("id", Dynamic::from_int(t.id as i64)),
         ("name", t.name.clone().into()),
         ("color", Dynamic::from_int(i64::from(t.color))),
+        ("points", Dynamic::from_int(t.points)),
     ])
 }
 fn minigame_map(g: &MinigameView) -> Dynamic {
@@ -298,6 +303,19 @@ fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
     }))
 }
 
+fn team_points(game: &Dynamic, team: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
+    let value = value.as_int().map_err(|_| "points are a whole number")?;
+    if value.abs() > MAX_SCORE {
+        return fail(format!("points are at most {MAX_SCORE} either way"));
+    }
+    push(Op::SetTeamPoints(ops::SetTeamPoints {
+        game: id(game)?,
+        team: id(team)?,
+        value,
+        add,
+    }))
+}
+
 fn drop_map(d: &DropView) -> Dynamic {
     let [x, y, z] = position(d.position);
     map([
@@ -362,7 +380,7 @@ fn report_from(mut report: Map) -> Fallible<Report> {
             }
         }
     }
-    rhai::serde::from_dynamic(&Dynamic::from_map(report))
+    rhai::serde::from_dynamic(&view::plain(&Dynamic::from_map(report)))
         .map_err(|e| format!("show_report: {e}").into())
 }
 /// `drop_item(item, #{ at, velocity, paint, data, seconds })`.
@@ -379,7 +397,7 @@ fn drop_with(item: &str, options: Map) -> Fallible<()> {
         None => None,
         Some(d) if d.is_unit() => None,
         Some(d) => Some(
-            rhai::serde::from_dynamic::<serde_json::Value>(d)
+            rhai::serde::from_dynamic::<serde_json::Value>(&view::plain(d))
                 .map_err(|_| "`data` must be plain values: numbers, text, arrays, maps")?,
         ),
     };
@@ -438,21 +456,22 @@ fn wear(
 pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("minigames", || {
         with(|i| {
-            Ok(i.snapshot
+            let snapshot = i.snapshot.clone();
+            snapshot
                 .minigames
                 .iter()
-                .map(minigame_map)
-                .collect::<Array>())
+                .map(|g| view_in(i, Some(Of::Minigame(g.id)), || minigame_map(g)))
+                .collect::<Fallible<Array>>()
         })
     });
     engine.register_fn("minigame", |game: Dynamic| {
         with(|i| {
             let game = id(&game)?;
-            Ok(i.snapshot
-                .minigames
-                .iter()
-                .find(|g| g.id == game)
-                .map_or(Dynamic::UNIT, minigame_map))
+            let snapshot = i.snapshot.clone();
+            match snapshot.minigames.iter().find(|g| g.id == game) {
+                Some(g) => view_in(i, Some(Of::Minigame(g.id)), || minigame_map(g)),
+                None => Ok(Dynamic::UNIT),
+            }
         })
     });
     engine.register_fn("set_teams", |game: Dynamic, list: Array| {
@@ -471,6 +490,14 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("add_score", |player: Dynamic, value: Dynamic| {
         score(&player, &value, true)
     });
+    engine.register_fn(
+        "set_team_points",
+        |game: Dynamic, team: Dynamic, value: Dynamic| team_points(&game, &team, &value, false),
+    );
+    engine.register_fn(
+        "add_team_points",
+        |game: Dynamic, team: Dynamic, value: Dynamic| team_points(&game, &team, &value, true),
+    );
     // Add-On settings (`behaviour.json` `settings`).
     engine.register_fn("setting", |game: Dynamic, key: &str| {
         read_setting(&game, None, key)
@@ -516,7 +543,7 @@ pub(super) fn register(engine: &mut Engine) {
         let value = if value.is_unit() {
             None
         } else {
-            let json: serde_json::Value = rhai::serde::from_dynamic(&value)?;
+            let json: serde_json::Value = rhai::serde::from_dynamic(&view::plain(&value))?;
             Some(json)
         };
         push(Op::SetHostData(ops::SetHostData {
@@ -524,12 +551,28 @@ pub(super) fn register(engine: &mut Engine) {
             value,
         }))
     });
-    // The lines of one of these rules' data files (`data` provides).
-    engine.register_fn("data_lines", |file: &str| {
+    // One of these rules' data files (`data` provides), a line at a time:
+    // `data_line_count(file)` lines (`()` without the file) and
+    // `data_line(file, i)`. A whole file as one array would count every
+    // line's text against the script's string limit, so a name list longer
+    // than that (Slayer's 36 KB of first names) could not be read at all.
+    engine.register_fn("data_line_count", |file: &str| {
         with_world(|world, _| {
-            Ok(world.data_lines(file).map_or(Dynamic::UNIT, |lines| {
-                Dynamic::from_array(lines.into_iter().map(Into::into).collect())
-            }))
+            Ok(world
+                .data_lines(file)
+                .map_or(Dynamic::UNIT, |lines| (lines.len() as i64).into()))
+        })
+    });
+    engine.register_fn("data_line", |file: &str, i: i64| {
+        with_world(|world, _| {
+            Ok(world
+                .data_lines(file)
+                .and_then(|lines| {
+                    usize::try_from(i)
+                        .ok()
+                        .and_then(|i| lines.into_iter().nth(i))
+                })
+                .map_or(Dynamic::UNIT, Into::into))
         })
     });
     engine.register_fn("minigame_snapshot", |game: Dynamic| {
@@ -541,7 +584,7 @@ pub(super) fn register(engine: &mut Engine) {
         })
     });
     engine.register_fn("restore_minigame", |game: Dynamic, snapshot: Dynamic| {
-        let snapshot: serde_json::Value = rhai::serde::from_dynamic(&snapshot)?;
+        let snapshot: serde_json::Value = rhai::serde::from_dynamic(&view::plain(&snapshot))?;
         push(Op::RestoreMinigame(ops::RestoreMinigame {
             game: id(&game)?,
             snapshot,
@@ -826,7 +869,13 @@ pub(super) fn register(engine: &mut Engine) {
         }))
     });
     engine.register_fn("drops", || {
-        with_world(|world, _| Ok(world.drops().iter().map(drop_map).collect::<Array>()))
+        with_world(|world, i| {
+            world
+                .drops()
+                .iter()
+                .map(|d| view_in(i, Some(Of::Drop(d.id)), || drop_map(d)))
+                .collect::<Fallible<Array>>()
+        })
     });
     engine.register_fn(
         "mount_image",
@@ -863,18 +912,23 @@ pub(super) fn register(engine: &mut Engine) {
         },
     );
     // Every brick of one kind, lowest id first, at most MAX_BRICKS_LISTED.
+    // Bricks are views ([`view`]): the list never meets a script value's
+    // limits, however many bricks of the kind the build has.
     engine.register_fn("bricks", |kind: &str| {
-        with_world(|world, _| {
-            Ok(world
+        with_world(|world, i| {
+            world
                 .bricks_of(kind, MAX_BRICKS_LISTED)
                 .iter()
-                .map(brick_map)
-                .collect::<Array>())
+                .map(|b| view_in(i, Some(Of::Brick(b.id)), || brick_map(b)))
+                .collect::<Fallible<Array>>()
         })
     });
     engine.register_fn("brick", |brick: Dynamic| {
         let brick = id(&brick)?;
-        with_world(|world, _| Ok(world.brick(brick).as_ref().map_or(Dynamic::UNIT, brick_map)))
+        with_world(|world, i| match world.brick(brick) {
+            Some(b) => view_in(i, Some(Of::Brick(b.id)), || brick_map(&b)),
+            None => Ok(Dynamic::UNIT),
+        })
     });
     // A value kept on a brick (a v20 brick's dynamic field): this
     // package's own `key`, or another's as `namespace:key`; () when none.
@@ -926,8 +980,10 @@ pub(super) fn register(engine: &mut Engine) {
     });
     // The avatar pack's choices by slot, and its faces and decals, in the
     // pack's order (`$pref::Avatar::Hat` 6 is the seventh hat).
+    // A view ([`view`]): every slot's names together grow with the avatar
+    // packs; a script reads one slot's list at a time.
     engine.register_fn("avatar_choices", || {
-        with_world(|world, _| {
+        with_world(|world, i| {
             let mut out = Map::new();
             for (slot, names) in world.avatar_choices() {
                 out.insert(
@@ -935,7 +991,7 @@ pub(super) fn register(engine: &mut Engine) {
                     Dynamic::from_array(names.into_iter().map(Dynamic::from).collect()),
                 );
             }
-            Ok(out)
+            view_in(i, None, || Dynamic::from_map(out))
         })
     });
     // The paint palette: `[r, g, b, a]` from 0 to 1 for each colour index

@@ -127,7 +127,9 @@ impl Screen {
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
                 Event::Failed(e) => bail!("{}: {e}", self.name),
-                Event::Reply { request, result } => {
+                Event::Reply {
+                    request, result, ..
+                } => {
                     self.replies
                         .insert(request, result.map_err(|r| format!("{r:?}")));
                 }

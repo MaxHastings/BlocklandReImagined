@@ -1,5 +1,6 @@
 //! Rendering the scene each frame.
 use super::*;
+use bri_console::Clamp;
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -43,6 +44,11 @@ impl App {
                 }
             }
         }
+        // The world's pipelines compile on a worker (seconds with FXC).
+        // Entering a game and finishing a map change wait for them on the
+        // loading screen (`scene_pipelines_ready`), so a frame of a game
+        // that is in reaches here with them compiled; only a GPU opened
+        // after entering (a lost device, an offscreen capture) waits here.
         let renderer = self
             .gpu
             .renderer
@@ -390,51 +396,23 @@ impl App {
             {
                 lines.set_lines(frame.device, &vertices)?;
             }
-            if (self.gpu.hidden_uploaded != Some(show) || self.gpu.hidden_fading != fading)
-                && let Some(lines) = &mut self.gpu.hidden_lines
+            let debris = &self.fx.brick_debris;
+            if let Some(lines) = &mut self.gpu.hidden_lines
+                && let Some(vertices) = self.gpu.hidden_outlines.update(
+                    &view.world.bricks,
+                    &view.world.palette,
+                    show,
+                    &fading,
+                    |id| debris.is_dead(id),
+                    |brick| {
+                        crate::brick_cover::mesh(brick, meshes)
+                            .map(|mesh| hidden_brick_box(brick, mesh))
+                    },
+                    self.gpu.hidden_uploaded != Some(show),
+                )
             {
-                let mut vertices = vec![];
-                if show {
-                    // Hidden bricks, and any fading in or out drawn under
-                    // alpha 0.1 (`brick_fade::OUTLINE_ALPHA`).
-                    let faint: BTreeSet<u64> = fading
-                        .iter()
-                        .filter(|(_, faint)| *faint)
-                        .map(|(id, _)| *id)
-                        .collect();
-                    let easing: BTreeSet<u64> = fading.iter().map(|(id, _)| *id).collect();
-                    let bricks = view
-                        .world
-                        .bricks
-                        .iter()
-                        .filter(|(id, b)| !b.visible && !easing.contains(*id))
-                        .chain(
-                            faint
-                                .iter()
-                                .filter_map(|id| Some((id, view.world.bricks.get(id)?))),
-                        );
-                    for (id, brick) in bricks {
-                        if self.fx.brick_debris.is_dead(*id) {
-                            continue;
-                        }
-                        let Some(mesh) = crate::brick_cover::mesh(brick, meshes) else {
-                            continue;
-                        };
-                        let Some(color) = view.world.palette.get(usize::from(brick.color)) else {
-                            continue;
-                        };
-                        let (low, high) = hidden_brick_box(brick, mesh);
-                        bri_render::lines::box_edges(
-                            low,
-                            high,
-                            [color[0], color[1], color[2]],
-                            &mut vertices,
-                        );
-                    }
-                }
                 lines.set_lines(frame.device, &vertices)?;
                 self.gpu.hidden_uploaded = Some(show);
-                self.gpu.hidden_fading = fading;
             }
             let selection = self.build.building.as_ref().and_then(|b| b.outline());
             if self.gpu.selection_uploaded != Some(selection)
@@ -469,7 +447,11 @@ impl App {
                     &view.world.palette,
                 )?;
             }
-            if let Some(world) = &self.scene.world_source {
+            if let (Some(world), Some(palette), Some(gpu_palette)) = (
+                &self.scene.world_source,
+                &self.scene.palette,
+                &self.gpu.gpu_palette,
+            ) {
                 self.fx.fade_models.upload(
                     &self.fx.brick_fades,
                     &self.scene.chunks_left_out,
@@ -478,6 +460,8 @@ impl App {
                     frame.device,
                     frame.queue,
                     meshes,
+                    palette,
+                    gpu_palette,
                     materials,
                 )?;
             }
@@ -598,8 +582,8 @@ impl App {
         // Explosion `CameraShake`: 10 degrees of view rotation per unit of offset.
         let shake = self.fx.actor_effects.camera_shake(eye) * 10f32.to_radians();
         let (forward, right, up) = rolled_view_basis(
-            yaw + shake.z.clamp(-0.3, 0.3),
-            pitch + shake.x.clamp(-0.3, 0.3),
+            yaw + shake.z.clamped(-0.3, 0.3),
+            pitch + shake.x.clamped(-0.3, 0.3),
             roll,
         );
         let aspect = frame.size.0 as f32 / frame.size.1 as f32;
@@ -877,8 +861,18 @@ impl App {
             .actor_effects
             .world()
             .snapshot_in_view(&effects_camera);
-        let (effects_frame, deferred_lights) =
-            combine_effect_frames(world_frame, [weapon_frame, actor_frame], &eyes);
+        let sprite_budget = self
+            .gpu
+            .effects_renderer
+            .as_ref()
+            .context("Effects GPU not initialized")?
+            .max_instances();
+        let (effects_frame, cuts) = combine_effect_frames(
+            world_frame,
+            [weapon_frame, actor_frame],
+            &eyes,
+            sprite_budget,
+        );
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
@@ -914,7 +908,7 @@ impl App {
         let plant_light = std::array::from_fn(|i| {
             ((camera.ambient[i] + camera.sun_color[i] * live_up)
                 / (scene.ambient[i] + scene.sun_color[i] * baked_up).max(0.001))
-            .clamp(0.0, 4.0)
+            .clamped(0.0, 4.0)
         });
         self.foliage.set_illumination(plant_light)?;
         self.foliage.prepare(
@@ -928,7 +922,8 @@ impl App {
             fog_start,
             fog_end.max(fog_start + 0.001),
         )?;
-        self.fx.weapon_light_deferred = deferred_lights;
+        self.fx.weapon_light_deferred = cuts.lights;
+        self.fx.effect_sprites_cut = cuts.sprites;
         // Player lights are effect lights too; the nearest to the camera win.
         let lights: Vec<_> = effects_frame
             .lights
@@ -1353,9 +1348,7 @@ impl App {
         let effective = self
             .graphics
             .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
-        // The last frame, holding any picture copied then, was submitted.
         // Failures are logged by the writer; success is not news.
-        self.files.save_shots.submitted();
         self.files.save_shots.poll(frame.device);
         if let Some(path) = self.files.save_picture.take() {
             self.take_save_picture(frame, path)?;
@@ -1453,16 +1446,7 @@ impl App {
         }
         // Unified's switchable fixtures retain their exact legacy per-texel
         // light shares. Dynamic never equips or patches these images.
-        let rules = self
-            .net
-            .attempt
-            .as_ref()
-            .and_then(|a| a.view.as_ref())
-            .is_some_and(|v| !v.map_lights.is_empty());
-        let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
-        if (effective.lighting == 2 && switchable)
-            && !self.lighting.light_volume.switchable_equipped
-            && self.lighting.light_volume.map.is_some()
+        if self.switchable_sheets_due()
             && let Some(scene) = self.scene.cpu_scene.as_mut()
         {
             bri_render::map_lighting::DynamicSheet::equip(
@@ -1473,5 +1457,24 @@ impl App {
             self.gpu.gpu_scene = None;
         }
         Ok(())
+    }
+    /// The map bake's switchable sheets wait for the map's images: taking
+    /// them uploads the whole scene again (`prepare_render`).
+    pub(super) fn switchable_sheets_due(&self) -> bool {
+        let effective = self
+            .graphics
+            .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
+        let rules = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.view.as_ref())
+            .is_some_and(|v| !v.map_lights.is_empty());
+        let switchable = !self.lighting.light_volume.light_shapes.is_empty() || rules;
+        effective.lighting == 2
+            && switchable
+            && !self.lighting.light_volume.switchable_equipped
+            && self.lighting.light_volume.map.is_some()
+            && self.scene.cpu_scene.is_some()
     }
 }

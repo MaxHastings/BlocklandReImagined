@@ -29,7 +29,9 @@ struct Save {
     path: String,
     #[allow(dead_code)]
     reason: String,
-    /// Bricks the host places, when stable.
+    /// Bricks the host keeps: placed, or set aside because no installed
+    /// package defines them. Which Add-Ons are installed only moves bricks
+    /// between the two, so the count holds for any content folder.
     bricks: Option<usize>,
     /// Hosting must fail with an error containing this text.
     error: Option<String>,
@@ -131,17 +133,25 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.host(entry)))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("panicked")));
         match (&outcome, &save.error, save.bricks) {
-            (Ok(placed), None, Some(want)) if *placed != want => Some(format!(
-                "{}: placed {placed} bricks, expected {want} (update save-corpus.json if the change is intended)",
-                save.path
-            )),
-            (Ok(placed), None, _) => {
-                eprintln!("ok {}: {placed} bricks", save.path);
+            (Ok(hosted), None, Some(want)) if hosted.placed + hosted.set_aside != want => {
+                Some(format!(
+                    "{}: kept {} bricks ({} placed, {} set aside), expected {want} (update save-corpus.json if the change is intended)",
+                    save.path,
+                    hosted.placed + hosted.set_aside,
+                    hosted.placed,
+                    hosted.set_aside
+                ))
+            }
+            (Ok(hosted), None, _) => {
+                eprintln!(
+                    "ok {}: {} bricks placed, {} set aside",
+                    save.path, hosted.placed, hosted.set_aside
+                );
                 None
             }
-            (Ok(placed), Some(want), _) => Some(format!(
-                "{}: placed {placed} bricks, expected the error {want:?}",
-                save.path
+            (Ok(hosted), Some(want), _) => Some(format!(
+                "{}: placed {} bricks, expected the error {want:?}",
+                save.path, hosted.placed
             )),
             (Err(error), Some(want), _) if format!("{error:#}").contains(want.as_str()) => {
                 eprintln!("ok {}: refused as expected ({error:#})", save.path);

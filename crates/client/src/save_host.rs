@@ -12,6 +12,17 @@ use bri_sim::session::{Command, Reply, Session};
 use bri_world::{ContentRef, World};
 use std::{collections::BTreeMap, sync::Arc};
 
+/// What hosting a save kept of its bricks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hosted {
+    /// Bricks placed in the world.
+    pub placed: usize,
+    /// Bricks set aside, kept and saved with the world, because no installed
+    /// package defines them. Installing the package that does moves them to
+    /// `placed`, so `placed + set_aside` does not depend on the Add-Ons.
+    pub set_aside: usize,
+}
+
 pub struct SaveHost {
     pub content: ClientContent,
     weapons: bri_net::content_identity::WeaponContent,
@@ -77,8 +88,8 @@ impl SaveHost {
     }
 
     /// Host `entry` on its map (Slate for a loose save) and build what a
-    /// joined client builds. The number of bricks placed.
-    pub fn host(&self, entry: &Entry) -> Result<usize> {
+    /// joined client builds.
+    pub fn host(&self, entry: &Entry) -> Result<Hosted> {
         let build = Store::read(entry)?;
         let map = if LOADABLE_MAPS.contains(&entry.map_id.as_str()) {
             entry.map_id.as_str()
@@ -113,7 +124,10 @@ impl SaveHost {
             palette: state.palette.clone(),
             bricks: bri_net::protocol::public_bricks(&state.bricks),
         });
-        let placed = world.bricks.len();
+        let hosted = Hosted {
+            placed: world.bricks.len(),
+            set_aside: state.unloaded.len(),
+        };
         let definitions = session.simulation().definitions.clone();
         let waters = session.simulation().waters.clone();
         drop(session);
@@ -136,7 +150,7 @@ impl SaveHost {
                 usize::MAX / 4,
             )
             .context("Building brick chunks")?;
-        Ok(placed)
+        Ok(hosted)
     }
 
     /// Print names in `build` this client has no image for, with brick counts.

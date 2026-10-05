@@ -4,6 +4,9 @@
 //! that one folder are converted by the importer (`bri-import-addon`, run by
 //! the game), each once, into an Add-On that starts off. A zip that changes
 //! is converted again; one that is removed takes its conversion with it.
+//! A dropped copy of an Add-On the game already ships (a bundled original,
+//! [`crate::library::PackageInfo::bundled`]) is not converted: the shipped
+//! one is never adopted, replaced or removed by this folder.
 //! Add-Ons there are also each other's reference, so one that requires
 //! another (`ForceRequiredAddOn`) finds it beside it.
 //!
@@ -89,6 +92,10 @@ pub struct Record {
     /// Why it could not be converted; tried again once it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The package the game ships as it, so it was not converted
+    /// ([`Step::Included`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub included: Option<String>,
 }
 
 /// [`STATE_FILE`]: records by lower-case name.
@@ -149,8 +156,8 @@ impl State {
 /// folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    /// Convert a dropped Add-On, first removing `replaces`, the package an
-    /// earlier copy of it became.
+    /// Convert a dropped Add-On in place of `replaces`, the package an
+    /// earlier copy of it became ([`Library::install_staged`]).
     Import {
         name: String,
         path: std::path::PathBuf,
@@ -171,11 +178,18 @@ pub enum Step {
         id: String,
         stamp: Stamp,
     },
+    /// Tell the player `name` is already included: the game ships it as
+    /// `id`, so it is not converted. Remembered, so it is said once.
+    Included {
+        name: String,
+        id: String,
+        stamp: Stamp,
+    },
 }
 
 /// What brings the root's conversions in line with its drop folder.
-/// Removals come first, so a replaced Add-On's old package is gone before
-/// its new one is made.
+/// Removals come first, so a folder an Add-On taken out held is free
+/// before a new conversion may take its name.
 pub fn plan(library: &Library, state: &State) -> Vec<Step> {
     let mut removals = vec![];
     let mut rest = vec![];
@@ -184,6 +198,16 @@ pub fn plan(library: &Library, state: &State) -> Vec<Step> {
             continue;
         };
         let record = state.get(&legacy.name);
+        if let Some(id) = &legacy.included {
+            if record.is_none_or(|r| r.included.as_ref() != Some(id)) {
+                rest.push(Step::Included {
+                    name: legacy.name.clone(),
+                    id: id.clone(),
+                    stamp: now,
+                });
+            }
+            continue;
+        }
         match (&legacy.imported_as, record) {
             (Some(_), Some(r)) if r.stamp == now => {}
             (Some(id), None) => rest.push(Step::Adopt {
@@ -208,10 +232,12 @@ pub fn plan(library: &Library, state: &State) -> Vec<Step> {
         if dropped {
             continue;
         }
-        // Only what the game converted, in its own import folder.
+        // Only what the game converted for the player, in its own import
+        // folder: never a package the game ships, whatever a record says.
         if let (Some(id), Some(dir)) = (&record.id, &record.dir)
             && dir.starts_with(&format!("{IMPORT_DIR}/"))
             && library.get(id).is_some_and(|e| e.package.dir == *dir)
+            && !library.shipped(id)
         {
             removals.push(Step::Remove {
                 name: record.name.clone(),
@@ -271,6 +297,7 @@ mod tests {
                 Step::Import { name, replaces, .. } => format!("import {name} {replaces:?}"),
                 Step::Remove { name, id, .. } => format!("remove {name} {id}"),
                 Step::Adopt { name, id, .. } => format!("adopt {name} {id}"),
+                Step::Included { name, id, .. } => format!("included {name} {id}"),
             })
             .collect()
     }
@@ -295,6 +322,7 @@ mod tests {
             id: Some("weapon_gun".into()),
             dir: Some(dir.clone()),
             error: None,
+            included: None,
         });
         state.save(&root).unwrap();
         let state = State::load(&root);
@@ -333,6 +361,7 @@ mod tests {
             id: None,
             dir: None,
             error: Some("not a zip".into()),
+            included: None,
         });
         let broken = library.legacy.iter().find(|l| l.name == "Broken").unwrap();
         assert_eq!(state.failed(broken), Some("not a zip"));

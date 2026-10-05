@@ -9,6 +9,7 @@ use crate::ml;
 use crate::pack::{Pack, TexKey};
 use crate::schema::{Control, HSizing, Justify, Style, VSizing};
 use crate::text::{self, Font};
+use bri_console::Clamp;
 use std::collections::HashMap;
 
 pub type NodeId = usize;
@@ -321,6 +322,12 @@ pub struct View {
     /// The link of an ML text control the last press landed on (its
     /// `onURL`), with that press's `Click`.
     pub link: Option<String>,
+    /// A detached control that is still pressed, by name: the control a
+    /// rebuild adds under that name takes the press, so a rebuild between
+    /// press and release (a refresh from the host) does not lose the click.
+    pressed_rebuilt: Option<(NodeId, String)>,
+    /// The same for a detached control whose dropdown is still open.
+    popup_rebuilt: Option<(NodeId, String)>,
 }
 
 /// How close to a resizable window's right or bottom edge a press resizes it.
@@ -361,6 +368,8 @@ impl View {
             pressed: None,
             focus: None,
             popup: None,
+            pressed_rebuilt: None,
+            popup_rebuilt: None,
             popup_query: String::new(),
             popup_keys: Vec::new(),
             popup_shown: Vec::new(),
@@ -412,6 +421,18 @@ impl View {
         });
         if let Some(n) = &c.name {
             self.names.entry(n.clone()).or_insert(id);
+            if let Some((old, _)) = self.pressed_rebuilt.take_if(|(_, p)| p == n)
+                && let Some((pressed, _)) = &mut self.pressed
+                && *pressed == old
+            {
+                *pressed = id;
+            }
+            if let Some((old, _)) = self.popup_rebuilt.take_if(|(_, p)| p == n)
+                && let Some(open) = &mut self.popup
+                && open.node == old
+            {
+                open.node = id;
+            }
         }
         for ch in &c.children {
             let cid = self.insert(ch, Some(id));
@@ -442,10 +463,16 @@ impl View {
         }
         self.nodes[id].parent = None;
         self.nodes[id].state.visible = false;
-        if let Some(n) = self.nodes[id].ctrl.name.clone()
-            && self.names.get(&n) == Some(&id)
-        {
-            self.names.remove(&n);
+        if let Some(n) = self.nodes[id].ctrl.name.clone() {
+            if self.pressed.is_some_and(|(p, _)| p == id) {
+                self.pressed_rebuilt = Some((id, n.clone()));
+            }
+            if self.popup.as_ref().is_some_and(|p| p.node == id) {
+                self.popup_rebuilt = Some((id, n.clone()));
+            }
+            if self.names.get(&n) == Some(&id) {
+                self.names.remove(&n);
+            }
         }
         if self.focus == Some(id) {
             self.focus = None;
@@ -1226,7 +1253,7 @@ impl View {
                 let (lo, hi) = self.range(id);
                 let v = self.num(id);
                 let t = if hi > lo {
-                    ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+                    ((v - lo) / (hi - lo)).clamped(0.0, 1.0)
                 } else {
                     0.0
                 };
@@ -1257,7 +1284,7 @@ impl View {
                         .field(field)?
                         .split_whitespace()
                         .filter_map(|x| x.parse::<f32>().ok())
-                        .map(|x| (x.clamp(0.0, 1.0) * 255.0) as u8)
+                        .map(|x| (x.clamped(0.0, 1.0) * 255.0) as u8)
                         .collect();
                     c.try_into().ok()
                 };
@@ -1267,7 +1294,7 @@ impl View {
                 {
                     dl.fill(r, c);
                 }
-                let f = self.num(id).clamp(0.0, 1.0);
+                let f = self.num(id).clamped(0.0, 1.0);
                 let bar = if on("flipped") {
                     let w = (r.w as f32 * f) as i32;
                     Rect::new(r.x + r.w - w, r.y, w, r.h)
@@ -1285,7 +1312,7 @@ impl View {
             }
             "GuiProgressCtrl" => {
                 if let Some(s) = style {
-                    let f = self.num(id).clamp(0.0, 1.0);
+                    let f = self.num(id).clamped(0.0, 1.0);
                     dl.fill(
                         Rect::new(r.x, r.y, (r.w as f32 * f) as i32, r.h),
                         s.fill_color.unwrap_or([0, 0, 128, 128]),
@@ -2296,7 +2323,7 @@ impl View {
     fn slide_to(&mut self, id: NodeId, x: i32) {
         let r = self.nodes[id].rect;
         let (lo, hi) = self.range(id);
-        let t = ((x - r.x - 4) as f32 / (r.w - 8).max(1) as f32).clamp(0.0, 1.0);
+        let t = ((x - r.x - 4) as f32 / (r.w - 8).max(1) as f32).clamped(0.0, 1.0);
         let mut v = lo + t * (hi - lo);
         if let Some(ticks) = self.nodes[id]
             .ctrl

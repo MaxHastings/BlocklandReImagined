@@ -1,5 +1,6 @@
 //! Advisory reservations, separate from occupancy and action authority.
 use super::OwnerId;
+use glam::Vec3;
 use std::collections::BTreeMap;
 
 const MAX_CLAIMS: usize = 16;
@@ -22,6 +23,14 @@ impl Resource {
                 && (matches!(self, Self::Body { .. }) || matches!(other, Self::Body { .. }))
     }
 
+    /// Claims coordinate one side. A seat is physically exclusive whoever
+    /// wants it, but two opponents moving the same loose body are a contest,
+    /// not a reservation: neither side's intention blocks the other's.
+    fn contends(self, other: Self, allied: bool) -> bool {
+        self.conflicts(other)
+            && (allied || matches!(self, Self::Seat { .. }) || matches!(other, Self::Seat { .. }))
+    }
+
     pub(super) fn vehicle(self) -> u64 {
         match self {
             Self::Seat { vehicle, .. } | Self::Body { vehicle } => vehicle,
@@ -37,12 +46,78 @@ pub(super) struct Claim {
     pub started: u64,
     pub deadline: u64,
     pub best_distance: f32,
+    /// Whether the claimant sits in the claimed vehicle: its leg changed
+    /// from walking to the seat to riding from it.
+    pub seated: bool,
+}
+
+/// What a bot is doing now, published for its side to read (`team`). Not a
+/// reservation: any number may share a target. It lapses unless renewed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Intent {
+    /// The chosen option (a behaviour's index) and since when.
+    pub option: u8,
+    pub since: u64,
+    /// Where the option takes it, and what it acts on.
+    pub place: Option<Vec3>,
+    pub target: Option<Target>,
+    /// A vehicle whose controls it holds while a seat is free.
+    pub seats: Option<u64>,
+    /// Where its weapon will hit, and the vehicle it rides, whose crew
+    /// that does not endanger.
+    pub harm: Option<Space>,
+    pub mount: Option<u64>,
+    /// From a seat it does not drive: the line it needs to what it is after.
+    pub sight: Option<Sightline>,
+    /// The idle flavour it is doing (`surprise`), if any.
+    pub flavour: Option<u8>,
+    pub until: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Target {
+    Player(OwnerId),
+    Object(u64),
+}
+
+/// A line from a mount `offset` from `vehicle`'s origin to `to`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Sightline {
+    pub vehicle: u64,
+    pub offset: Vec3,
+    pub to: Vec3,
+}
+
+/// A space: within `radius` of the segment from `from` to `to`, widening by
+/// `spread` per unit along it. The one test of whether a body stands in a
+/// line of fire or a blast (`bot_fire_clear`, `team`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Space {
+    pub from: Vec3,
+    pub to: Vec3,
+    pub radius: f32,
+    pub spread: f32,
+}
+impl Space {
+    /// Whether a body of half-size `margin` centred at `point` is in it.
+    pub(super) fn holds(&self, point: Vec3, margin: f32) -> bool {
+        let line = self.to - self.from;
+        let length = line.length();
+        let direction = if length > 1e-6 {
+            line / length
+        } else {
+            Vec3::ZERO
+        };
+        let along = (point - self.from).dot(direction).clamp(0.0, length);
+        point.distance(self.from + direction * along) < self.radius + margin + along * self.spread
+    }
 }
 
 #[derive(Default)]
 pub(super) struct Claims {
     active: BTreeMap<OwnerId, Claim>,
     failures: BTreeMap<(OwnerId, Resource), u64>,
+    intents: BTreeMap<OwnerId, Intent>,
 }
 
 fn valid_distance(distance: f32) -> bool {
@@ -50,6 +125,38 @@ fn valid_distance(distance: f32) -> bool {
 }
 
 impl Claims {
+    pub(super) fn publish(&mut self, owner: OwnerId, intent: Intent) {
+        self.intents.insert(owner, intent);
+    }
+
+    /// Since when `owner` has held `option` on `target`: its live intent's
+    /// `since` while that is the same option on the same target, else now.
+    /// A new target is a new choice, whatever the behaviour.
+    pub(super) fn held_since(
+        &self,
+        owner: OwnerId,
+        option: u8,
+        target: Option<Target>,
+        tick: u64,
+    ) -> u64 {
+        self.intents
+            .get(&owner)
+            .filter(|i| tick < i.until && i.option == option && i.target == target)
+            .map_or(tick, |i| i.since)
+    }
+
+    pub(super) fn forget(&mut self, owner: OwnerId) {
+        self.intents.remove(&owner);
+    }
+
+    /// Live intents; a caller keeps its allies'.
+    pub(super) fn intents(&self, tick: u64) -> impl Iterator<Item = (OwnerId, Intent)> + '_ {
+        self.intents
+            .iter()
+            .filter(move |(_, i)| tick < i.until)
+            .map(|(o, i)| (*o, *i))
+    }
+
     pub(super) fn owner_claim(&self, owner: OwnerId, tick: u64) -> Option<Claim> {
         self.active
             .get(&owner)
@@ -57,11 +164,43 @@ impl Claims {
             .filter(|c| tick < c.deadline)
     }
 
+    #[cfg(test)]
     pub(super) fn resource_claim(&self, resource: Resource, tick: u64) -> Option<Claim> {
+        self.contending_claim(resource, tick, |_| true)
+    }
+
+    /// The live claim that blocks `resource` for a caller to whom `allied`
+    /// tells which claimants are on its side.
+    pub(super) fn contending_claim(
+        &self,
+        resource: Resource,
+        tick: u64,
+        allied: impl Fn(OwnerId) -> bool,
+    ) -> Option<Claim> {
         self.active
             .values()
             .copied()
-            .find(|c| c.resource.conflicts(resource) && tick < c.deadline)
+            .find(|c| tick < c.deadline && c.resource.contends(resource, allied(c.owner)))
+    }
+
+    /// Live claimants of any resource on this vehicle.
+    pub(super) fn claimants_on(
+        &self,
+        vehicle: u64,
+        tick: u64,
+    ) -> impl Iterator<Item = OwnerId> + '_ {
+        self.active
+            .values()
+            .filter(move |c| tick < c.deadline && c.resource.vehicle() == vehicle)
+            .map(|c| c.owner)
+    }
+
+    /// Current claimants, so a caller can classify them as allies first.
+    pub(super) fn claimants(&self, tick: u64) -> impl Iterator<Item = OwnerId> + '_ {
+        self.active
+            .values()
+            .filter(move |c| tick < c.deadline)
+            .map(|c| c.owner)
     }
 
     pub(super) fn cooling_down(&self, owner: OwnerId, resource: Resource, tick: u64) -> bool {
@@ -79,6 +218,7 @@ impl Claims {
         resource: Resource,
         distance: f32,
         tick: u64,
+        allied: impl Fn(OwnerId) -> bool,
     ) -> bool {
         self.prune(tick);
         if !valid_distance(distance) || self.cooling_down(owner, resource, tick) {
@@ -87,7 +227,9 @@ impl Claims {
         if let Some(c) = self.active.get(&owner) {
             return c.resource == resource && c.subject == subject;
         }
-        if self.active.len() >= MAX_CLAIMS || self.resource_claim(resource, tick).is_some() {
+        if self.active.len() >= MAX_CLAIMS
+            || self.contending_claim(resource, tick, allied).is_some()
+        {
             return false;
         }
         self.active.insert(
@@ -99,9 +241,29 @@ impl Claims {
                 started: tick,
                 deadline: tick.saturating_add(LEASE),
                 best_distance: distance,
+                seated: false,
             },
         );
         true
+    }
+
+    /// The claimant got into (or out of) the claimed vehicle: its next
+    /// leg's progress is measured afresh from `distance`, once per change.
+    /// A real boarding or exit is the only way to reach it, so it cannot
+    /// renew a stalled claim by itself.
+    pub(super) fn leg(&mut self, owner: OwnerId, seated: bool, distance: f32, tick: u64) {
+        if !valid_distance(distance) {
+            return;
+        }
+        if let Some(c) = self.active.get_mut(&owner)
+            && tick < c.deadline
+            && c.seated != seated
+        {
+            c.seated = seated;
+            c.best_distance = distance;
+            c.started = tick;
+            c.deadline = tick.saturating_add(LEASE);
+        }
     }
 
     /// `physical_progress` means confirmed object movement caused by contact,
@@ -187,6 +349,7 @@ impl Claims {
             .filter(|c| tick >= c.deadline)
             .collect();
         self.active.retain(|_, c| tick < c.deadline);
+        self.intents.retain(|_, i| tick < i.until);
         self.failures.retain(|_, until| tick < *until);
         for c in expired {
             let until = c.deadline.saturating_add(RETRY);
@@ -216,15 +379,48 @@ mod tests {
             seat: 0,
         };
         let mut claims = Claims::default();
-        assert!(claims.acquire(1, 1, body, 5.0, 10));
-        assert!(!claims.acquire(2, 2, driver, 5.0, 10));
-        assert!(!claims.acquire(3, 3, gunner, 5.0, 10));
-        assert!(claims.acquire(4, 4, elsewhere, 5.0, 10));
+        assert!(claims.acquire(1, 1, body, 5.0, 10, |_| true));
+        assert!(!claims.acquire(2, 2, driver, 5.0, 10, |_| true));
+        assert!(!claims.acquire(3, 3, gunner, 5.0, 10, |_| true));
+        assert!(claims.acquire(4, 4, elsewhere, 5.0, 10, |_| true));
         claims.release_owner(1);
-        assert!(claims.acquire(2, 2, driver, 5.0, 11));
-        assert!(claims.acquire(3, 3, gunner, 5.0, 11));
-        assert!(!claims.acquire(1, 1, body, 5.0, 11));
+        assert!(claims.acquire(2, 2, driver, 5.0, 11, |_| true));
+        assert!(claims.acquire(3, 3, gunner, 5.0, 11, |_| true));
+        assert!(!claims.acquire(1, 1, body, 5.0, 11, |_| true));
         assert_eq!(claims.resource_claim(body, 11).unwrap().owner, 2);
+    }
+
+    #[test]
+    fn opponents_contest_one_body_while_allies_and_seats_stay_exclusive() {
+        use super::*;
+        let body = Resource::Body { vehicle: 21 };
+        let seat = Resource::Seat {
+            vehicle: 21,
+            seat: 0,
+        };
+        // Owners 1 and 2 are one side; 3 is their opponent.
+        let side = |o: OwnerId| if o == 3 { 1 } else { 0 };
+        let mut claims = Claims::default();
+        assert!(claims.acquire(1, 1, body, 5.0, 10, |o| side(o) == side(1)));
+        assert!(
+            !claims.acquire(2, 2, body, 5.0, 10, |o| side(o) == side(2)),
+            "an ally's body intention coordinates the side"
+        );
+        assert!(
+            claims.acquire(3, 3, body, 5.0, 10, |o| side(o) == side(3)),
+            "an opponent contests the same body"
+        );
+        assert!(
+            !claims.acquire(2, 2, seat, 5.0, 10, |o| side(o) == side(2)),
+            "a seat on a claimed body remains exclusive"
+        );
+        claims.release_owner(1);
+        claims.release_owner(3);
+        assert!(claims.acquire(1, 1, seat, 5.0, 11, |o| side(o) == side(1)));
+        assert!(
+            !claims.acquire(3, 3, seat, 5.0, 11, |o| side(o) == side(3)),
+            "physical occupancy intentions never become contests"
+        );
     }
 
     use super::*;
@@ -236,23 +432,23 @@ mod tests {
     #[test]
     fn contenders_cannot_steal_and_each_owner_has_one_task() {
         let mut c = Claims::default();
-        assert!(c.acquire(1, 9, seat(10), 8.0, 0));
-        assert!(!c.acquire(2, 9, seat(10), 1.0, 1));
-        assert!(!c.acquire(1, 9, seat(11), 1.0, 1));
-        assert!(!c.acquire(1, 8, seat(10), 1.0, 1));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 0, |_| true));
+        assert!(!c.acquire(2, 9, seat(10), 1.0, 1, |_| true));
+        assert!(!c.acquire(1, 9, seat(11), 1.0, 1, |_| true));
+        assert!(!c.acquire(1, 8, seat(10), 1.0, 1, |_| true));
         assert_eq!(c.resource_claim(seat(10), 1).unwrap().owner, 1);
-        assert!(c.acquire(1, 9, seat(10), 1.0, 300));
+        assert!(c.acquire(1, 9, seat(10), 1.0, 300, |_| true));
         assert_eq!(c.owner_claim(1, 300).unwrap().deadline, LEASE);
         // Rotation/fairness belongs to the caller; after expiry a previous
         // contender can win without retaining priority for the old owner.
-        assert!(c.acquire(2, 9, seat(10), 1.0, LEASE));
-        assert!(!c.acquire(1, 9, seat(10), 1.0, LEASE));
+        assert!(c.acquire(2, 9, seat(10), 1.0, LEASE, |_| true));
+        assert!(!c.acquire(1, 9, seat(10), 1.0, LEASE, |_| true));
     }
 
     #[test]
     fn only_meaningful_progress_renews_and_expiry_cannot_be_revived() {
         let mut c = Claims::default();
-        assert!(c.acquire(1, 9, seat(10), 8.0, 0));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 0, |_| true));
         assert!(!c.progress(1, 7.9, false, 100));
         assert_eq!(c.owner_claim(1, 100).unwrap().deadline, LEASE);
         assert!(c.progress(1, 7.75, false, 100));
@@ -261,14 +457,32 @@ mod tests {
         assert_eq!(c.owner_claim(1, 200).unwrap().best_distance, 7.75);
         assert!(!c.progress(1, 0.0, true, 200 + LEASE));
         assert!(c.owner_claim(1, 200 + LEASE).is_none());
-        assert!(!c.acquire(1, 9, seat(10), 0.0, 200 + LEASE));
-        assert!(c.acquire(1, 9, seat(10), 0.0, 200 + LEASE + RETRY));
+        assert!(!c.acquire(1, 9, seat(10), 0.0, 200 + LEASE, |_| true));
+        assert!(c.acquire(1, 9, seat(10), 0.0, 200 + LEASE + RETRY, |_| true));
+    }
+
+    #[test]
+    fn boarding_measures_the_drive_from_where_it_starts_once() {
+        let mut c = Claims::default();
+        assert!(c.acquire(1, 1, seat(10), 8.0, 0, |_| true));
+        assert!(c.progress(1, 1.0, false, 100));
+        // Seated, the drive's end is 16 away: that is its new baseline.
+        c.leg(1, true, 16.0, 200);
+        let claim = c.owner_claim(1, 200).unwrap();
+        assert_eq!((claim.best_distance, claim.deadline), (16.0, 200 + LEASE));
+        assert!(c.progress(1, 15.5, false, 300));
+        // Staying seated changes nothing; a stalled drive still expires.
+        c.leg(1, true, 15.5, 400);
+        assert_eq!(c.owner_claim(1, 400).unwrap().deadline, 300 + LEASE);
+        assert!(c.owner_claim(1, 300 + LEASE).is_none());
+        c.leg(1, false, 1.0, 300 + LEASE);
+        assert!(c.owner_claim(1, 300 + LEASE).is_none(), "no revival");
     }
 
     #[test]
     fn useful_physical_progress_survives_old_age_but_idle_claims_expire() {
         let mut c = Claims::default();
-        assert!(c.acquire(1, 9, Resource::Body { vehicle: 10 }, 100.0, 0));
+        assert!(c.acquire(1, 9, Resource::Body { vehicle: 10 }, 100.0, 0, |_| true));
         for tick in (100..MAX_AGE * 3).step_by(100) {
             assert!(c.progress(1, 100.0, true, tick));
             assert_eq!(c.owner_claim(1, tick).unwrap().deadline, tick + LEASE);
@@ -281,37 +495,37 @@ mod tests {
     #[test]
     fn preemption_and_resource_invalidation_release_immediately() {
         let mut c = Claims::default();
-        assert!(c.acquire(1, 9, seat(10), 8.0, 0));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 0, |_| true));
         assert_eq!(c.release_owner(1).unwrap().resource, seat(10));
-        assert!(c.acquire(2, 9, seat(10), 1.0, 1));
+        assert!(c.acquire(2, 9, seat(10), 1.0, 1, |_| true));
         assert_eq!(c.release_resource(seat(10)).unwrap().owner, 2);
-        assert!(c.acquire(1, 9, seat(10), 8.0, 2));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 2, |_| true));
         assert!(!c.cooling_down(1, seat(10), 2));
     }
 
     #[test]
     fn failed_resources_leave_alternatives_and_other_owners_available() {
         let mut c = Claims::default();
-        assert!(c.acquire(1, 9, seat(10), 8.0, 0));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 0, |_| true));
         c.fail(1, seat(10), 100);
         assert!(c.owner_claim(1, 100).is_none());
-        assert!(!c.acquire(1, 9, seat(10), 8.0, 101));
-        assert!(c.acquire(1, 9, seat(11), 8.0, 101));
-        assert!(c.acquire(2, 9, seat(10), 8.0, 101));
+        assert!(!c.acquire(1, 9, seat(10), 8.0, 101, |_| true));
+        assert!(c.acquire(1, 9, seat(11), 8.0, 101, |_| true));
+        assert!(c.acquire(2, 9, seat(10), 8.0, 101, |_| true));
         c.fail(1, seat(12), 102);
         assert_eq!(c.owner_claim(1, 102).unwrap().resource, seat(11));
         c.release_owner(1);
         c.release_owner(2);
-        assert!(c.acquire(1, 9, seat(10), 8.0, 100 + RETRY));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 100 + RETRY, |_| true));
     }
 
     #[test]
     fn invalid_distances_cannot_acquire_or_renew() {
         let mut c = Claims::default();
         for distance in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1] {
-            assert!(!c.acquire(1, 9, seat(10), distance, 0));
+            assert!(!c.acquire(1, 9, seat(10), distance, 0, |_| true));
         }
-        assert!(c.acquire(1, 9, seat(10), 8.0, 0));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 0, |_| true));
         for distance in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1] {
             assert!(!c.progress(1, distance, true, 100));
         }
@@ -322,10 +536,10 @@ mod tests {
     fn storage_is_bounded_and_pruning_and_eviction_are_deterministic() {
         let mut c = Claims::default();
         for owner in 0..MAX_CLAIMS as u64 {
-            assert!(c.acquire(owner, 99, seat(owner), 1.0, 0));
+            assert!(c.acquire(owner, 99, seat(owner), 1.0, 0, |_| true));
         }
-        assert!(!c.acquire(99, 99, seat(99), 1.0, 0));
-        assert!(c.acquire(99, 99, seat(99), 1.0, LEASE));
+        assert!(!c.acquire(99, 99, seat(99), 1.0, 0, |_| true));
+        assert!(c.acquire(99, 99, seat(99), 1.0, LEASE, |_| true));
         for vehicle in 0..=MAX_FAILURES as u64 {
             c.fail(1, seat(vehicle), 400);
         }

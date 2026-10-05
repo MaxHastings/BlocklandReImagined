@@ -482,7 +482,7 @@ impl ToolUi {
             InspectMode::Events => {
                 let catalog = self.events.as_ref().context("Events are unavailable")?;
                 (rows, retained) = event_rows(brick, catalog)?;
-                let names: BTreeSet<_> = world
+                let brick_names: BTreeSet<_> = world
                     .bricks
                     .values()
                     .filter(|b| b.owner == brick.owner)
@@ -490,8 +490,18 @@ impl ToolUi {
                     .collect();
                 UiUpdate::OpenEvents {
                     brick: *brick_id,
+                    builder: Some(brick.owner),
+                    builder_name: (brick.owner != local_owner).then(|| {
+                        names.get(&brick.owner).cloned().unwrap_or_else(|| {
+                            if brick.owner == 0 {
+                                "Public".into()
+                            } else {
+                                format!("BL_ID: {}", brick.owner)
+                            }
+                        })
+                    }),
                     rows: rows.clone(),
-                    named_targets: names.into_iter().collect(),
+                    named_targets: brick_names.into_iter().collect(),
                     allow_named: true,
                 }
             }
@@ -620,7 +630,9 @@ impl ToolUi {
                 ensure!(
                     (*variant == WrenchVariant::Sound || data.sound.is_none())
                         && (*variant == WrenchVariant::VehicleSpawn
-                            || (data.vehicle.is_none() && !data.recolor_vehicle)),
+                            || (data.vehicle.is_none()
+                                && !data.recolor_vehicle
+                                && data.vehicle_team.is_none())),
                     "This brick cannot hold that sound or vehicle"
                 );
                 validate_choice(data.sound.as_deref(), &self.catalog.sounds, "music")?;
@@ -659,6 +671,7 @@ impl ToolUi {
                         raycast: data.raycasting,
                         colliding: data.colliding,
                         visible: data.rendering,
+                        vehicle_team: data.vehicle_team,
                     },
                 }
             }
@@ -784,6 +797,8 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
             .transpose()?
             .map(str::to_owned),
         recolor_vehicle: brick.vehicle.as_ref().is_some_and(|v| v.recolor),
+        vehicle_team: brick.vehicle.as_ref().and_then(|v| v.team),
+        builder: Some(brick.owner),
     })
 }
 
@@ -813,6 +828,11 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
         bri_events::Param::List { items } => ParamSpec::List { items },
     };
     EventCatalog {
+        target_notes: catalog
+            .targets
+            .iter()
+            .filter_map(|t| Some((t.name.clone(), t.description.clone()?)))
+            .collect(),
         inputs: catalog
             .inputs
             .iter()
@@ -1117,6 +1137,7 @@ mod tests {
                 package: "slayer".into(),
                 source: "slayer".into(),
                 source_line: 0,
+                description: Some("The team of whoever set this row off".into()),
             }],
             outputs: vec![
                 output(

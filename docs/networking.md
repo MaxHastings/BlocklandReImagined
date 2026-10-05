@@ -75,7 +75,11 @@ The runtime dependency graph contains no Torque readers.
 - TLS verifies an explicitly supplied host certificate. Random 256-bit reconnect
   credentials resume an existing owner; old numeric Blockland IDs confer no
   authority. Server lookup stores credential hashes. Resume credentials last for
-  one server process. A host can keep a persistent certificate, and a world's
+  one server process and are bound to the principal that received them. The
+  game's automatic rejoin after a lost connection presents its credential;
+  when the host has not yet timed the old connection out, the credential and
+  principal together replace that stale connection, so the player keeps their
+  number. A credential the host does not know falls back to a fresh join. A host can keep a persistent certificate, and a world's
   owner table maps each player's durable principal to their owner number, so
   ownership survives a restart.
 - Limits:64 peers, bounded channels, 64 KiB Hello, 16 MiB compressed frames,

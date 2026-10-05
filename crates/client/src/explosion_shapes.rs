@@ -2,6 +2,7 @@
 //! explosions for the shape's ambient sequence: node scale keys and object
 //! visibility become each instance's transform and tint alpha.
 use anyhow::{Context, Result, ensure};
+use bri_console::Clamp;
 use bri_content::shape::Shape;
 use bri_render::scene::{
     GpuInstances, GpuScene, SceneData, SceneImage, SceneRenderer, SceneTransform,
@@ -202,7 +203,7 @@ impl ExplosionShapes {
     /// Age the explosions and rebuild this frame's instances.
     pub fn advance(&mut self, dt: f32) {
         let dt = if dt.is_finite() {
-            dt.clamp(0.0, 0.25)
+            dt.clamped(0.0, 0.25)
         } else {
             0.0
         };
@@ -220,7 +221,9 @@ impl ExplosionShapes {
             }
             let t = *age / model.duration;
             let scale = sample(&model.scales, t).unwrap_or(Vec3::ONE) * model.base_scale;
-            let alpha = sample1(&model.visibility, t).unwrap_or(1.0).clamp(0.0, 1.0);
+            let alpha = sample1(&model.visibility, t)
+                .unwrap_or(1.0)
+                .clamped(0.0, 1.0);
             model.transforms.push(SceneTransform {
                 transform: Mat4::from_scale_rotation_translation(
                     scale,
@@ -294,7 +297,7 @@ fn span(len: usize, t: f32) -> Option<(usize, usize, f32)> {
     if len == 0 {
         return None;
     }
-    let x = t.clamp(0.0, 1.0) * (len - 1) as f32;
+    let x = t.clamped(0.0, 1.0) * (len - 1) as f32;
     let a = x.floor() as usize;
     let b = (a + 1).min(len - 1);
     Some((a, b, x - a as f32))

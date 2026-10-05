@@ -299,6 +299,15 @@ fn overlays_render_offscreen(pack: Rc<Pack>, out: Option<&std::path::Path>) {
                 ("world".into(), 2.4),
                 ("effects".into(), 0.1),
             ],
+            bot: Some((
+                "Bot Alex".into(),
+                vec![
+                    "Doing chase over plain fight [committed]".into(),
+                    "Top: fight 0.80, chase 0.75, search 0.20".into(),
+                    "Terms: boredom 0.40 chase, hold: committed".into(),
+                    "Sees player 3".into(),
+                ],
+            )),
         }));
         let dl = u.draw();
         let px = gpu

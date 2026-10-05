@@ -1,4 +1,5 @@
 //! Recovered event math in native Y-up. Host adapters apply permissions and current state.
+use bri_console::Clamp;
 use glam::Vec3;
 /// Source direct event AddHealth heals damage or routes negative health through damage policy.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,7 +47,7 @@ pub fn radius_impulse(center: Vec3, target: Vec3, radius: f32, force: f32, verti
         return Vec3::ZERO;
     }
     let delta = target - center;
-    let factor = (1. - delta.length_squared() / (radius * radius)).clamp(0., 1.);
+    let factor = (1. - delta.length_squared() / (radius * radius)).clamped(0., 1.);
     (delta.normalize_or_zero() * force + Vec3::Y * vertical) * factor
 }
 /// Thin source axes collapse to box center before the three independent uniform draws.
@@ -58,7 +59,7 @@ pub fn brick_projectile_position(min: Vec3, max: Vec3, random: [f32; 3]) -> Vec3
         result[i] += if size[i] < threshold[i] {
             size[i] * 0.5
         } else {
-            size[i] * random[i].clamp(0., 1.)
+            size[i] * random[i].clamped(0., 1.)
         };
     }
     result

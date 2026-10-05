@@ -13,6 +13,27 @@ combat can interrupt an approach. See [bot architecture](../architecture/bots.md
 for selection, evidence and control ownership, and [game rules](rules.md) for
 package hooks, state, permissions and zones.
 
+## Creator rules bots can plan with
+
+Bots also plan from creator event rows, by what each output does. In a ball
+game (the Ball goals recipe):
+
+- A **Team Score** condition (`Team Score >= 5` on `winRound`) is a fact the
+  planner can raise: a team's total is the sum of its members' scores, so
+  `addTeamScore` and `addScore` count toward it.
+- A delayed **`resetObject`** on the Object (the ball) is understood when the
+  row's brick owner owns the ball's spawner: after the score, the ball is
+  replaced by a new one. Bots treat the old ball vanishing as expected and
+  take up the new one.
+- Two sides may work the same ball. Claims on a loose body conflict only
+  between teammates; an opponent contests it. The kind's `contest` numbers
+  (`lead_seconds`, `max_lead`, `engage` in `bots.json`) say how a bot plays
+  a body an opponent is working, and `objective_radius` how far it looks for
+  objects.
+
+An output the planner does not understand makes the plan unsupported (Explain
+shows "no grounded objective plan"); it is never assumed to do nothing.
+
 ## Declare an existing pickup/return policy
 
 These snippets extend an existing pickup/return policy; they are not a complete

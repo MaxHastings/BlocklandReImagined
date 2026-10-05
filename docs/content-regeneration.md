@@ -69,7 +69,7 @@ CI tooling and is best effort.
 | `events` | events-pack | `crates/events-import/import_events.py` |
 | `weather` | weather-pack | `bri-weather-import` (reads the map bundle) |
 | `foliage` | foliage-pack | `bri-foliage-import` (reads the map bundle) |
-| `worlds` | worlds-pass | `import_saves` over `saves/`, then `bind_world_events` |
+| `worlds` | worlds-pass | `import_saves` over v20's `saves/` and, with `--bundled`, the repository's own `saves/<Map>/` builds (copied in unchanged; Load Bricks lists them as "Bundled build"), then `bind_world_events` |
 | `tutorial` | tutorial-pack | Map_Tutorial's saves through `import_saves` and `bind_world_events`, then `tutorial_pack` |
 | `check` | | `bri-client --check content` |
 

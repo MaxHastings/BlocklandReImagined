@@ -1,5 +1,6 @@
 //! Native scene placements and retained declarative environment settings.
 use crate::interior::Interior;
+use bri_console::Clamp;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -14,8 +15,8 @@ pub fn sun_direction(
     sin: fn(f32) -> f32,
     cos: fn(f32) -> f32,
 ) -> Vec3 {
-    let yaw = azimuth.clamp(0.0, 359.0).to_radians();
-    let pitch = elevation.clamp(-360.0, 360.0).to_radians();
+    let yaw = azimuth.clamped(0.0, 359.0).to_radians();
+    let pitch = elevation.clamped(-360.0, 360.0).to_radians();
     -Vec3::new(sin(yaw) * cos(pitch), cos(yaw) * cos(pitch), sin(pitch)).normalize()
 }
 

@@ -139,6 +139,7 @@ macro_rules! for_each_op {
             SetTeams = minigame,
             SetTeam = minigame,
             SetScore = minigame,
+            SetTeamPoints = minigame,
             ResetMinigame = minigame,
             SetGameRule = minigame,
             CreateMinigame = minigame,

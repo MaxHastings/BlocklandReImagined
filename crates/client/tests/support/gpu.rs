@@ -32,3 +32,41 @@ pub fn turn() -> Result<Turn> {
     }
     Ok(Turn(gpu))
 }
+
+/// How long one wait may keep the GPU busy before it counts as hung. Only
+/// a hang reaches it: a software adapter (WARP on the Windows CI runner,
+/// lavapipe on Linux) can spend well over half a minute on one frame, and
+/// a frame that finishes ends the wait at once.
+pub const HANG: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Wait until the GPU has finished everything submitted so far, saying so
+/// every half minute it is still at it, and fail only after [`HANG`].
+pub fn wait(device: &wgpu::Device, what: &str) -> Result<()> {
+    const SLICE: std::time::Duration = std::time::Duration::from_secs(30);
+    let start = std::time::Instant::now();
+    loop {
+        match device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(SLICE),
+        }) {
+            Ok(_) => {
+                if start.elapsed() >= SLICE {
+                    eprintln!("{what}: the GPU took {:.1?}", start.elapsed());
+                }
+                return Ok(());
+            }
+            Err(wgpu::PollError::Timeout) if start.elapsed() < HANG => {
+                eprintln!(
+                    "{what}: the GPU is still drawing after {:.0?}",
+                    start.elapsed()
+                );
+            }
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "{what}: the GPU did not finish within {:.0?}: {error}",
+                    start.elapsed()
+                ));
+            }
+        }
+    }
+}

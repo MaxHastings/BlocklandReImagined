@@ -7,6 +7,7 @@ publish = false
 description = "Offline converter: Blockland v20 UI art, font caches, GUI layouts and UI data -> native bri-ui pack"
 
 [dependencies]
+bri-console = { path = "../console" }
 bri-ui = { path = "../ui", default-features = false }
 anyhow.workspace = true
 serde.workspace = true

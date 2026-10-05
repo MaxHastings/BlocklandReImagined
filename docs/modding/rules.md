@@ -120,7 +120,7 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
-| `bot_kinds()` (each `#{ id, name, first_names }`), `bot_limit()` | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
+| `bot_kinds()` (each `#{ id, name, first_names }`, `first_names` a count), `bot_kind(id)`, `bot_first_name(kind, i)`, `bot_limit()`, `bot_name_limit()` (a longer name keeps its first characters) | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
@@ -185,8 +185,9 @@ keep player state keys while they play (gone when they leave).
 
 **Bots for a mini-game** (the `bots` capability, v20 Slayer's
 `addBotToGame`). `bot_kinds()` lists the bot kinds the enabled Add-Ons
-provide, each `#{ id, name, first_names }` (`first_names` is the kind's own
-name list, maybe empty). `add_bot(game, #{ kind, name, team })` adds a bot
+provide, each `#{ id, name, first_names }` (`first_names` counts the kind's
+own name list, maybe 0; `bot_first_name(kind, i)` reads one), and
+`bot_kind(id)` is one of them or `()`. `add_bot(game, #{ kind, name, team })` adds a bot
 of that kind to the game, on `team` when given; it joins when the
 operations run, and the rules hear it join. Its brain is the engine's: it
 spawns where members spawn, roams from wherever it stands, fights whoever
@@ -277,10 +278,15 @@ points_kill_player }`, each team `#{ id, name, color }`; `player_type`,
 `loadout` (five item ids, `""` for an empty slot) and `points_kill_player`
 are the game's own (`playerDatablock`, `startEquip`, `Points_KillPlayer`).
 `set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
-teams: a team map with an `id` keeps that team and its members, one
-without is new, and a team left out is removed. `set_team(p, team)` puts a
+teams: a team map with an `id` keeps that team and its members (an `id`
+the game has not got makes the team in that slot), one without is new in
+the lowest free slot, and a team left out is removed. Team ids are slots,
+1 to 64; 0 is never a team (a Team condition reads 0 for none). `set_team(p, team)` puts a
 member on a team (or `()` for none), `set_score` and `add_score` change
-their score, and `reset_minigame(game)` resets the game. The engine keeps
+their score, `add_team_points(game, team, n)` and `set_team_points(game,
+team, n)` change a team's own points (a team map's `points`; the engine
+counts them with the members' scores wherever a team's score is read, and
+a reset clears them unless scores are kept), and `reset_minigame(game)` resets the game. The engine keeps
 teammates from hurting each other while `friendly_fire` is off, sends team
 chat to the team, and tells `on_minigame` about every change. These need
 the `minigame` capability. A rule set like Slayer's sorts players with
@@ -338,7 +344,28 @@ global whichever running Add-On declares it, or `()` when none does (an
 unset global), as every script read the one global; `set_setting(game, key, value)` and
 `set_team_setting(game, team, key, value)` change it, `()` putting the
 default back (`minigame` capability). `on_minigame` gets `kind ==
-"settings"` with the changed `keys` when anyone changes them.
+"settings"` when anyone changes them: `keys` maps each changed
+`namespace:key` to `true` (`"my_rules:points" in event.keys`), and
+`changes` maps each to the teams it changed for (`()` for the game's own),
+both holding only the settings of your package and the Add-Ons it depends
+on. Walk a map with `for key in map`, a key at a time: one script value
+holds at most 4096 bytes of text all together (every string in an array
+or map counts), and `keys()` gathers them into one.
+
+**Views.** What `players()`, `player(id)`, `bots()`, `bricks(kind)`,
+`brick(id)`, `entities()`, `me()`, `objects()`, `objects_near(...)`,
+`drops()`, `minigames()`, `minigame(id)`, `bot_kinds()` and
+`avatar_choices()` hand out are views: each reads like a map (`p.name`,
+`p["name"]`, `"team" in p`, `p.keys()`, `for key in p`, `type_of(p) ==
+"map"`, a missing field is `()`), and a script's own copy takes fields
+(`best.distance = d`). Unlike a map, a view's insides are the host's and
+never count against a script value's limits, so a list of 500 spawn
+bricks or 80 players with their tools, or a script's own array gathering
+them, works however big the build or the server. The same thing asked
+twice in a call is the same view (`player(1) == players()[0]`). A call
+makes at most 16 384 views and writes at most 1 MiB into them;
+`to_map()` gives the script its own counted map. What leaves the script
+(state, operations, a hook's answer) holds plain maps.
 
 **Rounds.** `end_round(game, #{ teams: [...], players: [...] })` ends a
 mini-game's round, won by those teams and players (or by nobody, with
@@ -489,8 +516,12 @@ Rules may add targets as well (`registerEventTarget`; capability
 know, found from one of an input's targets:
 
 ```json
-"brick_targets": [ { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" } ]
+"brick_targets": [ { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client",
+                    "description": "The team of whoever set this row off" } ]
 ```
+
+An optional `description` (one line, up to 160 characters) is what the
+wrench shows under a row aimed at the target.
 
 Every input with the `from` target (`Self`, the brick, or `Player`,
 `Client`, `MiniGame`, `OwnerPlayer`, `OwnerClient`) lists it, the engine's

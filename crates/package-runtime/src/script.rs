@@ -13,6 +13,7 @@ use crate::manifest::location;
 use crate::ops;
 use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, WorldShape};
 use crate::state::{Namespace, PlayerKey, check_value};
+use bri_console::Clamp;
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
 use serde::{Deserialize, Serialize};
@@ -23,8 +24,10 @@ use std::sync::Arc;
 mod bots;
 mod games;
 mod physics;
+pub mod view;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
+use view::{Of, view_in};
 
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +52,12 @@ impl Budget {
 }
 const MAX_OPS_PER_CALL: usize = 1024;
 const MAX_OUTPUT_LINES: usize = 32;
+/// Most bytes of text one script value holds: Rhai counts all the strings
+/// inside an array or map together, not each string, so a list or map of
+/// text is held to this as a whole: what the host hands a script must not
+/// grow with the content or the Add-Ons running (a map's keys are not
+/// counted, so keyed sets travel as maps).
+pub const MAX_SCRIPT_TEXT: usize = 4096;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerView {
@@ -580,6 +589,12 @@ struct Invocation {
     /// only, and read only through `with_world`.
     world: Option<*const (dyn World + 'static)>,
     rays: usize,
+    /// The players, bricks and other things this call has read, by what
+    /// they are ([`view`]), and how many views it made and how much it
+    /// wrote into them.
+    views: BTreeMap<Of, view::View>,
+    views_made: usize,
+    view_writes: usize,
 }
 thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
@@ -689,7 +704,7 @@ fn permit_write(i: &mut Invocation) -> Fallible<()> {
     Ok(())
 }
 fn to_json(value: &Dynamic) -> Fallible<serde_json::Value> {
-    let json: serde_json::Value = rhai::serde::from_dynamic(value)?;
+    let json: serde_json::Value = rhai::serde::from_dynamic(&view::plain(value))?;
     check_value(&json).map_err(|e| e.to_string())?;
     Ok(json)
 }
@@ -1177,7 +1192,7 @@ fn world_shape(value: Dynamic) -> Fallible<WorldShape> {
     };
     let byte = |v: Dynamic, what: &str| -> Fallible<[u8; 4]> {
         let c = color::<4>(v, what)?;
-        Ok(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+        Ok(c.map(|v| (v.clamped(0.0, 1.0) * 255.0).round() as u8))
     };
     let rgba = |key: &str| -> Fallible<[u8; 4]> {
         match map.get(key).filter(|v| !v.is_unit()) {
@@ -1301,25 +1316,46 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("game_version", || {
         with(|i| Ok(i.snapshot.game_version.clone()))
     });
+    // Players, bots and entities are views ([`view`]): a list of them, or
+    // a script's own list of some, never meets a script value's limits.
     engine.register_fn("players", || {
-        with(|i| Ok(i.snapshot.players.iter().map(player_map).collect::<Array>()))
+        with(|i| {
+            let snapshot = i.snapshot.clone();
+            snapshot
+                .players
+                .iter()
+                .map(|p| view_in(i, Some(Of::Player(p.id)), || player_map(p)))
+                .collect::<Fallible<Array>>()
+        })
     });
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot.player(player).map_or(Dynamic::UNIT, player_map))
+            let snapshot = i.snapshot.clone();
+            match snapshot.player(player) {
+                Some(p) => view_in(i, Some(Of::Player(p.id)), || player_map(p)),
+                None => Ok(Dynamic::UNIT),
+            }
         })
     });
     engine.register_fn("bots", || {
-        with(|i| Ok(i.snapshot.bots.iter().map(player_map).collect::<Array>()))
+        with(|i| {
+            let snapshot = i.snapshot.clone();
+            snapshot
+                .bots
+                .iter()
+                .map(|p| view_in(i, Some(Of::Player(p.id)), || player_map(p)))
+                .collect::<Fallible<Array>>()
+        })
     });
     engine.register_fn("entities", || {
         with(|i| {
-            Ok(i.snapshot
+            let snapshot = i.snapshot.clone();
+            snapshot
                 .entities
                 .iter()
-                .map(entity_map)
-                .collect::<Array>())
+                .map(|e| view_in(i, Some(Of::Entity(e.id)), || entity_map(e)))
+                .collect::<Fallible<Array>>()
         })
     });
     engine.register_fn("me", || {
@@ -1327,11 +1363,11 @@ fn register_api(engine: &mut Engine) {
             let Some(me) = i.entity else {
                 return Ok(Dynamic::UNIT);
             };
-            Ok(i.snapshot
-                .entities
-                .iter()
-                .find(|e| e.id == me)
-                .map_or(Dynamic::UNIT, entity_map))
+            let snapshot = i.snapshot.clone();
+            match snapshot.entities.iter().find(|e| e.id == me) {
+                Some(e) => view_in(i, Some(Of::Entity(e.id)), || entity_map(e)),
+                None => Ok(Dynamic::UNIT),
+            }
         })
     });
     engine.register_fn("aim", || {
@@ -3407,7 +3443,24 @@ fn sandbox() -> Engine {
     });
     engine.set_max_call_levels(32);
     engine.set_max_expr_depths(64, 32);
-    engine.set_max_string_size(4096);
+    engine.set_max_string_size(MAX_SCRIPT_TEXT);
+    view::register(&mut engine);
+    // `for key in map`: a map's keys one at a time, so a script walks a
+    // map of any size without `keys()` gathering all its text into one
+    // value (the text limit counts a whole array's strings together).
+    let mut maps = rhai::Module::new();
+    maps.set_iter(std::any::TypeId::of::<Map>(), |map: Dynamic| {
+        let keys: Vec<Dynamic> = map
+            .try_cast::<Map>()
+            .map(|m| {
+                m.into_keys()
+                    .map(|k| Dynamic::from(rhai::ImmutableString::from(k.as_str())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Box::new(keys.into_iter())
+    });
+    engine.register_global_module(maps.into());
     engine.set_max_array_size(65_536);
     engine.set_max_map_size(1024);
     engine.set_max_variables(256);
@@ -3689,6 +3742,9 @@ impl Runtime {
                 write_attempted: false,
                 world,
                 rays: 0,
+                views: BTreeMap::new(),
+                views_made: 0,
+                view_writes: 0,
             })
         });
         let options = rhai::CallFnOptions::new()
@@ -3715,14 +3771,15 @@ impl Runtime {
         }
         match result {
             Ok(returned) => Ok(Outcome {
-                returned,
+                // What leaves the script holds plain maps, not views.
+                returned: view::plain(&returned),
                 ops: invocation.ops,
                 state: invocation.state,
                 entity_vars: invocation.written,
                 output: invocation.output,
             }),
             Err(e) => {
-                let code = match *e {
+                let code = match e.unwrap_inner() {
                     EvalAltResult::ErrorTooManyOperations(_)
                     | EvalAltResult::ErrorTerminated(..) => "script.budget",
                     EvalAltResult::ErrorDataTooLarge(..) | EvalAltResult::ErrorStackOverflow(_) => {
@@ -3730,28 +3787,53 @@ impl Runtime {
                     }
                     _ => "script.error",
                 };
-                let position = e.position();
+                // Name the function and line that threw, not only the
+                // hook it threw under: `on_minigame → bot_name`.
+                let (functions, inner) = thrown_in(&e);
+                let position = inner.position();
                 let script = self
                     .sources
                     .get(package)
                     .map_or(String::new(), Clone::clone);
-                let mut problem =
-                    Diagnostic::error(code, format!("{}: {}", call.function, e)).at(match position
-                        .line()
-                    {
-                        Some(line) => format!("{}:{line}", location(package, &script)),
-                        None => location(package, &script),
-                    });
+                let mut path = call.function.to_owned();
+                for f in &functions {
+                    path.push_str(" → ");
+                    path.push_str(f);
+                }
+                // Rhai's message ends with the line and position.
+                let message = format!("{path}: {inner}");
+                let mut problem = Diagnostic::error(code, message).at(match position.line() {
+                    Some(line) => format!("{}:{line}", location(package, &script)),
+                    None => location(package, &script),
+                });
                 if code == "script.budget" {
                     problem = problem.hint(format!(
                         "the call exceeded {} script operations",
                         call.budget.operations()
                     ));
                 }
+                if matches!(inner, EvalAltResult::ErrorDataTooLarge(..)) {
+                    problem = problem.hint(format!(
+                        "one value's text all together holds at most {MAX_SCRIPT_TEXT} bytes"
+                    ));
+                }
                 Err(problem)
             }
         }
     }
+}
+
+/// The script functions a thrown error passed out of, outermost first, and
+/// the error itself as the innermost one threw it (its line is in that
+/// function).
+fn thrown_in(e: &EvalAltResult) -> (Vec<&str>, &EvalAltResult) {
+    let mut functions = Vec::new();
+    let mut at = e;
+    while let EvalAltResult::ErrorInFunctionCall(name, _, inner, _) = at {
+        functions.push(name.as_str());
+        at = inner;
+    }
+    (functions, at)
 }
 
 /// Convert a script's `[[x, y, z, m], ...]` into voxels, bounded.

@@ -1,5 +1,6 @@
 use crate::Definition;
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use glam::{Mat4, Vec3};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -378,13 +379,13 @@ pub fn fade(d: &Definition, distance: f32) -> f32 {
         if d.fade_near == 0. {
             0.
         } else {
-            (1. - (d.closest - distance) / d.fade_near).clamp(0., 1.)
+            (1. - (d.closest - distance) / d.fade_near).clamped(0., 1.)
         }
     } else if distance > d.distance {
         if d.fade_far == 0. {
             0.
         } else {
-            (1. - (distance - d.distance) / d.fade_far).clamp(0., 1.)
+            (1. - (distance - d.distance) / d.fade_far).clamped(0., 1.)
         }
     } else {
         1.

@@ -738,6 +738,20 @@ impl Simulation {
             .get(brick)
             .is_ok_and(|definition| Bounds::new(brick, &definition.mesh).is_ok())
     }
+    /// A loaded brick on the stud and plate grid: as saved when it is on
+    /// it, else moved to the nearest grid position (a save made where the
+    /// brick had another size). v20 plants a saved brick wherever the save
+    /// put it; this world's occupancy needs the grid, so the brick is moved
+    /// by under half a cell rather than lost. None without a definition.
+    pub fn on_grid(&self, mut brick: Brick) -> Option<Brick> {
+        let definition = self.definitions.get(&brick).ok()?;
+        if Bounds::new(&brick, &definition.mesh).is_err() {
+            brick.position = Bounds::snapped(brick.position, brick.quarter_turns, &definition.mesh);
+        }
+        Bounds::new(&brick, &definition.mesh)
+            .is_ok()
+            .then_some(brick)
+    }
     /// Keep bricks without a definition with the world; see
     /// [`bri_world::authority::Authority::keep_unloaded`].
     pub fn keep_unloaded(&mut self, palette: &[[f32; 4]], bricks: Vec<Brick>) -> Result<()> {

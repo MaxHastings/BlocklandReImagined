@@ -1,6 +1,8 @@
+use anyhow::Context;
 use bri_ui::{
     api::*,
     binds::Platform,
+    input::{InputEvent, MouseButton},
     pack::Pack,
     schema::{Control, UiPack},
     screens::ScreenId,
@@ -1052,6 +1054,94 @@ fn teams_work_without_addon_settings_and_remain_editable_in_a_small_window() {
     assert_eq!(teams[0].name, "Blue");
 }
 
+/// The Add-On Settings window with a checkbox setting, open over a game
+/// whose bot is mid-fight (it has a score).
+fn addon_window_with_checkbox() -> (Ui, MiniGameUiState) {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "slayer:friendlyfire".into(),
+        add_on: "Slayer".into(),
+        category: "Victory Method".into(),
+        title: "Friendly Fire".into(),
+        team: false,
+        server: false,
+        restart: false,
+        kind: MiniGameSettingKind::Bool,
+        default: MiniGameSettingValue::Bool(false),
+        help: String::new(),
+        avatar: None,
+        shown_when: None,
+    });
+    state.members.push(MiniGameMemberRow {
+        id: MiniGamePlayerId(31),
+        name: "Blockhead Bot".into(),
+        score: 0,
+        is_owner: false,
+        admin: false,
+        in_local_game: true,
+    });
+    ui.apply(UiUpdate::MiniGames(state.clone()));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::MiniGameAddOns));
+    (ui, state)
+}
+/// Press the checkbox, let `between` reach the window, release, and
+/// Save: the click must have ticked it.
+fn click_across_update(mut ui: Ui, between: MiniGameUiState) {
+    let (x, y) = ui
+        .control_center(ScreenId::MiniGameAddOns, "AOS_S4")
+        .expect("checkbox row");
+    ui.handle_input(InputEvent::MouseMove { x, y });
+    ui.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    ui.apply(UiUpdate::MiniGames(between));
+    ui.update(16);
+    ui.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Left,
+        x,
+        y,
+    });
+    ui.update(32);
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let sent = ui.drain_actions().into_iter().find_map(|(_, a)| match a {
+        UiAction::EditMiniGameAddOns { settings, .. } => Some(settings),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some(vec![(
+            "slayer:friendlyfire".into(),
+            Some(MiniGameSettingValue::Bool(true))
+        )]),
+        "the click landed on the row the update rebuilt"
+    );
+}
+
+#[test]
+fn a_score_changing_mid_click_does_not_rebuild_the_addon_settings_rows() {
+    let (ui, mut state) = addon_window_with_checkbox();
+    state.revision += 1;
+    state.members[0].score += 1;
+    click_across_update(ui, state);
+}
+
+#[test]
+fn a_rebuild_between_press_and_release_keeps_the_click_on_the_rebuilt_row() {
+    // A real change the window shows (the host renamed a team) rebuilds
+    // every row while the button is down.
+    let (ui, mut state) = addon_window_with_checkbox();
+    state.revision += 1;
+    state.games[0].teams[0].name = "Crimson".into();
+    click_across_update(ui, state);
+}
+
 #[test]
 fn asynchronous_listings_preserve_valid_and_partial_typed_team_names() {
     for name in ["Blue", ""] {
@@ -1355,8 +1445,8 @@ fn permissions_and_mode_visibility_refresh_without_discarding_the_draft() {
     ui.core.minigame_addons = Some(MiniGameId(42));
     ui.core.push(ScreenId::MiniGameAddOns);
     ui.update(0);
-    let teams = addon_view(&mut ui).id("AOS_Teams").unwrap();
-    assert!(!addon_view(&mut ui).node(teams).state.active);
+    let players = addon_view(&mut ui).id("AOS_Players").unwrap();
+    assert!(!addon_view(&mut ui).node(players).state.active);
     select_addon(&mut ui, "AOS_S0", 1);
     addon_event(&mut ui, "AOS_Teams", EventKind::Click);
     type_addon(&mut ui, "AOS_T0_Name", "Red revised");
@@ -1373,6 +1463,55 @@ fn permissions_and_mode_visibility_refresh_without_discarding_the_draft() {
     assert!(ui.drain_actions().is_empty());
     addon_event(&mut ui, "AOS_Close", EventKind::Click);
     assert!(ui.drain_actions().is_empty(), "Cancel sends no settings");
+}
+
+/// Max (v0.2.3): Slayer in Deathmatch still showed team rows and
+/// Preferred Player Count on the Teams page. In a mode without teams the
+/// page says so, and which choice of which setting turns teams on, from
+/// the Add-On's own rule; picking that choice brings the teams back.
+#[test]
+fn the_teams_page_says_how_to_turn_teams_on_in_a_mode_without_them() {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.teams_shown_when = Some(MiniGameShownWhen {
+        setting: "slayer:mode".into(),
+        is: vec![],
+        is_not: vec![MiniGameSettingValue::Text("dm".into())],
+    });
+    state.games[0].teams.push(MiniGameTeam {
+        id: 1,
+        name: "Red".into(),
+        color: 0,
+        settings: Default::default(),
+    });
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    let hint = "This Game Mode doesn't use teams: set Game Mode on Setup to Capture the Flag.";
+    let says = |ui: &mut Ui, line: &str| {
+        let view = addon_view(ui);
+        view.walk().any(|n| view.text_of(n) == line)
+    };
+    let teams = addon_view(&mut ui).id("AOS_Teams").unwrap();
+    assert!(addon_view(&mut ui).node(teams).state.active);
+    addon_event(&mut ui, "AOS_Teams", EventKind::Click);
+    assert!(says(&mut ui, hint), "the Teams page explains itself");
+    let view = addon_view(&mut ui);
+    assert!(view.id("AOS_T0_Name").is_none(), "no team rows");
+    let add = view.id("AOS_AddTeam").unwrap();
+    assert!(!view.node(add).state.visible, "no adding teams");
+    let players = view.id("AOS_Players").unwrap();
+    assert!(!view.node(players).state.active);
+
+    addon_event(&mut ui, "AOS_Setup", EventKind::Click);
+    select_addon(&mut ui, "AOS_S0", 1);
+    addon_event(&mut ui, "AOS_Teams", EventKind::Click);
+    assert!(!says(&mut ui, hint));
+    assert!(
+        addon_view(&mut ui).id("AOS_T0_Name").is_some(),
+        "teams again"
+    );
 }
 
 #[test]
@@ -1462,7 +1601,7 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
         "ui_pack",
     ))?);
     let out = workspace.join("artifacts/v022-minigame-ui");
-    std::fs::create_dir_all(&out)?;
+    std::fs::create_dir_all(&out).with_context(|| format!("Creating {}", out.display()))?;
     let gpu = Headless::new()?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for (width, height, scale) in [
@@ -1524,13 +1663,9 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
                 ui.scale(),
                 [0.12, 0.16, 0.22, 1.0],
             )?;
-            image::save_buffer(
-                out.join(format!("{page}-{width}x{height}-{scale}x.png")),
-                &pixels,
-                width,
-                height,
-                image::ColorType::Rgba8,
-            )?;
+            let png = out.join(format!("{page}-{width}x{height}-{scale}x.png"));
+            image::save_buffer(&png, &pixels, width, height, image::ColorType::Rgba8)
+                .with_context(|| format!("Writing {}", png.display()))?;
             assert!(!draw.cmds.is_empty());
             assert_eq!(pixels.len(), (width * height * 4) as usize);
         }
@@ -1538,9 +1673,11 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
     // Read generated Slayer definitions directly. This test-only adapter
     // mirrors client minigame_ui's typed metadata mapping, without a runtime
     // dependency or a product-side Add-On-name branch.
-    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(
-        workspace.join("content/addons/gamemode_slayer-rules/behaviour.json"),
-    )?)?;
+    let behaviour = workspace.join("content/addons/gamemode_slayer-rules/behaviour.json");
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&behaviour).with_context(|| format!("Reading {}", behaviour.display()))?,
+    )
+    .with_context(|| format!("Parsing {}", behaviour.display()))?;
     let value = |v: &serde_json::Value| {
         if let Some(v) = v.as_bool() {
             MiniGameSettingValue::Bool(v)
@@ -1681,13 +1818,9 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
                 ui.scale(),
                 [0.12, 0.16, 0.22, 1.0],
             )?;
-            image::save_buffer(
-                out.join(format!("Slayer-{page}-{width}x{height}-1x.png")),
-                &pixels,
-                width,
-                height,
-                image::ColorType::Rgba8,
-            )?;
+            let png = out.join(format!("Slayer-{page}-{width}x{height}-1x.png"));
+            image::save_buffer(&png, &pixels, width, height, image::ColorType::Rgba8)
+                .with_context(|| format!("Writing {}", png.display()))?;
             assert!(!draw.cmds.is_empty());
         }
     }

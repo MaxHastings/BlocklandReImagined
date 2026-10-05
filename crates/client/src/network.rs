@@ -31,6 +31,9 @@ pub struct View {
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
     pub owner: OwnerId,
+    /// The host's ticket for this connection: a rejoin after the network
+    /// dropped presents it to come back as the same player.
+    pub resume: bri_net::protocol::ResumeToken,
     pub administrator: bool,
     pub world: Arc<PublicWorld>,
     /// Increments with every replica world change; `world_log` says what changed.
@@ -146,6 +149,9 @@ pub enum Event {
     Reply {
         request: u64,
         result: std::result::Result<Reply, bri_sim::session::Rejection>,
+        /// The world's revision ([`View::world_revision`]) when the answer
+        /// came: a Save Bricks answer's snapshot holds the world up to here.
+        revision: u64,
     },
     Failed(String),
     /// The host changed to this map.
@@ -179,6 +185,9 @@ pub struct Probes {
     pub host: Option<Arc<std::sync::Mutex<bri_net::server::ServerPerf>>>,
     /// The in-process server's port when this game hosts.
     pub host_port: Option<u16>,
+    /// Problems the in-process server's Add-On scripts ran into, for this
+    /// game's Add-On health, when this game hosts.
+    pub host_problems: Option<Arc<std::sync::Mutex<Vec<bri_package::diag::Diagnostic>>>>,
 }
 /// How long loading may stand still while it waits on the server before it
 /// fails. A dead or unreachable server fails sooner, at QUIC's idle timeout.
@@ -198,6 +207,14 @@ async fn stalled(progress: &bri_progress::Progress) -> anyhow::Error {
         } else if now.duration_since(since) >= PEER_STALL {
             return anyhow::anyhow!("The server stopped responding ({})", snapshot.status());
         }
+    }
+}
+/// Why a game this player hosted ended when its host failed, in plain words.
+pub fn host_failed(kept: bool) -> &'static str {
+    if kept {
+        "The game you were hosting hit an internal error and stopped. Your unsaved build was kept, so you can recover it."
+    } else {
+        "The game you were hosting hit an internal error and stopped."
     }
 }
 pub struct Worker {
@@ -240,17 +257,24 @@ impl Worker {
             };
             let result=match connected {
                 Ok(mut connection)=>{
-                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone()),host_port:connection.host.as_ref().map(|h|h.address.port())});
+                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone()),host_port:connection.host.as_ref().map(|h|h.address.port()),host_problems:connection.host.as_ref().map(|h|h.package_problems.clone())});
                     let result=tokio::select! {
                         _=&mut stopped=>Ok(()),
                         result=run(&mut connection.client,connection.mods.clone(),rx,movement_rx,&view_tx,&events_tx)=>result,
                     };
                     connection.client.close();
+                    let mut result=result;
                     if let Some(host)=connection.host.take() {
                         // Stop the host even when dispatch failed or the UI cancelled;
                         // the host keeps the package state it ends with.
-                        if let Err(error)=host.stop().await {
-                            bri_console::warn(format!("Host stopped with an error: {error:#}"));
+                        match host.finish().await {
+                            Ok(report)=>if let Some(failure)=report.failure {
+                                // The host stopping is why this game ended, not the
+                                // connection it closed; its world was kept to recover.
+                                bri_console::warn(format!("Host stopped with an error: {failure}"));
+                                result=Err(anyhow::anyhow!("{}",host_failed(report.recovery.is_some())));
+                            },
+                            Err(error)=>bri_console::warn(format!("Host stopped with an error: {error:#}")),
                         }
                     }
                     result
@@ -377,6 +401,7 @@ fn publish(
         weapons: client.replica.weapons.clone(),
         tools: client.replica.tools.clone(),
         owner: client.owner,
+        resume: client.resume.clone(),
         administrator: client.administrator,
         world: world.world.clone(),
         world_revision: world.revision,
@@ -469,7 +494,7 @@ async fn run(
                 for request in pending.expire(std::time::Instant::now()) {
                     bri_console::warn(format!("The server never answered request {request}; giving up on it"));
                     let result=Err(bri_sim::session::Rejection{plant:None,message:"The server did not answer in time.".into()});
-                    events.try_send(Event::Reply{request,result}).context("UI reply queue is full or closed")?;
+                    events.try_send(Event::Reply{request,result,revision:world.revision}).context("UI reply queue is full or closed")?;
                 }
             }
             batch=movement.recv()=>{
@@ -497,7 +522,7 @@ async fn run(
                     // Refuse this one; the connection and the answers on
                     // their way are fine.
                     let result=Err(bri_sim::session::Rejection{plant:None,message:"Too many requests are waiting on the server; try again in a moment.".into()});
-                    events.try_send(Event::Reply{request:request.id,result}).context("UI reply queue is full or closed")?;
+                    events.try_send(Event::Reply{request:request.id,result,revision:world.revision}).context("UI reply queue is full or closed")?;
                     continue;
                 }
                 let sequence=tokio::time::timeout(Duration::from_secs(10),client.request_with_aim(request.command,request.aim)).await.context("Server request write timed out")??;
@@ -513,7 +538,7 @@ async fn run(
                             continue;
                         };
                         if std::mem::take(&mut stale) { publish(client,&host_key,&world,checkpoint_cue_cursor,view); }
-                        events.try_send(Event::Reply{request,result}).context("UI reply queue is full or closed")?;
+                        events.try_send(Event::Reply{request,result,revision:world.revision}).context("UI reply queue is full or closed")?;
                     }
                     ClientEvent::Updated {world_changed,changed_bricks,palette_changed}=>{
                         let cues=client.replica.take_cues();

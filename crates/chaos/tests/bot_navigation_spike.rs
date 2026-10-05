@@ -1,5 +1,9 @@
 //! Physical/navigation feasibility evidence. Only ordinary motor inputs after
 //! initialization: no runtime transforms, invisible supports or teleports.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "f32::clamp here is not yet bri_console::Clamp::clamped"
+)]
 use bri_chaos::fixture;
 use bri_sim::player::{MoveInput, Player, PlayerTuning};
 use bri_sim::{
@@ -187,6 +191,7 @@ fn bot_session(
     spawner.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, spawner);
     for (i, mut goal) in goals.into_iter().enumerate() {
@@ -358,6 +363,9 @@ fn fixed_navigation_does_not_discover_the_physically_valid_actor_support() {
         physics: &physics,
         terrain: &|_, _, _| None,
         passages: &passages,
+        waters: &[],
+        bodies: &[],
+        motions: &[],
     };
     let body = Body::of(&tuning, 1.);
     let mut nav = Nav::default();

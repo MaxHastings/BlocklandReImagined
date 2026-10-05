@@ -1,6 +1,7 @@
 //! Native liquid regions, shared by presentation and authoritative queries.
 use crate::environment::Image;
 use anyhow::{Result, ensure};
+use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -180,13 +181,13 @@ impl Water {
         if self.max[1] >= top && self.min[1] <= feet[1] {
             return 1.0;
         }
-        ((self.max[1].min(top) - self.min[1].max(feet[1])) / height).clamp(0.0, 1.0)
+        ((self.max[1].min(top) - self.min[1].max(feet[1])) / height).clamped(0.0, 1.0)
     }
     /// Surface/shore opacity from authored depth controls, with defined behavior
     /// for legacy zero-gradient and out-of-range alpha values.
     pub fn depth_opacity(&self, depth: f32) -> [f32; 2] {
         if !self.depth_mask {
-            return [self.opacity.clamp(0.0, 1.0), 0.0];
+            return [self.opacity.clamped(0.0, 1.0), 0.0];
         }
         let [low, high, shore, gradient] = self.depth_alpha;
         let ramp = |d: f32| {
@@ -198,9 +199,9 @@ impl Water {
                 (d.max(0.0) / shore).powf(1.0 / gradient)
             }
         };
-        let surface = (low + (high - low) * ramp(depth)).clamp(0.0, 1.0);
+        let surface = (low + (high - low) * ramp(depth)).clamped(0.0, 1.0);
         let edge = if shore > 0.0 && depth > shore {
-            ((high - low) * (1.0 - ramp(depth - shore))).clamp(0.0, 1.0)
+            ((high - low) * (1.0 - ramp(depth - shore))).clamped(0.0, 1.0)
         } else {
             surface
         };

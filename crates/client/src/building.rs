@@ -433,21 +433,20 @@ impl Building {
                 .collect(),
         };
         let dirty = !changed.is_empty() || !removed.is_empty();
-        for id in removed {
-            self.bricks.remove(&id);
-            self.index.remove(id);
-            self.camera_index.remove(id);
-            self.visibility_index.remove(id);
+        // A blast through a big build changes thousands of bricks in one
+        // update: each index takes them all in one pass.
+        let mut leaving: Vec<BrickId> = removed.clone();
+        leaving.extend(changed.iter().map(|(id, _, _)| *id));
+        for id in &removed {
+            self.bricks.remove(id);
         }
+        let (mut shown, mut aimed, mut solid) = (Vec::new(), Vec::new(), Vec::new());
         for (id, brick, bounds) in changed {
-            self.index.remove(id);
-            self.camera_index.remove(id);
-            self.visibility_index.remove(id);
             if brick.visible {
-                self.visibility_index.insert(id, bounds);
+                shown.push((id, bounds));
             }
             if brick.raycast {
-                self.index.insert(id, bounds);
+                aimed.push((id, bounds));
             }
             if brick.colliding {
                 let aabb = self
@@ -455,14 +454,22 @@ impl Building {
                     .get(brick)?
                     .shape
                     .compute_aabb(&brick_pose(brick));
-                self.camera_index.insert(
+                solid.push((
                     id,
                     query_bounds(
                         Vec3::from(aabb.mins.to_array()),
                         Vec3::from(aabb.maxs.to_array()),
                     ),
-                );
+                ));
             }
+        }
+        for (index, joining) in [
+            (&mut self.index, aimed),
+            (&mut self.camera_index, solid),
+            (&mut self.visibility_index, shown),
+        ] {
+            index.remove_many(leaving.iter().copied());
+            index.insert_many(joining);
         }
         // The change log names everything that differs, so the replica's map
         // now matches what the indexes hold; share it instead of copying.

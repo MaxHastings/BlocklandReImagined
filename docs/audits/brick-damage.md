@@ -144,14 +144,27 @@ other routes.
    are frozen.
 4. **`fakeKillBrick` with time 0 waits 1 s.** v20 passes 0 ms to the engine.
    The engine side was not recovered, so the existing 1 s floor stays.
+5. **A blast throws at most 2048 of its bricks as debris**
+   (`session::MAX_BLAST_DEBRIS`, 2026-10-04). Every brick in reach is knocked
+   out and respawns; at most 2048, spread over the blast, get a `BrickKill`
+   cue. That is the most debris a client keeps at its highest Physics
+   Quality, and a v20 client over its `$pref::Physics::MaxBricks` only hides
+   the rest. The Mini-Nuke takes out about 5,000 bricks of Badspot's
+   Christmas Block Party; one cue each overflowed the presentation queue and
+   pushed out the blast's own explosion and sound. Clients take the
+   unannounced bricks in the blast's reach out at once, as they do the
+   announced ones, rather than fading them.
+6. **`canExplode` as v20's engine has it** (blocklandv20.exe 0x5381f0,
+   recovered 2026-10-04). A brick's volume is studs x studs x plates, a
+   quarter of it (rounded down) when its paint's alpha is under 0.95. Within
+   `brickExplosionMaxVolume` it breaks; over the larger of that and
+   `brickExplosionMaxVolumeFloating` it never does; in between it breaks
+   only when it is not held between a live brick below and a live brick
+   above (0x534e80), so a brick on the floor or with nothing on top counts
+   as floating. Base plates and indestructible bricks are still skipped.
 
 ## Not verified or not implemented
 
-- `canExplode`'s floating-volume allowance (`brickExplosionMaxVolumeFloating`)
-  is engine code that was not recovered. We use only `maxVolume`, and also
-  skip base plates and indestructible bricks. A brick that is floating and
-  larger than `maxVolume` but within the floating limit would survive here
-  and might break in v20.
 - The internet, non-minigame "source object's brick group" allowance is not
   modelled. For a player shooter it never applies. It would matter only for
   brick-spawned shooters such as bots.

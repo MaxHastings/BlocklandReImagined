@@ -524,6 +524,65 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     Ok(())
 }
 
+/// An Add-On explosion with a light (the Mini-Nuke's: its light is named
+/// after it) is played by its explosion's name, its emitters and all. The
+/// light took the name once Add-On lights were bound by datablock name, so
+/// the explosion cue started only the light's "missing duration" note.
+#[test]
+fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
+    let base = fixture(false);
+    let particle = Particle {
+        id: "kit:particle/spark".into(),
+        ..base.library.particles[0].clone()
+    };
+    let emitter = Emitter {
+        id: "kit:emitter/flash".into(),
+        name: String::new(),
+        particles: vec![particle.id.clone()],
+        ..base.library.emitters[0].clone()
+    };
+    let light = Light {
+        id: "kit:explosion-light/boom".into(),
+        name: String::new(),
+        enabled: true,
+        color: [1.0, 0.8, 0.2],
+        brightness: 1.0,
+        radius: 60.0,
+        color_curves: None,
+        brightness_curve: None,
+        radius_curve: None,
+        flare: None,
+    };
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![particle],
+        emitters: vec![emitter],
+        lights: vec![light.clone()],
+        explosions: vec![bri_weapons::ExplosionEffect {
+            id: "kit:explosion/boom".into(),
+            lifetime: 0.25,
+            emitters: vec!["kit:emitter/flash".into()],
+            light: Some(light.id.clone()),
+            burst: Some(("kit:emitter/flash".into(), 10, 0.2)),
+        }],
+    };
+    pack.validate()?;
+    let mut fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
+    fx.cues(&[cue(1, "boom", 0.)], pose)?;
+    fx.advance(0.1, Vec3::ZERO, pose)?;
+    assert_eq!(
+        fx.diagnostics.missing_bindings, 0,
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    assert!(
+        fx.world().particle_count() >= 10,
+        "{} particles",
+        fx.world().particle_count()
+    );
+    Ok(())
+}
+
 #[test]
 fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     let base = fixture(false);
@@ -565,6 +624,11 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     // States and trails name the emitter by id; the explosion is found by
     // its explosion's name, as the base game's are.
     assert!(fx.resolves("kit:emitter/flash"));
+    // Another Add-On names it by its datablock name, as v20's names are
+    // global (Tier 2's tracers trail Tier 1's pistolTrailEmitter); one left
+    // out answers to no name.
+    assert!(fx.resolves("Flash"));
+    assert!(!fx.resolves("lost"));
     assert!(fx.resolves("boom"));
     assert!(fx.resolves("kit:explosion/boom"));
     // A particle drawing a texture the game lacks is left out, with the
@@ -580,6 +644,92 @@ fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     );
     // The base game's names still win.
     assert!(fx.resolves("hit"));
+    Ok(())
+}
+
+/// v20 draws the game's cloud for a particle whose texture does not load
+/// (`ParticleData` preload, 0x558c60), so an explosion naming a texture the
+/// game lacks (the Mini-Nuke's `base/data/particles/star`) keeps every part.
+#[test]
+fn a_particle_whose_texture_is_missing_draws_the_cloud() -> Result<()> {
+    let cloud = bri_client::weapon_effects::MISSING_PARTICLE_TEXTURE;
+    let fixture = fixture(false);
+    let mut library = fixture.library.clone();
+    library.textures.insert(cloud.into(), "cloud.png".into());
+    let mut textures: Vec<_> = fixture
+        .textures
+        .iter()
+        .map(|t| TextureImage {
+            id: t.id.clone(),
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.clone(),
+        })
+        .collect();
+    textures.push(TextureImage {
+        id: cloud.into(),
+        width: 1,
+        height: 1,
+        rgba: vec![128; 4],
+    });
+    let base = EffectsPack::from_parts(library, fixture.manifest.clone(), textures)?;
+    let lost = Particle {
+        id: "kit:particle/star".into(),
+        texture: "base/data/particles/star".into(),
+        ..base.library.particles[0].clone()
+    };
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![lost.clone()],
+        emitters: vec![Emitter {
+            id: "kit:emitter/star".into(),
+            name: String::new(),
+            particles: vec![lost.id.clone()],
+            ..base.library.emitters[0].clone()
+        }],
+        lights: vec![],
+        explosions: vec![bri_weapons::ExplosionEffect {
+            id: "kit:explosion/nuke".into(),
+            lifetime: 0.2,
+            emitters: vec!["kit:emitter/star".into()],
+            light: None,
+            burst: Some(("kit:emitter/star".into(), 4, 0.5)),
+        }],
+    };
+    pack.validate()?;
+    let fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
+    assert!(
+        fx.resolves("kit:emitter/star"),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    let drawn = fx
+        .world()
+        .pack()
+        .library
+        .particles
+        .iter()
+        .find(|p| p.id == lost.id)
+        .expect("the particle is kept");
+    assert_eq!(drawn.texture, cloud);
+    let explosion = fx
+        .world()
+        .pack()
+        .manifest
+        .composites
+        .iter()
+        .find(|c| c.id == "kit:explosion/nuke")
+        .unwrap();
+    assert_eq!(explosion.emitters, ["kit:emitter/star"]);
+    assert!(explosion.burst.is_some());
+    assert!(
+        !fx.diagnostics
+            .messages
+            .iter()
+            .any(|m| m.contains("draws nothing") || m.contains("shows less")),
+        "{:?}",
+        fx.diagnostics.messages
+    );
     Ok(())
 }
 

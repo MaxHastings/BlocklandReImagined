@@ -5,10 +5,12 @@ use crate::draw::DrawList;
 use crate::geom::{Rect, Rgba};
 use crate::models::perf::{
     FRAME_HISTORY, FrameSample, NET_GRAPH_POINTS, NET_PLOTS, NetGraph, PerfMode, PerfOverlay,
+    PerfStats,
 };
 use crate::pack::Pack;
 use crate::text::Font;
 use crate::ui::Core;
+use bri_console::Clamp;
 
 /// `NetGraphGui` is authored at 640x480 with `horizSizing = "left"`, so it
 /// keeps its distance from the right edge: the graph at "432 5", 200x200.
@@ -211,7 +213,7 @@ fn lines(core: &Core) -> (Vec<Line>, Vec<Line>) {
         ],
     ];
     if o.mode != PerfMode::Expanded {
-        return (head, Vec::new());
+        return (head, bot_lines(&o.stats));
     }
     let mut head = head;
     head[0].push(label(format!("  worst {:.1}", s.worst_ms)));
@@ -323,7 +325,22 @@ fn lines(core: &Core) -> (Vec<Line>, Vec<Line>) {
         let gpu: String = st.gpu.chars().take(40).collect();
         body.push(vec![label(gpu)]);
     }
+    body.extend(bot_lines(st));
     (head, body)
+}
+
+/// The looked-at bot's "why" readout, when this game hosts it.
+fn bot_lines(st: &PerfStats) -> Vec<Line> {
+    let Some((name, why)) = &st.bot else {
+        return Vec::new();
+    };
+    let name: String = name.chars().take(32).collect();
+    let mut out = vec![vec![label("Bot    "), value(name)]];
+    for line in why {
+        let line: String = line.chars().take(72).collect();
+        out.push(vec![value(format!("  {line}"))]);
+    }
+    out
 }
 
 fn line_width(font: &Font, line: &Line) -> i32 {
@@ -415,8 +432,12 @@ fn frame_graph<'a>(
     let frames: Vec<&FrameSample> = frames.take(r.w.max(0) as usize).collect();
     let worst = frames.iter().map(|f| f.frame_ms).fold(0.0, f32::max);
     // Keep 30 FPS on the graph; grow for hitches, up to 100 ms.
-    let top_ms = worst.clamp(1000.0 / 30.0 * 1.2, 100.0);
-    let px = |ms: f32| ((ms / top_ms) * r.h as f32).round().clamp(0.0, r.h as f32) as i32;
+    let top_ms = worst.clamped(1000.0 / 30.0 * 1.2, 100.0);
+    let px = |ms: f32| {
+        ((ms / top_ms) * r.h as f32)
+            .round()
+            .clamped(0.0, r.h as f32) as i32
+    };
     for (i, f) in frames.iter().enumerate() {
         let x = r.right() - 1 - i as i32;
         let bar = px(f.frame_ms).max(1);

@@ -133,34 +133,37 @@ impl Session {
                     continue;
                 }
             };
+            // A new body on a new map: only what belongs to the connection
+            // and the player's own choices comes along. Everything the old
+            // mission or its Add-Ons put on them (uniforms, respawn times,
+            // look limits, bodies, a seat, a camera path) stays behind, and
+            // so does whatever a later field adds unless it is named here.
             let tick = self.simulation.state().tick;
-            self.peers.insert(
+            let mut arrived = Peer::fresh(
+                player,
                 owner,
-                Peer {
-                    player,
-                    actor: Actor {
-                        owner,
-                        administrator: peer.actor.administrator,
-                        ..Default::default()
-                    },
-                    combat,
-                    special: Default::default(),
-                    control: ControlObject::Player,
-                    camera: None,
-                    last_drop_tick: None,
-                    tutorial: Default::default(),
-                    input: MoveInput::default(),
-                    inputs: VecDeque::new(),
-                    seated_pace: SeatedPace::default(),
-                    last_input_tick: tick,
-                    window_tick: tick,
-                    actions: 0,
-                    chats: 0,
-                    inspection: None,
-                    thread_timers: Vec::new(),
-                    ..peer
-                },
+                peer.actor.administrator,
+                peer.name,
+                peer.principal,
+                combat,
+                peer.avatar,
+                tick,
             );
+            arrived.clan = peer.clan;
+            // The client's paint pick and its colour set stay as it shows them.
+            arrived.current_color = peer.current_color;
+            arrived.fx_can = peer.fx_can;
+            arrived.talking = peer.talking;
+            // Its move and request sequences go on where they were.
+            arrived.input_drain = peer.input_drain;
+            arrived.processed_move = peer.processed_move;
+            arrived.seat_since = peer.seat_since;
+            arrived.input_budget = peer.input_budget;
+            arrived.last_sequence = peer.last_sequence;
+            arrived.last_move_sequence = peer.last_move_sequence;
+            // Chat's repeat check (`lastChatText`) is the connection's.
+            arrived.last_chat = peer.last_chat;
+            self.peers.insert(owner, arrived);
         }
         let name = self
             .peers

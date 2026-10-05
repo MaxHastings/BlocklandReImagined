@@ -16,6 +16,9 @@ pub(super) struct Saves {
     /// first frame, once startup has settled which Add-Ons are on.
     pub(super) old_saves: std::sync::Arc<crate::old_saves::OldSaves>,
     pub(super) old_saves_started: bool,
+    /// Whether the build a crashed hosted game left was offered back this
+    /// run (`crate::recovery`).
+    pub(super) recovery_offered: bool,
     /// A save list read because converted saves arrived while a save
     /// dialog was open.
     pub(super) save_refresh:
@@ -36,9 +39,16 @@ impl App {
                 Ok(())
             }
             Ok(crate::saves::Outcome::Saved(path, entries)) => {
-                // What the host has now is saved under a name.
-                if let Some(a) = self.net.attempt.as_mut().filter(|a| a.local) {
-                    a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
+                // What the host had when it took the build is saved under a
+                // name; bricks placed while the file was written are not.
+                if let Some(a) = self
+                    .net
+                    .attempt
+                    .as_mut()
+                    .filter(|a| a.local && request.session == Some(a.id))
+                    && request.revision.is_some()
+                {
+                    a.saved_revision = request.revision;
                 }
                 // v20's save picture: the next scene drawn, without the interface.
                 self.files.save_picture = crate::save_picture::path_for(&path);
@@ -86,6 +96,12 @@ impl App {
     /// interface, and write it as the save picture at `path` (v20's
     /// `screenShot` after `Canvas.setContent(noHudGui)`). Waits for a frame
     /// with a scene to draw.
+    ///
+    /// The picture is drawn in an encoder of its own and submitted before
+    /// the frame's own drawing begins. A frame's buffer writes all land at
+    /// its submit, so sharing the frame's encoder let the frame's camera,
+    /// lights and indirect draw arguments overwrite the picture's: its world
+    /// chunks drew with another pass's arguments and bricks went missing.
     pub(super) fn take_save_picture(
         &mut self,
         frame: &mut RenderContext<'_>,
@@ -106,21 +122,35 @@ impl App {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
+        let mut encoder = frame
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Save picture"),
+            });
         let drawn = self.render_scene(&mut RenderContext {
             device: frame.device,
             queue: frame.queue,
-            encoder: frame.encoder,
+            encoder: &mut encoder,
             target: &view,
             format: frame.format,
             size: frame.size,
             ui_renderer: frame.ui_renderer,
         })?;
-        if !drawn {
+        let capture = if drawn {
+            Some(crate::platform::capture_copy(
+                frame.device,
+                &mut encoder,
+                &texture,
+                frame.format,
+            )?)
+        } else {
+            None
+        };
+        frame.queue.submit([encoder.finish()]);
+        let Some(capture) = capture else {
             self.files.save_picture = Some(path);
             return Ok(());
-        }
-        let capture =
-            crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
+        };
         self.files.save_shots.copied(
             crate::platform::Shot {
                 path,
@@ -128,6 +158,7 @@ impl App {
             },
             capture,
         );
+        self.files.save_shots.submitted(frame.queue);
         Ok(())
     }
     pub(super) fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
@@ -162,6 +193,16 @@ impl App {
     pub(super) fn poll_old_saves(&mut self) {
         if !self.files.old_saves_started {
             self.start_old_saves();
+        }
+        self.show_damaged_files();
+        // A hosted game that ended abnormally last time left its build:
+        // offer it back once, on the first frame.
+        if !self.files.recovery_offered {
+            self.files.recovery_offered = true;
+            if let Some(left) = crate::recovery::left(&self.state_dir, &self.files.saves) {
+                self.ui
+                    .apply(UiUpdate::Question(crate::recovery::question(&left, None)));
+            }
         }
         if let Some(rx) = &self.files.save_refresh {
             match rx.try_recv() {

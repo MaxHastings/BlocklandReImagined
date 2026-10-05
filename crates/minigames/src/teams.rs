@@ -22,7 +22,8 @@ impl MinigamesWorld {
         }
     }
     /// Set a game's teams and team rules, as its Add-On's policy asks.
-    /// Teams named by an existing id keep their members; teams left out are
+    /// Teams named by an existing id keep their members (an id the game
+    /// has not got makes that slot's team); teams left out are
     /// removed and their members are left with no team. Returns each
     /// spec's team id, in order.
     pub fn set_teams(
@@ -42,14 +43,10 @@ impl MinigamesWorld {
                 return Err(Error::InvalidSettings);
             }
             if let Some(id) = spec.id
-                && (g.teams.get(id).is_none() || !kept.insert(id))
+                && (!TeamId::valid(id) || !kept.insert(id))
             {
                 return Err(Error::StaleTeam);
             }
-        }
-        let new_count = specs.iter().filter(|s| s.id.is_none()).count() as u32;
-        if g.teams.next.checked_add(new_count).is_none() {
-            return Err(Error::Capacity);
         }
         let orphans: Vec<_> = g
             .members
@@ -62,13 +59,21 @@ impl MinigamesWorld {
             .into_iter()
             .map(|t| (t.id, t))
             .collect();
+        // New teams take the lowest slots no spec names; there are at most
+        // MAX_TEAMS specs, so one is always free.
+        let mut free = (1..=MAX_TEAMS as u32)
+            .map(TeamId)
+            .filter(|id| !kept.contains(id));
         let mut ids = Vec::with_capacity(specs.len());
+        let mut fresh = BTreeSet::new();
         teams.list = specs
             .into_iter()
             .map(|spec| {
+                // A new team in a removed team's slot starts fresh: none of
+                // that team's settings or points.
                 let id = spec.id.unwrap_or_else(|| {
-                    let id = TeamId(teams.next);
-                    teams.next += 1;
+                    let id = free.next().expect("a free team slot");
+                    fresh.insert(id);
                     id
                 });
                 ids.push(id);
@@ -78,6 +83,7 @@ impl MinigamesWorld {
                     color: spec.color,
                     addon_settings: old
                         .remove(&id)
+                        .filter(|_| !fresh.contains(&id))
                         .map(|t| t.addon_settings)
                         .unwrap_or_default(),
                 }
@@ -85,6 +91,10 @@ impl MinigamesWorld {
             .collect();
         teams.friendly_fire = friendly_fire;
         teams.ally_same_color = ally_same_color;
+        let g = self.games.get_mut(&game).expect("validated game");
+        let teams = &g.teams;
+        g.team_points
+            .retain(|t, _| teams.get(*t).is_some() && !fresh.contains(t));
         let mut out = Vec::new();
         for p in orphans {
             self.clear_team(p, game, &mut out);

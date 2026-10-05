@@ -88,8 +88,8 @@ touching its outer edge counts.
 `onRegionEnter/Leave/Stay` observes players; `onObjectEnter/Leave/Stay` observes
 vehicles and balls spawned by this builder. Stay fires once per second, on the
 server's shared clock. A fast full passage can produce Enter and Leave in one
-tick. Teleports/portal jumps currently sweep that straight path too; test
-intermediate checkpoint/goal firings deliberately. Driven object facts supply the driver when there is no recent touch credit.
+tick. Teleports, respawns and portal jumps enter only the region they land
+in, never the sensors between. Driven object facts supply the driver when there is no recent touch credit.
 Unattributed natural motion supplies an Object but no Instigator.
 
 Variable actions on a brick take scope, name and integer. `Brick` means the
