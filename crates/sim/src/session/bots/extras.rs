@@ -251,9 +251,9 @@ impl Session {
             let source = p.source.0;
             if p.stuck
                 || source == bot
-                || self.bot_allies(bot, source)
                 || p.position.distance(centre) > INCOMING
                 || p.velocity.dot(centre - p.position) <= 0.0
+                || self.bot_allies(bot, source)
             {
                 continue;
             }

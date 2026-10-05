@@ -1496,21 +1496,29 @@ impl Session {
     /// Whether two brick bots are on one side: one side (Bot_Hole's
     /// `hType`) never fights itself and fights every other; bots of no side
     /// side with their builder.
+    ///
+    /// Each one's minigame player is looked up once (`bot_team_relation`
+    /// and `game_of` read the same). Minigame teammates count only through
+    /// that explicit relation: `minigames.allied` holds only for two players
+    /// of one game who both have teams, which the relation has answered.
     fn bot_allies(&self, bot: OwnerId, other: OwnerId) -> bool {
-        if let Some(allied) = self.bot_team_relation(bot, other) {
-            return allied;
-        }
-        if let (Some(a), Some(b)) = (self.peers.get(&bot), self.peers.get(&other))
-            && bot != other
-            && b.combat.alive
-            && self.minigames.allied(a.combat.player, b.combat.player)
+        let player = |o: OwnerId| {
+            let peer = self.peers.get(&o)?;
+            self.minigames.player(peer.combat.player).ok()
+        };
+        let (a, b) = (player(bot), player(other));
+        if let (Some(a), Some(b)) = (a, b)
+            && a.game.is_some()
+            && a.game == b.game
+            && a.team.is_some()
+            && b.team.is_some()
         {
-            return true;
+            return self.minigames.allied(a.id, b.id);
         }
         if !self.bots.is_brick_bot(bot) || !self.bots.is_brick_bot(other) {
             return false;
         }
-        if self.game_of(bot) != self.game_of(other) {
+        if a.and_then(|a| a.game) != b.and_then(|b| b.game) {
             return false;
         }
         let side = |o: OwnerId| {
@@ -3058,10 +3066,13 @@ impl Session {
             .peers
             .iter()
             .filter(|(o, p)| {
-                **o != bot && p.combat.alive && !self.seated(**o) && self.bot_allies(bot, **o)
+                **o != bot
+                    && p.combat.alive
+                    && flat(Vec3::from(p.player.state().feet) - feet).length() < 3.0
+                    && !self.seated(**o)
+                    && self.bot_allies(bot, **o)
             })
             .map(|(_, p)| Vec3::from(p.player.state().feet))
-            .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
         let may_glance = perception::may_glance(behaviour) && sight.target.is_none();
         let glance = self.bot_glance(
