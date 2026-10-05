@@ -8,7 +8,12 @@
     "team.teamwork",
     "team.mood",
     "team.pressure",
-    "team.copy"
+    "team.copy",
+    "extras.idle_play",
+    "extras.crouch",
+    "extras.dodge",
+    "extras.activate",
+    "extras.hand_weapon"
   ],
   "on_value": 1.0,
   "on_note": "on: each dial shipped off (0) is set to this ON value in the all-on run (all_dials_on) and the perf bar; a dial shipped on keeps its value; one not listed uses on_value.",

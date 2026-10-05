@@ -378,11 +378,8 @@ fn water_between_the_sides() {
     // no route), no kills, 2 changes a bot-minute. Now a brawler in its
     // band walks at its enemy rather than strafing, and some cross: stuck
     // 13-30%, 6-15 kills, 7-15 changes (the chase/fight of a real fight)
-    // over the runs while these fixes landed. TARGET stuck < 5%. With
-    // `perception` more of them meet in the water: 19-22 kills where the
-    // release had 12, and the changes rise with them (21.6 a bot-minute,
-    // the same 3-4 per kill as the release's 10.8 for 12).
-    within(&r, 0.35, 0.01, 0.02, 25.0);
+    // over the runs while these fixes landed. TARGET stuck < 5%.
+    within(&r, 0.35, 0.01, 0.02, 20.0);
     assert!(r.kills > 0, "the water was crossed");
 }
 
