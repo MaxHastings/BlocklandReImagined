@@ -75,6 +75,17 @@ const GOOF_FLOOR: f32 = 0.05;
 /// brake on goofing that the mood's pull pushes against.
 const GOOF_BOREDOM: f32 = 0.3;
 const GOOF_SECONDS: f32 = 2.0;
+/// How near someone must be for a goof to go right up to them.
+const CLOSE_RANGE: f32 = 10.0;
+/// How fast it walks up to them, for the time a goof is given for it.
+const WALK_UP_SPEED: f32 = 3.0;
+/// How close it comes to use its hand on someone.
+const HAND_REACH: f32 = 1.4;
+/// How far the way it faces must be clear of the world to use what is in
+/// its hand on the air (past any tool's reach, a long wand's included).
+const OPEN_AIR: f32 = 1000.0;
+/// Ticks between clicks of a tool, or of the bare hand.
+const CLICK_TICKS: u64 = 30;
 /// How much of the mood's pull (`team::mood`, up to its cap) lifts a
 /// goof's score: at the cap of 10, by half again.
 const MOOD_LIFT: f32 = 0.05;
@@ -285,6 +296,18 @@ pub(super) struct Interrupt {
     pub roll: f32,
     /// The slot in hand before it took out another tool.
     pub restore: Option<Option<usize>>,
+    /// It goes right up to its target first (in their face, onto their
+    /// head), and how it moves while its hands are busy: each goof a mix.
+    pub close: bool,
+    pub gait: Gait,
+}
+/// How a bot moves while it plays with what is in its hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Gait {
+    Still,
+    Amble,
+    /// Crouched, creeping round.
+    Crawl,
 }
 /// What the bot can do idly now.
 #[derive(Clone, Copy, Debug, Default)]
@@ -299,9 +322,7 @@ pub(super) struct Pause {
     pub gate: Gate,
     /// A player in sight it might look or spray toward.
     pub player: Option<OwnerId>,
-    /// It has another tool to take out, or a second attack so it can drop
-    /// the one in hand.
-    pub other_tool: bool,
+    /// It has a second attack, so it can drop the one in hand.
     pub spare_weapon: bool,
     /// Mood (`team::mood`): how much likelier any flavour is, and each one,
     /// from bots nearby doing one.
@@ -310,6 +331,9 @@ pub(super) struct Pause {
     /// What playing is worth now, 0 to 1 (1: the action is right here),
     /// against a goof's small worth: low in a lull.
     pub play: f32,
+    /// Up on a body (a roof, a crate, a head): no new goof starts there,
+    /// though one that took it up there goes on.
+    pub perched: bool,
 }
 /// A goof this tick.
 #[derive(Clone, Copy, Debug)]
@@ -610,7 +634,7 @@ impl Mind {
         }
         // Playing grows boring all the while, so a bot that has played a
         // long time goofs at the first moment it can.
-        if !pause.natural {
+        if !pause.natural || pause.perched {
             let di = Domain::Flavour as usize;
             let seconds = tick.saturating_sub(self.last_pick[di]).min(120) as f32 / TICKS;
             self.last_pick[di] = tick;
@@ -618,8 +642,9 @@ impl Mind {
             return Moment::None;
         }
         let possible = |f: Flavour| match f {
-            Flavour::Stare | Flavour::Spray => pause.player.is_some(),
-            Flavour::Tool => pause.other_tool,
+            Flavour::Stare => pause.player.is_some(),
+            // Another tool, or none: the bare hand clicks too.
+            Flavour::Tool => true,
             Flavour::Drop => pause.spare_weapon,
             // A walk round or off somewhere only with nothing to do: in
             // the middle of a match it reads as a bot gone aimless. Never
@@ -689,9 +714,17 @@ impl Mind {
             target: pause.player.filter(|_| possible(flavour)),
             roll: self.random(),
             restore: None,
+            close: self.random() < 0.5,
+            gait: [Gait::Still, Gait::Amble, Gait::Crawl][(self.random() * 3.0) as usize % 3],
         };
         self.interrupt = Some(i);
         Moment::Begin(i)
+    }
+    /// Give a goof under way `ticks` more (the walk up to its target).
+    pub(super) fn extend(&mut self, ticks: u64) {
+        if let Some(i) = self.interrupt.as_mut() {
+            i.until += ticks;
+        }
     }
     /// Keep what a goof under way remembers (the tool to put back).
     pub(super) fn set_restore(&mut self, restore: Option<usize>) {
@@ -1064,24 +1097,15 @@ impl Session {
             })
             .min_by(|a, b| a.1.distance(eye).total_cmp(&b.1.distance(eye)))
             .map(|(o, _)| o);
-        let (other_tool, spare_weapon) =
-            self.weapons
-                .actor(ActorId(bot))
-                .map_or((false, false), |a| {
-                    let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
-                    let attacks = |item: &Option<String>| {
-                        item.as_deref()
-                            .is_some_and(|i| hand_combat::item_attacks(self, i, scale))
-                    };
-                    let other = a
-                        .inventory
-                        .iter()
-                        .enumerate()
-                        .any(|(s, i)| i.is_some() && Some(s) != a.selected);
-                    let spare = a.selected.is_some_and(|s| attacks(&a.inventory[s]))
-                        && a.inventory.iter().filter(|i| attacks(i)).count() >= 2;
-                    (other, spare)
-                });
+        let spare_weapon = self.weapons.actor(ActorId(bot)).is_some_and(|a| {
+            let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+            let attacks = |item: &Option<String>| {
+                item.as_deref()
+                    .is_some_and(|i| hand_combat::item_attacks(self, i, scale))
+            };
+            a.selected.is_some_and(|s| attacks(&a.inventory[s]))
+                && a.inventory.iter().filter(|i| attacks(i)).count() >= 2
+        });
         // Only asked when an aimless walk is possible at all.
         let bodies_near = idle && {
             let predicate = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == 2;
@@ -1106,7 +1130,6 @@ impl Session {
             bodies_near,
             gate,
             player,
-            other_tool,
             spare_weapon,
             ..Default::default()
         }
@@ -1128,11 +1151,6 @@ impl Session {
             let _ = s.command(bot, sequence, c);
         };
         let selected = self.weapons.actor(ActorId(bot)).and_then(|a| a.selected);
-        let spray_held = |s: &Session| {
-            s.weapons
-                .image_state(ActorId(bot), 0)
-                .is_some_and(|(image, _)| image.id == super::super::tools::SPRAY_CAN_IMAGE)
-        };
         let i = match moment {
             Moment::None => return Ok(Act::default()),
             Moment::Begin(i) => {
@@ -1158,20 +1176,25 @@ impl Session {
                         }
                     }
                     Flavour::Tool => {
-                        let others: Vec<usize> = self
+                        // Another tool, or the bare hand.
+                        let mut others: Vec<Option<usize>> = self
                             .weapons
                             .actor(ActorId(bot))
                             .map(|a| {
                                 (0..a.inventory.len())
                                     .filter(|s| a.inventory[*s].is_some() && Some(*s) != selected)
+                                    .map(Some)
                                     .collect()
                             })
                             .unwrap_or_default();
+                        if selected.is_some() {
+                            others.push(None);
+                        }
                         if !others.is_empty() {
                             let slot =
                                 others[(i.roll * others.len() as f32) as usize % others.len()];
                             self.abort_bot_hand_charge(bot)?;
-                            let _ = self.equip_tool(bot, Some(slot));
+                            let _ = self.equip_tool(bot, slot);
                             if let Some(b) = self.bots.brains.get_mut(&bot) {
                                 b.surprise.set_restore(selected);
                             }
@@ -1195,13 +1218,27 @@ impl Session {
                     }
                     _ => {}
                 }
+                // Time to walk up to whoever it goes up to.
+                let gap = i
+                    .target
+                    .filter(|_| i.close)
+                    .and_then(|t| self.peers.get(&t))
+                    .map(|p| flat(Vec3::from(p.player.state().feet) - feet).length())
+                    .filter(|gap| *gap < CLOSE_RANGE);
+                if let (Some(gap), Some(b)) = (gap, self.bots.brains.get_mut(&bot)) {
+                    b.surprise.extend((gap / WALK_UP_SPEED * TICKS) as u64);
+                }
                 i
             }
             Moment::Continue(i) => i,
             Moment::End(i) => {
                 match i.flavour {
                     Flavour::Spray | Flavour::Tool => {
-                        if spray_held(self) {
+                        if self
+                            .weapons
+                            .actor(ActorId(bot))
+                            .is_some_and(|a| a.trigger_held())
+                        {
                             let (y, p) = self
                                 .bots
                                 .brains
@@ -1214,7 +1251,10 @@ impl Session {
                             let _ = self.equip_tool(bot, restore);
                         }
                     }
-                    Flavour::Light => command(self, Command::ToggleLight),
+                    // Off again, however its flicker left it.
+                    Flavour::Light if self.peers.get(&bot).is_some_and(|p| p.combat.light) => {
+                        command(self, Command::ToggleLight)
+                    }
                     _ => {}
                 }
                 return Ok(Act::default());
@@ -1230,39 +1270,42 @@ impl Session {
             .and_then(|t| self.peers.get(&t))
             .filter(|p| p.combat.alive)
             .map(|p| (p.player.eye(), Vec3::from(p.player.state().feet)));
+        // Right up to them, when this goof goes up close and they are near.
+        let close = target.filter(|(_, at)| i.close && flat(*at - feet).length() < CLOSE_RANGE);
+        let up_to = |at: Vec3, within: f32| {
+            let gap = flat(at - feet);
+            Some(if gap.length() > within {
+                gap.normalize()
+            } else {
+                Vec3::ZERO
+            })
+        };
         let still = Some(Vec3::ZERO);
-        Ok(match i.flavour {
-            Flavour::Stare => Act {
+        Ok(match (i.flavour, close) {
+            (Flavour::Stare, _) => Act {
                 aim: target.map(|(eye, _)| look(eye)),
-                direction: still,
+                direction: close.map_or(still, |(_, at)| up_to(at, HAND_REACH)),
                 ..Default::default()
             },
-            Flavour::Spray => {
-                // Paint the floor between them, toward the player: only with
-                // room between, so the stream lands well short of them.
-                let aim = target.map(|(_, at)| look(feet.lerp(at, 0.4)));
-                let room = target.is_some_and(|(_, at)| flat(at - feet).length() > 6.0);
-                // Once the can is in hand, paint toward them.
-                if tick == i.since + 2
-                    && room
-                    && spray_held(self)
-                    && let Some((y, p)) = aim
-                {
-                    let direction = Vec3::new(y.sin() * p.cos(), p.sin(), -y.cos() * p.cos());
-                    let _ = self.weapon_trigger(bot, true, direction, false);
-                }
+            (Flavour::Spray, _) | (Flavour::Tool, _) => {
+                self.hands_goof(bot, &i, close, feet, eye, tick)
+            }
+            // Onto their head, and sit there.
+            (Flavour::Hop, Some((head, at))) => {
+                let up = feet.y > at.y + 1.2;
                 Act {
-                    aim,
-                    direction: still,
+                    aim: (!up).then(|| look(head)),
+                    direction: up_to(at, 0.25),
+                    jump: !up && flat(at - feet).length() < 1.6 && (tick - i.since) % 24 < 4,
                     ..Default::default()
                 }
             }
-            Flavour::Hop => Act {
+            (Flavour::Hop, _) => Act {
                 direction: still,
                 jump: (tick - i.since) % 60 < 6,
                 ..Default::default()
             },
-            Flavour::Circle => {
+            (Flavour::Circle, _) => {
                 let turn = if i.roll < 0.5 { 1.0 } else { -1.0 };
                 let a = i.roll * std::f32::consts::TAU + turn * t * std::f32::consts::PI;
                 Act {
@@ -1270,24 +1313,164 @@ impl Session {
                     ..Default::default()
                 }
             }
-            Flavour::Look => Act {
+            (Flavour::Look, _) => Act {
                 aim: Some((wrap(i.roll * std::f32::consts::TAU + t * 1.2), 0.1)),
                 direction: still,
                 ..Default::default()
             },
-            Flavour::Crouch => Act {
+            (Flavour::Crouch, _) => Act {
                 direction: still,
                 crouch: true,
                 ..Default::default()
             },
+            // An emote in their face.
+            (Flavour::Emote, Some((head, at))) => Act {
+                aim: Some(look(head)),
+                direction: up_to(at, HAND_REACH),
+                ..Default::default()
+            },
             // Eyes down at what it handles; a glance still turns its head.
-            Flavour::Emote | Flavour::Tool | Flavour::Drop => Act {
+            (Flavour::Emote, _) | (Flavour::Drop, _) => Act {
                 look_down: true,
                 direction: still,
                 ..Default::default()
             },
-            Flavour::Detour | Flavour::Light => Act::default(),
+            // Flicking its light on and off in their face.
+            (Flavour::Light, Some((head, at))) => {
+                if (tick - i.since) % 10 == 9 {
+                    let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
+                    let _ = self.command(bot, sequence, Command::ToggleLight);
+                }
+                Act {
+                    aim: Some(look(head)),
+                    direction: up_to(at, HAND_REACH),
+                    ..Default::default()
+                }
+            }
+            (Flavour::Detour, _) | (Flavour::Light, _) => Act::default(),
         })
+    }
+}
+
+impl Session {
+    /// A goof with what is in hand, the bare hand too: used again and
+    /// again on someone close by that it cannot hurt with it (on a part of
+    /// them picked at the start), or waved about in the open air as it
+    /// stands, ambles or crawls round. Only ever on them or into the air,
+    /// never on a brick (a hammer, a can or a click would work on it); an
+    /// item that can hurt them only ever comes out to be looked at.
+    fn hands_goof(
+        &mut self,
+        bot: OwnerId,
+        i: &Interrupt,
+        close: Option<(Vec3, Vec3)>,
+        feet: Vec3,
+        eye: Vec3,
+        tick: u64,
+    ) -> Act {
+        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+        let item = self.weapons.actor(ActorId(bot)).and_then(|a| {
+            a.selected
+                .and_then(|s| a.inventory.get(s).cloned().flatten())
+        });
+        let attacks = item
+            .as_deref()
+            .is_some_and(|item| hand_combat::item_attacks(self, item, scale));
+        let on = close.filter(|_| {
+            !attacks
+                || i.target
+                    .is_some_and(|t| !self.can_damage_player(bot, t, false))
+        });
+        let t = tick.saturating_sub(i.since) as f32 / TICKS;
+        let turn = if i.roll < 0.5 { 1.0 } else { -1.0 };
+        let (aim, direction, near, aim_distance) = if let Some((head, at)) = on {
+            // Anywhere from the knees up.
+            let part = at.lerp(head, 0.3 + 0.7 * (i.roll * 7.0).fract());
+            let d = part - eye;
+            let gap = flat(at - feet);
+            let direction = if gap.length() > HAND_REACH {
+                gap.normalize()
+            } else {
+                Vec3::ZERO
+            };
+            (
+                (yaw_to(d), d.y.atan2(flat(d).length()).clamp(-1.5, 1.5)),
+                direction,
+                gap.length() <= HAND_REACH + 0.4,
+                d.length(),
+            )
+        } else if attacks {
+            return Act {
+                look_down: true,
+                direction: Some(Vec3::ZERO),
+                ..Default::default()
+            };
+        } else {
+            let sweep = (
+                wrap(i.roll * std::f32::consts::TAU + turn * t * 1.5),
+                0.5 + 0.35 * (t * 2.3).sin(),
+            );
+            let a = i.roll * std::f32::consts::TAU + turn * t * 0.8;
+            let direction = match i.gait {
+                Gait::Still => Vec3::ZERO,
+                Gait::Amble | Gait::Crawl => Vec3::new(a.sin(), 0.0, -a.cos()),
+            };
+            (sweep, direction, true, OPEN_AIR)
+        };
+        // What it really faces (its head turns over a few ticks), and
+        // whether that way is clear of the world past where anything in
+        // hand reaches: a miss lands on nothing but air.
+        let facing = self.bots.brains.get(&bot).map_or(Vec3::ZERO, |b| {
+            Vec3::new(
+                b.yaw.sin() * b.pitch.cos(),
+                b.pitch.sin(),
+                -b.yaw.cos() * b.pitch.cos(),
+            )
+        });
+        let along = Vec3::new(
+            aim.0.sin() * aim.1.cos(),
+            aim.1.sin(),
+            -aim.0.cos() * aim.1.cos(),
+        );
+        // On someone: square on a part of them, nothing of the world before
+        // it. In the air: nothing of the world that way at all, however far
+        // what is in hand reaches.
+        let clear = near
+            && match on {
+                Some(_) => {
+                    let to = along * (aim_distance + 0.2);
+                    facing.dot(along) > 0.995 && self.world_ray(eye, facing, to.length()).is_none()
+                }
+                None => facing.dot(along) > 0.97 && self.world_ray(eye, facing, OPEN_AIR).is_none(),
+            };
+        let spray = self
+            .weapons
+            .image_state(ActorId(bot), 0)
+            .is_some_and(|(image, _)| image.id == super::super::tools::SPRAY_CAN_IMAGE);
+        // A can is held down; anything else clicks.
+        let beat = tick.saturating_sub(i.since) % CLICK_TICKS;
+        if item.is_none() {
+            if clear && beat == 0 {
+                let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
+                let _ = self.command(bot, sequence, Command::Activate);
+                let _ = self.command(bot, sequence + 1, Command::ActivateRelease);
+            }
+        } else {
+            let down = clear && (spray || beat < 4);
+            let held = self
+                .weapons
+                .actor(ActorId(bot))
+                .is_some_and(|a| a.trigger_held());
+            if down != held {
+                let _ = self.weapon_trigger(bot, down, facing, false);
+            }
+        }
+        Act {
+            aim: Some(aim),
+            direction: Some(direction),
+            crouch: i.gait == Gait::Crawl && on.is_none(),
+            ..Default::default()
+        }
     }
 }
 

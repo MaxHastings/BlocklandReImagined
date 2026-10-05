@@ -699,3 +699,61 @@ fn brick_bot_names_come_from_first_names_with_no_duplicates() {
         assert!(seen.insert(names[b].to_lowercase()), "{} twice", names[b]);
     }
 }
+
+/// Two idle bots of a builder outside any game, the builder standing by a
+/// row of bricks: now and then a goof takes a bot right up to them, and
+/// whatever it does with its hands there (or in the air) changes no
+/// brick.
+#[test]
+fn an_idle_bot_goofs_up_close_with_someone_and_leaves_bricks_alone() {
+    let mut s = session(|_| {});
+    s.set_bot_kinds(blockhead(|k| k.wander_radius = 3.0))
+        .unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 6.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let mut bricks = vec![
+        bot_brick([-3.0, 0.1, 0.0], human),
+        bot_brick([3.0, 0.1, 0.0], human),
+    ];
+    for x in -4..=4 {
+        bricks.push(Brick::new(
+            ContentRef::Resolved(fixture::PLATE.into()),
+            [x as f32 + 0.25, 0.1, 8.25],
+            human,
+        ));
+    }
+    load(&mut s, human, bricks, &mut sequence);
+    let before: Vec<_> = s
+        .simulation()
+        .state()
+        .bricks
+        .iter()
+        .map(|(id, b)| (*id, b.color, b.color_effect, b.position))
+        .collect();
+    let mut close = 0;
+    for _ in 0..120 * 120 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let at = s.vitals();
+        let builder = feet(&s, human);
+        close += bots(&s)
+            .iter()
+            .filter(|b| at.get(b).is_some_and(|v| v.alive))
+            .filter(|b| {
+                let f = feet(&s, **b);
+                Vec3::new(f.x - builder.x, 0.0, f.z - builder.z).length() < 2.0
+            })
+            .count();
+    }
+    let after: Vec<_> = s
+        .simulation()
+        .state()
+        .bricks
+        .iter()
+        .map(|(id, b)| (*id, b.color, b.color_effect, b.position))
+        .collect();
+    assert_eq!(before, after, "no brick changed");
+    assert!(close > 0, "no goof went up close to the builder");
+}

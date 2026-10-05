@@ -3209,12 +3209,10 @@ impl Session {
         }
         // Idle play with a body (Interact) is already the bot's fun: a goof
         // would stand it still beside the ball it came to push.
-        // Fooling about is done on the floor, not on top of something.
         let natural = threat.is_none()
             && !matches!(behaviour, Behaviour::Interact | Behaviour::Carry)
             && !holding
             && driving.is_none()
-            && !on_body
             // A swimmer's idle hops and walks would take it out of its
             // water at the surface.
             && kind.moves != Moves::Swim
@@ -3246,6 +3244,7 @@ impl Session {
             .flatten();
         let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye);
         pause.play = play;
+        pause.perched = on_body;
         (pause.pull, pause.copy) = self.team_mood_now(bot, (feet, eye), threat.is_some(), tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain
