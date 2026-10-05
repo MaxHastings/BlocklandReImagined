@@ -403,6 +403,39 @@ together), `mood` and `mood_cap`, `mood_human`, `pressure` and `copy`;
 radii come from its sight, the rest are constants in code. Still
 unsupported: a goal to defend, passing.
 
+## Extras
+
+Five small options round out what a bot does, each through ordinary player
+controls and each weighed by one number in the kind's `extras` (1 by
+default; 0 turns one off; where a chance applies, 1 takes it about half
+the time and 2 or more always). They live in
+`crates/sim/src/session/bots/extras.rs`, with a hook in `step_bot` and the
+Interact opportunity; their random stream is their own, so the brain's
+other choices draw as before. Nothing reads a content name.
+
+| Option | When | Does |
+|---|---|---|
+| `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2 x weight, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
+| `crouch` | hurt from more than 5 units while fighting or holding its ground | crouches for 1.5 s after the last such hit (damage already scales with crouching) |
+| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
+| `activate` | a brick a click does something to (a catalog swap, an enabled `onActivate` row) within 2.5 units on the straight way to its goal, while not fighting; now and then (about every 2 s at a natural pause, at a quarter of the chance) one within 8 units in sight | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
+| `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
+
+Route clicks are what an activation is worth: a door in the way is clicked
+whenever the option is on. Activations an objective needs stay with the
+objective planner. Tests: `crates/chaos/tests/bot_extras.rs`.
+
+## Looks and names
+
+Each bot gets a seeded look on top of the avatar pack's defaults: a face
+and a decal from the pack's own lists, and clothing colours from the
+server's opaque paint colours (arms and legs in matching pairs, skin
+kept, see-through parts left see-through). A kind's `look` is applied on
+top. A brick bot is called by a first name of its kind no other player
+goes by, kept while it lives; a brick with its own name keeps the
+"Kind (name)" form, and a kind without a free first name falls back to
+its kind and team label. See `bots/looks.rs`.
+
 ## Data
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
@@ -419,6 +452,8 @@ unsupported: a goal to defend, passing.
   - `surprise`: every tunable of the chooser and the interrupts (above),
     each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
     comments outside strings.
+  - `extras` (`idle_play`, `crouch`, `dodge`, `activate`, `hand_weapon`):
+    one weight each, 0 to 10, every one 1 when left out (above).
   - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
     `strafe_seconds`, `fly_rise`, `fly_drop`, `fly_give_up_seconds`): the
     leeway around its band, how long a choice is held, strafe legs, and

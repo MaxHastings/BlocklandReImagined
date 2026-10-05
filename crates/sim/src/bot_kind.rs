@@ -33,6 +33,12 @@ pub const BEHAVIOURS: [&str; 10] = [
     "objective",
     "wander",
 ];
+/// The small extra options a kind's `extras` may weigh
+/// (`session::bots::extras`): idle play with bodies and seats, crouching
+/// under ranged fire, a jet hop out of a projectile's path, clicking bricks
+/// that do something, and handing a spare weapon to an unarmed teammate.
+/// Each defaults to 1; 0 turns it off.
+pub const EXTRAS: [&str; 5] = ["idle_play", "crouch", "dodge", "activate", "hand_weapon"];
 
 /// One bot kind: its spawn list entry and how its brain plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +113,8 @@ pub struct BotKind {
     /// How teammates' intents, the mood about it and its team's score
     /// weigh in its choices (`team`).
     pub team: BotTeam,
+    /// Weights on its extra options by name ([`EXTRAS`]); each defaults to 1.
+    pub extras: std::collections::BTreeMap<String, f32>,
 }
 /// How a bot moves in a fight: when a fight turns into a chase and back,
 /// and how a ranged fighter strafes.
@@ -310,10 +318,15 @@ impl Default for BotKind {
             fighting: BotFighting::default(),
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
+            extras: Default::default(),
         }
     }
 }
 impl BotKind {
+    /// The weight of one of its [`EXTRAS`]: 1 unless its `extras` says.
+    pub fn extra(&self, name: &str) -> f32 {
+        self.extras.get(name).copied().unwrap_or(1.0)
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.id.trim().is_empty()
@@ -412,6 +425,16 @@ impl BotKind {
             "Bot `{}`: behaviours weighs {} by 0 to 10",
             self.id,
             BEHAVIOURS.join(", ")
+        );
+        ensure!(
+            self.extras.iter().all(|(name, weight)| {
+                EXTRAS.contains(&name.as_str())
+                    && weight.is_finite()
+                    && (0.0..=10.0).contains(weight)
+            }),
+            "Bot `{}`: extras weighs {} by 0 to 10",
+            self.id,
+            EXTRAS.join(", ")
         );
         let ranges = [
             ("sight", self.sight, 1.0, 400.0),

@@ -102,6 +102,16 @@
         // by the term that changed it.
         "callouts": { "uses": "Coming!", "harm": "Moving!" }
       },
+      // Extra options (docs/architecture/bots.md, "Extras"), each through
+      // ordinary controls: 0 turns one off; at 1 a chance one is taken
+      // about half the time, at 2 or more always.
+      "extras": {
+        "idle_play": 1,   // no enemy about: push a loose body toward a player, ride along with a teammate
+        "crouch": 1,      // hurt from range while holding its ground: crouch a moment
+        "dodge": 1,       // a projectile predicted to hit it: jump, jetting if it can
+        "activate": 1,    // click a door or event brick in its way; now and then one nearby for fun
+        "hand_weapon": 1  // drop a spare weapon to an unarmed teammate in sight
+      },
       "first_names": [
         "Alex",
         "Ben",

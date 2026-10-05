@@ -418,6 +418,9 @@ impl Match {
             ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
         ];
         let mut s = Session::new(Simulation::new(world, definitions, floor).unwrap());
+        // A field loads at a fixed pace, not as fast as this machine can
+        // place bricks: the match then plays the same on every machine.
+        s.set_load_pace(bri_sim::session::LoadPace::Bricks(4096));
         s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
         let mut vehicles = bri_vehicles::testing::pack();
         let kit_pack = bri_vehicles::Pack::load(
