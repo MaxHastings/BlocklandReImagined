@@ -5,10 +5,7 @@
     "surprise.strength",
     "behaviours.interact",
     "behaviours.objective",
-    "team.teamwork",
-    "team.mood",
-    "team.pressure",
-    "team.copy"
+    "team.teamwork"
   ],
   "on_value": 1.0,
   "on_note": "on: each dial shipped off (0) is set to this ON value in the all-on run (all_dials_on) and the perf bar; a dial shipped on keeps its value; one not listed uses on_value.",
@@ -34,7 +31,7 @@
     "frame": 0.5
   },
   "fair": {
-    "note": "The fair metric (fair_hit_rate): one bot per weapon class against a scripted player who strafes and hops, at each range. The steady hit rate (after steady_after seconds of an engagement) should sit in min..max: never near-perfect, never hopeless. Enforced (fair_hit_rate): every class together and the gun and the bow each. fair_by_dial moves the first of `dials` bots.json has (perception.strength: more human, fewer hits; aim_error_degrees without it) and checks the rate moves its way.",
+    "note": "The fair metric (fair_hit_rate): one bot per weapon class against a scripted player who strafes and hops, at each range. The steady hit rate (after steady_after seconds of an engagement) should sit in min..max: never near-perfect, never hopeless. Enforced (fair_hit_rate): every class together and the gun and the bow each. fair_by_dial moves the first of `dials` bots.json has (perception.strength: more human, fewer hits) and checks the rate moves its way.",
     "min": 0.15,
     "max": 0.6,
     "first_seconds": 2,
@@ -42,8 +39,7 @@
     "seconds": 25,
     "ranges": [10, 25],
     "dials": [
-      { "path": "perception.strength", "sign": -1 },
-      { "path": "aim_error_degrees", "sign": -1 }
+      { "path": "perception.strength", "sign": -1 }
     ]
   },
   "on": {

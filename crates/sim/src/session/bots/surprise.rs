@@ -345,11 +345,7 @@ impl Mind {
         self.shots.clear();
     }
     fn random(&mut self) -> f32 {
-        self.rng = self
-            .rng
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+        super::perception::draw(&mut self.rng)
     }
     /// The drive of `option`, brought up to `tick`: boredom and lost
     /// effectiveness fade, and the drift takes a step each second.

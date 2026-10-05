@@ -7,90 +7,25 @@
       "sight": 80,
       "wander_radius": 12,
       "chase_radius": 48,
-      "reaction_seconds": 0.35,
-      "turn_degrees": 300,
-      "aim_error_degrees": 5,
-      "memory_seconds": 8,
       "fights_bots": true,
       "alerts_allies": true,
       "behaviours": { "interact": 1, "objective": 1 },
       "objective_radius": 24,
-      "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4, "cover_distance": 6, "cover_side": 3, "clear_degrees": 60 },
-      // Holding a choice (docs/architecture/bots.md, "Holding a choice"):
-      // every choice it makes (behaviour, weapon, aim, route, goofing) is
-      // held at least `seconds`; after that another takes over only by
-      // scoring more than `margin` (a share) above it. Urgent damage, an
-      // objective picked up or dropped, a target lost, or a choice no
-      // longer possible take over at once.
-      "hold": { "seconds": 0.5, "margin": 0.1 },
-      "fighting": { "strafe_seconds": 3.5 },
-      "perception": {
-        "salience": 1,
-        "glance_seconds": 0.8,
-        "cooldown_seconds": 6,
-        "strength": 1,
-        "relaxed_scale": 1.8,
-        "away_scale": 1.5,
-        "view_degrees": 180
-      },
-      "mounted": {
-        "anchor": "mount",
-        "chase_radius": 96,
-        "reverse_degrees": 103,
-        "reverse_distance": 16
-      },
-      // Surprise: variation among the bot's choices that changes over time
-      // (docs/architecture/bots.md, "Surprise"). Each option's score at
-      // each choice point (behaviour, weapon, aim, chase route) leans with
-      // a slow per-bot drift, boredom and how well it has been working,
-      // within a band; then the hold rule above chooses. Goofing is such a
-      // choice too: playing grows boring until a goof wins.
-      "surprise": {
-        // 0 to 1: how much its choices vary and how often it goofs (about
-        // every half minute of play at 0.5). 0 is the plain brain.
-        "strength": 0.6,
-        // How often each goof is picked when it goofs.
-        "flavours": {
-          "stare": 2,      // look at a player in sight
-          "emote": 2,      // love, hate, confusion or the alarm, as /love does
-          "hop": 1,        // a few jumps
-          "circle": 1,     // run a small circle
-          "detour": 1,     // walk somewhere close by
-          "look": 2,       // look round
-          "crouch": 1,     // crouch a moment
-          "spray": 0.5,    // paint the floor toward a player with the spray can
-          "tool": 0.5,     // take out another tool, then put it back
-          "drop": 0.2,     // drop the weapon in hand (only with another)
-          "light": 0.5     // flick the light on and off
-        }
-      },
-      // Coordination (docs/architecture/bots.md, "Coordination"): how
-      // teammates' published intents, the mood of the bots it sees and its
-      // team's score move its own choices. Each is a score term in the one
-      // chooser, never an order.
-      "team": {
-        // 0-1: how much allies' intents count. Crowding the same target or
-        // spot costs, using a seat or sightline an ally offers pays, and
-        // standing where an ally's weapon will hit costs (a fight steps out).
-        "teamwork": 0.6,
-        // Idle flavours grow likelier by mood times the share of the players
-        // it sees doing one (a person counting mood_human), at most mood_cap.
-        "mood": 16,
-        "mood_cap": 10,
-        "mood_human": 3,
-        // Objectives are worth up to this much more as its team falls behind.
-        "pressure": 0.3,
-        // Seeing a teammate's option work makes it score up to this much
-        // more for a while (fading over effectiveness_seconds).
-        "copy": 0.15,
-        // A choice an ally's intent changed may be said in team chat, keyed
-        // by the term that changed it.
-        "callouts": { "uses": "Coming!", "harm": "Moving!" }
-      },
-      // Extra options (docs/architecture/bots.md, "Extras"): idle play with
-      // a loose body or a teammate's vehicle, crouching under ranged fire, a
-      // hop out of a projectile's path, opening doors, handing a spare
-      // weapon to an unarmed teammate. 0 to 1: how much of them applies.
+      // The four main dials (docs/architecture/bots.md, "Tuning"). Every
+      // other number is fixed in code.
+      // Surprise, 0 to 1: how much its choices vary and how often it goofs (about
+      // every half minute of play at 0.5). 0 is the plain brain.
+      "surprise": { "strength": 0.6 },
+      // Teamwork, 0 to 1: how much teammates' intents, mood and score move its own
+      // choices; never an order. A choice an ally's intent changed may be
+      // said in team chat, keyed by the term that changed it.
+      "team": { "teamwork": 0.6, "callouts": { "uses": "Coming!", "harm": "Moving!" } },
+      // Perception, 0 to 4: how human its noticing, reactions and aim are
+      // (more is slower to notice, fewer hits).
+      "perception": { "strength": 1 },
+      // Extras, 0 to 1: idle play with a loose body or a teammate's vehicle,
+      // crouching under fire, hopping out of a projectile's path, opening
+      // doors, handing a spare weapon to an unarmed teammate.
       "extras": { "strength": 1 },
       "first_names": [
         "Alex",

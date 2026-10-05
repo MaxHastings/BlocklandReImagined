@@ -35,6 +35,12 @@ pub fn dial(kind: &BotKind, path: &str) -> Option<f64> {
 pub fn with_dial(kind: &BotKind, path: &str, value: f64) -> Result<BotKind> {
     ensure!(value.is_finite(), "{path}: {value} is not a number");
     ensure!(
+        settable(path),
+        "{}: `{path}` is fixed in code; a dial is one of {}",
+        kind.id,
+        SETTABLE.join(", ")
+    );
+    ensure!(
         !path.is_empty() && path.len() <= MAX_PATH,
         "A dial path is 1 to {MAX_PATH} characters"
     );
@@ -68,8 +74,49 @@ pub fn with_dial(kind: &BotKind, path: &str, value: f64) -> Result<BotKind> {
     Ok(out)
 }
 
-/// Every number `kind` has, by path, in schema order.
+/// The numbers a kind may set, in `bots.json` and as a dial: what the kind
+/// is (its sight and ranges, behaviour and goof weights, its melee hit) and
+/// the four main dials. Every other number is fixed in code
+/// (`BotKind::default`), so tuning a kind means turning a main dial. A path
+/// ending in `.` covers every entry under it.
+pub const SETTABLE: [&str; 12] = [
+    "sight",
+    "wander_radius",
+    "chase_radius",
+    "objective_radius",
+    "out_of_water_seconds",
+    "behaviours.",
+    "melee.",
+    "surprise.flavours.",
+    "surprise.strength",
+    "team.teamwork",
+    "perception.strength",
+    "extras.strength",
+];
+
+/// Whether a kind may set the number at `path` ([`SETTABLE`]).
+pub fn settable(path: &str) -> bool {
+    SETTABLE.iter().any(|p| {
+        if p.ends_with('.') {
+            path.starts_with(p)
+        } else {
+            path == *p
+        }
+    })
+}
+
+/// Every settable number `kind` has, by path, in schema order.
 pub fn dials(kind: &BotKind) -> Vec<(String, f64)> {
+    serde_json::to_value(kind)
+        .map(|value| numbers(&value))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(path, _)| settable(path))
+        .collect()
+}
+
+/// Every number in `value`, by dot-separated path, in order.
+pub(super) fn numbers(value: &serde_json::Value) -> Vec<(String, f64)> {
     fn walk(prefix: &str, value: &serde_json::Value, out: &mut Vec<(String, f64)>) {
         match value {
             serde_json::Value::Number(n) => {
@@ -91,9 +138,7 @@ pub fn dials(kind: &BotKind) -> Vec<(String, f64)> {
         }
     }
     let mut out = Vec::new();
-    if let Ok(value) = serde_json::to_value(kind) {
-        walk("", &value, &mut out);
-    }
+    walk("", value, &mut out);
     out
 }
 
@@ -190,17 +235,18 @@ mod tests {
     #[test]
     fn a_dial_is_read_and_set_by_its_path() {
         let k = kind();
-        assert_eq!(dial(&k, "surprise.strength"), Some(0.5));
-        let k = with_dial(&k, "surprise.strength", 0.6).unwrap();
-        assert!((k.surprise.strength - 0.6).abs() < 1e-6);
         assert!((dial(&k, "surprise.strength").unwrap() - 0.6).abs() < 1e-6);
+        let k = with_dial(&k, "surprise.strength", 0.3).unwrap();
+        assert!((k.surprise.strength - 0.3).abs() < 1e-6);
+        assert!((dial(&k, "surprise.strength").unwrap() - 0.3).abs() < 1e-6);
         // A top-level number, and a new entry of a map of numbers.
         let k = with_dial(&k, "sight", 40.0).unwrap();
         assert_eq!(k.sight, 40.0);
         let k = with_dial(&k, "behaviours.objective", 1.0).unwrap();
         let k = with_dial(&k, "behaviours.chase", 0.0).unwrap();
         assert_eq!(k.behaviours["chase"], 0.0);
-        assert!(dials(&k).iter().any(|(p, _)| p == "hold.seconds"));
+        assert!(dials(&k).iter().any(|(p, _)| p == "team.teamwork"));
+        assert!(!dials(&k).iter().any(|(p, _)| p == "hold.seconds"));
     }
 
     #[test]

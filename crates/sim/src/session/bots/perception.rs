@@ -123,7 +123,9 @@ const DRIFT_DEGREES: f32 = 7.0;
 /// ...over two slow swings of these many seconds.
 const DRIFT_SECONDS: (f32, f32) = (7.0, 2.9);
 
-/// The bots' seeded generator: the next value in [0, 1).
+/// The bots' one seeded generator: the next value in [0, 1). Each part
+/// that draws (the brain, the surprise chooser, the extras) keeps its own
+/// seeded stream, so a goof never shifts an aim's draws.
 pub(super) fn draw(rng: &mut u64) -> f32 {
     *rng = rng
         .wrapping_mul(6364136223846793005)

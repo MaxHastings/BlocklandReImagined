@@ -13,6 +13,9 @@ use std::collections::BTreeMap;
 pub const FLAVOURS: [&str; 11] = [
     "stare", "emote", "hop", "circle", "detour", "look", "crouch", "spray", "tool", "drop", "light",
 ];
+/// How often each goof in [`FLAVOURS`] is picked when a kind names no
+/// weight for it: looking and emoting most, the props least.
+const FLAVOUR_WEIGHTS: [f32; 11] = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0, 1.0, 0.5, 0.5, 0.2, 0.5];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -20,14 +23,14 @@ pub struct BotSurprise {
     /// 0 to 1: how much its choices vary and how often it goofs. 0 is the
     /// plain brain (the hold rule still holds its choices).
     pub strength: f32,
-    /// Goof weights by name ([`FLAVOURS`]); an unnamed one weighs 1, 0
-    /// never happens.
+    /// Goof weights by name ([`FLAVOURS`]); an unnamed one takes its
+    /// usual weight, 0 never happens.
     pub flavours: BTreeMap<String, f32>,
 }
 impl Default for BotSurprise {
     fn default() -> Self {
         Self {
-            strength: 0.5,
+            strength: 0.6,
             flavours: BTreeMap::new(),
         }
     }
@@ -53,6 +56,11 @@ impl BotSurprise {
     }
     /// The weight of goof `name`.
     pub fn flavour_weight(&self, name: &str) -> f32 {
-        self.flavours.get(name).copied().unwrap_or(1.0)
+        self.flavours.get(name).copied().unwrap_or_else(|| {
+            FLAVOURS
+                .iter()
+                .position(|f| *f == name)
+                .map_or(1.0, |i| FLAVOUR_WEIGHTS[i])
+        })
     }
 }

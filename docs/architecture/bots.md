@@ -715,30 +715,26 @@ its kind and team label. See `bots/looks.rs`.
 
 ## Data
 
-- `bots.json` (a kind): sight, wander and chase radii, reaction, turn
-  rate, aim error, memory, whether it fights other builders' bots,
-  whether it warns its side (`alerts_allies`), its `behaviours` weights,
-  and:
+- `bots.json` (a kind) sets only what the kind is and the four main dials
+  (`bot_kind::tuning::SETTABLE`); any other number there is an error.
+  Everything else (reaction, turn rate, aim error, memory, `contest`,
+  `hold`, `fighting`, `mounted` distances, the rest of `perception` and
+  `team`) is fixed in code at `BotKind::default`, so tuning means turning
+  a main dial. What a kind sets:
+  - sight, wander and chase radii, whether it fights other builders' bots,
+    whether it warns its side (`alerts_allies`) and its `behaviours`
+    weights.
   - `objective_radius`: how far around itself it looks for loose objects
     an objective can use (24 for the Blockhead).
-  - `contest` (`lead_seconds`, `max_lead`, `engage`, `cover_distance`,
-    `cover_side`, `clear_degrees`): how it plays a body an opponent is also
-    working, and how it covers one a teammate works (above). A
-    `cover_distance` of 0 stands down as before, and a `clear_degrees` of
-    0 meets a drive head on.
-  - `hold` (`seconds`, `margin`): how long a choice is kept and by how
-    much a challenger must beat it after that (above).
-  - `perception`: glances, reaction delays and turning (Noticing, above).
-  - `surprise` (`strength`, `flavours`): the one variation dial and the
-    weights of the idle flavours (above), commented in the Blockhead's
-    `bots.json`; `bots.json` takes `//` comments outside strings.
-  - `extras` (`strength`): 0 to 1, how much of the extra options applies,
-    1 when left out (above). The tuning tools find it by itself.
-  - `fighting` (`strafe_seconds`): the mean strafe leg. Whether it flies
-    at all is its `fly` leg weight (Routes).
-  - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
-    `reverse_distance`): its pursuit policy while it drives (above). It is
-    the same for every vehicle; nothing checks a vehicle's name.
+  - The main dials: `surprise.strength` (0 to 1, variation and goofing),
+    `team.teamwork` (0 to 1), `perception.strength` (0 to 4, how human its
+    noticing and aim are) and `extras.strength` (0 to 1). Each is commented
+    in the Blockhead's `bots.json`; `bots.json` takes `//` comments outside
+    strings. `/botset` and the tuning tools turn only these.
+  - `surprise.flavours`: a goof's weight, to turn one off for a kind (each
+    has its usual weight in code). `team.callouts`: its team chat lines.
+  - `mounted.anchor`: where it sits while it drives. Its pursuit is the
+    same for every vehicle; nothing checks a vehicle's name.
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is

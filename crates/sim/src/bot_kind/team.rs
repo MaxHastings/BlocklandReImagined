@@ -43,7 +43,7 @@ pub struct BotTeam {
 impl Default for BotTeam {
     fn default() -> Self {
         Self {
-            teamwork: 0.5,
+            teamwork: 0.6,
             mood: 16.0,
             mood_cap: 10.0,
             mood_human: 3.0,

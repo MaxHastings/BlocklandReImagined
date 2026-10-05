@@ -102,11 +102,7 @@ impl State {
         if self.rng == 0 {
             self.rng = 0x9E37_79B9_7F4A_7C15 ^ bot.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1;
         }
-        self.rng = self
-            .rng
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+        super::perception::draw(&mut self.rng)
     }
 }
 

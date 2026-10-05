@@ -601,7 +601,23 @@ impl BotPack {
     /// Reads a `bots.json`. A `//` outside a string starts a comment that
     /// runs to the end of its line, so tunables can say what they do.
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        let pack: Self = serde_json::from_slice(&strip_comments(bytes)).context("bots.json")?;
+        let raw: serde_json::Value =
+            serde_json::from_slice(&strip_comments(bytes)).context("bots.json")?;
+        for bot in raw
+            .get("bots")
+            .and_then(|b| b.as_array())
+            .into_iter()
+            .flatten()
+        {
+            for (path, _) in tuning::numbers(bot) {
+                ensure!(
+                    tuning::settable(&path),
+                    "bots.json: `{path}` is fixed in code; a kind sets {}",
+                    tuning::SETTABLE.join(", ")
+                );
+            }
+        }
+        let pack: Self = serde_json::from_value(raw).context("bots.json")?;
         ensure!(
             pack.schema_version == SCHEMA_VERSION,
             "bots.json schema_version must be {SCHEMA_VERSION}"
@@ -674,7 +690,7 @@ mod tests {
         assert_eq!(pack.bots[0].name, "A // B");
         assert_eq!(pack.bots[0].surprise.strength, 0.25);
         // On by default.
-        assert_eq!(BotKind::default().surprise.strength, 0.5);
+        assert_eq!(BotKind::default().surprise.strength, 0.6);
         for bad in [
             r#""surprise":{"strength":2}"#,
             r#""surprise":{"band":-0.1}"#,
@@ -714,24 +730,49 @@ mod tests {
         );
     }
     #[test]
-    fn the_hold_rule_and_fighting_are_read_and_limited() {
-        let fighting = BotFighting::default();
+    fn a_kind_sets_only_what_it_is_and_the_main_dials() {
         let pack = BotPack::from_json(
-            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","hold":{"seconds":1,"margin":0.2}}]}"#,
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","sight":40,"behaviours":{"chase":0.5},"surprise":{"strength":0.2,"flavours":{"spray":0}},"team":{"teamwork":1},"perception":{"strength":2},"extras":{"strength":0}}]}"#,
         )
         .unwrap();
         let read = &pack.bots[0];
-        assert_eq!((read.hold.seconds, read.hold.margin), (1.0, 0.2));
-        assert_eq!(read.fighting.strafe_seconds, fighting.strafe_seconds);
-        for bad in [
-            r#""hold":{"margin":2}"#,
-            r#""fighting":{"strafe_seconds":0}"#,
-            r#""hold":{"seconds":-1}"#,
-            r#""fighting":{"band_slack":0.3}"#,
+        assert_eq!(read.perception.strength, 2.0);
+        assert_eq!(read.surprise.flavour_weight("spray"), 0.0);
+        // Everything else keeps its fixed value.
+        assert_eq!(read.hold, BotKind::default().hold);
+        for fixed in [
+            r#""hold":{"seconds":1}"#,
+            r#""fighting":{"strafe_seconds":2}"#,
+            r#""reaction_seconds":0.1"#,
+            r#""perception":{"glance_seconds":1}"#,
+            r#""team":{"mood":4}"#,
+            r#""mounted":{"chase_radius":10}"#,
         ] {
-            let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
-            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");
+            let json =
+                format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{fixed}}}]}}"#);
+            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{fixed}");
         }
+        assert!(tuning::with_dial(read, "hold.seconds", 1.0).is_err());
+        assert!(
+            tuning::dials(read)
+                .iter()
+                .all(|(path, _)| tuning::settable(path))
+        );
+    }
+    #[test]
+    fn the_shipped_kind_keeps_the_fixed_values() {
+        // The Blockhead's bots.json sets only what SETTABLE allows, so its
+        // other numbers are the code's.
+        let pack = BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap();
+        let shipped = &pack.bots[0];
+        let fixed = BotKind::default();
+        assert_eq!(shipped.hold, fixed.hold);
+        assert_eq!(shipped.perception, fixed.perception);
+        assert_eq!(shipped.surprise.strength, fixed.surprise.strength);
+        assert_eq!(shipped.team.teamwork, fixed.team.teamwork);
     }
     #[test]
     fn body_melee_and_swimming_are_read_and_limited() {
