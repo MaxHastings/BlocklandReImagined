@@ -3,8 +3,9 @@
 Branch `fix/bot-route-planner`. Follows
 `2026-10-05-bot-route-planner-integration.md`. Merged, with merge commits:
 `fix/runover-and-jeep-physics` 8560ee2c, `claude/project-thread-pt64ji`
-fe74899d (extras: one strength dial) and 07ce549a (perception). No limit
-was loosened and no test skipped.
+fe74899d (extras: one strength dial), 07ce549a (perception) and a00626eb
+(think-time refactor, no behaviour change). No limit was loosened and no
+test skipped.
 
 ## Root causes and fixes
 
@@ -42,6 +43,43 @@ was loosened and no test skipped.
 - **fair_hit_rate 12.3% after the perception merge.** The coin-flip strafe
   carry-on from the earlier merge drifted fighters out of their band (gun
   range 12 to 23 units). Strafe legs alternate again: 27.2% steady.
+
+## The other suites (after the gauntlet work)
+
+- **bot_brain jetting onto a high platform.** A chasing jetter's landing
+  was its enemy's own cell, so it braked onto their head and stood there:
+  the jet leg only failed on coming down below the landing. The landing
+  now moves to the nearest free floor beside a body on the goal, a cell's
+  leeway off it for the touchdown drift, and that landing counts as
+  arrival (`nav` guard test). A jet leg that comes down off the landing's
+  height either way is given up and replanned (`route` guard test).
+- **bot_extras door on the route.** The planner marked an enemy behind a
+  shut door out of reach (the best route ended at the door), so the bot
+  wandered and never walked up to click it. A route that ends with a door
+  the bot may activate across the way on no longer gives the chase up
+  (`bot_opens_way`).
+- **bot_routes jeep beside the pitch.** The objective retry wait carried
+  across a change of game, round or team, so after each round reset a bot
+  went up to two seconds with no plan and fought: it pushed the match ball
+  at an enemy, or boarded the jeep to run the host over. A new context now
+  gets its planning turn at once, and until that turn a bot takes up no
+  body or seat (`objectives::State::unplanned`).
+- **bot_soccer_match 2v2 obstacles, wrong way 0.12.** Every wrong-way tick
+  traced was a goal going in: the measure took the way to the defended
+  goal from the ball's position, so a ball pushed over the line into the
+  attacked goal's pocket (past that goal) read as pushed backwards. It now
+  takes the way of the defended goal: the same anywhere on the field, and
+  a push into a team's own pocket still counts. Wrong way reads 0.00-0.03
+  on every line-up.
+- **bot_soccer_teams contested ball, swapped sides: nearest 4.39 > 4.0
+  (open).** The overtaking bot goes round the moving ball to the push
+  approach's tangent point, 4.3 units off its centre. Unpulled, the grid's
+  route keeps the lane closest to the ball (3.5 off), which is what brings
+  release (and this branch with pulling off) under 4. String-pulling walks
+  the straight line to the tangent point instead, and the other bot
+  scores first. Not loosened; fixing it means a closer go-round geometry
+  in `push_approach` or a pull that keeps that lane, both outside this
+  pass.
 
 ## Results at 2fff1747 (gauntlet, one round)
 
