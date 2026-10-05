@@ -306,6 +306,10 @@ pub(super) struct View {
     /// It carries what the objective delivers (a declared carriage it
     /// picked up, a body it holds): stopping would put that at risk.
     pub committed: bool,
+    /// The step is planned for its mini-game team, so a teammate doing it
+    /// does it for the team; without one it is the bot's own progress
+    /// (a racer's checkpoint), which nobody else's arrival advances.
+    pub shared: bool,
 }
 impl View {
     /// The step needs only its feet: no tool, trigger, body, seat or enemy
@@ -336,6 +340,7 @@ impl View {
             physical_progress: false,
             heading: Vec3::ZERO,
             committed: false,
+            shared: false,
         }
     }
 }
@@ -392,6 +397,7 @@ impl Step {
             self.executor.view(session, bot)?
         };
         view.waiting = self.waiting.is_some();
+        view.shared = self.team.is_some();
         if view.waiting
             && matches!(&self.executor,Executor::Physical(action)
             if matches!(action.method,super::physical_objectives::Method::Hammer{..}))

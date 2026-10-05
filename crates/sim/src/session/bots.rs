@@ -2271,7 +2271,15 @@ impl Session {
             objective,
             feet,
             brain.home,
-            team::exit(&intents, feet, tall),
+            team::exit(&intents, feet, tall, &|at| {
+                super::admin_players::world_ray(
+                    &self.simulation,
+                    at + Vec3::Y * 0.5,
+                    Vec3::NEG_Y,
+                    0.5 + body.step + body.drop,
+                )
+                .is_some()
+            }),
             carries,
         );
         // Its objective is worth more as its team falls behind, and what it
@@ -2549,7 +2557,7 @@ impl Session {
                 let waters = simulation.liquids();
                 // Living bodies a takeoff must not climb into, nor a
                 // pulled straight walk cut through (`nav::pull`).
-                let bodies: Vec<(Vec3, Vec3)> = {
+                let (bodies, motions): (Vec<(Vec3, Vec3)>, Vec<Vec3>) = {
                     self.peers
                         .iter()
                         .filter(|(o, p)| **o != bot && p.combat.alive)
@@ -2557,11 +2565,14 @@ impl Session {
                             let at = Vec3::from(p.player.state().feet);
                             let half = p.player.tuning().width * 0.5;
                             (
-                                at - Vec3::new(half, 0.0, half),
-                                at + Vec3::new(half, p.player.tuning().stand_height, half),
+                                (
+                                    at - Vec3::new(half, 0.0, half),
+                                    at + Vec3::new(half, p.player.tuning().stand_height, half),
+                                ),
+                                Vec3::from(p.player.state().velocity),
                             )
                         })
-                        .collect()
+                        .unzip()
                 };
                 let ground = Ground {
                     physics,
@@ -2569,6 +2580,7 @@ impl Session {
                     passages: simulation.passages(),
                     waters: &waters,
                     bodies: &bodies,
+                    motions: &motions,
                 };
                 let at = match self.bots.navs.iter().position(|(b, _)| *b == body) {
                     Some(at) => at,
@@ -3659,7 +3671,9 @@ fn team_choices(
     c[at(Behaviour::Return)].place = Some(home);
     if let Some(v) = objective {
         c[at(Behaviour::Objective)] = team::Choice {
-            place: Some(v.point),
+            // Only a team's step crowds a teammate's: one's own progress
+            // is not given way to an ally making the same.
+            place: v.shared.then_some(v.point),
             target: v
                 .resource
                 .map(|r| Target::Object(r.vehicle()))

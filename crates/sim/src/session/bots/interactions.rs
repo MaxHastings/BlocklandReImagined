@@ -803,8 +803,10 @@ impl Session {
     /// Any ally in the way is passed. So is any other body, except
     /// `quarry`, the one it is going after, and one standing at `goal`, the
     /// spot it is making for, which it contests rather than walks round.
-    /// It always passes on its left, so two walking into each other both
-    /// step aside the same way and get by. In a gap (solid close on both
+    /// It passes on its left, so two walking straight into each other both
+    /// step aside the same way and get by, unless the one in the way
+    /// already stands off to its left: that one is passed on the right,
+    /// rather than crossed in front of. In a gap (solid close on both
     /// sides), an ally ahead already going its
     /// way is followed at its pace instead (`team` overlap: the later of
     /// two on one path gives way), so a file through a narrow gap keeps
@@ -854,22 +856,34 @@ impl Session {
         if let Some(pace) = follow {
             return desired * pace;
         }
-        let blocked = self.peers.iter().any(|(o, p)| {
-            if *o == bot || !p.combat.alive || self.seated(*o) {
-                return false;
+        // The nearest body in the way, and how far it stands off to the
+        // left of the line (negative: to the right).
+        let blocker = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                if **o == bot || !p.combat.alive || self.seated(**o) {
+                    return false;
+                }
+                let at = Vec3::from(p.player.state().feet);
+                if !self.bot_allies(bot, **o)
+                    && (Some(**o) == quarry
+                        || goal.is_some_and(|g| flat(at - g).length() < CONTESTED))
+                {
+                    return false;
+                }
+                ahead(p)
+            })
+            .map(|(_, p)| flat(Vec3::from(p.player.state().feet) - feet))
+            .min_by(|a, b| a.dot(desired).total_cmp(&b.dot(desired)));
+        match blocker {
+            // One already off to its left is passed on its right, not
+            // walked across; one dead ahead on its left.
+            Some(delta) if delta.dot(side) > own.tuning().width * 0.1 => {
+                (desired * 0.25 - side).normalize_or_zero()
             }
-            let at = Vec3::from(p.player.state().feet);
-            if !self.bot_allies(bot, *o)
-                && (Some(*o) == quarry || goal.is_some_and(|g| flat(at - g).length() < CONTESTED))
-            {
-                return false;
-            }
-            ahead(p)
-        });
-        if blocked {
-            (desired * 0.25 + side).normalize_or_zero()
-        } else {
-            desired
+            Some(_) => (desired * 0.25 + side).normalize_or_zero(),
+            None => desired,
         }
     }
 

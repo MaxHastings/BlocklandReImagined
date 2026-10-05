@@ -365,6 +365,7 @@ fn fixed_navigation_does_not_discover_the_physically_valid_actor_support() {
         passages: &passages,
         waters: &[],
         bodies: &[],
+        motions: &[],
     };
     let body = Body::of(&tuning, 1.);
     let mut nav = Nav::default();

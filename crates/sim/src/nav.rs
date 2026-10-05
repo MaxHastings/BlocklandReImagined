@@ -129,7 +129,14 @@ pub struct Ground<'a> {
     /// straight walk ([`pull`]) does not cut past one where the grid's own
     /// route keeps its lane.
     pub bodies: &'a [(Vec3, Vec3)],
+    /// Each body's velocity, in `bodies`' order (none: all standing): a
+    /// pulled walk also keeps clear of where one is going ([`MOTION_AHEAD`]).
+    pub motions: &'a [Vec3],
 }
+/// How far ahead (seconds) a moving body's path counts as taken for a
+/// pulled walk ([`Ground::crowds`]): two walkers heading into each other
+/// keep their grid lanes instead of both cutting onto one line.
+pub const MOTION_AHEAD: f32 = 1.0;
 /// Share of a standing body under water from which it floats: the walk
 /// grid's floor there is out of reach of its feet, and it swims.
 const FLOATS: f32 = 0.6;
@@ -226,20 +233,20 @@ impl Ground<'_> {
         })
     }
     /// Whether a straight walk from `from` to `to` passes within reach of a
-    /// moving body about (`bodies`): the body's half width plus the
+    /// moving body about (`bodies`), or of where it is going over the next
+    /// [`MOTION_AHEAD`] seconds (`motions`): the body's half width plus the
     /// other's. Its own grid route is left to keep its lane there.
     pub fn crowds(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
         let (_, _, tall) = body.clearance(false);
-        let line = Vec3::new(to.x - from.x, 0.0, to.z - from.z);
-        self.bodies.iter().any(|(min, max)| {
+        self.bodies.iter().enumerate().any(|(i, (min, max))| {
             let centre = (*min + *max) * 0.5;
             if max.y < from.y.min(to.y) || min.y > from.y.max(to.y) + tall {
                 return false;
             }
-            let offset = Vec3::new(centre.x - from.x, 0.0, centre.z - from.z);
-            let along = (offset.dot(line) / line.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            let motion = self.motions.get(i).copied().unwrap_or(Vec3::ZERO);
+            let going = centre + Vec3::new(motion.x, 0.0, motion.z) * MOTION_AHEAD;
             let reach = body.width * 0.5 + (max.x - min.x).max(max.z - min.z) * 0.5;
-            (offset - line * along).length() < reach
+            segment_gap(from, to, centre, going) < reach
         })
     }
     /// The nearest surface along a ray and its normal.
@@ -361,6 +368,31 @@ const PULL_REACH: usize = 16;
 /// kind, the one before it (where that step starts) and the route's end
 /// are kept; nothing is cut that the body would catch on. A chassis's
 /// route is left as it is: its drive leg steers by pursuit, not by corners.
+/// The least flat (x, z) distance between segments `a0`-`a1` and `b0`-`b1`.
+fn segment_gap(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
+    let flat = |v: Vec3| glam::Vec2::new(v.x, v.z);
+    let (a0, a1, b0, b1) = (flat(a0), flat(a1), flat(b0), flat(b1));
+    let to_segment = |p: glam::Vec2, s0: glam::Vec2, s1: glam::Vec2| {
+        let d = s1 - s0;
+        let t = ((p - s0).dot(d) / d.length_squared().max(1e-9)).clamp(0.0, 1.0);
+        (p - (s0 + d * t)).length()
+    };
+    let (da, db) = (a1 - a0, b1 - b0);
+    let cross = |u: glam::Vec2, v: glam::Vec2| u.x * v.y - u.y * v.x;
+    let denom = cross(da, db);
+    if denom.abs() > 1e-9 {
+        let t = cross(b0 - a0, db) / denom;
+        let u = cross(b0 - a0, da) / denom;
+        if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+            return 0.0;
+        }
+    }
+    to_segment(a0, b0, b1)
+        .min(to_segment(a1, b0, b1))
+        .min(to_segment(b0, a0, a1))
+        .min(to_segment(b1, a0, a1))
+}
+
 pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Vec<Waypoint> {
     if body.conservative {
         return path;
@@ -1152,6 +1184,7 @@ mod tests {
             passages: &NO_PASSAGES,
             waters: &[],
             bodies: &[],
+            motions: &[],
         };
         let body = body();
         let mut nav = Nav::default();
@@ -1187,6 +1220,7 @@ mod tests {
             passages: &NO_PASSAGES,
             waters: &[],
             bodies: &[],
+            motions: &[],
         };
         let mut nav = Nav::default();
         nav.begin_tick();
@@ -1215,6 +1249,7 @@ mod tests {
             passages: &NO_PASSAGES,
             waters: &[],
             bodies: &[],
+            motions: &[],
         };
         let mut chassis = body();
         chassis.width = 4.0;
@@ -1250,6 +1285,8 @@ mod tests {
                     passages: &NO_PASSAGES,
                     waters: &[],
                     bodies: &[],
+                    motions: &[],
+            motions: &[],
                 };
                 nav.clear();
                 nav.begin_tick();
@@ -1360,6 +1397,7 @@ mod tests {
             passages: &NO_PASSAGES,
             waters: &[],
             bodies: &[],
+            motions: &[],
         };
         let mut search = Search::new(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), 60.0);
         let found = loop {
@@ -1408,6 +1446,7 @@ mod tests {
             passages: &NO_PASSAGES,
             waters: &[],
             bodies: &[],
+            motions: &[],
         };
         let body = body();
         let mut nav = Nav::default();
@@ -1474,6 +1513,7 @@ mod tests {
             passages: &passages,
             waters: &[],
             bodies: &[],
+            motions: &[],
         };
         let goal = Vec3::new(16.0, 0.0, 3.0);
         let mut nav = Nav::default();
@@ -1506,6 +1546,7 @@ mod tests {
             passages: &NO_PASSAGES,
             waters: &[],
             bodies: &[],
+            motions: &[],
         }
     }
     fn walked(from: Vec3, p: &[Waypoint]) -> f32 {

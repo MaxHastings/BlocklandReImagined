@@ -109,8 +109,15 @@ pub(super) fn terms(
 }
 
 /// The nearest place to `feet` that no ally's weapon will hit, when it
-/// stands where one will.
-pub(super) fn exit(allies: &[(OwnerId, Intent)], feet: Vec3, body: f32) -> Option<Vec3> {
+/// stands where one will, and that has floor to stand on (`floor`): out of
+/// a line by its nearer side, else by the other; none when both sides of
+/// it are a drop.
+pub(super) fn exit(
+    allies: &[(OwnerId, Intent)],
+    feet: Vec3,
+    body: f32,
+    floor: &dyn Fn(Vec3) -> bool,
+) -> Option<Vec3> {
     let mut at = feet;
     for _ in 0..3 {
         let Some(h) = allies
@@ -127,8 +134,11 @@ pub(super) fn exit(allies: &[(OwnerId, Intent)], feet: Vec3, body: f32) -> Optio
             .try_normalize()
             .unwrap_or_else(|| Vec3::new(-line.z, 0.0, line.x).normalize_or(Vec3::X));
         let wide = h.radius + h.spread * (nearest - h.from).length();
-        let out = flat(nearest) + away * (wide + body + 0.5);
-        at = Vec3::new(out.x, feet.y, out.z);
+        let side = |away: Vec3| {
+            let out = flat(nearest) + away * (wide + body + 0.5);
+            Some(Vec3::new(out.x, feet.y, out.z)).filter(|at| floor(*at))
+        };
+        at = side(away).or_else(|| side(-away))?;
     }
     None
 }
@@ -612,10 +622,26 @@ mod tests {
         assert_eq!(harm(at(0.5, -10.0)), cfg.harm());
         assert_eq!(harm(at(2.0, -21.0)), cfg.harm());
         assert_eq!(harm(at(8.0, -10.0)), 0.0);
-        let out = exit(&[(1, shooter())], Vec3::new(0.5, 0.0, -10.0), 2.0).unwrap();
+        let ground = |_: Vec3| true;
+        let out = exit(&[(1, shooter())], Vec3::new(0.5, 0.0, -10.0), 2.0, &ground).unwrap();
         assert!(!inside(&shooter().harm.unwrap(), out, 2.0) && out.x > 0.5);
         assert_eq!(
-            exit(&[(1, shooter())], Vec3::new(8.0, 0.0, -10.0), 2.0),
+            exit(&[(1, shooter())], Vec3::new(8.0, 0.0, -10.0), 2.0, &ground),
+            None
+        );
+    }
+
+    #[test]
+    fn a_way_out_of_a_line_of_fire_is_never_off_the_floor() {
+        // Standing on the line by its +x side, on a deck that ends at
+        // x = 1: the nearer way out (+x) is a drop, so it goes out by -x.
+        let deck = |at: Vec3| at.x < 1.0;
+        let out = exit(&[(1, shooter())], Vec3::new(0.5, 0.0, -10.0), 2.0, &deck).unwrap();
+        assert!(!inside(&shooter().harm.unwrap(), out, 2.0) && out.x < 0.0, "{out}");
+        // No floor either side: it stays where it is.
+        let ledge = |_: Vec3| false;
+        assert_eq!(
+            exit(&[(1, shooter())], Vec3::new(0.5, 0.0, -10.0), 2.0, &ledge),
             None
         );
     }
