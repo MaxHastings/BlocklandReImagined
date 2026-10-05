@@ -228,6 +228,92 @@ grid, so a route that crosses one is a walk leg like any other. Shark-like
 kinds (`moves: swim`) keep their own water roaming; their staying in water
 is package policy.
 
+## Noticing
+
+`bots/perception.rs` adds a small "what a bot notices" layer on top of
+sight, and `bots/sightlines.rs` the one sight-ray budget every bot sight
+query goes through. The kind's `perception` holds seven numbers, on by
+default for every kind: `salience`, `glance_seconds`, `cooldown_seconds`,
+`strength`, `relaxed_scale`, `away_scale`, `view_degrees`. Everything
+else is a documented constant in `perception.rs` or comes from engine
+data (blast radius, sound volume, the kind's `sight`, `reaction_seconds`,
+`aim_error_degrees` and `turn_degrees`, the body's running speed).
+`strength` (0 to 4, 1 shipped) is the one dial (the tuning tools' sweep
+reads it): it scales the reaction delay, the starting aim error, the
+view-cone delay and turn cap, the warning delay, the turn's overshoot, the
+idle drift and a steady aim error that never settles, together. At 0 the
+bot reacts in exactly `reaction_seconds` with the plain narrowing error,
+the plain linear turn and the old fire gate.
+
+- **Glances.** A strolling or homeward bot (Wander, Return; only a
+  strolling one looks round at someone merely near) with no enemy in sight, no objective at hand, nothing held, no seat and no chassis may
+  turn its ordinary aim at something salient for about `glance_seconds`,
+  then waits `cooldown_seconds`. Sources are engine data only: a
+  projectile blast (the weapons runtime's `Blast` event), noticed out to
+  10 units per unit of its radius; a weapon sound, out to 12 units at full
+  `volume`; a stare (someone in plain view looking within 8 degrees of it
+  for 1.5 seconds) or a body faster than twice its own running speed,
+  within 0.3 of its `sight`; and, less likely, anyone of any team close by
+  in plain view. `salience` scales every reach (0 turns glances off).
+  Salience falls from 1 at the source to 0 at its reach and is the chance
+  of a glance. The look-round for watchers, nearby players and fast bodies
+  runs on the bot's own `cadence` beat. The walk goes on; only the look
+  turns. Strolling, the look also drifts a few degrees off the way.
+- **Reaction.** A newly seen target, or an attacker it was not already
+  fighting, starts a reaction: `reaction_seconds` as is when it was
+  fighting or hunting (Fight, Chase, Search), times `relaxed_scale`
+  when strolling or playing about (Wander, Interact), times `away_scale`
+  for a target outside its `view_degrees` cone, varied by 30% either way
+  from its seeded RNG. It fires only after it, and turns `away_scale`
+  times slower toward a target from outside its cone until then. The same
+  scale multiplies its starting aim error, which narrows over the usual
+  two seconds of tracking. On top, however long it tracks, its aim trails
+  a target moving across its line of sight (its own motion included) by up
+  to 0.5 seconds of that motion times `strength` (at most 0.3 rad either
+  way, so a shot never leaves far off a close strafer), so a strafing
+  target is missed by about the same distance at any range and a still one
+  is hit as before. The native fire gate judges a shot by where the bot believes it
+  aims (its look without its error), so the error misses for real instead
+  of holding the shot back; a shot whose actual line passes within 1.2
+  units of a living ally (60 units ahead) is still withheld. With the fair metric the Blockhead's steady hit
+  rate falls as `strength` rises and sits inside the 15-60% band at 1.
+  A spawn-protected target is watched but not
+  reacted to: the clock starts when it can be hurt. Damage still
+  interrupts at once (the chooser sees it as before); only the return fire
+  waits. `perception::delay_ticks` and `Brain::switch_delay` give the same
+  delay to any other pause before acting on a change (a chooser's tell).
+- **Hurt from out of sight.** A hit from someone it cannot see gives the
+  way the hit came from to within 25 degrees and the distance to within
+  40%, never nearer than a unit to the truth; its look holds until its
+  reaction, then turns there. Its warning to allies carries that guess.
+  The exact spot comes only from seeing them; a hit from someone in sight
+  is placed exactly.
+- **Warnings.** An ally's warning is acted on a seeded 0.25 to 1 second
+  later (per ally and warning, scaled like a reaction), at a spot up to
+  1.5 units off, so allies do not all turn on the same tick.
+- **Turning.** The head speeds into a big turn and eases out of it (top
+  speed 1.3 times `turn_degrees`, the acceleration set so a half turn takes
+  about the plain time), a fast flick overshoots a few degrees and settles
+  back within a degree. Handling things (Carry, Objective, Interact) keeps
+  the plain turn its controllers are built on, and a startle does not stop
+  it.
+- **Sight budget.** `Session::bot_sees` and `Session::bot_sees_player`
+  answer every bot sight query from one budget per tick: 128 rays shared
+  by ordinary queries (scans for enemies, watcher polls, arming, team and
+  surprise checks) and 4 per bot (sized for 32) for checking its current
+  target or attacker, which therefore always run. An ordinary answer is
+  cached per (viewer, subject) for 6 ticks while neither end moves half a
+  unit; with the ordinary share spent, the last answer stands in. A player
+  is seen at the eye or else at the chest. Vehicles with seats hide what is
+  behind them, except the viewer's and the subject's own mounts and a body
+  the viewer is pushing; seatless bodies (a ball, a crate) are looked
+  past (they hid soccer opponents and pushed the 2v2 hammer match's
+  wrong-way share over its bar).
+
+`BotThought::noticed` reads out the last glance or reaction (`glance:
+blast`, `glance: watched`, `glance: someone near`, `reacting: relaxed,
+from behind`, ...) with when it started and ends.
+
 ## Bounded rule and weapon adapters
 
 Objective discovery reads supported creator rules and opt-in typed package
@@ -425,11 +511,11 @@ class against a scripted player who strafes in legs of 0.4 to 1.2 s and
 hops every 1.5 to 3 s, at each range in `bot_tuning.json` `fair`. It
 reports the bot's hit rate (health drops per trigger tick) in the first
 seconds of an engagement and in steady state, against a band: never near
-perfect, never hopeless. Reported, not enforced yet. `fair_by_dial`
-(opt-in) runs it with the alertness dial (the first of `fair.dials` that
-`bots.json` has: `perception.alertness` once that lane lands,
-`aim_error_degrees` today) at half, shipped and double, and says whether
-the rate moves the dial's way.
+perfect, never hopeless. Enforced: the steady rate of all classes
+together, and of the gun and the bow each, sits in the band. `fair_by_dial`
+(opt-in) runs it with the perception dial (the first of `fair.dials` that
+`bots.json` has: `perception.strength`) at half, shipped and double, and
+asserts the rate moves the dial's way.
 
 **All-on run** (`all_dials_on`): every scenario with every dial at its ON
 value together (dials shipped at 0 take their `on` value), with the share
@@ -490,7 +576,7 @@ targets prefers an uncrowded one; following an ally through a gap too narrow to 
 pace rather than walking round it is the same rule) and **interaction**
 (a seat an ally offers, or a driving place from which a seated ally's
 mount sees its target, pays; a fight's stance in an ally's line of fire
-costs, so it steps out). Crew of one vehicle neither crowd nor endanger
+costs, so it steps out, where there is floor to step to). Crew of one vehicle neither crowd nor endanger
 each other; a seat stays the claim's to arbitrate. Socially, an objective
 is worth more as the team trails; idle flavours grow likelier with the
 share of the players a bot sees goofing, less those it sees playing, a
@@ -520,7 +606,7 @@ other choices draw as before. Nothing reads a content name.
 |---|---|---|
 | `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2 x strength, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
 | `crouch` | hurt from more than 5 units while fighting or holding its ground | crouches for 1.5 s after the last such hit (damage already scales with crouching) |
-| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
+| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius, where floor lies under the spot 0.8 s of its current drift reaches | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
 | `activate` | a door within 2.5 units on the straight way to its goal, while not fighting; now and then (about every 2 s at a natural pause, at a quarter of the chance) one within 8 units in sight. A door is a brick whose catalog swap the next click swaps back: the click only opens or closes the brick itself. A brick with only event rows (a reset, win, teleport or blast button) is never clicked, in the way or for fun | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
 | `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
 
@@ -552,6 +638,7 @@ its kind and team label. See `bots/looks.rs`.
     working, and how it covers one a teammate works (above). A
     `cover_distance` of 0 stands down as before, and a `clear_degrees` of
     0 meets a drive head on.
+  - `perception`: glances, reaction delays and turning (Noticing, above).
   - `surprise`: every tunable of the chooser and the interrupts (above),
     each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
     comments outside strings.

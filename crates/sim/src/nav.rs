@@ -1286,7 +1286,6 @@ mod tests {
                     waters: &[],
                     bodies: &[],
                     motions: &[],
-            motions: &[],
                 };
                 nav.clear();
                 nav.begin_tick();
