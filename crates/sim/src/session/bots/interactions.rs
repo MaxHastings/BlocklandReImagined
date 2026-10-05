@@ -1067,9 +1067,11 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             let pursuing = brain.memory.is_some()
                 || matches!(behaviour, Behaviour::Return | Behaviour::Objective);
+            // Progress is getting somewhere: a chassis rocking back and
+            // forth against what blocks it keeps moving but goes nowhere.
             let progressed = brain
                 .vehicle_anchor
-                .is_none_or(|old| flat(at - old).length() >= 0.5);
+                .is_none_or(|old| flat(at - old).length() >= VEHICLE_PROGRESS);
             if progressed || waiting || !pursuing {
                 brain.vehicle_anchor = Some(at);
                 brain.vehicle_stuck = 0;
@@ -1134,6 +1136,9 @@ impl Session {
     }
 }
 
+/// How far a driven chassis must get from where it last made progress for
+/// that to count as progress again.
+const VEHICLE_PROGRESS: f32 = 3.0;
 /// A chassis reverses toward a goal more than the kind's
 /// `mounted.reverse_degrees` off its heading. While pursuing a target it
 /// does so only within `mounted.reverse_distance`; a farther target behind

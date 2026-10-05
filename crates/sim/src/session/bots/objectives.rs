@@ -11,7 +11,17 @@ const SOURCES: usize = 64;
 const ROWS: usize = 256;
 const ACTIONS: usize = 32;
 const RETRY: u64 = 120;
+/// Ticks after an objective completes before it looks for the next one:
+/// the completing event's own effects (a flag put back) land first.
+const COMPLETION_SETTLE: u64 = 12;
 const APPROACH_TIMEOUT: u64 = 120 * 30;
+/// How long a finished step's view is held while the next step waits for
+/// its planning turn (one bot plans per tick), so the objective does not
+/// blink off between two steps of one plan.
+const STEP_HOLD: u64 = 60;
+/// Closer than this to the step's point since the best so far counts as
+/// approach progress, which extends the approach deadline.
+const APPROACH_PROGRESS: f32 = 0.5;
 
 /// Policy supplies desired state independently of the controls which can cause it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -293,8 +303,22 @@ pub(super) struct View {
     pub physical_progress: bool,
     /// The way a loose body is being delivered (`Directive::heading`).
     pub heading: Vec3,
+    /// It carries what the objective delivers (a declared carriage it
+    /// picked up, a body it holds): stopping would put that at risk.
+    pub committed: bool,
 }
 impl View {
+    /// The step needs only its feet: no tool, trigger, body, seat or enemy
+    /// of its own, so its aim is free for other things on the way.
+    pub(super) fn feet_only(&self) -> bool {
+        self.enemy.is_none()
+            && self.trigger.is_none()
+            && self.equip.is_none()
+            && self.held.is_none()
+            && self.drive.is_none()
+            && self.board.is_none()
+            && self.resource.is_none()
+    }
     pub(super) fn locomotion(point: Vec3, aim: Vec3) -> Self {
         Self {
             point,
@@ -311,6 +335,7 @@ impl View {
             enemy_evidence: None,
             physical_progress: false,
             heading: Vec3::ZERO,
+            committed: false,
         }
     }
 }
@@ -376,6 +401,17 @@ impl Step {
             view.trigger = Some(false);
         }
         Some(view)
+    }
+    /// [`Self::view`] with whether it carries what the step delivers.
+    fn committed_view(&self, session: &Session, bot: OwnerId) -> Option<View> {
+        let view = self.view(session, bot)?;
+        let committed = match &self.executor {
+            Executor::Package(action) => action.carrying(session, bot),
+            _ => view
+                .held
+                .is_some_and(|held| session.held_by(bot) == Some(held)),
+        };
+        Some(View { committed, ..view })
     }
     fn progress(&self, session: &Session, bot: OwnerId, tick: u64) -> Option<Progress> {
         match &self.executor {
@@ -539,6 +575,11 @@ pub(super) struct State {
     pub(super) searches: u64,
     pub(super) reused: u64,
     pub diagnostic: Option<&'static str>,
+    /// The last finished step's view, held until a tick while the next
+    /// step waits for its planning turn ([`STEP_HOLD`]).
+    hold: Option<(View, u64)>,
+    /// The nearest the current step's approach has come to its point.
+    best: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -603,6 +644,12 @@ impl State {
         {
             step.deadline = step.deadline.saturating_add(elapsed);
         }
+    }
+    /// A step it was after failed (timed out, made no progress) and is
+    /// cooling down before it is tried again: the objective is still
+    /// offered, so it does not walk all the way home meanwhile.
+    pub(super) fn pursuing(&self) -> bool {
+        self.step.is_none() && !self.failed.is_empty()
     }
     pub(super) fn ready(&self, tick: u64) -> bool {
         self.step.is_none() && tick >= self.next
@@ -1712,6 +1759,19 @@ impl Session {
             {
                 step.deadline = tick.saturating_add(APPROACH_TIMEOUT);
             }
+            // Getting closer to the step's point is progress too, whatever
+            // provides the step: a long route keeps its deadline while it
+            // advances, and only a stalled approach times out.
+            if step.waiting.is_none()
+                && let Some(point) = step.view(self, bot).map(|v| v.point)
+                && let Some(peer) = self.peers.get(&bot)
+            {
+                let gap = point.distance(Vec3::from(peer.player.state().feet));
+                if state.best.is_none_or(|best| gap < best - APPROACH_PROGRESS) {
+                    state.best = Some(gap);
+                    step.deadline = step.deadline.max(tick.saturating_add(APPROACH_TIMEOUT));
+                }
+            }
             if step.waiting.is_none()
                 && let Some((_, when)) = step.admitted(self, bot)
             {
@@ -1732,7 +1792,10 @@ impl Session {
             state.desired = None;
             state.failed.clear();
             state.route.clear();
-            state.next = tick + RETRY;
+            // What it achieved may be offered again at once (a flag back on
+            // its stand): look for the next objective as soon as the effects
+            // of the completing event have landed, not after a retry's wait.
+            state.next = tick + COMPLETION_SETTLE;
             state.diagnostic = Some(diagnostic);
             self.bots.brains.get_mut(&bot)?.objective = state;
             return None;
@@ -1752,7 +1815,10 @@ impl Session {
             } else if tick > step.deadline {
                 state.fail(tick, "objective approach timed out");
             } else if step.progress(self, bot, tick).is_none() {
-                let out = state.step.as_ref().and_then(|s| s.view(self, bot));
+                let out = state
+                    .step
+                    .as_ref()
+                    .and_then(|s| s.committed_view(self, bot));
                 self.bots.brains.get_mut(&bot)?.objective = state;
                 return out;
             } else {
@@ -1779,6 +1845,20 @@ impl Session {
                             view.physical_progress = false;
                             repair_hold = Some(view);
                         }
+                        // Hold this step's view until the next is planned,
+                        // standing where the step finished.
+                        if repair_hold.is_none()
+                            && let Some(mut view) = step.view(self, bot)
+                        {
+                            let feet = Vec3::from(self.peers[&bot].player.state().feet);
+                            view.point = feet;
+                            view.waiting = true;
+                            view.move_while_waiting = false;
+                            view.trigger = view.trigger.map(|_| false);
+                            view.physical_progress = false;
+                            view.board = None;
+                            state.hold = Some((view, tick + STEP_HOLD));
+                        }
                         state.step = None;
                         state.failed.clear();
                         state.next = tick;
@@ -1800,6 +1880,9 @@ impl Session {
             self.bots.objective_cursor = Some(bot);
             state.next = tick + RETRY;
             let mut budget = GroundingBudget::default();
+            // Another offered objective not yet found wanting: one that
+            // cannot be planned hands the bot's next turn to it.
+            let mut untried = false;
             let result = self
                 .discover_desired_states(bot, &mut budget)
                 .and_then(|discovery| {
@@ -1826,6 +1909,9 @@ impl Session {
                                 .cloned()
                         })
                         .ok_or(planning::Failure::NoPlan)?;
+                    untried = desireds.iter().any(|d| {
+                        *d != desired && !state.failed_desired.iter().any(|(f, _)| f == d)
+                    });
                     state.desired = Some(desired.clone());
                     self.objective_snapshot_with_budget(
                         bot,
@@ -1899,6 +1985,9 @@ impl Session {
                             state.failed_desired.remove(0);
                         }
                         state.failed_desired.push((desired, tick + RETRY * 3));
+                        if untried {
+                            state.next = tick;
+                        }
                     }
                     state.route.clear();
                     state.diagnostic = Some(match f {
@@ -1923,11 +2012,18 @@ impl Session {
                 }
             }
         }
+        if state.step.is_some() || state.hold.is_some_and(|(_, until)| tick >= until) {
+            state.hold = None;
+        }
+        if state.step.is_none() {
+            state.best = None;
+        }
         let result = state
             .step
             .as_ref()
-            .and_then(|s| s.view(self, bot))
-            .or(repair_hold);
+            .and_then(|s| s.committed_view(self, bot))
+            .or(repair_hold)
+            .or(state.hold.map(|(view, _)| view));
         self.bots.brains.get_mut(&bot)?.objective = state;
         result
     }

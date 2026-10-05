@@ -44,7 +44,20 @@ bot does through the same code.
    in its package. Nothing scoring: it wanders.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
-   past its band, and a walk home goes all the way.
+   past its band, and a walk home goes all the way, except while a failed
+   objective step cools down before it is tried again: then it does not
+   walk home at all.
+
+   Fly is entered only for an enemy at least `fighting.fly_rise` above that
+   no walk reaches; once flying it keeps on until it is by them or more
+   than `fly_drop` below. A flight that gets no closer for
+   `fly_give_up_seconds` lands, and it does not take off again for as long.
+
+   An objective outranks a fight while the bot carries what the objective
+   delivers (`View::committed`, read from the step: a package carriage it
+   holds, or a held body). On the way to a delivery that needs only its
+   feet it shoots an enemy ahead or to the side as it goes (run and gun);
+   an enemy behind is left, as walking backwards is slow.
 
    An on-foot bot's leash is its brick and `chase_radius`. A driver's leash
    follows the kind's `mounted` policy instead: with `anchor: "mount"` it is
@@ -140,7 +153,15 @@ positions. Source, object incarnation, tool, permission and game/round/team
 changes invalidate assumptions. Explain exposes desired state, selected
 action/provider, phase, proposed route and bounded failure diagnostics.
 An interrupted approach excludes time spent in another behavior, while an event
-that was already scheduled keeps its absolute due time. Failed search reuse
+that was already scheduled keeps its absolute due time. A step's 30 s approach
+deadline moves on each time the bot gets half a unit closer to the step's
+point, so only a stalled approach times out, however long the route.
+Between steps the bot keeps the finished step's view (standing where it
+finished, no trigger) for up to a second until the next is planned, rather
+than blinking to Wander. A completed objective looks for the next one 12
+ticks later (once the completing event's effects have landed), and a
+desired state that cannot be planned hands the bot's next planning turn to
+another offered one at once instead of after a retry's wait. Failed search reuse
 revalidates the authoritative model, game, round and team before accepting it.
 See [the current pipeline and verification limits](../audits/npc-pipeline-current.md),
 [the frozen acceptance contract](../audits/objective-driven-integration.md) and
@@ -167,6 +188,10 @@ of a moving target infallible or change damage permissions.
     working, and how it covers one a teammate works (above). A
     `cover_distance` of 0 stands down as before, and a `clear_degrees` of
     0 meets a drive head on.
+  - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
+    `strafe_seconds`, `fly_rise`, `fly_drop`, `fly_give_up_seconds`): the
+    leeway around its band, how long a choice is held, strafe legs, and
+    when it takes off and gives up a flight (above).
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.
