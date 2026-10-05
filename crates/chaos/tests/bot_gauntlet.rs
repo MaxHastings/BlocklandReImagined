@@ -409,8 +409,14 @@ fn a_jeep_on_each_side() {
     });
     // Measured: on foot stuck 59% (stood on a jeep roof with no route),
     // 78% of bot time driving, 1 kill in 60 s (drivers circle each other):
-    // TARGET kills > 10, stuck < 5%.
-    within(&r, 0.65, 0.01, 0.02, 14.0);
+    // TARGET kills > 10, stuck < 5%. Walking straight off a vehicle's
+    // roof toward the enemy, and a driver rocking against what blocks it
+    // giving up its seat: stuck 3.4-3.9%, 10 kills a minute, 25-28 changes
+    // a bot-minute (boarding and getting off), idle 0-9.1% (over three
+    // rounds a bot that lost sight of every enemy wanders: nothing seeks
+    // an enemy it has never seen). Drivers ramming and orbiting one
+    // another is open work (finding 7).
+    within(&r, 0.08, 0.12, 0.03, 32.0);
     assert!(
         r.progress["mounted_ticks"] >= 10_000 * rounds() as i64,
         "the jeeps were used: {:?}",
@@ -461,7 +467,8 @@ fn weapons_lying_on_the_ground() {
     // 41), most of the circling a ranged strafe's legs back and forth.
     within(&r, 0.01, 0.01, 0.10, 50.0);
     assert!(
-        r.progress["armed_bots"] == 4 * rounds() as i64,
+        // The bots that ever armed: the same four however long it runs.
+        r.progress["armed_bots"] == 4,
         "every bot armed itself: {:?}",
         r.progress
     );
@@ -508,8 +515,10 @@ fn zombie_survival() {
     );
     // Measured at the merge: circling 22% (melee circles its target), 33
     // changes a bot-minute (chase/fly flip-flop), 47 kills. Now melee
-    // closes: circling 5%, 25 changes, 48 kills.
-    within(&r, 0.01, 0.01, 0.08, 32.0);
+    // closes: circling 5%, 25 changes, 48 kills. Taking off only for an
+    // enemy well above and giving up a flight that gets no closer: 7
+    // changes.
+    within(&r, 0.01, 0.01, 0.08, 12.0);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }
 
@@ -521,17 +530,21 @@ fn capture_the_flag() {
         line(-36.0, 0.0, 50.0, 2),
         &[GUN],
     );
-    let r = flags(spec, 90);
+    let r = flags(spec, NEAR_POSTS, 90);
     // Measured at the merge: stuck 34.5% (opposing runners deadlock
     // head-on), circling 1%, 39 changes a bot-minute, 34 kills, 1656 ticks
     // carrying, and no capture in 90 s. Now, with fights held through a
     // jump: stuck 0.4-20%, 43-53 kills. The changes a bot-minute rose with
     // the fighting, to 44-60 (each fight is an objective/fight change and
-    // back). TARGET captures > 0.
-    within(&r, 0.25, 0.01, 0.03, 65.0);
+    // back). With a carrier that delivers rather than stopping to fight
+    // (shooting ahead on the way) and no blink between steps: 6 captures
+    // in 90 s (19 in three rounds), stuck 0.1%, 23 changes, circling 5.6%
+    // (each pickup's turn back).
+    within(&r, 0.05, 0.01, 0.07, 30.0);
+    let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(
-        r.progress["carry_ticks"] >= 1000 * rounds() as i64,
-        "flags were taken: {:?}",
+        caps >= 3 * rounds() as i64,
+        "flags were run home: {:?}",
         r.progress
     );
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
@@ -554,13 +567,17 @@ fn runners_cross_head_on() {
             k.behaviours.insert(b.into(), 0.0);
         }
     })];
-    let r = flags(spec, 60);
+    let r = flags(spec, NEAR_POSTS, 60);
     // Measured while bots sidestepped only allies: stuck 7.7% (the two
     // runners push into each other head-on, hopping, until one slides by).
     // Passing any body: stuck 0.2%, circling 6.6% (out and back), 15
-    // changes a bot-minute. Idle 11.7% is the objective blinking off for a
-    // few seconds after each capture. TARGET idle < 1%.
-    within(&r, 0.02, 0.12, 0.08, 18.0);
+    // changes a bot-minute. Idle 11.7% was the objective blinking off for a
+    // few seconds after each capture (a retry's wait, then the round win
+    // tried first and found unplannable, then another wait). Looking for
+    // the next objective once the capture's effects land, and trying the
+    // next offered objective at once: idle 0.7%, 8 captures rather than 6,
+    // so circling (each pickup's turn back) 9.5-10.7%.
+    within(&r, 0.02, 0.01, 0.12, 18.0);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(
         caps >= 2 * rounds() as i64,
@@ -569,23 +586,68 @@ fn runners_cross_head_on() {
     );
 }
 
+/// Where each side's flag and base stand: red flag, red base, blue flag,
+/// blue base.
+type Posts = [Vec3; 4];
+/// Each flag beside the other side's spawns, each base behind its own.
+const NEAR_POSTS: Posts = [
+    Vec3::new(-79.75, 0.1, 50.25),
+    Vec3::new(-79.75, 0.1, 44.25),
+    Vec3::new(-32.25, 0.1, 50.25),
+    Vec3::new(-32.25, 0.1, 56.25),
+];
+
+/// A run longer than a fixed approach timeout (30 s): runners spawn by
+/// their base in one corner of the floor, and the flag they take stands in
+/// the opposite corner, about 245 units off, 35 s at a run.
+#[test]
+fn a_run_longer_than_the_approach_timeout() {
+    const RUNNER: &str = "gauntlet:bot/runner";
+    let mut spec = Spec::new(
+        "a_run_longer_than_the_approach_timeout",
+        vec![Vec3::new(-88.0, 0.0, -84.0)],
+        vec![Vec3::new(88.0, 0.0, 84.0)],
+        &[],
+    );
+    spec.kinds = [RUNNER, RUNNER];
+    spec.extra_kinds = vec![kind(RUNNER, |k| {
+        for b in ["fight", "chase", "search", "arm", "fly", "return"] {
+            k.behaviours.insert(b.into(), 0.0);
+        }
+    })];
+    // Each side's flag and base by its own spawn: a runner crosses the
+    // floor for the other side's flag and back.
+    let posts = [
+        Vec3::new(-91.75, 0.1, -80.25),
+        Vec3::new(-91.75, 0.1, -88.25),
+        Vec3::new(91.75, 0.1, 80.25),
+        Vec3::new(91.75, 0.1, 88.25),
+    ];
+    let r = flags(spec, posts, 120);
+    // With a fixed 30 s approach timeout no runner ever reached the far
+    // flag: each walk was given up 30 s in, then idle 50% while the failed
+    // step cooled down, and no flag taken. Now the deadline moves on while
+    // the runner gets closer: idle 0.1%, a capture each in 120 s.
+    within(&r, 0.02, 0.01, 0.05, 6.0);
+    let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
+    assert!(
+        caps >= 2 * rounds() as i64,
+        "both ran the far flag home: {:?}",
+        r.progress
+    );
+}
+
 /// Capture the flag in `spec`'s layout and arsenal, for `seconds`: each
-/// side takes the other's flag from beside its spawns back to its base.
-fn flags(mut spec: Spec, seconds: usize) -> Report {
+/// side takes the other's flag from `posts` back to its base.
+fn flags(mut spec: Spec, posts: Posts, seconds: usize) -> Report {
     const FLAG: &str = "gauntlet-ctf:brick/flag";
     const BASE: &str = "gauntlet-ctf:brick/base";
     const FLAG_ITEM: &str = "gauntlet-ctf:weapon/flag";
     const FLAG_IMAGE: &str = "gauntlet-ctf:image/flag";
     spec.brick_defs = vec![(FLAG, fixture::PLATE), (BASE, fixture::PLATE)];
     spec.item_defs = vec![(FLAG_ITEM, FLAG_IMAGE)];
-    spec.bricks = vec![
-        brick(FLAG, Vec3::new(-79.75, 0.1, 50.25)),
-        brick(BASE, Vec3::new(-79.75, 0.1, 44.25)),
-    ];
-    spec.blue_bricks = vec![
-        brick(FLAG, Vec3::new(-32.25, 0.1, 50.25)),
-        brick(BASE, Vec3::new(-32.25, 0.1, 56.25)),
-    ];
+    spec.bricks = vec![brick(FLAG, posts[0]), brick(BASE, posts[1])];
+    spec.blue_bricks = vec![brick(FLAG, posts[2]), brick(BASE, posts[3])];
     let script = r#"
 fn flag() { "gauntlet-ctf:weapon/flag" }
 fn image() { "gauntlet-ctf:image/flag" }
@@ -763,8 +825,9 @@ fn checkpoint_race() {
 
     // Measured: stuck 0.5%, idle 0.2%, circling 14% (out-and-back track),
     // 54 behaviour changes a bot-minute (objective blinks off for a tick at
-    // each checkpoint), won after 15 s with 9 laps run.
-    within(&r, 0.01, 0.01, 0.17, 62.0);
+    // each checkpoint), won after 15 s with 9 laps run. Holding a finished
+    // step's view until the next is planned: no changes at all.
+    within(&r, 0.01, 0.01, 0.17, 4.0);
     let won = r.progress["won_after_seconds"];
     assert!((0..=20).contains(&won), "the race was won in time: {won}");
     assert!(r.progress["laps_total"] >= 9, "laps run: {:?}", r.progress);

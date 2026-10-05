@@ -140,6 +140,15 @@ const OPEN_SWING: f32 = 3.0;
 const MELEE_THREAD: u8 = 2;
 /// Emotes a kind may strike: those that are only a look.
 const BOT_EMOTES: [&str; 4] = ["hug", "love", "hate", "confusion"];
+/// Running and gunning, the farthest off its way (cosine) an enemy is shot
+/// at: about 105 degrees, where sideways speed still holds.
+const GUN_BEHIND_COS: f32 = -0.26;
+/// A melee flyer farther across from its target than this climbs above
+/// their feet before it moves over.
+const FLY_OVER: f32 = 1.5;
+/// Ticks pressing at a waypoint within a step without moving before it is
+/// taken as reached.
+const WEDGED_TICKS: u32 = 30;
 /// How much of a swimmer the water covers for it to swim rather than walk.
 const SWIM_COVERAGE: f32 = 0.5;
 
@@ -217,6 +226,9 @@ struct Brain {
     next_wander: u64,
     last_position: Vec3,
     stuck: u32,
+    /// Ticks in a row it pressed on without getting anywhere across, hops
+    /// and all.
+    wedged: u32,
     replans: u32,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
@@ -259,6 +271,8 @@ struct Brain {
     posed: bool,
     /// Ticks in a row a swimmer spent out of water in a mini-game.
     dry: u32,
+    /// A flight's progress (`BotFighting::fly_give_up_seconds`).
+    fly: FlyProgress,
     /// The kind its brick made, while a bite has turned it into another
     /// (`BotMelee::converts_below`); it comes back as this one.
     born: Option<BotKind>,
@@ -283,6 +297,14 @@ struct Brain {
     surprise: surprise::Mind,
     /// Where a flanking chase aims, from the enemy (zero straight at them).
     chase_offset: Vec3,
+}
+/// How a flight is going: the nearest it came and when, and how long it
+/// stays on the ground after giving one up.
+#[derive(Clone, Copy, Debug, Default)]
+struct FlyProgress {
+    best: f32,
+    since: u64,
+    grounded_until: u64,
 }
 /// An enemy up where a bot flies to them ([`Session::air_chase`]).
 #[derive(Clone, Copy, Debug)]
@@ -361,6 +383,7 @@ impl Brain {
             next_wander: 0,
             last_position: home,
             stuck: 0,
+            wedged: 0,
             replans: 0,
             yaw: 0.0,
             pitch: 0.0,
@@ -386,6 +409,7 @@ impl Brain {
             next_bite: 0,
             posed: false,
             dry: 0,
+            fly: FlyProgress::default(),
             born: None,
             next_interaction: 0,
             object_cursor: 0,
@@ -1342,11 +1366,20 @@ impl Session {
             .target
             .map(|seen| seen.feet)
             .or(brain.memory.map(|k| k.at))?;
-        // Taking off for someone well above; once up, until it is by them.
+        // Taking off for someone well above; once flying, until it is by
+        // them, or it has gone too long without getting closer.
+        let fighting = &brain.kind.fighting;
+        let flying = brain.behaviour == Behaviour::Fly;
         let above = to.y - feet.y;
         let across = flat(to - feet).length();
         let landed = !grounded && above < 0.5 && across < 1.0;
-        if across > AIR_CHASE || above < if grounded { 2.5 } else { -3.0 } || landed {
+        let floor = if flying {
+            -fighting.fly_drop
+        } else {
+            fighting.fly_rise
+        };
+        let tick = self.simulation.state().tick;
+        if across > AIR_CHASE || above < floor || landed || tick < brain.fly.grounded_until {
             return None;
         }
         let clear = |from: Vec3, d: Vec3, length: f32| {
@@ -1878,7 +1911,18 @@ impl Session {
         let retaliating =
             threat.is_some() && can_retaliate && flat(feet - leash).length() <= chase_radius;
         let mut pausing_delivery = false;
+        let ranged_in_hand = held.is_some_and(|w| !w.melee);
         let objective = self.bot_objective(bot, tick).filter(|view| {
+            // A carrier keeps delivering (it shoots back on the way); one
+            // that can shoot back on the way does not stop for a hurt from
+            // an enemy it sees.
+            if view.committed
+                || view.feet_only()
+                    && ranged_in_hand
+                    && threat.is_some_and(|k| sight.target.is_some_and(|s| s.owner == k.subject))
+            {
+                return true;
+            }
             // Keep the selected action and its completion baseline, but let
             // ordinary chase/search resolve a dated real injury even outside
             // the weapon band. Objective's utility otherwise beats pursuit.
@@ -2025,6 +2069,9 @@ impl Session {
             (leash, chase_radius) = brain.pursuit(driving.is_some());
         }
         let moved = feet.distance(brain.last_position);
+        // Across: a bot hopping against what blocks it moves up and down
+        // but gets nowhere.
+        let moved_across = flat(feet - brain.last_position).length();
         brain.last_position = feet;
         if brain.sequence == 0 {
             brain.yaw = state.yaw;
@@ -2078,6 +2125,11 @@ impl Session {
 
         // Behaviour: the most urgent that applies.
         let enemy = sight.target.filter(|_| away <= chase_radius);
+        // An enemy in sight it can shoot on the way to an objective that
+        // needs only its feet (run and gun).
+        let can_gun = enemy.is_some()
+            && weapon.is_some_and(|w| !w.melee)
+            && objective.is_some_and(|view| view.feet_only());
         let (near, far) = if driving.is_some() && !vehicle_weapon {
             (0.0, 0.0)
         } else {
@@ -2096,6 +2148,8 @@ impl Session {
                 && air.is_some_and(|a| !walks_up(a.to)),
             interaction: opportunity.map_or(0.0, |o| o.utility),
             objective: objective.is_some(),
+            committed: objective.is_some_and(|view| view.committed),
+            gunning: can_gun,
             arm: arm.is_some(),
             // A swimmer reaches any depth: only how far counts.
             enemy: enemy
@@ -2110,6 +2164,7 @@ impl Session {
             remembers: brain.memory.is_some(),
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
+            pursuing: brain.objective.pursuing(),
         };
         let scores = behaviour::scores(brain.behaviour, &situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
@@ -2148,6 +2203,22 @@ impl Session {
             brain.behaviour_since = tick;
         }
         brain.behaviour = behaviour;
+        // A flight that stops getting closer is given up for a while; one
+        // within its band of them is where it means to be.
+        if behaviour == Behaviour::Fly
+            && let Some(air) = air
+        {
+            let gap = air.to.distance(feet);
+            if brain.behaviour_since == tick || gap < brain.fly.best - 1.0 || gap <= far {
+                brain.fly.best = gap;
+                brain.fly.since = tick;
+            } else {
+                let give_up = (kind.fighting.fly_give_up_seconds * 120.0) as u64;
+                if tick > brain.fly.since + give_up {
+                    brain.fly.grounded_until = tick + give_up;
+                }
+            }
+        }
         let mut selected_objective = objective.filter(|_| behaviour == Behaviour::Objective);
         let objective_resource = selected_objective
             .and_then(|view| view.resource)
@@ -2208,6 +2279,14 @@ impl Session {
             }
         }
 
+        // Carrying an objective's delivery that needs only its feet (no
+        // tool, trigger, body or seat), it shoots an enemy in sight on the
+        // way, as a player runs and guns; the walk goes on. (On the way to
+        // pick up, an enemy in its band is fought instead.)
+        let gunning = behaviour == Behaviour::Objective
+            && can_gun
+            && selected_objective.is_some_and(|view| view.committed)
+            && selected_objective.is_some_and(|view| view.feet_only());
         // Goal.
         brain.chase_offset = Vec3::ZERO;
         let (hold, back_off) = match behaviour {
@@ -2372,12 +2451,21 @@ impl Session {
             while let Some(next) = brain.plan.first() {
                 let d = next.feet - feet;
                 // One through an opening is reached by going through.
+                // One it presses against without moving, within a step of
+                // it (wedged on a door jamb), it takes as reached, if more
+                // of the route follows. (Not on the way to work a body or a
+                // brick: pressing against those is the work.)
+                let wedged = brain.wedged > WEDGED_TICKS
+                    && brain.plan.len() > 1
+                    && flat(d).length() < 1.0
+                    && !matches!(brain.goal, Some(Goal::Objective(_) | Goal::Interact(_)));
                 if next.through.is_none()
-                    && flat(d).length() < if body.conservative { 1.2 } else { 0.4 }
+                    && (flat(d).length() < if body.conservative { 1.2 } else { 0.4 } || wedged)
                     && d.y.abs() < body.step + 0.5
                 {
                     brain.plan.remove(0);
                     brain.stuck = 0;
+                    brain.wedged = 0;
                 } else {
                     break;
                 }
@@ -2438,6 +2526,32 @@ impl Session {
                 });
             }
         }
+        // Standing on a body (a vehicle's roof, a crate) the walk grid has
+        // no place for its feet and no route from there: it walks straight
+        // off toward the enemy it is after, and plans again once down.
+        if wanted.is_none()
+            && swim.is_none()
+            && driving.is_none()
+            && state.grounded
+            && let Some(Goal::Chase(point)) = self.bots.brains[&bot].goal
+            && flat(point - feet).length() > 1.5
+            && self.bots.brains[&bot].search.is_none()
+            && super::admin_players::world_ray(
+                &self.simulation,
+                own_feet + Vec3::Y * 0.1,
+                Vec3::NEG_Y,
+                0.4,
+            )
+            .is_none()
+        {
+            wanted = Some(Waypoint {
+                feet: point,
+                jump: false,
+                through: None,
+                crouch: false,
+            });
+            self.bots.brains.get_mut(&bot).unwrap().settled = false;
+        }
         let pushing = if behaviour == Behaviour::Interact {
             self.act_bot_interaction(bot, interaction_enemy.map(|k| k.at), tick)?
         } else {
@@ -2497,6 +2611,14 @@ impl Session {
             wanted = None;
         }
 
+        // It runs on facing its way and shoots only an enemy ahead or to
+        // the side: walking backwards is slow (`PlayerTuning::backward`).
+        let gunning = gunning
+            && sight.target.zip(wanted).is_none_or(|(seen, next)| {
+                let way = flat(next.feet - feet).normalize_or_zero();
+                let to = flat(seen.feet - feet).normalize_or_zero();
+                way == Vec3::ZERO || way.dot(to) > GUN_BEHIND_COS
+            });
         // Aim: at the enemy, or where it walks.
         let mut aim_yaw = brain.yaw;
         let mut aim_pitch = 0.0;
@@ -2529,6 +2651,7 @@ impl Session {
                 }
             }
         } else if behaviour == Behaviour::Objective
+            && !gunning
             && selected_objective.is_none_or(|view| view.enemy.is_none())
         {
             if let Some(objective) = selected_objective.as_ref() {
@@ -2705,7 +2828,11 @@ impl Session {
                     if !air.roofed && kind.moves != Moves::Swim && weapon.is_some_and(|w| w.melee) {
                         let velocity = Vec3::from(state.velocity);
                         let closing_speed = flat(velocity).dot(toward);
-                        if feet.y < air.to.y - 0.6
+                        // Still short of being over them, it climbs past
+                        // their feet first, so it clears the edge they
+                        // stand back from rather than pressing on its side.
+                        let climb = if across > FLY_OVER { 0.5 } else { -0.6 };
+                        if feet.y < air.to.y + climb
                             || (!state.grounded && velocity.y < -1.0 && feet.y < air.to.y + 0.8)
                         {
                             // Recover the target's altitude before spending more
@@ -2793,6 +2920,11 @@ impl Session {
             brain.stuck += 1;
         } else {
             brain.stuck = 0;
+        }
+        if driving.is_none() && trying && moved_across < 0.01 {
+            brain.wedged += 1;
+        } else {
+            brain.wedged = 0;
         }
         if driving.is_none() && pushing.is_none() && brain.stuck > 20 && brain.stuck % 40 < 5 {
             input.jump = true;
@@ -2957,6 +3089,7 @@ impl Session {
             self.bot_objective_act(bot, tick)?;
         }
         if (behaviour != Behaviour::Objective
+            || gunning
             || selected_objective.is_some_and(|view| view.enemy.is_some()))
             && sight.target.is_some()
             && !self.vehicles.weapon_seat(bot)

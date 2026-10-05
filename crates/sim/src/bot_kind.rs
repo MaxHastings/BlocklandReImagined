@@ -120,6 +120,14 @@ pub struct BotFighting {
     /// an ally at once. A melee fighter does not strafe: it closes to its
     /// band.
     pub strafe_seconds: f32,
+    /// It takes off for an enemy at least this many world units above it
+    /// that no walk reaches; once flying it keeps on until it is by them,
+    /// or no lower than this below them...
+    pub fly_rise: f32,
+    pub fly_drop: f32,
+    /// ...unless this many seconds pass without getting a unit closer:
+    /// then it lands and does not take off again for as long.
+    pub fly_give_up_seconds: f32,
 }
 impl Default for BotFighting {
     fn default() -> Self {
@@ -128,6 +136,9 @@ impl Default for BotFighting {
             min_band_slack: 1.5,
             dwell_seconds: 0.5,
             strafe_seconds: 3.5,
+            fly_rise: 2.5,
+            fly_drop: 3.0,
+            fly_give_up_seconds: 4.0,
         }
     }
 }
