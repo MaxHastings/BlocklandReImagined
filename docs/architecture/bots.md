@@ -27,7 +27,6 @@ bot does through the same code.
    | Behaviour | When | Does |
    |---|---|---|
    | Carry | its tool holds something | carries it to open space, swings and lets go |
-   | Fly | an enemy up where its path does not walk, with usable jets | jets straight up, out from under cover, over, down by them |
    | Interact | a useful, permitted environmental opportunity | reserves a seat or loose hazard, approaches and executes through ordinary controls |
    | Fight | an enemy in sight within its weapon's band | stands, strafes, backs off when too close |
    | Chase | an enemy in sight out of its band | paths to them |
@@ -45,9 +44,11 @@ bot does through the same code.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
    past its band, and a walk home goes all the way.
-3. **Goal and path.** The behaviour sets the goal; the walk grid
-   (`crate::nav`, shared by every bot of a body size, updated as bricks
-   change, portals included) finds the way a little each tick. Gaps only
+3. **Goal and path.** The behaviour sets the goal; the route planner (see
+   [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
+   walk grid (`crate::nav`, shared by every bot of a body size, updated as
+   bricks change, portals included) finds the way a little each tick,
+   walking, jumping, swimming or jetting wherever that is the cheapest. Gaps only
    a crouched body fits (crawlspaces) are on the grid: crawling costs
    more than walking, and the bot crouches into them. A wheeled driver's body
    uses the chassis footprint and clearance, with no pedestrian jump, crawl or
@@ -72,6 +73,75 @@ bot does through the same code.
    through the same mechanism for humans and bots; mass and geometry determine
    the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
    budgets, provider boundary and examples.
+
+## Routes: one planner for every way of getting about
+
+A behaviour only says where it wants to be (its goal). How the bot gets
+there is one question with one answer: the route planner
+(`crate::nav::Search` over the walk grid, `crate::route` for the costs and
+the per-leg controls). There is no flying behaviour, no swimming shortcut
+for walkers and no driving special case in the arbiter; there are legs.
+
+**The graph.** Nodes are the walk grid's cells (a floor and its height).
+Edges are the ways the bot's body can actually move between them now:
+
+| Edge | Exists when | Costs (seconds of travel, in walking units) |
+|---|---|---|
+| walk, step | the motor steps it (`Body::step`) | distance |
+| jump | a ledge within the body's jump apex | distance + a jump |
+| crawl | only a crouched body fits | distance + crawling |
+| portal | the body's middle goes in through a linked brick's opening | one cell |
+| swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
+| jet | the body can jet (`can_jet`, energy, the kind's `fly` weight above 0), the column up from the launch cell, the crossing at the apex and the descent are clear, and the climb is within the energy | the flight time from the jet's thrust, lift and gravity, plus takeoff |
+| board, drive, leave | a free, permitted wheeled vehicle a short walk away whose drive beats the walk | walk to the seat + boarding + chassis distance / cruise speed + leaving |
+
+Edge costs come from the body's and vehicle's own numbers (`PlayerTuning`
+speeds, jet acceleration and lift, gravity, energy drain; a vehicle's
+`max_speed`, `max_steering`, wheelbase and `brake_force`), never from
+content names. Kinds keep one data knob per mode: the `fly` weight in
+`behaviours` (0: never takes a jet leg) scales how willing a kind is to
+jet, and `interact` (0: never) whether it may take a vehicle.
+
+**The plan.** A search returns one list of waypoints, each tagged with the
+leg it belongs to (`nav::Mode`: walk, swim or jet), and, when a vehicle is
+worth it, the route wraps that in board / drive / leave legs
+(`route::Leg`). Behaviours ask for a goal and get back that one mixed plan.
+The search stays bounded: the same per-tick sample and expansion budgets,
+at most a few jet tests per search, one landing sample per goal.
+
+**Execution.** Each leg turns into ordinary controls, the same keys a
+person presses:
+
+- walk: as before (step, jump, crouch into crawlspaces, walk through
+  openings).
+- swim: head for the next waypoint across the water, whatever the depth,
+  holding jump to rise where the way out is higher.
+- jet: climb straight up at the launch cell until above the landing's
+  height (jets lift hardest with no move), cross at that height (jetting
+  again whenever it sinks to the lip), cut the jets over the landing and
+  brake onto it. A takeoff under a roof cannot happen: the planner only
+  launches where the column up is clear, so a bot under a platform walks
+  out from under it first.
+- drive: pure pursuit along the chassis path. The chassis's turning radius
+  is its wheelbase over `tan(max_steering)`, widened with speed. A target
+  inside either turning circle is not chased round in circles: the driver
+  backs up, steering the nose toward it, until it is outside, then drives
+  on. It slows to the speed it can still brake from by the target and
+  stops there.
+- board / leave: the ordinary seat approach and mount; leave dismounts
+  where the drive ends and the rest is walked.
+
+**Replanning from outcomes.** Each leg watches what really happened: a walk
+leg that stops moving hops, then plans again (as before); a jet leg that
+runs out of time or lands below where it took off plans again from where
+the bot came down, and the cells that failed are forgotten; a drive leg
+that makes no headway backs up, plans again and finally gives up the seat.
+A plan is never trusted past what the world shows.
+
+Portals stay inside the same mechanism: an opening is a walk edge of the
+grid, so a route that crosses one is a walk leg like any other. Shark-like
+kinds (`moves: swim`) keep their own water roaming; their staying in water
+is package policy.
 
 ## Bounded rule and weapon adapters
 
