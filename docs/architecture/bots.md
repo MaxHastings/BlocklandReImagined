@@ -236,7 +236,10 @@ before. Headway is net displacement over a window (`route::Progress`):
 over three quarters of a second a walker must cover a fifth of what its
 walk speed would carry it, so one shuttling between two spots, or hopping
 in place, while its input says move, is as stuck as one standing against
-a wall. A bot at work beside its objective, a seat or an arming point is
+a wall. It is the only stuck check on foot or swimming: the first window
+gone nowhere hops, each later one plans again, and a waypoint within a
+step that a window got nowhere toward counts as reached (a door jamb). A
+bot at work beside its objective, a seat or an arming point is
 not judged by it; a jet leg that
 runs out of time or lands below where it took off plans again from where
 the bot came down, and the cells that failed are forgotten; a drive leg
@@ -441,9 +444,12 @@ radius of the body rather than inside it.
 
 **Goofing off.** Flavour is a choice like any other, between play and
 goof, with boredom per kind of moment: play gains boredom while the bot is
-at a natural pause (wandering with no objective, or at an objective with
-no enemy in view, no threat, on its own feet, not carrying), faster when
-it is idle, and a goof relieves it. When goof wins, the bot does something
+at a natural pause (no threat, on its own feet, not carrying, not
+playing with something), faster when it is idle, and a goof relieves it.
+Playing is worth what the action is: an enemy trading shots with it is
+worth all of it, so a goof never wins mid-fight; an enemy in sight who is
+goofing is worth less, so a bot facing someone who stopped fighting may
+goof back now and then, and holds its fire while it does. When goof wins, the bot does something
 idle for about 2 s, each an ordinary player action through the player's
 own path: look at a player in sight, strike an emote (`Command::Emote`:
 love, hate, confusion, alarm), hop, run a small circle, walk a short
@@ -669,7 +675,10 @@ costs, so it steps out, where there is floor to step to). Crew of one vehicle ne
 each other; a seat stays the claim's to arbitrate. Socially, an objective
 is worth more as the team trails; idle flavours grow likelier with the
 share of the players a bot sees goofing, less those it sees playing, a
-person counting `mood_human`, capped; and an option it saw work for a
+person counting `mood_human`, capped. Bots and people are read the same
+way, by what they visibly do: a goof is a bot's published flavour or a
+person's emote, spray can or other tool that does not attack; play is
+moving with purpose, attacking or holding something; and an option it saw work for a
 teammate (a hit) scores a little more for a while (`copy`, fading over
 the surprise `effectiveness_seconds`), with boredom as the brake. A choice
 the terms changed may be said in team chat, keyed by the term that moved

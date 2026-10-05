@@ -22,11 +22,16 @@ pub struct WeaponView {
     pub drops: Vec<bri_weapons::Drop>,
 }
 impl WeaponView {
-    /// Projectiles something fired, without the spawn and death effects
-    /// that ride the same projectile system (as in v20).
+    /// Projectiles something fired, without the spawn, death and alarm
+    /// emote effects that ride the same projectile system (as in v20).
     pub fn fired(&self) -> impl Iterator<Item = &bri_weapons::Projectile> {
         self.projectiles.iter().filter(|p| {
-            p.definition != super::SPAWN_PROJECTILE && p.definition != super::DEATH_PROJECTILE
+            ![
+                super::SPAWN_PROJECTILE,
+                super::DEATH_PROJECTILE,
+                super::combat::ALARM_PROJECTILE,
+            ]
+            .contains(&p.definition.as_str())
         })
     }
     pub fn validate(&self, names: &BTreeMap<OwnerId, String>) -> Result<()> {

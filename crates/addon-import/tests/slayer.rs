@@ -2470,7 +2470,10 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     g.steps(120);
     assert!(!g.s.vitals()[&bot].alive, "not yet");
     g.steps(150 + 180);
-    assert!(g.s.vitals()[&bot].alive, "back after two seconds and its wait");
+    assert!(
+        g.s.vitals()[&bot].alive,
+        "back after two seconds and its wait"
+    );
 
     // A player joining sends a bot of their team away.
     let c =

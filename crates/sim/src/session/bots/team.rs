@@ -433,10 +433,8 @@ impl Session {
         mood
     }
 
-    /// The mood pull on `bot` at `at`, its eye at `eye`: each bot's
-    /// published flavour or work, and a person's visible goof (an emote in
-    /// the last `EMOTED` ticks) or play (firing, holding something, moving
-    /// faster than `PURPOSE`); only those it has in sight count.
+    /// The mood pull on `bot` at `at`, its eye at `eye`: what each player
+    /// it has in sight is visibly doing ([`Self::seen_doing`]).
     pub(super) fn team_mood(
         &self,
         bot: OwnerId,
@@ -444,9 +442,6 @@ impl Session {
         eye: Vec3,
         tick: u64,
     ) -> (f32, [f32; 11]) {
-        const EMOTED: u64 = 240;
-        /// Faster than a stroll, in world units a second: going somewhere.
-        const PURPOSE: f32 = 3.0;
         let Some(brain) = self.bots.brains.get(&bot) else {
             return (0.0, [0.0; 11]);
         };
@@ -461,34 +456,70 @@ impl Session {
             let seen = self
                 .bot_sees_player(bot, *o, eye, radius, SightUrgency::Ordinary)
                 .is_some();
-            if self.bots.is_bot(*o) {
-                let i = intents.get(o)?;
-                let what = match i.flavour {
-                    Some(f) => Doing::Goof(f),
-                    None if i.option != Behaviour::Wander as u8 => Doing::Play,
-                    None => Doing::Idle,
-                };
-                return Some((*o, feet, what, 1.0, seen));
-            }
-            let emoted = p
-                .combat
-                .voice
-                .is_some_and(|t| tick.saturating_sub(t) < EMOTED);
-            let moving = flat(Vec3::from(p.player.state().velocity)).length() > PURPOSE;
-            let firing = self
-                .weapons
-                .actor(ActorId(*o))
-                .is_some_and(|a| a.trigger_held());
-            let what = if emoted {
-                Doing::Goof(1)
-            } else if moving || firing || self.held_by(*o).is_some() {
-                Doing::Play
+            let weight = if self.bots.is_bot(*o) {
+                1.0
             } else {
-                Doing::Idle
+                cfg.mood_human
             };
-            Some((*o, feet, what, cfg.mood_human, seen))
+            let what = self.seen_doing(*o, intents.get(o), tick)?;
+            Some((*o, feet, what, weight, seen))
         });
         mood(cfg, bot, at, radius, others)
+    }
+
+    /// What anyone visibly does, bot or person alike: a goof (a bot's
+    /// published flavour; a person's emote in the last `EMOTED` ticks, or
+    /// a trigger held on something that does not attack, a spray can or
+    /// another tool), play (moving faster than `PURPOSE`, attacking,
+    /// holding something), or nothing much. A bot with no intent published
+    /// yet is unknown.
+    pub(super) fn seen_doing(
+        &self,
+        who: OwnerId,
+        intent: Option<&Intent>,
+        tick: u64,
+    ) -> Option<Doing> {
+        const EMOTED: u64 = 240;
+        /// Faster than a stroll, in world units a second: going somewhere.
+        const PURPOSE: f32 = 3.0;
+        let p = self.peers.get(&who)?;
+        if self.bots.is_bot(who) {
+            let i = intent?;
+            return Some(match i.flavour {
+                Some(f) => Doing::Goof(f),
+                None if i.option != Behaviour::Wander as u8 => Doing::Play,
+                None => Doing::Idle,
+            });
+        }
+        let emoted = p
+            .combat
+            .voice
+            .is_some_and(|t| tick.saturating_sub(t) < EMOTED);
+        let moving = flat(Vec3::from(p.player.state().velocity)).length() > PURPOSE;
+        let hand = self.weapons.actor(ActorId(who));
+        let firing = hand.is_some_and(|a| a.trigger_held());
+        let attacking = firing
+            && hand.is_some_and(|a| {
+                let scale = p.player.state().scale;
+                a.selected
+                    .and_then(|s| a.inventory.get(s)?.as_deref())
+                    .is_some_and(|item| hand_combat::item_attacks(self, item, scale))
+            });
+        let spraying = self
+            .weapons
+            .image_state(ActorId(who), 0)
+            .is_some_and(|(image, _)| image.id == super::super::tools::SPRAY_CAN_IMAGE);
+        Some(if emoted {
+            Doing::Goof(surprise::Flavour::Emote as u8)
+        } else if firing && spraying {
+            Doing::Goof(surprise::Flavour::Spray as u8)
+        } else if firing && !attacking {
+            Doing::Goof(surprise::Flavour::Tool as u8)
+        } else if moving || attacking || self.held_by(who).is_some() {
+            Doing::Play
+        } else {
+            Doing::Idle
+        })
     }
 
     /// Allies that see `bot` and its `worked` options succeed take a liking

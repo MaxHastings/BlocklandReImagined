@@ -139,12 +139,6 @@ const RULES_RESPAWN: (f32, f32) = (0.3, 1.5);
 const BRICK_RESPAWN: (f32, f32) = (0.75, 1.75);
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
-/// Ticks without progress before a bot plans again.
-const STUCK_TICKS: u32 = 45;
-/// How many ticks earlier than the 40th a stuck bot may hop, by its own
-/// seeded phase: bots hop apart, and each still hops before it replans at
-/// `STUCK_TICKS`.
-const HOP_SPREAD: u64 = 5;
 /// Within this of the point its objective takes it to, a bot is at its
 /// post, and playing is worth what it watches there (`View::aim`).
 const ON_OBJECTIVE: f32 = 6.0;
@@ -160,8 +154,8 @@ const LULL_PLAY: f32 = surprise::LULL;
 /// objective that wants one beaten but none in sight.
 const RETURN_PLAY: f32 = 0.8;
 const PRESSED_PLAY: f32 = 0.85;
-/// How far ahead a fighter's step looks for a portal it would go through.
-const FIGHT_PORTAL_REACH: f32 = 0.8;
+/// How far ahead a step looks for a portal it would go through.
+const PORTAL_REACH: f32 = 0.8;
 /// The pitch of a bot looking at what it handles (an emote, a tool).
 const LOOK_DOWN: f32 = -0.3;
 /// Plans in a row that got stuck before a bot drops its goal.
@@ -204,9 +198,6 @@ const BOT_EMOTES: [&str; 4] = ["hug", "love", "hate", "confusion"];
 /// Running and gunning, the farthest off its way (cosine) an enemy is shot
 /// at: about 105 degrees, where sideways speed still holds.
 const GUN_BEHIND_COS: f32 = -0.26;
-/// Ticks pressing at a waypoint within a step without moving before it is
-/// taken as reached.
-const WEDGED_TICKS: u32 = 30;
 /// Over how many units past the edge of its stroll a brick bot's urge to
 /// walk home grows to full.
 const STRAY: f32 = 4.0;
@@ -312,12 +303,8 @@ struct Brain {
     chase_feet: Option<Vec3>,
     segment_anchor: Vec3,
     next_wander: u64,
-    last_position: Vec3,
-    stuck: u32,
-    /// Ticks in a row it pressed on without getting anywhere across, hops
-    /// and all.
-    wedged: u32,
-    /// The walk leg's net progress (`route::Progress`).
+    /// The walk leg's net progress (`route::Progress`): the one judge of
+    /// whether it is stuck.
     progress: crate::route::Progress,
     replans: u32,
     /// Current aim, turned toward the wanted one at the kind's rate.
@@ -468,9 +455,6 @@ impl Brain {
             chase_feet: None,
             segment_anchor: home,
             next_wander: 0,
-            last_position: home,
-            stuck: 0,
-            wedged: 0,
             progress: crate::route::Progress::default(),
             replans: 0,
             yaw: 0.0,
@@ -556,7 +540,7 @@ impl Brain {
             self.plan.clear();
             self.search = None;
             self.replans = 0;
-            self.stuck = 0;
+            self.progress.reset();
             self.settled = false;
             self.partial_route = false;
         }
@@ -2471,14 +2455,8 @@ impl Session {
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
             brain.leash = feet;
-            brain.last_position = feet;
             (leash, chase_radius) = brain.pursuit(driving.is_some());
         }
-        let moved = feet.distance(brain.last_position);
-        // Across: a bot hopping against what blocks it moves up and down
-        // but gets nowhere.
-        let moved_across = flat(feet - brain.last_position).length();
-        brain.last_position = feet;
         if brain.sequence == 0 {
             brain.yaw = state.yaw;
         }
@@ -3017,11 +2995,11 @@ impl Session {
                 } else {
                     0.4
                 };
-                // One it presses against without moving, within a step of
-                // it (wedged on a door jamb), it takes as reached, if more
-                // of the route follows. (Not on the way to work a body or a
-                // brick: pressing against those is the work.)
-                let wedged = brain.wedged > WEDGED_TICKS
+                // One it got nowhere toward, within a step of it (wedged
+                // on a door jamb), it takes as reached, if more of the
+                // route follows. (Not on the way to work a body or a brick:
+                // pressing against those is the work.)
+                let wedged = brain.progress.stalls() > 0
                     && brain.plan.len() > 1
                     && flat(d).length() < 1.0
                     && !matches!(brain.goal, Some(Goal::Objective(_) | Goal::Interact(_)));
@@ -3041,8 +3019,6 @@ impl Session {
                 };
                 if reached {
                     brain.plan.remove(0);
-                    brain.stuck = 0;
-                    brain.wedged = 0;
                     // Reaching a waypoint is getting somewhere.
                     brain.progress.reset();
                 } else {
@@ -3191,8 +3167,9 @@ impl Session {
         // at its post, on its way to it) wins easily; far from the action,
         // waiting, or with nothing to do, playing is worth little and a
         // goof wins now and then. Only what makes a goof impossible rules
-        // it out: fighting or flying, hurt just now (urgent), holding
-        // something, carrying the objective, or off its feet.
+        // it out: hurt just now (urgent), playing with or holding
+        // something, carrying the objective, or off its feet. A fight
+        // rules it out only by being worth all of playing.
         let idle = behaviour == Behaviour::Wander && objective.is_none();
         let action = |d: f32| {
             let t = ((d - ACTION_NEAR) / (ACTION_FAR - ACTION_NEAR)).clamp(0.0, 1.0);
@@ -3213,18 +3190,30 @@ impl Session {
         if selected_objective.is_some_and(|v| v.enemy.is_some()) {
             play = play.max(PRESSED_PLAY);
         }
+        // An enemy in sight is the action as far as it plays along: one
+        // trading shots with it is the action itself; one goofing (an
+        // emote, a spray can) is still an enemy, but playing it is worth
+        // less, so over time a goof may answer in kind.
         if let Some(seen) = sight.target {
-            play = play.max(action(flat(seen.feet - feet).length()));
+            let intent = self
+                .bots
+                .claims
+                .intents(tick)
+                .find(|(o, _)| *o == seen.owner);
+            play = play.max(
+                match self.seen_doing(seen.owner, intent.as_ref().map(|(_, i)| i), tick) {
+                    Some(team::Doing::Goof(_)) => PRESSED_PLAY,
+                    _ if behaviour == Behaviour::Fight => 1.0,
+                    _ => action(flat(seen.feet - feet).length()),
+                },
+            );
         } else if self.bots.brains[&bot].memory.is_some() {
             play = play.max(PRESSED_PLAY);
         }
         // Idle play with a body (Interact) is already the bot's fun: a goof
         // would stand it still beside the ball it came to push.
         let natural = threat.is_none()
-            && !matches!(
-                behaviour,
-                Behaviour::Fight | Behaviour::Interact | Behaviour::Carry
-            )
+            && !matches!(behaviour, Behaviour::Interact | Behaviour::Carry)
             && !holding
             && driving.is_none()
             // A swimmer's idle hops and walks would take it out of its
@@ -3390,7 +3379,8 @@ impl Session {
             if grabbing && enemy.is_some() && driving.is_none() {
                 fire = true;
             }
-            if tick < brain.next_grab {
+            // A goof is not an attack.
+            if tick < brain.next_grab || brain.surprise.flavour().is_some() {
                 fire = false;
             }
         } else if let Some(at) = glance {
@@ -3457,6 +3447,8 @@ impl Session {
             // until it has room to stand).
             input.crouch = next.crouch && flat(next.feet - feet).length() < 1.6;
         }
+        // Where its route alone would take it this tick.
+        let routed = direction;
         if let Some(push) = pushing {
             direction = push;
         }
@@ -3659,15 +3651,6 @@ impl Session {
         {
             direction = flat(out - feet).normalize_or_zero();
         }
-        // A fight's footwork never steps through a portal (`passage`):
-        // going after someone through one is a chase's move.
-        if behaviour == Behaviour::Fight && direction != Vec3::ZERO {
-            let from = feet + Vec3::Y * 0.9;
-            let to = from + flat(direction).normalize_or_zero() * FIGHT_PORTAL_REACH;
-            if self.simulation.passages().first(from, to).is_some() {
-                direction = Vec3::ZERO;
-            }
-        }
         if let Some(to) = act.direction {
             direction = to;
         }
@@ -3677,13 +3660,23 @@ impl Session {
         if extra.stand {
             direction = Vec3::ZERO;
         }
+        // It steps through a portal (`passage`) only where its route leads
+        // through one; footwork, a goof or a push never stumbles in.
+        if direction != routed && driving.is_none() && direction != Vec3::ZERO {
+            let from = feet + Vec3::Y * 0.9;
+            let to = from + flat(direction).normalize_or_zero() * PORTAL_REACH;
+            if self.simulation.passages().first(from, to).is_some() {
+                direction = Vec3::ZERO;
+            }
+        }
         if driving.is_none() && pushing.is_none() {
             direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);
         }
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
-        // Walking into something: hop, then plan again, then give up.
+        // Walking into something: hop, then plan again, then give up. One
+        // judge says whether it is getting anywhere.
         let trying = input.forward != 0.0 || input.right != 0.0;
         // Getting somewhere is net progress across a window (`route`), not
         // moving at an instant: wobbling on a roof's edge or between two
@@ -3699,7 +3692,7 @@ impl Session {
             && trying
             && pushing.is_none()
             && !at_work
-            && wanted.is_some_and(|w| w.mode == Mode::Walk);
+            && wanted.is_some_and(|w| matches!(w.mode, Mode::Walk | Mode::Swim));
         let stalled = walking
             && brain
                 .progress
@@ -3711,30 +3704,9 @@ impl Session {
             // The first window gone nowhere hops (off a body it stands on,
             // over what its shins catch); the next plans again.
             input.jump = true;
-        } else if stalled {
-            brain.stuck = brain.stuck.max(STUCK_TICKS + 1);
-        } else if driving.is_none() && trying && moved < 0.01 {
-            brain.stuck += 1;
-        } else {
-            brain.stuck = 0;
-        }
-        if driving.is_none() && trying && moved_across < 0.01 {
-            brain.wedged += 1;
-        } else {
-            brain.wedged = 0;
-        }
-        if driving.is_none()
-            && pushing.is_none()
-            && brain.stuck > 20
-            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP) % HOP_SPREAD)
-                % 40
-                < 5
-        {
-            input.jump = true;
         }
         let mut forget = false;
-        if brain.stuck > STUCK_TICKS && wanted.is_some() {
-            brain.stuck = 0;
+        if stalled && brain.progress.stalls() > 1 && wanted.is_some() {
             brain.replans += 1;
             // Stuck: what it was doing is not working.
             let cfg = &brain.kind.surprise;
@@ -4016,8 +3988,7 @@ impl Session {
         if let Some((_, at)) = brain.mount_anchor.as_mut() {
             *at = carry.transform_point3(*at);
         }
-        brain.last_position = carry.transform_point3(brain.last_position);
-        brain.stuck = 0;
+        brain.progress.reset();
         match brain.plan.iter().take(2).position(|w| w.through.is_some()) {
             Some(at) => {
                 brain.plan.drain(..at);

@@ -132,6 +132,8 @@ const MIN_RESPAWN_TICKS: u64 = 120;
 pub const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
 /// The effect a body leaves when it disappears.
 pub const DEATH_PROJECTILE: &str = "v20.projectile.deathprojectile";
+/// The alarm emote's flare (`serverCmdAlarm`).
+pub const ALARM_PROJECTILE: &str = "v20.projectile.alarmprojectile";
 const MAX_NOTICES: usize = 256;
 
 /// Per-player authoritative combat state.

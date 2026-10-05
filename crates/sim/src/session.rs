@@ -2130,7 +2130,7 @@ impl Session {
                     // `initialVelocity = "0 0 1"`, exploding on death.
                     "alarm" => {
                         let _ = self.weapons.spawn(
-                            "v20.projectile.alarmprojectile",
+                            combat::ALARM_PROJECTILE,
                             bri_weapons::ActorId(owner),
                             eye,
                             Vec3::Y,

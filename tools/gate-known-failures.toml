@@ -65,7 +65,7 @@ reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/
 [[failure]]
 test = "a_bot_jets_over_to_someone_above_it"
 owner = "v0.2.5 bot/test cleanup"
-reason = "The bot's jet climb to the 7-unit deck stalls near 4 units (the planner's flight estimate says it reaches); still open after v0.2.5's search fix."
+reason = "The bot's jet climb to the 7-unit deck stalls near 4 units (the planner's flight estimate says it reaches); the search half was fixed in v0.2.5; the climb is parked for after v0.2.5 (bots/next-version.md)."
 
 [[failure]]
 test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
@@ -85,7 +85,7 @@ reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on 
 [[failure]]
 test = "team_fill_bots_play_slayer_soccer_with_or_without_weapons"
 owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+reason = "Bots cannot read Slayer's Team(Brick) IncScore goal (an Add-On output: unsupported rule semantics), so they never score. The general fix adds a layer and is parked for after v0.2.5 (bots/next-version.md)."
 
 [[failure]]
 test = "the_fixed_save_corpus_hosts_like_the_game"
