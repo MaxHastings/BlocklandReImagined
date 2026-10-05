@@ -1902,8 +1902,9 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// each `MapLighting::lights` index's place among them (-1 for none); then
 /// the Dynamic mode's light cubes: 1 when a valid runtime cohort exists (kept
 /// during geometry refresh), first layer, faces
-/// per row and a face's share of a layer; face resolution and world texel
-/// per unit of distance; and each light's six face matrices.
+/// per row and a face's share of a layer; face resolution, world texel per
+/// unit of distance and the soft lights' bits (`shadow::soft_cube_mask`);
+/// and each light's six face matrices.
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
 const MAP_LIGHT_CUBES: usize =
     48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
@@ -2096,6 +2097,7 @@ impl MapLightBinding {
         settings: Option<crate::shadow::ShadowSettings>,
         ready: bool,
         drawn: &[(usize, usize, Mat4)],
+        soft: u32,
     ) {
         let mut header = [0.0f32; 8];
         if let Some(s) = settings.filter(|s| s.light_cubes) {
@@ -2109,7 +2111,7 @@ impl MapLightBinding {
                 size as f32 / s.resolution as f32,
                 size as f32,
                 2.0 * half / size as f32,
-                0.0,
+                f32::from_bits(soft),
                 0.0,
             ];
         }
@@ -3643,8 +3645,16 @@ impl SceneRenderer {
             for &(light, face, matrix) in &stale_cubes {
                 self.shadows.set_cube_matrix(queue, light, face, matrix);
             }
-            self.map_lights
-                .set_cubes(queue, self.shadows.settings, cubes_ready, &stale_cubes);
+            let soft = self.shadows.settings.map_or(0, |s| {
+                crate::shadow::soft_cube_mask(self.views[0].eye, &cube_lights, s.soft_cubes)
+            });
+            self.map_lights.set_cubes(
+                queue,
+                self.shadows.settings,
+                cubes_ready,
+                &stale_cubes,
+                soft,
+            );
         }
         // Per lamp slot, the static chunks within its reach: what its kept
         // faces draw, and how they tell a build changed there.

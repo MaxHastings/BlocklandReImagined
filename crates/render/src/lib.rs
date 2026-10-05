@@ -18,6 +18,7 @@ pub mod terrain_scene;
 pub mod testing;
 pub mod textured;
 pub mod timing;
+pub mod upscale;
 pub mod vignette;
 pub mod water_scene;
 pub mod world_shapes;
