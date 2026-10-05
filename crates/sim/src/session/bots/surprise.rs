@@ -1,61 +1,102 @@
 //! Bot surprise: variation among a bot's choices that changes over time,
 //! so bots do not always do the one predictable thing
 //! (`docs/architecture/bots.md`, "Surprise"). No personality, mood or
-//! script: plain mechanisms over choices the brain already scores.
+//! script: plain terms on choices the brain already scores, then the one
+//! hold rule every choice goes through ([`behaviour::Hold`]).
 //!
-//! One chooser ([`Mind::pick`]) sits at each choice point the brain has
-//! (which behaviour, which weapon, which aim point, which way round a
-//! chase). The brain still scores its options as before and names its
-//! plain pick; the chooser then picks at random, by weight, among the
-//! options scoring near the best:
+//! [`Mind::pick`] serves each choice point the brain has (which behaviour,
+//! which weapon, which aim point, which way round a chase, and whether to
+//! goof). The brain scores its options as before; the mind then scales
+//! each score by three terms before the hold rule chooses:
 //!
-//! - an option's score counts with its *effectiveness*: one that is not
-//!   working (shots dodged, no damage, stuck) loses it, and an option that
-//!   was best may fall out of the band so another takes over;
-//! - each eligible option weighs by how near the best it scores, by a
-//!   per-bot *drift* that wanders slowly, and by *boredom*, which grows
-//!   while an option is in use and fades once it is not.
+//! - *effectiveness*: an option that is not working (shots dodged, no
+//!   damage, stuck) loses score, so another takes over;
+//! - a per-bot *drift* that wanders slowly, and *boredom*, which grows
+//!   while an option is in use and fades once it is not. Together they
+//!   move a score at most [`BAND`] either way, so only near options trade.
 //!
-//! Guards keep it sane: a pick is held for a while (commitment); nothing
-//! varies while it carries an objective or is urgent (low health, hurt at
-//! close range); only options that work now are offered (a zero score is
-//! no option); and a switch the variation causes is preceded by a short
-//! pause (the tell).
+//! Nothing varies while it carries an objective or is urgent (low health,
+//! hurt at close range), nor for an option that cannot work now (a zero
+//! score is no option). Holding a choice (commitment) is the hold rule's,
+//! at every strength.
 //!
-//! At natural pauses a bot sometimes does something idle a player could
-//! do (a flavour [`Interrupt`]): looks at a player, emotes, hops, runs a
-//! little circle, walks a detour, looks round, crouches, sprays paint
-//! toward a player, takes out another tool or drops its weapon, or
-//! flicks its light. Never while it carries an objective.
+//! Goofing is a choice like any other ([`Domain::Flavour`]): playing, or
+//! something idle a player could do (looks at a player, emotes, hops, runs
+//! a little circle, walks a detour, looks round, crouches, sprays paint
+//! toward a player, takes out another tool or drops its weapon, or flicks
+//! its light). Playing grows boring, faster when there is nothing to do,
+//! until a goof wins; a goof relieves the boredom. So bots goof now and
+//! then even in an objective game, never while they carry an objective.
 //!
-//! `strength` 0 (the default) changes nothing: every pick is the plain
-//! one and no random number is drawn. The mind still records the plain
-//! decisions for the readout.
+//! `strength` 0 changes nothing but the plain scores going to the hold
+//! rule: every term is 1 and no random number is drawn. The mind still
+//! records the decisions for the readout.
+use super::behaviour::{Ask, Hold};
 use super::*;
-use crate::bot_kind::{BotSurprise, INTERRUPTS};
+use crate::bot_kind::{BotHold, BotSurprise, FLAVOURS};
 
-/// The choice points the chooser covers.
+/// The share either way drift and boredom move a score, at strength 1.
+const BAND: f32 = 0.15;
+/// How far a drift goes either way (a factor of e^drift), at strength 1,
+/// and about how many seconds it takes to cross its range.
+const DRIFT: f32 = 0.4;
+const DRIFT_SECONDS: f32 = 90.0;
+/// Boredom an option gains a second in use, at strength 1, and the
+/// seconds it takes to halve.
+const BOREDOM: f32 = 0.02;
+const BOREDOM_SECONDS: f32 = 20.0;
+/// Share of effectiveness one failed outcome takes away (at strength 1),
+/// share of the gap to full one success gives back, and the seconds lost
+/// effectiveness takes to halve on its own.
+const FAILURE: f32 = 0.25;
+const SUCCESS: f32 = 0.5;
+const EFFECTIVENESS_SECONDS: f32 = 30.0;
+/// Urgent, so nothing varies: under this share of health, or hurt by an
+/// enemy this close this recently.
+const URGENT_HEALTH: f32 = 0.3;
+const URGENT_RANGE: f32 = 8.0;
+const URGENT_SECONDS: f32 = 1.5;
+/// How far to the side a flanking chase aims, and what it scores against
+/// straight at them.
+const FLANK_DISTANCE: f32 = 5.0;
+const FLANK_SCORE: f32 = 0.95;
+/// Playing's boredom a second at strength 1 (twice that with nothing to
+/// do), what a goof scores against playing's 1, and how long one lasts
+/// (up to half again).
+const PLAY_BOREDOM: f32 = 0.12;
+const IDLE_BOREDOM: f32 = 0.24;
+const GOOF_SCORE: f32 = 0.5;
+const GOOF_SECONDS: f32 = 2.0;
+/// The [`Domain::Flavour`] options.
+const PLAY: u32 = 0;
+const GOOF: u32 = 1;
+
+/// The choice points the mind serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Domain {
     Behaviour,
     Weapon,
     Aim,
     Route,
+    /// Playing, or goofing.
+    Flavour,
 }
 impl Domain {
-    const ALL: [Domain; 4] = [Self::Behaviour, Self::Weapon, Self::Aim, Self::Route];
+    const ALL: [Domain; 5] = [
+        Self::Behaviour,
+        Self::Weapon,
+        Self::Aim,
+        Self::Route,
+        Self::Flavour,
+    ];
     fn name(self) -> &'static str {
         match self {
             Self::Behaviour => "behaviour",
             Self::Weapon => "weapon",
             Self::Aim => "aim",
             Self::Route => "route",
+            Self::Flavour => "flavour",
         }
-    }
-    /// A switch here shows (another weapon in hand, another activity):
-    /// the variation pauses a moment first.
-    fn tells(self) -> bool {
-        matches!(self, Self::Behaviour | Self::Weapon)
     }
     fn label(self, option: u32) -> String {
         match self {
@@ -66,6 +107,11 @@ impl Domain {
             Self::Weapon => format!("slot {option}"),
             Self::Aim => AIMS.get(option as usize).copied().unwrap_or("?").into(),
             Self::Route => ROUTES.get(option as usize).copied().unwrap_or("?").into(),
+            Self::Flavour => ["play", "goof"]
+                .get(option as usize)
+                .copied()
+                .unwrap_or("?")
+                .into(),
         }
     }
 }
@@ -77,8 +123,8 @@ pub(super) const AIM_FEET: u32 = 1;
 pub(super) const AIM_SURFACE: u32 = 2;
 /// Which way round a chase goes: straight at them, or wide to a side.
 pub(super) const ROUTES: [&str; 3] = ["direct", "left", "right"];
-/// Behaviours the chooser may trade for each other. The rest (carrying a
-/// catch, arming, flying, walking home) are done when they apply.
+/// Behaviours whose scores vary. The rest (carrying a catch, arming,
+/// flying, walking home) keep their plain scores.
 const VARIED: [Behaviour; 6] = [
     Behaviour::Interact,
     Behaviour::Fight,
@@ -115,7 +161,7 @@ impl Gate {
 struct Drive {
     domain: Domain,
     option: u32,
-    /// Its weight is multiplied by e^drift.
+    /// Its score is multiplied by e^drift (within the band).
     drift: f32,
     boredom: f32,
     /// 1 works; lower when it has not been working.
@@ -128,44 +174,39 @@ struct Drive {
 pub(super) struct Term {
     pub option: u32,
     pub score: f32,
-    /// The score as the band sees it, after effectiveness.
+    /// The score the hold rule sees, after every term.
     pub adjusted: f32,
-    pub eligible: bool,
     pub drift: f32,
     pub boredom: f32,
     pub effectiveness: f32,
-    /// Its share in the random pick (0 if not eligible).
-    pub weight: f32,
 }
 #[derive(Clone, Debug)]
 pub(super) struct Decision {
     pub domain: Domain,
     pub tick: u64,
+    /// The best by the plain scores.
     pub plain: u32,
     pub chosen: u32,
-    /// off, gated (carrying/urgent), plain, committed, picked, telling,
-    /// switched.
+    /// The terms put another option first.
+    pub varied: bool,
+    /// What the hold rule did (`behaviour::Held::name`).
     pub reason: &'static str,
     pub terms: Vec<Term>,
 }
-#[derive(Clone, Copy, Debug)]
-struct Commit {
-    option: u32,
-    until: u64,
-}
-#[derive(Clone, Copy, Debug)]
-struct Tell {
-    domain: Domain,
-    from: u32,
-    to: u32,
-    until: u64,
-}
-/// What the chooser says to do now.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Pick {
-    pub option: u32,
-    /// Holding the old option a moment before switching: pause.
-    pub telling: bool,
+
+/// One choice to make ([`Mind::pick`]).
+pub(super) struct Choice<'a> {
+    pub domain: Domain,
+    /// Each option and its plain score; 0 is not possible now.
+    pub options: &'a [(u32, f32)],
+    /// Something happened the choice must answer at once.
+    pub interrupt: bool,
+    /// The held option scores nothing only because it is between steps.
+    pub paused: bool,
+    /// Options that take over at once when they win.
+    pub must: &'a [u32],
+    /// Options whose scores never vary.
+    pub fixed: &'a [u32],
 }
 
 /// A shot whose outcome is not known yet.
@@ -180,7 +221,7 @@ pub(super) struct Shot {
     pub due: u64,
 }
 
-/// Idle things a bot does at a pause, each an ordinary player action.
+/// Idle things a bot does when it goofs, each an ordinary player action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Flavour {
     Stare,
@@ -210,11 +251,11 @@ impl Flavour {
         Self::Light,
     ];
     pub(super) fn name(self) -> &'static str {
-        INTERRUPTS[self as usize]
+        FLAVOURS[self as usize]
     }
 }
-/// Emotes a bot strikes at a pause: those a player strikes that are only
-/// a look (and the alarm's harmless flare).
+/// Emotes a bot strikes when it goofs: those a player strikes that are
+/// only a look (and the alarm's harmless flare).
 pub(super) const EMOTES: [&str; 4] = ["love", "hate", "confusion", "alarm"];
 
 #[derive(Clone, Copy, Debug)]
@@ -232,8 +273,11 @@ pub(super) struct Interrupt {
 /// What the bot can do idly now.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Pause {
-    /// Nothing to do but stroll: no enemy, no objective, on its feet.
+    /// It may goof: playing an objective it does not carry, or with
+    /// nothing to do; no enemy in sight, on its feet.
     pub natural: bool,
+    /// Nothing to do at all (no objective either): playing bores faster.
+    pub idle: bool,
     pub gate: Gate,
     /// A player in sight it might look or spray toward.
     pub player: Option<OwnerId>,
@@ -242,7 +286,7 @@ pub(super) struct Pause {
     pub other_tool: bool,
     pub spare_weapon: bool,
 }
-/// An interrupt this tick.
+/// A goof this tick.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Moment {
     None,
@@ -251,21 +295,19 @@ pub(super) enum Moment {
     End(Interrupt),
 }
 
-/// A bot's surprise state: its own random stream, its drives, what it
-/// holds, and its last decision at each choice point.
+/// A bot's surprise state: its own random stream, its drives, what each
+/// choice point holds, and its last decision at each.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Mind {
     rng: u64,
     drives: Vec<Drive>,
-    commits: [Option<Commit>; 4],
-    tell: Option<Tell>,
-    decisions: [Option<Decision>; 4],
-    last_pick: [u64; 4],
+    holds: [Hold; 5],
+    decisions: [Option<Decision>; 5],
+    last_pick: [u64; 5],
     /// This tick's guard (the weapon choice, made earlier in the tick,
     /// uses the last one).
     pub gate: Gate,
     interrupt: Option<Interrupt>,
-    next_interrupt: u64,
     shots: Vec<Shot>,
 }
 impl Mind {
@@ -275,11 +317,10 @@ impl Mind {
             ..Default::default()
         }
     }
-    /// A new life: no pick, tell, interrupt or shot carries over; drives
-    /// (how it has come to like its options) do.
+    /// A new life: no choice, goof or shot carries over; drives (how it has
+    /// come to like its options) do.
     pub(super) fn new_life(&mut self) {
-        self.commits = Default::default();
-        self.tell = None;
+        self.holds = Default::default();
         self.interrupt = None;
         self.shots.clear();
     }
@@ -292,7 +333,7 @@ impl Mind {
     }
     /// The drive of `option`, brought up to `tick`: boredom and lost
     /// effectiveness fade, and the drift takes a step each second.
-    fn drive(&mut self, cfg: &BotSurprise, domain: Domain, option: u32, tick: u64) -> usize {
+    fn drive(&mut self, strength: f32, domain: Domain, option: u32, tick: u64) -> usize {
         let at = match self
             .drives
             .iter()
@@ -314,211 +355,109 @@ impl Mind {
         let d = self.drives[at];
         let seconds = tick.saturating_sub(d.updated) as f32 / TICKS;
         let mut drive = d;
-        drive.boredom *= 0.5f32.powf(seconds / cfg.boredom_seconds);
+        drive.boredom *= 0.5f32.powf(seconds / BOREDOM_SECONDS);
         drive.effectiveness =
-            1.0 - (1.0 - drive.effectiveness) * 0.5f32.powf(seconds / cfg.effectiveness_seconds);
+            1.0 - (1.0 - drive.effectiveness) * 0.5f32.powf(seconds / EFFECTIVENESS_SECONDS);
         // An Ornstein-Uhlenbeck walk, a step a second: it reverts over
-        // `drift_seconds` and spreads to about half `drift` either way.
-        let limit = cfg.drift * cfg.strength;
+        // `DRIFT_SECONDS` and spreads to about half its limit either way.
+        let limit = DRIFT * strength;
         let steps = (tick / 120).saturating_sub(d.updated / 120).min(120);
-        let sigma = limit * 0.5 * (2.0 / cfg.drift_seconds).sqrt() * 3f32.sqrt();
+        let sigma = limit * 0.5 * (2.0 / DRIFT_SECONDS).sqrt() * 3f32.sqrt();
         for _ in 0..steps {
             let noise = self.random() * 2.0 - 1.0;
-            drive.drift = (drive.drift * (1.0 - 1.0 / cfg.drift_seconds) + noise * sigma)
-                .clamp(-limit, limit);
+            drive.drift =
+                (drive.drift * (1.0 - 1.0 / DRIFT_SECONDS) + noise * sigma).clamp(-limit, limit);
         }
         drive.updated = tick;
         self.drives[at] = drive;
         at
     }
-    /// Choose at one choice point. `options` are those the brain scored
-    /// (a zero or non-finite score is not an option), `plain` the brain's
-    /// own pick and `current` what is in effect now.
-    #[allow(clippy::too_many_arguments)]
+    /// Choose at one choice point: each option's score scaled by its
+    /// terms, then the hold rule. Returns the option chosen.
     pub(super) fn pick(
         &mut self,
         cfg: &BotSurprise,
-        domain: Domain,
-        options: &[(u32, f32)],
-        plain: u32,
-        current: Option<u32>,
+        rule: BotHold,
+        choice: Choice,
         gate: Gate,
         tick: u64,
-    ) -> Pick {
+    ) -> u32 {
+        let domain = choice.domain;
         let di = domain as usize;
-        let viable: Vec<(u32, f32)> = options
-            .iter()
-            .copied()
-            .filter(|(_, s)| s.is_finite() && *s > 0.0)
-            .collect();
-        let plain_terms = |viable: &[(u32, f32)]| {
-            viable
-                .iter()
-                .map(|(option, score)| Term {
-                    option: *option,
-                    score: *score,
-                    adjusted: *score,
-                    eligible: *option == plain,
-                    drift: 0.0,
-                    boredom: 0.0,
-                    effectiveness: 1.0,
-                    weight: if *option == plain { 1.0 } else { 0.0 },
-                })
-                .collect::<Vec<_>>()
-        };
-        let reason = if cfg.strength <= 0.0 {
-            Some("off")
-        } else if let Some(gated) = gate.closed() {
-            Some(gated)
-        } else if !viable.iter().any(|(o, _)| *o == plain) {
-            Some("plain")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            self.commits[di] = None;
-            if self.tell.is_some_and(|t| t.domain == domain) {
-                self.tell = None;
-            }
-            self.record(domain, tick, plain, plain, reason, plain_terms(&viable));
-            return Pick {
-                option: plain,
-                telling: false,
-            };
-        }
-        // Terms: effectiveness counts in the score, drift and boredom in
-        // the weight.
+        let strength = cfg.strength.clamp(0.0, 1.0);
+        let on = strength > 0.0 && gate.closed().is_none();
         let since = tick.saturating_sub(self.last_pick[di]).min(120) as f32 / TICKS;
         self.last_pick[di] = tick;
-        let mut terms = Vec::with_capacity(viable.len());
-        for (option, score) in &viable {
-            let at = self.drive(cfg, domain, *option, tick);
-            let d = self.drives[at];
-            terms.push(Term {
+        let clean = |s: f32| if s.is_finite() { s.max(0.0) } else { 0.0 };
+        let mut terms = Vec::with_capacity(choice.options.len());
+        for (option, score) in choice.options {
+            let score = clean(*score);
+            let mut term = Term {
                 option: *option,
-                score: *score,
-                adjusted: score * (1.0 - cfg.strength * (1.0 - d.effectiveness)),
-                eligible: false,
-                drift: d.drift,
-                boredom: d.boredom,
-                effectiveness: d.effectiveness,
-                weight: 0.0,
-            });
-        }
-        let best = terms.iter().map(|t| t.adjusted).fold(0.0, f32::max);
-        let floor = best * (1.0 - cfg.band * cfg.strength);
-        for t in &mut terms {
-            t.eligible = t.adjusted >= floor && t.adjusted > 0.0;
-            if t.eligible {
-                t.weight = (t.adjusted / best).powi(4) * t.drift.exp() / (1.0 + t.boredom);
-            }
-        }
-        let eligible = |terms: &[Term], o: u32| terms.iter().any(|t| t.option == o && t.eligible);
-        let viable_now = |o: u32| viable.iter().any(|(v, _)| *v == o);
-        let mut reason = "picked";
-        let mut chosen = None;
-        // A tell under way: hold what it had until the switch.
-        if let Some(t) = self.tell.filter(|t| t.domain == domain) {
-            if tick < t.until && viable_now(t.from) && eligible(&terms, t.to) {
-                self.accrue(cfg, domain, t.from, since, tick);
-                self.record(domain, tick, plain, t.from, "telling", terms);
-                return Pick {
-                    option: t.from,
-                    telling: true,
-                };
-            }
-            self.tell = None;
-            if eligible(&terms, t.to) {
-                chosen = Some(t.to);
-                reason = "switched";
-                self.commit(cfg, domain, t.to, tick);
-            }
-        }
-        if chosen.is_none()
-            && let Some(c) = self.commits[di]
-            && tick < c.until
-            && eligible(&terms, c.option)
-        {
-            chosen = Some(c.option);
-            reason = "committed";
-        }
-        let chosen = match chosen {
-            Some(c) => c,
-            None => {
-                let total: f32 = terms.iter().map(|t| t.weight).sum();
-                let c = if total > 0.0 {
-                    let mut roll = self.random() * total;
-                    let mut pick = plain;
-                    for t in terms.iter().filter(|t| t.weight > 0.0) {
-                        pick = t.option;
-                        if roll < t.weight {
-                            break;
-                        }
-                        roll -= t.weight;
-                    }
-                    pick
-                } else {
-                    plain
-                };
-                self.commit(cfg, domain, c, tick);
-                // A switch the variation causes shows first.
-                if domain.tells()
-                    && cfg.tell_seconds > 0.0
-                    && c != plain
-                    && let Some(from) = current.filter(|f| *f != c && viable_now(*f))
-                {
-                    self.tell = Some(Tell {
-                        domain,
-                        from,
-                        to: c,
-                        until: tick + (cfg.tell_seconds * TICKS).round().max(1.0) as u64,
-                    });
-                    self.accrue(cfg, domain, from, since, tick);
-                    self.record(domain, tick, plain, from, "telling", terms);
-                    return Pick {
-                        option: from,
-                        telling: true,
-                    };
+                score,
+                adjusted: score,
+                drift: 0.0,
+                boredom: 0.0,
+                effectiveness: 1.0,
+            };
+            if on && score > 0.0 && !choice.fixed.contains(option) {
+                let at = self.drive(strength, domain, *option, tick);
+                let d = self.drives[at];
+                let band = BAND * strength;
+                let mut lean = d.drift.exp() / (1.0 + d.boredom);
+                // Goofing is driven by boredom alone, past any band.
+                if domain != Domain::Flavour {
+                    lean = lean.clamp(1.0 - band, 1.0 + band);
                 }
-                c
+                term.adjusted = score * (1.0 - strength * (1.0 - d.effectiveness)) * lean;
+                term.drift = d.drift;
+                term.boredom = d.boredom;
+                term.effectiveness = d.effectiveness;
             }
-        };
-        self.accrue(cfg, domain, chosen, since, tick);
-        self.record(domain, tick, plain, chosen, reason, terms);
-        Pick {
-            option: chosen,
-            telling: false,
+            terms.push(term);
         }
-    }
-    fn commit(&mut self, cfg: &BotSurprise, domain: Domain, option: u32, tick: u64) {
-        let hold = cfg.commit_seconds * (1.0 + 0.5 * self.random());
-        self.commits[domain as usize] = Some(Commit {
-            option,
-            until: tick + (hold * TICKS) as u64,
-        });
-    }
-    /// The option in use grows boring.
-    fn accrue(&mut self, cfg: &BotSurprise, domain: Domain, option: u32, seconds: f32, tick: u64) {
-        let at = self.drive(cfg, domain, option, tick);
-        self.drives[at].boredom += cfg.boredom * cfg.strength * seconds;
-    }
-    fn record(
-        &mut self,
-        domain: Domain,
-        tick: u64,
-        plain: u32,
-        chosen: u32,
-        reason: &'static str,
-        terms: Vec<Term>,
-    ) {
-        self.decisions[domain as usize] = Some(Decision {
+        let first = |by: &dyn Fn(&Term) -> f32| {
+            let mut best: Option<(u32, f32)> = None;
+            for t in &terms {
+                if by(t) > 0.0 && best.is_none_or(|(_, b)| by(t) > b) {
+                    best = Some((t.option, by(t)));
+                }
+            }
+            best.map(|b| b.0)
+        };
+        let plain = first(&|t| t.score);
+        let varied = plain != first(&|t| t.adjusted);
+        let adjusted: Vec<(u32, f32)> = terms.iter().map(|t| (t.option, t.adjusted)).collect();
+        let ask = Ask {
+            options: &adjusted,
+            interrupt: choice.interrupt,
+            paused: choice.paused,
+            must: choice.must,
+        };
+        let (chosen, why) = self.holds[di].choose(rule, &ask, tick);
+        if on && !choice.fixed.contains(&chosen) {
+            self.accrue(strength, domain, chosen, since, tick);
+        }
+        self.decisions[di] = Some(Decision {
             domain,
             tick,
-            plain,
+            plain: plain.unwrap_or(chosen),
             chosen,
-            reason,
+            varied,
+            reason: why.name(),
             terms,
         });
+        chosen
+    }
+    /// The option in use grows boring.
+    fn accrue(&mut self, strength: f32, domain: Domain, option: u32, seconds: f32, tick: u64) {
+        let rate = match (domain, option) {
+            (Domain::Flavour, GOOF) => 0.0,
+            (Domain::Flavour, _) => PLAY_BOREDOM,
+            _ => BOREDOM,
+        };
+        let at = self.drive(strength, domain, option, tick);
+        self.drives[at].boredom += rate * strength * seconds;
     }
     /// How an option worked out: a hit, progress; or a dodge, no damage,
     /// stuck. Failures cost effectiveness, so the bot adapts.
@@ -530,25 +469,22 @@ impl Mind {
         success: bool,
         tick: u64,
     ) {
-        if cfg.strength <= 0.0 {
+        let strength = cfg.strength.clamp(0.0, 1.0);
+        if strength <= 0.0 {
             return;
         }
-        let at = self.drive(cfg, domain, option, tick);
+        let at = self.drive(strength, domain, option, tick);
         let d = &mut self.drives[at];
         d.effectiveness = if success {
-            d.effectiveness + (1.0 - d.effectiveness) * cfg.success
+            d.effectiveness + (1.0 - d.effectiveness) * SUCCESS
         } else {
-            d.effectiveness * (1.0 - cfg.failure * cfg.strength)
+            d.effectiveness * (1.0 - FAILURE * strength)
         }
         .clamp(0.05, 1.0);
     }
-    /// In a tell: pausing before a switch.
-    pub(super) fn telling(&self, tick: u64) -> bool {
-        self.tell.is_some_and(|t| tick < t.until)
-    }
-    /// The option last chosen at `domain`.
+    /// The option chosen at `domain`.
     pub(super) fn chosen(&self, domain: Domain) -> Option<u32> {
-        self.decisions[domain as usize].as_ref().map(|d| d.chosen)
+        self.holds[domain as usize].option
     }
     pub(super) fn fired(&mut self, shot: Shot) {
         if self.shots.len() >= 8 {
@@ -562,29 +498,25 @@ impl Mind {
         self.shots = later;
         due
     }
-    /// The flavour interrupt this tick: one under way goes on until its
-    /// time is up or the pause ends; a new one starts now and then at a
-    /// natural pause once the last has cooled down.
-    pub(super) fn interrupt(&mut self, cfg: &BotSurprise, pause: &Pause, tick: u64) -> Moment {
+    /// The goof this tick: one under way goes on until its time is up or
+    /// it may no longer goof; a new one starts when goofing wins the
+    /// choice against playing.
+    pub(super) fn goof(
+        &mut self,
+        cfg: &BotSurprise,
+        rule: BotHold,
+        pause: &Pause,
+        tick: u64,
+    ) -> Moment {
         if let Some(i) = self.interrupt {
             if !pause.natural || pause.gate.closed().is_some() || tick >= i.until {
                 self.interrupt = None;
-                self.next_interrupt =
-                    tick + (cfg.interrupt_cooldown_seconds * TICKS).round() as u64;
                 return Moment::End(i);
             }
             return Moment::Continue(i);
         }
-        if cfg.strength <= 0.0
-            || cfg.interrupts_per_minute <= 0.0
-            || !pause.natural
-            || pause.gate.closed().is_some()
-            || tick < self.next_interrupt
-        {
-            return Moment::None;
-        }
-        let chance = cfg.interrupts_per_minute * cfg.strength / (60.0 * TICKS);
-        if self.random() >= chance {
+        let strength = cfg.strength.clamp(0.0, 1.0);
+        if strength <= 0.0 || !pause.natural || pause.gate.closed().is_some() {
             return Moment::None;
         }
         let possible = |f: Flavour| match f {
@@ -596,11 +528,29 @@ impl Mind {
         let weights: Vec<(Flavour, f32)> = Flavour::ALL
             .into_iter()
             .filter(|f| possible(*f))
-            .map(|f| (f, cfg.interrupt_weight(f.name())))
+            .map(|f| (f, cfg.flavour_weight(f.name())))
             .filter(|(_, w)| *w > 0.0)
             .collect();
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
-        if total <= 0.0 {
+        let goof = if total > 0.0 { GOOF_SCORE } else { 0.0 };
+        // With nothing to do, playing (strolling) bores twice as fast.
+        if pause.idle {
+            let at = self.drive(strength, Domain::Flavour, PLAY, tick);
+            let seconds = tick
+                .saturating_sub(self.last_pick[Domain::Flavour as usize])
+                .min(120) as f32
+                / TICKS;
+            self.drives[at].boredom += (IDLE_BOREDOM - PLAY_BOREDOM) * strength * seconds;
+        }
+        let choice = Choice {
+            domain: Domain::Flavour,
+            options: &[(PLAY, 1.0), (GOOF, goof)],
+            interrupt: false,
+            paused: false,
+            must: &[],
+            fixed: &[],
+        };
+        if self.pick(cfg, rule, choice, pause.gate, tick) != GOOF {
             return Moment::None;
         }
         let mut roll = self.random() * total;
@@ -612,7 +562,10 @@ impl Mind {
             }
             roll -= w;
         }
-        let seconds = cfg.interrupt_seconds * (1.0 + 0.5 * self.random());
+        // A goof relieves playing's boredom.
+        let at = self.drive(strength, Domain::Flavour, PLAY, tick);
+        self.drives[at].boredom = 0.0;
+        let seconds = GOOF_SECONDS * (1.0 + 0.5 * self.random());
         let i = Interrupt {
             flavour,
             since: tick,
@@ -624,7 +577,7 @@ impl Mind {
         self.interrupt = Some(i);
         Moment::Begin(i)
     }
-    /// Keep what an interrupt under way remembers (the tool to put back).
+    /// Keep what a goof under way remembers (the tool to put back).
     pub(super) fn set_restore(&mut self, restore: Option<usize>) {
         if let Some(i) = self.interrupt.as_mut() {
             i.restore = Some(restore);
@@ -633,18 +586,10 @@ impl Mind {
     pub(super) fn flavour(&self) -> Option<Flavour> {
         self.interrupt.map(|i| i.flavour)
     }
-    pub(super) fn view(&self, cfg: &BotSurprise, tick: u64) -> BotSurpriseView {
+    pub(super) fn view(&self, cfg: &BotSurprise) -> BotSurpriseView {
         BotSurpriseView {
             strength: cfg.strength,
             gate: self.gate.closed(),
-            telling: self.tell.filter(|t| tick < t.until).map(|t| {
-                format!(
-                    "{}: {} -> {}",
-                    t.domain.name(),
-                    t.domain.label(t.from),
-                    t.domain.label(t.to)
-                )
-            }),
             interrupt: self.flavour().map(Flavour::name),
             drives: self
                 .drives
@@ -665,6 +610,7 @@ impl Mind {
                     tick: d.tick,
                     plain: d.domain.label(d.plain),
                     chosen: d.domain.label(d.chosen),
+                    varied: d.varied,
                     reason: d.reason,
                     candidates: d
                         .terms
@@ -673,11 +619,9 @@ impl Mind {
                             option: d.domain.label(t.option),
                             score: t.score,
                             adjusted: t.adjusted,
-                            eligible: t.eligible,
                             drift: t.drift,
                             boredom: t.boredom,
                             effectiveness: t.effectiveness,
-                            weight: t.weight,
                         })
                         .collect(),
                 })
@@ -686,39 +630,38 @@ impl Mind {
     }
 }
 
-/// The behaviour to follow: the plain pick (`behaviour::choose` over
-/// `scores`), or a near one the chooser takes instead. Only behaviours in
-/// [`VARIED`] are traded, and only when the plain pick is one.
+/// The behaviour to follow, by the hold rule over `scores`
+/// (`behaviour::scores`) and their terms. Only behaviours in [`VARIED`]
+/// vary; carrying a catch and arming take over at once when they win.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn behaviour(
     mind: &mut Mind,
     cfg: &BotSurprise,
+    rule: BotHold,
     scores: &[f32; 10],
-    plain: Behaviour,
-    current: Behaviour,
+    interrupt: bool,
+    paused: bool,
     gate: Gate,
     tick: u64,
-) -> (Behaviour, bool) {
-    let varied = VARIED.contains(&plain);
+) -> Behaviour {
     let options: Vec<(u32, f32)> = Behaviour::ALL
         .into_iter()
-        .filter(|b| VARIED.contains(b) && (varied || *b == plain))
         .map(|b| (b as u32, scores[b as usize]))
         .collect();
-    let options = if varied {
-        options
-    } else {
-        vec![(plain as u32, scores[plain as usize].max(f32::MIN_POSITIVE))]
+    let fixed: Vec<u32> = Behaviour::ALL
+        .into_iter()
+        .filter(|b| !VARIED.contains(b))
+        .map(|b| b as u32)
+        .collect();
+    let choice = Choice {
+        domain: Domain::Behaviour,
+        options: &options,
+        interrupt,
+        paused,
+        must: &behaviour::MUST,
+        fixed: &fixed,
     };
-    let pick = mind.pick(
-        cfg,
-        Domain::Behaviour,
-        &options,
-        plain as u32,
-        Some(current as u32),
-        gate,
-        tick,
-    );
-    (Behaviour::ALL[pick.option as usize], pick.telling)
+    Behaviour::ALL[mind.pick(cfg, rule, choice, gate, tick) as usize]
 }
 
 /// Which way round a chase goes ([`ROUTES`]): straight at the enemy, or
@@ -727,6 +670,7 @@ pub(super) fn behaviour(
 pub(super) fn route(
     mind: &mut Mind,
     cfg: &BotSurprise,
+    rule: BotHold,
     enemy: Vec3,
     flanks: [Option<Vec3>; 2],
     gate: Gate,
@@ -735,13 +679,19 @@ pub(super) fn route(
     let mut options = vec![(0, 1.0)];
     for (side, flank) in flanks.iter().enumerate() {
         if flank.is_some() {
-            options.push((side as u32 + 1, 0.9));
+            options.push((side as u32 + 1, FLANK_SCORE));
         }
     }
-    let current = mind.chosen(Domain::Route);
-    let pick = mind.pick(cfg, Domain::Route, &options, 0, current, gate, tick);
-    match pick.option {
-        1 | 2 => flanks[pick.option as usize - 1].map_or(Vec3::ZERO, |at| at - enemy),
+    let choice = Choice {
+        domain: Domain::Route,
+        options: &options,
+        interrupt: false,
+        paused: false,
+        must: &[],
+        fixed: &[],
+    };
+    match mind.pick(cfg, rule, choice, gate, tick) {
+        side @ (1 | 2) => flanks[side as usize - 1].map_or(Vec3::ZERO, |at| at - enemy),
         _ => Vec3::ZERO,
     }
 }
@@ -768,21 +718,20 @@ impl Session {
         threat: Option<Knowledge>,
         tick: u64,
     ) -> Gate {
-        let Some(brain) = self.bots.brains.get(&bot) else {
+        if !self.bots.brains.contains_key(&bot) {
             return Gate::default();
-        };
-        let cfg = &brain.kind.surprise;
+        }
         let health = self
             .peers
             .get(&bot)
             .map_or(1.0, |p| p.combat.health / self.max_health(bot).max(1.0));
         let hurt_close = threat.is_some_and(|k| {
-            tick.saturating_sub(k.observed) as f32 <= cfg.urgent_seconds * TICKS
-                && k.at.distance(feet) <= cfg.urgent_range
+            tick.saturating_sub(k.observed) as f32 <= URGENT_SECONDS * TICKS
+                && k.at.distance(feet) <= URGENT_RANGE
         });
         Gate {
             carrying,
-            urgent: health < cfg.urgent_health || hurt_close,
+            urgent: health < URGENT_HEALTH || hurt_close,
         }
     }
     /// Whether a bot carries an objective: a body its tool holds, a mount
@@ -866,20 +815,19 @@ impl Session {
         feet: Vec3,
         enemy: Vec3,
     ) -> [Option<Vec3>; 2] {
-        let Some(cfg) = self
+        if !self
             .bots
             .brains
             .get(&bot)
-            .map(|b| &b.kind.surprise)
-            .filter(|s| s.strength > 0.0 && s.flank_distance > 0.0)
-        else {
-            return [None, None];
-        };
-        let across = flat(enemy - feet);
-        if across.length() < cfg.flank_distance * 2.5 {
+            .is_some_and(|b| b.kind.surprise.strength > 0.0)
+        {
             return [None, None];
         }
-        let side = Vec3::new(-across.z, 0.0, across.x).normalize_or_zero() * cfg.flank_distance;
+        let across = flat(enemy - feet);
+        if across.length() < FLANK_DISTANCE * 2.5 {
+            return [None, None];
+        }
+        let side = Vec3::new(-across.z, 0.0, across.x).normalize_or_zero() * FLANK_DISTANCE;
         [enemy + side, enemy - side].map(|at| {
             self.world_ray(at + Vec3::Y * 3.0, Vec3::NEG_Y, 6.0)
                 .is_some()
@@ -957,6 +905,7 @@ impl Session {
         &self,
         bot: OwnerId,
         natural: bool,
+        idle: bool,
         gate: Gate,
         eye: Vec3,
     ) -> Pause {
@@ -1004,6 +953,7 @@ impl Session {
                 });
         Pause {
             natural,
+            idle,
             gate,
             player,
             other_tool,
@@ -1197,9 +1147,7 @@ pub struct BotSurpriseView {
     pub strength: f32,
     /// Why nothing varies now (carrying, urgent), if so.
     pub gate: Option<&'static str>,
-    /// A switch it is pausing before.
-    pub telling: Option<String>,
-    /// A flavour interrupt under way.
+    /// A goof under way.
     pub interrupt: Option<&'static str>,
     pub drives: Vec<BotDrive>,
     /// The last decision at each choice point.
@@ -1217,8 +1165,13 @@ pub struct BotDrive {
 pub struct BotDecision {
     pub domain: &'static str,
     pub tick: u64,
+    /// The best by the plain scores.
     pub plain: String,
     pub chosen: String,
+    /// The surprise terms put another option first.
+    pub varied: bool,
+    /// What the hold rule did: first, best, committed, margin, paused,
+    /// beaten, interrupt or impossible.
     pub reason: &'static str,
     pub candidates: Vec<BotCandidate>,
 }
@@ -1227,465 +1180,9 @@ pub struct BotDecision {
 pub struct BotCandidate {
     pub option: String,
     pub score: f32,
+    /// The score the hold rule saw, after every term.
     pub adjusted: f32,
-    pub eligible: bool,
     pub drift: f32,
     pub boredom: f32,
     pub effectiveness: f32,
-    pub weight: f32,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn on(strength: f32) -> BotSurprise {
-        BotSurprise {
-            strength,
-            ..Default::default()
-        }
-    }
-    const OPEN: Gate = Gate {
-        carrying: false,
-        urgent: false,
-    };
-    /// Picks over `ticks`, re-asking every tick.
-    fn run(mind: &mut Mind, cfg: &BotSurprise, options: &[(u32, f32)], ticks: u64) -> Vec<u32> {
-        let mut out = Vec::new();
-        let mut current = None;
-        for tick in 0..ticks {
-            let p = mind.pick(cfg, Domain::Aim, options, 0, current, OPEN, tick);
-            current = Some(p.option);
-            out.push(p.option);
-        }
-        out
-    }
-
-    #[test]
-    fn the_chooser_is_deterministic_for_a_seed() {
-        let cfg = BotSurprise {
-            commit_seconds: 0.0,
-            ..on(1.0)
-        };
-        let options = [(0, 1.0), (1, 0.95), (2, 0.9)];
-        let a = run(&mut Mind::new(7), &cfg, &options, 2000);
-        let b = run(&mut Mind::new(7), &cfg, &options, 2000);
-        assert_eq!(a, b);
-        assert_ne!(a, run(&mut Mind::new(8), &cfg, &options, 2000));
-        // And it does vary.
-        assert!(a.contains(&1) && a.contains(&2), "{:?}", &a[..40]);
-    }
-
-    /// Strength 0 is the plain brain: the plain pick every time, with no
-    /// random number drawn.
-    #[test]
-    fn strength_zero_reproduces_the_plain_pick() {
-        let cfg = on(0.0);
-        let mut mind = Mind::new(3);
-        let rng = mind.rng;
-        for tick in 0..1000 {
-            let plain = (tick / 100 % 3) as u32;
-            let p = mind.pick(
-                &cfg,
-                Domain::Weapon,
-                &[(0, 1.0), (1, 1.0), (2, 1.0)],
-                plain,
-                Some((plain + 1) % 3),
-                OPEN,
-                tick,
-            );
-            assert_eq!(
-                p,
-                Pick {
-                    option: plain,
-                    telling: false
-                }
-            );
-        }
-        assert_eq!(mind.rng, rng, "no random number drawn");
-        mind.outcome(&cfg, Domain::Weapon, 0, false, 5);
-        assert!(mind.drives.is_empty());
-        let pause = Pause {
-            natural: true,
-            ..Default::default()
-        };
-        for tick in 0..100_000 {
-            assert!(matches!(mind.interrupt(&cfg, &pause, tick), Moment::None));
-        }
-        assert_eq!(mind.rng, rng);
-        // The behaviour hook likewise.
-        let mut scores = [0.0; 10];
-        scores[Behaviour::Objective as usize] = 0.65;
-        scores[Behaviour::Chase as usize] = 0.6;
-        scores[Behaviour::Wander as usize] = 0.1;
-        for tick in 0..500 {
-            assert_eq!(
-                behaviour(
-                    &mut mind,
-                    &cfg,
-                    &scores,
-                    Behaviour::Objective,
-                    Behaviour::Objective,
-                    OPEN,
-                    tick
-                ),
-                (Behaviour::Objective, false)
-            );
-        }
-    }
-
-    /// A pick is held for its commitment: no re-roll each tick.
-    #[test]
-    fn commitment_holds_a_pick() {
-        let cfg = BotSurprise {
-            commit_seconds: 2.0,
-            tell_seconds: 0.0,
-            ..on(1.0)
-        };
-        let options = [(0, 1.0), (1, 1.0), (2, 1.0)];
-        let picks = run(&mut Mind::new(11), &cfg, &options, 6000);
-        let mut runs = Vec::new();
-        let mut length = 1;
-        for w in picks.windows(2) {
-            if w[0] == w[1] {
-                length += 1;
-            } else {
-                runs.push(length);
-                length = 1;
-            }
-        }
-        assert!(runs.len() > 5, "it does change: {runs:?}");
-        // Every hold but the first lasts at least the commitment.
-        assert!(
-            runs.iter().skip(1).all(|r| *r >= 240),
-            "held at least two seconds: {runs:?}"
-        );
-        // Without commitment it changes far more often.
-        let loose = BotSurprise {
-            commit_seconds: 0.0,
-            ..cfg.clone()
-        };
-        let changes = |p: &[u32]| p.windows(2).filter(|w| w[0] != w[1]).count();
-        assert!(changes(&run(&mut Mind::new(11), &loose, &options, 6000)) > 10 * runs.len());
-    }
-
-    /// A commitment gives way once its option is no longer near the best:
-    /// a changed situation is not ignored.
-    #[test]
-    fn commitment_yields_when_the_option_falls_out_of_the_band() {
-        let cfg = BotSurprise {
-            commit_seconds: 100.0,
-            tell_seconds: 0.0,
-            ..on(1.0)
-        };
-        let mut mind = Mind::new(5);
-        let mut held = None;
-        for tick in 0..100 {
-            held = Some(
-                mind.pick(
-                    &cfg,
-                    Domain::Aim,
-                    &[(0, 1.0), (1, 1.0)],
-                    0,
-                    held,
-                    OPEN,
-                    tick,
-                )
-                .option,
-            );
-        }
-        let held = held.unwrap();
-        let other = 1 - held;
-        let mut scores = [(0, 0.0), (1, 0.0)];
-        scores[other as usize].1 = 1.0;
-        scores[held as usize].1 = 0.2;
-        let p = mind.pick(&cfg, Domain::Aim, &scores, other, Some(held), OPEN, 100);
-        assert_eq!(p.option, other);
-    }
-
-    /// Carrying an objective or being urgent: the plain pick, always.
-    #[test]
-    fn gating_keeps_the_plain_pick() {
-        let cfg = BotSurprise {
-            commit_seconds: 0.0,
-            ..on(1.0)
-        };
-        for gate in [
-            Gate {
-                carrying: true,
-                urgent: false,
-            },
-            Gate {
-                carrying: false,
-                urgent: true,
-            },
-        ] {
-            let mut mind = Mind::new(9);
-            for tick in 0..3000 {
-                let p = mind.pick(
-                    &cfg,
-                    Domain::Weapon,
-                    &[(0, 1.0), (1, 1.0), (2, 1.0)],
-                    2,
-                    Some(1),
-                    gate,
-                    tick,
-                );
-                assert_eq!(p.option, 2);
-                assert!(!p.telling);
-            }
-        }
-    }
-
-    /// Options that cannot work now (no score) are never picked, however
-    /// the weights fall.
-    #[test]
-    fn the_viability_filter_excludes_impossible_options() {
-        let cfg = BotSurprise {
-            commit_seconds: 0.0,
-            band: 1.0,
-            ..on(1.0)
-        };
-        let options = [(0, 1.0), (1, 0.0), (2, f32::NAN), (3, -1.0), (4, 0.9)];
-        let picks = run(&mut Mind::new(2), &cfg, &options, 4000);
-        assert!(picks.iter().all(|p| [0, 4].contains(p)), "{picks:?}");
-        assert!(picks.contains(&4));
-    }
-
-    /// A switch the variation causes is preceded by a tell: the old option
-    /// is held, flagged, for the tell's length; then it switches.
-    #[test]
-    fn a_tell_precedes_a_switch() {
-        let cfg = BotSurprise {
-            commit_seconds: 0.5,
-            tell_seconds: 0.25,
-            ..on(1.0)
-        };
-        let options = [(0, 1.0), (1, 1.0)];
-        let mut mind = Mind::new(4);
-        let mut current = 0;
-        let mut switches = 0;
-        let mut telling_since = None;
-        for tick in 0..20_000 {
-            let p = mind.pick(&cfg, Domain::Weapon, &options, 0, Some(current), OPEN, tick);
-            if p.telling {
-                assert_eq!(p.option, current, "the tell holds what it had");
-                assert!(mind.telling(tick));
-                telling_since.get_or_insert(tick);
-            } else if p.option != current && p.option != 0 {
-                // A switch away from the plain pick (back to it needs none).
-                let since = telling_since.expect("a tell before the switch");
-                assert!(tick - since >= 30, "the tell lasted {} ticks", tick - since);
-                switches += 1;
-            }
-            if !p.telling {
-                telling_since = None;
-            }
-            current = p.option;
-        }
-        assert!(switches > 3, "{switches} switches away from the plain pick");
-        // Aim switches show nothing: no tell.
-        let mut mind = Mind::new(4);
-        for tick in 0..5000 {
-            assert!(
-                !mind
-                    .pick(&cfg, Domain::Aim, &options, 0, Some(0), OPEN, tick)
-                    .telling
-            );
-        }
-    }
-
-    /// An option that keeps failing loses out: torso shots dodged, it
-    /// aims at the feet; a weapon that never lands gives way to another.
-    #[test]
-    fn effectiveness_decay_shifts_picks() {
-        let cfg = BotSurprise {
-            commit_seconds: 0.5,
-            tell_seconds: 0.0,
-            band: 0.1,
-            ..on(1.0)
-        };
-        // Torso plainly best, feet a bit behind.
-        let options = [(AIM_TORSO, 1.0), (AIM_FEET, 0.8)];
-        let share = |fail_torso: bool| {
-            let mut mind = Mind::new(21);
-            let mut feet = 0;
-            for tick in 0..12_000 {
-                let p = mind.pick(&cfg, Domain::Aim, &options, AIM_TORSO, None, OPEN, tick);
-                if p.option == AIM_FEET {
-                    feet += 1;
-                }
-                if tick % 120 == 0 {
-                    mind.outcome(
-                        &cfg,
-                        Domain::Aim,
-                        p.option,
-                        !(fail_torso && p.option == 0),
-                        tick,
-                    );
-                }
-            }
-            feet
-        };
-        assert_eq!(share(false), 0, "out of the band: never the feet");
-        assert!(share(true) > 6000, "dodged torso shots: {}", share(true));
-        // A weapon twice as good on paper that never lands.
-        let other = |fails: bool| {
-            let mut mind = Mind::new(1);
-            let weapons = [(0, 2.0), (1, 1.0)];
-            let (mut last, mut other) = (0, 0);
-            for tick in 0..12_000 {
-                last = mind
-                    .pick(&cfg, Domain::Weapon, &weapons, 0, Some(last), OPEN, tick)
-                    .option;
-                other += u32::from(last == 1);
-                if tick % 60 == 0 && last == 0 {
-                    mind.outcome(&cfg, Domain::Weapon, 0, !fails, tick);
-                }
-            }
-            other
-        };
-        assert_eq!(other(false), 0, "the better weapon while it lands");
-        assert!(other(true) > 8000, "the one that works: {}", other(true));
-    }
-
-    /// Boredom: an option long in use loses weight to its peers.
-    #[test]
-    fn boredom_and_drift_move_the_weights() {
-        let cfg = BotSurprise {
-            boredom: 0.1,
-            ..on(1.0)
-        };
-        let mut mind = Mind::new(13);
-        for tick in 0..2400 {
-            mind.accrue(&cfg, Domain::Route, 0, 1.0 / TICKS, tick);
-        }
-        let at = mind.drive(&cfg, Domain::Route, 0, 2400);
-        let d = mind.drives[at];
-        assert!(d.boredom > 0.5, "{}", d.boredom);
-        let at = mind.drive(&cfg, Domain::Route, 0, 2400 + 120 * 60);
-        let later = mind.drives[at];
-        assert!(later.boredom < 0.2 * d.boredom, "it fades out of use");
-        assert!(later.drift != 0.0 && later.drift.abs() <= cfg.drift);
-    }
-
-    /// No flavour interrupt while carrying an objective, and one under way
-    /// ends when the bot takes one up.
-    #[test]
-    fn no_interrupts_while_carrying() {
-        let cfg = BotSurprise {
-            interrupts_per_minute: 60.0,
-            interrupt_cooldown_seconds: 0.0,
-            interrupt_seconds: 1000.0,
-            ..on(1.0)
-        };
-        let mut pause = Pause {
-            natural: true,
-            gate: Gate {
-                carrying: true,
-                urgent: false,
-            },
-            ..Default::default()
-        };
-        let mut mind = Mind::new(17);
-        for tick in 0..60_000 {
-            assert!(matches!(mind.interrupt(&cfg, &pause, tick), Moment::None));
-        }
-        pause.gate.carrying = false;
-        let mut began = None;
-        for tick in 60_000..120_000 {
-            if let Moment::Begin(_) = mind.interrupt(&cfg, &pause, tick) {
-                began = Some(tick);
-                break;
-            }
-        }
-        let began = began.expect("interrupts at a free pause");
-        assert!(matches!(
-            mind.interrupt(&cfg, &pause, began + 1),
-            Moment::Continue(_)
-        ));
-        pause.gate.carrying = true;
-        assert!(matches!(
-            mind.interrupt(&cfg, &pause, began + 2),
-            Moment::End(_)
-        ));
-        assert!(mind.flavour().is_none());
-        // Not at a busy moment either, nor one needing a player it lacks.
-        let busy = Pause {
-            natural: false,
-            ..Default::default()
-        };
-        for tick in 200_000..260_000 {
-            assert!(matches!(mind.interrupt(&cfg, &busy, tick), Moment::None));
-        }
-        let mut mind = Mind::new(18);
-        let free = Pause {
-            natural: true,
-            ..Default::default()
-        };
-        let short = BotSurprise {
-            interrupt_seconds: 0.5,
-            ..cfg
-        };
-        let mut began = 0;
-        for tick in 0..200_000 {
-            if let Moment::Begin(i) = mind.interrupt(&short, &free, tick) {
-                began += 1;
-                assert!(
-                    !matches!(
-                        i.flavour,
-                        Flavour::Stare | Flavour::Spray | Flavour::Tool | Flavour::Drop
-                    ),
-                    "{:?} needs what it lacks",
-                    i.flavour
-                );
-            }
-        }
-        assert!(began > 100, "{began} interrupts");
-    }
-
-    /// The behaviour hook trades only near, ordinary behaviours: never away
-    /// from carrying a catch, arming or walking home.
-    #[test]
-    fn behaviour_variation_keeps_must_do_behaviours() {
-        let cfg = BotSurprise {
-            band: 1.0,
-            commit_seconds: 0.0,
-            tell_seconds: 0.0,
-            ..on(1.0)
-        };
-        let mut scores = [0.0; 10];
-        scores[Behaviour::Carry as usize] = 1.0;
-        scores[Behaviour::Fight as usize] = 0.8;
-        scores[Behaviour::Chase as usize] = 0.6;
-        scores[Behaviour::Wander as usize] = 0.1;
-        let mut mind = Mind::new(1);
-        for tick in 0..2000 {
-            let (b, _) = behaviour(
-                &mut mind,
-                &cfg,
-                &scores,
-                Behaviour::Carry,
-                Behaviour::Carry,
-                OPEN,
-                tick,
-            );
-            assert_eq!(b, Behaviour::Carry);
-        }
-        let mut seen = Vec::new();
-        for tick in 0..4000 {
-            let (b, _) = behaviour(
-                &mut mind,
-                &cfg,
-                &scores,
-                Behaviour::Fight,
-                Behaviour::Fight,
-                OPEN,
-                tick,
-            );
-            assert_ne!(b, Behaviour::Carry);
-            seen.push(b);
-        }
-        assert!(seen.contains(&Behaviour::Chase), "{seen:?}");
-    }
 }

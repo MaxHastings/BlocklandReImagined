@@ -602,7 +602,7 @@ impl Scorer {
                     self.report.distinct_picks += 1;
                 }
                 let last = self.decided.insert((*bot, d.domain), d.chosen.clone());
-                if d.chosen != d.plain && last.is_some_and(|l| l != d.chosen) {
+                if d.varied && last.is_some_and(|l| l != d.chosen) {
                     self.report.surprised += 1;
                 }
             }

@@ -9,7 +9,6 @@ const PATH_TICKS: u32 = 256;
 const SOLVES_PER_TICK: u32 = 2048;
 const RAYS_PER_TICK: u32 = 544;
 const CHEAP_RESERVE: u32 = 32;
-const SWITCH_MARGIN: f32 = 0.15;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -600,10 +599,11 @@ pub(super) fn choose(
     if turn {
         state.cursor = state.cursor.wrapping_add(1);
     }
-    match tactics::select(&candidates, selected.map(|s| s as u8), SWITCH_MARGIN) {
+    match tactics::select(&candidates) {
         Ok(Some(selection)) => {
-            use super::surprise::{AIM_TORSO, Domain};
-            let cfg = &session.bots.brains[&bot].kind.surprise;
+            use super::surprise::{AIM_TORSO, Choice, Domain};
+            let kind = &session.bots.brains[&bot].kind;
+            let (cfg, rule) = (&kind.surprise, kind.hold);
             let scores: Vec<(u32, f32)> = candidates
                 .iter()
                 .filter_map(|c| {
@@ -612,21 +612,24 @@ pub(super) fn choose(
                         .map(|s| (u32::from(c.slot), s))
                 })
                 .collect();
-            // The chooser picks among weapons on the planning turn, when
-            // every slot is weighed (`surprise`); otherwise the plain pick.
-            let mut slot = usize::from(selection.slot);
+            // The hold rule picks among weapons on the planning turn, when
+            // every slot is weighed; otherwise the held weapon while it
+            // still works, else the best.
+            let viable = |slot: u32| scores.iter().any(|(s, v)| *s == slot && *v > 0.0);
+            let mut slot = mind
+                .chosen(Domain::Weapon)
+                .filter(|s| viable(*s))
+                .map_or(usize::from(selection.slot), |s| s as usize);
             if turn && charge_continuation.is_none() {
-                slot = mind
-                    .pick(
-                        cfg,
-                        Domain::Weapon,
-                        &scores,
-                        u32::from(selection.slot),
-                        selected.map(|s| s as u32),
-                        gate,
-                        tick,
-                    )
-                    .option as usize;
+                let ask = Choice {
+                    domain: Domain::Weapon,
+                    options: &scores,
+                    interrupt: false,
+                    paused: false,
+                    must: &[],
+                    fixed: &[],
+                };
+                slot = mind.pick(cfg, rule, ask, gate, tick) as usize;
             }
             let mut choice = choices
                 .into_iter()
@@ -639,10 +642,15 @@ pub(super) fn choose(
             let aims: Vec<(u32, f32)> = std::iter::once((AIM_TORSO, torso))
                 .chain(variants.iter().filter(|v| v.0 == slot).map(|v| (v.1, v.3)))
                 .collect();
-            let current = mind.chosen(Domain::Aim);
-            let aim = mind
-                .pick(cfg, Domain::Aim, &aims, AIM_TORSO, current, gate, tick)
-                .option;
+            let ask = Choice {
+                domain: Domain::Aim,
+                options: &aims,
+                interrupt: false,
+                paused: false,
+                must: &[],
+                fixed: &[],
+            };
+            let aim = mind.pick(cfg, rule, ask, gate, tick);
             if let Some(v) = variants.iter().find(|v| v.0 == slot && v.1 == aim) {
                 choice = v.2;
             }

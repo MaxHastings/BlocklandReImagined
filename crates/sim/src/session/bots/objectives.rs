@@ -15,10 +15,6 @@ const RETRY: u64 = 120;
 /// the completing event's own effects (a flag put back) land first.
 const COMPLETION_SETTLE: u64 = 12;
 const APPROACH_TIMEOUT: u64 = 120 * 30;
-/// How long a finished step's view is held while the next step waits for
-/// its planning turn (one bot plans per tick), so the objective does not
-/// blink off between two steps of one plan.
-const STEP_HOLD: u64 = 60;
 /// Closer than this to the step's point since the best so far counts as
 /// approach progress, which extends the approach deadline.
 const APPROACH_PROGRESS: f32 = 0.5;
@@ -575,9 +571,10 @@ pub(super) struct State {
     pub(super) searches: u64,
     pub(super) reused: u64,
     pub diagnostic: Option<&'static str>,
-    /// The last finished step's view, held until a tick while the next
-    /// step waits for its planning turn ([`STEP_HOLD`]).
-    hold: Option<(View, u64)>,
+    /// Between steps: a step finished (or the objective was completed, or
+    /// its body replaced) and the next is not planned yet. The hold rule
+    /// holds the objective through this (`behaviour::Ask::paused`).
+    paused: bool,
     /// The nearest the current step's approach has come to its point.
     best: Option<f32>,
 }
@@ -648,6 +645,10 @@ impl State {
     /// A step it was after failed (timed out, made no progress) and is
     /// cooling down before it is tried again: the objective is still
     /// offered, so it does not walk all the way home meanwhile.
+    /// Between steps (see `paused`).
+    pub(super) fn between_steps(&self) -> bool {
+        self.step.is_none() && self.paused
+    }
     pub(super) fn pursuing(&self) -> bool {
         self.step.is_none() && !self.failed.is_empty()
     }
@@ -655,6 +656,7 @@ impl State {
         self.step.is_none() && tick >= self.next
     }
     pub(super) fn fail(&mut self, tick: u64, reason: &'static str) {
+        self.paused = false;
         if let Some(step) = self.step.take() {
             self.failed.retain(|f| f.action_id != step.action_id);
             if self.failed.len() == 8 {
@@ -1796,6 +1798,7 @@ impl Session {
             // its stand): look for the next objective as soon as the effects
             // of the completing event have landed, not after a retry's wait.
             state.next = tick + COMPLETION_SETTLE;
+            state.paused = true;
             state.diagnostic = Some(diagnostic);
             self.bots.brains.get_mut(&bot)?.objective = state;
             return None;
@@ -1811,6 +1814,7 @@ impl Session {
                 state.step = None;
                 state.desired = None;
                 state.next = if replaced { tick } else { tick + RETRY };
+                state.paused = replaced;
                 state.diagnostic = Some(diagnostic);
             } else if tick > step.deadline {
                 state.fail(tick, "objective approach timed out");
@@ -1845,20 +1849,7 @@ impl Session {
                             view.physical_progress = false;
                             repair_hold = Some(view);
                         }
-                        // Hold this step's view until the next is planned,
-                        // standing where the step finished.
-                        if repair_hold.is_none()
-                            && let Some(mut view) = step.view(self, bot)
-                        {
-                            let feet = Vec3::from(self.peers[&bot].player.state().feet);
-                            view.point = feet;
-                            view.waiting = true;
-                            view.move_while_waiting = false;
-                            view.trigger = view.trigger.map(|_| false);
-                            view.physical_progress = false;
-                            view.board = None;
-                            state.hold = Some((view, tick + STEP_HOLD));
-                        }
+                        state.paused = true;
                         state.step = None;
                         state.failed.clear();
                         state.next = tick;
@@ -1976,8 +1967,10 @@ impl Session {
                 {
                     // All declared desired candidates are cooling. Preserve the
                     // actual prior failure rather than relabeling it NoPlan.
+                    state.paused = false;
                 }
                 Err(f) => {
+                    let was_paused = std::mem::take(&mut state.paused);
                     if let Some(desired) = state.desired.take() {
                         state.failed_desired.retain(|(old, _)| old != &desired);
                         // Native rule goal plus the existing maximum eight offers.
@@ -1987,6 +1980,7 @@ impl Session {
                         state.failed_desired.push((desired, tick + RETRY * 3));
                         if untried {
                             state.next = tick;
+                            state.paused = was_paused;
                         }
                     }
                     state.route.clear();
@@ -2012,8 +2006,8 @@ impl Session {
                 }
             }
         }
-        if state.step.is_some() || state.hold.is_some_and(|(_, until)| tick >= until) {
-            state.hold = None;
+        if state.step.is_some() {
+            state.paused = false;
         }
         if state.step.is_none() {
             state.best = None;
@@ -2022,8 +2016,7 @@ impl Session {
             .step
             .as_ref()
             .and_then(|s| s.committed_view(self, bot))
-            .or(repair_hold)
-            .or(state.hold.map(|(view, _)| view));
+            .or(repair_hold);
         self.bots.brains.get_mut(&bot)?.objective = state;
         result
     }

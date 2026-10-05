@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 mod surprise;
-pub use surprise::{BotSurprise, INTERRUPTS};
+pub use surprise::{BotSurprise, FLAVOURS};
 
 pub const SCHEMA_VERSION: u32 = 1;
 /// Bot kinds one server knows, over every Add-On.
@@ -98,23 +98,40 @@ pub struct BotKind {
     pub mounted: BotMounted,
     /// How it moves while it fights.
     pub fighting: BotFighting,
+    /// How long a choice it made is held and how much better another must
+    /// be to take over (`hold`): one rule for every choice it makes.
+    pub hold: BotHold,
     /// How its choices vary and change over time (`surprise`); its
     /// `strength` 0 is the plain brain.
     pub surprise: BotSurprise,
 }
-/// How a bot moves in a fight: when a fight turns into a chase and back,
-/// and how a ranged fighter strafes.
+/// How a bot holds a choice (which behaviour, weapon, aim, route): the
+/// one rule against flip-flopping (`docs/architecture/bots.md`, "Holding
+/// a choice"). A choice is held at least `seconds`, and after that another
+/// takes over only by scoring more than `margin` (a share) above it. An
+/// interrupt (urgent damage, an objective picked up or dropped, the target
+/// lost or dead, a choice no longer possible, a must-do behaviour) takes
+/// over at once.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotHold {
+    pub seconds: f32,
+    pub margin: f32,
+}
+impl Default for BotHold {
+    fn default() -> Self {
+        Self {
+            seconds: 0.5,
+            margin: 0.1,
+        }
+    }
+}
+
+/// How a bot moves in a fight: how a ranged fighter strafes, and when it
+/// flies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BotFighting {
-    /// Leeway past the band's far edge (and in height) before a fighting
-    /// bot gives chase, as a share of that far edge...
-    pub band_slack: f32,
-    /// ...and at least this many world units.
-    pub min_band_slack: f32,
-    /// A fight keeps fighting at least this long before it gives chase,
-    /// while the enemy is still in sight.
-    pub dwell_seconds: f32,
     /// A ranged fighter strafes one way about this long before turning
     /// back. It stands at a ledge or a wall until then, and turns away from
     /// an ally at once. A melee fighter does not strafe: it closes to its
@@ -132,20 +149,11 @@ pub struct BotFighting {
 impl Default for BotFighting {
     fn default() -> Self {
         Self {
-            band_slack: 0.15,
-            min_band_slack: 1.5,
-            dwell_seconds: 0.5,
             strafe_seconds: 3.5,
             fly_rise: 2.5,
             fly_drop: 3.0,
             fly_give_up_seconds: 4.0,
         }
-    }
-}
-impl BotFighting {
-    /// The leeway past a band whose far edge is `far`.
-    pub fn slack(&self, far: f32) -> f32 {
-        (far * self.band_slack).max(self.min_band_slack)
     }
 }
 /// Contesting one body with opponents (each pushing it toward its own
@@ -302,6 +310,7 @@ impl Default for BotKind {
             contest: BotContest::default(),
             mounted: BotMounted::default(),
             fighting: BotFighting::default(),
+            hold: BotHold::default(),
             surprise: BotSurprise::default(),
         }
     }
@@ -431,19 +440,8 @@ impl BotKind {
                 0.0,
                 90.0,
             ),
-            ("fighting.band_slack", self.fighting.band_slack, 0.0, 1.0),
-            (
-                "fighting.min_band_slack",
-                self.fighting.min_band_slack,
-                0.0,
-                16.0,
-            ),
-            (
-                "fighting.dwell_seconds",
-                self.fighting.dwell_seconds,
-                0.0,
-                5.0,
-            ),
+            ("hold.seconds", self.hold.seconds, 0.0, 10.0),
+            ("hold.margin", self.hold.margin, 0.0, 1.0),
             (
                 "fighting.strafe_seconds",
                 self.fighting.strafe_seconds,
@@ -604,21 +602,20 @@ mod tests {
         );
     }
     #[test]
-    fn fight_slack_scales_with_the_band_and_is_limited() {
+    fn the_hold_rule_and_fighting_are_read_and_limited() {
         let fighting = BotFighting::default();
-        assert_eq!(fighting.slack(4.0), 1.5);
-        assert!((fighting.slack(40.0) - 6.0).abs() < 1e-4);
         let pack = BotPack::from_json(
-            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","fighting":{"band_slack":0.3,"dwell_seconds":1}}]}"#,
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","hold":{"seconds":1,"margin":0.2}}]}"#,
         )
         .unwrap();
-        let read = &pack.bots[0].fighting;
-        assert_eq!((read.band_slack, read.dwell_seconds), (0.3, 1.0));
-        assert_eq!(read.strafe_seconds, fighting.strafe_seconds);
+        let read = &pack.bots[0];
+        assert_eq!((read.hold.seconds, read.hold.margin), (1.0, 0.2));
+        assert_eq!(read.fighting.strafe_seconds, fighting.strafe_seconds);
         for bad in [
-            r#""fighting":{"band_slack":2}"#,
+            r#""hold":{"margin":2}"#,
             r#""fighting":{"strafe_seconds":0}"#,
-            r#""fighting":{"dwell_seconds":-1}"#,
+            r#""hold":{"seconds":-1}"#,
+            r#""fighting":{"band_slack":0.3}"#,
         ] {
             let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
             assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");

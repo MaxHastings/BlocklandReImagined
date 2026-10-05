@@ -631,20 +631,11 @@ pub struct Selection {
 /// Ties keep the lowest slot; a valid current choice wins unless a replacement
 /// improves its score by more than `switch_margin`. Invalid current gear never
 /// holds a safe usable weapon hostage. No time-based pacing lives here.
-pub fn select(
-    candidates: &[Candidate],
-    current: Option<u8>,
-    switch_margin: f32,
-) -> Result<Option<Selection>, Invalid> {
-    finite(&[switch_margin])?;
-    if switch_margin < 0.0 {
-        return Err(Invalid::OutOfBounds);
-    }
+pub fn select(candidates: &[Candidate]) -> Result<Option<Selection>, Invalid> {
     if candidates.len() > MAX_CANDIDATES {
         return Err(Invalid::TooManyCandidates);
     }
     let mut best: Option<Selection> = None;
-    let mut held: Option<Selection> = None;
     let mut slots = [false; 256];
     for candidate in candidates {
         let index = usize::from(candidate.slot);
@@ -661,18 +652,9 @@ pub fn select(
             slot: candidate.slot,
             score,
         };
-        if current == Some(candidate.slot) {
-            held = Some(choice);
-        }
         if best.is_none_or(|b| score > b.score || (score == b.score && candidate.slot < b.slot)) {
             best = Some(choice);
         }
-    }
-    if let (Some(best), Some(held)) = (best, held)
-        && best.slot != held.slot
-        && best.score <= held.score + switch_margin
-    {
-        return Ok(Some(held));
     }
     Ok(best)
 }
@@ -1085,30 +1067,22 @@ mod tests {
             ..near
         };
         assert_eq!(
-            select(
-                &[
-                    candidate(0, gun, scarce),
-                    candidate(1, melee, near),
-                    candidate(2, splash, near)
-                ],
-                None,
-                0.0
-            )
+            select(&[
+                candidate(0, gun, scarce),
+                candidate(1, melee, near),
+                candidate(2, splash, near)
+            ])
             .unwrap()
             .unwrap()
             .slot,
             1
         );
         assert_eq!(
-            select(
-                &[
-                    candidate(0, gun, context()),
-                    candidate(1, melee, context()),
-                    candidate(2, splash, context())
-                ],
-                None,
-                0.0
-            )
+            select(&[
+                candidate(0, gun, context()),
+                candidate(1, melee, context()),
+                candidate(2, splash, context())
+            ])
             .unwrap()
             .unwrap()
             .slot,
@@ -1119,15 +1093,11 @@ mod tests {
             ..context()
         };
         assert_eq!(
-            select(
-                &[
-                    candidate(0, gun, ally_close),
-                    candidate(1, melee, ally_close),
-                    candidate(2, splash, ally_close)
-                ],
-                None,
-                0.0
-            )
+            select(&[
+                candidate(0, gun, ally_close),
+                candidate(1, melee, ally_close),
+                candidate(2, splash, ally_close)
+            ])
             .unwrap()
             .unwrap()
             .slot,
@@ -1195,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn hysteresis_and_stable_ties_stop_inventory_flip_flop() {
+    fn the_best_is_picked_and_ties_are_stable() {
         let a = candidate(0, ray(), context());
         let b = candidate(
             1,
@@ -1205,8 +1175,9 @@ mod tests {
             },
             context(),
         );
-        assert_eq!(select(&[a, b], Some(0), 15.0).unwrap().unwrap().slot, 0);
-        assert_eq!(select(&[a, b], Some(0), 5.0).unwrap().unwrap().slot, 1);
+        // Holding a weapon against a slightly better one is the hold
+        // rule's job (`behaviour::Hold`), not this pick's.
+        assert_eq!(select(&[a, b]).unwrap().unwrap().slot, 1);
         let blocked = candidate(
             0,
             ray(),
@@ -1215,22 +1186,12 @@ mod tests {
                 ..context()
             },
         );
+        assert_eq!(select(&[blocked, b]).unwrap().unwrap().slot, 1);
         assert_eq!(
-            select(&[blocked, b], Some(0), 1_000.0)
-                .unwrap()
-                .unwrap()
-                .slot,
-            1
-        );
-        assert_eq!(
-            select(
-                &[
-                    candidate(4, ray(), context()),
-                    candidate(2, ray(), context())
-                ],
-                None,
-                0.0
-            )
+            select(&[
+                candidate(4, ray(), context()),
+                candidate(2, ray(), context())
+            ])
             .unwrap()
             .unwrap()
             .slot,
@@ -1241,12 +1202,11 @@ mod tests {
     #[test]
     fn candidate_budget_duplicates_and_nan_are_rejected() {
         let a = candidate(0, ray(), context());
-        assert_eq!(select(&[a, a], None, 0.0), Err(Invalid::DuplicateSlot));
+        assert_eq!(select(&[a, a]), Err(Invalid::DuplicateSlot));
         assert_eq!(
-            select(&[a; MAX_CANDIDATES + 1], None, 0.0),
+            select(&[a; MAX_CANDIDATES + 1]),
             Err(Invalid::TooManyCandidates)
         );
-        assert_eq!(select(&[a], None, f32::NAN), Err(Invalid::NonFinite));
         assert_eq!(
             suitability(
                 ray(),

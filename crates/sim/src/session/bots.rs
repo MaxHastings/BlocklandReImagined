@@ -154,6 +154,16 @@ const FLY_OVER: f32 = 1.5;
 /// Ticks pressing at a waypoint within a step without moving before it is
 /// taken as reached.
 const WEDGED_TICKS: u32 = 30;
+/// Over how many units past the edge of its stroll a brick bot's urge to
+/// walk home grows to full.
+const STRAY: f32 = 4.0;
+/// What a bot's last behaviour choice saw ([`Brain::choice_was`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct ChoiceWas {
+    committed: bool,
+    holding: bool,
+    target: Option<OwnerId>,
+}
 /// How much of a swimmer the water covers for it to swim rather than walk.
 const SWIM_COVERAGE: f32 = 0.5;
 
@@ -252,6 +262,8 @@ struct Brain {
     behaviour: Behaviour,
     /// Tick it took up `behaviour`.
     behaviour_since: u64,
+    /// What its last behaviour choice saw, to tell an interrupt.
+    choice_was: ChoiceWas,
     /// The weapon it is going to pick up, with nothing to attack with
     /// (`arming`).
     arming: arming::Arming,
@@ -402,6 +414,7 @@ impl Brain {
             fire_down: false,
             behaviour: Behaviour::default(),
             behaviour_since: 0,
+            choice_was: ChoiceWas::default(),
             arming: Default::default(),
             strafe: (1.0, 0),
             objective: objectives::State::default(),
@@ -1224,7 +1237,7 @@ impl Session {
                 }),
                 objective_searches: b.objective.searches,
                 objective_reused: b.objective.reused,
-                surprise: b.surprise.view(&b.kind.surprise, tick),
+                surprise: b.surprise.view(&b.kind.surprise),
             })
             .collect()
     }
@@ -2060,6 +2073,8 @@ impl Session {
         // What guards the surprise chooser: carrying an objective, urgency.
         let carrying = objective_holding || self.surprise_carrying(bot, objective.as_ref());
         let gate = self.surprise_gate(bot, feet, carrying, threat, tick);
+        // Hurt just now, and it matters (low health, or from close by).
+        let hurt_now = hurt_by.is_some() && gate.urgent;
         let flanks = sight.target.map_or([None, None], |seen| {
             self.surprise_flanks(bot, feet, seen.real)
         });
@@ -2174,14 +2189,16 @@ impl Session {
                     None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
                 }),
             far,
-            slack: kind.fighting.slack(far),
             step: body.step,
             remembers: brain.memory.is_some(),
-            strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
-            home: brain.goal != Some(Goal::Home),
+            strayed: if brain.brick.is_some() {
+                (away - kind.wander_radius) / STRAY
+            } else {
+                0.0
+            },
             pursuing: brain.objective.pursuing(),
         };
-        let scores = behaviour::scores(brain.behaviour, &situation, |b| {
+        let scores = behaviour::scores(&situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
                     0.0
@@ -2190,30 +2207,31 @@ impl Session {
                 },
             )
         });
-        // The plain pick, or a near one the surprise chooser takes.
+        // What the choice must answer at once (`behaviour::Hold`): urgent
+        // damage, an objective picked up or dropped, the target lost or
+        // dead. A choice no longer possible, or a must-do one winning, the
+        // rule sees for itself.
+        let target = sight.target.map(|seen| seen.owner);
+        let interrupt = hurt_now
+            || situation.committed != brain.choice_was.committed
+            || situation.holding != brain.choice_was.holding
+            || brain.choice_was.target.is_some_and(|t| target != Some(t));
+        brain.choice_was = ChoiceWas {
+            committed: situation.committed,
+            holding: situation.holding,
+            target,
+        };
         brain.surprise.gate = gate;
-        let (mut behaviour, _) = surprise::behaviour(
+        let behaviour = surprise::behaviour(
             &mut brain.surprise,
             &kind.surprise,
+            kind.hold,
             &scores,
-            behaviour::best(&scores),
-            brain.behaviour,
+            interrupt,
+            brain.behaviour == Behaviour::Objective && brain.objective.between_steps(),
             gate,
             tick,
         );
-        // Pausing a moment before a switch the variation causes.
-        let telling = brain.surprise.telling(tick);
-        // A fight just taken up holds a moment before it turns into a
-        // chase while the enemy is still in sight: no flip-flop at the
-        // band's edge as either steps back and forth. (A chase that
-        // reaches the band fights at once.)
-        let dwell = (kind.fighting.dwell_seconds * 120.0) as u64;
-        if situation.enemy.is_some()
-            && (brain.behaviour, behaviour) == (Behaviour::Fight, Behaviour::Chase)
-            && tick < brain.behaviour_since + dwell
-        {
-            behaviour = brain.behaviour;
-        }
         if behaviour != brain.behaviour {
             brain.behaviour_since = tick;
         }
@@ -2353,6 +2371,9 @@ impl Session {
                         (false, false)
                     }
                 } else {
+                    // Between steps, held by the hold rule: it stands where
+                    // the last step finished until the next is planned.
+                    brain.set_goal(None);
                     (false, false)
                 }
             }
@@ -2367,6 +2388,7 @@ impl Session {
                     brain.chase_offset = surprise::route(
                         &mut brain.surprise,
                         &kind.surprise,
+                        kind.hold,
                         seen.real,
                         flanks,
                         gate,
@@ -2596,19 +2618,24 @@ impl Session {
             .map(|(_, p)| Vec3::from(p.player.state().feet))
             .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
-        // At a natural pause, now and then something idle (`surprise`).
-        let natural = behaviour == Behaviour::Wander
+        // Now and then something idle (`surprise`): with nothing to do, or
+        // playing an objective it does not carry; never with an enemy about.
+        let idle = behaviour == Behaviour::Wander && objective.is_none();
+        let natural = (idle
+            || behaviour == Behaviour::Objective
+                && selected_objective.is_none_or(|v| v.enemy.is_none()))
             && sight.target.is_none()
             && threat.is_none()
-            && objective.is_none()
             && !holding
             && driving.is_none()
             && swim.is_none()
             && !self.seated(bot)
             && self.bots.brains[&bot].memory.is_none();
-        let pause = self.surprise_pause(bot, natural, gate, eye);
+        let pause = self.surprise_pause(bot, natural, idle, gate, eye);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let moment = brain.surprise.interrupt(&brain.kind.surprise, &pause, tick);
+        let moment = brain
+            .surprise
+            .goof(&brain.kind.surprise, brain.kind.hold, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
@@ -2724,9 +2751,6 @@ impl Session {
         }
         if let Some((yaw, pitch)) = act.aim {
             (aim_yaw, aim_pitch) = (yaw, pitch);
-        }
-        if telling {
-            fire = false;
         }
         brain.yaw = turn(brain.yaw, aim_yaw, step);
         brain.pitch += (aim_pitch - brain.pitch).clamp(-step, step);
@@ -2924,9 +2948,6 @@ impl Session {
         }
         input.jump |= act.jump;
         input.crouch |= act.crouch;
-        if telling {
-            direction = Vec3::ZERO;
-        }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up.
