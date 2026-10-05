@@ -794,8 +794,10 @@ fn slayer_ports_apply_with_their_rules() {
     assert_eq!(
         behaviour["brick_targets"],
         serde_json::json!([
-            { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
-            { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
+            { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client",
+              "description": "The team of whoever set this row off" },
+            { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self",
+              "description": "The teams whose colour this brick is painted (or a brick named Team_<colour>)" }
         ])
     );
     assert_eq!(

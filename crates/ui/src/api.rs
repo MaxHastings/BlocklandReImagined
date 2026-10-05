@@ -138,6 +138,10 @@ pub type DatablockMenus = BTreeMap<String, Vec<Choice>>;
 pub struct EventCatalog {
     pub inputs: Vec<EventInputInfo>,
     pub outputs: Vec<EventOutputInfo>,
+    /// One line about an Add-On's target, by its name, that the wrench
+    /// shows while a row aims at it.
+    #[serde(default)]
+    pub target_notes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -182,6 +186,7 @@ impl EventCatalog {
         supported_outputs: &[(&str, &str)],
     ) -> Self {
         EventCatalog {
+            target_notes: BTreeMap::new(),
             inputs: t
                 .inputs
                 .iter()
@@ -1681,6 +1686,9 @@ pub enum UiUpdate {
         /// The brick's builder (owner id), whose mini-game its rows run in;
         /// `None` takes the local player's.
         builder: Option<u64>,
+        /// The builder's brick group name when the brick is not the local
+        /// player's: `<NAMED BRICK>` lists their named bricks.
+        builder_name: Option<String>,
         rows: Vec<EventRow>,
         named_targets: Vec<String>,
         allow_named: bool,

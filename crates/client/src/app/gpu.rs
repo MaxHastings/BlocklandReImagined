@@ -34,8 +34,14 @@ pub(super) struct GpuState {
     pub(super) gpu_chunk_bricks:
         HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
     pub(super) chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
-    /// Rebuild GPU renderers before the next frame (the map changed).
+    /// Rebuild GPU renderers before the next frame (the map changed while
+    /// no device was open).
     pub(super) gpu_restart: bool,
+    /// The device the renderers were built on (`gpu_ready`), until it
+    /// stops. A map change rebuilds them on it at once rather than on the
+    /// next frame: a window that draws no frames (minimized) still
+    /// finishes the change, and the compile starts as early as it can.
+    pub(super) device: Option<(wgpu::Device, wgpu::Queue, wgpu::TextureFormat)>,
     /// The ghost built at the origin and the one transform that places it.
     pub(super) ghost_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
     /// What `ghost_gpu` was built from: moving the ghost only moves it.

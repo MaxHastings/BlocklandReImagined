@@ -5,6 +5,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_CONDITIONS: usize = 8;
+/// A mini-game's highest team slot (`bri_minigames::MAX_TEAMS`).
+pub const MAX_TEAM_SLOT: u32 = 64;
 
 /// Context is resolved by the authoritative host, never by object numbers sent
 /// by a player. Instigator is optional and never falls back to the brick owner.
@@ -95,7 +97,10 @@ pub enum Datum {
 pub struct Condition {
     pub subject: Subject,
     pub property: Property,
-    /// Only Variable uses a name. Other queries have no arbitrary reflection.
+    /// Variable's name. A Team check (Subject Team, other than Variable)
+    /// may name a team slot here, "1" to "64": that team of the rule's
+    /// mini-game; empty is the instigator's team. Other queries have no
+    /// arbitrary reflection.
     pub key: String,
     pub compare: Compare,
     pub value: Datum,
@@ -119,6 +124,11 @@ impl Condition {
     pub fn validate(&self) -> Result<()> {
         if self.property == Property::Variable {
             validate_key(&self.key)?;
+        } else if self.subject == Subject::Team && !self.key.is_empty() {
+            ensure!(
+                self.team_slot().is_some(),
+                "A Team check names a team slot from 1 to {MAX_TEAM_SLOT}"
+            );
         } else {
             ensure!(self.key.is_empty(), "Only variables take a key");
         }
@@ -140,6 +150,16 @@ impl Condition {
             ensure!(text.len() <= 128, "Condition text is too long");
         }
         Ok(())
+    }
+    /// The team slot a Team check names, if any (see [`Condition::key`]).
+    pub fn team_slot(&self) -> Option<u32> {
+        if self.subject != Subject::Team || self.property == Property::Variable {
+            return None;
+        }
+        self.key
+            .parse()
+            .ok()
+            .filter(|slot| (1..=MAX_TEAM_SLOT).contains(slot))
     }
     pub fn matches(&self, actual: Option<Datum>) -> bool {
         let Some(actual) = actual else { return false };
@@ -186,7 +206,16 @@ pub enum RuleOp {
     },
     AddScore(i32),
     AddTeamScore(i32),
+    /// MiniGame `addTeamScore`: points for the team in this slot itself,
+    /// whoever set the row off.
+    TeamPoints {
+        team: u32,
+        points: i32,
+    },
     WinRound,
+    /// MiniGame `winRound`: end the round with the team in this slot as
+    /// the winner.
+    TeamWin(u32),
     EndRound,
     SetTeam(u32),
     ObjectVelocity(glam::Vec3),
@@ -307,11 +336,18 @@ pub fn workshop_catalog(catalog: &Catalog) -> Result<Catalog> {
             vec![Param::Int {
                 min: 1,
                 // A mini-game's team slots: 1 to `bri_minigames::MAX_TEAMS`.
-                max: 64,
+                max: MAX_TEAM_SLOT as i64,
                 default: 1,
             }],
         );
     }
+    let slot = || Param::Int {
+        min: 1,
+        max: MAX_TEAM_SLOT as i64,
+        default: 1,
+    };
+    add("MiniGame", "addTeamScore", vec![slot(), number()]);
+    add("MiniGame", "winRound", vec![slot()]);
     add("MiniGame", "endRound", vec![]);
     add("Vehicle", "setObjectVelocity", vec![vector()]);
     add("Vehicle", "resetObject", vec![]);
@@ -327,6 +363,7 @@ pub(crate) fn compile(output: &OutputDef, p: &[Value]) -> Result<Action> {
         Some(Value::Vector(v)) => Ok(*v),
         _ => anyhow::bail!("Expected vector"),
     };
+    let minigame = output.class_name.eq_ignore_ascii_case("MiniGame");
     let op = match output.name.as_str() {
         "setVariable" | "addVariable" => {
             let key = match p.get(1) {
@@ -349,7 +386,12 @@ pub(crate) fn compile(output: &OutputDef, p: &[Value]) -> Result<Action> {
             }
         }
         "addPlayerScore" => RuleOp::AddScore(i32::try_from(n(0)?)?),
+        "addTeamScore" if minigame => RuleOp::TeamPoints {
+            team: u32::try_from(n(0)?)?,
+            points: i32::try_from(n(1)?)?,
+        },
         "addTeamScore" => RuleOp::AddTeamScore(i32::try_from(n(0)?)?),
+        "winRound" if minigame => RuleOp::TeamWin(u32::try_from(n(0)?)?),
         "winRound" => RuleOp::WinRound,
         "endRound" => RuleOp::EndRound,
         "setTeam" => RuleOp::SetTeam(u32::try_from(n(0)?)?),
@@ -385,9 +427,11 @@ pub fn action_hint(name: &str) -> &'static str {
         }
         "addPlayerScore" => "Add points to this player in the rule owner's mini-game.",
         "addTeamScore" => {
-            "Add real points to this player. IF Team Score sums current team members."
+            "Player: add real points to this player. MiniGame: add points to the chosen team itself, whoever scored. IF Team Score counts both."
         }
-        "winRound" => "End the round with this player (and their team) as winner.",
+        "winRound" => {
+            "Player: end the round with this player (and their team) as winner. MiniGame: the chosen team wins."
+        }
         "endRound" => "End the round without a winner. MiniGame Reset starts another round.",
         "setTeam" => "Move this player to the numbered team. Configure teams in MiniGame.",
         "resetObject" => "Respawn this object at its spawn brick. Clears prior attribution.",

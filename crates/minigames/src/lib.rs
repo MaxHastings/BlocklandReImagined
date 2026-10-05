@@ -437,6 +437,20 @@ impl MinigamesWorld {
             reveal_items: true,
         });
         let keep_scores = self.games[&game].keep_scores;
+        if !keep_scores {
+            let points = std::mem::take(
+                &mut self
+                    .games
+                    .get_mut(&game)
+                    .expect("validated game")
+                    .team_points,
+            );
+            out.extend(points.into_keys().map(|team| Effect::TeamScore {
+                game,
+                team,
+                value: 0,
+            }));
+        }
         for p in members {
             if !keep_scores {
                 self.score(p, 0, out);
@@ -871,6 +885,54 @@ impl MinigamesWorld {
         } else {
             vec![g.owner.account]
         }
+    }
+    /// A team's score: its own points and its current members' scores
+    /// together (Slayer's `Slayer_TeamSO::getScore`).
+    pub fn team_score(&self, game: GameId, team: TeamId) -> Result<i64, Error> {
+        let g = self.game(game)?;
+        if g.teams.get(team).is_none() {
+            return Err(Error::StaleTeam);
+        }
+        let own = g.team_points.get(&team).copied().unwrap_or(0);
+        Ok(g.members
+            .iter()
+            .filter_map(|p| self.players.get(p))
+            .filter(|p| p.team == Some(team))
+            .fold(own, |sum, p| sum.saturating_add(p.score)))
+    }
+    /// Give `team` of `game` points of its own, whoever scored them, or
+    /// with `add` false set them (a rule's MiniGame `addTeamScore`,
+    /// Slayer's `IncScore`); the host validates who may.
+    pub fn event_team_score(
+        &mut self,
+        game: GameId,
+        team: TeamId,
+        value: i64,
+        add: bool,
+    ) -> Result<Vec<Effect>, Error> {
+        if self.game(game)?.teams.get(team).is_none() {
+            return Err(Error::StaleTeam);
+        }
+        let points = &mut self
+            .games
+            .get_mut(&game)
+            .expect("validated game")
+            .team_points;
+        let value = if add {
+            points
+                .get(&team)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(value)
+        } else {
+            value
+        };
+        if value == 0 {
+            points.remove(&team);
+        } else {
+            points.insert(team, value);
+        }
+        Ok(vec![Effect::TeamScore { game, team, value }])
     }
     /// Native Client incScore/setScore event integration; host validates event ownership first.
     pub fn event_score(

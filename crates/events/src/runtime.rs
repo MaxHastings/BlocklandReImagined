@@ -1163,11 +1163,15 @@ impl EventWorld {
                 format!(
                     "IF {}: {} {} {} {} (current: {}) - {}",
                     i + 1,
-                    crate::rules::SUBJECTS
-                        .iter()
-                        .find(|(_, v)| *v == condition.subject)
-                        .map(|(n, _)| *n)
-                        .unwrap_or("Target"),
+                    match condition.team_slot() {
+                        Some(slot) => format!("Team {slot}"),
+                        None => crate::rules::SUBJECTS
+                            .iter()
+                            .find(|(_, v)| *v == condition.subject)
+                            .map(|(n, _)| *n)
+                            .unwrap_or("Target")
+                            .into(),
+                    },
                     if condition.property == crate::rules::Property::Variable {
                         format!("Variable {}", condition.key)
                     } else if condition.property == crate::rules::Property::Team {
@@ -1638,6 +1642,7 @@ mod semantic_inspection_tests {
                 package: "inspection".into(),
                 source: "test".into(),
                 source_line: 1,
+                description: None,
             }])
             .unwrap();
         let mut output = catalog.output(Class::Brick, "setColor").unwrap().clone();

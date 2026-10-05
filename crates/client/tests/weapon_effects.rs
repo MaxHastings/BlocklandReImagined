@@ -524,6 +524,65 @@ fn actual_native_weapon_bindings_and_effects() -> Result<()> {
     Ok(())
 }
 
+/// An Add-On explosion with a light (the Mini-Nuke's: its light is named
+/// after it) is played by its explosion's name, its emitters and all. The
+/// light took the name once Add-On lights were bound by datablock name, so
+/// the explosion cue started only the light's "missing duration" note.
+#[test]
+fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
+    let base = fixture(false);
+    let particle = Particle {
+        id: "kit:particle/spark".into(),
+        ..base.library.particles[0].clone()
+    };
+    let emitter = Emitter {
+        id: "kit:emitter/flash".into(),
+        name: String::new(),
+        particles: vec![particle.id.clone()],
+        ..base.library.emitters[0].clone()
+    };
+    let light = Light {
+        id: "kit:explosion-light/boom".into(),
+        name: String::new(),
+        enabled: true,
+        color: [1.0, 0.8, 0.2],
+        brightness: 1.0,
+        radius: 60.0,
+        color_curves: None,
+        brightness_curve: None,
+        radius_curve: None,
+        flare: None,
+    };
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![particle],
+        emitters: vec![emitter],
+        lights: vec![light.clone()],
+        explosions: vec![bri_weapons::ExplosionEffect {
+            id: "kit:explosion/boom".into(),
+            lifetime: 0.25,
+            emitters: vec!["kit:emitter/flash".into()],
+            light: Some(light.id.clone()),
+            burst: Some(("kit:emitter/flash".into(), 10, 0.2)),
+        }],
+    };
+    pack.validate()?;
+    let mut fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
+    fx.cues(&[cue(1, "boom", 0.)], pose)?;
+    fx.advance(0.1, Vec3::ZERO, pose)?;
+    assert_eq!(
+        fx.diagnostics.missing_bindings, 0,
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    assert!(
+        fx.world().particle_count() >= 10,
+        "{} particles",
+        fx.world().particle_count()
+    );
+    Ok(())
+}
+
 #[test]
 fn an_add_on_pack_brings_its_own_emitters_and_explosions() -> Result<()> {
     let base = fixture(false);

@@ -819,11 +819,17 @@ impl App {
                 bri_progress::Unit::Steps,
                 None,
             );
+            // A map change: renderers keep per-map sky and terrain state,
+            // so rebuild them for the new map like a fresh join, once it is
+            // set up below. Finishing the change waits for their pipelines
+            // (`scene_pipelines_ready`), so they are rebuilt here, not on
+            // the next frame: a window drawing no frames (minimized, or
+            // covered) would otherwise never finish it.
+            let mut rebuild = None;
             if self.scene.cpu_scene.is_some() {
-                // A map change: renderers keep per-map sky and terrain state,
-                // so rebuild them for the new map like a fresh join.
+                rebuild = self.gpu.device.take();
                 self.gpu_stopped();
-                self.gpu.gpu_restart = true;
+                self.gpu.gpu_restart = rebuild.is_none();
             }
             self.scene.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
@@ -853,6 +859,9 @@ impl App {
             }
             self.gpu.gpu_scene = None;
             self.gpu.gpu_terrain.clear();
+            if let Some((device, queue, format)) = rebuild {
+                self.gpu_ready(&device, &queue, format)?;
+            }
             // A map change replaced what first entry set the HUD up from.
             if a.entered
                 && let (Some(scene), Some(view)) = (&self.scene.cpu_scene, &a.view)

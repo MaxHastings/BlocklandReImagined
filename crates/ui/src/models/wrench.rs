@@ -81,6 +81,8 @@ pub struct WrenchState {
     /// The builder (owner id) of the brick whose events are open: its rows
     /// run in their mini-game, so its teams are the ones rows name.
     pub events_builder: Option<u64>,
+    /// That builder's brick group name, when it is not the local player.
+    pub events_builder_name: Option<String>,
     /// Copy checkbox survives dialog closure. Only editable rows may cross bricks.
     pub events_copy: Option<EventsModel>,
     /// The fill wrench's ticked settings: its Copy boxes say which settings
@@ -247,6 +249,7 @@ impl WrenchState {
         catalog: &EventCatalog,
     ) {
         self.events_builder = None;
+        self.events_builder_name = None;
         let mut incoming = EventsModel::open(brick, rows, named_targets, allow_named, catalog);
         if let Some(copy) = &self.events_copy {
             use crate::models::events::{EditRow, RowState};
@@ -307,6 +310,7 @@ mod tests {
     fn event_copy_survives_close_without_copying_opaque_tokens() {
         use crate::api::{EventInputInfo, EventLine, EventOutputInfo};
         let catalog = EventCatalog {
+            target_notes: Default::default(),
             inputs: vec![EventInputInfo {
                 name: "onActivate".into(),
                 targets: vec![("Self".into(), "fxDTSBrick".into())],

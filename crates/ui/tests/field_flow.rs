@@ -898,6 +898,7 @@ fn open_events(u: &mut Ui) {
     u.apply(UiUpdate::OpenEvents {
         brick: 42,
         builder: None,
+        builder_name: None,
         rows: vec![EventRow::Editable(EventLine {
             conditions: vec![],
             enabled: true,

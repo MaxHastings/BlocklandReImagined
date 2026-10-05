@@ -40,6 +40,8 @@ labels are retained so earlier progress notes remain traceable.
 | Client app split | `crates/client/src/app.rs` into modules | Code health audit | on main |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | on main |
 | Brick values | `set_brick_field`, `brick_field`: values rules keep on bricks, readable by every Add-On | Capture the Flag (Slayer) | on main |
+| Team points | `add_team_points`, `set_team_points`, a team's `points`: a team's own points kept with its mini-game (`MiniGame::team_points`), counted by `team_score` with its members' scores for wrench IF Team Score, MiniGame `addTeamScore` and Slayer's `IncScore` | Goal teams (v0.2.4) | branch fix/goal-teams |
+| Brick target descriptions | `brick_targets` `description`, `TargetDef::description`: one line the wrench shows for an Add-On's target | Goal teams (v0.2.4) | branch fix/goal-teams |
 | Drop key with empty hands | `Command::DropKey`, `on_drop_key` | Capture the Flag (Slayer) | on main |
 | Dropped item names | `Drop::name`, `name_drop`, name tags over drops | Capture the Flag (Slayer) | on main |
 | Image lights | `Image::light`, drawn at the mounted image in its paint | Capture the Flag (Slayer) | on main |
@@ -56,7 +58,7 @@ labels are retained so earlier progress notes remain traceable.
 | Copy pose | `Command::CopyPose` (client reports where its copy ghost stands), `Blueprint::ghost_box`, `on_copy_ghost(p, #{box})` hook | Duplicators | on main |
 | Copy extras | `Blueprint.extras` (names, lights, emitters, items, sounds, vehicles, events), turned with the copy and planted through the wrench checks (`give_copy_extras`) | Duplicators | on main |
 | Image loaded and spin | `State.loaded`/`not_loaded`/`spin` (v20 `stateTransitionOnLoaded`/`NotLoaded`, `stateSpinThread`), `set_image_loaded`, client spin clock in `world_items` | Duplicators | on main |
-| Slayer game rules | `remove_body`, `setting_info`, `setting_text`, `data_lines` (rules data files), `on_pick_spawn` answering `"map"`, `teams` events with `by`/`quiet`, `on_minigame_request` `info.teams`, mini-game event chat charged to the acting player | Slayer and CTF port | on main |
+| Slayer game rules | `remove_body`, `setting_info`, `setting_text`, `data_line_count`/`data_line` (rules data files, a line at a time), `on_pick_spawn` answering `"map"`, `teams` events with `by`/`quiet`, `on_minigame_request` `info.teams`, mini-game event chat charged to the acting player | Slayer and CTF port | on main |
 | Experimental event guards and rule observations | Optional IF fields on existing event rows, bounded transient state, region/object inputs; existing event scheduler and package vocabulary remain the execution path. No lasting schema commitment. | Rule Workshop | integrated for v0.2.0 alpha |
 | Detection region authoring and outlines | Direct wrench dimensions, shared authoritative bounds, live creator preview and replicated outlines with existing building-tool visibility | Release coordinator | on main (v0.2.2 refinement); human acceptance remains separate |
 | Environmental bot interactions | Capability-based ground seats and loose hazards; bounded advisory claims, live occupancy, dated allied evidence, ordinary seat controls, finite-mass walking contacts; `docs/architecture/bot-interactions.md` | Bot NPC coordination | integrated for v0.2.0 alpha |

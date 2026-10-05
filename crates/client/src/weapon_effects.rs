@@ -221,6 +221,16 @@ impl WeaponEffects {
                     .lights
                     .iter()
                     .filter(|l| pack.library.lights.iter().any(|x| x.id == l.id))
+                    // An explosion's light is part of its `ExplosionData`,
+                    // not a datablock of its own: its symbol is the
+                    // explosion's name, which the explosion keeps.
+                    .filter(|l| {
+                        !weapons
+                            .effects
+                            .explosions
+                            .iter()
+                            .any(|x| x.light.as_ref() == Some(&l.id))
+                    })
                     .map(|l| (&l.id, Kind::Light)),
             )
         {

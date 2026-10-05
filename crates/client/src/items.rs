@@ -2646,8 +2646,7 @@ mod add_on_icon_tests {
         };
         let icon = render(&Mesh::from_scene(&scene), &pose, &look, "pick");
         if std::env::var_os("BRI_ICON_SHOT").is_some() {
-            let out =
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/own-model-preview.png");
+            let out = crate::testing::look_path("own-model-preview.png")?;
             image::save_buffer(
                 &out,
                 &icon.rgba,
@@ -2871,7 +2870,7 @@ mod add_on_icon_tests {
                 }
             }
         }
-        let side = manifest.join("../../target/gravity-gun-icon-vs-printer.png");
+        let side = crate::testing::look_path("gravity-gun-icon-vs-printer.png")?;
         image::save_buffer(
             &side,
             &sheet,
@@ -2879,7 +2878,7 @@ mod add_on_icon_tests {
             h as u32,
             image::ColorType::Rgba8,
         )?;
-        let out = manifest.join("../../target/gravity-gun-icon.png");
+        let out = crate::testing::look_path("gravity-gun-icon.png")?;
         image::save_buffer(
             &out,
             &icon.rgba,
@@ -2902,7 +2901,6 @@ mod own_model_icon_tests {
     /// stock tool (the stand-in `own_model_tool`, as the Trench Pick was).
     /// Writes it to `target/own-model-icon.png` for a look.
     fn an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers(fx: &Items) -> Result<()> {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let dir = tempfile::tempdir()?;
         let extras = vec![(
             "addons/tool/assets".to_string(),
@@ -2982,7 +2980,7 @@ mod own_model_icon_tests {
             (0.7..1.6).contains(&ratio),
             "about the Hammer's size: {ratio}"
         );
-        let out = manifest.join("../../target/own-model-icon.png");
+        let out = crate::testing::look_path("own-model-icon.png")?;
         image::save_buffer(
             &out,
             &icon.rgba,

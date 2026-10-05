@@ -629,6 +629,38 @@ impl AddOnSettings {
             .or_else(|| Self::setting(core, key).map(|d| d.default.clone()));
         current.is_some_and(|v| when.holds(&v))
     }
+    /// What the Teams page says when the draft's choice has no teams, from
+    /// the Add-On's own rule: the setting that turns teams on, and the
+    /// choices of it that do.
+    fn teams_hint(&self, core: &Core) -> String {
+        let setting = core
+            .minigames
+            .teams_shown_when
+            .as_ref()
+            .and_then(|w| Some((w, Self::setting(core, &w.setting)?)));
+        let Some((when, setting)) = setting else {
+            return "This game doesn't use teams.".into();
+        };
+        let title = &setting.title;
+        let choices: Vec<&str> = match &setting.kind {
+            MiniGameSettingKind::List { items }
+            | MiniGameSettingKind::Item { items }
+            | MiniGameSettingKind::PlayerType { items } => items
+                .iter()
+                .filter(|(v, _)| when.holds(v))
+                .map(|(_, name)| name.as_str())
+                .collect(),
+            _ => Vec::new(),
+        };
+        match choices.as_slice() {
+            [] => format!("This {title} doesn't use teams: change {title} on Setup."),
+            [one] => format!("This {title} doesn't use teams: set {title} on Setup to {one}."),
+            [rest @ .., last] => format!(
+                "This {title} doesn't use teams: set {title} on Setup to {} or {last}.",
+                rest.join(", ")
+            ),
+        }
+    }
 
     fn summary<'a>(&self, core: &'a Core) -> Option<&'a MiniGameSummary> {
         self.game
@@ -881,12 +913,20 @@ impl AddOnSettings {
             );
             *y += 24;
         };
-        let teams_available =
-            !self.server && self.summary(core).is_some() && self.teams_shown(core);
+        // The Teams page stays open in a mode without teams, to say so and
+        // how to change it; the Players page has nothing to assign.
+        let has_game = !self.server && self.summary(core).is_some();
+        let teams_used = self.teams_shown(core);
+        let teams_available = has_game && teams_used;
         if self.server {
             self.page = Page::Setup;
         }
-        if self.page != Page::Setup && !teams_available {
+        let page_open = match self.page {
+            Page::Setup => true,
+            Page::Teams => has_game,
+            Page::Players => teams_available,
+        };
+        if !page_open {
             self.page = Page::Setup;
         }
         if let Some(n) = self.view.id("AOS_AddTeam") {
@@ -901,8 +941,14 @@ impl AddOnSettings {
         ] {
             if let Some(n) = self.view.id(name) {
                 self.view.set_visible(n, !self.server);
-                self.view
-                    .set_active(n, page == Page::Setup || teams_available);
+                self.view.set_active(
+                    n,
+                    match page {
+                        Page::Setup => true,
+                        Page::Teams => has_game,
+                        Page::Players => teams_available,
+                    },
+                );
                 self.view.set_text(
                     n,
                     match page {
@@ -927,7 +973,9 @@ impl AddOnSettings {
                         && !Self::controller(core, &s.key)
                         && self.shown(core, s, None)
                 }
-                Page::Teams => s.team && self.shown(core, s, Some(self.selected_team)),
+                Page::Teams => {
+                    s.team && teams_used && self.shown(core, s, Some(self.selected_team))
+                }
                 Page::Players => false,
             };
             let group = (s.add_on.clone(), s.category.clone());
@@ -990,8 +1038,10 @@ impl AddOnSettings {
                 })
                 .collect();
             self.view.select(n, Some(self.selected_team as i64));
-            self.view
-                .set_visible(n, self.page == Page::Teams && !self.teams.is_empty());
+            self.view.set_visible(
+                n,
+                self.page == Page::Teams && teams_used && !self.teams.is_empty(),
+            );
         }
         if self.open(core) {
             match self.page {
@@ -1027,6 +1077,10 @@ impl AddOnSettings {
                     if self.categories.is_empty() && self.rows.is_empty() {
                         heading(&mut self.view, &mut y, "No Add-On settings.");
                     }
+                }
+                Page::Teams if !teams_used => {
+                    let hint = self.teams_hint(core);
+                    heading(&mut self.view, &mut y, &hint);
                 }
                 Page::Teams if !self.teams.is_empty() => {
                     let t = self.selected_team;

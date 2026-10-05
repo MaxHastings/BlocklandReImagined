@@ -44,17 +44,17 @@ impl App {
                 }
             }
         }
-        // The world's pipelines compile on a worker (seconds with FXC); the
-        // loading screen stays up, and the window responsive, until then.
-        let Some(renderer) = self
+        // The world's pipelines compile on a worker (seconds with FXC).
+        // Entering a game and finishing a map change wait for them on the
+        // loading screen (`scene_pipelines_ready`), so a frame of a game
+        // that is in reaches here with them compiled; only a GPU opened
+        // after entering (a lost device, an offscreen capture) waits here.
+        let renderer = self
             .gpu
             .renderer
             .as_mut()
             .context("Scene GPU not initialized")?
-            .ready()
-        else {
-            return Ok(false);
-        };
+            .wait();
         renderer.set_filtering(frame.device, self.graphics.filtering);
         let timing = self.gpu.time_passes || self.ui.core.perf.wants_net();
         renderer.time_passes(frame.device, frame.queue, timing);
@@ -1348,9 +1348,7 @@ impl App {
         let effective = self
             .graphics
             .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));
-        // The last frame, holding any picture copied then, was submitted.
         // Failures are logged by the writer; success is not news.
-        self.files.save_shots.submitted();
         self.files.save_shots.poll(frame.device);
         if let Some(path) = self.files.save_picture.take() {
             self.take_save_picture(frame, path)?;

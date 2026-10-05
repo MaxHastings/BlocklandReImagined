@@ -54,18 +54,42 @@ pub fn read(path: &Path) -> Result<Option<Picture>> {
     limits.max_image_width = Some(16384);
     limits.max_image_height = Some(16384);
     reader.limits(limits);
-    let image = reader.decode()?;
-    let image = if image.width() > FIT[0] || image.height() > FIT[1] {
-        image.resize(FIT[0], FIT[1], image::imageops::FilterType::Triangle)
-    } else {
-        image
-    };
-    let rgba = image.into_rgba8();
+    let rgba = fit(reader.decode()?).into_rgba8();
     Ok(Some(Picture {
         width: rgba.width(),
         height: rgba.height(),
         rgba: rgba.into_raw(),
     }))
+}
+
+/// `image` cut to the preview box's shape about its centre, then scaled
+/// down to fit [`FIT`]. The box stretches whatever it shows to its own
+/// shape, so a picture taken on a wide screen would show squashed.
+fn fit(image: image::DynamicImage) -> image::DynamicImage {
+    let (width, height) = (u64::from(image.width()), u64::from(image.height()));
+    let (box_w, box_h) = (u64::from(FIT[0]), u64::from(FIT[1]));
+    // The widest (or tallest) part with the box's shape, rounded to whole
+    // pixels; a picture already that shape is left whole.
+    let (crop_w, crop_h) = if width * box_h > height * box_w {
+        ((height * box_w).div_ceil(box_h).min(width), height)
+    } else {
+        (width, (width * box_h).div_ceil(box_w).min(height))
+    };
+    let image = if (crop_w, crop_h) == (width, height) {
+        image
+    } else {
+        image.crop_imm(
+            ((width - crop_w) / 2) as u32,
+            ((height - crop_h) / 2) as u32,
+            crop_w as u32,
+            crop_h as u32,
+        )
+    };
+    if image.width() > FIT[0] || image.height() > FIT[1] {
+        image.resize(FIT[0], FIT[1], image::imageops::FilterType::Triangle)
+    } else {
+        image
+    }
 }
 
 /// Put `picture` in the UI texture [`ID`] draws from.
@@ -187,10 +211,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bri-save-picture-{}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         let big = dir.join("big.jpg");
-        image::RgbImage::from_pixel(1680, 1050, image::Rgb([200, 40, 10])).save(&big)?;
+        image::RgbImage::from_pixel(2352, 1760, image::Rgb([200, 40, 10])).save(&big)?;
         let picture = read(&big)?.context("a picture")?;
-        assert_eq!((picture.width, picture.height), (588, 368));
-        assert_eq!(picture.rgba.len(), 588 * 368 * 4);
+        assert_eq!((picture.width, picture.height), (588, 440));
+        assert_eq!(picture.rgba.len(), 588 * 440 * 4);
         let small = dir.join("small.jpg");
         image::RgbImage::from_pixel(294, 220, image::Rgb([0, 90, 200])).save(&small)?;
         let picture = read(&small)?.context("a picture")?;
@@ -200,6 +224,51 @@ mod tests {
             "never scaled up"
         );
         assert!(read(&dir.join("none.jpg"))?.is_none());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// A picture taken on a wide (or tall) screen keeps its proportions in
+    /// the preview box, which stretches what it shows to its own shape: its
+    /// middle is shown, its sides cut.
+    #[test]
+    fn pictures_of_another_shape_show_their_middle_unstretched() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("bri-save-shape-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let (red, green, blue) = ([220, 0, 0], [0, 200, 0], [0, 0, 220]);
+        for (name, size, wide) in [
+            ("ultrawide.png", (3177, 1322), true),
+            ("tall.png", (600, 1400), false),
+        ] {
+            let path = dir.join(name);
+            // The outer tenths red and blue, the middle green.
+            image::RgbImage::from_fn(size.0, size.1, |x, y| {
+                let (at, of) = if wide { (x, size.0) } else { (y, size.1) };
+                image::Rgb(match at * 10 / of {
+                    0 => red,
+                    9 => blue,
+                    _ => green,
+                })
+            })
+            .save(&path)?;
+            let picture = read(&path)?.context("a picture")?;
+            let shape = picture.width as f32 / picture.height as f32;
+            let box_shape = FIT[0] as f32 / FIT[1] as f32;
+            assert!(
+                (shape - box_shape).abs() < 0.01,
+                "{name}: {}x{} is not the preview box's shape",
+                picture.width,
+                picture.height
+            );
+            let pixel = |x: u32, y: u32| {
+                let i = ((y * picture.width + x) * 4) as usize;
+                [picture.rgba[i], picture.rgba[i + 1], picture.rgba[i + 2]]
+            };
+            let (w, h) = (picture.width, picture.height);
+            for (x, y) in [(0, 0), (w - 1, h - 1), (w / 2, h / 2)] {
+                assert_eq!(pixel(x, y), green, "{name}: the middle fills the box");
+            }
+        }
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }

@@ -42,11 +42,20 @@ briefs informed the experiment; they do not define mandatory infrastructure.
    Names intentionally share state across a builder's bricks: two courses using
    `checkpoint` in the same match share progress until you rename the key.
 6. **Canonical scoring and rounds.** Player points call the real MiniGame
-   scoring path. `addTeamScore` awards real points to the targeted team member;
-   IF Team Score sums current members' real scores, so changing/leaving a team
-   changes the total. No independent team scoreboard is invented. `winRound`
-   uses the existing round ending system, naming the player and their current
-   team; `endRound` names no winner. Configure automatic MiniGame points
+   scoring path. Player `addTeamScore` awards real points to the targeted team
+   member. MiniGame `addTeamScore` (Team, Points) gives the chosen team points
+   of its own, whoever set the row off: a goal credits the team attacking it,
+   so a defender's own goal still counts for the attackers. A team's score is
+   its own points plus its current members' real scores (`bri_minigames`
+   `team_score`); IF Team Score, Slayer's `IncScore`, `/teams score`, its End
+   of Round report and points to win all read that one total, and a reset
+   clears a team's own points with its members' scores unless scores are
+   kept. An IF Team check names a team slot (Which team) or, by default, the
+   instigator's team. Player `winRound` uses the existing round ending
+   system, naming the player and their current team; MiniGame `winRound`
+   (Team) names the chosen team; `endRound` names no winner. Rows run in
+   order, each IF read when its row runs, so a row after an
+   `addTeamScore` sees the new score in the same firing. Configure automatic MiniGame points
    deliberately to avoid counting twice. Recipe thresholds are editable IF
    rows, not game-mode code. Reset, damage, healing, equipment and other classic
    actions continue through their existing implementations.
@@ -64,13 +73,18 @@ briefs informed the experiment; they do not define mandatory infrastructure.
    meters, and round ending does not implicitly freeze physical motion.
 8. **Authority stays local to the existing systems.** Match facts go to the
    match owner's listening bricks. Region players must share the builder's
-   MiniGame, including both being outside games in free build. Objects must have
-   that builder's spawn brick; uncredited objects remain observable. In a match,
+   MiniGame, including both being outside games in free build. Objects must
+   come from a spawn brick of the builder, or of someone who may edit the
+   builder's events (trust at the events level, which every administrator
+   has): an administrator's own ball works with a loaded build's goal, a
+   stranger's ball does not. Object actions (resetObject, setObjectVelocity's
+   ownership check) follow the same rule. Uncredited objects remain
+   observable. In a match,
    credited movers must share the builder's match. In free build an owned object
    remains observable regardless of the mover's match. Score/team/
    round actions require the match owner as builder; delayed player actions
-   reject a target who left the captured match. Object actions require an owned
-   spawner. These conservative limits make cross-owner collaborative builds an
+   reject a target who left the captured match. Object actions require a
+   spawner the region's rule above accepts. These conservative limits make cross-owner collaborative builds an
    important later question, not an invented permission architecture here.
 9. **Generated match facts follow the existing phase boundary.** A score or
    round action generated inside the event phase queues its native match fact

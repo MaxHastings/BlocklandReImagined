@@ -15,7 +15,8 @@ a native function's result and any `&mut` method target (`keys.contains`,
 - `data_lines("first_names")`: Max's real list is 5161 names, 36 KB. Every
   bot fill threw, so the whole `on_minigame` call (auto-sort, round start,
   fill) was thrown away. Max's PC session found the exact line; its fix
-  (line-at-a-time data reads) is on the integration branch, not here.
+  (line-at-a-time data reads, a20f1e5a) is merged in here, and Slayer's
+  `bot_name` keeps its line's first word cut to `bot_name_limit()`.
 - A `settings` event's `keys` and `changes`: arrays of every changed
   `namespace:key` of every running Add-On. A favourite or a Save & Reset
   touching ~100 settings is over 4096 bytes, so `is_key` threw.
@@ -92,7 +93,5 @@ of one kind would throw there.
 
 ## Next
 
-- Merge the integration branch (the line-at-a-time name fix) into this
-  one.
 - Deathmatch bots: a game-level free-for-all bot count for modes without
   teams.

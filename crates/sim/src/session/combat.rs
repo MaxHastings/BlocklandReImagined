@@ -2144,6 +2144,7 @@ impl Session {
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
+                | mg::Effect::TeamScore { .. }
                 | mg::Effect::Reset { .. }
                 | mg::Effect::TeamsConfigured { .. }
                 | mg::Effect::AddOnSettings { .. }
