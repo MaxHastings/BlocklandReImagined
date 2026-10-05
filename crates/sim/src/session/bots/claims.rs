@@ -129,6 +129,22 @@ impl Claims {
         self.intents.insert(owner, intent);
     }
 
+    /// Since when `owner` has held `option` on `target`: its live intent's
+    /// `since` while that is the same option on the same target, else now.
+    /// A new target is a new choice, whatever the behaviour.
+    pub(super) fn held_since(
+        &self,
+        owner: OwnerId,
+        option: u8,
+        target: Option<Target>,
+        tick: u64,
+    ) -> u64 {
+        self.intents
+            .get(&owner)
+            .filter(|i| tick < i.until && i.option == option && i.target == target)
+            .map_or(tick, |i| i.since)
+    }
+
     pub(super) fn forget(&mut self, owner: OwnerId) {
         self.intents.remove(&owner);
     }

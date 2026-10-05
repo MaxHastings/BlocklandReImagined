@@ -16,6 +16,9 @@ use crate::bot_kind::BotTeam;
 const CROWD: f32 = 4.0;
 /// At most one callout this often, in seconds, as a person would.
 const CALLOUT_SECONDS: f32 = 30.0;
+/// About how often, in ticks, a bot looks round for the mood: a second,
+/// on its own staggered beat (`cadence`).
+const MOOD_TICKS: u64 = 120;
 
 /// What one of a bot's options would do.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -50,6 +53,10 @@ impl Terms {
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
     pub terms: [Terms; Behaviour::COUNT],
+    /// The mood as last looked at (`Session::team_mood_now`): the pull
+    /// toward any idle flavour and toward each one. Whatever scores a
+    /// flavour reads it from here.
+    pub mood: Option<(f32, [f32; 11])>,
     pub allies: usize,
     pub next_callout: u64,
     pub said: Option<String>,
@@ -280,13 +287,28 @@ impl Session {
             .collect()
     }
 
-    /// How many of `bot`'s allies, crew of its vehicle aside, are after
-    /// `enemy` now.
+    /// How many of `bot`'s allies, crew of its vehicle aside, went after
+    /// `enemy` before it did. As with every overlap the first keeps it:
+    /// counting later ones too made two bots on one enemy both give way,
+    /// then both come back.
     pub(super) fn team_crowd(&self, bot: OwnerId, enemy: OwnerId) -> f32 {
         let tick = self.simulation.state().tick;
-        self.team_intents(bot, tick)
-            .into_iter()
-            .filter(|(_, i)| i.target == Some(Target::Player(enemy)))
+        let target = Some(Target::Player(enemy));
+        let mine = self
+            .bots
+            .claims
+            .intents(tick)
+            .find(|(o, i)| *o == bot && i.target == target)
+            .map_or(tick, |(_, i)| i.since);
+        // As `team_intents`, but the cheap target test first: this runs for
+        // each enemy in sight, and most intents are on something else.
+        let vehicle = self.mounted(bot).map(|(v, _)| v);
+        self.bots
+            .claims
+            .intents(tick)
+            .filter(|(o, i)| i.target == target && (i.since, *o) < (mine, bot))
+            .filter(|(_, i)| vehicle.is_none() || i.mount != vehicle)
+            .filter(|(o, _)| *o != bot && self.bot_allies(bot, *o))
             .count() as f32
     }
 
@@ -299,11 +321,7 @@ impl Session {
         let Some(brain) = self.bots.brains.get(&bot) else {
             return 0.0;
         };
-        let since = if brain.behaviour == option {
-            brain.behaviour_since
-        } else {
-            tick
-        };
+        let since = self.bots.claims.held_since(bot, option as u8, None, tick);
         let choice = Choice {
             place: Some(at),
             ..Default::default()
@@ -377,6 +395,38 @@ impl Session {
         .then_some(vehicle)
     }
 
+    /// The mood pull on `bot`, with the surprise and the mood on: looked at
+    /// afresh on the bot's own beat, about every `MOOD_TICKS`, while nothing
+    /// threatens it, and kept between (and while it is under threat), so a
+    /// crowd costs a few rays a bot each second, not each tick, and a match
+    /// keeps a mood for a flavour to be scored by.
+    pub(super) fn team_mood_now(
+        &mut self,
+        bot: OwnerId,
+        (at, eye): (Vec3, Vec3),
+        threatened: bool,
+        tick: u64,
+    ) -> (f32, [f32; 11]) {
+        let Some(brain) = self.bots.brains.get(&bot) else {
+            return (0.0, [0.0; 11]);
+        };
+        if brain.kind.team.mood <= 0.0 || brain.kind.surprise.strength <= 0.0 {
+            self.bots.brains.get_mut(&bot).unwrap().team.mood = None;
+            return (0.0, [0.0; 11]);
+        }
+        if threatened {
+            return brain.team.mood.unwrap_or_default();
+        }
+        if let Some(mood) = brain.team.mood
+            && !cadence::beat(bot, cadence::salt::MOOD, tick, MOOD_TICKS)
+        {
+            return mood;
+        }
+        let mood = self.team_mood(bot, at, eye, tick);
+        self.bots.brains.get_mut(&bot).unwrap().team.mood = Some(mood);
+        mood
+    }
+
     /// The mood pull on `bot` at `at`, its eye at `eye`: each bot's
     /// published flavour or work, and a person's visible goof (an emote in
     /// the last `EMOTED` ticks) or play (firing, holding something, moving
@@ -402,7 +452,9 @@ impl Session {
             if !p.combat.alive || *o == bot || feet.distance(at) >= radius {
                 return None;
             }
-            let seen = self.clear_between(eye, p.player.eye());
+            let seen = self
+                .bot_sees_player(bot, *o, eye, radius, SightUrgency::Ordinary)
+                .is_some();
             if self.bots.is_bot(*o) {
                 let i = intents.get(o)?;
                 let what = match i.flavour {
@@ -441,10 +493,7 @@ impl Session {
         worked: &[(surprise::Domain, u32)],
         tick: u64,
     ) {
-        let Some(eye) = self.peers.get(&bot).map(|p| p.player.eye()) else {
-            return;
-        };
-        if worked.is_empty() {
+        if worked.is_empty() || !self.peers.contains_key(&bot) {
             return;
         }
         let watchers: Vec<(OwnerId, f32)> = self
@@ -455,7 +504,9 @@ impl Session {
             .filter_map(|(o, brain)| {
                 let p = self.peers.get(o).filter(|p| p.combat.alive)?;
                 let from = p.player.eye();
-                let seen = from.distance(eye) < brain.kind.sight && self.clear_between(from, eye);
+                let seen = self
+                    .bot_sees_player(*o, bot, from, brain.kind.sight, SightUrgency::Ordinary)
+                    .is_some();
                 Some((*o, copied(&brain.kind.team, seen)))
             })
             .filter(|(_, copy)| *copy > 0.0)
@@ -466,13 +517,6 @@ impl Session {
                 brain.surprise.saw(*domain, *option, copy, tick);
             }
         }
-    }
-
-    /// Nothing solid between two points.
-    pub(super) fn clear_between(&self, from: Vec3, to: Vec3) -> bool {
-        let d = to - from;
-        self.world_ray(from, d.normalize_or_zero(), d.length())
-            .is_none()
     }
 
     /// What a seated bot needs from whoever drives it: a line from its

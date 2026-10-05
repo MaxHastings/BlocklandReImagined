@@ -75,11 +75,40 @@ soccer (seed 2: ball ignored 278 bot-s): only where solid stands close on
 both sides. Seat offers from a vehicle under way pulled bots into chasing
 it (jeep circling 3.4%): an offer stands only while the driver waits.
 
+## After the merge
+
+- `stairs_to_a_deck` failed on the merged tip with circling 4.5% (bound
+  4%); teamwork 0 gave 2.1%. Bisecting the terms (overlap, harm, follow,
+  sight crowding) moved it but none was the cause: the overlap only changed
+  which enemy a bot chased. The cause was in the chase itself: when the
+  path search to a chase goal came back empty, the bot settled, and the
+  goal was refreshed only once the enemy moved 2.5 m from it, so a bot
+  short of an unreachable goal paced in place. A chase now searches again
+  whenever it has settled with no plan short of its goal. With teamwork
+  0.5: circling 1.7%, stuck 5.5%.
+- Two correctness fixes met on the way: a bot's seniority on an enemy or
+  place now counts from when it took that option and target (not any
+  intent), and enemy crowding counts only allies who took the enemy first,
+  so two bots no longer push each other off the same pick.
+- The mood looked round (a sight ray to every peer in range) for every
+  bot, every tick. It is now looked at afresh on each bot's own `cadence`
+  beat (salt `MOOD`, about once a second) whenever no enemy threatens it,
+  kept between and under threat, and cached in the brain's team state, so
+  a match keeps a mood for flavour to be scored by once flavour is an
+  ordinary option (the bots lane's work); the natural pause reads it as
+  before. Team sight (the mood's look at each peer, an ally watching an
+  option work) now asks perception's shared `bot_sees_player` instead of
+  casting its own rays, and enemy crowding tests an intent's target
+  before asking whether its owner is an ally. In `bot_think_time_16` (all
+  dials on, 16 bots, 30 s, debug, merged with a00626eb) the mood's sight
+  queries by tick 4200 fell from 608,161 to 3,684, and bot think is 3515
+  and 3597 us/tick against 4307 and 4957 with the per-tick mood and 5900
+  and 4101 on the release tip a00626eb itself.
+
 ## Not done
 
 A goal to defend, passing; humans publish no intents beyond what is seen;
 the audit's free-for-all brick bots (T1) was reverted here, because
 `bots_of_one_builder_are_on_one_side` asserts the current rule and a
-lane's test cannot be inverted without a decision; the sight checks use
-the module's own rays until the perception lane's shared sight query lands;
-the cadence helper is not yet used for callout timing.
+lane's test cannot be inverted without a decision; callouts keep their
+own per-bot deadline rather than a cadence beat.
