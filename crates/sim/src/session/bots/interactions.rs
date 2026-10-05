@@ -931,10 +931,7 @@ impl Session {
             for k in 1..=8 {
                 let out = body.width * 0.5 * (k as f32 + 1.0);
                 let at = feet + d * out;
-                if self
-                    .world_ray(feet + Vec3::Y * body.step, d, out)
-                    .is_some()
-                {
+                if self.world_ray(feet + Vec3::Y * body.step, d, out).is_some() {
                     break;
                 }
                 let Some(down) = self.world_ray(at + Vec3::Y * 0.5, Vec3::NEG_Y, 0.5 + depth)

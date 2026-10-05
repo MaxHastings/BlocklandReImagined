@@ -637,7 +637,10 @@ mod tests {
         // x = 1: the nearer way out (+x) is a drop, so it goes out by -x.
         let deck = |at: Vec3| at.x < 1.0;
         let out = exit(&[(1, shooter())], Vec3::new(0.5, 0.0, -10.0), 2.0, &deck).unwrap();
-        assert!(!inside(&shooter().harm.unwrap(), out, 2.0) && out.x < 0.0, "{out}");
+        assert!(
+            !inside(&shooter().harm.unwrap(), out, 2.0) && out.x < 0.0,
+            "{out}"
+        );
         // No floor either side: it stays where it is.
         let ledge = |_: Vec3| false;
         assert_eq!(
