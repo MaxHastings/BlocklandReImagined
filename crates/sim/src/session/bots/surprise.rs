@@ -121,6 +121,10 @@ struct Drive {
     /// 1 works; lower when it has not been working.
     effectiveness: f32,
     updated: u64,
+    /// Seen it work for a teammate (`team` copy): a bonus on its score that
+    /// fades over `effectiveness_seconds`, as of `seen_at`.
+    seen: f32,
+    seen_at: u64,
 }
 
 /// One option's terms in a decision.
@@ -241,6 +245,10 @@ pub(super) struct Pause {
     /// the one in hand.
     pub other_tool: bool,
     pub spare_weapon: bool,
+    /// Mood (`team::mood`): how much likelier any flavour is, and each one,
+    /// from bots nearby doing one.
+    pub pull: f32,
+    pub copy: [f32; 11],
 }
 /// An interrupt this tick.
 #[derive(Clone, Copy, Debug)]
@@ -266,6 +274,9 @@ pub(super) struct Mind {
     pub gate: Gate,
     interrupt: Option<Interrupt>,
     next_interrupt: u64,
+    /// Seconds spent in flavours, halving every `boredom_seconds` (as of
+    /// the tick beside it): the whole kind grows stale, not one flavour.
+    stale: (f32, u64),
     shots: Vec<Shot>,
 }
 impl Mind {
@@ -307,6 +318,8 @@ impl Mind {
                     boredom: 0.0,
                     effectiveness: 1.0,
                     updated: tick,
+                    seen: 0.0,
+                    seen_at: tick,
                 });
                 return self.drives.len() - 1;
             }
@@ -397,7 +410,9 @@ impl Mind {
             terms.push(Term {
                 option: *option,
                 score: *score,
-                adjusted: score * (1.0 - cfg.strength * (1.0 - d.effectiveness)),
+                adjusted: score
+                    * (1.0 - cfg.strength * (1.0 - d.effectiveness))
+                    * (1.0 + Self::faded(cfg, &d, tick)),
                 eligible: false,
                 drift: d.drift,
                 boredom: d.boredom,
@@ -542,6 +557,55 @@ impl Mind {
         }
         .clamp(0.05, 1.0);
     }
+    /// What seeing `option` work for a teammate is still worth, at `tick`.
+    fn faded(cfg: &BotSurprise, d: &Drive, tick: u64) -> f32 {
+        let seconds = tick.saturating_sub(d.seen_at) as f32 / TICKS;
+        let seen = d.seen * 0.5f32.powf(seconds / cfg.effectiveness_seconds);
+        if seen < 1e-3 { 0.0 } else { seen }
+    }
+    /// The bonus on `option` from having seen it work for a teammate.
+    /// Draws nothing, so the plain brain stays as it was.
+    pub(super) fn seen(&self, cfg: &BotSurprise, domain: Domain, option: u32, tick: u64) -> f32 {
+        self.drives
+            .iter()
+            .find(|d| d.domain == domain && d.option == option)
+            .map_or(0.0, |d| Self::faded(cfg, d, tick))
+    }
+    /// A teammate's `option` worked where this bot saw it: each sighting
+    /// adds half of `copy`, and the bonus never passes `copy`.
+    pub(super) fn saw(
+        &mut self,
+        cfg: &BotSurprise,
+        domain: Domain,
+        option: u32,
+        copy: f32,
+        tick: u64,
+    ) {
+        let at = match self
+            .drives
+            .iter()
+            .position(|d| d.domain == domain && d.option == option)
+        {
+            Some(at) => at,
+            None => {
+                self.drives.push(Drive {
+                    domain,
+                    option,
+                    drift: 0.0,
+                    boredom: 0.0,
+                    effectiveness: 1.0,
+                    updated: tick,
+                    seen: 0.0,
+                    seen_at: tick,
+                });
+                self.drives.len() - 1
+            }
+        };
+        let now = Self::faded(cfg, &self.drives[at], tick);
+        let d = &mut self.drives[at];
+        d.seen = (now + copy * 0.5).min(copy);
+        d.seen_at = tick;
+    }
     /// In a tell: pausing before a switch.
     pub(super) fn telling(&self, tick: u64) -> bool {
         self.tell.is_some_and(|t| tick < t.until)
@@ -569,8 +633,13 @@ impl Mind {
         if let Some(i) = self.interrupt {
             if !pause.natural || pause.gate.closed().is_some() || tick >= i.until {
                 self.interrupt = None;
-                self.next_interrupt =
-                    tick + (cfg.interrupt_cooldown_seconds * TICKS).round() as u64;
+                // Others about still at it cut the rest short (`team::mood`).
+                self.next_interrupt = tick
+                    + (cfg.interrupt_cooldown_seconds * TICKS / (1.0 + pause.pull)).round() as u64;
+                self.stale = (
+                    self.stale(cfg, tick) + tick.saturating_sub(i.since) as f32 / TICKS,
+                    tick,
+                );
                 return Moment::End(i);
             }
             return Moment::Continue(i);
@@ -583,7 +652,9 @@ impl Mind {
         {
             return Moment::None;
         }
-        let chance = cfg.interrupts_per_minute * cfg.strength / (60.0 * TICKS);
+        let chance = cfg.interrupts_per_minute * cfg.strength * (1.0 + pause.pull)
+            / (1.0 + cfg.boredom * self.stale(cfg, tick))
+            / (60.0 * TICKS);
         if self.random() >= chance {
             return Moment::None;
         }
@@ -596,7 +667,12 @@ impl Mind {
         let weights: Vec<(Flavour, f32)> = Flavour::ALL
             .into_iter()
             .filter(|f| possible(*f))
-            .map(|f| (f, cfg.interrupt_weight(f.name())))
+            .map(|f| {
+                (
+                    f,
+                    cfg.interrupt_weight(f.name()) * (1.0 + pause.copy[f as usize]),
+                )
+            })
             .filter(|(_, w)| *w > 0.0)
             .collect();
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
@@ -623,6 +699,11 @@ impl Mind {
         };
         self.interrupt = Some(i);
         Moment::Begin(i)
+    }
+    fn stale(&self, cfg: &BotSurprise, tick: u64) -> f32 {
+        let (seconds, at) = self.stale;
+        let half_lives = tick.saturating_sub(at) as f32 / (cfg.boredom_seconds * TICKS);
+        seconds * 0.5f32.powf(half_lives)
     }
     /// Keep what an interrupt under way remembers (the tool to put back).
     pub(super) fn set_restore(&mut self, restore: Option<usize>) {
@@ -892,9 +973,10 @@ impl Session {
         let Some(brain) = self.bots.brains.get_mut(&bot) else {
             return;
         };
-        if brain.kind.surprise.strength <= 0.0 {
+        if brain.kind.surprise.strength <= 0.0 && brain.kind.team.copy <= 0.0 {
             return;
         }
+        let mut worked = Vec::new();
         for shot in brain.surprise.due(tick) {
             let hit = self.peers.get(&shot.target).is_none_or(|p| {
                 !p.combat.alive
@@ -904,6 +986,9 @@ impl Session {
             let cfg = &brain.kind.surprise;
             if let Some(slot) = shot.weapon {
                 brain.surprise.outcome(cfg, Domain::Weapon, slot, hit, tick);
+                if hit {
+                    worked.push((Domain::Weapon, slot));
+                }
             }
             brain
                 .surprise
@@ -911,7 +996,11 @@ impl Session {
             brain
                 .surprise
                 .outcome(cfg, Domain::Behaviour, shot.behaviour, hit, tick);
+            if hit {
+                worked.extend([(Domain::Aim, shot.aim), (Domain::Behaviour, shot.behaviour)]);
+            }
         }
+        self.team_copy(bot, &worked, tick);
     }
     /// A shot to judge once it has had time to land.
     pub(super) fn surprise_fired(
@@ -930,7 +1019,7 @@ impl Session {
             .bots
             .brains
             .get_mut(&bot)
-            .filter(|b| b.kind.surprise.strength > 0.0)
+            .filter(|b| b.kind.surprise.strength > 0.0 || b.kind.team.copy > 0.0)
         else {
             return;
         };
@@ -1008,6 +1097,7 @@ impl Session {
             player,
             other_tool,
             spare_weapon,
+            ..Default::default()
         }
     }
     /// Carry out a flavour interrupt: the commands a player would give as

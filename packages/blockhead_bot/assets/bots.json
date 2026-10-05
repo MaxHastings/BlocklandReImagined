@@ -79,6 +79,29 @@
           "light": 0.5     // flick the light on and off
         }
       },
+      // Coordination (docs/architecture/bots.md, "Coordination"): how
+      // teammates' published intents, the mood of the bots it sees and its
+      // team's score move its own choices. Each is a score term in the one
+      // chooser, never an order.
+      "team": {
+        // 0-1: how much allies' intents count. Crowding the same target or
+        // spot costs, using a seat or sightline an ally offers pays, and
+        // standing where an ally's weapon will hit costs (a fight steps out).
+        "teamwork": 0.5,
+        // Idle flavours grow likelier by mood times the share of the players
+        // it sees doing one (a person counting mood_human), at most mood_cap.
+        "mood": 16,
+        "mood_cap": 10,
+        "mood_human": 3,
+        // Objectives are worth up to this much more as its team falls behind.
+        "pressure": 0.3,
+        // Seeing a teammate's option work makes it score up to this much
+        // more for a while (fading over effectiveness_seconds).
+        "copy": 0.15,
+        // A choice an ally's intent changed may be said in team chat, keyed
+        // by the term that changed it.
+        "callouts": { "uses": "Coming!", "harm": "Moving!" }
+      },
       "first_names": [
         "Alex",
         "Ben",

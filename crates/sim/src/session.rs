@@ -16,7 +16,7 @@ mod admin;
 mod bots;
 pub use bots::{
     BotCandidate, BotDecision, BotDrive, BotEvidence, BotObjectiveDetail, BotReload,
-    BotSurpriseView, BotTask, BotThought, BotTuning,
+    BotSurpriseView, BotTask, BotTeamView, BotThought, BotTuning,
 };
 mod breakables;
 mod build_load;

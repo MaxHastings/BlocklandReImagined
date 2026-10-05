@@ -369,6 +369,40 @@ second only while the overlay asks (`ServerPerf::bots_wanted`, host-local,
 never sent to players), so it shows for games this computer hosts and not
 on another computer's server.
 
+## Coordination
+
+What teammates do is information that moves a bot's scores, never an
+order: it goes through the same chooser, with surprise and commitment, as
+everything else (`bots/team.rs`). Nothing names a game, item or vehicle.
+
+Each bot publishes its current choice as an *intent* beside the claims
+(`claims::Intent`, lapsing three ticks after it stops): where it goes or
+stands, its target, a vehicle whose free seats it controls while it waits for crew, the space its
+weapon will hit (`claims::Space`, from real reach, splash and aim error,
+the same test the hold-fire check uses) and, from a seat it does not drive,
+the line its mount needs. Allies' intents enter each option's score as
+**overlap** (an earlier ally on the same target, or doing the same option
+at the same spot, costs: the first keeps it, and a choice among places or
+targets prefers an uncrowded one; following an ally through a gap too narrow to pass it, at its
+pace rather than walking round it is the same rule) and **interaction**
+(a seat an ally offers, or a driving place from which a seated ally's
+mount sees its target, pays; a fight's stance in an ally's line of fire
+costs, so it steps out). Crew of one vehicle neither crowd nor endanger
+each other; a seat stays the claim's to arbitrate. Socially, an objective
+is worth more as the team trails; idle flavours grow likelier with the
+share of the players a bot sees goofing, less those it sees playing, a
+person counting `mood_human`, capped; and an option it saw work for a
+teammate (a hit) scores a little more for a while (`copy`, fading over
+the surprise `effectiveness_seconds`), with boredom as the brake. A choice
+the terms changed may be said in team chat, keyed by the term that moved
+it (`callouts`). `BotThought::team` shows what it read and each option's
+terms.
+
+The kind's `team` dials: `teamwork` (0-1, scales overlap and interaction
+together), `mood` and `mood_cap`, `mood_human`, `pressure` and `copy`;
+radii come from its sight, the rest are constants in code. Still
+unsupported: a goal to defend, passing.
+
 ## Data
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
