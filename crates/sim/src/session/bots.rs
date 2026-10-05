@@ -2375,7 +2375,7 @@ impl Session {
         // Clearing an opponent off a body a teammate holds, with something
         // that shoves (`contest::clear`), or else covering it (`contest::cover`).
         let shove = objective.and_then(|view| {
-            contest::clear(self, bot, view.resource?, feet, eye).map(|c| (c, view))
+            contest::clear(self, bot, view.resource?, feet, eye, view.heading).map(|c| (c, view))
         });
         let cover = objective.and_then(|view| {
             contest::cover(self, bot, view.resource?, feet, view.heading).map(|point| (point, view))
@@ -3892,7 +3892,24 @@ impl Session {
         }
         if behaviour == Behaviour::Objective {
             if let Some(view) = selected_objective {
+                // The step's tool slot as planned; one emptied since (the
+                // item dropped, thrown or taken by the rules) fails the step,
+                // which plans again, rather than the bot's whole turn.
+                let filled = |slot: usize| {
+                    self.weapons
+                        .actor(ActorId(bot))
+                        .is_some_and(|a| a.inventory.get(slot).is_some_and(Option::is_some))
+                };
                 if let Some(slot) = view.equip
+                    && !filled(slot)
+                {
+                    self.bots
+                        .brains
+                        .get_mut(&bot)
+                        .unwrap()
+                        .objective
+                        .fail(tick, "objective tool slot emptied");
+                } else if let Some(slot) = view.equip
                     && self
                         .weapons
                         .actor(ActorId(bot))

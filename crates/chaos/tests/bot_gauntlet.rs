@@ -226,6 +226,25 @@ fn deathmatch_open_field() {
     within(&r, 0.01, 0.01, 0.12, 26.0);
 }
 
+/// Max's soccer save with its slot-1 kit (2026-10-05 watch loop): four a
+/// side with swords on open ground. Bots close and swing, not dither
+/// between chasing and wandering, and never wander with an enemy about.
+#[test]
+fn swords_four_a_side() {
+    let spec = Spec::new(
+        "swords_four_a_side",
+        line(-70.0, 0.0, 50.0, 4),
+        line(-40.0, 0.0, 50.0, 4),
+        &[bri_weapons::testing::SWORD_ITEM],
+    );
+    let mut b = battle(spec, |_| {});
+    let r = b.play(0.0, 60, |_, _| {});
+    eprintln!("transitions {:?}", r.transitions);
+    assert!(r.kills >= 10 * rounds() as u64, "a real fight: {}", r.kills);
+    assert_eq!(r.team_kills, 0, "no swings at its own side");
+    within(&r, 0.03, 0.03, 0.15, 30.0);
+}
+
 #[test]
 fn deathmatch_mixed_arsenal() {
     use bri_weapons::testing::*;

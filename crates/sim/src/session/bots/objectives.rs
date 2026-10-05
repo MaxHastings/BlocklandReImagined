@@ -1489,7 +1489,7 @@ impl Session {
     fn discover_rule_causes(
         &self,
         bot: OwnerId,
-        sources: &BTreeSet<BrickId>,
+        sources: &[BrickId],
         facts: &mut Facts,
         budget: &mut GroundingBudget,
         unsupported: &mut bool,
@@ -1509,7 +1509,10 @@ impl Session {
         let mut causes = Vec::new();
         // These are the known native causal inputs at this baseline. Selecting
         // an available body/control method is deliberately a later operation.
-        for id in sources {
+        // Sources come most relevant first (`objective_candidates`): past
+        // half the model's actions the rest are left out, keeping room for
+        // bodies, enemies and Add-On goals.
+        'sources: for id in sources {
             let Some(program) = world.program(super::super::events::id(*id)) else {
                 continue;
             };
@@ -1520,8 +1523,8 @@ impl Session {
                 if !program.rows.iter().any(|r| r.enabled && r.input == input) {
                     continue;
                 }
-                if causes.len() >= ACTIONS {
-                    return Err(F::ActionBudgetExceeded);
+                if causes.len() >= ACTIONS / 2 {
+                    break 'sources;
                 }
                 let previous = facts.clone();
                 let cx = self
@@ -1664,7 +1667,7 @@ impl Session {
     fn append_physical_actions(
         &self,
         bot: OwnerId,
-        sources: &BTreeSet<BrickId>,
+        sources: &[BrickId],
         facts: &mut Facts,
         budget: &mut GroundingBudget,
         unsupported: &mut bool,
@@ -1756,6 +1759,58 @@ impl Session {
         Ok(actions)
     }
 
+    /// The game creator's bricks with objective inputs this bot's model
+    /// considers, at most `SOURCES` of them with at most `ROWS` rows between
+    /// them: those whose rows change rules, the game or call an Add-On
+    /// output (a goal's `IncScore`) first, then the rest nearest the bot.
+    /// A big build (doors, lights and music bricks by the hundred) keeps the
+    /// model to what is near and what scores, instead of giving up on it.
+    fn objective_candidates(&self, bot: OwnerId, owner: OwnerId) -> Vec<BrickId> {
+        let Some(indexed) = self.events.objective_sources.get(&owner) else {
+            return Vec::new();
+        };
+        let Some(world) = self.events.world.as_ref() else {
+            return Vec::new();
+        };
+        let feet = self
+            .peers
+            .get(&bot)
+            .map_or(Vec3::ZERO, |p| Vec3::from(p.player.state().feet));
+        let bricks = &self.simulation.state().bricks;
+        let mut ranked: Vec<(bool, f32, BrickId, usize)> = indexed
+            .iter()
+            .filter_map(|id| {
+                let program = world.program(super::super::events::id(*id))?;
+                let scores = (0..program.rows.len()).any(|row| {
+                    matches!(
+                        u16::try_from(row)
+                            .ok()
+                            .and_then(|row| world.row_intent(super::super::events::id(*id), row)),
+                        Some(Intent::Rule(_) | Intent::MiniGame(_) | Intent::Package(_))
+                    )
+                });
+                let at = bricks
+                    .get(id)
+                    .map_or(Vec3::splat(f32::MAX), |b| Vec3::from(b.position));
+                Some((!scores, at.distance(feet), *id, program.rows.len()))
+            })
+            .collect();
+        ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let mut rows = 0usize;
+        let mut out = Vec::new();
+        for (_, _, id, count) in ranked {
+            if out.len() >= SOURCES {
+                break;
+            }
+            if rows + count > ROWS {
+                continue;
+            }
+            rows += count;
+            out.push(id);
+        }
+        out
+    }
+
     fn objective_snapshot_with_budget(
         &self,
         bot: OwnerId,
@@ -1771,27 +1826,7 @@ impl Session {
         if g.round_over {
             return Err(F::NoPlan);
         }
-        let indexed_sources = self.events.objective_sources.get(&g.owner.account.0);
-        if indexed_sources.is_some_and(|sources| sources.len() > SOURCES) {
-            return Err(F::ActionBudgetExceeded);
-        }
-        let sources = indexed_sources.cloned().unwrap_or_default();
-        let mut row_count = 0usize;
-        // Candidate sources are indexed by actual game creator. Decorative
-        // named bricks do not consume the model's discovery budget.
-        for id in &sources {
-            if let Some(program) = self
-                .events
-                .world
-                .as_ref()
-                .and_then(|w| w.program(super::super::events::id(*id)))
-            {
-                row_count = row_count.saturating_add(program.rows.len());
-                if row_count > ROWS {
-                    return Err(F::ModelBudgetExceeded);
-                }
-            }
-        }
+        let sources = self.objective_candidates(bot, g.owner.account.0);
         let peer = self.peers.get(&bot).ok_or(F::NoPlan)?;
         let team = self
             .minigames
@@ -1816,7 +1851,7 @@ impl Session {
                 continue;
             }
             if grounded_actions.len() >= ACTIONS {
-                return Err(F::ActionBudgetExceeded);
+                break;
             }
             let model = Action {
                 id: action_id.clone(),
@@ -1848,7 +1883,7 @@ impl Session {
                     continue;
                 }
                 if grounded_actions.len() >= ACTIONS {
-                    return Err(F::ActionBudgetExceeded);
+                    break;
                 }
                 grounded_actions.push(grounded);
             }
@@ -1863,7 +1898,7 @@ impl Session {
                         continue;
                     }
                     if grounded_actions.len() >= ACTIONS {
-                        return Err(F::ActionBudgetExceeded);
+                        break;
                     }
                     grounded_actions.push(grounded);
                 }
@@ -1879,7 +1914,7 @@ impl Session {
                     continue;
                 }
                 if grounded_actions.len() >= ACTIONS {
-                    return Err(F::ActionBudgetExceeded);
+                    break;
                 }
                 grounded_actions.push(grounded);
             }

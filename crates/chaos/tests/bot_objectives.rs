@@ -688,6 +688,37 @@ fn unrelated_named_decor_and_timer_do_not_disable_the_creator_objective() {
     assert!(s.take_event_diagnostics().is_empty());
 }
 
+/// Max's builds hold doors, lights and music bricks by the hundred, each
+/// clickable. The model takes what scores first and the rest nearest the
+/// bot, so the round's goal is still found instead of the whole model
+/// giving up as over budget.
+#[test]
+fn a_build_full_of_light_switches_still_shows_the_goal() {
+    let mut bricks = vec![brick(
+        [0.25, 0.1, 28.25],
+        "goal_panel",
+        vec![row("onActivate", "winRound", Slot::Player, vec![], vec![], 0)],
+    )];
+    for i in 0..120 {
+        bricks.push(brick(
+            [-30.25 + (i % 12) as f32 * 2.0, 0.1, -20.25 - (i / 12) as f32 * 2.0],
+            &format!("light_{i}"),
+            vec![row(
+                "onActivate",
+                "setColor",
+                Slot::SelfBrick,
+                vec![Value::Color(2)],
+                vec![],
+                0,
+            )],
+        ));
+    }
+    bricks.push(round_observer());
+    let (mut s, owner, mut sequence) = game(bricks);
+    ticks(&mut s, owner, &mut sequence, 120 * 20);
+    assert_round_ended(&mut s, owner, &mut sequence);
+}
+
 #[test]
 fn ungrounded_collateral_on_the_same_input_is_not_omitted() {
     let rows = vec![

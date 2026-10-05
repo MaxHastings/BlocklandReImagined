@@ -109,9 +109,13 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
     while s.build_loading() {
         step(&mut s)?;
     }
+    // Each command takes the next sequence number: a repeated one is
+    // rejected as replayed.
+    let sent = std::cell::Cell::new(1_000_000u64);
     let send = |s: &mut bri_sim::session::Session, action: UiAction, game: Option<u64>| {
+        sent.set(sent.get() + 1);
         let command = minigame_ui::command(&action, game, true)?.context("a mini-game command")?;
-        let reply = s.command(host, 1_000_000, command)?;
+        let reply = s.command(host, sent.get(), command)?;
         eprintln!("{action:?}\n  -> {reply:?}");
         Ok::<_, anyhow::Error>(())
     };

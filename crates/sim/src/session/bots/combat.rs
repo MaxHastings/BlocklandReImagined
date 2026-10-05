@@ -304,13 +304,27 @@ pub(super) fn item_shove(session: &Session, item: &str, scale: f32) -> Option<f3
         .projectile
         .as_ref()
         .and_then(|id| pack.projectiles.get(id))?;
-    if projectile.impulse <= 0.0 && projectile.vertical <= 0.0 || !charge_release_only(image) {
+    if projectile.impulse <= 0.0 && projectile.vertical <= 0.0
+        || !projectile.collide_players
+        || image.command.is_some()
+        || !image.commands.is_empty()
+        || !image.scripts.is_empty()
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
         return None;
     }
-    let mut native = image.clone();
-    native.melee = false;
-    let cap = tactics::native_capability(&native, Some(projectile), scale, cadence(image)).ok()?;
-    (cap.reach <= SHOVE_REACH * scale).then_some(cap.reach)
+    // Its reach as the native attack would have it (a shove need not hurt,
+    // so the attack capability, which wants damage, is not asked).
+    let ray = image.shot.as_ref().and_then(|s| s.hitscan.as_ref());
+    let reach = image.bot.and_then(|b| b.reach).unwrap_or_else(|| {
+        ray.map_or(
+            projectile.speed * scale * projectile.lifetime_ticks as f32
+                / bri_weapons::TICK_HZ as f32,
+            |r| r.range * scale,
+        )
+    });
+    (reach > 0.0 && reach <= SHOVE_REACH * scale).then_some(reach)
 }
 
 /// How much splash damage counts for, against direct damage, in an item's

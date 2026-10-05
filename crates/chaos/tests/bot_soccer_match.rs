@@ -1250,11 +1250,12 @@ fn two_against_two_play_a_clean_match_across_seeds() {
         failures.push("no bot ever cleared an opponent off the ball with a broom".into());
     }
     // Goofing is one of the bot's options mid-match too (a look, an emote
-    // between plays), not only with nothing to do: a little, never a lot.
+    // between plays), not only with nothing to do: a little, never a lot
+    // (Max 2026-10-05 wants more goofing: up to about one moment in seven).
     let goofing = goof / bot_time.max(1.0);
     println!("goof share {:.2}%", goofing * 100.0);
-    if goofing <= 0.0 || goofing > 0.1 {
-        failures.push(format!("goof share {goofing:.4} outside (0, 0.1]"));
+    if goofing <= 0.0 || goofing > 0.15 {
+        failures.push(format!("goof share {goofing:.4} outside (0, 0.15]"));
     }
     // A lull: a bot far up the field from the ball now and then goofs; one
     // at the ball hardly ever does, so it stops when the ball comes back.

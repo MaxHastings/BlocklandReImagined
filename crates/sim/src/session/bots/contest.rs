@@ -208,7 +208,7 @@ pub(super) fn cover(
 /// (`clear`).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Clear {
-    /// Where it walks: just on the body's side of the opponent.
+    /// Where it walks: beside the opponent, off the body's line.
     pub point: Vec3,
     /// Where it looks: the opponent's chest, so the hit knocks it away
     /// from the body.
@@ -221,18 +221,20 @@ pub(super) struct Clear {
 }
 
 /// While a teammate works a loose body, a cover holding something that
-/// shoves (`hand_combat::item_shove`) goes for the opponent standing at the
-/// body instead of standing back: from the body's side, so its hit knocks
-/// the opponent away while the teammate keeps the body moving. The
-/// opponent nearest the body within the kind's `contest.engage` of it is
-/// the one. None when no teammate works it, nobody contests it there, it
-/// has nothing that shoves, or the kind does not cover.
+/// shoves (`hand_combat::item_shove`) goes for the opponent standing in
+/// the body's way instead of standing back: from the body's side, so its
+/// hit knocks the opponent out of the way while the teammate keeps the
+/// body moving. The one is the opponent nearest the body within the
+/// kind's `contest.engage` of it and ahead of it along `heading`, the way
+/// the team delivers it. None when no teammate works it, nobody stands in
+/// its way, it has nothing that shoves, or the kind does not cover.
 pub(super) fn clear(
     session: &Session,
     bot: OwnerId,
     resource: Resource,
     feet: Vec3,
     eye: Vec3,
+    heading: Vec3,
 ) -> Option<Clear> {
     let Resource::Body { vehicle } = resource else {
         return None;
@@ -272,16 +274,29 @@ pub(super) fn clear(
                 && !session.bot_allies(bot, **o)
         })
         .map(|(o, p)| (*o, Vec3::from(p.player.state().feet)))
-        .filter(|(_, at)| flat(*at - centre).length() <= tuning.engage)
+        .filter(|(_, at)| {
+            let off = flat(*at - centre);
+            off.length() <= tuning.engage && off.dot(flat(heading)) > 0.0
+        })
         .min_by(|a, b| {
             flat(a.1 - centre)
                 .length()
                 .total_cmp(&flat(b.1 - centre).length())
         })?;
-    let away = flat(at - centre)
+    // From beside it, on the side the cover is already on, so the swing
+    // knocks the opponent sideways off the body's line: never from between
+    // it and the body, where the cover would be in the way itself (and the
+    // opponent's own push would drive the cover into the body).
+    let line = flat(at - centre)
         .try_normalize()
-        .or_else(|| flat(at - feet).try_normalize())?;
-    let mut point = at - away * (reach * 0.5).min(1.5);
+        .or_else(|| flat(heading).try_normalize())?;
+    let across = Vec3::new(-line.z, 0.0, line.x);
+    let side = if flat(feet - at).dot(across) < 0.0 {
+        -across
+    } else {
+        across
+    };
+    let mut point = at + side * (reach * 0.6).min(1.5);
     point.y = feet.y;
     let aim = at + Vec3::Y * 1.2;
     let swing = (aim - eye).length() <= reach;
