@@ -172,7 +172,14 @@ person presses:
   catch on is still walked round. Walking eases off only at the leg's end.
   A walker does not walk into a vehicle (which the grid leaves out): one
   ahead is walked round by its nearer side, unless it is what the bot
-  makes for.
+  makes for. Nor is a pulled line drawn past another player or where one
+  is heading over the next second (`Ground::crowds`, `MOTION_AHEAD`); a
+  player in the way is passed on the left, or on the right when already
+  off to the left. A bot standing on a body (a roof, a head) with its
+  target close below steps off to the nearest open floor
+  (`bot_step_off`). An airborne fighter whose arc (`route::landing`)
+  would come down off the floor steers back instead of strafing on, and
+  a way out of an ally's line of fire is only taken onto floor.
 - swim: head for the next waypoint across the water, whatever the depth,
   holding jump to rise where the way out is higher.
 - jet: climb straight up at the launch cell until above the landing's
