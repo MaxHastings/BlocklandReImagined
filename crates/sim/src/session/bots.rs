@@ -36,14 +36,20 @@ use bri_weapons::ActorId;
 
 mod arming;
 mod behaviour;
+// Only the extras beat here so far; its other users (fire, alerts, hops,
+// dismounts, respawns) come with fix/bots-ball-games-2.
+#[allow(dead_code)]
+pub(crate) mod cadence;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
 mod contest;
+mod extras;
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod interactions;
+mod looks;
 mod objectives;
 mod package_objectives;
 mod physical_objectives;
@@ -310,6 +316,8 @@ struct Brain {
     chase_offset: Vec3,
     /// What teammates' intents did to its last choice ([`team`]).
     team: team::State,
+    /// The small extra options' memory ([`extras`]).
+    extras: extras::State,
 }
 /// How a flight is going: the nearest it came and when, and how long it
 /// stays on the ground after giving one up.
@@ -437,6 +445,7 @@ impl Brain {
             surprise: surprise::Mind::new(bot),
             chase_offset: Vec3::ZERO,
             team: team::State::default(),
+            extras: Default::default(),
         }
     }
     fn random(&mut self) -> f32 {
@@ -713,7 +722,7 @@ impl Session {
             return Ok(());
         };
         let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
-        let name = self.brick_bot_name(&kind, brick_id);
+        let name = self.brick_bot_name(&kind, brick_id, None);
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
         if self.bots.brains.len() >= MAX_BOTS {
@@ -807,6 +816,10 @@ impl Session {
         };
         let pack = self.avatar_catalog.as_ref();
         let mut avatar = pack.map(|c| c.defaults.clone());
+        // Each bot its own seeded look (`looks`); its kind's look on top.
+        if let (Some(avatar), Some(pack)) = (avatar.as_mut(), pack) {
+            looks::seeded_look(bot, avatar, pack, &self.simulation.state().palette);
+        }
         if let (Some(look), Some(avatar)) = (&kind.look, avatar.as_mut()) {
             UniformParts {
                 parts: look.parts.clone(),
@@ -1037,24 +1050,38 @@ impl Session {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
     }
-    /// What a spawn brick's bot is called: its kind, then the brick's name
-    /// or else the team its Team choice names, so the Players list tells
-    /// one brick's bot from another's ("Blockhead Bot (Red)").
-    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId) -> String {
+    /// What a spawn brick's bot is called. A brick its builder named gives
+    /// "Kind (name)", so the Players list tells one brick's bot from
+    /// another's. Otherwise a first name of its kind no other player goes
+    /// by, kept while it lives (`looks`); a kind without a free one gives
+    /// its kind and the team its Team choice names ("Blockhead Bot (Red)").
+    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId, bot: Option<OwnerId>) -> String {
         let Some(b) = self.simulation.state().bricks.get(&brick) else {
             return kind.name.clone();
         };
-        let label = b
+        let named = b
             .name
             .as_deref()
             .map(|n| n.trim().trim_start_matches('_').trim())
             .filter(|n| !n.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
-                let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
-                Some(game.teams.get(team)?.name.clone())
-            });
+            .map(str::to_owned);
+        if named.is_none() {
+            if let Some(own) = bot
+                .and_then(|o| self.bots.brains.get(&o))
+                .map(|b| &b.named)
+                .filter(|n| kind.first_names.contains(n))
+            {
+                return own.clone();
+            }
+            if let Some(first) = self.bot_first_name(kind, brick, bot) {
+                return first;
+            }
+        }
+        let label = named.or_else(|| {
+            let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
+            let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
+            Some(game.teams.get(team)?.name.clone())
+        });
         // The label is shortened, not the kind or the closing bracket.
         let room = MAX_PLAYER_NAME.saturating_sub(kind.name.chars().count() + 3);
         match label {
@@ -1170,7 +1197,8 @@ impl Session {
             }
             self.apply_brick_team(bot, wanted, team)?;
             let named = self.bots.brains.get(&bot).and_then(|b| {
-                let name = self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick);
+                let name =
+                    self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick, Some(bot));
                 (name != b.named).then_some(name)
             });
             if let Some(name) = named {
@@ -2726,6 +2754,19 @@ impl Session {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain.surprise.interrupt(&brain.kind.surprise, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
+        let extra = self.bot_extras(
+            bot,
+            extras::Scene {
+                behaviour,
+                enemy_seen: sight.target.is_some(),
+                hurt_by,
+                holding: wanted.is_none(),
+                natural,
+                calm: !gate.urgent && !gate.carrying,
+                feet,
+            },
+            tick,
+        )?;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -2838,7 +2879,7 @@ impl Session {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
         }
-        if let Some((yaw, pitch)) = act.aim {
+        if let Some((yaw, pitch)) = act.aim.or(extra.aim) {
             (aim_yaw, aim_pitch) = (yaw, pitch);
         }
         if telling {
@@ -3046,8 +3087,12 @@ impl Session {
         if let Some(to) = act.direction {
             direction = to;
         }
-        input.jump |= act.jump;
-        input.crouch |= act.crouch;
+        input.jump |= act.jump || extra.jump;
+        input.crouch |= act.crouch || extra.crouch;
+        input.jet |= extra.jet;
+        if extra.stand {
+            direction = Vec3::ZERO;
+        }
         if telling {
             direction = Vec3::ZERO;
         }
