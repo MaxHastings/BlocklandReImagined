@@ -2061,6 +2061,11 @@ impl Session {
             }
         }
         let (mut leash, mut chase_radius) = self.bots.brains[&bot].pursuit(driving.is_some());
+        // A passenger goes where its driver takes it: however far that is
+        // from its brick, it keeps its enemy (a gunner fights on).
+        if driving.is_none() && self.seated(bot) {
+            leash = feet;
+        }
         // A swimmer in water: how tall it is, to keep it under.
         let swim = (self.bots.brains[&bot].kind.moves == Moves::Swim)
             .then(|| crate::water::body_height(&state, peer.player.tuning()) * state.scale)

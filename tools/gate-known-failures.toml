@@ -68,22 +68,12 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "a_charged_mounted_weapon_is_held_until_ready_then_released_and_rearmed"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "a_jeep_on_each_side"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
 test = "a_teams_preferred_player_count_fills_it_with_bots"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "an_armed_bot_passenger_aims_in_world_space_on_a_rotated_stationary_chassis"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 

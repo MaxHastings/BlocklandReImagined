@@ -1261,7 +1261,15 @@ impl Session {
         let role = &d.seats[usize::from(seat)];
         // A seat with neither controls nor a weapon carries a bot, but it
         // fights nothing from there.
-        let carried_only = !role.controls && !role.weapon;
+        // A passenger holding a weapon of its own fights from its seat.
+        let armed = self.weapons.actor(ActorId(bot)).is_some_and(|a| {
+            let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+            a.inventory
+                .iter()
+                .flatten()
+                .any(|i| hand_combat::item_attacks(self, i, scale))
+        });
+        let carried_only = !role.controls && !role.weapon && !armed;
         // Idle play: a passenger rides along while a teammate drives.
         let riding_along = !role.controls
             && !role.weapon
