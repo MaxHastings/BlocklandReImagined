@@ -75,6 +75,32 @@ soccer (seed 2: ball ignored 278 bot-s): only where solid stands close on
 both sides. Seat offers from a vehicle under way pulled bots into chasing
 it (jeep circling 3.4%): an offer stands only while the driver waits.
 
+## After the merge
+
+- `stairs_to_a_deck` failed on the merged tip with circling 4.5% (bound
+  4%); teamwork 0 gave 2.1%. Bisecting the terms (overlap, harm, follow,
+  sight crowding) moved it but none was the cause: the overlap only changed
+  which enemy a bot chased. The cause was in the chase itself: when the
+  path search to a chase goal came back empty, the bot settled, and the
+  goal was refreshed only once the enemy moved 2.5 m from it, so a bot
+  short of an unreachable goal paced in place. A chase now searches again
+  whenever it has settled with no plan short of its goal. With teamwork
+  0.5: circling 1.7%, stuck 5.5%.
+- Two correctness fixes met on the way: a bot's seniority on an enemy or
+  place now counts from when it took that option and target (not any
+  intent), and enemy crowding counts only allies who took the enemy first,
+  so two bots no longer push each other off the same pick.
+- The mood looked round (a sight ray to every peer in range) for every
+  bot, every tick. It now runs only while it can matter (a natural pause,
+  or an idle flavour under way, with surprise and mood on), on each bot's
+  own `cadence` beat (salt `MOOD`, about every 60 ticks), cached between.
+  There is no sight result to reuse there: at a natural pause a bot has no
+  target, and its sight pass looks at enemies, not at allies. In
+  `bot_think_time_16` (all dials on, 16 bots, 30 s) the mood rays went
+  from about 90 a tick to none during the fight (a counter: 397,616 to
+  266 by tick 4200). Think time is within run-to-run noise on the shared
+  build box (before 7611-9149 us/tick over four runs, after 7581-9274).
+
 ## Not done
 
 A goal to defend, passing; humans publish no intents beyond what is seen;
@@ -82,4 +108,4 @@ the audit's free-for-all brick bots (T1) was reverted here, because
 `bots_of_one_builder_are_on_one_side` asserts the current rule and a
 lane's test cannot be inverted without a decision; the sight checks use
 the module's own rays until the perception lane's shared sight query lands;
-the cadence helper is not yet used for callout timing.
+callouts keep their own per-bot deadline rather than a cadence beat.
