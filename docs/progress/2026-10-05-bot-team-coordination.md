@@ -91,21 +91,22 @@ it (jeep circling 3.4%): an offer stands only while the driver waits.
   intent), and enemy crowding counts only allies who took the enemy first,
   so two bots no longer push each other off the same pick.
 - The mood looked round (a sight ray to every peer in range) for every
-  bot, every tick. It now runs only while it can matter (a natural pause,
-  or an idle flavour under way, with surprise and mood on), on each bot's
-  own `cadence` beat (salt `MOOD`, about every 60 ticks), cached between.
-  There is no sight result to reuse there: at a natural pause a bot has no
-  target, and its sight pass looks at enemies, not at allies. In
-  `bot_think_time_16` (all dials on, 16 bots, 30 s) the mood rays went
-  from about 90 a tick to none during the fight (a counter: 397,616 to
-  266 by tick 4200). Think time is within run-to-run noise on the shared
-  build box (before 7611-9149 us/tick over four runs, after 7581-9274).
+  bot, every tick. It is now looked at afresh on each bot's own `cadence`
+  beat (salt `MOOD`, about once a second) whenever no enemy threatens it,
+  kept between and under threat, and cached in the brain's team state, so
+  a match keeps a mood for flavour to be scored by once flavour is an
+  ordinary option (the bots lane's work); the natural pause reads it as
+  before. Team sight (the mood's look at each peer, an ally watching an
+  option work) now asks perception's shared `bot_sees_player` instead of
+  casting its own rays. In `bot_think_time_16` (all dials on, 16 bots,
+  30 s, merged with 07ce549a) the mood's sight queries by tick 4200 fell
+  from 608,161 to 3,684; think time is flat (per-tick mood 12959 and
+  12435 us/tick, on the beat 12346 and 12552; the debug bar is 15000).
 
 ## Not done
 
 A goal to defend, passing; humans publish no intents beyond what is seen;
 the audit's free-for-all brick bots (T1) was reverted here, because
 `bots_of_one_builder_are_on_one_side` asserts the current rule and a
-lane's test cannot be inverted without a decision; the sight checks use
-the module's own rays until the perception lane's shared sight query lands;
-callouts keep their own per-bot deadline rather than a cadence beat.
+lane's test cannot be inverted without a decision; callouts keep their
+own per-bot deadline rather than a cadence beat.
