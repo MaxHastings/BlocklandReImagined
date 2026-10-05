@@ -290,9 +290,15 @@ impl Session {
             .intents(tick)
             .find(|(o, i)| *o == bot && i.target == target)
             .map_or(tick, |(_, i)| i.since);
-        self.team_intents(bot, tick)
-            .into_iter()
+        // As `team_intents`, but the cheap target test first: this runs for
+        // each enemy in sight, and most intents are on something else.
+        let vehicle = self.mounted(bot).map(|(v, _)| v);
+        self.bots
+            .claims
+            .intents(tick)
             .filter(|(o, i)| i.target == target && (i.since, *o) < (mine, bot))
+            .filter(|(_, i)| vehicle.is_none() || i.mount != vehicle)
+            .filter(|(o, _)| *o != bot && self.bot_allies(bot, *o))
             .count() as f32
     }
 
