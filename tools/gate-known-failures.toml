@@ -65,7 +65,7 @@ reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/
 [[failure]]
 test = "a_bot_jets_over_to_someone_above_it"
 owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+reason = "The bot's jet climb to the 7-unit deck stalls near 4 units (the planner's flight estimate says it reaches); still open after v0.2.5's search fix."
 
 [[failure]]
 test = "a_teams_preferred_player_count_fills_it_with_bots"

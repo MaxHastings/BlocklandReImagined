@@ -5,6 +5,9 @@ use super::{Knowledge, Vec3, flat};
 const PROBES: usize = 4;
 const RADIUS: f32 = 3.5;
 const ARRIVAL: f32 = 1.25;
+/// A probe on a deck is not reached from the floor beneath it, nor in the
+/// middle of the jet up to it: within this of its height.
+const ARRIVAL_RISE: f32 = 1.5;
 const ANCHOR_TICKS: u64 = 360;
 const PROBE_TICKS: u64 = 120;
 
@@ -97,6 +100,7 @@ impl State {
                 PROBE_TICKS
             };
             if flat(point - feet).length() <= ARRIVAL.max(reach)
+                && (point.y - feet.y).abs() <= ARRIVAL_RISE.max(reach)
                 || route_failed
                 || tick.saturating_sub(started) >= timeout
             {
