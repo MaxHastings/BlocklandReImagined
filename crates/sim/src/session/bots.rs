@@ -36,6 +36,7 @@ use bri_weapons::ActorId;
 
 mod arming;
 mod behaviour;
+pub(crate) mod cadence;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
 mod claims;
@@ -111,6 +112,10 @@ pub enum BotTask {
 }
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
 const TICK: f32 = 1.0 / 120.0;
+/// Seconds a rules bot waits past its game's respawn time, as a seeded range.
+const RULES_RESPAWN: (f32, f32) = (0.3, 1.5);
+/// Seconds a brick bot waits past its respawn time, as a seeded range.
+const BRICK_RESPAWN: (f32, f32) = (0.75, 1.75);
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
 /// Ticks without progress before a bot plans again.
@@ -1644,13 +1649,23 @@ impl Session {
             return Ok(());
         };
         if !peer.combat.alive {
-            // A brick's bot comes back a second after it may; a rules bot
-            // as soon as its game lets it (Slayer's bot respawn time).
-            let wait = if self.bots.by_rules.contains_key(&bot) {
-                0
+            // A brick's bot comes back about a second after it may; a rules
+            // bot soon after its game lets it (Slayer's bot respawn time).
+            // Each death adds its own seeded delay, so bots one blast killed
+            // do not all come back on the same tick.
+            let (lo, hi) = if self.bots.by_rules.contains_key(&bot) {
+                RULES_RESPAWN
             } else {
-                120
+                BRICK_RESPAWN
             };
+            let delay = cadence::spread(
+                bot,
+                cadence::salt::RESPAWN,
+                peer.combat.respawn_tick,
+                lo,
+                hi,
+            );
+            let wait = (delay * 120.0) as u64;
             if tick >= peer.combat.respawn_tick + wait {
                 // A bot a bite turned comes back as its own kind.
                 if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
@@ -2093,7 +2108,7 @@ impl Session {
                 };
                 brain.memory = Some(knowledge);
                 brain.evidence_search.observe(knowledge, feet);
-                if tick.is_multiple_of(30) || brain.seen_since == tick {
+                if cadence::beat(bot, cadence::salt::ALERT, tick, 30) || brain.seen_since == tick {
                     warn = Some(knowledge);
                 }
             }
@@ -2926,7 +2941,11 @@ impl Session {
         } else {
             brain.wedged = 0;
         }
-        if driving.is_none() && pushing.is_none() && brain.stuck > 20 && brain.stuck % 40 < 5 {
+        if driving.is_none()
+            && pushing.is_none()
+            && brain.stuck > 20
+            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP)) % 40 < 5
+        {
             input.jump = true;
         }
         let mut forget = false;
@@ -2975,13 +2994,15 @@ impl Session {
         // it down.
         let charging = weapon.is_some_and(|w| w.charge);
         let held_down = grabbing || charging || weapon.is_some_and(|w| w.hold);
-        let pulse = fire && !held_down && tick.is_multiple_of(40) && bite.is_none();
+        // Each bot taps on its own beat, so gunners do not fire in unison.
+        let beat = cadence::beat(bot, cadence::salt::FIRE, tick, 40);
+        let pulse = fire && !held_down && beat && bite.is_none();
         // A charged weapon is held until letting go fires it, then let go.
         let pulse = pulse
             || fire
                 && charging
                 && (if vehicle_weapon {
-                    charged_ready || !mounted_charging && tick.is_multiple_of(40)
+                    charged_ready || !mounted_charging && beat
                 } else {
                     self.weapons
                         .image_state(ActorId(bot), 0)

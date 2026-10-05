@@ -1129,7 +1129,9 @@ impl Session {
         }
         // Once no enemy or remembered task remains, safely relinquish the
         // vehicle. A stationary gunner without a driver need not sit forever.
-        if behaviour == Behaviour::Wander && tick.is_multiple_of(CREW_WAIT) {
+        if behaviour == Behaviour::Wander
+            && super::cadence::beat(bot, super::cadence::salt::DISMOUNT, tick, CREW_WAIT)
+        {
             let _ = self.dismount_vehicle(bot);
         }
         Ok(input)
