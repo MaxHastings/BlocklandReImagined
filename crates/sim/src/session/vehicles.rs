@@ -2049,16 +2049,26 @@ impl Session {
                 Intent::RunOver {
                     vehicle,
                     owner,
+                    driver,
                     target,
                     damage,
                     velocity,
                 } => {
                     let victim = target.0;
-                    // Whoever threw or holds the vehicle runs the victim
-                    // over, not its driver or owner.
-                    let owner = self
-                        .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
-                        .unwrap_or(owner.0);
+                    // A driven vehicle runs the victim over for its driver
+                    // (`WheeledVehicleData::onCollision` damages with the
+                    // vehicle as source, whose controlling client gets the
+                    // kill). The victim's own bump into it pushes it and so
+                    // credits them as its mover, which must not turn the
+                    // driver's kill into a suicide. Only an undriven one is
+                    // run by whoever threw, holds or last pushed it, else
+                    // its owner.
+                    let owner = match driver {
+                        Some(driver) if self.peers.contains_key(&driver.0) => driver.0,
+                        _ => self
+                            .mover_credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0))
+                            .unwrap_or(owner.0),
+                    };
                     let (shoves, gentle) = self
                         .vehicles
                         .world
