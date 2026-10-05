@@ -682,13 +682,14 @@ impl Session {
         };
         let (origin, direction) = (me.player.eye(), direction.normalize_or_zero());
         !self.peers.iter().any(|(o, p)| {
-            if *o == bot || !p.combat.alive || !self.bot_allies(bot, *o) {
+            if *o == bot || !p.combat.alive {
                 return false;
             }
             let centre = Vec3::from(p.player.state().feet) + Vec3::Y;
             let along = (centre - origin).dot(direction);
             (0.0..MISS_REACH).contains(&along)
                 && (centre - origin - direction * along).length() < MISS_CLEARANCE
+                && self.bot_allies(bot, *o)
         })
     }
     /// Where `bot` glances this tick (`State::glance`). `eligible` is the

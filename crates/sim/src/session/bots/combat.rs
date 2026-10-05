@@ -928,9 +928,11 @@ fn clear_path(
         if q.passage(start, end).is_some() {
             return Some(false);
         }
-        let unmounted = bodies.allies.iter().filter(|a| !a.shares_mount);
-        let spared = unmounted.map(|a| (a.centre, a.half));
-        if !super::interactions::fire_clear_of(start, end, 0.0, 0.0, 0.0, spared) {
+        let Some(space) = super::interactions::shot_space(start, end, 0.0, 0.0, 0.0) else {
+            return Some(false);
+        };
+        let mut unmounted = bodies.allies.iter().filter(|a| !a.shares_mount);
+        if unmounted.any(|a| space.holds(a.centre, a.half)) {
             return Some(false);
         }
         // Future ally movement is conservatively enclosed about today's body.

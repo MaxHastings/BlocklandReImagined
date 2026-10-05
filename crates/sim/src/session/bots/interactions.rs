@@ -97,29 +97,24 @@ pub(super) struct Opportunity {
     pub utility: f32,
 }
 
-/// No body of `spared` (centre, half-size) stands in a shot from `origin`
-/// at `target` and `past` beyond, `splash` wide, widening by `spread`
-/// radians (`Session::bot_fire_clear`).
-pub(super) fn fire_clear_of(
+/// The space a shot from `origin` at `target` sweeps: on `past` beyond,
+/// `splash` wide, widening by `spread` radians; none for a shot too short
+/// to judge (`Session::bot_fire_clear`).
+pub(super) fn shot_space(
     origin: Vec3,
     target: Vec3,
     splash: f32,
     past: f32,
     spread: f32,
-    mut spared: impl Iterator<Item = (Vec3, f32)>,
-) -> bool {
+) -> Option<super::claims::Space> {
     let delta = target - origin;
     let length = delta.length();
-    if length < 0.01 {
-        return false;
-    }
-    let space = super::claims::Space {
+    (length >= 0.01).then(|| super::claims::Space {
         from: origin,
         to: origin + delta / length * (length + past),
         radius: splash,
         spread: spread.tan(),
-    };
-    !spared.any(|(centre, half)| space.holds(centre, half))
+    })
 }
 
 impl Session {
@@ -979,19 +974,20 @@ impl Session {
         past: f32,
         spread: f32,
     ) -> bool {
-        let allies = self.peers.iter().filter_map(|(o, p)| {
-            if *o == bot || !p.combat.alive || !self.bot_allies(bot, *o) {
-                return None;
-            }
-            if self.mounted(bot).is_some()
-                && self.mounted(bot).map(|(v, _)| v) == self.mounted(*o).map(|(v, _)| v)
-            {
-                return None;
-            }
+        let Some(space) = shot_space(origin, target, splash, past, spread) else {
+            return false;
+        };
+        let mount = self.mounted(bot).map(|(v, _)| v);
+        // The cheap geometry first: the side is looked up only for a body
+        // in the way.
+        !self.peers.iter().any(|(o, p)| {
             let half = p.player.tuning().stand_height * 0.5;
-            Some((Vec3::from(p.player.state().feet) + Vec3::Y * half, half))
-        });
-        fire_clear_of(origin, target, splash, past, spread, allies)
+            *o != bot
+                && p.combat.alive
+                && space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
+                && !(mount.is_some() && mount == self.mounted(*o).map(|(v, _)| v))
+                && self.bot_allies(bot, *o)
+        })
     }
 
     pub(super) fn bot_vehicle_body(&self, bot: OwnerId) -> Option<(Vec3, Body)> {
