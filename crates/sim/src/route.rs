@@ -220,7 +220,8 @@ impl JetLeg {
     /// Whether what really happened says to give the leg up at `tick`: it
     /// took longer than planned allows (`seconds`), its climb stopped
     /// rising (something it could not see from the grid is over it), or it
-    /// came down below the landing after climbing.
+    /// came down off the landing's height after climbing: below it, or on
+    /// something standing above it (another body).
     pub fn failed(
         &mut self,
         feet: Vec3,
@@ -234,7 +235,7 @@ impl JetLeg {
         }
         tick.saturating_sub(self.since) > jet_patience(seconds)
             || !self.crossing && tick.saturating_sub(self.risen.1) > CLIMB_STALL
-            || grounded && self.crossing && feet.y < self.to.y - step - 0.5
+            || grounded && self.crossing && (feet.y - self.to.y).abs() > step + 0.5
     }
 }
 /// Ticks a climb may go without rising before the leg is given up.
@@ -773,5 +774,24 @@ mod tests {
             9.0,
         );
         assert!(c.jet && c.direction == Vec3::ZERO, "{c:?}");
+    }
+
+    #[test]
+    fn a_jet_leg_that_comes_down_on_something_above_its_landing_fails() {
+        let to = Vec3::new(16.0, 6.0, 30.0);
+        let mut leg = JetLeg::start(to, Vec3::new(10.0, 2.0, 30.0), 0);
+        let _ = jet(
+            &mut leg,
+            Vec3::new(12.0, 9.0, 30.0),
+            Vec3::ZERO,
+            false,
+            to,
+            9.0,
+        );
+        assert!(leg.crossing);
+        // Standing on another body's head over the landing.
+        assert!(leg.failed(Vec3::new(16.3, 8.66, 30.0), true, 0.5, 3.0, 60));
+        // Standing on the landing itself is not a failure.
+        assert!(!leg.failed(Vec3::new(16.0, 6.0, 30.0), true, 0.5, 3.0, 61));
     }
 }

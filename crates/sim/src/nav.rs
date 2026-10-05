@@ -39,6 +39,8 @@ use std::collections::BinaryHeap;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
+/// Farthest (cells) a jet leg's landing moves off a goal someone stands on.
+const LANDING_RING: i32 = 4;
 /// Horizontal distance within which a grid node completes its search.
 pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 /// New ground samples all bots together may take in one tick.
@@ -837,6 +839,8 @@ impl Search {
         Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS
             // Over a swum floor the goal may be anywhere up the water.
             && (d.y.abs() <= 2.0 || swum && d.y < 0.0)
+            // Beside someone standing on the goal is as near as it gets.
+            || self.landing == Some(Some(node))
     }
     /// Reach `to` the way `came` says, if that is cheaper than before.
     fn relax(&mut self, to: Node, came: Came) {
@@ -963,15 +967,56 @@ impl Search {
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {
-        // Where a jet leg would land: the goal's own floor.
+        // Where a jet leg would land: the goal's own floor, or, where
+        // someone stands on it (a chased enemy), the nearest floor beside
+        // them at that height, so it does not come down on their head. A
+        // cell's leeway keeps the braking drift of the touchdown off them.
         if self.costs.jets.is_some() && self.landing.is_none() {
             let (x, z) = cell_of(self.goal);
-            let floor = nav.floor(ground, body, x, z, self.goal.y + body.step * 0.5)?;
-            self.landing = Some(
-                floor
-                    .filter(|f| (f.y - self.goal.y).abs() <= body.step + 0.5 && !f.wet)
-                    .map(|f| Node::at(x, z, f.y)),
-            );
+            let (half_width, _, _) = body.clearance(false);
+            let half_width = half_width + CELL;
+            let taken = |feet: Vec3| {
+                let (low, high) = (
+                    feet + Vec3::new(-half_width, 0.1, -half_width),
+                    feet + Vec3::new(half_width, body.height, half_width),
+                );
+                ground
+                    .bodies
+                    .iter()
+                    .any(|(min, max)| min.cmplt(high).all() && max.cmpgt(low).all())
+            };
+            let mut landing = None;
+            'rings: for ring in 0..=LANDING_RING {
+                let mut best: Option<(f32, Node)> = None;
+                for dx in -ring..=ring {
+                    for dz in -ring..=ring {
+                        if dx.abs().max(dz.abs()) != ring {
+                            continue;
+                        }
+                        let floor =
+                            nav.floor(ground, body, x + dx, z + dz, self.goal.y + body.step * 0.5)?;
+                        let Some(f) = floor
+                            .filter(|f| (f.y - self.goal.y).abs() <= body.step + 0.5 && !f.wet)
+                        else {
+                            continue;
+                        };
+                        let node = Node::at(x + dx, z + dz, f.y);
+                        let off = (dx * dx + dz * dz) as f32;
+                        if !taken(node.feet()) && best.is_none_or(|(b, _)| off < b) {
+                            best = Some((off, node));
+                        }
+                    }
+                }
+                if let Some((_, node)) = best {
+                    landing = Some(node);
+                    break 'rings;
+                }
+                if ring == 0 && !taken(self.goal) {
+                    // The goal's own cell has no floor: no landing.
+                    break;
+                }
+            }
+            self.landing = Some(landing);
         }
         let start = match self.start {
             Some(start) => start,
@@ -1482,6 +1527,57 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|w| !w.jump), "stairs need no jump: {a:?}");
         assert!((a.last().unwrap().feet.y - 3.0).abs() < 0.11);
+    }
+
+    #[test]
+    fn a_jet_leg_lands_beside_someone_standing_on_its_goal() {
+        // A 6-high platform with nothing to climb, and someone on it, in a
+        // yard small enough for the search to spend its budget there.
+        let physics = world(&[
+            (Vec3::new(0.0, -1.0, -6.0), Vec3::new(20.0, 0.0, 6.0)),
+            (Vec3::new(10.0, 0.0, -3.0), Vec3::new(15.0, 6.0, 3.0)),
+        ]);
+        let goal = Vec3::new(12.25, 6.0, 0.25);
+        let t = bri_motor::player::PlayerTuning::default();
+        let half = t.width * 0.5;
+        let bodies = [(
+            goal - Vec3::new(half, 0.0, half),
+            goal + Vec3::new(half, t.stand_height, half),
+        )];
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &bodies,
+            motions: &[],
+        };
+        let costs = crate::route::Costs {
+            jets: crate::route::Jets::of(&t, t.max_energy, 1.0),
+            ..Default::default()
+        };
+        let mut nav = Nav::default();
+        let mut search = Search::with(Vec3::new(4.0, 0.0, 0.25), goal, 60.0, costs);
+        let found = loop {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, &body()) {
+                break found;
+            }
+        };
+        let p = path(found);
+        let landing = p
+            .iter()
+            .find(|w| matches!(w.mode, Mode::Jet { .. }))
+            .expect("it jets up onto the platform");
+        let (min, max) = bodies[0];
+        let (width, _, _) = body().clearance(false);
+        let clear = landing.feet.x + width <= min.x
+            || landing.feet.x - width >= max.x
+            || landing.feet.z + width <= min.z
+            || landing.feet.z - width >= max.z;
+        assert!(clear, "landed on their head: {landing:?} {p:?}");
+        assert!((landing.feet.y - 6.0).abs() < 0.2, "{landing:?}");
+        assert!(landing.feet.distance(goal) < 2.5, "{landing:?}");
     }
 
     #[test]
