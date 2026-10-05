@@ -3381,7 +3381,10 @@ impl Session {
                     // A melee fighter closes to its band rather than
                     // circling its target.
                     if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
-                        direction = forward;
+                        // Straight at it: not along its facing, which its
+                        // aim error turns off the line (off a stair's edge).
+                        direction = enemy
+                            .map_or(forward, |seen| flat(seen.feet - feet).normalize_or(forward));
                     } else if let Some(gap) = gap {
                         // In its band it keeps its feet moving: in, back
                         // out and aside, on its own seeded beat.

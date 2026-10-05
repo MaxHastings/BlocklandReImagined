@@ -416,6 +416,7 @@ impl Mind {
         self.last_pick[di] = tick;
         let clean = |s: f32| if s.is_finite() { s.max(0.0) } else { 0.0 };
         let mut terms = Vec::with_capacity(choice.options.len());
+        let mut own = Vec::with_capacity(choice.options.len());
         for (option, score) in choice.options {
             let score = clean(*score);
             let mut term = Term {
@@ -440,6 +441,7 @@ impl Mind {
                 term.boredom = d.boredom;
                 term.effectiveness = d.effectiveness;
             }
+            own.push((term.option, term.adjusted));
             // Seen working for a teammate (`team` copy): draws nothing.
             let copied = self.seen(domain, *option, tick);
             if copied > 0.0 {
@@ -457,7 +459,20 @@ impl Mind {
             best.map(|b| b.0)
         };
         let plain = first(&|t| t.score);
-        let varied = plain != first(&|t| t.adjusted);
+        // Varied by its own drift and boredom: a copy is the team's pick,
+        // not a surprise.
+        let varied = plain
+            != own
+                .iter()
+                .filter(|(_, s)| *s > 0.0)
+                .fold(None, |best: Option<(u32, f32)>, &(o, s)| {
+                    if best.is_none_or(|(_, b)| s > b) {
+                        Some((o, s))
+                    } else {
+                        best
+                    }
+                })
+                .map(|b| b.0);
         let adjusted: Vec<(u32, f32)> = terms.iter().map(|t| (t.option, t.adjusted)).collect();
         let ask = Ask {
             options: &adjusted,
