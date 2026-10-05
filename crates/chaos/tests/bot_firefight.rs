@@ -93,6 +93,7 @@ fn bedroom_mixed_firefight_survives_spawn_loadout_changes() -> Result<()> {
                         zombie.clone()
                     }),
                     recolor: false,
+                    team: None,
                 }));
                 world.bricks.insert(id, b);
             }

@@ -264,34 +264,26 @@ impl Session {
                 map.insert("quiet".into(), e.quiet.into());
             }
             if e.kind == "settings" {
-                map.insert(
-                    "keys".into(),
-                    Dynamic::from_array(e.keys.iter().map(|k| k.clone().into()).collect()),
-                );
                 map.insert("quiet".into(), e.quiet.into());
-                map.insert(
-                    "changes".into(),
-                    Dynamic::from_array(
-                        e.changes
-                            .iter()
-                            .map(|(key, team)| {
-                                let mut c = Map::new();
-                                c.insert("key".into(), key.clone().into());
-                                c.insert("team".into(), id(*team));
-                                Dynamic::from_map(c)
-                            })
-                            .collect(),
-                    ),
-                );
             }
             if let Some(host) = self.packages.as_mut() {
                 host.game_hooks.chat_payer = e.by.or(e.player);
             }
             for package in &hooks {
+                let mut map = map.clone();
+                if e.kind == "settings"
+                    && let Some(host) = self.packages.as_ref()
+                {
+                    let (keys, changes) = settings_payload(host, package, &e);
+                    map.insert("keys".into(), keys);
+                    map.insert("changes".into(), changes);
+                }
+                // A failed call is noted (`run_package`) and told to the
+                // admins and the Add-On health report (`tell_package_problems`).
                 let _ = self.run_package(
                     package,
                     "on_minigame",
-                    vec![Dynamic::from_map(map.clone())],
+                    vec![Dynamic::from_map(map)],
                     Budget::Command,
                     None,
                     None,
@@ -919,6 +911,40 @@ pub(super) fn patched_settings(
 }
 
 /// Packages whose behaviour declares a hook, in catalog order.
+/// A `settings` event as `package` hears it: `keys` and `changes` are maps
+/// keyed by `namespace:key` (`changes` to the teams changed, `()` for the
+/// mini-game's own), holding only the settings of `package` and of the
+/// Add-Ons it depends on. A script value's text is bounded
+/// (`MAX_SCRIPT_TEXT`), and a map's keys are not text it holds, so how many
+/// Add-Ons are running or how many settings one change touches never
+/// makes the event too big to read.
+fn settings_payload(host: &PackageHost, package: &str, e: &GameEvent) -> (Dynamic, Dynamic) {
+    let manifest = host.catalog.packages.get(package).map(|p| &p.manifest);
+    let reads = |key: &str| match key.split_once(':') {
+        None => true,
+        Some((ns, _)) => {
+            ns == package
+                || manifest.is_some_and(|m| {
+                    m.dependencies.contains_key(ns) || m.optional_dependencies.contains_key(ns)
+                })
+        }
+    };
+    let mut keys = Map::new();
+    for key in e.keys.iter().filter(|k| reads(k)) {
+        keys.insert(key.as_str().into(), true.into());
+    }
+    let mut changes: BTreeMap<&str, Vec<Dynamic>> = BTreeMap::new();
+    for (key, team) in e.changes.iter().filter(|(k, _)| reads(k)) {
+        let team = team.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64));
+        changes.entry(key.as_str()).or_default().push(team);
+    }
+    let changes: Map = changes
+        .into_iter()
+        .map(|(key, teams)| (key.into(), Dynamic::from_array(teams)))
+        .collect();
+    (Dynamic::from_map(keys), Dynamic::from_map(changes))
+}
+
 pub(super) fn declaring(host: &PackageHost, declares: fn(&Behaviour) -> bool) -> Vec<String> {
     host.catalog
         .behaviours()

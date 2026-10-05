@@ -179,6 +179,7 @@ impl Game {
         spawn.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(v.kind().into()),
             recolor: false,
+            team: None,
         }));
         bricks.push(spawn);
         if v.0 {

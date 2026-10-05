@@ -248,6 +248,7 @@ impl Game {
             b.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(kind.into()),
                 recolor: false,
+                team: None,
             }));
             b
         };

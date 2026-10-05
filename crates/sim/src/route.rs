@@ -147,6 +147,52 @@ impl Default for Costs {
     }
 }
 
+/// Whether a walk leg is getting anywhere: its net displacement over a
+/// window, not its speed at an instant. A body hopping against what blocks
+/// it, or wobbling back and forth between two spots, moves every tick and
+/// goes nowhere. The window and the distance come from the body's own
+/// walking speed: over [`Progress::WINDOW`] seconds a body on its way
+/// covers at least a fifth of what it walks in that time.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Progress {
+    /// Where the window started, and the tick; none between legs.
+    from: Option<(Vec3, u64)>,
+    /// Windows in a row gone nowhere.
+    stalls: u32,
+}
+impl Progress {
+    /// Seconds a window lasts.
+    pub const WINDOW: f32 = 0.75;
+    /// Share of a window's walk that counts as getting somewhere.
+    const SHARE: f32 = 0.2;
+    /// Ends the window: the body is not on a walk leg now.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+    /// Windows in a row that went nowhere, the latest included.
+    pub fn stalls(&self) -> u32 {
+        self.stalls
+    }
+    /// One tick on a walk leg at `tick`, the body at `feet` walking at up
+    /// to `walk_speed` (units a second) and `hz` ticks a second: true once a
+    /// window closes with less than its share of a walk made good across.
+    pub fn stalled(&mut self, feet: Vec3, walk_speed: f32, hz: f32, tick: u64) -> bool {
+        let window = (Self::WINDOW * hz).ceil() as u64;
+        let Some((from, since)) = self.from else {
+            self.from = Some((feet, tick));
+            return false;
+        };
+        if tick < since + window {
+            return false;
+        }
+        self.from = Some((feet, tick));
+        let across = Vec3::new(feet.x - from.x, 0.0, feet.z - from.z).length();
+        let stalled = across < walk_speed * Self::WINDOW * Self::SHARE;
+        self.stalls = if stalled { self.stalls + 1 } else { 0 };
+        stalled
+    }
+}
+
 /// Where a jet leg is: set when it starts, kept while its waypoint leads.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct JetLeg {
@@ -354,25 +400,42 @@ impl Gear {
     }
 }
 
+/// What a driver steers by: its chassis's turn and speeds, and its kind's
+/// reversing policy (`BotMounted::reverse_degrees`, `reverse_distance`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Driving {
+    /// Its tightest turn at manoeuvring speed.
+    pub radius: f32,
+    /// How near a point it counts as there: half its width.
+    pub reach: f32,
+    /// Cruise speeds, forward and in reverse.
+    pub cruise: (f32, f32),
+    /// Radians off the nose past which a point is behind.
+    pub behind: f32,
+    /// The farthest a point behind is backed onto (a pursued target: a
+    /// farther one is turned round for, not driven at as a long retreat).
+    pub reverse_limit: f32,
+}
+
 /// The gear for a point `distance` away at `error` radians off the nose,
-/// after `was`, for a chassis whose tightest turn has `radius` and that
-/// arrives within `reach` of a point. Each side of it has a turning
-/// circle; a point deeper than `reach` inside one cannot be driven onto
-/// forward, only circled. Then it opens the distance first: backs away
-/// from a point ahead (the nose swinging toward it) or pulls ahead of one
-/// behind, until the point is out of the circle. A point behind is backed
-/// onto rear first when that is sooner, at its `cruise` (forward, reverse)
-/// speeds, than turning round for it at full lock. The radius is the one
-/// it turns at manoeuvring speed: it can always brake to that first, so a
-/// fast approach slows rather than changing gear.
-pub fn gear(
-    radius: f32,
-    reach: f32,
-    cruise: (f32, f32),
-    error: f32,
-    distance: f32,
-    was: Gear,
-) -> Gear {
+/// after `was`. Each side of the chassis has a turning circle; a point
+/// deeper than `reach` inside one cannot be driven onto forward, only
+/// circled. Then it opens the distance first: backs away from a point
+/// ahead (the nose swinging toward it) or pulls ahead of one behind, until
+/// the point is out of the circle. A point behind is backed onto rear
+/// first, within `reverse_limit`, when that is sooner, at its `cruise`
+/// speeds, than turning round for it at full lock. This is the one
+/// reversing rule. The radius is the one it turns at manoeuvring speed: it
+/// can always brake to that first, so a fast approach slows rather than
+/// changing gear.
+pub fn gear(drive: &Driving, error: f32, distance: f32, was: Gear) -> Gear {
+    let Driving {
+        radius,
+        reach,
+        cruise,
+        behind,
+        reverse_limit,
+    } = *drive;
     // The point relative to the centre of the circle on its side.
     let ahead = distance * error.cos();
     let sideways = distance * error.sin().abs();
@@ -383,14 +446,15 @@ pub fn gear(
         radius - reach
     };
     let inside = from_centre < clear;
-    let behind = error.abs() > 1.8;
+    let behind = error.abs() > behind;
     match (inside, behind) {
         (true, false) => Gear::Reverse { nose: true },
         (true, true) => Gear::PullOut,
         (false, true)
-            if distance / cruise.1.max(0.1)
-                < std::f32::consts::PI * radius / Chassis::arc_speed(radius)
-                    + distance / cruise.0.max(0.1) =>
+            if distance <= reverse_limit
+                && distance / cruise.1.max(0.1)
+                    < std::f32::consts::PI * radius / Chassis::arc_speed(radius)
+                        + distance / cruise.0.max(0.1) =>
         {
             Gear::Reverse { nose: false }
         }
@@ -436,6 +500,15 @@ pub fn drive_serves(walk_speed: f32, walk: f32, to_seat: f32, drive: f32, cruise
     to_seat / walk_speed + BOARD_SECONDS + drive / cruise.max(0.1) < walk / walk_speed
 }
 
+/// Whether a walker at `walk_speed` closes on a target `toward` it (flat,
+/// from the walker) moving at `velocity`: the target draws away slower
+/// than the walker walks, with a tenth to spare, so a runner as fast as
+/// the walker is not left to an on-foot chase that never closes.
+pub fn walk_closes(walk_speed: f32, toward: Vec3, velocity: Vec3) -> bool {
+    let away = Vec3::new(toward.x, 0.0, toward.z).normalize_or_zero();
+    velocity.dot(away) < walk_speed * 0.9
+}
+
 /// The label of a waypoint's leg, for diagnostics.
 pub fn leg_name(mode: Mode) -> &'static str {
     match mode {
@@ -448,6 +521,59 @@ pub fn leg_name(mode: Mode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_body_wobbling_between_two_spots_is_stalled_within_a_window() {
+        let (walk, hz) = (7.0, 120.0);
+        let window = (Progress::WINDOW * hz).ceil() as u64;
+        // Back and forth a unit and a half, every tick moving.
+        let mut wobble = Progress::default();
+        let stalled = (0..=window * 2).find(|&t| {
+            let x = if (t / 20).is_multiple_of(2) { 0.0 } else { 1.5 };
+            wobble.stalled(Vec3::new(x, 0.0, 0.0), walk, hz, t)
+        });
+        assert!(
+            stalled.is_some_and(|t| t <= window),
+            "stalled at {stalled:?}"
+        );
+        assert_eq!(wobble.stalls(), 1);
+        // Still going nowhere: each window counts, until it gets somewhere.
+        assert!((window + 1..=window * 2 + 1).any(|t| wobble.stalled(Vec3::ZERO, walk, hz, t)));
+        assert_eq!(wobble.stalls(), 2);
+        wobble.stalled(Vec3::new(9.0, 0.0, 0.0), walk, hz, window * 4);
+        assert_eq!(wobble.stalls(), 0);
+        // Hopping in place: up and down is not across.
+        let mut hop = Progress::default();
+        assert!((0..=window).any(|t| hop.stalled(
+            Vec3::new(0.0, (t % 30) as f32 * 0.05, 0.0),
+            walk,
+            hz,
+            t
+        )));
+        // Walking at a third of its speed round a corner gets somewhere.
+        let mut walking = Progress::default();
+        for t in 0..window * 6 {
+            let d = t as f32 / hz * walk / 3.0;
+            let at = if d < 4.0 {
+                Vec3::new(d, 0.0, 0.0)
+            } else {
+                Vec3::new(4.0, 0.0, d - 4.0)
+            };
+            assert!(!walking.stalled(at, walk, hz, t), "walking stalled at {t}");
+        }
+    }
+
+    #[test]
+    fn a_walker_closes_only_on_a_target_drawing_away_slower_than_it_walks() {
+        let toward = Vec3::new(3.0, 0.0, 4.0);
+        let away = toward.normalize();
+        assert!(walk_closes(7.0, toward, Vec3::ZERO));
+        assert!(walk_closes(7.0, toward, -away * 7.0), "coming closer");
+        assert!(walk_closes(7.0, toward, away * 3.0), "slower than a walk");
+        assert!(!walk_closes(7.0, toward, away * 7.0), "as fast as a walk");
+        // Sideways is not away.
+        assert!(walk_closes(7.0, toward, Vec3::new(-4.0, 0.0, 3.0) * 3.0));
+    }
 
     #[test]
     fn a_chassis_turns_by_its_wheelbase_and_lock_and_backs_out_of_its_circle() {
@@ -464,7 +590,27 @@ mod tests {
         assert!(four.radius() < 3.6 / 0.8f32.tan());
         // Straight ahead: drive. Close beside: inside the circle, back up.
         let reach = 1.0;
-        let gear = |error, distance, was| gear(r, reach, (18.0, 6.0), error, distance, was);
+        let drive = Driving {
+            radius: r,
+            reach,
+            cruise: (18.0, 6.0),
+            behind: 103f32.to_radians(),
+            reverse_limit: f32::INFINITY,
+        };
+        let gear = |error, distance, was| gear(&drive, error, distance, was);
+        // A pursued target behind is backed onto only within the limit.
+        let pursuing = Driving {
+            reverse_limit: 1.5,
+            ..drive
+        };
+        assert_eq!(
+            super::gear(&drive, 3.1, 2.0, Gear::Forward),
+            Gear::Reverse { nose: false }
+        );
+        assert_eq!(
+            super::gear(&pursuing, 3.1, 2.0, Gear::Forward),
+            Gear::Forward
+        );
         assert_eq!(gear(0.1, 10.0, Gear::Forward), Gear::Forward);
         let beside = std::f32::consts::FRAC_PI_2;
         assert_eq!(

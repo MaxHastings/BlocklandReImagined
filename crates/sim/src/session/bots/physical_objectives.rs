@@ -9,10 +9,51 @@ use super::*;
 use bri_vehicles::{Definition, Family, VehicleId, VehicleSnapshot};
 use bri_weapons::BotManipulation;
 
-// Reuse the interaction discovery envelope. The caller charges every resulting
-// choice against the existing cumulative action/model budget before cloning rows.
+// The caller charges every resulting choice against the existing cumulative
+// action/model budget before cloning rows. The discovery envelope is the
+// kind's `objective_radius`.
 const OBJECTS: usize = 8;
-const DISCOVER: f32 = 24.0;
+/// Degrees a push turns away from a wall behind the body, smallest first.
+const WALL_TURNS: [f32; 4] = [30.0, 60.0, 90.0, 120.0];
+
+/// The way to push a body when something solid stands where a pusher would
+/// stand. `clear(back)` says whether a pusher fits behind the body along
+/// `back`. Against a wall or in a corner, the push turns by the smallest of
+/// `WALL_TURNS` that leaves room behind it, preferring the turn whose rear
+/// is nearer the bot, so the body is worked along and off the wall rather
+/// than pressed into it. With nowhere better, the delivery heading stays.
+fn wall_clear_heading(
+    feet: Vec3,
+    centre: Vec3,
+    toward: Vec3,
+    clear: impl Fn(Vec3) -> bool,
+) -> Vec3 {
+    if clear(-toward) {
+        return toward;
+    }
+    let near = |heading: Vec3| flat(centre - heading - feet).length();
+    for degrees in WALL_TURNS {
+        let mut turns =
+            [degrees, -degrees].map(|d| glam::Quat::from_rotation_y(d.to_radians()) * toward);
+        if near(turns[1]) < near(turns[0]) {
+            turns.swap(0, 1);
+        }
+        if let Some(turned) = turns.into_iter().find(|t| clear(-*t)) {
+            return turned;
+        }
+    }
+    toward
+}
+
+fn discovery_radius(session: &Session, bot: OwnerId) -> f32 {
+    session
+        .bots
+        .brains
+        .get(&bot)
+        .map_or(BotKind::default().objective_radius, |b| {
+            b.kind.objective_radius
+        })
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ObjectStamp {
@@ -102,6 +143,9 @@ pub(super) struct Directive {
     pub held: Option<ObjectRef>,
     pub drive: Option<(u64, u8)>,
     pub physical_progress: bool,
+    /// The horizontal way the body is being delivered, when it is moved
+    /// loose (pushed, hammered or held); zero otherwise.
+    pub heading: Vec3,
 }
 
 fn stamp(session: &Session, v: &VehicleSnapshot, d: &Definition) -> Option<ObjectStamp> {
@@ -203,10 +247,11 @@ pub(super) fn discover(
 ) -> Result<Discovery, Rejection> {
     let peer = session.peers.get(&bot).ok_or(Rejection::Missing)?;
     let feet = Vec3::from(peer.player.state().feet);
+    let radius = discovery_radius(session, bot);
     let mut bodies = Vec::new();
     for v in &session.bots.objects {
         budget.reserve(1, 0, 0).map_err(|_| Rejection::Budget)?;
-        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > DISCOVER {
+        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > radius {
             continue;
         }
         if bodies.len() >= OBJECTS {
@@ -242,9 +287,10 @@ pub(super) fn candidates(
         .as_ref()
         .ok_or(Rejection::Unsupported)?;
     let destination = (bounds.0 + bounds.1) * 0.5;
+    let radius = discovery_radius(session, bot);
     let mut choices = Vec::new();
     for v in &discovery.bodies {
-        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > DISCOVER {
+        if v.destroyed || feet.distance(Vec3::from(v.transform.position)) > radius {
             continue;
         }
         let Some(d) = world.definition(&v.definition) else {
@@ -639,7 +685,11 @@ impl Choice {
         }
         let feet = Vec3::from(peer.player.state().feet);
         let at = Vec3::from(v.transform.position);
-        let centre = session.object_centre(object).ok_or(Rejection::Missing)?;
+        let mut centre = session.object_centre(object).ok_or(Rejection::Missing)?;
+        // Contested by an opponent: meet the body where it is heading.
+        if matches!(self.method, Method::Push | Method::Hammer { .. }) {
+            centre += super::contest::lead(session, bot, object, feet, centre, v.velocity.into());
+        }
         let destination = self
             .rearm
             .unwrap_or((self.goal.bounds.0 + self.goal.bounds.1) * 0.5);
@@ -654,12 +704,35 @@ impl Choice {
             held: None,
             drive: None,
             physical_progress: self.progressed,
+            heading: if matches!(self.method, Method::Drive { .. }) {
+                Vec3::ZERO
+            } else {
+                toward
+            },
         };
         match &self.method {
             Method::Push | Method::Hammer { .. } => {
                 let extents = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale * 0.5;
                 let width = peer.player.tuning().width;
                 let radius = extents.length() + width * 0.5 + 0.15;
+                // Room for a pusher behind the body, by the world's solid
+                // geometry (bricks, interiors, terrain; never players or
+                // other bodies).
+                let room = radius + width * 0.5 + 0.3;
+                // An opponent driving the body straight back: clear it to
+                // the side rather than meet it head on.
+                let toward = super::contest::clearing(
+                    session,
+                    bot,
+                    object,
+                    feet,
+                    centre,
+                    v.velocity.into(),
+                    toward,
+                );
+                let toward = wall_clear_heading(feet, centre, toward, |back| {
+                    session.world_ray(centre, back, room).is_none()
+                });
                 let approach = push_approach(feet, centre, toward, radius, width)
                     .ok_or(Rejection::Unsupported)?;
                 out.point = approach.point;
@@ -809,6 +882,27 @@ mod tests {
 
     fn push_point(feet: Vec3, centre: Vec3, toward: Vec3, radius: f32, width: f32) -> Option<Vec3> {
         push_approach(feet, centre, toward, radius, width).map(|a| a.point)
+    }
+
+    #[test]
+    fn a_push_against_a_wall_turns_off_it_toward_the_bots_side() {
+        let centre = Vec3::new(0.0, 1.0, 0.0);
+        // Delivery is north (-z); a wall lies south, behind the body.
+        let north = Vec3::NEG_Z;
+        let wall_south = |back: Vec3| back.z < 0.5;
+        let east_bot = wall_clear_heading(Vec3::new(3.0, 0.0, 0.0), centre, north, wall_south);
+        let west_bot = wall_clear_heading(Vec3::new(-3.0, 0.0, 0.0), centre, north, wall_south);
+        // Turned enough that its rear leaves the wall, the rear on the
+        // bot's own side.
+        assert!(-east_bot.z < 0.9 && east_bot.z.abs() < 0.9, "{east_bot}");
+        assert!(
+            (-east_bot).x > 0.0 && (-west_bot).x < 0.0,
+            "{east_bot} {west_bot}"
+        );
+        // Open behind: the heading stands.
+        assert_eq!(wall_clear_heading(Vec3::X, centre, north, |_| true), north);
+        // Boxed in: nothing better, the heading stands.
+        assert_eq!(wall_clear_heading(Vec3::X, centre, north, |_| false), north);
     }
 
     #[test]

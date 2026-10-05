@@ -1,5 +1,5 @@
-Quill
-Marrow
-Tansy
-Orrin
-Willet
+Quill          3.318  3.318      1
+Marrow         3.271  6.589      2
+Tansy	meadow	line
+Orrin          2.629 12.880      4
+Willetsworthington-Hargreaves

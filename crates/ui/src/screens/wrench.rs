@@ -83,6 +83,111 @@ enum Operation {
     Respawn,
 }
 
+/// The vehicle spawn wrench's Team menu: a bot spawn brick's team.
+const TEAM_ROW: i32 = 30;
+
+/// Add the vehicle spawn wrench's Team row under its recovered fields, above
+/// the footer actions, styled as its Vehicles menu and that menu's label.
+fn add_team_row(window: &mut Control, layout: &str, prefix: &str) {
+    let node = format!("{prefix}_Team");
+    let vehicles = format!("{prefix}_Vehicles");
+    let Some(menu) = window
+        .children
+        .iter()
+        .find(|c| c.name.as_deref() == Some(vehicles.as_str()))
+        .cloned()
+    else {
+        return;
+    };
+    if window
+        .children
+        .iter()
+        .any(|c| c.name.as_deref() == Some(node.as_str()))
+    {
+        return;
+    }
+    let footer_commands = [
+        format!("{layout}.send();"),
+        format!("{layout}.respawn();"),
+        format!("canvas.popDialog({layout});"),
+        "canvas.pushDialog(WrenchEventsDlg);".into(),
+    ];
+    let top = window
+        .children
+        .iter()
+        .filter(|c| {
+            c.command
+                .as_ref()
+                .is_some_and(|command| footer_commands.contains(command))
+        })
+        .map(|c| c.position[1])
+        .min()
+        .unwrap_or(window.extent[1]);
+    // The Vehicles menu's label: plain text left of it on its row.
+    let label = window
+        .children
+        .iter()
+        .filter(|c| {
+            c.class == "GuiTextCtrl"
+                && (c.position[1] - menu.position[1]).abs() <= 6
+                && c.position[0] + c.extent[0] <= menu.position[0] + 4
+        })
+        .max_by_key(|c| c.position[0])
+        .cloned();
+    for control in &mut window.children {
+        if control.position[1] >= top {
+            control.position[1] += TEAM_ROW;
+        } else if control
+            .name
+            .as_deref()
+            .is_some_and(|name| name.ends_with("Blocker"))
+            && control.position[1] + control.extent[1] > top
+        {
+            control.extent[1] += TEAM_ROW;
+        }
+    }
+    window.extent[1] += TEAM_ROW;
+    let y = top + (TEAM_ROW - menu.extent[1]) / 2;
+    let mut team = named(menu.clone(), node);
+    team.position[1] = y;
+    team.command = None;
+    team.text = None;
+    let label = match label {
+        Some(mut label) => {
+            let colon = label
+                .text
+                .as_deref()
+                .is_some_and(|t| t.trim_end().ends_with(':'));
+            label.name = None;
+            label.command = None;
+            label.position[1] = y + (menu.extent[1] - label.extent[1]) / 2;
+            label.text = Some(if colon { "Team:" } else { "Team" }.into());
+            label
+        }
+        None => text(
+            "GuiDefaultProfile",
+            Rect::new(14, y, (menu.position[0] - 18).max(40), menu.extent[1]),
+            "Team:",
+        ),
+    };
+    window.children.push(label);
+    window.children.push(team);
+}
+
+/// The teams of the mini-game `builder` plays in (`None`: the local
+/// player's).
+fn builder_teams(core: &Core, builder: Option<u64>) -> Vec<crate::api::MiniGameTeam> {
+    core.minigames
+        .games
+        .iter()
+        .find(|g| match builder {
+            Some(b) => g.members.iter().any(|m| m.id.0 == b),
+            None => Some(g.id) == core.minigames.active_game,
+        })
+        .map(|g| g.teams.clone())
+        .unwrap_or_default()
+}
+
 /// Extend the recovered wrench without modifying generated original layouts.
 fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View {
     let Some(mut root) = core.pack.data.layouts.get(layout).cloned() else {
@@ -94,6 +199,7 @@ fn region_view(core: &Core, layout: &str, prefix: &str, expanded: bool) -> View 
         .iter_mut()
         .find(|c| c.name.as_deref() == Some(&format!("{prefix}_Window")))
     {
+        add_team_row(window, layout, prefix);
         let old_height = window.extent[1];
         // Share an existing action row when its neighboring space is free.
         // Imported layouts with a crowded footer still receive a separate row.
@@ -366,6 +472,28 @@ impl Wrench {
                 _ => {}
             }
         }
+        if let Some(n) = self.view.id(&format!("{}_Team", self.prefix)) {
+            // "No team" as a Team check says it; a slot the builder's game
+            // has not got stays chosen until changed.
+            let mut ids = vec![None];
+            let mut items = vec![("No team".to_string(), 0)];
+            for team in builder_teams(core, data.builder) {
+                items.push((team.name, ids.len() as i64));
+                ids.push(Some(team.id.to_string()));
+            }
+            let current = data.vehicle_team.map(|t| t.to_string());
+            let selected = ids.iter().position(|id| *id == current).unwrap_or_else(|| {
+                items.push((
+                    format!("Team {}", current.as_deref().unwrap_or_default()),
+                    ids.len() as i64,
+                ));
+                ids.push(current.clone());
+                ids.len() - 1
+            });
+            self.view.state(n).items = items;
+            self.view.select(n, Some(selected as i64));
+            self.menus.insert(n, ids);
+        }
         if let Some(n) = self.view.id(&format!("{}_Window", self.prefix)) {
             let open = core.wrench.open.as_ref();
             let title = match open.and_then(|o| o.fill) {
@@ -493,6 +621,14 @@ impl Wrench {
                 RecolorVehicle => data.recolor_vehicle = self.view.bool_value(n),
                 _ => {}
             }
+        }
+        if let Some(n) = self.view.id(&format!("{}_Team", self.prefix)) {
+            data.vehicle_team = self
+                .view
+                .selected(n)
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| self.menus.get(&n)?.get(i).cloned().flatten())
+                .and_then(|id| id.parse().ok());
         }
         core.wrench.set_values(self.variant, data);
     }
@@ -2943,8 +3079,9 @@ mod tests {
                     view.node(view.id("WrenchVehicleSpawn_Window").unwrap())
                         .rect
                         .h,
-                    295,
-                    "neither collapsed nor expanded regions add spare vertical space"
+                    295 + TEAM_ROW,
+                    "neither collapsed nor expanded regions add spare vertical space \
+                     (the Team row adds its own)"
                 );
                 let mut sound = region_view(&ui.core, "wrenchSoundDlg", "WrenchSound", expanded);
                 sound.layout(logical.0, logical.1);
@@ -3950,6 +4087,131 @@ mod tests {
     /// A goal's Team check names the teams of the mini-game its rows run in,
     /// its builder's, even when whoever has the wrench open plays in none,
     /// and each team by its own id (never "No team"'s 0).
+    /// The vehicle spawn wrench's Team row: added above the footer of a
+    /// recovered layout without covering its controls, listing the brick
+    /// builder's mini-game teams and sending the chosen slot.
+    #[test]
+    fn vehicle_spawn_team_menu_offers_the_builders_teams_and_sends_the_slot() {
+        let pack = crate::testing::screens_pack();
+        let mut ui = fixture();
+        ui.core.pack = pack.clone();
+        let original = pack.data.layouts["wrenchVehicleSpawnDlg"]
+            .children
+            .iter()
+            .find(|c| c.name.as_deref() == Some("WrenchVehicleSpawn_Window"))
+            .unwrap()
+            .clone();
+        let mut view = region_view(
+            &ui.core,
+            "wrenchVehicleSpawnDlg",
+            "WrenchVehicleSpawn",
+            false,
+        );
+        view.layout(ui.core.logical.0, ui.core.logical.1);
+        let team = view.node(view.id("WrenchVehicleSpawn_Team").unwrap()).rect;
+        let window = view
+            .node(view.id("WrenchVehicleSpawn_Window").unwrap())
+            .rect;
+        assert_eq!(window.intersect(&team), Some(team), "inside the window");
+        let vehicles = view
+            .node(view.id("WrenchVehicleSpawn_Vehicles").unwrap())
+            .rect;
+        assert_eq!((team.x, team.w), (vehicles.x, vehicles.w));
+        for control in original.children.iter().filter(|c| c.visible) {
+            let id = control
+                .name
+                .as_deref()
+                .and_then(|name| view.id(name))
+                .or_else(|| control.command.as_deref().and_then(|c| view.by_command(c)));
+            let Some(id) = id else { continue };
+            assert!(
+                view.node(id).rect.intersect(&team).is_none(),
+                "the Team row covers {control:?}"
+            );
+        }
+        let send = view
+            .node(view.by_command("wrenchVehicleSpawnDlg.send();").unwrap())
+            .rect;
+        assert!(
+            send.y >= team.bottom(),
+            "the footer stays below the Team row"
+        );
+
+        let mut ui = fixture();
+        let team = |id: u32, name: &str| crate::api::MiniGameTeam {
+            id,
+            name: name.into(),
+            color: 0,
+            settings: Default::default(),
+        };
+        ui.core.minigames.active_game = None;
+        ui.core.minigames.games.push(crate::api::MiniGameSummary {
+            id: crate::api::MiniGameId(1),
+            title: "Soccer".into(),
+            owner: crate::api::MiniGamePlayerId(5),
+            owner_name: "Max".into(),
+            color: 0,
+            member_count: 1,
+            invite_only: false,
+            rules: crate::api::MiniGameRules::default(),
+            teams: vec![team(1, "Blue"), team(3, "Red")],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: vec![crate::api::MiniGameTeamMember {
+                id: crate::api::MiniGamePlayerId(5),
+                name: "Max".into(),
+                team: None,
+            }],
+        });
+        ui.core.wrench.open(
+            16,
+            WrenchVariant::VehicleSpawn,
+            "Max".into(),
+            WrenchData {
+                builder: Some(5),
+                vehicle_team: Some(1),
+                ..Default::default()
+            },
+            false,
+            true,
+        );
+        let mut s = Wrench::new(&ui.core, WrenchVariant::VehicleSpawn);
+        let menu = s.view().id("WrenchVehicleSpawn_Team").unwrap();
+        assert_eq!(
+            s.view().node(menu).state.items,
+            vec![("No team".into(), 0), ("Blue".into(), 1), ("Red".into(), 2)]
+        );
+        assert_eq!(s.view().selected(menu), Some(1), "the brick's choice");
+        choose(&mut s, "WrenchVehicleSpawn_Team", "Red", &mut ui.core);
+        click(&mut s, "WrenchVehicleSpawn_Send", &mut ui.core);
+        assert!(
+            ui.drain_actions().iter().any(|(_, a)| matches!(a,
+                UiAction::SendWrench { brick: 16, data, .. } if data.vehicle_team == Some(3))),
+            "the chosen team's slot is sent"
+        );
+        // A slot the builder's game has not got stays chosen.
+        ui.core.wrench.close();
+        ui.core.wrench.open(
+            17,
+            WrenchVariant::VehicleSpawn,
+            "Max".into(),
+            WrenchData {
+                builder: Some(5),
+                vehicle_team: Some(9),
+                ..Default::default()
+            },
+            false,
+            true,
+        );
+        let mut s = Wrench::new(&ui.core, WrenchVariant::VehicleSpawn);
+        let menu = s.view().id("WrenchVehicleSpawn_Team").unwrap();
+        assert_eq!(s.view().node(menu).state.items[3], ("Team 9".into(), 3));
+        click(&mut s, "WrenchVehicleSpawn_Send", &mut ui.core);
+        assert!(ui.drain_actions().iter().any(|(_, a)| matches!(a,
+            UiAction::SendWrench { brick: 17, data, .. } if data.vehicle_team == Some(9))));
+    }
+
     #[test]
     fn team_checks_offer_the_builders_mini_game_teams() {
         let mut ui = fixture();

@@ -259,6 +259,7 @@ impl Game {
         spawn.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(KIND.into()),
             recolor: false,
+            team: None,
         }));
         world.bricks.insert(1, spawn);
         world.next_brick_id = 2;

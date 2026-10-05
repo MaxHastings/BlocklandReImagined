@@ -165,6 +165,10 @@ pub struct ServerHandle {
     listing: Arc<std::sync::Mutex<Listing>>,
     /// The host's own performance, refreshed about once a second.
     pub perf: Arc<Mutex<ServerPerf>>,
+    /// Problems the host's Add-On scripts ran into since the game last
+    /// took them (a script error, an operation refused or failed), for its
+    /// Add-On health; at most [`MAX_HELD_PROBLEMS`], newest kept.
+    pub package_problems: Arc<Mutex<Vec<bri_package::diag::Diagnostic>>>,
     /// What the host has sent, by kind.
     pub traffic: Arc<Traffic>,
     discovery: Option<tokio::task::JoinHandle<()>>,
@@ -173,6 +177,9 @@ pub struct ServerHandle {
     recovery: mpsc::Sender<crate::recovery::Recovery>,
     task: tokio::task::JoinHandle<ServerReport>,
 }
+/// Add-On problems a host holds for the game to take
+/// ([`ServerHandle::package_problems`]).
+pub const MAX_HELD_PROBLEMS: usize = 256;
 /// How the host's simulation is keeping up, for the host's performance
 /// overlay. Measured on the host only; never sent to players.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -668,6 +675,7 @@ fn start_stepping(
         max_players: max_players as u32,
     }));
     let perf = Arc::new(Mutex::new(ServerPerf::default()));
+    let package_problems = Arc::new(Mutex::new(Vec::new()));
     let traffic = Arc::new(Traffic::default());
     // The whole-world event scan runs here, before anyone can connect: on
     // the first tick it would hold the server's loop, and the handshakes
@@ -676,6 +684,7 @@ fn start_stepping(
     let task = tokio::spawn(run(
         players.clone(),
         perf.clone(),
+        package_problems.clone(),
         traffic.clone(),
         listing.clone(),
         endpoint,
@@ -697,6 +706,7 @@ fn start_stepping(
         players,
         listing,
         perf,
+        package_problems,
         traffic,
         discovery: None,
         router: None,
@@ -1249,6 +1259,20 @@ impl EventNotes {
         }
     }
 }
+/// Keep `new` Add-On problems for the game to take, the newest
+/// [`MAX_HELD_PROBLEMS`] when it has not taken them for a while.
+fn hold_package_problems(
+    held: &Mutex<Vec<bri_package::diag::Diagnostic>>,
+    new: Vec<bri_package::diag::Diagnostic>,
+) {
+    if new.is_empty() {
+        return;
+    }
+    let mut held = held.lock().unwrap_or_else(|e| e.into_inner());
+    held.extend(new);
+    let over = held.len().saturating_sub(MAX_HELD_PROBLEMS);
+    held.drain(..over);
+}
 fn close_admin_disconnects(session: &mut Session, peers: &mut BTreeMap<OwnerId, Peer>) {
     for target in session.take_admin_disconnects() {
         let message = session.take_admin_disconnect_message(target);
@@ -1326,6 +1350,7 @@ impl PanicFuse {
 async fn run(
     players: Arc<std::sync::atomic::AtomicU32>,
     perf: Arc<Mutex<ServerPerf>>,
+    package_problems: Arc<Mutex<Vec<bri_package::diag::Diagnostic>>>,
     traffic: Arc<Traffic>,
     listing: Arc<std::sync::Mutex<Listing>>,
     endpoint: Endpoint,
@@ -1562,6 +1587,7 @@ async fn run(
                 event_overload=(0,Some(now));
             }
             event_notes.log(now,session.take_event_diagnostics(),session.take_slow_event_ticks());
+            hold_package_problems(&package_problems,session.take_package_problems());
             if let Some(keeper)=keeper.as_mut(){keeper.tick(now,&session);}
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)

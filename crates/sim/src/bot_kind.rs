@@ -8,6 +8,9 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod surprise;
+pub use surprise::{BotSurprise, INTERRUPTS};
+
 pub const SCHEMA_VERSION: u32 = 1;
 /// Bot kinds one server knows, over every Add-On.
 pub const MAX_KINDS: usize = 64;
@@ -15,10 +18,11 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_FIRST_NAMES: usize = 256;
 /// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
 /// order (`session::bots::behaviour::Behaviour`).
-pub const BEHAVIOURS: [&str; 8] = [
+pub const BEHAVIOURS: [&str; 9] = [
     "carry",
     "interact",
     "fight",
+    "arm",
     "chase",
     "search",
     "return",
@@ -89,6 +93,126 @@ pub struct BotKind {
     /// 0 turns one off (a guard that never gives chase), more puts it ahead
     /// of others (`docs/architecture/bots.md`).
     pub behaviours: std::collections::BTreeMap<String, f32>,
+    /// How far from itself, in world units, it looks for loose bodies an
+    /// authored object-entry objective can use.
+    pub objective_radius: f32,
+    /// How it plays an object an opponent is also moving.
+    pub contest: BotContest,
+    /// How it pursues while it drives a mount.
+    pub mounted: BotMounted,
+    /// How it moves while it fights.
+    pub fighting: BotFighting,
+    /// How its choices vary and change over time (`surprise`); its
+    /// `strength` 0 is the plain brain.
+    pub surprise: BotSurprise,
+}
+/// How a bot moves in a fight: when a fight turns into a chase and back,
+/// and how a ranged fighter strafes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotFighting {
+    /// Leeway past the band's far edge (and in height) before a fighting
+    /// bot gives chase, as a share of that far edge...
+    pub band_slack: f32,
+    /// ...and at least this many world units.
+    pub min_band_slack: f32,
+    /// A fight keeps fighting at least this long before it gives chase,
+    /// while the enemy is still in sight.
+    pub dwell_seconds: f32,
+    /// A ranged fighter strafes one way about this long before turning
+    /// back. It stands at a ledge or a wall until then, and turns away from
+    /// an ally at once. A melee fighter does not strafe: it closes to its
+    /// band.
+    pub strafe_seconds: f32,
+}
+impl Default for BotFighting {
+    fn default() -> Self {
+        Self {
+            band_slack: 0.15,
+            min_band_slack: 1.5,
+            dwell_seconds: 0.5,
+            strafe_seconds: 3.5,
+        }
+    }
+}
+impl BotFighting {
+    /// The leeway past a band whose far edge is `far`.
+    pub fn slack(&self, far: f32) -> f32 {
+        (far * self.band_slack).max(self.min_band_slack)
+    }
+}
+/// Contesting one body with opponents (each pushing it toward its own
+/// goal): both sides keep their intentions and the physics decides. While
+/// an opponent claims or last moved the body, it aims for where the body is
+/// heading rather than where it was.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotContest {
+    /// Seconds of the body's own velocity it leads its approach by.
+    pub lead_seconds: f32,
+    /// The most, in world units, that lead moves the approach.
+    pub max_lead: f32,
+    /// Within this many world units of a contested body it is engaged: its
+    /// intention stays live while it works the body against an opponent.
+    pub engage: f32,
+    /// While a teammate holds the body, it covers instead of standing down:
+    /// this many world units behind the body, against the way the team
+    /// delivers it. 0 stands down as before.
+    pub cover_distance: f32,
+    /// And this many to the side of that line, on the side it already is.
+    pub cover_side: f32,
+    /// Degrees it turns its push off a body an opponent drives straight
+    /// back at it, to knock it aside rather than meet it head on. 0 meets
+    /// it head on.
+    pub clear_degrees: f32,
+}
+impl Default for BotContest {
+    fn default() -> Self {
+        Self {
+            lead_seconds: 0.6,
+            max_lead: 4.0,
+            engage: 4.0,
+            cover_distance: 6.0,
+            cover_side: 3.0,
+            clear_degrees: 60.0,
+        }
+    }
+}
+/// Where a driving bot's chase leash is measured from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MountAnchor {
+    /// Where it took the controls.
+    #[default]
+    Mount,
+    /// Its brick, as on foot.
+    Home,
+}
+/// Pursuit while driving: a mount covers ground a walker does not, so its
+/// leash has its own anchor and length, and a chassis turns toward a goal
+/// behind it unless the goal is close enough to back onto.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotMounted {
+    pub anchor: MountAnchor,
+    /// How far from the anchor it follows a fight before giving up.
+    pub chase_radius: f32,
+    /// A goal at least this many degrees off the hull's heading is reached
+    /// in reverse...
+    pub reverse_degrees: f32,
+    /// ...but a pursued target only when it is no farther than this; a
+    /// farther one is turned toward.
+    pub reverse_distance: f32,
+}
+impl Default for BotMounted {
+    fn default() -> Self {
+        Self {
+            anchor: MountAnchor::Mount,
+            chase_radius: 96.0,
+            reverse_degrees: 103.0,
+            reverse_distance: 16.0,
+        }
+    }
 }
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
@@ -167,6 +291,11 @@ impl Default for BotKind {
             out_of_water_seconds: None,
             alerts_allies: false,
             behaviours: Default::default(),
+            objective_radius: 24.0,
+            contest: BotContest::default(),
+            mounted: BotMounted::default(),
+            fighting: BotFighting::default(),
+            surprise: BotSurprise::default(),
         }
     }
 }
@@ -279,6 +408,60 @@ impl BotKind {
             ("turn_degrees", self.turn_degrees, 10.0, 3600.0),
             ("aim_error_degrees", self.aim_error_degrees, 0.0, 45.0),
             ("memory_seconds", self.memory_seconds, 0.0, 60.0),
+            ("objective_radius", self.objective_radius, 1.0, 128.0),
+            ("contest.lead_seconds", self.contest.lead_seconds, 0.0, 5.0),
+            ("contest.max_lead", self.contest.max_lead, 0.0, 32.0),
+            ("contest.engage", self.contest.engage, 0.0, 32.0),
+            (
+                "contest.cover_distance",
+                self.contest.cover_distance,
+                0.0,
+                32.0,
+            ),
+            ("contest.cover_side", self.contest.cover_side, 0.0, 32.0),
+            (
+                "contest.clear_degrees",
+                self.contest.clear_degrees,
+                0.0,
+                90.0,
+            ),
+            ("fighting.band_slack", self.fighting.band_slack, 0.0, 1.0),
+            (
+                "fighting.min_band_slack",
+                self.fighting.min_band_slack,
+                0.0,
+                16.0,
+            ),
+            (
+                "fighting.dwell_seconds",
+                self.fighting.dwell_seconds,
+                0.0,
+                5.0,
+            ),
+            (
+                "fighting.strafe_seconds",
+                self.fighting.strafe_seconds,
+                0.1,
+                30.0,
+            ),
+            (
+                "mounted.chase_radius",
+                self.mounted.chase_radius,
+                0.0,
+                400.0,
+            ),
+            (
+                "mounted.reverse_degrees",
+                self.mounted.reverse_degrees,
+                90.0,
+                180.0,
+            ),
+            (
+                "mounted.reverse_distance",
+                self.mounted.reverse_distance,
+                0.0,
+                64.0,
+            ),
         ];
         for (name, value, min, max) in ranges {
             ensure!(
@@ -287,6 +470,9 @@ impl BotKind {
                 self.id
             );
         }
+        self.surprise
+            .validate()
+            .with_context(|| format!("Bot `{}`", self.id))?;
         Ok(())
     }
 }
@@ -299,8 +485,10 @@ pub struct BotPack {
     pub bots: Vec<BotKind>,
 }
 impl BotPack {
+    /// Reads a `bots.json`. A `//` outside a string starts a comment that
+    /// runs to the end of its line, so tunables can say what they do.
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        let pack: Self = serde_json::from_slice(bytes).context("bots.json")?;
+        let pack: Self = serde_json::from_slice(&strip_comments(bytes)).context("bots.json")?;
         ensure!(
             pack.schema_version == SCHEMA_VERSION,
             "bots.json schema_version must be {SCHEMA_VERSION}"
@@ -327,9 +515,62 @@ impl BotPack {
     }
 }
 
+/// `bytes` with every `//` comment outside a JSON string blanked out
+/// (spaces keep error positions where they were).
+fn strip_comments(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let (mut string, mut escaped, mut comment) = (false, false, false);
+    for i in 0..out.len() {
+        let c = out[i];
+        if comment {
+            if c == b'\n' {
+                comment = false;
+            } else {
+                out[i] = b' ';
+            }
+        } else if string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                string = false;
+            }
+        } else if c == b'"' {
+            string = true;
+        } else if c == b'/' && out.get(i + 1) == Some(&b'/') {
+            comment = true;
+            out[i] = b' ';
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Comments explain tunables; a `//` inside a string is text.
+    #[test]
+    fn comments_are_skipped_but_not_inside_strings() {
+        let pack = BotPack::from_json(
+            br#"{"schema_version":1, // the format
+            "bots":[{"id":"bot.a","name":"A // B", // its name
+            "surprise":{"strength":0.5}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(pack.bots[0].name, "A // B");
+        assert_eq!(pack.bots[0].surprise.strength, 0.5);
+        assert_eq!(BotKind::default().surprise.strength, 0.0);
+        for bad in [
+            r#""surprise":{"strength":2}"#,
+            r#""surprise":{"band":-0.1}"#,
+            r#""surprise":{"interrupts":{"teleport":1}}"#,
+            r#""surprise":{"loud":1}"#,
+        ] {
+            let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
+            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");
+        }
+    }
     #[test]
     fn packs_validate_and_later_ids_replace_earlier_ones() {
         let a = BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"bot.a","name":"A"}]}"#)
@@ -355,6 +596,27 @@ mod tests {
             BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"x","name":"X","speed":2}]}"#)
                 .is_err()
         );
+    }
+    #[test]
+    fn fight_slack_scales_with_the_band_and_is_limited() {
+        let fighting = BotFighting::default();
+        assert_eq!(fighting.slack(4.0), 1.5);
+        assert!((fighting.slack(40.0) - 6.0).abs() < 1e-4);
+        let pack = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","fighting":{"band_slack":0.3,"dwell_seconds":1}}]}"#,
+        )
+        .unwrap();
+        let read = &pack.bots[0].fighting;
+        assert_eq!((read.band_slack, read.dwell_seconds), (0.3, 1.0));
+        assert_eq!(read.strafe_seconds, fighting.strafe_seconds);
+        for bad in [
+            r#""fighting":{"band_slack":2}"#,
+            r#""fighting":{"strafe_seconds":0}"#,
+            r#""fighting":{"dwell_seconds":-1}"#,
+        ] {
+            let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
+            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");
+        }
     }
     #[test]
     fn body_melee_and_swimming_are_read_and_limited() {

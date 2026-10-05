@@ -37,6 +37,24 @@ impl Bounds {
         }
         Ok(Self { min, size })
     }
+    /// The position nearest `position` at which a brick of `mesh`, turned
+    /// `quarter_turns`, sits on the stud and plate grid: the same position
+    /// when it already does.
+    pub fn snapped(position: [f32; 3], quarter_turns: u8, mesh: &Mesh) -> [f32; 3] {
+        let [w, d] = mesh.footprint_studs.map(f64::from);
+        let h = f64::from(mesh.height_plates);
+        let size = if quarter_turns.is_multiple_of(2) {
+            [w, h, d]
+        } else {
+            [d, h, w]
+        };
+        std::array::from_fn(|axis| {
+            let cell = [0.5_f64, 0.2, 0.5][axis];
+            let half = size[axis] * cell * 0.5;
+            let lower = f64::from(position[axis]) - half;
+            ((lower / cell).round() * cell + half) as f32
+        })
+    }
     pub fn max(self) -> [i32; 3] {
         std::array::from_fn(|a| self.min[a] + self.size[a])
     }
@@ -458,6 +476,25 @@ impl Index {
 mod tests {
     use super::*;
     use bri_world::ContentRef;
+    /// A brick saved off its grid (a save made where it had another size)
+    /// moves to the nearest grid position, under half a cell; one on it
+    /// stays put, turned or not.
+    #[test]
+    fn a_brick_off_its_grid_snaps_to_the_nearest_cell() {
+        let odd = crate::testing::definition("odd", [3, 5], 2, Default::default(), false).mesh;
+        assert!(Bounds::at([0.0, 0.1, 0.0], 0, &odd).is_err());
+        let snapped = Bounds::snapped([0.0, 0.1, 0.0], 0, &odd);
+        assert!(Bounds::at(snapped, 0, &odd).is_ok(), "{snapped:?}");
+        for axis in 0..3 {
+            let moved = (snapped[axis] - [0.0, 0.1, 0.0][axis]).abs();
+            assert!(moved <= [0.25, 0.1, 0.25][axis] + 1e-6, "{snapped:?}");
+        }
+        let turned = Bounds::snapped([0.0, 0.1, 0.0], 1, &odd);
+        assert!(Bounds::at(turned, 1, &odd).is_ok(), "{turned:?}");
+        let on = [0.25, 0.2, 0.75];
+        assert!(Bounds::at(on, 0, &odd).is_ok());
+        assert_eq!(Bounds::snapped(on, 0, &odd), on);
+    }
     #[test]
     fn faces_are_shared_side_by_side_and_stacked_never_at_edges() {
         let b = |min: [i32; 3], size: [i32; 3]| Bounds { min, size };

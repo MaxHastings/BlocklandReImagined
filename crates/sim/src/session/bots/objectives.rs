@@ -11,7 +11,17 @@ const SOURCES: usize = 64;
 const ROWS: usize = 256;
 const ACTIONS: usize = 32;
 const RETRY: u64 = 120;
+/// Ticks after an objective completes before it looks for the next one:
+/// the completing event's own effects (a flag put back) land first.
+const COMPLETION_SETTLE: u64 = 12;
 const APPROACH_TIMEOUT: u64 = 120 * 30;
+/// How long a finished step's view is held while the next step waits for
+/// its planning turn (one bot plans per tick), so the objective does not
+/// blink off between two steps of one plan.
+const STEP_HOLD: u64 = 60;
+/// Closer than this to the step's point since the best so far counts as
+/// approach progress, which extends the approach deadline.
+const APPROACH_PROGRESS: f32 = 0.5;
 
 /// Policy supplies desired state independently of the controls which can cause it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +150,11 @@ impl Cause {
             .copied()
             .filter(|(origin, _)| *origin > after)
     }
+    /// The authored rows replace this captured object once they are due.
+    fn resets(&self, object: u64) -> bool {
+        self.rules()
+            .is_some_and(|causes| causes.iter().any(|c| c.projection.resets.contains(&object)))
+    }
     fn delay(&self) -> u64 {
         self.rules().map_or(0, |causes| {
             causes.iter().map(|c| c.projection.delay).max().unwrap_or(0)
@@ -176,6 +191,8 @@ pub(super) struct Projection {
     group_delays: Vec<u64>,
     admission_groups: usize,
     observations: Vec<Observation>,
+    /// Captured objects a projected ResetObject row replaces once due.
+    resets: Vec<u64>,
 }
 
 /// Guaranteed native changes preceding admission, never projected state writes.
@@ -284,8 +301,24 @@ pub(super) struct View {
     pub enemy: Option<OwnerId>,
     pub enemy_evidence: Option<Knowledge>,
     pub physical_progress: bool,
+    /// The way a loose body is being delivered (`Directive::heading`).
+    pub heading: Vec3,
+    /// It carries what the objective delivers (a declared carriage it
+    /// picked up, a body it holds): stopping would put that at risk.
+    pub committed: bool,
 }
 impl View {
+    /// The step needs only its feet: no tool, trigger, body, seat or enemy
+    /// of its own, so its aim is free for other things on the way.
+    pub(super) fn feet_only(&self) -> bool {
+        self.enemy.is_none()
+            && self.trigger.is_none()
+            && self.equip.is_none()
+            && self.held.is_none()
+            && self.drive.is_none()
+            && self.board.is_none()
+            && self.resource.is_none()
+    }
     pub(super) fn locomotion(point: Vec3, aim: Vec3) -> Self {
         Self {
             point,
@@ -301,6 +334,8 @@ impl View {
             enemy: None,
             enemy_evidence: None,
             physical_progress: false,
+            heading: Vec3::ZERO,
+            committed: false,
         }
     }
 }
@@ -318,7 +353,7 @@ impl Step {
     }
     fn validate(&self, session: &Session, bot: OwnerId, full: bool) -> bool {
         self.cause.validate(session, bot, full)
-            && self.executor.validate(session, bot)
+            && (self.executor.validate(session, bot) || self.expected_reset(session))
             && session.game_of(bot) == Some(self.game)
             && session
                 .minigames
@@ -329,6 +364,25 @@ impl Step {
                 .get(&bot)
                 .and_then(|p| session.minigames.player(p.combat.player).ok())
                 .is_some_and(|p| p.team == self.team)
+    }
+    /// After real admission, the projected ResetObject replacing the
+    /// captured body is the authored outcome, not an invalidated step.
+    /// Its observation (the old incarnation no longer exists) is checked with
+    /// every other effect once the due time passes.
+    fn object_gone(&self, session: &Session) -> bool {
+        matches!(&self.executor, Executor::Physical(action)
+            if session
+                .object_centre(ObjectRef::Vehicle(action.goal.object.vehicle))
+                .is_none())
+    }
+    fn expected_reset(&self, session: &Session) -> bool {
+        let Executor::Physical(action) = &self.executor else {
+            return false;
+        };
+        let object = action.goal.object.vehicle;
+        self.waiting.is_some()
+            && self.cause.resets(object)
+            && session.object_centre(ObjectRef::Vehicle(object)).is_none()
     }
     fn view(&self, session: &Session, bot: OwnerId) -> Option<View> {
         let mut view = if self.waiting.is_some() && matches!(self.executor, Executor::Enemy(_)) {
@@ -347,6 +401,17 @@ impl Step {
             view.trigger = Some(false);
         }
         Some(view)
+    }
+    /// [`Self::view`] with whether it carries what the step delivers.
+    fn committed_view(&self, session: &Session, bot: OwnerId) -> Option<View> {
+        let view = self.view(session, bot)?;
+        let committed = match &self.executor {
+            Executor::Package(action) => action.carrying(session, bot),
+            _ => view
+                .held
+                .is_some_and(|held| session.held_by(bot) == Some(held)),
+        };
+        Some(View { committed, ..view })
     }
     fn progress(&self, session: &Session, bot: OwnerId, tick: u64) -> Option<Progress> {
         match &self.executor {
@@ -510,6 +575,11 @@ pub(super) struct State {
     pub(super) searches: u64,
     pub(super) reused: u64,
     pub diagnostic: Option<&'static str>,
+    /// The last finished step's view, held until a tick while the next
+    /// step waits for its planning turn ([`STEP_HOLD`]).
+    hold: Option<(View, u64)>,
+    /// The nearest the current step's approach has come to its point.
+    best: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -575,6 +645,12 @@ impl State {
             step.deadline = step.deadline.saturating_add(elapsed);
         }
     }
+    /// A step it was after failed (timed out, made no progress) and is
+    /// cooling down before it is tried again: the objective is still
+    /// offered, so it does not walk all the way home meanwhile.
+    pub(super) fn pursuing(&self) -> bool {
+        self.step.is_none() && !self.failed.is_empty()
+    }
     pub(super) fn ready(&self, tick: u64) -> bool {
         self.step.is_none() && tick >= self.next
     }
@@ -638,6 +714,12 @@ fn eq(key: String, value: FactValue) -> Predicate {
 fn round_key(game: bri_minigames::GameId, round: u64) -> String {
     format!("round/{}/{round}/over", game.0)
 }
+fn team_score_key(game: bri_minigames::GameId, team: bri_minigames::TeamId) -> String {
+    format!("score/team/{}/{}", game.0, team.0)
+}
+fn reset_key(spawner: BrickId, object: u64) -> String {
+    format!("object/{spawner}/{object}/reset")
+}
 fn win_key(bot: OwnerId) -> String {
     format!("wins/{bot}")
 }
@@ -650,6 +732,37 @@ fn scalar(d: Datum) -> Option<FactValue> {
 }
 
 impl Session {
+    /// The game and team whose canonical score a Team subject reads: the
+    /// rule actor's, exactly as `rule_query` resolves it.
+    fn objective_team(
+        &self,
+        cx: &Trigger,
+    ) -> Option<(bri_minigames::GameId, bri_minigames::TeamId)> {
+        let actor = cx
+            .targets
+            .get(&ev::Slot::Instigator)
+            .or_else(|| cx.targets.get(&ev::Slot::Player))
+            .or(cx.client.as_ref())?
+            .id
+            .index;
+        let player = self
+            .minigames
+            .player(self.peers.get(&actor)?.combat.player)
+            .ok()?;
+        Some((player.game?, player.team?))
+    }
+
+    fn team_score(&self, game: bri_minigames::GameId, team: bri_minigames::TeamId) -> Option<i64> {
+        let g = self.minigames.game(game).ok()?;
+        Some(
+            g.members
+                .iter()
+                .filter_map(|id| self.minigames.player(*id).ok())
+                .filter(|p| p.team == Some(team))
+                .fold(0i64, |sum, p| sum.saturating_add(p.score)),
+        )
+    }
+
     pub(super) fn objective_fact_key(
         &self,
         cx: &Trigger,
@@ -679,7 +792,12 @@ impl Session {
                 format!("score/{}", cx.targets.get(&ev::Slot::Instigator)?.id.index)
             }
             Property::Score if c.subject == Subject::Target => format!("score/{}", target.id.index),
-            Property::Score if c.subject == Subject::Team => return None,
+            // Team score is the canonical sum of its members' scores (the
+            // rule interpreter's own definition), keyed by game and team.
+            Property::Score if c.subject == Subject::Team => {
+                let (game, team) = self.objective_team(cx)?;
+                team_score_key(game, team)
+            }
             _ => format!(
                 "observation/{:?}/{:?}",
                 self.rule_key(cx, target, c.subject, &c.key)?,
@@ -776,24 +894,31 @@ impl Session {
                 if matches!(op, RuleOp::AddTeamScore(_)) && player.team.is_none() {
                     return None;
                 }
-                let key = format!("score/{bot}");
-                facts.insert(key.clone(), FactValue::Number(player.score));
-                // Canonical scoring saturates. Restrict this first projection
-                // to arithmetic that cannot saturate, rather than predict wrong.
-                let (compare, bound) = if *value >= 0 {
-                    (Compare::AtMost, i64::MAX - i64::from(*value))
-                } else {
-                    (Compare::AtLeast, i64::MIN - i64::from(*value))
-                };
-                guards.push(Predicate {
-                    key: key.clone(),
-                    compare,
-                    value: FactValue::Number(bound),
-                });
-                result.push(Effect::Add {
-                    key,
-                    amount: i64::from(*value),
-                });
+                let mut scores = vec![(format!("score/{bot}"), player.score)];
+                // A team total is the sum of member scores: the same award
+                // moves the member's team total by the same amount.
+                if let (Some(game), Some(team)) = (player.game, player.team) {
+                    scores.push((team_score_key(game, team), self.team_score(game, team)?));
+                }
+                for (key, current) in scores {
+                    facts.insert(key.clone(), FactValue::Number(current));
+                    // Canonical scoring saturates. Restrict this projection
+                    // to arithmetic that cannot saturate, rather than predict wrong.
+                    let (compare, bound) = if *value >= 0 {
+                        (Compare::AtMost, i64::MAX - i64::from(*value))
+                    } else {
+                        (Compare::AtLeast, i64::MIN - i64::from(*value))
+                    };
+                    guards.push(Predicate {
+                        key: key.clone(),
+                        compare,
+                        value: FactValue::Number(bound),
+                    });
+                    result.push(Effect::Add {
+                        key,
+                        amount: i64::from(*value),
+                    });
+                }
             }
             RuleOp::WinRound | RuleOp::EndRound => {
                 let game = self.rule_game_context(cx, cx.source, target).ok()?;
@@ -844,6 +969,7 @@ impl Session {
         let mut ordered = Vec::new();
         let mut observations = Vec::new();
         let mut admission = Vec::new();
+        let mut resets = Vec::new();
         for transition in transitions {
             let c = Condition {
                 subject: Subject::Target,
@@ -922,6 +1048,28 @@ impl Session {
                     );
                 }
                 let (effects, subject, property, key, value) = match intent {
+                    // Resetting the captured object is a known authored effect:
+                    // its spawner replaces it with a new incarnation once this
+                    // row is due. It never counts as delivery or success; the
+                    // physical provider grounds the replacement afresh.
+                    Intent::Rule(RuleOp::ResetObject) => {
+                        let spawner = self
+                            .objective_reset(program, cx, target)
+                            .ok_or(F::Unsupported)?;
+                        let key = reset_key(spawner, target.id.index);
+                        facts.insert(key.clone(), FactValue::Bool(false));
+                        resets.push(target.id.index);
+                        (
+                            vec![Effect::Set {
+                                key,
+                                value: FactValue::Bool(true),
+                            }],
+                            Subject::Target,
+                            Property::Exists,
+                            String::new(),
+                            Datum::Bool(true),
+                        )
+                    }
                     Intent::Rule(op) => {
                         if matches!(
                             op,
@@ -1037,7 +1185,30 @@ impl Session {
             group_delays,
             admission_groups,
             observations,
+            resets,
         })
+    }
+
+    /// The spawner a ResetObject row would respawn, when its semantics are
+    /// known: the target is exactly this input's captured object and the
+    /// rule owner owns its spawner (the executor's own permission check).
+    fn objective_reset(
+        &self,
+        program: &ev::BrickProgram,
+        cx: &Trigger,
+        target: Entity,
+    ) -> Option<BrickId> {
+        let captured = cx.targets.get(&ev::Slot::Object)?;
+        if target.class != Class::Vehicle || captured.id != target.id {
+            return None;
+        }
+        let spawner = self.vehicle_spawn_brick(bri_vehicles::VehicleId(target.id.index))?;
+        self.simulation
+            .state()
+            .bricks
+            .get(&spawner)
+            .is_some_and(|b| b.owner == program.owner_scope)
+            .then_some(spawner)
     }
     fn objective_reactions_clear(
         &self,
@@ -1283,6 +1454,7 @@ impl Session {
         sources: &BTreeSet<BrickId>,
         facts: &mut Facts,
         budget: &mut GroundingBudget,
+        unsupported: &mut bool,
     ) -> Result<Vec<GroundedAction>, planning::Failure> {
         use planning::Failure as F;
         let Some(world) = self.events.world.as_ref() else {
@@ -1340,7 +1512,10 @@ impl Session {
                     match self.ground_causal_input(bot, program, context, &[], facts, budget) {
                         Ok(cause) => cause,
                         Err(F::Unsupported) => {
+                            // Report unknown authored semantics; never drop
+                            // a goal region silently.
                             *facts = previous;
+                            *unsupported = true;
                             continue;
                         }
                         Err(f) => return Err(f),
@@ -1444,7 +1619,7 @@ impl Session {
             grounded_actions.push(grounded);
         }
         for supplied in [
-            self.append_physical_actions(bot, &sources, &mut facts, budget),
+            self.append_physical_actions(bot, &sources, &mut facts, budget, &mut unsupported),
             self.append_enemy_actions(bot, &mut facts, budget),
         ] {
             let provided = match supplied {
@@ -1584,6 +1759,19 @@ impl Session {
             {
                 step.deadline = tick.saturating_add(APPROACH_TIMEOUT);
             }
+            // Getting closer to the step's point is progress too, whatever
+            // provides the step: a long route keeps its deadline while it
+            // advances, and only a stalled approach times out.
+            if step.waiting.is_none()
+                && let Some(point) = step.view(self, bot).map(|v| v.point)
+                && let Some(peer) = self.peers.get(&bot)
+            {
+                let gap = point.distance(Vec3::from(peer.player.state().feet));
+                if state.best.is_none_or(|best| gap < best - APPROACH_PROGRESS) {
+                    state.best = Some(gap);
+                    step.deadline = step.deadline.max(tick.saturating_add(APPROACH_TIMEOUT));
+                }
+            }
             if step.waiting.is_none()
                 && let Some((_, when)) = step.admitted(self, bot)
             {
@@ -1604,7 +1792,10 @@ impl Session {
             state.desired = None;
             state.failed.clear();
             state.route.clear();
-            state.next = tick + RETRY;
+            // What it achieved may be offered again at once (a flag back on
+            // its stand): look for the next objective as soon as the effects
+            // of the completing event have landed, not after a retry's wait.
+            state.next = tick + COMPLETION_SETTLE;
             state.diagnostic = Some(diagnostic);
             self.bots.brains.get_mut(&bot)?.objective = state;
             return None;
@@ -1614,14 +1805,20 @@ impl Session {
             let same = step.validate(self, bot, tick % 30 == bot % 30);
             if !same {
                 let diagnostic = step.invalidation_diagnostic(self, bot);
+                // A body that no longer exists (scored and reset, destroyed)
+                // leaves nothing to retry: ground its replacement at once.
+                let replaced = step.object_gone(self);
                 state.step = None;
                 state.desired = None;
-                state.next = tick + RETRY;
+                state.next = if replaced { tick } else { tick + RETRY };
                 state.diagnostic = Some(diagnostic);
             } else if tick > step.deadline {
                 state.fail(tick, "objective approach timed out");
             } else if step.progress(self, bot, tick).is_none() {
-                let out = state.step.as_ref().and_then(|s| s.view(self, bot));
+                let out = state
+                    .step
+                    .as_ref()
+                    .and_then(|s| s.committed_view(self, bot));
                 self.bots.brains.get_mut(&bot)?.objective = state;
                 return out;
             } else {
@@ -1648,6 +1845,20 @@ impl Session {
                             view.physical_progress = false;
                             repair_hold = Some(view);
                         }
+                        // Hold this step's view until the next is planned,
+                        // standing where the step finished.
+                        if repair_hold.is_none()
+                            && let Some(mut view) = step.view(self, bot)
+                        {
+                            let feet = Vec3::from(self.peers[&bot].player.state().feet);
+                            view.point = feet;
+                            view.waiting = true;
+                            view.move_while_waiting = false;
+                            view.trigger = view.trigger.map(|_| false);
+                            view.physical_progress = false;
+                            view.board = None;
+                            state.hold = Some((view, tick + STEP_HOLD));
+                        }
                         state.step = None;
                         state.failed.clear();
                         state.next = tick;
@@ -1669,6 +1880,9 @@ impl Session {
             self.bots.objective_cursor = Some(bot);
             state.next = tick + RETRY;
             let mut budget = GroundingBudget::default();
+            // Another offered objective not yet found wanting: one that
+            // cannot be planned hands the bot's next turn to it.
+            let mut untried = false;
             let result = self
                 .discover_desired_states(bot, &mut budget)
                 .and_then(|discovery| {
@@ -1695,6 +1909,9 @@ impl Session {
                                 .cloned()
                         })
                         .ok_or(planning::Failure::NoPlan)?;
+                    untried = desireds.iter().any(|d| {
+                        *d != desired && !state.failed_desired.iter().any(|(f, _)| f == d)
+                    });
                     state.desired = Some(desired.clone());
                     self.objective_snapshot_with_budget(
                         bot,
@@ -1768,6 +1985,9 @@ impl Session {
                             state.failed_desired.remove(0);
                         }
                         state.failed_desired.push((desired, tick + RETRY * 3));
+                        if untried {
+                            state.next = tick;
+                        }
                     }
                     state.route.clear();
                     state.diagnostic = Some(match f {
@@ -1792,11 +2012,18 @@ impl Session {
                 }
             }
         }
+        if state.step.is_some() || state.hold.is_some_and(|(_, until)| tick >= until) {
+            state.hold = None;
+        }
+        if state.step.is_none() {
+            state.best = None;
+        }
         let result = state
             .step
             .as_ref()
-            .and_then(|s| s.view(self, bot))
-            .or(repair_hold);
+            .and_then(|s| s.committed_view(self, bot))
+            .or(repair_hold)
+            .or(state.hold.map(|(view, _)| view));
         self.bots.brains.get_mut(&bot)?.objective = state;
         result
     }
@@ -1932,6 +2159,7 @@ impl Executor {
                 held: d.held,
                 drive: d.drive,
                 physical_progress: d.physical_progress,
+                heading: d.heading,
                 move_while_waiting: matches!(
                     action.method,
                     super::physical_objectives::Method::Hold { .. }
@@ -2092,6 +2320,7 @@ mod tests {
                 admission_groups,
                 delay: 60,
                 observations: vec![],
+                resets: vec![],
             },
         };
         let a = input(

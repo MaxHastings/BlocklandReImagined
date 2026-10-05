@@ -43,7 +43,21 @@ bot does through the same code.
    in its package. Nothing scoring: it wanders.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
-   past its band, and a walk home goes all the way.
+   past its band, and a walk home goes all the way, except while a failed
+   objective step cools down before it is tried again: then it does not
+   walk home at all.
+
+   An objective outranks a fight while the bot carries what the objective
+   delivers (`View::committed`, read from the step: a package carriage it
+   holds, or a held body). On the way to a delivery that needs only its
+   feet it shoots an enemy ahead or to the side as it goes (run and gun);
+   an enemy behind is left, as walking backwards is slow.
+
+   An on-foot bot's leash is its brick and `chase_radius`. A driver's leash
+   follows the kind's `mounted` policy instead: with `anchor: "mount"` it is
+   measured from where the bot took the controls, with `mounted.chase_radius`;
+   with `"home"` from its brick. So a bot that boards a vehicle 40 m out keeps
+   pursuing a target 60 m out rather than turning back at its walking leash.
 3. **Goal and path.** The behaviour sets the goal; the route planner (see
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
    walk grid (`crate::nav`, shared by every bot of a body size, updated as
@@ -64,11 +78,44 @@ bot does through the same code.
    targets cancel a held charge without firing it. A driver steers the
    chassis independently of the gunner's world aim; an armed passenger's world
    aim is preserved when its seat converts the look to a relative angle.
+   How a chassis reverses is one rule, the drive leg's `route::gear`
+   (Routes, below): a goal more than `mounted.reverse_degrees` off its hull
+   is behind, and while pursuing (Fight, Chase, Search) it is backed onto
+   only within `mounted.reverse_distance`; a farther target behind is
+   turned toward, so a chase is not driven as a long retreat.
 5. **Move and act.** The behaviour's movement, then getting unstuck (hop,
    plan again, give up the goal) on foot; drivers instead brake, replan and
    relinquish an unproductive seat. Shared claims are exclusive advisory
    intentions, released on success, preemption or invalidation. A claim never
    overrides human occupancy, trust, mini-game policy or an Add-On ride hook.
+   Claims on a loose body (a ball, a crate) conflict only between allies:
+   an opponent may pursue the same body and push it toward its own goal.
+   Seats stay exclusive for everyone. That contest is its own piece
+   (`bots/contest.rs`): when an opponent is the body's mover or holds a live
+   claim on it, the approach leads the body along its velocity
+   (`contest.lead_seconds`, at most `contest.max_lead`), and being within
+   `contest.engage` of it counts as progress, so the claim's lease does not
+   lapse while the two sides fight over it. A step waiting on an admitted
+   delivery holds no lease at all.
+
+   The contest piece also covers the other cases of a shared body:
+   - **Cover.** A bot whose claim is refused because a teammate holds the
+     body keeps its objective. It does not stand down into Wander: it holds
+     a cover point `contest.cover_distance` behind the body, against the
+     team's delivery heading, and `contest.cover_side` to the side. A lone
+     cover takes the side the working teammate is not on. Several covers
+     take id-ordered slots on both sides, each further pair further back and
+     wider. A cover point stops short of any wall between it and the body.
+     When an opponent drives the body back at the cover, the cover stands
+     beside the body's path instead, so the drive is not deflected off it.
+     When the claim frees, the cover takes the body up at once.
+   - **Clear.** A push or hammer on a body an opponent drives straight back
+     at it turns by `contest.clear_degrees` to the bot's side, knocking the
+     body out of its line rather than being carried back with it.
+   - **Walls.** When solid world geometry stands where a pusher would stand
+     (a wall or a corner behind the body), the push turns by the smallest of
+     30, 60, 90 or 120 degrees that leaves room. The body is worked along
+     and off the wall instead of being pressed into it.
    Physical pushing transfers only momentum stopped at actual motor contacts,
    through the same mechanism for humans and bots; mass and geometry determine
    the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
@@ -93,7 +140,7 @@ Edges are the ways the bot's body can actually move between them now:
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
 | jet | the body can jet (`can_jet`, energy, the kind's `fly` weight above 0), the column up from the launch cell, the crossing at the apex and the descent are clear, and the climb is within the energy | the flight time from the jet's thrust, lift and gravity, plus takeoff |
-| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
+| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
 
 Edge costs come from the body's and vehicle's own numbers (`PlayerTuning`
 speeds, jet acceleration and lift, gravity, energy drain; a vehicle's
@@ -113,8 +160,19 @@ at most a few jet tests per search, one landing sample per goal.
 **Execution.** Each leg turns into ordinary controls, the same keys a
 person presses:
 
-- walk: as before (step, jump, crouch into crawlspaces, walk through
-  openings).
+- walk: step, jump, crouch into crawlspaces, walk through openings. The
+  grid's eight-way steps are pulled straight (`nav::pull`): each plain
+  walking waypoint heads for the farthest later one of the same walk that
+  the full-width standing body walks straight to (`Ground::walkable`: its
+  box sweeps clear a step up, of the map and of loose bodies such as a
+  ball or a parked vehicle (players step aside), and floor it can stand on, not deep water,
+  lies within a step all the way along). A jump, crawl, opening or other
+  leg's waypoint is never skipped, nor the one where it starts, so a
+  diagonal across open floor is one line and a corner the body would
+  catch on is still walked round. Walking eases off only at the leg's end.
+  A walker does not walk into a vehicle (which the grid leaves out): one
+  ahead is walked round by its nearer side, unless it is what the bot
+  makes for.
 - swim: head for the next waypoint across the water, whatever the depth,
   holding jump to rise where the way out is higher.
 - jet: climb straight up at the launch cell until above the landing's
@@ -128,9 +186,10 @@ person presses:
   its front and rear lock (`route::Chassis`). A point deeper than half the
   chassis's width inside either turning circle is not chased round in
   circles: the driver backs away from it (nose swinging toward it) or
-  pulls ahead of it, until it is out of the circle. A point behind is
-  backed onto when that is sooner, at the definition's cruise speeds, than
-  turning round. Speed is no more than the tyres hold on the arc pure
+  pulls ahead of it, until it is out of the circle. A point behind (past
+  the kind's `mounted.reverse_degrees`) is backed onto when that is
+  sooner, at the definition's cruise speeds, than turning round, and, for
+  a pursued target, only within `mounted.reverse_distance`. Speed is no more than the tyres hold on the arc pure
   pursuit takes, manoeuvring speed while backing or pulling out, and what
   it can still brake from by the point. A chassis is at a waypoint, or a
   search probe, within half its footprint.
@@ -138,12 +197,22 @@ person presses:
   progress is measured afresh once the bot is seated (the drive's own
   distance), so a long drive is not judged by the walk to the seat.
 - leave: a chassis that cannot hurt the enemy it chases (no gun, and no
-  runover for someone not on foot) stops and gets out once its side is
-  about as close as the bot fights from on foot. A wreck, or a wheeled
-  hull on its side or roof, ends the drive at once.
+  runover for someone not on foot) pulls up short of them: it brakes so
+  as to stop with its nose about as far off as the bot fights from on
+  foot (half its length plus that reach), and never rams them. There it
+  gets out, if on foot it would still close on them (`route::walk_closes`:
+  they draw away slower than it walks); one outrunning a walker is
+  followed in the seat. A wreck, or a wheeled hull on its side or roof,
+  ends the drive at once.
 
 **Replanning from outcomes.** Each leg watches what really happened: a walk
-leg that stops moving hops, then plans again (as before); a jet leg that
+leg that makes no headway hops, then plans again, then gives up as
+before. Headway is net displacement over a window (`route::Progress`):
+over three quarters of a second a walker must cover a fifth of what its
+walk speed would carry it, so one shuttling between two spots, or hopping
+in place, while its input says move, is as stuck as one standing against
+a wall. A bot at work beside its objective, a seat or an arming point is
+not judged by it; a jet leg that
 runs out of time or lands below where it took off plans again from where
 the bot came down, and the cells that failed are forgotten; a drive leg
 that makes no headway backs up, plans again and finally gives up the seat.
@@ -170,6 +239,16 @@ package callbacks alone apply their gameplay effects. Real input admission,
 physical state and canonical death/round observations decide what happened;
 a package completion counter does not claim a round winner.
 
+Rule outputs are projected by what they do, never by content names. A
+Team Score condition reads a fact, the team's total: the sum of its members'
+scores, which `addScore` and `addTeamScore` raise. A delayed `resetObject`
+on the captured Object, from a brick whose owner owns that object's
+spawner, is a known effect after the scoring group: the object is replaced
+by a new incarnation. A step that expects it does not fail when the object
+disappears, and the bot plans again at once for the replacement. Any other
+output the planner does not understand makes the plan unsupported rather
+than being skipped.
+
 Grounding, search and depth remain finite. Unknown script semantics, thrown-object
 trajectories, hookshot routes, cooperative stacking and aircraft/watercraft
 delivery remain unsupported. Search uses dated enemy evidence, not unseen live
@@ -177,7 +256,15 @@ positions. Source, object incarnation, tool, permission and game/round/team
 changes invalidate assumptions. Explain exposes desired state, selected
 action/provider, phase, proposed route and bounded failure diagnostics.
 An interrupted approach excludes time spent in another behavior, while an event
-that was already scheduled keeps its absolute due time. Failed search reuse
+that was already scheduled keeps its absolute due time. A step's 30 s approach
+deadline moves on each time the bot gets half a unit closer to the step's
+point, so only a stalled approach times out, however long the route.
+Between steps the bot keeps the finished step's view (standing where it
+finished, no trigger) for up to a second until the next is planned, rather
+than blinking to Wander. A completed objective looks for the next one 12
+ticks later (once the completing event's effects have landed), and a
+desired state that cannot be planned hands the bot's next planning turn to
+another offered one at once instead of after a retry's wait. Failed search reuse
 revalidates the authoritative model, game, round and team before accepting it.
 See [the current pipeline and verification limits](../audits/npc-pipeline-current.md),
 [the frozen acceptance contract](../audits/objective-driven-integration.md) and
@@ -191,12 +278,116 @@ canonical spawn protection withholds ammunition-spending attacks and charge
 release, retaining aim and proven non-firing holds. It does not make prediction
 of a moving target infallible or change damage permissions.
 
+## Surprise
+
+Bots that always do the single best thing are predictable. Surprise is
+variation among a bot's choices that changes over time, built from plain
+mechanisms over the choices the brain already scores: no personality,
+emotion or mood, and no item, vehicle or game names
+(`crates/sim/src/session/bots/surprise.rs`).
+
+**One chooser.** Each choice point asks the same chooser (`Mind::pick`)
+once a tick, with the options the brain scored and its own plain pick:
+
+| Choice point | Options and scores | Plain pick |
+|---|---|---|
+| Behaviour | Interact, Fight, Chase, Search, Objective, Wander, by their weighted scores (`behaviour::scores`) | the highest (`behaviour::best`) |
+| Weapon | each inventory slot the hand-combat planner found usable now, by `tactics::suitability` | `tactics::select`, on the bot's planning turn |
+| Aim | the body; with a splash weapon (real `splash_radius` and `splash_damage`) also its feet, and a brick, vehicle or terrain face beside it within 0.7 of the radius, each scored by splash alone | the body |
+| Route | for a chase: straight at the enemy, or `flank_distance` to either side where there is floor | straight |
+
+Carrying a catch, arming, flying and walking home are never traded away.
+An option's score counts with its *effectiveness* (1 working, lower after
+failures): options whose adjusted score is within `band` of the best are
+eligible, so an option that keeps failing drops out of the band and
+another takes over. Each eligible option weighs (adjusted / best)^4,
+times e^drift, divided by 1 + boredom; one is drawn from the bot's own
+seeded random stream, so a seed always plays the same.
+
+- *Drift*: every option a bot has met carries a slow random walk
+  (Ornstein-Uhlenbeck, a step a second, reverting over `drift_seconds`,
+  bounded by `drift`), so each bot's preferences wander apart over time.
+- *Boredom*: an option in use gains `boredom` a second; it halves every
+  `boredom_seconds` once out of use.
+- *Effectiveness*: a shot is judged after its flight plus 0.6 s (the
+  target lost health or died, or not) for the weapon, aim and behaviour
+  that fired it; getting stuck fails the behaviour and chase route. A
+  failure takes `failure` of it away, a success restores `success` of the
+  gap, and it recovers on its own over `effectiveness_seconds`. A spear
+  that keeps missing gives way to the sword; torso shots that keep being
+  dodged give way to the feet or a wall beside the target.
+
+**Guards.** A pick is held at least `commit_seconds` (up to half again),
+unless it falls out of the band (the situation changed). Nothing varies
+while the bot carries an objective (a body its tool holds, a mount to
+deliver, a loose body it pushes, or a picked-up item on its way to a
+destination) or is urgent (under `urgent_health`, or hurt by an enemy
+within `urgent_range` in the last `urgent_seconds`): the plain pick, every
+time. Only options the brain scored above zero are options: what cannot
+work now is never picked. A switch of behaviour or weapon that the
+variation causes is preceded by a tell: the old one is held and the bot
+stands still with its fire held for `tell_seconds`, then switches.
+
+**Splash aims** are solved and checked like any shot: an intercept for
+the aimed point, the blast clear of itself and allies (`safe_blast`), the
+path clear. A surface aim counts its path clear when it reaches that
+surface, and at the firing gate its impact must lie within the splash
+radius of the body rather than inside it.
+
+**Flavour interrupts.** At a natural pause (wandering, no enemy seen or
+remembered, no threat, no objective, on its own feet, not carrying), now
+and then (`interrupts_per_minute`, then `interrupt_cooldown_seconds` of
+rest) a bot does something idle for `interrupt_seconds` (up to half
+again), each an ordinary player action through the player's own path:
+look at a player in sight, strike an emote (`Command::Emote`: love, hate,
+confusion, alarm), hop, run a small circle, walk a short detour, look
+round, crouch, paint the floor toward a player with the spray can
+(`Command::UseSprayCan`, then the trigger, only once the can is in hand),
+take out another tool and put it back, drop the weapon in hand
+(`Command::DropTool`, only with a second attack in inventory), or flick
+the light (`Command::ToggleLight`). Each weighs by `interrupts`; an
+interrupt ends at once if an enemy, a threat or an objective turns up.
+
+**Strength.** `strength` (0 to 1) scales the band, the drift, boredom,
+effectiveness failures and the interrupt rate. At 0, the default, every
+choice is the plain pick and no random number is drawn: the brain plays
+exactly as without surprise (the gauntlet's mixed-arsenal numbers are
+identical). The mind still records plain decisions for the readout.
+
+**Why.** `BotThought::surprise` (`BotSurpriseView`) gives the strength,
+the guard in force, a tell or interrupt under way, every drive (drift,
+boredom, effectiveness) and the last decision at each choice point: the
+plain and chosen options, the reason (off, carrying, urgent, plain,
+committed, picked, telling, switched) and each candidate's score, adjusted
+score, eligibility, drift, boredom, effectiveness and weight.
+
+The gauntlet's `surprise_by_strength` reports variety (distinct choices in
+effect per bot-minute), goof share, longest goof and switches away from
+the plain pick at strengths 0, 0.5 and 1; bands come later.
+
 ## Data
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
   rate, aim error, memory, whether it fights other builders' bots,
   whether it warns its side (`alerts_allies`), its `behaviours` weights,
   and:
+  - `objective_radius`: how far around itself it looks for loose objects
+    an objective can use (24 for the Blockhead).
+  - `contest` (`lead_seconds`, `max_lead`, `engage`, `cover_distance`,
+    `cover_side`, `clear_degrees`): how it plays a body an opponent is also
+    working, and how it covers one a teammate works (above). A
+    `cover_distance` of 0 stands down as before, and a `clear_degrees` of
+    0 meets a drive head on.
+  - `surprise`: every tunable of the chooser and the interrupts (above),
+    each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
+    comments outside strings.
+  - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
+    `strafe_seconds`): the
+    leeway around its band, how long a choice is held, and strafe legs.
+    Whether it flies at all is its `fly` leg weight (Routes).
+  - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
+    `reverse_distance`): its pursuit policy while it drives (above). It is
+    the same for every vehicle; nothing checks a vehicle's name.
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is
@@ -211,6 +402,15 @@ of a moving target infallible or change damage permissions.
     roams up and down as well as across, and every goal is kept inside its
     water (`water::swim_point`), so an enemy on land brings it to the edge
     nearest them and no farther. Out of water it walks like any bot.
+- A spawn brick's `team` (`VehicleSpawn::team`, the wrench's Team menu,
+  listing the builder's mini-game teams): the team slot its bot plays for.
+  It is applied when the bot joins its builder's game, after every new life
+  (a reset or respawn), after a build loads, and whenever the choice or the
+  game changes; in between, the game's own commands (SetTeam) may move the
+  bot. A slot the game has not got is applied once the game has it. With no
+  choice, the team is left to the game. A spawn brick's bot is named after
+  its kind and then its brick's name, or else its team ("Blockhead Bot
+  (Red)"), so the MiniGame Players list tells the bots apart.
 - A hole brick (a brick catalog entry's `bot`, Bot_Hole's `isBotHole` and
   `holeBot`) keeps one bot of that kind from the moment it is planted, as
   a spawn brick keeps the one chosen in its wrench. Import Add-On turns a

@@ -86,6 +86,9 @@ pub struct Emitter {
     pub asset: Option<ContentRef>,
     pub direction: u8,
 }
+/// The highest mini-game team slot a spawn brick may name (the games'
+/// team limit).
+pub const MAX_SPAWN_TEAM: u32 = 64;
 /// Vehicle spawn brick contents. `recolor` paints the vehicle with the
 /// brick color (the wrench "Recolor Vehicle" checkbox).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +96,11 @@ pub struct Emitter {
 pub struct VehicleSpawn {
     pub vehicle: ContentRef,
     pub recolor: bool,
+    /// The team slot (1..=64) of the builder's mini-game that a bot this
+    /// brick spawns plays for (the wrench "Team" choice); `None` leaves its
+    /// team to the game. Vehicles ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<u32>,
 }
 /// Vanilla ordinary-brick item attachment. Selectors persist even for NONE.
 /// Positions: Up0, Down1, North2, East3, South4, West5. Facing: North2..West5.
@@ -407,6 +415,12 @@ impl Brick {
         }
         if let Some(vehicle) = &self.vehicle {
             vehicle.vehicle.validate()?;
+            ensure!(
+                vehicle
+                    .team
+                    .is_none_or(|t| (1..=MAX_SPAWN_TEAM).contains(&t)),
+                "A spawn brick's team is a mini-game team slot, 1 to {MAX_SPAWN_TEAM}"
+            );
         }
         ensure!(
             self.events.len() <= MAX_EVENTS_PER_BRICK,

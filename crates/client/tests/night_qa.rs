@@ -1652,6 +1652,7 @@ fn jeep_save(host_state: &Path, app: &App) -> Result<(String, String)> {
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("v20.vehicle.jeepvehicle".into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

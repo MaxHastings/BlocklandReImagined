@@ -464,6 +464,7 @@ fn add_bots(
                     zombie.to_owned()
                 }),
                 recolor: false,
+                team: None,
             }));
             world
                 .bricks

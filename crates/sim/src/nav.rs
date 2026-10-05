@@ -174,6 +174,55 @@ impl Ground<'_> {
             )
             .is_none()
     }
+    /// Whether the full-width standing body walks straight from `from` to
+    /// `to` (feet): its box sweeps clear of fixed collision a step up, and
+    /// all the way along a floor it can stand on lies within a step of the
+    /// line, with no water deep enough to float it. What the grid's own
+    /// steps check cell by cell, along one line.
+    pub fn walkable(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
+        let rise = to.y - from.y;
+        let across = Vec3::new(to.x - from.x, 0.0, to.z - from.z).length();
+        if rise.abs() > body.step || across < 1e-3 {
+            return across < 1e-3 && rise.abs() <= body.step;
+        }
+        let (_, lift, tall) = body.clearance(false);
+        let half = Vector::new(body.width * 0.5, tall * 0.5, body.width * 0.5);
+        let shape = Cuboid::new(half);
+        let start = from + Vec3::Y * (lift + tall * 0.5);
+        let pose = Pose::translation(start.x, start.y, start.z);
+        // Loose bodies (a ball, a parked vehicle) count too: the grid
+        // leaves them out, so a straight line must not cut through one.
+        // Only players, who move out of the way, are left out.
+        let query = self
+            .physics
+            .query_pipeline_with_filter(QueryFilter::exclude_kinematic().exclude_sensors());
+        if query.intersect_shape(pose, &shape).next().is_some()
+            || query
+                .cast_shape(
+                    &pose,
+                    Vector::from_array((to - from).to_array()),
+                    &shape,
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: 1.0,
+                        stop_at_penetration: true,
+                        ..Default::default()
+                    },
+                )
+                .is_some()
+        {
+            return false;
+        }
+        let samples = (across / (CELL * 0.5)).ceil() as usize;
+        (1..samples).all(|i| {
+            let at = from.lerp(to, i as f32 / samples as f32);
+            let top = at + Vec3::Y * (body.step + 0.05);
+            self.ray(top, Vec3::NEG_Y, body.step * 2.0 + 0.1)
+                .is_some_and(|(distance, normal)| {
+                    (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
+                })
+                && self.floats(body, at).is_none()
+        })
+    }
     /// The nearest surface along a ray and its normal.
     fn ray(&self, origin: Vec3, direction: Vec3, reach: f32) -> Option<(f32, Vec3)> {
         let ray = Ray::new(
@@ -280,6 +329,48 @@ pub enum Mode {
     /// Jetting from the waypoint before: up to `apex`, over at that height
     /// and down onto this one, planned to take `seconds`.
     Jet { apex: f32, seconds: f32 },
+}
+
+/// Most grid steps a pulled straight walk passes over at once.
+const PULL_REACH: usize = 16;
+
+/// A walk route off the grid with its corners pulled straight: from
+/// `from`, each plain walking waypoint (no jump, crawl, opening or other
+/// leg) heads for the farthest of the plain walk that follows which the
+/// body walks straight to ([`Ground::walkable`]), so a diagonal is one line,
+/// not a zig-zag of the grid's eight directions. Every waypoint of another
+/// kind, the one before it (where that step starts) and the route's end
+/// are kept; nothing is cut that the body would catch on. A chassis's
+/// route is left as it is: its drive leg steers by pursuit, not by corners.
+pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Vec<Waypoint> {
+    if body.conservative {
+        return path;
+    }
+    let plain = |w: &Waypoint| w.mode == Mode::Walk && !w.jump && !w.crouch && w.through.is_none();
+    let mut pulled = Vec::with_capacity(path.len());
+    let (mut anchor, mut i) = (from, 0);
+    while i < path.len() {
+        let mut keep = i;
+        if plain(&path[i]) {
+            let mut k = i + 1;
+            while k < path.len()
+                && k - i <= PULL_REACH
+                && plain(&path[k])
+                && ground.walkable(body, anchor, path[k].feet)
+            {
+                keep = k;
+                // Where the next kind of step starts is kept.
+                if path.get(k + 1).is_some_and(|w| !plain(w)) {
+                    break;
+                }
+                k += 1;
+            }
+        }
+        pulled.push(path[keep]);
+        anchor = path[keep].feet;
+        i = keep + 1;
+    }
+    pulled
 }
 
 /// A step of the grid: the node it reaches, whether that takes a jump, the
@@ -1386,5 +1477,132 @@ mod tests {
         assert!(through.feet.x > 12.25 && through.feet.x < 13.5, "{p:?}");
         assert!(p[..at].iter().all(|w| w.feet.x < 2.25), "{p:?}");
         assert!((p.last().unwrap().feet - goal).length() < 1.0, "{p:?}");
+    }
+
+    fn open_ground(physics: &PhysicsWorld) -> Ground<'_> {
+        Ground {
+            physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+        }
+    }
+    fn walked(from: Vec3, p: &[Waypoint]) -> f32 {
+        std::iter::once(from)
+            .chain(p.iter().map(|w| w.feet))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|s| s[0].distance(s[1]))
+            .sum()
+    }
+    /// Every leg of a pulled route is one the body walks straight.
+    fn every_leg_walkable(ground: &Ground, from: Vec3, p: &[Waypoint]) {
+        let mut at = from;
+        for w in p {
+            assert!(
+                w.jump || ground.walkable(&body(), at, w.feet),
+                "{at} -> {} is cut through something: {p:?}",
+                w.feet
+            );
+            at = w.feet;
+        }
+    }
+
+    #[test]
+    fn a_pulled_diagonal_across_open_floor_is_about_a_straight_line() {
+        let physics = world(&[floor()]);
+        let ground = open_ground(&physics);
+        for (from, goal) in [
+            (Vec3::ZERO, Vec3::new(12.0, 0.0, 5.0)),
+            (Vec3::new(-3.0, 0.0, 9.0), Vec3::new(14.0, 0.0, -2.0)),
+        ] {
+            let (found, _) = search(&physics, from, goal);
+            let raw = path(found);
+            let end = raw.last().unwrap().feet;
+            assert!(end.distance(goal) < 1.0, "{raw:?}");
+            let straight = from.distance(end);
+            // The grid's eight directions zig-zag a diagonal.
+            assert!(walked(from, &raw) > straight * 1.05, "{raw:?}");
+            let pulled = pull(&ground, &body(), from, raw);
+            assert!(
+                walked(from, &pulled) <= straight * 1.05,
+                "{} of {straight}: {pulled:?}",
+                walked(from, &pulled)
+            );
+            every_leg_walkable(&ground, from, &pulled);
+        }
+    }
+
+    #[test]
+    fn a_pulled_route_still_takes_the_door_and_cuts_no_corner() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(5.0, 0.0, -20.0), Vec3::new(5.5, 4.0, 9.0)),
+            (Vec3::new(5.0, 0.0, 11.0), Vec3::new(5.5, 4.0, 20.0)),
+            // A block whose corner a diagonal past it would clip.
+            (Vec3::new(-6.0, 0.0, 3.0), Vec3::new(-2.0, 4.0, 7.0)),
+        ]);
+        let ground = open_ground(&physics);
+        for (from, goal) in [
+            (Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)),
+            (Vec3::new(-8.0, 0.0, 1.0), Vec3::new(10.0, 0.0, 12.0)),
+            (Vec3::new(-4.0, 0.0, 0.0), Vec3::new(-4.0, 0.0, 10.0)),
+        ] {
+            let (found, _) = search(&physics, from, goal);
+            let raw = path(found);
+            let pulled = pull(&ground, &body(), from, raw.clone());
+            assert!(pulled.len() <= raw.len());
+            assert!((pulled.last().unwrap().feet - raw.last().unwrap().feet).length() < 1e-4);
+            every_leg_walkable(&ground, from, &pulled);
+            if goal.x > 5.25 {
+                let crossing = std::iter::once(from)
+                    .chain(pulled.iter().map(|w| w.feet))
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .find_map(|s| {
+                        let (a, b) = (s[0], s[1]);
+                        (a.x < 5.25 && b.x >= 5.25)
+                            .then(|| a.z + (b.z - a.z) * (5.25 - a.x) / (b.x - a.x))
+                    })
+                    .expect("crosses the wall");
+                // The whole body passes through the 2-unit door.
+                assert!(
+                    (crossing - 10.0).abs() <= 1.0 - body().width * 0.5,
+                    "{crossing}: {pulled:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pulling_keeps_every_jump_and_where_it_starts() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(3.0, 0.0, -2.0), Vec3::new(6.0, 0.6, 2.0)),
+            (Vec3::new(6.0, 0.0, -2.0), Vec3::new(9.0, 2.6, 2.0)),
+        ]);
+        let ground = open_ground(&physics);
+        let from = Vec3::new(0.0, 0.0, -6.0);
+        let (found, _) = search(&physics, from, Vec3::new(7.5, 2.6, 0.0));
+        let raw = path(found);
+        let pulled = pull(&ground, &body(), from, raw.clone());
+        let jumps = |p: &[Waypoint]| {
+            p.iter()
+                .filter(|w| w.jump)
+                .map(|w| w.feet)
+                .collect::<Vec<_>>()
+        };
+        assert!(!jumps(&raw).is_empty(), "{raw:?}");
+        assert_eq!(jumps(&raw), jumps(&pulled));
+        for (i, w) in pulled.iter().enumerate().filter(|(_, w)| w.jump) {
+            let before = raw.iter().position(|r| r.feet == w.feet).unwrap();
+            if before > 0 {
+                assert!(
+                    i > 0 && pulled[i - 1].feet == raw[before - 1].feet,
+                    "{pulled:?}"
+                );
+            }
+        }
     }
 }

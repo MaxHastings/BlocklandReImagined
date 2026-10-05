@@ -52,6 +52,7 @@ fn spawn_brick(kind: &str, at: [f32; 3], owner: OwnerId) -> Brick {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
+        team: None,
     }));
     brick
 }
@@ -446,15 +447,32 @@ fn soccer(extra: impl FnOnce(OwnerId) -> Vec<Brick>) -> (Session, OwnerId, u64) 
     (s, human, sequence)
 }
 
+/// One tick of that soccer, played on: a goal wins the round, and the host
+/// resets the game at once (the Mini-Game window's Reset), so the ball game
+/// goes on for as long as a test watches. `rounds` counts the goals seen.
+fn play_on(s: &mut Session, human: OwnerId, sequence: &mut u64, rounds: &mut usize) {
+    steps(s, &[human], 1, sequence);
+    let ended = s.round_results().count();
+    if ended > *rounds {
+        *rounds = ended;
+        s.command(
+            human,
+            1000 + ended as u64,
+            Command::MiniGame(MiniGameRequest::Reset),
+        )
+        .unwrap();
+    }
+}
+
 /// In that soccer nothing needs a jet leg, so no bot ever takes off: a jet
 /// leg is only ever a way to reach a point the ground does not, never
 /// something to do with nothing to reach.
 #[test]
 fn unarmed_bots_with_only_a_ball_to_play_never_take_off() {
     let (mut s, human, mut sequence) = soccer(|_| Vec::new());
-    let mut played = false;
+    let (mut played, mut rounds) = (false, 0);
     for tick in 0..120 * 30 {
-        steps(&mut s, &[human], 1, &mut sequence);
+        play_on(&mut s, human, &mut sequence, &mut rounds);
         let snapshot = s.snapshot();
         for p in snapshot.players.iter().filter(|p| s.is_bot(p.owner)) {
             // A jump clears a couple of units; only jets climb past four.
@@ -481,9 +499,9 @@ fn unarmed_bots_with_only_a_ball_to_play_never_take_off() {
 fn a_vehicle_that_does_not_serve_the_ball_game_attracts_no_bot() {
     let (mut s, human, mut sequence) =
         soccer(|human| vec![spawn_brick(JEEP, [-2.0, 0.1, 52.0], human)]);
-    let mut played = false;
+    let (mut played, mut rounds) = (false, 0);
     for tick in 0..120 * 30 {
-        steps(&mut s, &[human], 1, &mut sequence);
+        play_on(&mut s, human, &mut sequence, &mut rounds);
         for t in s.bot_thoughts() {
             played |= t.objective_detail.is_some();
             assert!(

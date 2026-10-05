@@ -220,6 +220,7 @@ impl Game {
         spawn.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(bot_kind),
             recolor: false,
+            team: None,
         }));
         if variant {
             spawn.name = Some("Attendant station".into());

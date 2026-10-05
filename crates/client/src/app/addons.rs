@@ -481,6 +481,35 @@ impl App {
         self.addons.add_on_health = crate::add_on_health::AddOnHealth::new(owners, problems);
         self.write_add_on_health();
     }
+    /// What this game's own server ran into in Add-On scripts since the
+    /// last look (a script error, an operation such as a bot joining that
+    /// was refused or failed): listed under the Add-On and written to
+    /// `add-on-health.json` like a loading problem. The server has already
+    /// logged it and told the admins in chat.
+    pub(super) fn update_host_problems(&mut self) {
+        let Some(held) = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.worker.probes.get())
+            .and_then(|p| p.host_problems.clone())
+        else {
+            return;
+        };
+        let taken = {
+            let Ok(mut held) = held.try_lock() else {
+                return;
+            };
+            std::mem::take(&mut *held)
+        };
+        if taken.is_empty() {
+            return;
+        }
+        let problems = taken.iter().map(crate::add_on_health::script_problem);
+        if self.addons.add_on_health.add(problems) {
+            self.write_add_on_health();
+        }
+    }
     fn write_add_on_health(&self) {
         match self.addons.add_on_health.write_report(&self.state_dir) {
             Ok(path) => {

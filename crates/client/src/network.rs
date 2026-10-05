@@ -185,6 +185,9 @@ pub struct Probes {
     pub host: Option<Arc<std::sync::Mutex<bri_net::server::ServerPerf>>>,
     /// The in-process server's port when this game hosts.
     pub host_port: Option<u16>,
+    /// Problems the in-process server's Add-On scripts ran into, for this
+    /// game's Add-On health, when this game hosts.
+    pub host_problems: Option<Arc<std::sync::Mutex<Vec<bri_package::diag::Diagnostic>>>>,
 }
 /// How long loading may stand still while it waits on the server before it
 /// fails. A dead or unreachable server fails sooner, at QUIC's idle timeout.
@@ -254,7 +257,7 @@ impl Worker {
             };
             let result=match connected {
                 Ok(mut connection)=>{
-                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone()),host_port:connection.host.as_ref().map(|h|h.address.port())});
+                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone()),host_port:connection.host.as_ref().map(|h|h.address.port()),host_problems:connection.host.as_ref().map(|h|h.package_problems.clone())});
                     let result=tokio::select! {
                         _=&mut stopped=>Ok(()),
                         result=run(&mut connection.client,connection.mods.clone(),rx,movement_rx,&view_tx,&events_tx)=>result,
