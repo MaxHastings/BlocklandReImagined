@@ -1,6 +1,6 @@
 //! Live dials: an administrator's `/botset`, `/botreload` and `/botsave`
-//! (`docs/architecture/bots.md`, "Tuning"). A dial is any number a kind
-//! has, by its path in `bots.json` (`crate::bot_kind::tuning`). A change
+//! (`docs/architecture/bots.md`, "Tuning"). A dial is a settable number
+//! a kind has, by its path in `bots.json` (`tuning::SETTABLE`). A change
 //! replaces the kind every brain of it plays by, so bots take it up at
 //! their next decision. Overrides are kept in the user's data directory,
 //! never the install folder, and the host applies them as it starts.

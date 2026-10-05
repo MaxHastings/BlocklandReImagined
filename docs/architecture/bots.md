@@ -45,9 +45,9 @@ bot does through the same code.
    in its package. Nothing scoring: it wanders.
 
    **Holding a choice.** One rule keeps every choice from flip-flopping,
-   at every strength (`behaviour::Hold`, `bots.json` `hold`): a choice is
-   kept for `hold.seconds` (0.5), and after that a challenger must beat
-   it by more than `hold.margin` (10%). The scores themselves are
+   at every strength (`behaviour::Hold`, fixed in code): a choice is
+   kept for 0.5 seconds, and after that a challenger must beat
+   it by more than 10%. The scores themselves are
    continuous, with no thresholds to sit on: a fight fades out past its
    band's far edge (over half the band, at least 4.5 units) and with
    height, and a walk home grows with how far past its stroll the bot is.
@@ -109,7 +109,7 @@ bot does through the same code.
    Claims on a loose body (a ball, a crate) conflict only between allies:
    an opponent may pursue the same body and push it toward its own goal.
    Seats stay exclusive for everyone. That contest is its own piece
-   (`bots/contest.rs`): when an opponent is the body's mover or holds a live
+   (`bots/contest.rs`; its `contest.*` numbers are fixed in code): when an opponent is the body's mover or holds a live
    claim on it, the approach leads the body along its velocity
    (`contest.lead_seconds`, at most `contest.max_lead`), and being within
    `contest.engage` of it counts as progress, so the claim's lease does not
@@ -257,9 +257,9 @@ is package policy.
 
 `bots/perception.rs` adds a small "what a bot notices" layer on top of
 sight, and `bots/sightlines.rs` the one sight-ray budget every bot sight
-query goes through. The kind's `perception` holds seven numbers, on by
-default for every kind: `salience`, `glance_seconds`, `cooldown_seconds`,
-`strength`, `relaxed_scale`, `away_scale`, `view_degrees`. Everything
+query goes through. A kind sets only `perception.strength`; the other six numbers
+(`salience`, `glance_seconds`, `cooldown_seconds`, `relaxed_scale`,
+`away_scale`, `view_degrees`) are fixed in code. Everything
 else is a documented constant in `perception.rs` or comes from engine
 data (blast radius, sound volume, the kind's `sight`, `reaction_seconds`,
 `aim_error_degrees` and `turn_degrees`, the body's running speed).
@@ -454,7 +454,7 @@ with a second attack in inventory), or flick the light. The kind's
 at once if an enemy, a threat or an objective turns up. So bots goof in
 objective games too, between plays.
 
-**Strength.** `surprise.strength` (0 to 1, 0.5 by default) is the one
+**Strength.** `surprise.strength` (0 to 1, 0.6 shipped) is the one
 dial: it scales the drift's bound, the band, boredom and effectiveness
 failures. At 0 no term is applied and no random number is drawn: the
 plain scores through the hold rule. Every other constant is in code
@@ -620,8 +620,9 @@ think time per tick (`Session::bot_think_nanos`, wall time in
 
 - `/botset surprise.strength`: shows the dial on every bot kind that has it.
 - `/botset surprise.strength 0.6`: sets it on every kind that has it
-  (`/botset sight 40 bot.blockhead` on one kind). Any number in a kind's
-  `bots.json` is a dial, by its path; the kind's own validation applies,
+  (`/botset sight 40 bot.blockhead` on one kind). The settable paths are
+  `bot_kind::tuning::SETTABLE` (the four main dials plus what a kind is:
+  radii, `behaviours`, `melee`, goof weights); the kind's own validation applies,
   so an out-of-range value is refused and changes nothing. Bots take it up
   at their next decision.
 - `/botsave`: writes the dials set so far to `bot-overrides.json` in the
@@ -675,9 +676,9 @@ the terms changed may be said in team chat, keyed by the term that moved
 it (`callouts`). `BotThought::team` shows what it read and each option's
 terms.
 
-The kind's `team` dials: `teamwork` (0-1, scales overlap and interaction
-together), `mood` and `mood_cap`, `mood_human`, `pressure` and `copy`;
-radii come from its sight, the rest are constants in code. Still
+A kind sets only `team.teamwork` (0-1, scales overlap and interaction
+together). `mood`, `mood_cap`, `mood_human`, `pressure` and `copy` are
+fixed in code and do not follow `teamwork`; radii come from its sight. Still
 unsupported: a goal to defend, passing.
 
 ## Extras
@@ -730,7 +731,8 @@ its kind and team label. See `bots/looks.rs`.
     `team.teamwork` (0 to 1), `perception.strength` (0 to 4, how human its
     noticing and aim are) and `extras.strength` (0 to 1). Each is commented
     in the Blockhead's `bots.json`; `bots.json` takes `//` comments outside
-    strings. `/botset` and the tuning tools turn only these.
+    strings. `/botset` and the tuning tools turn these and the other
+    `SETTABLE` paths below.
   - `surprise.flavours`: a goof's weight, to turn one off for a kind (each
     has its usual weight in code). `team.callouts`: its team chat lines.
   - `mounted.anchor`: where it sits while it drives. Its pursuit is the
