@@ -715,7 +715,13 @@ impl Mind {
             roll: self.random(),
             restore: None,
             close: self.random() < 0.5,
-            gait: [Gait::Still, Gait::Amble, Gait::Crawl][(self.random() * 3.0) as usize % 3],
+            // Ambling or crawling round only with nothing to do, as a walk
+            // round is (`Circle`).
+            gait: if pause.idle && !pause.bodies_near {
+                [Gait::Still, Gait::Amble, Gait::Crawl][(self.random() * 3.0) as usize % 3]
+            } else {
+                Gait::Still
+            },
         };
         self.interrupt = Some(i);
         Moment::Begin(i)
@@ -1270,7 +1276,8 @@ impl Session {
             .and_then(|t| self.peers.get(&t))
             .filter(|p| p.combat.alive)
             .map(|p| (p.player.eye(), Vec3::from(p.player.state().feet)));
-        // Right up to them, when this goof goes up close and they are near.
+        // Right up to them, when this goof goes up close and they are near
+        // (an enemy too: a goof only starts with nobody fighting it).
         let close = target.filter(|(_, at)| i.close && flat(*at - feet).length() < CLOSE_RANGE);
         let up_to = |at: Vec3, within: f32| {
             let gap = flat(at - feet);
@@ -1376,10 +1383,9 @@ impl Session {
         let attacks = item
             .as_deref()
             .is_some_and(|item| hand_combat::item_attacks(self, item, scale));
+        // What can hurt is used only on someone the rules say it cannot.
         let on = close.filter(|_| {
-            !attacks
-                || i.target
-                    .is_some_and(|t| !self.can_damage_player(bot, t, false))
+            !attacks || i.target.is_some_and(|t| !self.can_damage_player(bot, t, false))
         });
         let t = tick.saturating_sub(i.since) as f32 / TICKS;
         let turn = if i.roll < 0.5 { 1.0 } else { -1.0 };

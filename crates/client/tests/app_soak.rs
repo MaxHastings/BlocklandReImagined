@@ -132,6 +132,9 @@ struct Run<'a> {
     soak: Soak,
     content: &'a ContentRoot,
     state: PathBuf,
+    /// Each shot of the player's seen: what it is, where it left and
+    /// where it was last, for a blast that knocks nothing out.
+    shots: std::collections::BTreeMap<u64, (String, Vec3, Vec3)>,
 }
 impl Run<'_> {
     fn step(&mut self, elapsed: Duration) -> Result<()> {
@@ -144,7 +147,13 @@ impl Run<'_> {
         if let ConnectionState::Failed { reason } = &self.app.ui.core.conn {
             bail!("Native app connection failed: {reason}");
         }
-        if self.app.network_view().is_some() {
+        if let Some(view) = self.app.network_view() {
+            for p in view.weapons.fired().filter(|p| p.source.0 == view.owner) {
+                self.shots
+                    .entry(p.id)
+                    .or_insert((p.definition.clone(), p.origin, p.position))
+                    .2 = p.position;
+            }
             self.screen.draw(&mut self.app)?;
         }
         self.soak.frame(&self.app);
@@ -205,7 +214,8 @@ impl Run<'_> {
     fn state(&self) -> String {
         let view = self.app.network_view();
         format!(
-            "screens {:?}; chat {:?}; conn {:?}; bricks {:?}; images {:?}; vitals {:?}",
+            "screens {:?}; chat {:?}; conn {:?}; bricks {:?}; images {:?}; vitals {:?}; \
+             shots {:?}; player {:?}; wall {:?}",
             self.app.ui.stack(),
             self.app
                 .ui
@@ -224,6 +234,17 @@ impl Run<'_> {
             )),
             view.and_then(|v| v.weapons.images.get(&v.owner)),
             view.and_then(|v| v.vitals.get(&v.owner)),
+            self.shots,
+            self.app.local_motion().map(|(p, eye)| (p.feet, p.yaw, p.pitch, eye)),
+            view.map(|v| {
+                v.world.bricks.values().fold(
+                    (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                    |(lo, hi), b| {
+                        let at = Vec3::from(b.position);
+                        (lo.min(at), hi.max(at))
+                    },
+                )
+            }),
         )
     }
     fn use_tool(&mut self, slot: usize) -> Result<()> {
@@ -557,6 +578,7 @@ fn start<'a>(f: &'a ContentRoot, state: &std::path::Path) -> Result<(Run<'a>, us
         app,
         screen,
         soak: Soak::default(),
+        shots: Default::default(),
         content: f,
         state: state.to_path_buf(),
     };

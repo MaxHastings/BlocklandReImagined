@@ -3102,7 +3102,7 @@ impl Session {
         // (under its feet or at the body's foot), goes nowhere walking at
         // it: it steps off to the nearest free floor instead, toward the
         // goal where that side is open.
-        if wanted.is_none() && on_body {
+        if wanted.is_none() && on_body && self.bots.brains[&bot].search.is_none() {
             let to = match self.bots.brains[&bot].goal.map(|g| g.point(home)) {
                 Some(point) if flat(point - feet).length() > 1.5 => Some(point),
                 Some(point) if point.y >= feet.y - body.step - 0.5 => None,

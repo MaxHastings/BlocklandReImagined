@@ -1571,9 +1571,10 @@ impl Session {
         })
     }
 
-    /// Raise its side's score: tried when no plan reaches the win itself,
+    /// Raise its team's score: tried when no plan reaches the win itself,
     /// as when an Add-On decides the win from a score its rules keep (a
-    /// Slayer points limit). Score is the game's own measure of doing well.
+    /// Slayer points limit). A team's score is the game's own measure of
+    /// a side doing well; a lone player's points are not a goal of theirs.
     fn score_desired_state(&self, bot: OwnerId) -> Option<DesiredState> {
         let game = self.game_of(bot)?;
         let g = self.minigames.game(game).ok()?;
@@ -1584,12 +1585,10 @@ impl Session {
             .minigames
             .player(self.peers.get(&bot)?.combat.player)
             .ok()?
-            .team;
-        let from = self.score_of(game, team, bot)?;
-        let key = match team {
-            Some(team) => team_score_key(game, team),
-            None => format!("score/{bot}"),
-        };
+            .team?;
+        let from = self.team_score(game, team)?;
+        let key = team_score_key(game, team);
+        let team = Some(team);
         Some(DesiredState {
             id: format!("rules/score/{}/{}/{bot}", game.0, g.round),
             predicates: Goal(vec![Predicate {

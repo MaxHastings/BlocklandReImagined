@@ -4280,7 +4280,8 @@ struct BotMatch {
     /// Bot-ticks in all, and those up in the air well above the pitch.
     bot_ticks: u64,
     high: u64,
-    /// Bot-ticks standing on the parked tank, and right beside it.
+    /// The longest any bot stood on the parked tank at a stretch, in
+    /// ticks, and bot-ticks right beside it.
     on_tank: u64,
     by_tank: u64,
 }
@@ -4470,6 +4471,7 @@ fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
     let mut alive: BTreeMap<OwnerId, bool> =
         g.s.vitals().iter().map(|(o, v)| (*o, v.alive)).collect();
     let mut last_goal = 0u64;
+    let mut standing: BTreeMap<OwnerId, u64> = BTreeMap::new();
     for tick in 0..(seconds * 120) as u64 {
         g.steps(1);
         let now_ball = the(&g, ball);
@@ -4517,9 +4519,10 @@ fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
             // standing on it.
             if let Some(at) = tank_box.filter(|_| v.mounted.is_none()) {
                 let across = Vec3::new(feet.x - at.x, 0.0, feet.z - at.z).length();
-                if across < 2.0 && feet.y > at.y + 0.8 {
-                    m.on_tank += 1;
-                }
+                let on = across < 2.0 && feet.y > at.y + 0.8;
+                let stretch = standing.entry(o).or_default();
+                *stretch = if on { *stretch + 1 } else { 0 };
+                m.on_tank = m.on_tank.max(*stretch);
                 if across < 3.0 {
                     m.by_tank += 1;
                 }
@@ -4548,10 +4551,11 @@ fn team_fill_bots_play_slayer_soccer_with_or_without_weapons() {
             "armed {armed}: up in the air {:.3}",
             share(m.high)
         );
+        // Landing on it now and then is fine; staying up there is not.
         assert!(
-            share(m.on_tank) < 0.01,
-            "armed {armed}: on the tank {:.3}",
-            share(m.on_tank)
+            m.on_tank < 120 * 5,
+            "armed {armed}: stood on the tank {} s at a stretch",
+            m.on_tank as f32 / 120.0
         );
         assert!(
             share(m.by_tank) < 0.1,

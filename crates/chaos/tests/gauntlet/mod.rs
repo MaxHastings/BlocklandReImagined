@@ -557,6 +557,8 @@ pub struct Scorer {
     pub report: Report,
     tracks: BTreeMap<OwnerId, Track>,
     seen_shots: BTreeSet<u64>,
+    /// Projectiles that hurt nothing (a can's paint): not shots.
+    harmless: BTreeSet<String>,
     seen_deaths: usize,
     last_death_tick: u64,
     /// Floor height: under `floor - 2` is fallen.
@@ -579,6 +581,14 @@ impl Scorer {
             },
             tracks: BTreeMap::new(),
             seen_shots: BTreeSet::new(),
+            harmless: fixture::synthetic_weapons()
+                .unwrap()
+                .0
+                .projectiles
+                .into_values()
+                .filter(|p| p.damage <= 0.0 && p.explosion.damage <= 0.0)
+                .map(|p| p.id)
+                .collect(),
             seen_deaths: 0,
             last_death_tick: 0,
             floor,
@@ -807,7 +817,7 @@ impl Scorer {
         // Shots: new projectiles a bot fired.
         let view = s.weapon_view();
         for p in view.fired() {
-            if !self.seen_shots.insert(p.id) {
+            if !self.seen_shots.insert(p.id) || self.harmless.contains(&p.definition) {
                 continue;
             }
             let shooter = p.source.0;

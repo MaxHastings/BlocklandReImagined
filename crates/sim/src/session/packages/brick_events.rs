@@ -504,15 +504,16 @@ impl Session {
     /// The engine operations an Add-On output would perform if this row
     /// ran now, read from a run of its own rules that commits nothing. A
     /// bot learns what an Add-On's output does by asking its rules, not by
-    /// knowing the Add-On. `None` when the call fails or answers with one
-    /// of its own inputs (which this does not follow).
+    /// knowing the Add-On. `None` when the call fails, answers with one of
+    /// its own inputs (which this does not follow) or changes the Add-On's
+    /// own state (an effect no op shows).
     pub(in crate::session) fn package_output_ops(
         &self,
         dispatch: &ev::Dispatch,
         call: &ev::PackageCall,
     ) -> Option<Vec<bri_package_runtime::ops::Op>> {
         let (args, client, _, _, _) = self.package_output_call(dispatch, call).ok()?;
-        let (result, _, _) = self
+        let (result, _, before) = self
             .call_package(
                 &call.package,
                 "on_brick_output",
@@ -524,7 +525,8 @@ impl Session {
             )
             .ok()?;
         let outcome = result.ok()?;
-        outcome.returned.is_unit().then_some(outcome.ops)
+        (outcome.returned.is_unit() && outcome.state == before && outcome.entity_vars.is_empty())
+            .then_some(outcome.ops)
     }
     pub(in crate::session) fn package_output(
         &mut self,
