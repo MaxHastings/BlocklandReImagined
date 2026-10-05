@@ -36,6 +36,10 @@ use bri_weapons::ActorId;
 
 mod arming;
 mod behaviour;
+// The bots lane's per-bot cadence helper (fix/bots-ball-games-2), taken
+// as is; until that lands, only perception uses it.
+#[allow(dead_code)]
+mod cadence;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
 mod claims;
@@ -52,6 +56,8 @@ pub(super) use perception::Stimulus;
 mod physical_objectives;
 mod planning;
 mod search_memory;
+mod sightlines;
+pub(super) use sightlines::{Subject as SightSubject, Urgency as SightUrgency};
 mod tactics;
 
 /// Read-only brain evidence for headless diagnostics and playtest logs. This
@@ -169,6 +175,8 @@ pub(super) struct Bots {
     combat_budget: hand_combat::Budget,
     /// Blasts and sounds since bots last stepped (`perception`).
     stimuli: Vec<Stimulus>,
+    /// The tick's shared sight-ray budget (`sightlines`).
+    sightlines: std::sync::Mutex<sightlines::Sightlines>,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {
@@ -1269,13 +1277,13 @@ impl Session {
     }
     fn bot_sight(&self, bot: OwnerId, brain: &Brain, eye: Vec3) -> Sight {
         let kind = &brain.kind;
-        let visible = |owner: OwnerId| -> Option<Seen> {
+        let visible = |owner: OwnerId, urgency: SightUrgency| -> Option<Seen> {
             let p = self.peers.get(&owner)?;
             if !self.bot_enemy(bot, kind, owner) {
                 return None;
             }
             let real = Vec3::from(p.player.state().feet);
-            let way = self.simulation.sight(eye, p.player.eye(), kind.sight)?;
+            let way = self.bot_sees_player(bot, owner, eye, kind.sight, urgency)?;
             Some(Seen {
                 owner,
                 eye: way.aim,
@@ -1299,13 +1307,13 @@ impl Session {
             .filter(valid_threat)
             .or(brain.objective_threat.filter(valid_threat));
         if let Some(threat) = threat {
-            let target = visible(threat.subject);
+            let target = visible(threat.subject, SightUrgency::Target);
             if target.is_some() || brain.objective.detail().is_some() {
                 return Sight { target };
             }
         }
         // Keep fighting the same enemy while it stays in view.
-        if let Some(seen) = brain.target.and_then(visible) {
+        if let Some(seen) = brain.target.and_then(|t| visible(t, SightUrgency::Target)) {
             return Sight { target: Some(seen) };
         }
         // Through an opening, anyone may be in sight wherever they stand.
@@ -1319,7 +1327,9 @@ impl Session {
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Sight {
-            target: candidates.into_iter().find_map(|(_, owner)| visible(owner)),
+            target: candidates
+                .into_iter()
+                .find_map(|(_, owner)| visible(owner, SightUrgency::Ordinary)),
         }
     }
     /// Where a bot flies to reach its enemy (in sight, or last seen) well

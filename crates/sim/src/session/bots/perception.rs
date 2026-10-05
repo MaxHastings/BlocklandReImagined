@@ -31,8 +31,11 @@ use super::behaviour::Behaviour;
 use super::*;
 use crate::bot_kind::BotPerception;
 
-/// Ticks between looks round for watchers and fast bodies.
+/// Ticks between looks round for watchers, nearby players and fast
+/// bodies, on the bot's own beat (`cadence`).
 const POLL_TICKS: u64 = 12;
+// Cadence names (`cadence::salt`) for perception's own timers.
+const POLL_SALT: u64 = 101;
 /// Most stimuli one tick keeps for bots to notice.
 const MAX_STIMULI: usize = 32;
 // Fixed by how perception works, not per kind (the kind's `salience`
@@ -47,6 +50,10 @@ const BLAST_REACH: f32 = 10.0;
 const SOUND_REACH: f32 = 12.0;
 /// ...and a stare or fast motion out to this share of the kind's sight.
 const SEEN_REACH: f32 = 0.3;
+/// Someone close by draws the eye at most this likely a poll...
+const NEAR: f32 = 0.03;
+/// ...within this share of a stare's reach.
+const NEAR_REACH: f32 = 0.5;
 /// A body moving faster than this many times the bot's own running speed
 /// is moving fast; it is fully salient at twice that.
 const FAST: f32 = 2.0;
@@ -81,6 +88,8 @@ enum Source {
         volume: f32,
     },
     Gaze,
+    /// Someone close by in plain view, of any team.
+    Near,
     /// How much faster than fast, 0 to 1.
     Motion {
         strength: f32,
@@ -92,6 +101,7 @@ impl Source {
             Self::Blast { .. } => "glance: blast",
             Self::Sound { .. } => "glance: sound",
             Self::Gaze => "glance: watched",
+            Self::Near => "glance: someone near",
             Self::Motion { .. } => "glance: fast motion",
         }
     }
@@ -118,6 +128,7 @@ impl Stimulus {
             Source::Blast { radius } => (1.0, radius.max(0.0) * BLAST_REACH),
             Source::Sound { volume } => (1.0, volume.clamp(0.0, 1.0) * SOUND_REACH),
             Source::Gaze => (1.0, seen),
+            Source::Near => (NEAR, seen * NEAR_REACH),
             Source::Motion { strength } => (strength, seen),
         };
         let reach = reach * p.salience;
@@ -459,21 +470,33 @@ impl Session {
         let reach = sight * SEEN_REACH * p.salience;
         let fast = FAST * self.peers.get(&bot)?.player.tuning().forward.max(0.1);
         let mut stimuli = self.bots.stimuli.clone();
-        let poll = eligible && reach > 0.0 && (tick + bot).is_multiple_of(POLL_TICKS);
-        let watcher = poll.then(|| self.bot_watcher(bot, eye, reach)).flatten();
+        let poll = eligible && reach > 0.0 && cadence::beat(bot, POLL_SALT, tick, POLL_TICKS);
+        let (watcher, near) = if poll {
+            self.bot_watcher(bot, eye, reach)
+        } else {
+            (None, Vec::new())
+        };
+        stimuli.extend(near);
         if poll {
             stimuli.extend(
                 self.bots
                     .objects
                     .iter()
                     .filter(|v| !v.destroyed)
-                    .map(|v| (Vec3::from(v.transform.position), Vec3::from(v.velocity)))
-                    .filter(|(at, velocity)| {
+                    .map(|v| {
+                        let at = Vec3::from(v.transform.position);
+                        (v.id.0, at, Vec3::from(v.velocity))
+                    })
+                    .filter(|(id, at, velocity)| {
+                        let subject = Some(super::SightSubject::Vehicle(*id));
+                        let urgency = super::SightUrgency::Ordinary;
                         velocity.length() > fast
                             && at.distance(eye) < reach
-                            && self.bot_sees_point(eye, *at)
+                            && self
+                                .bot_sees(bot, subject, eye, *at, reach, urgency)
+                                .is_some()
                     })
-                    .map(|(at, velocity)| Stimulus {
+                    .map(|(_, at, velocity)| Stimulus {
                         at,
                         source: Source::Motion {
                             strength: (velocity.length() / fast - 1.0).min(1.0),
@@ -492,42 +515,51 @@ impl Session {
         } = brain;
         perception.glance(&p, sight, tick, eye, eligible, stimuli, rng)
     }
-    /// The nearest player in plain view, within `range`, whose look points
-    /// within `GAZE_DEGREES` of `bot`'s eye.
-    fn bot_watcher(&self, bot: OwnerId, eye: Vec3, range: f32) -> Option<(OwnerId, Vec3)> {
+    /// Players in plain view within `range` of `bot`'s eye (through the
+    /// shared sight budget): the nearest whose look points within
+    /// `GAZE_DEGREES` of that eye (the watcher), and every one as a nearby
+    /// presence, of any team.
+    fn bot_watcher(
+        &self,
+        bot: OwnerId,
+        eye: Vec3,
+        range: f32,
+    ) -> (Option<(OwnerId, Vec3)>, Vec<Stimulus>) {
         let cone = GAZE_DEGREES.to_radians().cos();
-        self.peers
-            .iter()
-            .filter(|(owner, peer)| **owner != bot && peer.combat.alive)
-            .filter_map(|(owner, peer)| {
-                let state = peer.player.state();
-                let from = peer.player.eye();
-                let to = eye - from;
-                let distance = to.length();
-                let look = Vec3::new(
-                    state.yaw.sin() * state.pitch.cos(),
-                    state.pitch.sin(),
-                    -state.yaw.cos() * state.pitch.cos(),
-                );
-                (distance > 0.5 && distance < range && look.dot(to / distance) >= cone)
-                    .then_some((*owner, from, distance))
-            })
-            .filter(|(_, from, _)| self.bot_sees_point(eye, *from))
-            .min_by(|a, b| a.2.total_cmp(&b.2))
-            .map(|(owner, from, _)| (owner, from))
-    }
-    /// Nothing solid between `eye` and `at`.
-    fn bot_sees_point(&self, eye: Vec3, at: Vec3) -> bool {
-        let to = at - eye;
-        let distance = to.length();
-        distance < 0.01
-            || super::super::admin_players::world_ray(
-                &self.simulation,
-                eye,
-                to / distance,
-                distance,
-            )
-            .is_none_or(|hit| hit >= distance - 0.3)
+        let mut watcher: Option<(OwnerId, Vec3, f32)> = None;
+        let mut near = Vec::new();
+        for (owner, peer) in &self.peers {
+            if *owner == bot || !peer.combat.alive {
+                continue;
+            }
+            let state = peer.player.state();
+            let from = peer.player.eye();
+            let to = eye - from;
+            let distance = to.length();
+            if !(distance > 0.5 && distance < range) {
+                continue;
+            }
+            let urgency = super::SightUrgency::Ordinary;
+            if self
+                .bot_sees_player(bot, *owner, eye, range, urgency)
+                .is_none()
+            {
+                continue;
+            }
+            let look = Vec3::new(
+                state.yaw.sin() * state.pitch.cos(),
+                state.pitch.sin(),
+                -state.yaw.cos() * state.pitch.cos(),
+            );
+            if look.dot(to / distance) >= cone && watcher.is_none_or(|w| distance < w.2) {
+                watcher = Some((*owner, from, distance));
+            }
+            near.push(Stimulus {
+                at: from,
+                source: Source::Near,
+            });
+        }
+        (watcher.map(|(owner, from, _)| (owner, from)), near)
     }
 }
 
