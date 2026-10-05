@@ -130,15 +130,33 @@ impl Behaviour {
 }
 
 /// The behaviour to follow now, after `current`, its scores scaled by
-/// `weight` (a kind's `behaviours`). Wander when nothing scores.
+/// `weight` (a kind's `behaviours`). Wander when nothing scores. The
+/// brain takes [`scores`] and [`best`] apart, so the surprise chooser can
+/// weigh the near ones.
+#[cfg(test)]
 pub(crate) fn choose(
     current: Behaviour,
     s: &Situation,
     weight: impl Fn(Behaviour) -> f32,
 ) -> Behaviour {
+    best(&scores(current, s, weight))
+}
+
+/// Every behaviour's weighted score, in [`Behaviour::ALL`] order: what
+/// [`choose`] (and the surprise chooser) picks from.
+pub(crate) fn scores(
+    current: Behaviour,
+    s: &Situation,
+    weight: impl Fn(Behaviour) -> f32,
+) -> [f32; 10] {
+    Behaviour::ALL.map(|b| b.score(current, s) * weight(b))
+}
+
+/// The highest of `scores`, the earlier on a tie; Wander when none scores.
+pub(crate) fn best(scores: &[f32; 10]) -> Behaviour {
     let mut best = (Behaviour::Wander, 0.0);
     for b in Behaviour::ALL {
-        let score = b.score(current, s) * weight(b);
+        let score = scores[b as usize];
         if score > best.1 {
             best = (b, score);
         }

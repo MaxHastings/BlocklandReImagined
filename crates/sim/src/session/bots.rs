@@ -29,7 +29,7 @@
 use super::*;
 use crate::bot_kind::{BotKind, MountAnchor, Moves};
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
-use behaviour::{Behaviour, Situation, choose};
+use behaviour::{Behaviour, Situation};
 use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
@@ -49,6 +49,8 @@ mod package_objectives;
 mod physical_objectives;
 mod planning;
 mod search_memory;
+mod surprise;
+pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
 mod tactics;
 
 /// Read-only brain evidence for headless diagnostics and playtest logs. This
@@ -73,6 +75,9 @@ pub struct BotThought {
     /// Actual searches and unchanged failed-search reuse, for headless diagnostics.
     pub objective_searches: u64,
     pub objective_reused: u64,
+    /// Why it chose as it did (`surprise`): its drives and the last
+    /// decision at each choice point, every term's contribution.
+    pub surprise: BotSurpriseView,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {
@@ -274,6 +279,10 @@ struct Brain {
     /// The name this brick bot last asked for (before a number makes it
     /// unique).
     named: String,
+    /// Variation among its choices over time ([`surprise`]).
+    surprise: surprise::Mind,
+    /// Where a flanking chase aims, from the enemy (zero straight at them).
+    chase_offset: Vec3,
 }
 /// An enemy up where a bot flies to them ([`Session::air_chase`]).
 #[derive(Clone, Copy, Debug)]
@@ -388,6 +397,8 @@ impl Brain {
             mount_anchor: None,
             brick_team: None,
             named: String::new(),
+            surprise: surprise::Mind::new(bot),
+            chase_offset: Vec3::ZERO,
         }
     }
     fn random(&mut self) -> f32 {
@@ -427,12 +438,13 @@ impl Brain {
             (Some(seen), _) => {
                 // The chase heads for where it really stands, and the path
                 // finds the way there.
+                let to = seen.real + self.chase_offset;
                 let moved_on = match self.goal {
-                    Some(Goal::Chase(p)) => p.distance(seen.real) > 2.5,
+                    Some(Goal::Chase(p)) => p.distance(to) > 2.5,
                     _ => true,
                 };
                 if moved_on {
-                    self.set_goal(Some(Goal::Chase(seen.real)));
+                    self.set_goal(Some(Goal::Chase(to)));
                 }
                 (false, false)
             }
@@ -1183,6 +1195,7 @@ impl Session {
                 }),
                 objective_searches: b.objective.searches,
                 objective_reused: b.objective.reused,
+                surprise: b.surprise.view(&b.kind.surprise, tick),
             })
             .collect()
     }
@@ -1631,6 +1644,8 @@ impl Session {
                 brain.vehicle_anchor = None;
                 brain.fire_down = false;
                 brain.objective_tool = false;
+                brain.surprise.new_life();
+                brain.chase_offset = Vec3::ZERO;
             }
             return Ok(());
         }
@@ -1728,6 +1743,7 @@ impl Session {
             }
         }
         self.bot_crossed(bot);
+        self.surprise_settle(bot, tick);
         let brain = &self.bots.brains[&bot];
         let sight = self.bot_sight(bot, brain, eye);
         // A crossing immediately after direct sight can carry that last
@@ -1763,8 +1779,12 @@ impl Session {
             let mut combat = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().combat);
             let mut budget = std::mem::take(&mut self.bots.combat_budget);
             budget.begin_tick(tick);
-            let decision = hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget);
-            self.bots.brains.get_mut(&bot).unwrap().combat = combat;
+            let mut mind = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().surprise);
+            let decision =
+                hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget, &mut mind);
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.combat = combat;
+            brain.surprise = mind;
             self.bots.combat_budget = budget;
             decision
         } else {
@@ -1978,6 +1998,12 @@ impl Session {
             self.bots.brains.get_mut(&bot).unwrap().arming.clear();
             None
         };
+        // What guards the surprise chooser: carrying an objective, urgency.
+        let carrying = objective_holding || self.surprise_carrying(bot, objective.as_ref());
+        let gate = self.surprise_gate(bot, feet, carrying, threat, tick);
+        let flanks = sight.target.map_or([None, None], |seen| {
+            self.surprise_flanks(bot, feet, seen.real)
+        });
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2085,7 +2111,7 @@ impl Session {
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
         };
-        let mut behaviour = choose(brain.behaviour, &situation, |b| {
+        let scores = behaviour::scores(brain.behaviour, &situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
                     0.0
@@ -2094,6 +2120,19 @@ impl Session {
                 },
             )
         });
+        // The plain pick, or a near one the surprise chooser takes.
+        brain.surprise.gate = gate;
+        let (mut behaviour, _) = surprise::behaviour(
+            &mut brain.surprise,
+            &kind.surprise,
+            &scores,
+            behaviour::best(&scores),
+            brain.behaviour,
+            gate,
+            tick,
+        );
+        // Pausing a moment before a switch the variation causes.
+        let telling = brain.surprise.telling(tick);
         // A fight just taken up holds a moment before it turns into a
         // chase while the enemy is still in sight: no flip-flop at the
         // band's edge as either steps back and forth. (A chase that
@@ -2170,6 +2209,7 @@ impl Session {
         }
 
         // Goal.
+        brain.chase_offset = Vec3::ZERO;
         let (hold, back_off) = match behaviour {
             Behaviour::Arm => {
                 if let Some(at) = arm
@@ -2227,7 +2267,20 @@ impl Session {
                 (false, false)
             }
             Behaviour::Fight => brain.pursue(enemy, true, near, feet, tick),
-            Behaviour::Chase | Behaviour::Search => brain.pursue(enemy, false, near, feet, tick),
+            Behaviour::Chase | Behaviour::Search => {
+                // Straight at them, or wide round a side (`surprise`).
+                if let Some(seen) = enemy.filter(|_| behaviour == Behaviour::Chase) {
+                    brain.chase_offset = surprise::route(
+                        &mut brain.surprise,
+                        &kind.surprise,
+                        seen.real,
+                        flanks,
+                        gate,
+                        tick,
+                    );
+                }
+                brain.pursue(enemy, false, near, feet, tick)
+            }
             // Flying goes after them as walking would, so its path tells
             // when a walk leads up after all.
             Behaviour::Fly => {
@@ -2414,6 +2467,20 @@ impl Session {
             .map(|(_, p)| Vec3::from(p.player.state().feet))
             .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
+        // At a natural pause, now and then something idle (`surprise`).
+        let natural = behaviour == Behaviour::Wander
+            && sight.target.is_none()
+            && threat.is_none()
+            && objective.is_none()
+            && !holding
+            && driving.is_none()
+            && swim.is_none()
+            && !self.seated(bot)
+            && self.bots.brains[&bot].memory.is_none();
+        let pause = self.surprise_pause(bot, natural, gate, eye);
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        let moment = brain.surprise.interrupt(&brain.kind.surprise, &pause, tick);
+        let act = self.surprise_act(bot, moment, feet, eye, tick)?;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -2516,6 +2583,12 @@ impl Session {
         } else if hold {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
+        }
+        if let Some((yaw, pitch)) = act.aim {
+            (aim_yaw, aim_pitch) = (yaw, pitch);
+        }
+        if telling {
+            fire = false;
         }
         brain.yaw = turn(brain.yaw, aim_yaw, step);
         brain.pitch += (aim_pitch - brain.pitch).clamp(-step, step);
@@ -2704,6 +2777,14 @@ impl Session {
                 input.crouch = to.y < feet.y - 0.4;
             }
         }
+        if let Some(to) = act.direction {
+            direction = to;
+        }
+        input.jump |= act.jump;
+        input.crouch |= act.crouch;
+        if telling {
+            direction = Vec3::ZERO;
+        }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up.
@@ -2720,6 +2801,21 @@ impl Session {
         if brain.stuck > STUCK_TICKS && wanted.is_some() {
             brain.stuck = 0;
             brain.replans += 1;
+            // Stuck: what it was doing is not working.
+            let cfg = &brain.kind.surprise;
+            let route = brain.surprise.chosen(surprise::Domain::Route);
+            brain.surprise.outcome(
+                cfg,
+                surprise::Domain::Behaviour,
+                behaviour as u32,
+                false,
+                tick,
+            );
+            if let Some(route) = route.filter(|_| behaviour == Behaviour::Chase) {
+                brain
+                    .surprise
+                    .outcome(cfg, surprise::Domain::Route, route, false, tick);
+            }
             brain.plan.clear();
             brain.search = None;
             brain.settled = false;
@@ -2897,6 +2993,8 @@ impl Session {
                 let _ = self.weapon_trigger(bot, down, direction, false);
                 if down {
                     self.note_shot(bot);
+                    let target = sight.target.map(|s| s.owner);
+                    self.surprise_fired(bot, native_choice, target, behaviour, tick);
                 }
             }
         }

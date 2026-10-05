@@ -23,6 +23,62 @@
         "reverse_degrees": 103,
         "reverse_distance": 16
       },
+      // Surprise: variation among the bot's choices that changes over time
+      // (docs/architecture/bots.md, "Surprise"). One chooser picks at
+      // random, by weight, among the options scoring near the best at each
+      // choice point: behaviour, weapon, aim point, chase route.
+      "surprise": {
+        // 0 to 1: how much of everything below applies. 0 is the plain
+        // brain, exactly as before (no random number drawn). Off for now:
+        // tuning comes after the bot fixes land.
+        "strength": 0,
+        // Options scoring within this share of the best are eligible.
+        "band": 0.15,
+        // A per-bot drift on each option's weight wanders up to e^0.4
+        // either way, reverting over about 90 seconds.
+        "drift": 0.4,
+        "drift_seconds": 90,
+        // Weight lost per second an option is in use, and the half-life of
+        // that boredom once it is not.
+        "boredom": 0.02,
+        "boredom_seconds": 20,
+        // Effectiveness: a failure (shot dodged, no damage, stuck) takes
+        // this share away; a success gives back this share of the gap;
+        // what is lost halves on its own every effectiveness_seconds.
+        "failure": 0.25,
+        "success": 0.5,
+        "effectiveness_seconds": 30,
+        // A pick is held at least this long (up to half again), and a
+        // switch the variation causes is preceded by a pause this long.
+        "commit_seconds": 3,
+        "tell_seconds": 0.35,
+        // Urgent, so nothing varies: under this share of health, or hurt
+        // by an enemy within urgent_range in the last urgent_seconds.
+        "urgent_health": 0.3,
+        "urgent_range": 8,
+        "urgent_seconds": 1.5,
+        // How far to the side a flanking chase aims.
+        "flank_distance": 5,
+        // Flavour interrupts at natural pauses (never while carrying an
+        // objective): how many a minute, the rest after one, how long one
+        // lasts (up to half again), and the weight of each kind.
+        "interrupts_per_minute": 2,
+        "interrupt_cooldown_seconds": 12,
+        "interrupt_seconds": 2,
+        "interrupts": {
+          "stare": 2,      // look at a player in sight
+          "emote": 2,      // love, hate, confusion or the alarm, as /love does
+          "hop": 1,        // a few jumps
+          "circle": 1,     // run a small circle
+          "detour": 1,     // walk somewhere close by
+          "look": 2,       // look round
+          "crouch": 1,     // crouch a moment
+          "spray": 0.5,    // paint the floor toward a player with the spray can
+          "tool": 0.5,     // take out another tool, then put it back
+          "drop": 0.2,     // drop the weapon in hand (only with another)
+          "light": 0.5     // flick the light on and off
+        }
+      },
       "first_names": [
         "Alex",
         "Ben",

@@ -769,3 +769,67 @@ fn checkpoint_race() {
     assert!((0..=20).contains(&won), "the race was won in time: {won}");
     assert!(r.progress["laps_total"] >= 9, "laps run: {:?}", r.progress);
 }
+
+/// Bot surprise, measured but not yet held to bands
+/// (`docs/architecture/bots.md`, "Surprise"): variety (distinct choices in
+/// effect a bot-minute), goof share and the longest goof, at strengths 0,
+/// 0.5 and 1, in a mixed-arsenal fight and at an idle pause. Strength 0 is
+/// the plain brain: no goofing and no pick away from the plain one.
+#[test]
+fn surprise_by_strength() {
+    use bri_weapons::testing::*;
+    const RUNS: [(&str, &str, &str, f32); 3] = [
+        (
+            "gauntlet:bot/surprise0",
+            "surprise_fight_0",
+            "surprise_idle_0",
+            0.0,
+        ),
+        (
+            "gauntlet:bot/surprise5",
+            "surprise_fight_0.5",
+            "surprise_idle_0.5",
+            0.5,
+        ),
+        (
+            "gauntlet:bot/surprise10",
+            "surprise_fight_1",
+            "surprise_idle_1",
+            1.0,
+        ),
+    ];
+    for (id, fight, idle, strength) in RUNS {
+        let surprising = || kind(id, |k| k.surprise.strength = strength);
+        let mut spec = Spec::new(
+            fight,
+            line(-73.0, 0.0, 50.0, 3),
+            line(-37.0, 0.0, 50.0, 3),
+            &[ROCKET_ITEM, SHOTGUN_ITEM, BOW_ITEM, BOUNCER_ITEM, GUN],
+        );
+        spec.kinds = [id, id];
+        spec.extra_kinds = vec![surprising()];
+        let r = battle(spec, |_| {}).play(0.0, 60, |_, _| {});
+        assert!(r.kills > 0, "{fight}: a real fight");
+        // Three bots of one side and nobody to fight: a long pause.
+        let mut spec = Spec::new(
+            idle,
+            line(-73.0, 0.0, 50.0, 3),
+            Vec::new(),
+            &[ROCKET_ITEM, GUN],
+        );
+        spec.kinds = [id, id];
+        spec.extra_kinds = vec![surprising()];
+        // The other builder has only a plate far off.
+        spec.blue_bricks = floor(Vec3::new(60.0, 0.0, 60.0), [1, 1], 1.0);
+        let quiet = battle(spec, |_| {}).play(0.0, 60, |_, _| {});
+        if strength == 0.0 {
+            assert_eq!(r.goof + quiet.goof, 0, "the plain brain does not goof");
+            assert_eq!(r.surprised + quiet.surprised, 0, "nor varies its picks");
+        } else {
+            assert!(
+                quiet.goof > 0,
+                "{idle}: idle bots do something now and then"
+            );
+        }
+    }
+}
