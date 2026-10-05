@@ -68,8 +68,8 @@ const IDLE_BOREDOM: f32 = 0.24;
 const GOOF_SCORE: f32 = 0.5;
 /// Playing's worth (`Pause::play`) at which a goof is worth all of
 /// `GOOF_SCORE`, and the share it keeps with the action right here.
-const LULL: f32 = 0.55;
-const GOOF_FLOOR: f32 = 0.2;
+pub(super) const LULL: f32 = 0.7;
+const GOOF_FLOOR: f32 = 0.05;
 /// Goofing's own boredom a second (at strength 1): goofs grow stale, the
 /// brake on goofing that the mood's pull pushes against.
 const GOOF_BOREDOM: f32 = 0.3;

@@ -86,6 +86,9 @@ const GUNNING: f32 = 0.65;
 /// Height an enemy may stand above or below it, beyond a step, and still
 /// be fought at full score.
 const RISE_SLACK: f32 = 1.0;
+/// A ranged band reaches up and down too: this share of its far edge (a
+/// gunner fights one a few units up a slope or a jet's hop).
+const RISE_SHARE: f32 = 0.25;
 /// Over how many units past its band's far edge (or past that height) a
 /// fight's score fades to nothing, at least: a fight just past the edge
 /// still scores, so the hold rule's margin, not a threshold, decides when
@@ -137,7 +140,11 @@ impl Behaviour {
             Behaviour::Fight => s.enemy.map_or(0.0, |(distance, rise)| {
                 let width = (s.far * FIGHT_FADE_SHARE).max(FIGHT_FADE);
                 0.8 * fade(distance, s.far, width)
-                    * fade(rise.abs(), s.step + RISE_SLACK, FIGHT_FADE)
+                    * fade(
+                        rise.abs(),
+                        (s.step + RISE_SLACK).max(s.far * RISE_SHARE),
+                        FIGHT_FADE,
+                    )
             }),
             // Empty-handed, before going after an enemy or an objective
             // that wants one beaten; armed, an upgrade by its worth.

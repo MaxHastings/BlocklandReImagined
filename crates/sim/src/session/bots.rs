@@ -148,15 +148,14 @@ const ON_OBJECTIVE: f32 = 6.0;
 /// The action (an enemy, what a post watches) within this is worth all of
 /// playing; past `ACTION_FAR` playing is worth `LULL_PLAY`, in between it
 /// fades.
-const ACTION_NEAR: f32 = 16.0;
-const ACTION_FAR: f32 = 48.0;
+const ACTION_NEAR: f32 = 10.0;
+const ACTION_FAR: f32 = 30.0;
 /// Playing's worth in a lull (far from the action, waiting, nothing to
-/// do), against a goof's `surprise::GOOF_SCORE`: a little more, so a lull
-/// needs some boredom before a goof wins.
-const LULL_PLAY: f32 = 0.55;
+/// do): where a goof is worth all of its small score.
+const LULL_PLAY: f32 = surprise::LULL;
 /// Playing's worth going back home, or with an enemy remembered or an
 /// objective that wants one beaten but none in sight.
-const RETURN_PLAY: f32 = 0.7;
+const RETURN_PLAY: f32 = 0.8;
 const PRESSED_PLAY: f32 = 0.85;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
