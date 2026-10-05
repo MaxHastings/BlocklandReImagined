@@ -88,11 +88,6 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "blocked_contact_does_not_renew_a_push_forever_and_retry_waits"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "deathmatch_mixed_arsenal"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
@@ -114,16 +109,6 @@ reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on 
 
 [[failure]]
 test = "team_fill_bots_play_slayer_soccer_with_or_without_weapons"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "the_brain_keeps_a_loose_hazard_out_of_an_allies_corridor"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "the_real_brain_detours_to_push_an_unnamed_loose_hazard"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
