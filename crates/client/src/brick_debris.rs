@@ -17,8 +17,8 @@
 //!
 //! Like v20's `$pref::Physics::MaxBricks`, only a bounded number of bodies
 //! are alive at once; the oldest make way for new ones. The player picks the
-//! bound with Options' Physics Quality, and when debris work outgrows its
-//! share of the frame the client keeps fewer until it recovers.
+//! bound with Options' Physics Quality; nothing else thins the debris (Max,
+//! 2026-10-04: a little lag over less destruction).
 use crate::building::Building;
 use crate::local_physics::{MAX_STEPS, PUSHER_REACH, Pushers, STEP, Shots, Surroundings};
 pub use crate::local_physics::{Pusher, Shot};
@@ -32,25 +32,13 @@ use bri_world::{BrickId, ContentRef};
 use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::time::Duration;
 
 /// The limit a player who never chose gets: v20's default Physics Quality,
 /// High (see [`bri_ui::screens::options::debris_limit`]).
 pub const DEFAULT_LIMIT: usize = bri_ui::screens::options::PHYSICS_LIMITS[1] as usize;
 /// The highest limit `$pref::Physics::MaxBricks` may ask for.
 pub const MAX_LIMIT: usize = bri_ui::screens::options::MAX_BRICKS_RANGE.1 as usize;
-/// Debris work per frame (cues, pushes and physics) the client aims to stay
-/// under: a third of a 60 Hz frame. The client learns what a moving body
-/// costs on this PC and keeps no more than fit; above it for two frames
-/// running, the oldest bodies go early.
-pub const BUDGET: Duration = Duration::from_millis(6);
-/// The budget never sheds below this many bodies.
-const SHED_FLOOR: usize = 32;
-/// Frames with fewer moving bodies than this say little about their cost.
-const SAMPLE_FLOOR: usize = 16;
-/// How fast the learned cost follows each frame's.
-const LEARN_RATE: f64 = 0.2;
-/// Seconds a body removed early (over the limit or the budget) takes to
+/// Seconds a body removed early (over the limit) takes to
 /// fade out. It stops colliding and drifts on, so it costs nothing and
 /// never pops out of sight.
 const GHOST_SECONDS: f32 = 0.35;
@@ -195,10 +183,8 @@ pub struct BrickDebrisDiagnostics {
     pub unknown: u64,
     /// Oldest bodies removed early to stay within the limit.
     pub evicted: u64,
-    /// Oldest bodies removed early because debris outgrew its budget.
-    pub shed: u64,
-    /// Blasts that left no debris (Physics Quality Off, or the budget has
-    /// no room right now), and kills beyond the falling bricks drawn at once.
+    /// Blasts that left no debris (Physics Quality Off), and kills beyond
+    /// the falling bricks drawn at once.
     pub skipped: u64,
     pub dropped_steps: u64,
     pub projectile_hits: u64,
@@ -231,15 +217,6 @@ pub struct BrickDebris {
     shots: Shots,
     /// The player's limit (Physics Quality or `$pref::Physics::MaxBricks`).
     limit: usize,
-    /// The limit the budget allows right now; at most `limit`.
-    room: usize,
-    /// Frames in a row over budget.
-    over: u32,
-    /// Learned seconds of debris work per moving body per frame on this PC.
-    per_body: Option<f64>,
-    /// Bodies were thrown this frame: its cost is the spawn, not the
-    /// tumbling, so it teaches nothing.
-    threw: bool,
     ghosts: Vec<Ghost>,
     falling: Vec<Falling>,
     /// The openings of linked bricks (portals) bodies fly through.
@@ -267,10 +244,6 @@ impl BrickDebris {
             pushers: Pushers::default(),
             shots: Shots::default(),
             limit: DEFAULT_LIMIT,
-            room: DEFAULT_LIMIT,
-            over: 0,
-            per_body: None,
-            threw: false,
             ghosts: Vec::new(),
             falling: Vec::new(),
             passages: Default::default(),
@@ -284,64 +257,20 @@ impl BrickDebris {
             self.passages = passages.clone();
         }
     }
-    /// Forget everything (disconnect, new server). The limit and what
-    /// debris costs on this PC stay.
+    /// Forget everything (disconnect, new server). The limit stays.
     pub fn clear(&mut self) {
-        let (limit, per_body) = (self.limit, self.per_body);
+        let limit = self.limit;
         *self = Self::new();
-        self.per_body = per_body;
         self.set_limit(limit);
     }
     /// Keep at most `limit` bodies (clamped to [`MAX_LIMIT`]); extra bodies
     /// go now, oldest first.
     pub fn set_limit(&mut self, limit: usize) {
         self.limit = limit.min(MAX_LIMIT);
-        self.over = 0;
-        self.fit_room();
         self.diagnostics.evicted += self.evict_to(self.limit);
-    }
-    /// Room for as many bodies as the budget pays for, within the limit.
-    fn fit_room(&mut self) {
-        let fit = self.per_body.map_or(usize::MAX, |p| {
-            ((BUDGET.as_secs_f64() / p) as usize).max(SHED_FLOOR)
-        });
-        self.room = fit.min(self.limit);
     }
     pub fn limit(&self) -> usize {
         self.limit
-    }
-    /// How many bodies the budget allows right now.
-    pub fn room(&self) -> usize {
-        self.room
-    }
-    /// What this frame's debris work cost. It teaches the client what a
-    /// moving body costs on this PC, so later blasts keep only as many as
-    /// [`BUDGET`] pays for. Over budget two frames running, the oldest
-    /// bodies beyond that go early.
-    pub fn spent(&mut self, cost: Duration) {
-        let moving = self
-            .bodies
-            .values()
-            .filter(|b| !self.world.bodies[b.handle].is_sleeping())
-            .count();
-        let threw = std::mem::take(&mut self.threw);
-        if moving >= SAMPLE_FLOOR && !threw {
-            let sample = cost.as_secs_f64() / moving as f64;
-            self.per_body = Some(
-                self.per_body
-                    .map_or(sample, |p| p + (sample - p) * LEARN_RATE),
-            );
-            self.fit_room();
-        }
-        if cost <= BUDGET {
-            self.over = 0;
-            return;
-        }
-        self.over += 1;
-        if self.over >= 2 {
-            self.over = 0;
-            self.diagnostics.shed += self.evict_to(self.room);
-        }
     }
     /// Remove the oldest bodies until at most `keep` remain; returns how
     /// many went. Bodies already seen fade out as ghosts; ones killed and
@@ -513,7 +442,7 @@ impl BrickDebris {
             last_blast = Some(blast);
             // The dead brick must never hold up its own debris.
             self.surroundings.forget_brick(&mut self.world, *brick);
-            if self.room == 0 {
+            if self.limit == 0 {
                 self.diagnostics.skipped += 1;
                 continue;
             }
@@ -531,7 +460,6 @@ impl BrickDebris {
             );
             self.diagnostics.accepted += 1;
             spawned += 1;
-            self.threw = true;
         }
         Ok(spawned)
     }
@@ -585,7 +513,7 @@ impl BrickDebris {
         radius: f32,
         normal: Option<Vec3>,
     ) {
-        self.diagnostics.evicted += self.evict_to(self.room - 1);
+        self.diagnostics.evicted += self.evict_to(self.limit - 1);
         let mut rng = Seeded::new(id);
         let offset = center - origin;
         let distance = offset.length();
@@ -1927,49 +1855,26 @@ pub(crate) mod tests {
         assert_eq!(debris.limit(), MAX_LIMIT);
     }
 
+    /// Physics Quality alone decides how many bricks fly: a Mini-Nuke's
+    /// worth at Best all tumble, however long the frames get, and only the
+    /// limit makes the oldest go (Max, 2026-10-04: a little lag over less
+    /// destruction).
     #[test]
-    fn debris_learns_what_this_pc_pays_for_and_sheds_the_oldest_over_budget() {
+    fn the_physics_quality_limit_alone_decides_how_many_bricks_fly() {
         let (building, _) = building(&[]);
         let mut debris = BrickDebris::new();
-        debris.set_limit(1024);
-        debris.cues(&blast(400, 1, 8.0), &building).unwrap();
-        // The frame that threw them pays for the throw: it teaches nothing,
-        // and one slow frame alone sheds nothing.
-        debris.spent(BUDGET * 5);
-        assert_eq!((debris.room(), debris.len()), (1024, 400));
-        // 400 moving bodies at twice the budget: this PC pays for 200, and
-        // a second slow frame running sheds the oldest beyond that.
-        debris.spent(BUDGET * 2);
-        assert_eq!(debris.room(), 200);
-        assert_eq!(debris.len(), 200);
-        assert_eq!(debris.diagnostics.shed, 200);
-        // The oldest went, fading: the newest cue is still here.
-        assert!(debris.bodies.contains_key(&400) && !debris.bodies.contains_key(&1));
-        assert!(debris.ghosts() == 0, "never drawn, so nothing to fade");
-        // The next blast keeps only what fits from the start.
-        debris.cues(&blast(300, 1000, 8.0), &building).unwrap();
-        assert_eq!(debris.len(), 200);
-        // Never below the floor, however slow.
+        debris.set_limit(2048);
+        debris.cues(&blast(1500, 1, 8.0), &building).unwrap();
+        assert_eq!(debris.len(), 1500);
         for _ in 0..30 {
-            debris.spent(BUDGET * 1000);
+            debris.advance(1.0 / 60.0, &building).unwrap();
         }
-        assert_eq!(debris.len(), SHED_FLOOR);
-        // Cheap frames teach it the PC has room again, up to the limit.
-        for _ in 0..60 {
-            debris.spent(BUDGET / 1000);
-        }
-        assert_eq!(debris.room(), 1024);
-        // A disconnect keeps what it learned about this PC.
-        debris.spent(BUDGET * 1000);
-        let room = debris.room();
-        debris.clear();
-        assert_eq!(debris.room(), room);
-        // Few moving bodies teach nothing.
-        debris.set_limit(500);
-        debris.cues(&blast(10, 5000, 8.0), &building).unwrap();
-        debris.spent(BUDGET / 1000);
-        debris.spent(BUDGET / 1000);
-        assert_eq!(debris.room(), room);
+        assert_eq!(debris.len(), 1500);
+        debris.cues(&blast(1000, 5000, 8.0), &building).unwrap();
+        assert_eq!(debris.len(), 2048);
+        assert_eq!(debris.diagnostics.evicted, 452);
+        // The newest blast's bricks are all there; the oldest made way.
+        assert!(debris.bodies.contains_key(&5999) && !debris.bodies.contains_key(&1));
     }
 
     #[test]
