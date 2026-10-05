@@ -259,7 +259,7 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
     kind.reaction_seconds = 0.5;
     kind.chase_radius = 128.0;
     kind.memory_seconds = 0.5;
-    kind.perception.alertness = reaction;
+    kind.perception.strength = reaction;
     kind.perception.relaxed_scale = 3.0;
     kind.perception.away_scale = 1.0;
     let mut g = Game::new(kind, true);
@@ -297,7 +297,7 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
 #[test]
 fn a_relaxed_bot_returns_fire_after_its_longer_reaction() {
     let (plain, none) = first_wound(0.0);
-    assert!(none.is_none(), "alertness 0 records no reaction: {none:?}");
+    assert!(none.is_none(), "strength 0 records no reaction: {none:?}");
     let (relaxed, notice) = first_wound(1.0);
     let notice = notice.expect("the reaction is in the readout");
     assert!(notice.why.starts_with("reacting: relaxed"), "{notice:?}");

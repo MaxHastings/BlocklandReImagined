@@ -11,8 +11,9 @@
 //! answer (or "unseen") stands in until the next tick.
 //!
 //! A player is seen at the eye or, failing that, at the chest (a head
-//! behind a pole still shows a body). Vehicles occlude too, except the ones
-//! the viewer or the subject sit in.
+//! behind a pole still shows a body). Vehicles with seats occlude too,
+//! except the ones the viewer or the subject sit in and the body the viewer
+//! is pushing; seatless bodies (balls, crates) do not.
 use super::*;
 use bri_content::passage::Way;
 use rapier3d::prelude::*;
@@ -209,7 +210,7 @@ impl Session {
         )
     }
     /// A vehicle stands between `from` and `to`, other than the viewer's
-    /// own or the subject's mount.
+    /// own or the subject's mount, or the body the viewer is pushing.
     fn vehicle_between(
         &self,
         viewer: OwnerId,
@@ -219,8 +220,18 @@ impl Session {
     ) -> bool {
         let tag = |v: u64| super::super::vehicles::VEHICLE_TAG | u128::from(v);
         let own = |o: OwnerId| self.mounted(o).map(|(v, _)| tag(v));
+        // The body it is pushing it looks round, as a player would.
+        let handled = self
+            .bots
+            .claims
+            .owner_claim(viewer, self.simulation.state().tick)
+            .and_then(|c| match c.resource {
+                super::claims::Resource::Body { vehicle } => Some(tag(vehicle)),
+                _ => None,
+            });
         let skip = [
             own(viewer),
+            handled,
             match subject {
                 Some(Subject::Eye(o) | Subject::Chest(o)) => own(o),
                 Some(Subject::Vehicle(v)) => Some(tag(v)),
@@ -232,9 +243,19 @@ impl Session {
         if length <= 0.0 {
             return false;
         }
+        // Only a vehicle with seats hides what is behind it; a seatless
+        // body (a ball, a crate) is looked past, as a player looks over or
+        // round one.
+        let seated = |data: u128| {
+            self.bots
+                .objects
+                .iter()
+                .any(|v| tag(v.id.0) == data && !v.destroyed && !v.seats.is_empty())
+        };
         let predicate = |_: ColliderHandle, c: &Collider| {
             c.user_data >> 64 == super::super::vehicles::VEHICLE_TAG >> 64
                 && !skip.contains(&Some(c.user_data))
+                && seated(c.user_data)
         };
         let direction = to_far.normalize();
         let ray = Ray::new(

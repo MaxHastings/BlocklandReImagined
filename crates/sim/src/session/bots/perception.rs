@@ -20,13 +20,24 @@
 //! only the return fire waits. Any other pause before acting on a change
 //! (a chooser's tell) takes its length from [`Brain::switch_delay`].
 //!
+//! A hit from someone out of sight gives only a rough idea where from
+//! ([`guess`]); the look holds until the reaction, and the exact spot comes
+//! only from seeing them. An ally's warning is acted on after a short
+//! seeded delay, at a spot a little off. The head turns as a person's does
+//! ([`State::turn`]), and a strolling bot's look drifts a little
+//! ([`drift`]). What it sees goes through the shared ray budget
+//! (`sightlines`).
+//!
 //! The kind's `perception` (`bots.json`) holds seven numbers: `salience`
 //! (scales every source's reach, 0 off), `glance_seconds`,
-//! `cooldown_seconds`, `alertness` (0 to 1, scales the delay, aim error,
-//! view-cone delay and turn cap together, 0 plain), `relaxed_scale`,
-//! `away_scale`, `view_degrees`. Reaches come from engine data (blast
-//! radius, sound volume, the kind's sight, the body's running speed) times
-//! fixed constants below. The RNG is the bot's own seeded one.
+//! `cooldown_seconds`, `strength` (0 to 4, 1 shipped: scales the delay, aim
+//! error, view-cone delay and turn cap, warning delay, turn overshoot,
+//! drift and the steady aim error together; 0 plain), `relaxed_scale`,
+//! `away_scale`, `view_degrees`. Reaches and rates come from engine data
+//! (blast radius, sound volume, the kind's sight, turn rate and aim error,
+//! the body's running speed) times fixed constants below. The RNG is the
+//! bot's own seeded one; timers keyed to the tick use `cadence` with
+//! perception's own salts.
 use super::behaviour::Behaviour;
 use super::*;
 use crate::bot_kind::BotPerception;
@@ -38,6 +49,7 @@ const POLL_TICKS: u64 = 12;
 const POLL_SALT: u64 = 101;
 const HEAR_SALT: u64 = 102;
 const HEAR_OFFSET_SALT: u64 = 103;
+const DRIFT_SALT: u64 = 104;
 /// Most stimuli one tick keeps for bots to notice.
 const MAX_STIMULI: usize = 32;
 // Fixed by how perception works, not per kind (the kind's `salience`
@@ -59,6 +71,15 @@ const NEAR_REACH: f32 = 0.5;
 /// A body moving faster than this many times the bot's own running speed
 /// is moving fast; it is fully salient at twice that.
 const FAST: f32 = 2.0;
+/// However long it tracks, its aim trails a target moving across its line
+/// of sight by up to this many seconds of that motion, times `strength`: a
+/// person's tracking lags a strafing target and keeps up with a still one.
+/// The miss in units is then the same at any range. Measured with the
+/// tuning lane's fair metric (a strafing, hopping target at 10 and 25
+/// units, steady state): 0.5 s gives the Blockhead about 37% with the gun,
+/// 28% with the bow and 18% with the rocket (1 s: 19/21/14%), inside the
+/// 15-60% band; a still target is hit as before.
+const STEADY_LAG: f32 = 0.5;
 /// Seconds the starting aim error takes to narrow (`bots.rs`' tracking).
 const SETTLE_SECONDS: f32 = 2.0;
 /// A reaction delay varies by up to this share either way.
@@ -76,6 +97,22 @@ const HURT_BAND: f32 = 0.4;
 /// ...but never nearer the truth than this many units: the exact spot
 /// comes only from seeing them.
 const HURT_MISS: f32 = 1.0;
+// How a head turns (`State::turn`), in terms of the kind's plain turn
+// rate, so a half turn takes about as long as the plain linear one:
+/// its top speed, this many times the plain rate...
+const TURN_PEAK: f32 = 1.3;
+/// ...reached at this acceleration, per plain rate squared (with the peak,
+/// a half turn is as quick as the plain one)...
+const TURN_ACCEL: f32 = 1.8;
+/// ...braking late by up to this share at top speed, so a flick
+/// overshoots a little and settles back...
+const TURN_OVERSHOOT: f32 = 0.04;
+/// ...and resting once within this many radians at a crawl.
+const TURN_REST: f32 = 0.002;
+/// An idle bot's look drifts up to this many degrees either way...
+const DRIFT_DEGREES: f32 = 7.0;
+/// ...over two slow swings of these many seconds.
+const DRIFT_SECONDS: (f32, f32) = (7.0, 2.9);
 
 /// The bots' seeded generator: the next value in [0, 1).
 pub(super) fn draw(rng: &mut u64) -> f32 {
@@ -227,7 +264,7 @@ pub(super) fn may_glance(behaviour: Behaviour) -> bool {
 }
 /// How much slower than plain it reacts (and how much wider its first aim
 /// errs): by alertness, and more from outside its view cone, blended by
-/// the kind's `reaction` weight.
+/// the kind's `strength`.
 fn scale(p: &BotPerception, alertness: Alertness, away: bool) -> f32 {
     let scale = match alertness {
         // Fighting or hunting: the kind's plain numbers.
@@ -235,11 +272,11 @@ fn scale(p: &BotPerception, alertness: Alertness, away: bool) -> f32 {
         Alertness::Ordinary => 1.0,
         Alertness::Relaxed => p.relaxed_scale,
     } * if away { p.away_scale } else { 1.0 };
-    (1.0 + p.alertness * (scale - 1.0)).max(0.0)
+    (1.0 + p.strength * (scale - 1.0)).max(0.0)
 }
 /// Ticks of delay before acting on something new: the kind's plain
 /// `reaction_seconds` scaled by alertness and view, varied by `JITTER`.
-/// With the kind's `alertness` 0, exactly `reaction_seconds`, drawing
+/// With the kind's `strength` 0, exactly `reaction_seconds`, drawing
 /// nothing. Any pause before acting on a change uses this.
 pub(super) fn delay_ticks(
     p: &BotPerception,
@@ -248,10 +285,10 @@ pub(super) fn delay_ticks(
     away: bool,
     rng: &mut u64,
 ) -> u64 {
-    if p.alertness <= 0.0 {
+    if p.strength <= 0.0 {
         return ticks(reaction_seconds);
     }
-    let jitter = 1.0 + p.alertness * JITTER * (draw(rng) * 2.0 - 1.0);
+    let jitter = 1.0 + p.strength * JITTER * (draw(rng) * 2.0 - 1.0);
     ticks(reaction_seconds * scale(p, alertness, away) * jitter)
 }
 
@@ -291,6 +328,8 @@ pub(super) struct State {
     reaction: Option<Reaction>,
     /// An ally's warning, acted on from its tick.
     heard: Option<(u64, Knowledge)>,
+    /// How fast its head turns now, radians a second (`State::turn`).
+    turn_rate: f32,
     pub(super) why: Option<BotNotice>,
 }
 impl State {
@@ -393,7 +432,7 @@ impl State {
             },
             unseen: false,
         });
-        if p.alertness > 0.0 {
+        if p.strength > 0.0 {
             self.why = Some(BotNotice {
                 why: alertness.name(away),
                 since: tick,
@@ -425,14 +464,41 @@ impl State {
                 1.0 + (r.scale - 1.0) * (1.0 - tracked / SETTLE_SECONDS).max(0.0)
             })
     }
+    /// Its yaw one tick on from `yaw` toward `aim`, turning as a person
+    /// does: speeding up into a big turn and easing out of it, a fast flick
+    /// overshooting a little and settling back, so a half turn takes about
+    /// the plain time but is never at one rate. `step` is the plain linear
+    /// turn's limit this tick (0 holds the look). The kind's `strength`
+    /// scales the overshoot; at 0 the turn is the plain linear one.
+    pub(super) fn turn(&mut self, p: &BotPerception, yaw: f32, aim: f32, step: f32) -> f32 {
+        if p.strength <= 0.0 || step <= 0.0 {
+            self.turn_rate = 0.0;
+            return super::turn(yaw, aim, step);
+        }
+        let dt = 1.0 / 120.0;
+        let plain = step / dt;
+        let peak = TURN_PEAK * plain;
+        let accel = TURN_ACCEL * plain * plain;
+        let error = wrap(aim - yaw);
+        if error.abs() < TURN_REST && self.turn_rate.abs() <= accel * dt {
+            self.turn_rate = 0.0;
+            return aim;
+        }
+        // The speed that would just stop on the aim, braking late when fast.
+        let late = 1.0 + TURN_OVERSHOOT * p.strength * (self.turn_rate.abs() / peak).min(1.0);
+        let wanted = error.signum() * (2.0 * accel * error.abs()).sqrt().min(peak / late) * late;
+        self.turn_rate += (wanted - self.turn_rate).clamp(-accel * dt, accel * dt);
+        wrap(yaw + self.turn_rate * dt)
+    }
     /// Hit by someone out of sight and not yet reacted: its look holds.
     pub(super) fn startled(&self, tick: u64) -> bool {
         self.reaction.is_some_and(|r| r.unseen && tick < r.ready)
     }
     /// An ally's warning `k` reaches `bot`: it acts on it a seeded
     /// `HEAR_SECONDS` later, scaled like a reaction, at a spot up to
-    /// `HEAR_OFFSET` off. A newer warning replaces a pending older one.
-    /// With the kind's `alertness` 0, at once and exactly.
+    /// `HEAR_OFFSET` off. A newer warning while one is pending updates
+    /// what it knows but not when it acts (a warner repeats itself). With
+    /// the kind's `strength` 0, at once and exactly.
     fn hear(
         &mut self,
         p: &BotPerception,
@@ -459,10 +525,12 @@ impl State {
         );
         let off = cadence::spread(bot, HEAR_OFFSET_SALT ^ 1, k.observed, 0.0, HEAR_OFFSET);
         let k = Knowledge {
-            at: k.at + Vec3::new(angle.cos(), 0.0, angle.sin()) * off * p.alertness,
+            at: k.at + Vec3::new(angle.cos(), 0.0, angle.sin()) * off * p.strength,
             ..k
         };
-        let due = tick + ticks(seconds * p.alertness);
+        let due = self
+            .heard
+            .map_or(tick + ticks(seconds * p.strength), |(due, _)| due);
         self.heard = Some((due, k));
     }
     /// The warning it acts on now, if one is due.
@@ -478,6 +546,40 @@ impl State {
             .filter(|r| r.subject == subject && tick < r.ready)
             .map_or(1.0, |r| r.turn)
     }
+}
+
+/// How far, in radians either way, its aim keeps erring however long it
+/// tracks a target `distance` away moving `across` units a second across
+/// its line of sight (`STEADY_LAG`); 0 at `strength` 0.
+pub(super) fn steady_error(p: &BotPerception, across: f32, distance: f32) -> f32 {
+    (STEADY_LAG * p.strength * across.max(0.0) / distance.max(1.0)).min(0.6)
+}
+/// Where a bot shooting along `direction` believes it aims: without its
+/// aim `error` (yaw, pitch). The fire gate judges a shot by this, so the
+/// error is a real miss rather than a shot held back; at `strength` 0 the
+/// gate judges the actual direction, as before.
+pub(super) fn believed(p: &BotPerception, direction: Vec3, error: (f32, f32)) -> Vec3 {
+    if p.strength <= 0.0 || !direction.is_finite() || direction.length_squared() < 1e-6 {
+        return direction;
+    }
+    let d = direction.normalize();
+    let yaw = d.x.atan2(-d.z) - error.0;
+    let pitch = d.y.clamp(-1.0, 1.0).asin() - error.1;
+    Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        -yaw.cos() * pitch.cos(),
+    )
+}
+/// How far an idle bot's look has drifted off its way at `tick`, radians:
+/// two slow swings on the bot's own phase, scaled by the kind's
+/// `strength`.
+pub(super) fn drift(p: &BotPerception, bot: OwnerId, tick: u64) -> f32 {
+    let t = (tick + cadence::bot_phase(bot, DRIFT_SALT)) as f32 / 120.0;
+    let (slow, quick) = DRIFT_SECONDS;
+    let tau = std::f32::consts::TAU;
+    let swing = 0.7 * (t * tau / slow).sin() + 0.3 * (t * tau / quick).sin();
+    DRIFT_DEGREES.to_radians() * p.strength * swing
 }
 
 impl Brain {
@@ -522,14 +624,14 @@ impl Brain {
             away,
             rng,
         );
-        if kind.perception.alertness > 0.0 && perception.why.is_some_and(|w| w.since == tick) {
+        if kind.perception.strength > 0.0 && perception.why.is_some_and(|w| w.since == tick) {
             self.next_error = tick;
         }
     }
     /// It was hurt by `k.subject`, not the target it is fighting: with the
     /// reaction model on, its return fire waits a reaction.
     pub(super) fn hurt_by(&mut self, k: &Knowledge, feet: Vec3, tick: u64) {
-        if self.kind.perception.alertness > 0.0 && self.target != Some(k.subject) {
+        if self.kind.perception.strength > 0.0 && self.target != Some(k.subject) {
             self.perceive(k.subject, k.at, feet, tick, true, true);
             if let Some(r) = self.perception.reaction.as_mut().filter(|r| r.ready > tick) {
                 r.unseen = true;
@@ -894,7 +996,7 @@ mod tests {
     fn salience_and_alertness_at_zero_turn_noticing_off() {
         let p = BotPerception {
             salience: 0.0,
-            alertness: 0.0,
+            strength: 0.0,
             ..Default::default()
         };
         let mut rng = 5;
@@ -992,15 +1094,16 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert!(unique.len() >= 6, "{dues:?}");
-        // With alertness 0: at once, exactly.
+        // With strength 0: at once, exactly.
         let plain = BotPerception {
-            alertness: 0.0,
+            strength: 0.0,
             ..on()
         };
         let mut s = State::default();
         s.hear(&plain, k, Alertness::Relaxed, 3, 500);
         assert_eq!(s.heard(500).unwrap().at, k.at);
-        // A newer warning replaces an older pending one, not the reverse.
+        // A newer warning replaces an older pending one, not the reverse,
+        // and a warner repeating itself does not put off acting on it.
         let mut s = State::default();
         s.hear(&p, k, Alertness::Combat, 3, 500);
         s.hear(
@@ -1010,7 +1113,19 @@ mod tests {
             3,
             500,
         );
-        assert_eq!(s.heard(10_000).unwrap().observed, 500);
+        assert_eq!(s.clone().heard(10_000).unwrap().observed, 500);
+        let due = (500..700).find(|t| s.clone().heard(*t).is_some()).unwrap();
+        for repeat in 1..=6 {
+            let observed = 500 + repeat * 30;
+            s.hear(
+                &p,
+                Knowledge { observed, ..k },
+                Alertness::Combat,
+                3,
+                observed,
+            );
+        }
+        assert_eq!(s.heard(due).unwrap().observed, 680);
     }
 
     #[test]
@@ -1022,5 +1137,146 @@ mod tests {
         s.reaction.as_mut().unwrap().unseen = true;
         assert!(s.startled(100) && s.startled(ready - 1));
         assert!(!s.startled(ready));
+    }
+
+    /// Ticks to turn `degrees`, until within a degree of the aim, and the
+    /// most it ever went past; and each tick's turn.
+    fn turning(p: &BotPerception, degrees: f32, plain: f32) -> (u64, f32, Vec<f32>) {
+        let mut s = State::default();
+        let aim = degrees.to_radians();
+        let mut yaw = 0.0;
+        let mut reached = None;
+        let mut past = 0.0f32;
+        let mut steps = Vec::new();
+        for tick in 0..480u64 {
+            let next = s.turn(p, yaw, aim, plain / 120.0);
+            steps.push(wrap(next - yaw));
+            yaw = next;
+            if reached.is_none() && wrap(aim - yaw).abs() < 1f32.to_radians() {
+                reached = Some(tick + 1);
+            }
+            past = past.max(-wrap(aim - yaw) * aim.signum());
+        }
+        (reached.unwrap(), past.to_degrees(), steps)
+    }
+
+    #[test]
+    fn a_half_turn_takes_the_plain_time_but_not_at_one_rate() {
+        for plain in [90f32.to_radians(), 360f32.to_radians(), 720f32.to_radians()] {
+            let linear = (std::f32::consts::PI / (plain / 120.0)).ceil();
+            let (reached, past, steps) = turning(&on(), 179.0, plain);
+            let ratio = reached as f32 / linear;
+            assert!((0.8..=1.2).contains(&ratio), "{reached} vs {linear} ticks");
+            // Faster in the middle than at the start or end.
+            let moving: Vec<f32> = steps
+                .iter()
+                .map(|s| s.abs())
+                .filter(|s| *s > 1e-6)
+                .collect();
+            let top = moving.iter().copied().fold(0.0, f32::max);
+            assert!(
+                moving[0] < top * 0.2 && top > plain / 120.0 * 1.1,
+                "{moving:?}"
+            );
+            // A flick goes a little past, then settles within a degree in
+            // the settle time and stays.
+            assert!(past > 0.3 && past < 8.0, "{past} degrees past");
+            let settled = reached + ticks(SETTLE_SECONDS);
+            let mut s = State::default();
+            let mut yaw = 0.0;
+            for tick in 1..=600 {
+                yaw = s.turn(&on(), yaw, 179f32.to_radians(), plain / 120.0);
+                if tick >= settled {
+                    assert!(
+                        wrap(179f32.to_radians() - yaw).abs() < 1f32.to_radians(),
+                        "{tick}"
+                    );
+                }
+            }
+        }
+        // Alertness 0: the plain linear turn.
+        let plain = BotPerception {
+            strength: 0.0,
+            ..on()
+        };
+        let (reached, past, steps) = turning(&plain, 179.0, 360f32.to_radians());
+        assert_eq!(reached, (179.0 / 3.0f32).ceil() as u64);
+        assert_eq!(past, 0.0);
+        assert!(
+            steps[..50]
+                .iter()
+                .all(|s| (s - 3f32.to_radians()).abs() < 1e-5)
+        );
+    }
+
+    #[test]
+    fn small_corrections_track_without_wobbling() {
+        // A target sliding sideways at a radian a second is tracked to
+        // well within the fire gate's 0.1 radians.
+        let mut s = State::default();
+        let mut yaw = 0.0;
+        for tick in 0..240 {
+            let aim = tick as f32 / 120.0;
+            yaw = s.turn(&on(), yaw, aim, 360f32.to_radians() / 120.0);
+            if tick > 30 {
+                assert!(wrap(aim - yaw).abs() < 0.05, "{tick}: {}", wrap(aim - yaw));
+            }
+        }
+        let (_, past, _) = turning(&on(), 4.0, 360f32.to_radians());
+        assert!(past < 1.0, "a small turn barely overshoots: {past}");
+    }
+
+    #[test]
+    fn an_idle_look_drifts_slowly_and_differs_by_bot() {
+        let p = on();
+        let a: Vec<f32> = (0..1200).map(|t| drift(&p, 1, t)).collect();
+        let most = a.iter().copied().fold(0.0, |m: f32, d| m.max(d.abs()));
+        assert!(most <= DRIFT_DEGREES.to_radians() + 1e-5 && most > 2f32.to_radians());
+        assert!(
+            a.windows(2)
+                .all(|w| (w[1] - w[0]).abs() < 0.2f32.to_radians())
+        );
+        assert_ne!(drift(&p, 1, 500), drift(&p, 2, 500));
+        let plain = BotPerception {
+            strength: 0.0,
+            ..on()
+        };
+        assert_eq!(drift(&plain, 1, 500), 0.0);
+    }
+
+    #[test]
+    fn the_fire_gate_judges_the_aim_the_bot_believes() {
+        let ideal = Vec3::new(0.3, 0.1, -1.0).normalize();
+        let error = (0.08f32, -0.03f32);
+        let yaw = ideal.x.atan2(-ideal.z) + error.0;
+        let pitch = ideal.y.asin() + error.1;
+        let actual = Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        );
+        assert!(believed(&on(), actual, error).distance(ideal) < 1e-4);
+        let plain = BotPerception {
+            strength: 0.0,
+            ..on()
+        };
+        assert_eq!(believed(&plain, actual, error), actual);
+        // Tracking lags a moving target by the same distance at any range,
+        // and keeps up with a still one.
+        let near = steady_error(&on(), 5.0, 10.0) * 10.0;
+        let far = steady_error(&on(), 5.0, 25.0) * 25.0;
+        assert!(near > 0.5 && (near - far).abs() < 1e-4, "{near} {far}");
+        assert_eq!(steady_error(&on(), 0.0, 10.0), 0.0);
+        assert_eq!(steady_error(&plain, 5.0, 10.0), 0.0);
+        assert!(
+            steady_error(
+                &BotPerception {
+                    strength: 2.0,
+                    ..on()
+                },
+                5.0,
+                10.0
+            ) > steady_error(&on(), 5.0, 10.0)
+        );
     }
 }

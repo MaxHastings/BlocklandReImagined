@@ -2533,9 +2533,15 @@ impl Session {
             let delta = native_choice.map_or(at - eye, |c| c.direction);
             if tick >= brain.next_error {
                 let tracked = (tick - brain.seen_since) as f32 * TICK;
+                // How fast it moves across the bot's line of sight, the
+                // bot's own motion included: tracking it lags (`perception`).
+                let line = (at - eye).normalize_or_zero();
+                let relative = target_velocity - Vec3::from(state.velocity);
+                let across = (relative - line * relative.dot(line)).length();
                 let size = kind.aim_error_degrees.to_radians()
                     * (1.0 - (tracked / 2.0).min(1.0) * 2.0 / 3.0)
-                    * brain.perception.aim_scale(seen.owner, tracked);
+                    * brain.perception.aim_scale(seen.owner, tracked)
+                    + perception::steady_error(&kind.perception, across, at.distance(eye));
                 brain.error = (
                     (brain.random() * 2.0 - 1.0) * size,
                     (brain.random() * 2.0 - 1.0) * size * 0.5,
@@ -2576,16 +2582,33 @@ impl Session {
             if d.length() > 0.05 {
                 aim_yaw = yaw_to(d);
             }
+            // Strolling, the look drifts a little off the way.
+            if idle {
+                aim_yaw = wrap(aim_yaw + perception::drift(&kind.perception, bot, tick));
+            }
         } else if hold {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
         }
+        // Handling things (a carry's swing, an objective's or interaction's
+        // controls) keeps the plain turn its controllers are built on, and
+        // a startle does not stop it.
+        let handling = matches!(
+            behaviour,
+            Behaviour::Carry | Behaviour::Objective | Behaviour::Interact
+        );
         if let Some(seen) = sight.target {
             step *= brain.perception.turn_scale(seen.owner, tick);
-        } else if brain.perception.startled(tick) {
+        } else if !handling && brain.perception.startled(tick) {
             step = 0.0;
         }
-        brain.yaw = turn(brain.yaw, aim_yaw, step);
+        brain.yaw = if handling {
+            turn(brain.yaw, aim_yaw, step)
+        } else {
+            brain
+                .perception
+                .turn(&kind.perception, brain.yaw, aim_yaw, step)
+        };
         brain.pitch += (aim_pitch - brain.pitch).clamp(-step, step);
 
         // Move along the plan, facing wherever it aims.
@@ -2984,6 +3007,8 @@ impl Session {
             return None;
         }
         let intent = brain.combat.intent(plan_tick);
+        // Judged where it believes it aims: its aim error misses for real.
+        let direction = perception::believed(&brain.kind.perception, direction, brain.error);
         let mut budget = std::mem::take(&mut self.bots.combat_budget);
         let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
             hand_combat::validate_intent(self, bot, intent, direction, &mut budget)

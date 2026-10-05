@@ -21,7 +21,7 @@
         "salience": 1,
         "glance_seconds": 0.8,
         "cooldown_seconds": 6,
-        "alertness": 1,
+        "strength": 1,
         "relaxed_scale": 1.8,
         "away_scale": 1.5,
         "view_degrees": 180

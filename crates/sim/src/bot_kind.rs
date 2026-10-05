@@ -113,10 +113,13 @@ pub struct BotPerception {
     pub glance_seconds: f32,
     /// Seconds after a glance before the next.
     pub cooldown_seconds: f32,
-    /// How far the reaction model below applies, 0 to 1: it scales the
-    /// delay, the starting aim error and the slower turn together. 0 keeps
-    /// exactly `reaction_seconds` and `aim_error_degrees`.
-    pub alertness: f32,
+    /// How human its noticing and aim are, 0 to 4 (1 shipped): it scales
+    /// the reaction delay, the starting aim error, the view-cone delay and
+    /// slower turn, the warning delay, the turn's overshoot, the idle drift
+    /// and the aim error that remains however long it tracks, together. 0
+    /// keeps exactly `reaction_seconds`, the plain narrowing of
+    /// `aim_error_degrees` and the plain linear turn.
+    pub strength: f32,
     /// While strolling or playing about, `reaction_seconds` and the starting
     /// aim error are scaled by this (already fighting or hunting, they are
     /// the kind's plain numbers)...
@@ -133,7 +136,7 @@ impl Default for BotPerception {
             salience: 1.0,
             glance_seconds: 0.8,
             cooldown_seconds: 6.0,
-            alertness: 1.0,
+            strength: 1.0,
             relaxed_scale: 1.8,
             away_scale: 1.5,
             view_degrees: 180.0,
@@ -508,7 +511,7 @@ impl BotKind {
                 0.0,
                 120.0,
             ),
-            ("perception.alertness", self.perception.alertness, 0.0, 1.0),
+            ("perception.strength", self.perception.strength, 0.0, 4.0),
             (
                 "perception.relaxed_scale",
                 self.perception.relaxed_scale,

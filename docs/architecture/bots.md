@@ -114,8 +114,20 @@ bot does through the same code.
 
 ## Noticing
 
-`bots/perception.rs` adds two small mechanisms on top of sight, tuned by
-the kind's `perception` (eight numbers, on by default for every kind).
+`bots/perception.rs` adds a small "what a bot notices" layer on top of
+sight, and `bots/sightlines.rs` the one sight-ray budget every bot sight
+query goes through. The kind's `perception` holds seven numbers, on by
+default for every kind: `salience`, `glance_seconds`, `cooldown_seconds`,
+`strength`, `relaxed_scale`, `away_scale`, `view_degrees`. Everything
+else is a documented constant in `perception.rs` or comes from engine
+data (blast radius, sound volume, the kind's `sight`, `reaction_seconds`,
+`aim_error_degrees` and `turn_degrees`, the body's running speed).
+`strength` (0 to 4, 1 shipped) is the one dial (the tuning tools' sweep
+reads it): it scales the reaction delay, the starting aim error, the
+view-cone delay and turn cap, the warning delay, the turn's overshoot, the
+idle drift and a steady aim error that never settles, together. At 0 the
+bot reacts in exactly `reaction_seconds` with the plain narrowing error,
+the plain linear turn and the old fire gate.
 
 - **Glances.** A strolling or homeward bot (Wander, Return) with no enemy
   in sight, no objective at hand, nothing held, no seat and no chassis may
@@ -125,28 +137,63 @@ the kind's `perception` (eight numbers, on by default for every kind).
   10 units per unit of its radius; a weapon sound, out to 12 units at full
   `volume`; a stare (someone in plain view looking within 8 degrees of it
   for 1.5 seconds) or a body faster than twice its own running speed,
-  within 0.3 of its `sight`. `salience` scales every reach (0 turns
-  glances off). Salience falls from 1 at the source to 0 at its reach and
-  is the chance of a glance. The walk goes on; only the look turns.
+  within 0.3 of its `sight`; and, less likely, anyone of any team close by
+  in plain view. `salience` scales every reach (0 turns glances off).
+  Salience falls from 1 at the source to 0 at its reach and is the chance
+  of a glance. The look-round for watchers, nearby players and fast bodies
+  runs on the bot's own `cadence` beat. The walk goes on; only the look
+  turns. Strolling, the look also drifts a few degrees off the way.
 - **Reaction.** A newly seen target, or an attacker it was not already
-  fighting, starts a reaction: `reaction_seconds` times `combat_scale` when
-  it was fighting or hunting (Fight, Chase, Fly, Search), `relaxed_scale`
+  fighting, starts a reaction: `reaction_seconds` as is when it was
+  fighting or hunting (Fight, Chase, Fly, Search), times `relaxed_scale`
   when strolling or playing about (Wander, Interact), times `away_scale`
   for a target outside its `view_degrees` cone, varied by 30% either way
   from its seeded RNG. It fires only after it, and turns `away_scale`
   times slower toward a target from outside its cone until then. The same
-  scale multiplies its starting aim error (`aim_error_degrees`), which
-  narrows over the usual two seconds of tracking. A spawn-protected target
-  is watched but not reacted to: the clock starts when it can be hurt.
-  Damage still interrupts at once (the chooser sees it as before); only
-  the return fire waits. `alertness` (0 to 1) blends the delay, error and
-  turn cap in together: 0 keeps exactly `reaction_seconds` and the plain
-  error. `perception::delay_ticks` and `Brain::switch_delay` give the same
+  scale multiplies its starting aim error, which narrows over the usual
+  two seconds of tracking. On top, however long it tracks, its aim trails
+  a target moving across its line of sight (its own motion included) by up
+  to 0.5 seconds of that motion times `strength`, so a strafing target is
+  missed by about the same distance at any range and a still one is hit as
+  before. The native fire gate judges a shot by where the bot believes it
+  aims (its look without its error), so the error misses for real instead
+  of holding the shot back. With the fair metric the Blockhead's steady hit
+  rate falls as `strength` rises and sits inside the 15-60% band at 1. A spawn-protected target is watched but not
+  reacted to: the clock starts when it can be hurt. Damage still
+  interrupts at once (the chooser sees it as before); only the return fire
+  waits. `perception::delay_ticks` and `Brain::switch_delay` give the same
   delay to any other pause before acting on a change (a chooser's tell).
+- **Hurt from out of sight.** A hit from someone it cannot see gives the
+  way the hit came from to within 25 degrees and the distance to within
+  40%, never nearer than a unit to the truth; its look holds until its
+  reaction, then turns there. Its warning to allies carries that guess.
+  The exact spot comes only from seeing them; a hit from someone in sight
+  is placed exactly.
+- **Warnings.** An ally's warning is acted on a seeded 0.25 to 1 second
+  later (per ally and warning, scaled like a reaction), at a spot up to
+  1.5 units off, so allies do not all turn on the same tick.
+- **Turning.** The head speeds into a big turn and eases out of it (top
+  speed 1.3 times `turn_degrees`, the acceleration set so a half turn takes
+  about the plain time), a fast flick overshoots a few degrees and settles
+  back within a degree. Handling things (Carry, Objective, Interact) keeps
+  the plain turn its controllers are built on, and a startle does not stop
+  it.
+- **Sight budget.** `Session::bot_sees` and `Session::bot_sees_player`
+  answer every bot sight query from one budget per tick: 128 rays shared
+  by ordinary queries (scans for enemies, watcher polls, arming, team and
+  surprise checks) and 4 per bot (sized for 32) for checking its current
+  target or attacker, which therefore always run. An ordinary answer is
+  cached per (viewer, subject) for 6 ticks while neither end moves half a
+  unit; with the ordinary share spent, the last answer stands in. A player
+  is seen at the eye or else at the chest. Vehicles with seats hide what is
+  behind them, except the viewer's and the subject's own mounts and a body
+  the viewer is pushing; seatless bodies (a ball, a crate) are looked
+  past (they hid soccer opponents and pushed the 2v2 hammer match's
+  wrong-way share over its bar).
 
 `BotThought::noticed` reads out the last glance or reaction (`glance:
-blast`, `glance: watched`, `reacting: relaxed, from behind`, ...) with
-when it started and ends.
+blast`, `glance: watched`, `glance: someone near`, `reacting: relaxed,
+from behind`, ...) with when it started and ends.
 
 ## Bounded rule and weapon adapters
 
@@ -203,7 +250,7 @@ of a moving target infallible or change damage permissions.
     working, and how it covers one a teammate works (above). A
     `cover_distance` of 0 stands down as before, and a `clear_degrees` of
     0 meets a drive head on.
-  - `perception`: glances and reaction delays (Noticing, above).
+  - `perception`: glances, reaction delays and turning (Noticing, above).
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.
