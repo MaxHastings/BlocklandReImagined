@@ -326,10 +326,22 @@ impl Session {
                 } else {
                     return None;
                 };
-                if !crew && feet.distance(enemy) < 8.0 && d.weapon.is_none() {
+                let point = self.bot_seat_approach(bot, v, seat)?;
+                // A seat is a leg of the way to the enemy (`route`): an
+                // armed vehicle serves the fight itself; any other only
+                // when walking to it, boarding and driving there beats
+                // walking.
+                if d.weapon.is_none()
+                    && !crate::route::drive_serves(
+                        peer.player.tuning().forward,
+                        feet.distance(enemy),
+                        feet.distance(point),
+                        Vec3::from(v.transform.position).distance(enemy),
+                        d.max_speed * crate::route::CRUISE,
+                    )
+                {
                     return None;
                 }
-                let point = self.bot_seat_approach(bot, v, seat)?;
                 Some(Opportunity {
                     resource,
                     point,
@@ -390,10 +402,13 @@ impl Session {
         }
     }
 
+    /// `seats`: whether a seat may serve its goal at all (not while it has
+    /// a grounded objective, whose own plan decides what it drives).
     pub(super) fn bot_interaction(
         &mut self,
         bot: OwnerId,
         enemy: Option<Knowledge>,
+        seats: bool,
         tick: u64,
     ) -> Option<Opportunity> {
         let brain = &self.bots.brains[&bot];
@@ -414,15 +429,16 @@ impl Session {
         let enemy = enemy?;
         let feet = Vec3::from(self.peers[&bot].player.state().feet);
         if let Some(claim) = self.bots.claims.owner_claim(bot, tick) {
-            let opportunity = (claim.subject == enemy.subject)
-                .then(|| {
-                    self.bots
-                        .objects
-                        .iter()
-                        .find(|v| v.id.0 == claim.resource.vehicle())
-                        .and_then(|v| self.bot_opportunity(bot, v, claim.resource, enemy.at, tick))
-                })
-                .flatten();
+            let opportunity = (claim.subject == enemy.subject
+                && (seats || matches!(claim.resource, Resource::Body { .. })))
+            .then(|| {
+                self.bots
+                    .objects
+                    .iter()
+                    .find(|v| v.id.0 == claim.resource.vehicle())
+                    .and_then(|v| self.bot_opportunity(bot, v, claim.resource, enemy.at, tick))
+            })
+            .flatten();
             if let Some(mut o) = opportunity {
                 self.bots
                     .claims
@@ -472,6 +488,7 @@ impl Session {
                     seat: s.index as u8,
                 })
                 .chain(std::iter::once(Resource::Body { vehicle: v.id.0 }))
+                .filter(|r| seats || matches!(r, Resource::Body { .. }))
             {
                 if let Some(mut o) = self.bot_opportunity(bot, v, resource, enemy.at, tick) {
                     if brain.kind.behaviours.get("chase").copied().unwrap_or(1.0) == 0.0
@@ -878,6 +895,7 @@ impl Session {
                 floor_cos: 0.85,
                 conservative: true,
                 bottom: (min.y - support).max(0.0),
+                swims: false,
             },
         ))
     }
@@ -952,15 +970,37 @@ impl Session {
                 .filter(|p| p.through.is_none())
                 .map(|p| flat(p.feet - at));
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
-            let reversing = error.abs() > 1.8
-                || self.bots.brains[&bot].vehicle_stuck > 360
-                    && self.bots.brains[&bot].vehicle_stuck < 480;
-            let travel_sign = if reversing { -1.0 } else { 1.0 };
-            let heading_error = if reversing {
-                wrap(error + std::f32::consts::PI)
-            } else {
-                error
+            // Pure pursuit that knows how tightly this chassis turns: a
+            // point inside its turning circle is backed out of, never
+            // circled (`route::gear`). A chassis that made no headway backs
+            // straight up for a while.
+            let chassis = crate::route::Chassis::of(
+                d.wheels
+                    .iter()
+                    .map(|w| (w.position[2] * v.scale, w.steering)),
+                d.max_steering,
+                (d.bounds_max[2] - d.bounds_min[2]) * v.scale,
+            );
+            let yaw_rate = -v.angular_velocity[1];
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            let turn = chassis.radius();
+            let cruise = (
+                d.max_speed * crate::route::CRUISE,
+                d.reverse_speed * crate::route::CRUISE,
+            );
+            // It arrives once its side passes the point.
+            let reach = (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5;
+            let gear = match toward {
+                _ if brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480 => {
+                    crate::route::Gear::Reverse { nose: false }
+                }
+                Some(delta) => {
+                    crate::route::gear(turn, reach, cruise, error, delta.length(), brain.drive_gear)
+                }
+                None => crate::route::Gear::Forward,
             };
+            brain.drive_gear = gear;
+            let (travel_sign, heading_error) = gear.steer(error);
             let hull_forward = flat(glam::Quat::from_array(v.transform.rotation) * Vec3::NEG_Z)
                 .normalize_or_zero();
             let signed_speed = flat(Vec3::from(v.velocity)).dot(hull_forward);
@@ -972,7 +1012,6 @@ impl Session {
             } else {
                 travel_sign
             };
-            let yaw_rate = -v.angular_velocity[1];
             let desired_steer = (response_sign * (heading_error * 1.5 - yaw_rate * 0.25))
                 .clamp(-d.max_steering, d.max_steering);
             let previous = self.peers[&bot].input.yaw;
@@ -998,7 +1037,8 @@ impl Session {
                 || !self.bot_vehicle_clear(bot, &v, travel, stopping);
             let waiting = crew_waiting && tick < since + CREW_WAIT && speed < 2.0;
             let distance = toward.map_or(0.0, |delta| delta.length());
-            let corner_speed = (d.max_speed * 0.6 / (1.0 + heading_error.abs() * 2.0)).max(2.0);
+            let corner_speed =
+                crate::route::pace(turn, gear, heading_error, distance, cruise).max(2.0);
             let arrival_speed = (2.0 * braking * distance).sqrt().max(2.0);
             let brake =
                 signed_speed * travel_sign < -0.5 || speed > corner_speed.min(arrival_speed);

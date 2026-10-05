@@ -15,9 +15,8 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_FIRST_NAMES: usize = 256;
 /// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
 /// order (`session::bots::behaviour::Behaviour`).
-pub const BEHAVIOURS: [&str; 9] = [
+pub const BEHAVIOURS: [&str; 8] = [
     "carry",
-    "fly",
     "interact",
     "fight",
     "chase",
@@ -26,6 +25,10 @@ pub const BEHAVIOURS: [&str; 9] = [
     "objective",
     "wander",
 ];
+/// Route legs a kind's `behaviours` may also weigh: `fly` scales how
+/// readily its routes take a jet leg (0: never), as `crate::route::Jets`
+/// costs them (`docs/architecture/bots.md`, Routes).
+pub const LEG_WEIGHTS: [&str; 1] = ["fly"];
 
 /// One bot kind: its spawn list entry and how its brain plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -79,8 +82,9 @@ pub struct BotKind {
     /// sight that have nothing better to go on go and look where the enemy
     /// was (Bot_Hole's `hAlertOtherBots`).
     pub alerts_allies: bool,
-    /// Weights on its behaviours' scores by name (`carry`, `fly`,
-    /// `interact`, `fight`, `chase`, `search`, `return`, `wander`). Ordinary
+    /// Weights on its behaviours' scores by name (`carry`, `interact`,
+    /// `fight`, `chase`, `search`, `return`, `wander`), and on its route's
+    /// legs (`fly`: how readily it jets; 0 never). Ordinary
     /// behaviours default to 1; environmental interactions and objectives default to 0:
     /// 0 turns one off (a guard that never gives chase), more puts it ahead
     /// of others (`docs/architecture/bots.md`).
@@ -256,15 +260,16 @@ impl BotKind {
             self.id
         );
         ensure!(
-            self.behaviours.len() <= BEHAVIOURS.len()
+            self.behaviours.len() <= BEHAVIOURS.len() + LEG_WEIGHTS.len()
                 && self.behaviours.iter().all(|(name, weight)| {
-                    BEHAVIOURS.contains(&name.as_str())
+                    (BEHAVIOURS.contains(&name.as_str()) || LEG_WEIGHTS.contains(&name.as_str()))
                         && weight.is_finite()
                         && (0.0..=10.0).contains(weight)
                 }),
-            "Bot `{}`: behaviours weighs {} by 0 to 10",
+            "Bot `{}`: behaviours weighs {}, {} by 0 to 10",
             self.id,
-            BEHAVIOURS.join(", ")
+            BEHAVIOURS.join(", "),
+            LEG_WEIGHTS.join(", ")
         );
         let ranges = [
             ("sight", self.sight, 1.0, 400.0),

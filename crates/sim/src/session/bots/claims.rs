@@ -37,6 +37,9 @@ pub(super) struct Claim {
     pub started: u64,
     pub deadline: u64,
     pub best_distance: f32,
+    /// Whether the claimant sits in the claimed vehicle: its leg changed
+    /// from walking to the seat to riding from it.
+    pub seated: bool,
 }
 
 #[derive(Default)]
@@ -99,9 +102,29 @@ impl Claims {
                 started: tick,
                 deadline: tick.saturating_add(LEASE),
                 best_distance: distance,
+                seated: false,
             },
         );
         true
+    }
+
+    /// The claimant got into (or out of) the claimed vehicle: its next
+    /// leg's progress is measured afresh from `distance`, once per change.
+    /// A real boarding or exit is the only way to reach it, so it cannot
+    /// renew a stalled claim by itself.
+    pub(super) fn leg(&mut self, owner: OwnerId, seated: bool, distance: f32, tick: u64) {
+        if !valid_distance(distance) {
+            return;
+        }
+        if let Some(c) = self.active.get_mut(&owner)
+            && tick < c.deadline
+            && c.seated != seated
+        {
+            c.seated = seated;
+            c.best_distance = distance;
+            c.started = tick;
+            c.deadline = tick.saturating_add(LEASE);
+        }
     }
 
     /// `physical_progress` means confirmed object movement caused by contact,
@@ -263,6 +286,24 @@ mod tests {
         assert!(c.owner_claim(1, 200 + LEASE).is_none());
         assert!(!c.acquire(1, 9, seat(10), 0.0, 200 + LEASE));
         assert!(c.acquire(1, 9, seat(10), 0.0, 200 + LEASE + RETRY));
+    }
+
+    #[test]
+    fn boarding_measures_the_drive_from_where_it_starts_once() {
+        let mut c = Claims::default();
+        assert!(c.acquire(1, 1, seat(10), 8.0, 0));
+        assert!(c.progress(1, 1.0, false, 100));
+        // Seated, the drive's end is 16 away: that is its new baseline.
+        c.leg(1, true, 16.0, 200);
+        let claim = c.owner_claim(1, 200).unwrap();
+        assert_eq!((claim.best_distance, claim.deadline), (16.0, 200 + LEASE));
+        assert!(c.progress(1, 15.5, false, 300));
+        // Staying seated changes nothing; a stalled drive still expires.
+        c.leg(1, true, 15.5, 400);
+        assert_eq!(c.owner_claim(1, 400).unwrap().deadline, 300 + LEASE);
+        assert!(c.owner_claim(1, 300 + LEASE).is_none());
+        c.leg(1, false, 1.0, 300 + LEASE);
+        assert!(c.owner_claim(1, 300 + LEASE).is_none(), "no revival");
     }
 
     #[test]
