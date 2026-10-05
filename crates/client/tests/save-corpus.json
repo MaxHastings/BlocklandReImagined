@@ -10,7 +10,7 @@
     {"path": "Desertroad/TESTING1.bls", "reason": "Empty save on a folder that is not a loadable map.", "error": "Build contains no bricks"},
     {"path": "Slate/Nixill's Island place.bls", "reason": "Empty save on Slate.", "error": "Build contains no bricks"},
     {"path": "Slate/TESTING1.bls", "reason": "Empty save; same name as the Desertroad one in another folder.", "error": "Build contains no bricks"},
-    {"path": "Duplications/bed.bls", "reason": "Duplicator selection save: 17 brick lines off the grid; places none of them and keeps the 8 with no definition, without failing.", "bricks": 8},
+    {"path": "Duplications/bed.bls", "reason": "Duplicator selection save: brick lines off the grid; with v0.2.4's bundled Add-Ons it places 8 and sets aside 8, without failing.", "bricks": 16},
     {"path": "Default/Apartment2.bls", "reason": "Most NOPRINT bricks (92,256); NOPRINT once failed 357 of 699 saves.", "bricks": 92923},
     {"path": "Tutorial/TutorialBricks.bls", "reason": "Tiny NOPRINT save on the Tutorial folder.", "bricks": 13},
     {"path": "Default/cool 5.bls", "reason": "Older stock print paths (base/data/prints/Letters/*.PNG) plus unknown Letters prints.", "bricks": 16599},
