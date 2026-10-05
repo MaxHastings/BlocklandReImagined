@@ -68,11 +68,6 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "The bot's jet climb to the 7-unit deck stalls near 4 units (the planner's flight estimate says it reaches); still open after v0.2.5's search fix."
 
 [[failure]]
-test = "a_teams_preferred_player_count_fills_it_with_bots"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
