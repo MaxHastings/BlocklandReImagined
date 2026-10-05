@@ -311,7 +311,10 @@ pub enum Intent {
     },
     RunOver {
         vehicle: VehicleId,
+        /// The driver at contact, else the vehicle's spawn owner.
         owner: OwnerId,
+        /// Whoever held the control seat at contact: the runover is theirs.
+        driver: Option<OwnerId>,
         target: OccupantId,
         damage: f32,
         velocity: [f32; 3],
@@ -1463,6 +1466,7 @@ impl VehiclesWorld {
         self.intents.push(Intent::RunOver {
             vehicle: id,
             owner: driver.map_or(v.spawn.owner, |o| o.owner),
+            driver: driver.map(|o| o.owner),
             target,
             // An authored scale of 0 is harmless; only an unset one (out of
             // range) takes Torque's default.
