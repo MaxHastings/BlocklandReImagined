@@ -313,6 +313,48 @@ fn nested_containers_count_toward_one_limit() {
     assert_eq!(result.unwrap_err().code, "script.limit");
 }
 
+/// A map's keys are not text it holds, and `for key in map` walks them a
+/// key at a time: a keyed set far over the text limit (here 200 keys of 60
+/// bytes, 12 KB) is read whole, where `keys()` gathers them into one array
+/// the limit refuses. Keyed sets the host hands scripts (a settings
+/// event's `keys`) travel this way.
+#[test]
+fn a_map_is_walked_a_key_at_a_time_past_the_text_limit() {
+    let build = "let m = #{}; for i in 0..200 { let k = \"\"; k.pad(56, 'k'); m[`${k}${i + 1000}`] = true; }";
+    let (result, _) = run(
+        &format!(
+            "fn f() {{ {build} let n = 0; for key in m {{ if key.len() == 60 && m[key] {{ n += 1; }} }} n }}"
+        ),
+        "f",
+        Budget::Command,
+    );
+    assert_eq!(result.unwrap().as_int().unwrap(), 200);
+    let (result, _) = run(
+        &format!("fn f() {{ {build} m.keys().len() }}"),
+        "f",
+        Budget::Command,
+    );
+    assert_eq!(result.unwrap_err().code, "script.limit");
+}
+
+/// A script error names the functions it came out of and its line, not
+/// only the hook it was thrown under.
+#[test]
+fn a_script_error_names_the_functions_it_came_out_of() {
+    let (result, _) = run(
+        "fn f() { outer() }\nfn outer() { inner() }\nfn inner() {\n    throw \"broken\";\n}",
+        "f",
+        Budget::Command,
+    );
+    let e = result.unwrap_err();
+    assert_eq!(e.code, "script.error");
+    assert!(e.message.starts_with("f → outer → inner: "), "{e:?}");
+    assert!(
+        e.message.contains("broken") && e.message.contains("line 4"),
+        "{e:?}"
+    );
+}
+
 /// Many distinct strings, each under the 4 KiB string limit, held in one
 /// array: the call's live memory must stay bounded. Rhai sums string
 /// lengths across a container against the 4 KiB string limit, so 60 000

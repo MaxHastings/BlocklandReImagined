@@ -300,7 +300,7 @@ fn on_minigame(event) {
         }
     } else if event.kind == "round_end" && playing(event.game) {
         report_columns(event.game);
-    } else if event.kind == "settings" && event.keys.contains("{{slayer_rules}}:mode") {
+    } else if event.kind == "settings" && "{{slayer_rules}}:mode" in event.keys {
         // `Slayer_CTF::onGameModeStart`: the flags stand on their stands.
         // `onGameModeEnd`: they and the captures are gone, and Slayer's
         // report has its own columns again.
@@ -365,6 +365,10 @@ fn on_death(victim, killer) {
 // `Player::dropFlag`: the flag leaves the carrier's eye along their look,
 // or goes straight home when dropped flags do not wait.
 fn drop_flag(p) {
+    // Gone before this was heard (a bot taken back): no state to read.
+    if player(p) == () {
+        return;
+    }
     let brick_id = get_player(p, "carrying");
     if brick_id == () {
         return;

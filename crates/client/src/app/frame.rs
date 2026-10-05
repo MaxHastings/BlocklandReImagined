@@ -149,6 +149,7 @@ impl App {
         self.update_combat_presentation();
         self.update_perf();
         self.update_lag();
+        self.update_host_problems();
         self.poll_background_jobs();
         // Build macro playback: one recorded building action per frame so the
         // server's action budget is never exceeded.

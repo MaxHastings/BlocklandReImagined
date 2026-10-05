@@ -18,14 +18,14 @@ pub struct BotKindView {
     pub first_names: Vec<String>,
 }
 
+/// A kind as scripts see it. Its first names are counted, not listed
+/// (`bot_first_name(kind, i)` reads one): a kind's whole list can be more
+/// text than one script value holds (`MAX_SCRIPT_TEXT`).
 fn kind_map(k: &BotKindView) -> Dynamic {
     map([
         ("id", k.id.clone().into()),
         ("name", k.name.clone().into()),
-        (
-            "first_names",
-            Dynamic::from_array(k.first_names.iter().map(|n| n.clone().into()).collect()),
-        ),
+        ("first_names", Dynamic::from_int(k.first_names.len() as i64)),
     ])
 }
 
@@ -44,11 +44,16 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<()> {
         }
     };
     let kind = text("kind")?;
-    let name = text("name")?;
-    if name.trim().is_empty() || name.chars().count() > MAX_BOT_NAME_CHARS {
-        return fail(format!(
-            "a bot's name is 1 to {MAX_BOT_NAME_CHARS} characters"
-        ));
+    // A longer name keeps its first characters, as a player's does: a
+    // throw here would discard everything else the call did.
+    let name: String = text("name")?
+        .trim()
+        .chars()
+        .take(MAX_BOT_NAME_CHARS)
+        .collect();
+    let name = name.trim_end().to_owned();
+    if name.is_empty() {
+        return fail("a bot needs a name");
     }
     let team = match options.get("team") {
         None => None,
@@ -66,9 +71,35 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("bot_kinds", || {
         with(|i| Ok(i.snapshot.bot_kinds.iter().map(kind_map).collect::<Array>()))
     });
+    // One kind by id, or `()`: what rules that want one kind ask, so the
+    // answer is the same size however many kinds the Add-Ons provide.
+    engine.register_fn("bot_kind", |kind: &str| {
+        with(|i| {
+            Ok(i.snapshot
+                .bot_kinds
+                .iter()
+                .find(|k| k.id == kind)
+                .map_or(Dynamic::UNIT, kind_map))
+        })
+    });
+    // First name `i` (from 0) of a kind, or `()`.
+    engine.register_fn("bot_first_name", |kind: &str, i: i64| {
+        with(|inv| {
+            Ok(inv
+                .snapshot
+                .bot_kinds
+                .iter()
+                .find(|k| k.id == kind)
+                .and_then(|k| usize::try_from(i).ok().and_then(|i| k.first_names.get(i)))
+                .map_or(Dynamic::UNIT, |n| n.clone().into()))
+        })
+    });
     // How many bots the server runs at once, from spawn bricks and rules
     // together; `bots()` lists those it runs now.
     engine.register_fn("bot_limit", || MAX_BOTS as i64);
+    // The most characters a bot's name has; `add_bot` keeps that many of
+    // a longer one.
+    engine.register_fn("bot_name_limit", || MAX_BOT_NAME_CHARS as i64);
     // `add_bot(game, #{ kind, name, team })`: a bot of `kind` named `name`
     // joins `game`, on `team` when given. It joins next, when the
     // operations run; the rules hear it as a member who joined.

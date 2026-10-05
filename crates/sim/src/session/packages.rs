@@ -333,6 +333,14 @@ pub(super) struct PackageHost {
     /// cooldown (stress campaign W3).
     cooldowns: BTreeMap<(PlayerKey, String, String), u64>,
     diagnostics: VecDeque<Diagnostic>,
+    /// Problems noted since they were last told
+    /// ([`Session::tell_package_problems`]), and since the host last took
+    /// them ([`Session::take_package_problems`]).
+    unheard: VecDeque<Diagnostic>,
+    untaken: VecDeque<Diagnostic>,
+    /// When each Add-On's problem (by package and code) was last told, by
+    /// tick: a failing hook is told once a minute, not every tick.
+    told: BTreeMap<(String, String), u64>,
     output: VecDeque<String>,
     /// Deaths since the last tick, for `on_death` hooks: victim, killer.
     deaths: VecDeque<(OwnerId, Option<OwnerId>)>,
@@ -518,10 +526,23 @@ const MAX_PENDING_DEATHS: usize = 1024;
 /// Cooldown entries kept before expired ones are swept.
 const MAX_COOLDOWNS: usize = 4096;
 
+/// Problems held to be told or taken; past this many the oldest go.
+const MAX_UNHEARD: usize = 64;
+/// Ticks before the same Add-On problem (package and code) is told again.
+const TELL_EVERY: u64 = 60 * 120;
+
+/// Keep a package problem: in the recent list, and to be told to the
+/// host's admins and log and taken by the host
+/// ([`Session::tell_package_problems`]), so no failure stays in memory
+/// only.
 pub(in crate::session) fn note(host: &mut PackageHost, diagnostic: Diagnostic) {
     if host.diagnostics.len() == MAX_DIAGNOSTICS {
         host.diagnostics.pop_front();
     }
+    if host.unheard.len() == MAX_UNHEARD {
+        host.unheard.pop_front();
+    }
+    host.unheard.push_back(diagnostic.clone());
     host.diagnostics.push_back(diagnostic);
 }
 fn diagnostics_error(problems: Vec<Diagnostic>) -> anyhow::Error {
@@ -706,6 +727,9 @@ impl Session {
             next_entity: 1,
             cooldowns: BTreeMap::new(),
             diagnostics: VecDeque::new(),
+            unheard: VecDeque::new(),
+            untaken: VecDeque::new(),
+            told: BTreeMap::new(),
             output: VecDeque::new(),
             deaths: VecDeque::new(),
             loadouts: VecDeque::new(),
@@ -3553,6 +3577,79 @@ impl Session {
                 }),
             }),
         })
+    }
+    /// Package problems since the last call, oldest first (at most the
+    /// last [`MAX_UNHEARD`]): what the host records as Add-On health.
+    pub fn take_package_problems(&mut self) -> Vec<Diagnostic> {
+        self.packages
+            .as_mut()
+            .map(|h| h.untaken.drain(..).collect())
+            .unwrap_or_default()
+    }
+    /// Tell what went wrong in Add-Ons' scripts since the last tick (a
+    /// script error, a refused or failed operation such as a bot that could
+    /// not join): to the log, and in chat to each admin, once a minute per
+    /// Add-On and kind of problem. Each is also kept for
+    /// [`Self::take_package_problems`].
+    pub(super) fn tell_package_problems(&mut self) {
+        let tick = self.simulation.state().tick;
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        if host.unheard.is_empty() {
+            return;
+        }
+        let mut lines = Vec::new();
+        for d in std::mem::take(&mut host.unheard) {
+            let package = d
+                .location
+                .as_deref()
+                .and_then(|l| l.split('/').next())
+                .unwrap_or("?")
+                .to_owned();
+            let key = (package.clone(), d.code.clone());
+            let due = host
+                .told
+                .get(&key)
+                .is_none_or(|at| tick >= at.saturating_add(TELL_EVERY));
+            if due {
+                if host.told.len() >= MAX_DIAGNOSTICS {
+                    host.told
+                        .retain(|_, at| tick < at.saturating_add(TELL_EVERY));
+                }
+                host.told.insert(key, tick);
+                lines.push(format!("Add-On {package}: {}", d.message));
+            }
+            if host.untaken.len() == MAX_UNHEARD {
+                host.untaken.pop_front();
+            }
+            host.untaken.push_back(d);
+        }
+        if lines.is_empty() {
+            return;
+        }
+        let admins: Vec<OwnerId> = self
+            .peers
+            .iter()
+            .filter(|(owner, p)| {
+                !self.bots.is_bot(**owner)
+                    && (self.admin.rank(**owner).0
+                        || self
+                            .minigames
+                            .player(p.combat.player)
+                            .is_ok_and(|m| m.admin))
+            })
+            .map(|(owner, _)| *owner)
+            .collect();
+        for line in lines {
+            bri_console::warn(&line);
+            for admin in &admins {
+                self.notify(
+                    *admin,
+                    Notice::Chat(format!("{}{line}", combat::color_code(0))),
+                );
+            }
+        }
     }
     /// Recent package problems, newest last.
     pub fn package_diagnostics(&self) -> Vec<Diagnostic> {

@@ -122,13 +122,21 @@ fn cmd_frame(p, mine, size) {
 fn cmd_unframe(p, mine) { hide_shapes(if mine { p } else { () }, "frame"); }
 fn cmd_bot(p, name) {
     let kinds = bot_kinds();
-    note("kinds", `${kinds[0].id} ${kinds[0].first_names.len() > 0} ${bot_limit()}`);
+    let first = bot_first_name(kinds[0].id, 0);
+    note("kinds", `${bot_kind(kinds[0].id).id} ${kinds[0].first_names > 0 && first != ()} ${bot_limit()}`);
     add_bot(player(p).minigame, #{ kind: kinds[0].id, name: name });
 }
 fn cmd_bots(p) {
     let out = "";
     for b in bots() { out += `${b.name}:${b.spawner}:${b.minigame == player(p).minigame}:${b.item};`; }
     note("bots", out);
+}
+fn cmd_bots_with(p, kind) {
+    let mine = bot_kinds()[0].id;
+    let game = player(p).minigame;
+    add_bot(game, #{ kind: mine, name: "Bot One" });
+    add_bot(game, #{ kind: kind, name: "Bot Two" });
+    add_bot(game, #{ kind: mine, name: "Bot Three" });
 }
 fn cmd_rest(p, b, on) { rest_bot(b, on); }
 fn cmd_give(p, b) { give_item(b, "probe:weapon/gun", false); }
@@ -205,6 +213,7 @@ fn behaviour() -> Value {
             command("unframe", &["bool"]),
             command("bot", &["string"]),
             command("bots", &[]),
+            command("bots_with", &["string"]),
             command("rest", &["int", "bool"]),
             command("give", &["int"]),
             command("bot_tool", &["int", "int"]),
@@ -1582,6 +1591,124 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     g.steps(1);
     assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == a
         && matches!(n, Notice::MessageBox { title, text } if title == "Probe" && text == "A box")));
+}
+
+/// A rules bot's name past the limit keeps its first characters: one long
+/// name must not throw away everything else the call did (the bot, and
+/// the rest of a Preferred Player Count fill with it).
+#[test]
+fn a_rules_bots_long_name_is_cut_to_the_limit_not_refused() {
+    use bri_minigames::Settings;
+    use bri_sim::session::MiniGameRequest;
+    let mut g = Game::new();
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    // A map's drop points, where they come in.
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 8.0), Vec3::new(4.0, 0.05, 8.0)])
+        .unwrap();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let settings = Settings {
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
+    g.run(
+        a,
+        "bot",
+        vec![PackageArg::String(
+            "Bot Bartholomew-Fitzgerald-Smythe".into(),
+        )],
+    );
+    g.steps(2);
+    assert_eq!(g.text("kinds"), "bot.blockhead true 16");
+    g.run(a, "bots", vec![]);
+    assert_eq!(g.text("bots"), "Bot Bartholomew-Fitzger:probe:true:;");
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+/// One bot of a fill that cannot join (a kind no Add-On provides) leaves
+/// the others of the same call joining, and the failure is never memory
+/// only: the admins read it in chat, once a minute, and the host takes it
+/// for its Add-On health.
+#[test]
+fn a_bot_that_cannot_join_is_told_and_the_rest_of_the_fill_joins() {
+    use bri_minigames::Settings;
+    use bri_sim::session::MiniGameRequest;
+    let mut g = Game::new();
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    // A map's drop points, where they come in.
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 8.0), Vec3::new(4.0, 0.05, 8.0)])
+        .unwrap();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let settings = Settings {
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Create { color: 0, settings }),
+    )
+    .unwrap();
+    g.s.take_private_notices();
+    g.s.take_package_problems();
+    g.run(
+        a,
+        "bots_with",
+        vec![PackageArg::String("bot.missing".into())],
+    );
+    g.steps(2);
+    g.run(a, "bots", vec![]);
+    assert_eq!(
+        g.text("bots"),
+        "Bot One:probe:true:;Bot Three:probe:true:;",
+        "{:?}",
+        g.diagnostics()
+    );
+    let told = |g: &mut Game| {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter(|(o, n)| {
+                *o == a
+                    && matches!(n, Notice::Chat(t)
+                        if t.contains("Add-On probe: No bot kind `bot.missing`"))
+            })
+            .count()
+    };
+    assert_eq!(told(&mut g), 1);
+    let taken = g.s.take_package_problems();
+    assert!(
+        taken
+            .iter()
+            .any(|d| d.code == "op.failed" && d.message.contains("bot.missing")),
+        "{taken:?}"
+    );
+    assert!(g.s.take_package_problems().is_empty(), "taken once");
+    // Again within the minute: kept for the host, not told again.
+    g.run(
+        a,
+        "bots_with",
+        vec![PackageArg::String("bot.missing".into())],
+    );
+    g.steps(2);
+    assert_eq!(told(&mut g), 0);
+    assert!(!g.s.take_package_problems().is_empty());
 }
 
 #[test]

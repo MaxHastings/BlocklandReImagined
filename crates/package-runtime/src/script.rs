@@ -50,6 +50,12 @@ impl Budget {
 }
 const MAX_OPS_PER_CALL: usize = 1024;
 const MAX_OUTPUT_LINES: usize = 32;
+/// Most bytes of text one script value holds: Rhai counts all the strings
+/// inside an array or map together, not each string, so a list or map of
+/// text is held to this as a whole: what the host hands a script must not
+/// grow with the content or the Add-Ons running (a map's keys are not
+/// counted, so keyed sets travel as maps).
+pub const MAX_SCRIPT_TEXT: usize = 4096;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerView {
@@ -3408,7 +3414,23 @@ fn sandbox() -> Engine {
     });
     engine.set_max_call_levels(32);
     engine.set_max_expr_depths(64, 32);
-    engine.set_max_string_size(4096);
+    engine.set_max_string_size(MAX_SCRIPT_TEXT);
+    // `for key in map`: a map's keys one at a time, so a script walks a
+    // map of any size without `keys()` gathering all its text into one
+    // value (the text limit counts a whole array's strings together).
+    let mut maps = rhai::Module::new();
+    maps.set_iter(std::any::TypeId::of::<Map>(), |map: Dynamic| {
+        let keys: Vec<Dynamic> = map
+            .try_cast::<Map>()
+            .map(|m| {
+                m.into_keys()
+                    .map(|k| Dynamic::from(rhai::ImmutableString::from(k.as_str())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Box::new(keys.into_iter())
+    });
+    engine.register_global_module(maps.into());
     engine.set_max_array_size(65_536);
     engine.set_max_map_size(1024);
     engine.set_max_variables(256);
@@ -3723,7 +3745,7 @@ impl Runtime {
                 output: invocation.output,
             }),
             Err(e) => {
-                let code = match *e {
+                let code = match e.unwrap_inner() {
                     EvalAltResult::ErrorTooManyOperations(_)
                     | EvalAltResult::ErrorTerminated(..) => "script.budget",
                     EvalAltResult::ErrorDataTooLarge(..) | EvalAltResult::ErrorStackOverflow(_) => {
@@ -3731,28 +3753,53 @@ impl Runtime {
                     }
                     _ => "script.error",
                 };
-                let position = e.position();
+                // Name the function and line that threw, not only the
+                // hook it threw under: `on_minigame → bot_name`.
+                let (functions, inner) = thrown_in(&e);
+                let position = inner.position();
                 let script = self
                     .sources
                     .get(package)
                     .map_or(String::new(), Clone::clone);
-                let mut problem =
-                    Diagnostic::error(code, format!("{}: {}", call.function, e)).at(match position
-                        .line()
-                    {
-                        Some(line) => format!("{}:{line}", location(package, &script)),
-                        None => location(package, &script),
-                    });
+                let mut path = call.function.to_owned();
+                for f in &functions {
+                    path.push_str(" → ");
+                    path.push_str(f);
+                }
+                // Rhai's message ends with the line and position.
+                let message = format!("{path}: {inner}");
+                let mut problem = Diagnostic::error(code, message).at(match position.line() {
+                    Some(line) => format!("{}:{line}", location(package, &script)),
+                    None => location(package, &script),
+                });
                 if code == "script.budget" {
                     problem = problem.hint(format!(
                         "the call exceeded {} script operations",
                         call.budget.operations()
                     ));
                 }
+                if matches!(inner, EvalAltResult::ErrorDataTooLarge(..)) {
+                    problem = problem.hint(format!(
+                        "one value's text all together holds at most {MAX_SCRIPT_TEXT} bytes"
+                    ));
+                }
                 Err(problem)
             }
         }
     }
+}
+
+/// The script functions a thrown error passed out of, outermost first, and
+/// the error itself as the innermost one threw it (its line is in that
+/// function).
+fn thrown_in(e: &EvalAltResult) -> (Vec<&str>, &EvalAltResult) {
+    let mut functions = Vec::new();
+    let mut at = e;
+    while let EvalAltResult::ErrorInFunctionCall(name, _, inner, _) = at {
+        functions.push(name.as_str());
+        at = inner;
+    }
+    (functions, at)
 }
 
 /// Convert a script's `[[x, y, z, m], ...]` into voxels, bounded.

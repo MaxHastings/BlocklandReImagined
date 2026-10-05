@@ -50,7 +50,8 @@ fn mode_name(game) {
         minigame(game).title
     }
 }
-fn is_key(keys, key) { keys.contains(`{{rules}}:${key}`) }
+// A `settings` event's `keys` are a map of the changed `namespace:key`s.
+fn is_key(keys, key) { `{{rules}}:${key}` in keys }
 
 // One round of a mini-game: when its clock started (after the pre-round
 // countdown), the countdown and time announcements already made, and once
@@ -820,19 +821,30 @@ fn number(word) {
 // `BlockheadHoleBot`s ("this should be changeable") and needed Bot_Hole and
 // Bot_Blockhead; the Blockhead Bot Add-On is ours of both.
 fn bot_kind() { "bot.blockhead" }
-fn bot_kind_view() {
-    for k in bot_kinds() {
-        if k.id == bot_kind() {
-            return k;
-        }
-    }
-    ()
-}
+fn bot_kind_view() { bot_kind(bot_kind()) }
 // "Bot " and a random first name (`"Bot" SPC getRandomFirstName()`).
 // `getRandomFirstName` draws from Slayer's own first-names.txt
-// (Module_Names).
+// (Module_Names): a line's first word, as much of it as a bot's name
+// holds after "Bot " (`bot_name_limit()`), so a copy whose lines carry
+// more than a name (a census list's columns) or a long name still names
+// a bot.
 fn bot_name(kind, n) {
-    let names = data_lines("first_names").filter(|line| line != "");
+    let lines = data_lines("first_names");
+    let names = [];
+    if lines != () {
+        let most = bot_name_limit() - 4;
+        for line in lines {
+            // `split()`: by any whitespace, tabs too.
+            let ws = line.split().filter(|w| w != "");
+            if !ws.is_empty() {
+                let first = ws[0];
+                if first.len() > most {
+                    first = first.sub_string(0, most);
+                }
+                names.push(first);
+            }
+        }
+    }
     if names.is_empty() {
         return "Bot";
     }
@@ -2279,8 +2291,10 @@ fn mode_changed(g) {
 
 // `Slayer_TeamSO::updateBotFillLimit`: the teams filled to their new
 // counts, unless there are no bots to fill them with; then the count goes
-// back to -1 and whoever runs the game is told.
-fn bot_fill_changed(g) {
+// back to -1 and whoever runs the game is told. `fill`: false when the
+// same change already filled them (a new mode): this call's bots arrive
+// only as it ends, so a second fill would add them twice.
+fn bot_fill_changed(g, fill) {
     if bot_kind_view() == () {
         let refused = false;
         for t in g.teams {
@@ -2294,7 +2308,9 @@ fn bot_fill_changed(g) {
         }
         return;
     }
-    fill_bots(g);
+    if fill {
+        fill_bots(g);
+    }
 }
 
 // `Slayer_TeamHandlerSG::onNewTeam`, for each team the game did not have:
@@ -2376,14 +2392,18 @@ fn announce_changes(g, event) {
     if event.quiet {
         return;
     }
-    for c in event.changes {
-        let info = setting_info(c.key);
+    // `changes`: each changed key to the teams it changed for (`()` for
+    // the game's own), walked a key at a time.
+    for key in event.changes {
+        let info = setting_info(key);
         if info == () || info.quiet || info.scope == "server" {
             continue;
         }
-        let text = if c.team == () { setting_text(g.id, c.key) } else { team_setting_text(g.id, c.team, c.key) };
-        let plus = if c.team == () { " + " } else { " + + " };
-        tell_game(g, `${c3()}${plus}${c5()}[${c3()}${info.category}${c5()}|${c3()}${info.title}${c5()}] is now ${c3()}${text}`);
+        for team in event.changes[key] {
+            let text = if team == () { setting_text(g.id, key) } else { team_setting_text(g.id, team, key) };
+            let plus = if team == () { " + " } else { " + + " };
+            tell_game(g, `${c3()}${plus}${c5()}[${c3()}${info.category}${c5()}|${c3()}${info.title}${c5()}] is now ${c3()}${text}`);
+        }
     }
 }
 // `serverCmdSlayer_getPrefs_End`: the teams the editor added.
@@ -2564,7 +2584,7 @@ fn mg_settings(g, event) {
         mode_changed(g);
     }
     if is_key(event.keys, "team_bot_fill") {
-        bot_fill_changed(g);
+        bot_fill_changed(g, !is_key(event.keys, "mode"));
     }
     if is_key(event.keys, "lives") {
         lives_changed(g);
@@ -2604,21 +2624,28 @@ fn mg_settings(g, event) {
         r.minutes = now;
         set_round(g.id, r);
     }
-    for c in event.changes {
-        if c.key == `{{rules}}:team_lives` && c.team != () {
-            team_lives_changed(g, c.team);
+    let lives = `{{rules}}:team_lives`;
+    if lives in event.changes {
+        for team in event.changes[lives] {
+            if team != () {
+                team_lives_changed(g, team);
+            }
         }
     }
 }
 
 fn mg_joined(g, event) {
+    // Gone again before this was heard: nobody to set up.
+    let me = player(event.player);
+    if me == () {
+        return;
+    }
     // `Slayer_MiniGameSO::addMember`: the game's lives, then a team.
     set_player(event.player, "lives", setting(g.id, "lives"));
     set_player(event.player, "out", false);
     set_player(event.player, "wins", 0);
     // A bot comes with its team, and no greeting or `onMinigameJoin`.
-    let me = player(event.player);
-    if me != () && own_bot(me) {
+    if own_bot(me) {
         set_player(event.player, "kills", 0);
         set_player(event.player, "deaths", 0);
         return;

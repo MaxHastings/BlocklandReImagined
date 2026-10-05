@@ -2825,6 +2825,7 @@ impl Session {
         self.follow_player_mounts();
         self.drive_package_entities(entity_moves);
         contain("packages", self.step_packages());
+        self.tell_package_problems();
         self.step_holds();
         contain("vehicles", self.vehicle_pre_step());
         contain("physics", self.simulation.step());

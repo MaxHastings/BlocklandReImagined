@@ -48,7 +48,7 @@ labels are retained so earlier progress notes remain traceable.
 | Orbit camera | `orbit_camera` with a body that acts (Throwing) or is frozen (`watch`, spectating), `ControlObject::Orbit::body` | Capture the Flag (Slayer) | on main |
 | World shapes | `show_shapes`/`hide_shapes`: translucent boxes and labels every player sees, replicated by key, dropped with their player | Duplicators | on main |
 | Bot behaviours | the bot brain's behaviours and their order (`docs/architecture/bots.md`), a weapon image's `bot` use (`fire`, `reach`) | Gravity Gun (bots lane) | on main |
-| Rules bots | `add_bot`, `remove_bot`, `rest_bot`, `bot_tool`, `bot_kinds`, `bot_limit`, a player's `spawner`; capability `bots`; the engine brain roams, fights and respawns them, sharing the 16-bot cap with spawn-brick bots | Capture the Flag (Slayer) | on main |
+| Rules bots | `add_bot`, `remove_bot`, `rest_bot`, `bot_tool`, `bot_kinds`, `bot_limit`, `bot_name_limit`, a player's `spawner`; capability `bots`; the engine brain roams, fights and respawns them, sharing the 16-bot cap with spawn-brick bots | Capture the Flag (Slayer) | on main |
 | Message box | `message_box(p, title, text)` (v20 `MessageBoxOK`), capability `chat` | Capture the Flag (Slayer) | on main |
 | Saved mini-games | a build keeps its saver's mini-game (settings, Add-On settings, teams, `per_minigame` state keys); loading sets it up again and sends `on_minigame` `loaded` | Capture the Flag (Slayer) | on main |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | on main |
