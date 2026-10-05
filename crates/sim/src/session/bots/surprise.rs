@@ -817,6 +817,8 @@ pub(super) fn route(
 pub(super) struct Act {
     /// Yaw and pitch to look along.
     pub aim: Option<(f32, f32)>,
+    /// Look down where it faces, unless a glance turns it (`perception`).
+    pub look_down: bool,
     /// Where to move (zero stands still); none leaves the walk alone.
     pub direction: Option<Vec3>,
     pub jump: bool,
@@ -1193,7 +1195,6 @@ impl Session {
             }
         };
         let t = tick.saturating_sub(i.since) as f32 / TICKS;
-        let yaw = self.bots.brains.get(&bot).map_or(0.0, |b| b.yaw);
         let look = |at: Vec3| {
             let d = at - eye;
             (yaw_to(d), d.y.atan2(flat(d).length()).clamp(-1.5, 1.5))
@@ -1253,8 +1254,9 @@ impl Session {
                 crouch: true,
                 ..Default::default()
             },
+            // Eyes down at what it handles; a glance still turns its head.
             Flavour::Emote | Flavour::Tool | Flavour::Drop => Act {
-                aim: Some((yaw, -0.3)),
+                look_down: true,
                 direction: still,
                 ..Default::default()
             },

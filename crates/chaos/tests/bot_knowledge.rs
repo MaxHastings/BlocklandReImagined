@@ -719,4 +719,3 @@ fn becoming_an_ally_cancels_an_armed_hand_spear_without_throwing_it() {
         "cancellation preserves subsequent legitimate combat"
     );
 }
-

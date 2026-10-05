@@ -160,6 +160,8 @@ const LULL_PLAY: f32 = surprise::LULL;
 /// objective that wants one beaten but none in sight.
 const RETURN_PLAY: f32 = 0.8;
 const PRESSED_PLAY: f32 = 0.85;
+/// The pitch of a bot looking at what it handles (an emote, a tool).
+const LOOK_DOWN: f32 = -0.3;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
@@ -3397,6 +3399,8 @@ impl Session {
         }
         if let Some((yaw, pitch)) = act.aim.or(extra.aim) {
             (aim_yaw, aim_pitch) = (yaw, pitch);
+        } else if act.look_down && glance.is_none() {
+            (aim_yaw, aim_pitch) = (brain.yaw, LOOK_DOWN);
         }
         // Handling things (a carry's swing, an objective's or interaction's
         // controls) keeps the plain turn its controllers are built on, and
