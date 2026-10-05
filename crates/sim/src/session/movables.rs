@@ -376,6 +376,26 @@ impl Session {
             self.object_radius(hold.target),
         ))
     }
+    /// How low and how high what `player` holds reaches now: its body's
+    /// bounds, or a standing player's height.
+    pub(in crate::session) fn held_extent(&self, player: OwnerId) -> Option<(f32, f32)> {
+        let target = self.movables.holds.get(&player)?.target;
+        if let Some(body) = self.held_body(target) {
+            let b = self.simulation.physics.bodies.get(body)?;
+            return b
+                .colliders()
+                .iter()
+                .filter_map(|c| self.simulation.physics.colliders.get(*c))
+                .map(|c| {
+                    let a = c.compute_aabb();
+                    (a.mins.y, a.maxs.y)
+                })
+                .reduce(|(lo, hi), (l, h)| (lo.min(l), hi.max(h)));
+        }
+        let centre = self.object_centre(target)?;
+        let radius = self.object_radius(target);
+        Some((centre.y - radius, centre.y + radius))
+    }
     /// Capability feasibility from the native hold's force/acceleration limits.
     /// A provider can reject an impossible lift without its own integrator.
     pub(in crate::session) fn bot_hold_can_lift(&self, target: ObjectRef, force: f32) -> bool {

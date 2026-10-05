@@ -563,6 +563,16 @@ impl App {
                 maps: map_list,
                 copies: Some(copies),
                 game_version: Some(crate::updates::version()),
+                // `/botreload` reads the Add-Ons' bots.json again; `/botsave`
+                // keeps dial overrides beside settings.json, never in the
+                // install folder, and every hosted game starts with them.
+                bot_tuning: Some(bri_sim::session::BotTuning {
+                    reload: Some({
+                        let paths = paths_for_maps.clone();
+                        std::sync::Arc::new(move || paths.bot_kinds())
+                    }),
+                    overrides: Some(state_dir.join(bri_sim::bot_kind::tuning::OVERRIDES_FILE)),
+                }),
                 // Change Map keeps the host's Server Settings.
                 settings: Some(server_settings),
                 passwords: Some((admin, super_admin)),

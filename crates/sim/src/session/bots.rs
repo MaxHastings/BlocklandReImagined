@@ -36,14 +36,20 @@ use bri_weapons::ActorId;
 
 mod arming;
 mod behaviour;
+// Only the extras beat here so far; its other users (fire, alerts, hops,
+// dismounts, respawns) come with fix/bots-ball-games-2.
+#[allow(dead_code)]
+pub(crate) mod cadence;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
 mod contest;
+mod extras;
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod interactions;
+mod looks;
 mod objectives;
 mod package_objectives;
 mod physical_objectives;
@@ -52,6 +58,11 @@ mod search_memory;
 mod surprise;
 pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
 mod tactics;
+mod tuning;
+pub use tuning::{BotReload, BotTuning};
+mod team;
+mod why;
+pub use team::BotTeamView;
 
 /// Read-only brain evidence for headless diagnostics and playtest logs. This
 /// is derived state, never an input that assigns decisions to a bot.
@@ -81,6 +92,8 @@ pub struct BotThought {
     /// Why it chose as it did (`surprise`): its drives and the last
     /// decision at each choice point, every term's contribution.
     pub surprise: BotSurpriseView,
+    /// How teammates' intents moved its last choice (`team`).
+    pub team: BotTeamView,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {
@@ -127,6 +140,10 @@ const ERROR_TICKS: u64 = 48;
 const CARRY_TICKS: u64 = 720;
 /// Shortest hold before the throw: it holds its catch up a moment.
 const LIFT_TICKS: u64 = 90;
+/// A roof closer than this over its eyes is one a carried catch must clear.
+const CARRY_HEADROOM: f32 = 8.0;
+/// How far a carried catch keeps off the floor and the roof.
+const CARRY_CLEARANCE: f32 = 0.3;
 /// How long the throwing swing turns before it lets go.
 const SWING_TICKS: u64 = 36;
 /// After a throw, how long before it grabs again.
@@ -174,6 +191,10 @@ pub(super) struct Bots {
     objective_cursor: Option<OwnerId>,
     objective_candidate: Option<OwnerId>,
     combat_budget: hand_combat::Budget,
+    /// Live dials (`/botset`) and where overrides are kept.
+    tuning: tuning::Tuning,
+    /// Wall time spent in `step_bots`, for the bot performance bar.
+    pub(super) think_nanos: u64,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {
@@ -306,6 +327,10 @@ struct Brain {
     surprise: surprise::Mind,
     /// Where a flanking chase aims, from the enemy (zero straight at them).
     chase_offset: Vec3,
+    /// What teammates' intents did to its last choice ([`team`]).
+    team: team::State,
+    /// The small extra options' memory ([`extras`]).
+    extras: extras::State,
 }
 /// A bot holding something with a tool that holds (the Gravity Gun, or
 /// any tool whose trigger reaches and holds: `reach`, `hold`) carries it
@@ -421,6 +446,8 @@ impl Brain {
             named: String::new(),
             surprise: surprise::Mind::new(bot),
             chase_offset: Vec3::ZERO,
+            team: team::State::default(),
+            extras: Default::default(),
         }
     }
     fn random(&mut self) -> f32 {
@@ -701,7 +728,7 @@ impl Session {
             return Ok(());
         };
         let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
-        let name = self.brick_bot_name(&kind, brick_id);
+        let name = self.brick_bot_name(&kind, brick_id, None);
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
         if self.bots.brains.len() >= MAX_BOTS {
@@ -795,6 +822,10 @@ impl Session {
         };
         let pack = self.avatar_catalog.as_ref();
         let mut avatar = pack.map(|c| c.defaults.clone());
+        // Each bot its own seeded look (`looks`); its kind's look on top.
+        if let (Some(avatar), Some(pack)) = (avatar.as_mut(), pack) {
+            looks::seeded_look(bot, avatar, pack, &self.simulation.state().palette);
+        }
         if let (Some(look), Some(avatar)) = (&kind.look, avatar.as_mut()) {
             UniformParts {
                 parts: look.parts.clone(),
@@ -1025,24 +1056,38 @@ impl Session {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
     }
-    /// What a spawn brick's bot is called: its kind, then the brick's name
-    /// or else the team its Team choice names, so the Players list tells
-    /// one brick's bot from another's ("Blockhead Bot (Red)").
-    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId) -> String {
+    /// What a spawn brick's bot is called. A brick its builder named gives
+    /// "Kind (name)", so the Players list tells one brick's bot from
+    /// another's. Otherwise a first name of its kind no other player goes
+    /// by, kept while it lives (`looks`); a kind without a free one gives
+    /// its kind and the team its Team choice names ("Blockhead Bot (Red)").
+    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId, bot: Option<OwnerId>) -> String {
         let Some(b) = self.simulation.state().bricks.get(&brick) else {
             return kind.name.clone();
         };
-        let label = b
+        let named = b
             .name
             .as_deref()
             .map(|n| n.trim().trim_start_matches('_').trim())
             .filter(|n| !n.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
-                let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
-                Some(game.teams.get(team)?.name.clone())
-            });
+            .map(str::to_owned);
+        if named.is_none() {
+            if let Some(own) = bot
+                .and_then(|o| self.bots.brains.get(&o))
+                .map(|b| &b.named)
+                .filter(|n| kind.first_names.contains(n))
+            {
+                return own.clone();
+            }
+            if let Some(first) = self.bot_first_name(kind, brick, bot) {
+                return first;
+            }
+        }
+        let label = named.or_else(|| {
+            let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
+            let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
+            Some(game.teams.get(team)?.name.clone())
+        });
         // The label is shortened, not the kind or the closing bracket.
         let room = MAX_PLAYER_NAME.saturating_sub(kind.name.chars().count() + 3);
         match label {
@@ -1158,7 +1203,8 @@ impl Session {
             }
             self.apply_brick_team(bot, wanted, team)?;
             let named = self.bots.brains.get(&bot).and_then(|b| {
-                let name = self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick);
+                let name =
+                    self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick, Some(bot));
                 (name != b.named).then_some(name)
             });
             if let Some(name) = named {
@@ -1229,6 +1275,7 @@ impl Session {
                 objective_searches: b.objective.searches,
                 objective_reused: b.objective.reused,
                 surprise: b.surprise.view(&b.kind.surprise, tick),
+                team: b.team.view(),
             })
             .collect()
     }
@@ -1349,12 +1396,20 @@ impl Session {
         }
         // Through an opening, anyone may be in sight wherever they stand.
         let portals = !self.simulation.passages().list.is_empty();
+        // Each enemy in view is its own option: the nearest, but each ally
+        // already after one makes it farther (`team` overlap).
         let mut candidates: Vec<(f32, OwnerId)> = self
             .peers
             .iter()
             .filter(|(owner, p)| **owner != bot && p.combat.alive)
             .map(|(owner, p)| (p.player.eye().distance(eye), *owner))
             .filter(|(d, _)| portals || *d < kind.sight)
+            .map(|(d, owner)| {
+                (
+                    d * (1.0 + kind.team.overlap() * self.team_crowd(bot, owner)),
+                    owner,
+                )
+            })
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Sight {
@@ -1643,6 +1698,7 @@ impl Session {
                 brain.rehome = brain.brick.is_none();
                 brain.leash = brain.home;
                 self.bots.claims.release_owner(bot);
+                self.bots.claims.forget(bot);
                 brain.vehicle_since = None;
                 brain.vehicle_stuck = 0;
                 brain.vehicle_anchor = None;
@@ -1967,6 +2023,18 @@ impl Session {
                 if ranged { aim_error } else { 0.0 },
             )
         });
+        // Where its weapon will hit, for its side to keep out of (`team`):
+        // the line the clear-fire check above holds fire for.
+        let harm = sight.target.filter(|_| ranged).map(|seen| {
+            let to = seen.eye - Vec3::Y * 0.5;
+            let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
+            claims::Space {
+                from: eye,
+                to: to + (to - eye).normalize_or_zero() * past,
+                radius: weapon.map_or(0.0, |w| w.splash).max(0.3),
+                spread: aim_error.tan(),
+            }
+        });
         let mounted_charging = self
             .mounted(bot)
             .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
@@ -2032,6 +2100,31 @@ impl Session {
         let flanks = sight.target.map_or([None, None], |seen| {
             self.surprise_flanks(bot, feet, seen.real)
         });
+        // Teammates' intents, and what this bot exposes to them (`team`).
+        let intents = self.team_intents(bot, tick);
+        let seats = self.team_seats(bot, tick);
+        let mount = self.mounted(bot).map(|(v, _)| v);
+        let sightline = if driving.is_none() {
+            self.team_sightline(
+                bot,
+                eye,
+                sight
+                    .target
+                    .map(|s| s.real)
+                    .or(self.bots.brains[&bot].memory.map(|k| k.at)),
+            )
+        } else {
+            None
+        };
+        let carries = driving.and_then(|_| self.team_carries(bot, feet));
+        let simulation = &self.simulation;
+        let clear = move |a: Vec3, b: Vec3| {
+            let d = b - a;
+            super::admin_players::world_ray(simulation, a, d.normalize_or_zero(), d.length())
+                .is_none()
+        };
+        let tall = self.peers[&bot].player.tuning().stand_height;
+        let deficit = self.team_deficit(bot);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2159,7 +2252,7 @@ impl Session {
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
         brain.chase_feet = enemy.map(|seen| seen.feet);
-        let scores = behaviour::scores(brain.behaviour, &situation, |b| {
+        let mut scores = behaviour::scores(brain.behaviour, &situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
                     0.0
@@ -2168,6 +2261,45 @@ impl Session {
                 },
             )
         });
+        // What each option would do, and what allies' intents add to it
+        // (`team`): never while it carries an objective or is urgent.
+        let choices = team_choices(
+            opportunity,
+            enemy,
+            brain.memory,
+            arm,
+            objective,
+            feet,
+            brain.home,
+            team::exit(&intents, feet, tall),
+            carries,
+        );
+        // Its objective is worth more as its team falls behind, and what it
+        // saw work for a teammate a little more (`team` copy).
+        scores[Behaviour::Objective as usize] *= 1.0 + kind.team.pressure * deficit;
+        for (b, score) in scores.iter_mut().enumerate() {
+            *score *= 1.0
+                + brain
+                    .surprise
+                    .seen(&kind.surprise, surprise::Domain::Behaviour, b as u32, tick);
+        }
+        let plain_before = behaviour::best(&scores) as usize;
+        let (current, current_since) = (brain.behaviour as usize, brain.behaviour_since);
+        brain.team.terms = if gate.carrying || gate.urgent {
+            Default::default()
+        } else {
+            team::adjust(
+                &kind.team,
+                bot,
+                |b| if b == current { current_since } else { tick },
+                &mut scores,
+                &choices,
+                &intents,
+                tall,
+                &clear,
+            )
+        };
+        brain.team.allies = intents.len();
         // The plain pick, or a near one the surprise chooser takes.
         brain.surprise.gate = gate;
         let (mut behaviour, _) = surprise::behaviour(
@@ -2192,10 +2324,40 @@ impl Session {
         {
             behaviour = brain.behaviour;
         }
+        // A choice the terms changed is called out (`team`).
+        let callout = (behaviour != brain.behaviour
+            && behaviour as usize != plain_before
+            && tick >= brain.team.next_callout)
+            .then(|| {
+                team::callout(
+                    &kind.team,
+                    &brain.team.terms,
+                    plain_before,
+                    behaviour as usize,
+                )
+            })
+            .flatten()
+            .map(str::to_owned);
         if behaviour != brain.behaviour {
             brain.behaviour_since = tick;
         }
         brain.behaviour = behaviour;
+        let chosen = choices[behaviour as usize];
+        self.bots.claims.publish(
+            bot,
+            claims::Intent {
+                option: behaviour as u8,
+                since: brain.behaviour_since,
+                place: chosen.place,
+                target: chosen.target,
+                seats,
+                harm,
+                mount,
+                sight: sightline,
+                flavour: brain.surprise.flavour().map(|f| f as u8),
+                until: tick + 3,
+            },
+        );
         let mut selected_objective = objective.filter(|_| behaviour == Behaviour::Objective);
         let objective_resource = selected_objective
             .and_then(|view| view.resource)
@@ -2613,10 +2775,45 @@ impl Session {
             && swim.is_none()
             && !self.seated(bot)
             && self.bots.brains[&bot].memory.is_none();
-        let pause = self.surprise_pause(bot, natural, gate, eye);
+        // Carrying: the catch hangs off the floor, or it drags and trails
+        // back into its holder's path, and under the roof, or it snags on
+        // the roof's edge on the way out. The hold's point is raised or
+        // lowered by how far the catch's body is off that band.
+        let carry_pitch = holding
+            .then(|| {
+                let (_, distance, grip, _) = self.bot_hold_geometry(bot)?;
+                let (low, high) = self.held_extent(bot)?;
+                let ceiling =
+                    super::admin_players::world_ray(&self.simulation, eye, Vec3::Y, CARRY_HEADROOM)
+                        .map_or(f32::INFINITY, |up| eye.y + up);
+                let lift = (feet.y + CARRY_CLEARANCE - low).max(0.0);
+                let duck = (high - (ceiling - CARRY_CLEARANCE)).max(0.0);
+                let wanted = grip.y + if duck > 0.0 { -duck } else { lift };
+                Some(
+                    ((wanted - eye.y) / distance.max(0.5))
+                        .clamp(-1.0, 1.0)
+                        .asin(),
+                )
+            })
+            .flatten();
+        let mut pause = self.surprise_pause(bot, natural, gate, eye);
+        (pause.pull, pause.copy) = self.team_mood(bot, feet, eye, tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain.surprise.interrupt(&brain.kind.surprise, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
+        let extra = self.bot_extras(
+            bot,
+            extras::Scene {
+                behaviour,
+                enemy_seen: sight.target.is_some(),
+                hurt_by,
+                holding: wanted.is_none(),
+                natural,
+                calm: !gate.urgent && !gate.carrying,
+                feet,
+            },
+            tick,
+        )?;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -2669,7 +2866,7 @@ impl Session {
                             aim_yaw = yaw_to(d);
                         }
                     }
-                    aim_pitch = 0.15;
+                    aim_pitch = carry_pitch.unwrap_or(0.15);
                 }
             }
         } else if behaviour == Behaviour::Objective
@@ -2729,7 +2926,7 @@ impl Session {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
         }
-        if let Some((yaw, pitch)) = act.aim {
+        if let Some((yaw, pitch)) = act.aim.or(extra.aim) {
             (aim_yaw, aim_pitch) = (yaw, pitch);
         }
         if telling {
@@ -2908,11 +3105,23 @@ impl Session {
                 input.crouch = to.y < feet.y - 0.4;
             }
         }
+        // A fight stands out of where a teammate's weapon will hit (`team`).
+        if behaviour == Behaviour::Fight
+            && let Some(out) = choices[Behaviour::Fight as usize]
+                .place
+                .filter(|out| *out != feet)
+        {
+            direction = flat(out - feet).normalize_or_zero();
+        }
         if let Some(to) = act.direction {
             direction = to;
         }
-        input.jump |= act.jump;
-        input.crouch |= act.crouch;
+        input.jump |= act.jump || extra.jump;
+        input.crouch |= act.crouch || extra.crouch;
+        input.jet |= extra.jet;
+        if extra.stand {
+            direction = Vec3::ZERO;
+        }
         if telling {
             direction = Vec3::ZERO;
         }
@@ -3102,6 +3311,9 @@ impl Session {
         );
         let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
         self.movement(bot, sequence, input)?;
+        if let Some(line) = callout {
+            self.team_say(bot, line, tick)?;
+        }
         if let (Some(m), Some(seen)) = (bites, sight.target) {
             self.bot_bite(bot, seen.owner, m, tick)?;
         }
@@ -3357,4 +3569,70 @@ impl Session {
             .map(|k| (k.id.clone(), k.name.clone()))
             .collect()
     }
+}
+
+/// What each of a bot's options would do (`team::Choice`): where it would
+/// stand, what it acts on and whose seat it takes. A fight stands where it
+/// is, or at `exit`, the nearest place out of a teammate's line of fire.
+#[allow(clippy::too_many_arguments)]
+fn team_choices(
+    opportunity: Option<interactions::Opportunity>,
+    enemy: Option<Seen>,
+    memory: Option<Knowledge>,
+    arm: Option<Vec3>,
+    objective: Option<objectives::View>,
+    feet: Vec3,
+    home: Vec3,
+    exit: Option<Vec3>,
+    carries: Option<(u64, Vec3)>,
+) -> [team::Choice; Behaviour::COUNT] {
+    use claims::{Resource, Target};
+    let mut c = [team::Choice::default(); Behaviour::COUNT];
+    let at = |b: Behaviour| b as usize;
+    if let Some(o) = opportunity {
+        c[at(Behaviour::Interact)] = team::Choice {
+            place: Some(o.point),
+            target: match o.resource {
+                Resource::Body { vehicle } => Some(Target::Object(vehicle)),
+                Resource::Seat { .. } => None,
+            },
+            seat: match o.resource {
+                Resource::Seat { vehicle, .. } => Some(vehicle),
+                Resource::Body { .. } => None,
+            },
+            ..Default::default()
+        };
+    }
+    if let Some(seen) = enemy {
+        let target = Some(Target::Player(seen.owner));
+        c[at(Behaviour::Fight)] = team::Choice {
+            place: Some(exit.unwrap_or(feet)),
+            stand: true,
+            target,
+            ..Default::default()
+        };
+        c[at(Behaviour::Chase)].target = target;
+    }
+    // A search goes to look where the enemy was: searchers crowd one spot,
+    // but one coming to back up an ally on that enemy is not a pile-on.
+    if let Some(k) = memory {
+        c[at(Behaviour::Search)].place = Some(k.at);
+    }
+    c[at(Behaviour::Arm)].place = arm;
+    c[at(Behaviour::Return)].place = Some(home);
+    if let Some(v) = objective {
+        c[at(Behaviour::Objective)] = team::Choice {
+            place: Some(v.point),
+            target: v
+                .resource
+                .map(|r| Target::Object(r.vehicle()))
+                .or(v.enemy.map(Target::Player)),
+            seat: v.board.map(|(vehicle, _)| vehicle),
+            ..Default::default()
+        };
+    }
+    for choice in &mut c {
+        choice.carries = carries;
+    }
+    c
 }

@@ -1821,17 +1821,33 @@ fn a_save_picture_is_drawn_in_a_submission_of_its_own() -> anyhow::Result<()> {
         app.files.save_picture.is_none(),
         "the picture waited for another frame"
     );
+    // Only a hang ends this early: a software adapter can take many seconds
+    // over the picture, and the frame's own encoder is still held back, so
+    // finishing at all shows the picture did not wait on its submit.
     let start = std::time::Instant::now();
     while app.files.save_shots.busy() {
         ensure!(
-            start.elapsed() < Duration::from_secs(30),
+            start.elapsed() < Duration::from_secs(300),
             "the picture waited on the frame's own submit"
         );
         gpu.device.poll(wgpu::PollType::Poll)?;
-        app.files.save_shots.poll(&gpu.device);
+        let messages = app.files.save_shots.poll(&gpu.device);
+        ensure!(
+            messages.is_empty(),
+            "a save picture is written quietly: {messages:?}"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
-    let written = image::open(&picture)?;
+    eprintln!("the picture was written in {:.1?}", start.elapsed());
+    // The console is the whole process's; only this picture's lines count.
+    let failures: Vec<_> = bri_console::log::lines()
+        .into_iter()
+        .filter(|l| l.text.contains(&picture.display().to_string()))
+        .map(|l| l.text)
+        .collect();
+    ensure!(failures.is_empty(), "the picture failed: {failures:?}");
+    let written = image::open(&picture)
+        .with_context(|| format!("the picture {} was not written", picture.display()))?;
     ensure!(
         (written.width(), written.height()) == SIZE,
         "the picture is the frame, unscaled: {}x{}",

@@ -182,6 +182,15 @@ pub fn load_packages(
         load_map: Some(maps.loader(palette)),
         copies: None,
         game_version: None,
+        // `/botreload` reads the Add-Ons' bots.json again; a dedicated
+        // server keeps no user overrides.
+        bot_tuning: Some(bri_sim::session::BotTuning {
+            reload: Some({
+                let (root, packages) = (content_root.to_path_buf(), packages.clone());
+                std::sync::Arc::new(move || content_identity::bot_kinds(&root, &packages))
+            }),
+            overrides: None,
+        }),
     };
     let hosted = setup.hosted(&map.simulation.state().map_id)?;
     let unresolved_items = map.unresolved_items;

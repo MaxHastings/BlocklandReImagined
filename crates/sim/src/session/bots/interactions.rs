@@ -8,12 +8,18 @@ use rapier3d::prelude::*;
 
 const DISCOVER: f32 = 24.0;
 const RETRY: u64 = 240;
-const CREW_WAIT: u64 = 360;
+pub(super) const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 /// How far past its own half-length a driver that only carries its bot to
 /// an enemy stops and gets out: about where the bot fights from on foot.
 const LEAVE_REACH: f32 = 3.0;
+/// Idle play (`extras`, no enemy about) scores between wandering and
+/// walking home, times the kind's `idle_play` weight, so any purpose
+/// outranks it.
+const IDLE: f32 = 0.2;
+/// An idle push stops this far short of the player it plays toward.
+const IDLE_SHORT: f32 = 3.5;
 
 #[derive(Clone, Copy)]
 pub(super) struct PushApproach {
@@ -89,7 +95,7 @@ const CONTESTED: f32 = 3.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Opportunity {
-    resource: Resource,
+    pub(super) resource: Resource,
     pub point: Vec3,
     pub utility: f32,
 }
@@ -293,6 +299,7 @@ impl Session {
         v: &VehicleSnapshot,
         resource: Resource,
         (subject, enemy): (OwnerId, Vec3),
+        idle: bool,
         tick: u64,
     ) -> Option<Opportunity> {
         let peer = self.peers.get(&bot)?;
@@ -336,7 +343,17 @@ impl Session {
                 // Complete roles before filling passenger seats. An empty
                 // vehicle needs someone at its controls before a passenger
                 // has a reason to board it.
-                let utility = if role.controls {
+                let utility = if idle {
+                    // Idle play: ride along in a teammate's vehicle.
+                    let driven = d
+                        .control_seat()
+                        .and_then(|s| world.seat_occupant(v.id, s))
+                        .is_some_and(|o| self.bot_allies(bot, o.owner.0));
+                    if role.controls || role.weapon || !driven {
+                        return None;
+                    }
+                    IDLE * self.bots.brains.get(&bot)?.kind.extra("idle_play")
+                } else if role.controls {
                     0.84
                 } else if crew && role.weapon && d.weapon.is_some() {
                     0.88
@@ -361,7 +378,8 @@ impl Session {
                 } else {
                     d.max_speed * crate::route::CRUISE
                 };
-                if d.weapon.is_none()
+                if !idle
+                    && d.weapon.is_none()
                     && !crate::route::drive_serves(
                         peer.player.tuning().forward,
                         feet.distance(enemy),
@@ -387,12 +405,20 @@ impl Session {
                         || d.smash.is_some())
                     || !self.may_move(bot, ObjectRef::Vehicle(v.id.0))
                     || self.object_held(ObjectRef::Vehicle(v.id.0))
+                    // Idle play leaves a body anyone else means to work.
+                    || idle
+                        && self
+                            .bots
+                            .claims
+                            .claimants_on(v.id.0, tick)
+                            .any(|o| o != bot)
                 {
                     return None;
                 }
                 let at = object_centre(v, d);
                 let toward = flat(enemy - at);
-                if !(3.0..=20.0).contains(&toward.length()) {
+                let short = if idle { IDLE_SHORT } else { 0.0 };
+                if !(3.0 + short..=20.0).contains(&toward.length()) {
                     return None;
                 }
                 let direction = toward.normalize();
@@ -417,16 +443,27 @@ impl Session {
                 )?;
                 let radius = extent(Vec3::new(-direction.z, 0.0, direction.x));
                 let point = Vec3::new(approach.point.x, feet.y, approach.point.z);
-                if self.bot_ally_corridor(bot, at, toward.normalize(), toward.length(), radius) {
+                if self.bot_ally_corridor(
+                    bot,
+                    at,
+                    toward.normalize(),
+                    toward.length() - short,
+                    radius,
+                ) {
                     return None;
                 }
                 // Mass affects expected acceleration, not permission or an invented force.
                 // A heavy body remains useful on a slope, but costs more commitment.
                 let effort = (d.mass / combat::PLAYER_MASS).sqrt().min(5.0) * 0.008;
+                let base = if idle {
+                    IDLE * self.bots.brains.get(&bot)?.kind.extra("idle_play")
+                } else {
+                    0.85
+                };
                 Some(Opportunity {
                     resource,
                     point,
-                    utility: 0.85 - effort,
+                    utility: base - effort,
                 })
             }
         }
@@ -451,15 +488,25 @@ impl Session {
                 .copied()
                 .unwrap_or(0.0)
                 == 0.0
-            || enemy.is_none()
         {
             self.bots.claims.release_owner(bot);
             return None;
         }
-        let enemy = enemy?;
+        // With no enemy about, idle play toward a player in sight (`extras`).
+        let (subject, toward, idle) = match enemy {
+            Some(enemy) => (enemy.subject, enemy.at, false),
+            None => match self.bot_idle_mark(bot, tick) {
+                Some((mark, at)) => (mark, at, true),
+                None => {
+                    self.bots.claims.release_owner(bot);
+                    return None;
+                }
+            },
+        };
+        let brain = &self.bots.brains[&bot];
         let feet = Vec3::from(self.peers[&bot].player.state().feet);
         if let Some(claim) = self.bots.claims.owner_claim(bot, tick) {
-            let opportunity = (claim.subject == enemy.subject
+            let opportunity = (claim.subject == subject
                 && (seats || matches!(claim.resource, Resource::Body { .. })))
             .then(|| {
                 self.bots
@@ -467,13 +514,7 @@ impl Session {
                     .iter()
                     .find(|v| v.id.0 == claim.resource.vehicle())
                     .and_then(|v| {
-                        self.bot_opportunity(
-                            bot,
-                            v,
-                            claim.resource,
-                            (enemy.subject, enemy.at),
-                            tick,
-                        )
+                        self.bot_opportunity(bot, v, claim.resource, (subject, toward), idle, tick)
                     })
             })
             .flatten();
@@ -529,7 +570,7 @@ impl Session {
                 .filter(|r| seats || matches!(r, Resource::Body { .. }))
             {
                 if let Some(mut o) =
-                    self.bot_opportunity(bot, v, resource, (enemy.subject, enemy.at), tick)
+                    self.bot_opportunity(bot, v, resource, (subject, toward), idle, tick)
                 {
                     if brain.kind.behaviours.get("chase").copied().unwrap_or(1.0) == 0.0
                         && feet.distance(o.point) > 2.0
@@ -548,7 +589,7 @@ impl Session {
         let allies = self.claim_allies(bot, tick);
         if self.bots.claims.acquire(
             bot,
-            enemy.subject,
+            subject,
             opportunity.resource,
             feet.distance(opportunity.point),
             tick,
@@ -677,15 +718,26 @@ impl Session {
                 Ok(None)
             }
             Resource::Body { vehicle } => {
+                // Idle play pushes toward the player it was aimed at.
+                let idle = enemy.is_none();
+                let Some(enemy) = enemy.or_else(|| {
+                    self.bot_idle_mark(bot, tick)
+                        .filter(|(mark, _)| *mark == claim.subject)
+                        .map(|(_, at)| at)
+                }) else {
+                    return Ok(None);
+                };
                 let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle) else {
                     return Ok(None);
                 };
-                let Some(enemy) = enemy else {
-                    return Ok(None);
-                };
-                let Some(o) =
-                    self.bot_opportunity(bot, v, claim.resource, (claim.subject, enemy), tick)
-                else {
+                let Some(o) = self.bot_opportunity(
+                    bot,
+                    v,
+                    claim.resource,
+                    (claim.subject, enemy),
+                    idle,
+                    tick,
+                ) else {
                     return Ok(None);
                 };
                 let Some(d) = self
@@ -749,7 +801,11 @@ impl Session {
     /// `quarry`, the one it is going after, and one standing at `goal`, the
     /// spot it is making for, which it contests rather than walks round.
     /// It always passes on its left, so two walking into each other both
-    /// step aside the same way and get by.
+    /// step aside the same way and get by. In a gap (solid close on both
+    /// sides), an ally ahead already going its
+    /// way is followed at its pace instead (`team` overlap: the later of
+    /// two on one path gives way), so a file through a narrow gap keeps
+    /// moving instead of every one stepping into the frame.
     pub(super) fn bot_walk_direction(
         &self,
         bot: OwnerId,
@@ -762,6 +818,39 @@ impl Session {
         }
         let own = &self.peers[&bot].player;
         let feet = Vec3::from(own.state().feet);
+        let ahead = |p: &super::Peer| {
+            let at = Vec3::from(p.player.state().feet);
+            let delta = flat(at - feet);
+            let along = delta.dot(desired);
+            let width = (own.tuning().width + p.player.tuning().width) * 0.5;
+            along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
+        };
+        let side = Vec3::new(-desired.z, 0.0, desired.x);
+        let waist = feet + Vec3::Y * own.tuning().stand_height * 0.5;
+        // A gap: something solid close on both sides.
+        let no_room = [side, -side].iter().all(|d| {
+            self.world_ray(waist, *d, own.tuning().width + 0.6)
+                .is_some()
+        });
+        // The pace of an ally ahead going the same way, as a share of its own.
+        let follow = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                no_room
+                    && **o != bot
+                    && p.combat.alive
+                    && !self.seated(**o)
+                    && self.bot_allies(bot, **o)
+                    && ahead(p)
+            })
+            .map(|(_, p)| flat(Vec3::from(p.player.state().velocity)).dot(desired))
+            .filter(|pace| *pace > 0.5)
+            .map(|pace| (pace / own.tuning().forward.max(0.1)).min(1.0))
+            .reduce(f32::min);
+        if let Some(pace) = follow {
+            return desired * pace;
+        }
         let blocked = self.peers.iter().any(|(o, p)| {
             if *o == bot || !p.combat.alive || self.seated(*o) {
                 return false;
@@ -772,13 +861,10 @@ impl Session {
             {
                 return false;
             }
-            let delta = flat(at - feet);
-            let along = delta.dot(desired);
-            let width = (own.tuning().width + p.player.tuning().width) * 0.5;
-            along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
+            ahead(p)
         });
         if blocked {
-            (desired * 0.25 + Vec3::new(-desired.z, 0.0, desired.x)).normalize_or_zero()
+            (desired * 0.25 + side).normalize_or_zero()
         } else {
             desired
         }
@@ -982,7 +1068,12 @@ impl Session {
         if length < 0.01 {
             return false;
         }
-        let direction = delta / length;
+        let space = super::claims::Space {
+            from: origin,
+            to: origin + delta / length * (length + past),
+            radius: splash,
+            spread: spread.tan(),
+        };
         !self.peers.iter().any(|(o, p)| {
             if *o == bot || !p.combat.alive || !self.bot_allies(bot, *o) {
                 return false;
@@ -992,11 +1083,8 @@ impl Session {
             {
                 return false;
             }
-            let centre =
-                Vec3::from(p.player.state().feet) + Vec3::Y * p.player.tuning().stand_height * 0.5;
-            let along = (centre - origin).dot(direction).clamp(0.0, length + past);
-            centre.distance(origin + direction * along)
-                < p.player.tuning().stand_height * 0.5 + splash + along * spread.tan()
+            let half = p.player.tuning().stand_height * 0.5;
+            space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
         })
     }
 
@@ -1074,6 +1162,17 @@ impl Session {
             });
         }
         let role = &d.seats[usize::from(seat)];
+        // Idle play: a passenger rides along while a teammate drives.
+        let riding_along = !role.controls
+            && !role.weapon
+            && self
+                .bots
+                .brains
+                .get(&bot)
+                .is_some_and(|b| b.kind.extra("idle_play") > 0.0)
+            && d.control_seat()
+                .and_then(|s| w.seat_occupant(v.id, s))
+                .is_some_and(|o| self.bot_allies(bot, o.owner.0));
         // The bot knows its seat immediately. Human clients report the same
         // handover through SeatSince when they learn where they are sitting.
         let peer = self.peers.get_mut(&bot).unwrap();
@@ -1330,7 +1429,7 @@ impl Session {
         }
         // Once no enemy or remembered task remains, safely relinquish the
         // vehicle. A stationary gunner without a driver need not sit forever.
-        if behaviour == Behaviour::Wander && tick.is_multiple_of(CREW_WAIT) {
+        if behaviour == Behaviour::Wander && tick.is_multiple_of(CREW_WAIT) && !riding_along {
             let _ = self.dismount_vehicle(bot);
         }
         Ok(input)

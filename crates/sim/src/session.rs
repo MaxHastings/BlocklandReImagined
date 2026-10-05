@@ -15,8 +15,8 @@ use std::sync::Arc;
 mod admin;
 mod bots;
 pub use bots::{
-    BotCandidate, BotDecision, BotDrive, BotEvidence, BotObjectiveDetail, BotSurpriseView, BotTask,
-    BotThought,
+    BotCandidate, BotDecision, BotDrive, BotEvidence, BotObjectiveDetail, BotReload,
+    BotSurpriseView, BotTask, BotTeamView, BotThought, BotTuning,
 };
 mod breakables;
 mod build_load;
@@ -2624,7 +2624,10 @@ impl Session {
             }
         };
         contain("events", self.start_event_tick(tick + 1));
-        contain("bots", self.step_bots());
+        let thinking = std::time::Instant::now();
+        let bots = self.step_bots();
+        self.bots.think_nanos += thinking.elapsed().as_nanos() as u64;
+        contain("bots", bots);
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
