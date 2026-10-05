@@ -66,7 +66,7 @@ fn fixture(name: &str) -> PathBuf {
 
 /// The imports, their host rules, and a probe that moves players and reads
 /// their teams.
-fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
+fn content(root: &Path, long_names: bool) -> (Arc<Catalog>, bri_weapons::Pack) {
     let ports = Ports::builtin();
     let mut ids = vec![];
     for (addon, ns) in [
@@ -88,6 +88,14 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         let rules = report.ports[0].rules.as_ref().expect("rules");
         ids.push((ns.to_owned(), Side::Shared));
         ids.push((rules.id.clone(), Side::Server));
+    }
+    if long_names {
+        // As long as Slayer's own first-names.txt (36 KB): far more text
+        // than a script may hold at once.
+        let names: String = (0..5000).map(|i| format!("Name{i}
+")).collect();
+        std::fs::write(root.join("addons/gamemode_slayer-rules/data/first_names.txt"), names)
+            .unwrap();
     }
     let probe = root.join("probe");
     std::fs::create_dir_all(&probe).unwrap();
@@ -277,10 +285,15 @@ impl Drop for Root {
 
 impl Game {
     fn new(name: &str) -> Self {
+        Self::with_names(name, false)
+    }
+    /// [`Game::new`], Slayer's first-names list as long as the real one
+    /// when `long_names`.
+    fn with_names(name: &str, long_names: bool) -> Self {
         let root =
             Root(std::env::temp_dir().join(format!("bri-slayer-{}-{name}", std::process::id())));
         let _ = std::fs::remove_dir_all(&root.0);
-        let (catalog, pack) = content(&root.0);
+        let (catalog, pack) = content(&root.0, long_names);
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
@@ -2970,4 +2983,93 @@ fn slayer_bricks_say_whose_they_are_and_follow_paint_and_names() {
         "the resetter's line: {heard:?}"
     );
     g.quiet();
+}
+
+/// The Mini-Game window's Save & Reset as a lone host uses it: the team
+/// mode on and `teams` as edited.
+fn window_save(g: &mut Game, owner: OwnerId, teams: Vec<TeamEdit>) {
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(
+        owner,
+        Command::MiniGame(MiniGameRequest::AddOnSettings {
+            quiet: false,
+            reset: true,
+            game,
+            settings: vec![SettingEdit {
+                key: key(SLAYER, "mode"),
+                value: Some(Value::Text(TEAM_MODE.into())),
+            }],
+            teams: Some(teams),
+        }),
+    )
+    .unwrap();
+    g.steps(30);
+}
+
+/// Four new teams of one in a lone host's game each take a bot but the
+/// host's, with Slayer's full first-names list (once more text than a
+/// script may hold, which stopped every mini-game event before the fill).
+#[test]
+fn four_teams_of_one_fill_with_bots_named_from_a_long_list() {
+    let mut g = Game::with_names("bots-window", true);
+    let host =
+        g.s.join("Host".into(), Vec3::new(0.0, 0.05, 20.0), true)
+            .unwrap();
+    g.cmd(
+        host,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let fill = vec![SettingEdit {
+        key: key(SLAYER, "team_bot_fill"),
+        value: Some(Value::Int(1)),
+    }];
+    let teams = (0..4u8)
+        .map(|color| TeamEdit {
+            id: None,
+            name: format!("Team {}", color + 1),
+            color,
+            settings: fill.clone(),
+        })
+        .collect();
+    window_save(&mut g, host, teams);
+    let limits: Vec<String> = g
+        .s
+        .package_diagnostics()
+        .iter()
+        .filter(|d| d.code == "script.limit")
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(limits.is_empty(), "{limits:?}");
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let vitals = g.s.vitals();
+    let host_team = vitals[&host].team.expect("the host is sorted onto a team");
+    let names = g.s.names();
+    for t in &teams {
+        let bots: Vec<_> = vitals
+            .iter()
+            .filter(|(o, v)| g.s.is_bot(**o) && v.team == Some(t.id.0))
+            .map(|(o, _)| names[o].clone())
+            .collect();
+        let want = if t.id.0 == host_team { 0 } else { 1 };
+        assert_eq!(bots.len(), want, "{} has {bots:?}", t.name);
+        for name in bots {
+            assert!(name.starts_with("Bot Name"), "{name}");
+        }
+    }
 }

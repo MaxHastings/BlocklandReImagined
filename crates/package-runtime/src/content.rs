@@ -52,7 +52,7 @@ pub enum Kind {
     /// Keys players can bind to packages' commands in Options → Controls
     /// (`binds.json`). Client side, like HUD panels.
     Binds,
-    /// Lines of UTF-8 text rules read with `data_lines(id)` (Slayer's bot
+    /// Lines of UTF-8 text rules read with `data_line(id, i)` (Slayer's bot
     /// first names). Server side.
     Data,
     /// Pages the Help dialog (F1) lists for players (`help.json`, Slayer's
