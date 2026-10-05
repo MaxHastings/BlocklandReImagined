@@ -11,6 +11,9 @@ const RETRY: u64 = 240;
 const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
+/// How far past its own half-length a driver that only carries its bot to
+/// an enemy stops and gets out: about where the bot fights from on foot.
+const LEAVE_REACH: f32 = 3.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct PushApproach {
@@ -1048,6 +1051,26 @@ impl Session {
                 travel_sign * (1.0 - heading_error.abs() * 0.3).clamp(0.25, 0.8)
             };
             input.jump = input.forward == 0.0;
+            // The leave leg (`route`): a chassis that cannot hurt the one it
+            // chases (no gun, and no runover for someone not on foot) only
+            // carries the bot there. Once its side is about as close as the
+            // bot fights from on foot, it stops and gets out.
+            let target = self.bots.brains[&bot].target.and_then(|t| {
+                self.peers
+                    .get(&t)
+                    .map(|p| (self.mounted(t).is_some(), Vec3::from(p.player.state().feet)))
+            });
+            let leave = target.is_some_and(|(mounted, enemy)| {
+                matches!(behaviour, Behaviour::Chase | Behaviour::Fight)
+                    && d.weapon.is_none()
+                    && (mounted || d.runover_damage <= 0.0)
+                    && flat(enemy - at).length()
+                        <= (d.bounds_max[2] - d.bounds_min[2]) * v.scale * 0.5 + LEAVE_REACH
+            });
+            if leave {
+                input.forward = 0.0;
+                input.jump = true;
+            }
             // Crew claims are bounded independently of steering. A stuck
             // chassis also gives up instead of permanently holding a seat.
             let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -1081,6 +1104,17 @@ impl Session {
                     yaw: self.bots.brains[&bot].yaw,
                     ..Default::default()
                 };
+            }
+            if leave && speed < 3.0 {
+                let brain = self.bots.brains.get_mut(&bot).unwrap();
+                brain.next_interaction = tick + RETRY;
+                brain.plan.clear();
+                brain.search = None;
+                let _ = self.dismount_vehicle(bot);
+                return Ok(MoveInput {
+                    yaw: self.bots.brains[&bot].yaw,
+                    ..Default::default()
+                });
             }
         } else {
             let has_driver = d

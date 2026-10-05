@@ -750,6 +750,17 @@ impl Search {
                 return Some(Some(Node::at(x + dx, z + dz, f.y)));
             }
         }
+        // Standing on something the grid leaves out (a vehicle's roof,
+        // another body): the floor beneath, when it can drop down to it.
+        let top = self.started + Vec3::Y * 0.1;
+        if let Some((distance, _)) = ground.ray(top, Vec3::NEG_Y, body.drop + 0.1) {
+            let bottom = Vec3::new(self.started.x, top.y - distance, self.started.z);
+            if distance > body.step
+                && let Some(node) = nav.node_at(ground, body, bottom)?
+            {
+                return Some(Some(node));
+            }
+        }
         Some(None)
     }
     /// A jet leg from `node` to the goal's floor, if the body's jets reach

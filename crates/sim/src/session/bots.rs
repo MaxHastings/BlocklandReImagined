@@ -371,12 +371,14 @@ impl Brain {
     /// The goal of going after an enemy: standing its ground in its band
     /// (`fight`), after the enemy in sight, or to where one was. Whether it
     /// stands, and whether it gives ground (closer than `near`).
+    /// `reach`: how near its body counts as at a search point.
     fn pursue(
         &mut self,
         enemy: Option<Seen>,
         fight: bool,
         near: f32,
         feet: Vec3,
+        reach: f32,
         tick: u64,
     ) -> (bool, bool) {
         match (enemy, self.memory) {
@@ -401,7 +403,9 @@ impl Brain {
                     && self.settled
                     && self.plan.is_empty()
                     && !self.partial_route;
-                let next = self.evidence_search.next(knowledge, feet, tick, failed);
+                let next = self
+                    .evidence_search
+                    .next(knowledge, feet, tick, failed, reach);
                 self.set_goal(next.map(Goal::Search));
                 (next.is_none(), false)
             }
@@ -1953,7 +1957,7 @@ impl Session {
                             flat(seen.feet - feet).length() <= far
                                 && (seen.feet.y - feet.y).abs() <= body.step + 1.0
                         });
-                        brain.pursue(intended, in_band, near, feet, tick)
+                        brain.pursue(intended, in_band, near, feet, body.width * 0.5, tick)
                     } else {
                         if step.waiting && !step.move_while_waiting {
                             brain.set_goal(None);
@@ -1971,8 +1975,10 @@ impl Session {
                 brain.set_goal(brain.carry.and_then(|c| c.to).map(Goal::Carry));
                 (false, false)
             }
-            Behaviour::Fight => brain.pursue(enemy, true, near, feet, tick),
-            Behaviour::Chase | Behaviour::Search => brain.pursue(enemy, false, near, feet, tick),
+            Behaviour::Fight => brain.pursue(enemy, true, near, feet, body.width * 0.5, tick),
+            Behaviour::Chase | Behaviour::Search => {
+                brain.pursue(enemy, false, near, feet, body.width * 0.5, tick)
+            }
             Behaviour::Return => {
                 brain.set_goal(Some(Goal::Home));
                 (false, false)
