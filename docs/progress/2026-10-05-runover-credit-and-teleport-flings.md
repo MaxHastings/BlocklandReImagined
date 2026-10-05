@@ -41,9 +41,18 @@ sets the current and next pose together). A relocation is a jump, not
 travel. Seats (`place`), motor steps and corrections still move by the next
 pose. No velocity clamp was added.
 
-Not changed: a player carried through a linked opening (passages) still
-moves by its next pose. That path has the same shape and may want the same
-treatment if a vehicle is ever seen thrown at a portal.
+Passing through a linked opening (portal) is the same kind of jump, and it
+flung things the same way. The motor drove the body to the partner by its
+next pose, sweeping it across the gap in one step. A crate standing against
+the walker's side, toward the partner 20 units away, was thrown at 403 u/s.
+The body is now placed at once when it passes an opening, as a teleport
+does.
+
+Seen while building that test, not changed: the motor moves a body once
+per 32 ms Torque tick, and the kinematic body covers that move in a single
+120 Hz step. A walker stepping 0.25 up onto a sill throws a crate on its
+head upward at about 22 u/s. That matches v20's own tick, but anything
+resting on a player feels a four-times-faster step.
 
 ## Tests
 
@@ -57,6 +66,13 @@ treatment if a vehicle is ever seen thrown at a portal.
   (so landing on it does not board it), a player on its roof, suicide, then
   respawn. Before: the jeep reached 67 u/s and 62 rad/s and ended 2.8 units
   up. After: it stays under 1 u/s and under 0.2 units of travel.
+
+- `crates/sim/tests/portals.rs`
+  `walking_through_does_not_fling_what_the_walker_touches`: a walker steps
+  through a big portal from its sill with a crate against its side. Before:
+  the crate is thrown at 403 u/s. After: it stays under 15 u/s. All 11
+  portal tests pass, including the one that checks the walk through never
+  jumps or stalls.
 
 ## Evidence
 

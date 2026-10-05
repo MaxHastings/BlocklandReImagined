@@ -181,6 +181,52 @@ fn a_wall_right_behind_the_doorway_does_not_stop_the_walk() {
     assert!(feet.z < -4.2 && feet.z > -5.3, "{feet}");
 }
 
+/// Through an opening a body jumps to the partner; it does not travel the
+/// distance between them in one physics step. Driven there as its next
+/// kinematic pose, it swept from the doorway at twenty units a step and
+/// the contact solver threw what it touched (here a crate against its
+/// side, toward the partner) at about 400 u/s.
+#[test]
+fn walking_through_does_not_fling_what_the_walker_touches() {
+    let mut sim = simulation(vec![
+        brick(BIG, [0.0, 3.0, -4.25], 0, Some("Portal_a")),
+        brick(BIG, [20.25, 3.0, -4.0], 1, Some("Portal_a")),
+    ]);
+    // Standing on the sill just short of the doorway, a crate against its
+    // side toward the partner, the way the carry goes.
+    let mut player = spawn(&mut sim, Vec3::new(0.0, 0.3, -3.6));
+    let body = sim.physics.colliders[player.collider()].compute_aabb();
+    let (crate_, _) = sim.physics.insert(
+        RigidBodyBuilder::dynamic().translation(Vector::new(
+            body.maxs.x + 0.2,
+            body.mins.y + 0.25,
+            -3.8,
+        )),
+        ColliderBuilder::cuboid(0.2, 0.2, 0.4)
+            .density(10.0)
+            .friction(0.0),
+    );
+    bri_physics::detect_collisions(&mut sim.physics);
+    for _ in 0..60 {
+        sim.step_body(&mut player, MoveInput::default(), &[])
+            .unwrap();
+        sim.step().unwrap();
+    }
+    let (mut passed, mut fastest) = (false, 0.0f32);
+    for _ in 0..240 {
+        let input = MoveInput {
+            forward: 0.4,
+            ..Default::default()
+        };
+        let events = sim.step_body(&mut player, input, &[]).unwrap();
+        passed |= events.passed.is_some();
+        sim.step().unwrap();
+        fastest = fastest.max(sim.physics.bodies[crate_].linvel().length());
+    }
+    assert!(passed, "the walker went through");
+    assert!(fastest < 15.0, "the crate was thrown at {fastest} u/s");
+}
+
 #[test]
 fn an_unlinked_doorway_is_shut() {
     let mut sim = simulation(vec![brick(PORTAL, [0.0, 1.5, -4.25], 0, None)]);
