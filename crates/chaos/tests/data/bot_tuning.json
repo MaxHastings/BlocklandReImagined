@@ -7,6 +7,7 @@
     "behaviours.objective"
   ],
   "on_value": 1.0,
+  "on_note": "on: each dial shipped off (0) is set to this ON value in the all-on run (all_dials_on) and the perf bar; a dial shipped on keeps its value; one not listed uses on_value.",
   "grid": {
     "surprise.strength": [0, 0.5, 1]
   },
@@ -27,5 +28,26 @@
     "goof_waves": 20.0,
     "stuck": 5.0,
     "frame": 0.5
+  },
+  "fair": {
+    "note": "The fair metric (fair_hit_rate): one bot per weapon class against a scripted player who strafes and hops, at each range. The steady hit rate (after steady_after seconds of an engagement) should sit in min..max: never near-perfect, never hopeless. Reported, not enforced yet. fair_by_dial moves the first of `dials` bots.json has (perception.alertness once that lane lands; aim_error_degrees on today's base) and checks the rate moves its way.",
+    "min": 0.15,
+    "max": 0.6,
+    "first_seconds": 2,
+    "steady_after": 4,
+    "seconds": 25,
+    "ranges": [10, 25],
+    "dials": [
+      { "path": "perception.alertness", "sign": 1 },
+      { "path": "aim_error_degrees", "sign": -1 }
+    ]
+  },
+  "on": {
+    "surprise.strength": 0.6
+  },
+  "perf": {
+    "note": "bot_think_time_16 (16 bots, the busiest scenario, every dial on): the most bot think time per tick a build may take, in microseconds. Debug: the base measured 7528 us (2026-10-05, shared 4-core container), bar at twice that. Release: not measured here; 2000 us is a quarter of the 8333 us tick, to be confirmed on a release build.",
+    "debug_us": 15000,
+    "release_us": 2000
   }
 }

@@ -44,6 +44,13 @@ pub fn apply_dials(kinds: Vec<BotKind>) -> Vec<BotKind> {
             .collect()
     })
 }
+/// `run` with this thread's dials set to `dials`.
+pub fn with_dials<T>(dials: Vec<(String, f64)>, run: impl FnOnce() -> T) -> T {
+    let old = DIALS.with(|d| std::mem::replace(&mut *d.borrow_mut(), dials));
+    let out = run();
+    DIALS.with(|d| *d.borrow_mut() = old);
+    out
+}
 /// This thread's seed: 0 plays the gauntlet as its tests do.
 pub fn seed() -> u64 {
     SEED.with(Cell::get)
@@ -63,9 +70,43 @@ pub struct Config {
     pub note: String,
     pub dials: Vec<String>,
     pub on_value: f64,
+    #[serde(default)]
+    pub on_note: String,
     pub grid: BTreeMap<String, Vec<f64>>,
     pub unchanged: Unchanged,
     pub weights: Weights,
+    pub fair: FairConfig,
+    /// Each dial's ON value for the all-on run, where its shipped value
+    /// is off (0); others keep theirs.
+    pub on: BTreeMap<String, f64>,
+    pub perf: PerfConfig,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct FairConfig {
+    #[serde(default)]
+    pub note: String,
+    pub min: f32,
+    pub max: f32,
+    pub first_seconds: f32,
+    pub steady_after: f32,
+    pub seconds: usize,
+    pub ranges: Vec<f32>,
+    pub dials: Vec<FairDial>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct FairDial {
+    pub path: String,
+    /// 1: the hit rate rises with the dial; -1: it falls.
+    pub sign: f32,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct PerfConfig {
+    #[serde(default)]
+    pub note: String,
+    /// Most bot think time per tick, in microseconds, in a debug build and
+    /// in release.
+    pub debug_us: f64,
+    pub release_us: f64,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Unchanged {
@@ -134,6 +175,20 @@ pub fn resolve_dials(config: &Config) -> (Vec<(String, f64)>, Vec<String>) {
         }
     }
     (found, missing)
+}
+
+/// Every dial at its ON value together: a dial shipped off (0) at the
+/// config's `on` value (else `on_value`), the rest as shipped.
+pub fn all_on(config: &Config) -> Vec<(String, f64)> {
+    resolve_dials(config)
+        .0
+        .into_iter()
+        .filter(|(_, v)| *v == 0.0)
+        .map(|(p, _)| {
+            let on = config.on.get(&p).copied().unwrap_or(config.on_value);
+            (p, on)
+        })
+        .collect()
 }
 
 /// One gauntlet scenario, as its test function.
