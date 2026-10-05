@@ -422,6 +422,93 @@ datablock fxDTSBrickData (brickTestDoorData : brickTestDoorOpenData)
     );
 }
 
+/// An open door closes back the way it opened from either side. A door whose
+/// one open brick is both `openCW` and `openCCW` (the Halloween coffins)
+/// closes to `closedCW`, never to its `closedCCW` false back; the `openCCW`
+/// brick of a two-way door closes to `closedCCW`.
+#[test]
+fn an_open_door_closes_the_way_it_opened() {
+    let dir = temp("door-close").join("Brick_Test_Close");
+    write(&dir.join("server.cs"), "exec(\"./Bricks.cs\");
+");
+    write(
+        &dir.join("Bricks.cs"),
+        r#"datablock fxDTSBrickData (brickBoxOpenData)
+{
+	brickFile = "./Door.blb";
+	uiName = "Box Open";
+	isDoor = 1;
+	isOpen = 1;
+	closedCW = "brickBoxData";
+	openCW = "brickBoxOpenData";
+	closedCCW = "brickBoxFalseData";
+	openCCW = "brickBoxOpenData";
+};
+datablock fxDTSBrickData (brickBoxFalseData : brickBoxOpenData) { uiName = "Box False"; isOpen = 0; };
+datablock fxDTSBrickData (brickBoxData : brickBoxOpenData) { uiName = "Box"; isOpen = 0; };
+datablock fxDTSBrickData (brickPaneOpenCWData)
+{
+	brickFile = "./Door.blb";
+	uiName = "Pane Open CW";
+	isDoor = 1;
+	isOpen = 1;
+	closedCW = "brickPaneCWData";
+	openCW = "brickPaneOpenCWData";
+	closedCCW = "brickPaneCCWData";
+	openCCW = "brickPaneOpenCCWData";
+};
+datablock fxDTSBrickData (brickPaneCCWData : brickPaneOpenCWData) { uiName = "Pane CCW"; isOpen = 0; };
+datablock fxDTSBrickData (brickPaneOpenCCWData : brickPaneOpenCWData) { uiName = "Pane Open CCW"; };
+datablock fxDTSBrickData (brickPaneCWData : brickPaneOpenCWData) { uiName = "Pane"; isOpen = 0; };
+"#,
+    );
+    write(&dir.join("Door.blb"), "1 1 3
+BRICK
+");
+    write(&dir.join("description.txt"), "Title: Close
+Author: Tester
+");
+    let out = temp("door-close-out").join("out");
+    import(&Options {
+        input: dir,
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/bricks.json")).unwrap()).unwrap();
+    let swap = |name: &str| {
+        let swap = catalog["bricks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["display_name"] == name)
+            .unwrap()["swap"]
+            .clone();
+        let side = |s: &str| {
+            let id = swap[s].as_str().unwrap();
+            id[id.rfind('/').unwrap() + 1..].to_string()
+        };
+        (side("front"), side("back"))
+    };
+    let both = |n: &str| (n.to_string(), n.to_string());
+    assert_eq!(swap("Box Open"), both("brickboxdata"));
+    assert_eq!(
+        swap("Box"),
+        both("brickboxopendata"),
+        "a closed box opens either way"
+    );
+    assert_eq!(swap("Pane Open CW"), both("brickpanecwdata"));
+    assert_eq!(swap("Pane Open CCW"), both("brickpaneccwdata"));
+    assert_eq!(
+        swap("Pane"),
+        (
+            "brickpaneopencwdata".to_string(),
+            "brickpaneopenccwdata".to_string()
+        )
+    );
+}
+
 /// Identical BLBs under different authored names need independent identities;
 /// hashing only original bytes let the later conversion overwrite the first.
 #[test]
