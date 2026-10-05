@@ -471,3 +471,32 @@ fn a_reset_starts_team_points_again_unless_scores_are_kept() {
     .unwrap();
     assert_eq!(w.team_score(game, blue), Ok(3), "kept scores stay");
 }
+
+#[test]
+fn a_new_team_in_a_removed_teams_slot_starts_fresh() {
+    let (mut w, game, [_, b, _], [red, blue]) = red_blue();
+    w.assign_team(b, Some(blue)).unwrap();
+    w.event_team_score(game, blue, 5, true).unwrap();
+    w.set_addon_settings(
+        game,
+        vec![SettingChange {
+            team: Some(blue),
+            key: "slayer:lives".into(),
+            value: Some(SettingValue::Int(5)),
+        }],
+    )
+    .unwrap();
+    // Blue goes; a new team takes its free slot.
+    let kept = TeamSpec {
+        id: Some(red),
+        name: "Red".into(),
+        color: 0,
+    };
+    let (ids, _) = w
+        .set_teams(game, vec![kept, spec("Green", 2)], false, false)
+        .unwrap();
+    assert_eq!(ids[1], blue, "the lowest free slot");
+    let g = w.game(game).unwrap();
+    assert!(g.teams.get(blue).unwrap().addon_settings.is_empty());
+    assert_eq!(w.team_score(game, blue), Ok(0));
+}
