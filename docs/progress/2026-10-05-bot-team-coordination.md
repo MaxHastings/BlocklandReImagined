@@ -98,10 +98,12 @@ it (jeep circling 3.4%): an offer stands only while the driver waits.
   ordinary option (the bots lane's work); the natural pause reads it as
   before. Team sight (the mood's look at each peer, an ally watching an
   option work) now asks perception's shared `bot_sees_player` instead of
-  casting its own rays. In `bot_think_time_16` (all dials on, 16 bots,
-  30 s, merged with 07ce549a) the mood's sight queries by tick 4200 fell
-  from 608,161 to 3,684; think time is flat (per-tick mood 12959 and
-  12435 us/tick, on the beat 12346 and 12552; the debug bar is 15000).
+  casting its own rays, and enemy crowding tests an intent's target
+  before asking whether its owner is an ally. In `bot_think_time_16` (all
+  dials on, 16 bots, 30 s, debug, merged with a00626eb) the mood's sight
+  queries by tick 4200 fell from 608,161 to 3,684, and bot think is 3515
+  and 3597 us/tick against 4307 and 4957 with the per-tick mood and 5900
+  and 4101 on the release tip a00626eb itself.
 
 ## Not done
 
