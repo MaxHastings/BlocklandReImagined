@@ -101,6 +101,7 @@ pub(crate) mod salt {
     pub(crate) const AIM: u64 = 8;
     pub(crate) const HOP: u64 = 9;
     pub(crate) const LEAD: u64 = 10;
+    pub(crate) const LEAN: u64 = 11;
 }
 
 #[cfg(test)]

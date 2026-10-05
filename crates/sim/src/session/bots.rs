@@ -133,6 +133,15 @@ const STUCK_TICKS: u32 = 45;
 /// seeded phase: bots hop apart, and each still hops before it replans at
 /// `STUCK_TICKS`.
 const HOP_SPREAD: u64 = 5;
+/// Within this of the point its objective takes it to, a bot carrying that
+/// objective is on it and does not goof; farther off (a teammate covering,
+/// a long walk) it may.
+const ON_OBJECTIVE: f32 = 6.0;
+/// Nearer than this, an enemy in sight leaves no time to goof.
+const GOOF_ENEMY_NEAR: f32 = 24.0;
+/// How much of a goof's score an enemy in sight far off, or one it
+/// remembers, takes.
+const PRESSED_BRAKE: f32 = 0.5;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
@@ -709,23 +718,40 @@ fn leg(u: f32, mean: f32) -> f32 {
 
 /// Ticks in one melee footwork cycle: in, back out, aside.
 const FOOTWORK_TICKS: u64 = 110;
+/// About how far a step back carries a melee fighter, in units.
+const FOOTWORK_BACK: f32 = 0.6;
+/// A ranged fighter's lean in as it strafes: its most (a share of a
+/// walk), the ticks its seeded drift takes to wander, and how far outside
+/// its band's near edge it must be to lean in.
+const LEAN: f32 = 0.35;
+const LEAN_TICKS: u64 = 360;
+const LEAN_ROOM: f32 = 2.0;
 
 /// Where a melee fighter in its band steps this tick: in toward its target,
-/// then back out, then aside, each for a seeded share of its own cycle, so
-/// no two bots step alike and none stands planted.
-fn footwork(bot: OwnerId, tick: u64, forward: Vec3, right: Vec3) -> Vec3 {
+/// back out, a step aside, then a moment planted, each for a seeded share
+/// of its own cycle, so no two bots step alike and none walks a circle.
+/// Without `room` to give ground and stay in reach it plants instead of
+/// stepping back, so its footwork never carries it out of its band (and
+/// its fight into a chase and back).
+fn footwork(bot: OwnerId, tick: u64, forward: Vec3, right: Vec3, room: bool) -> Vec3 {
     let salt = cadence::salt::FOOTWORK;
     let (k, f) = cadence::cycle(bot, salt, tick, FOOTWORK_TICKS);
-    let lunge = cadence::spread(bot, salt, k, 0.2, 0.4);
-    let back = lunge + cadence::spread(bot, salt, k ^ 1 << 32, 0.2, 0.35);
+    let lunge = cadence::spread(bot, salt, k, 0.15, 0.3);
+    let back = lunge + cadence::spread(bot, salt, k ^ 1 << 32, 0.15, 0.25);
+    let aside = back + cadence::spread(bot, salt, k ^ 3 << 32, 0.15, 0.25);
     if f < lunge {
-        forward * 0.6
+        forward * 0.5
     } else if f < back {
-        -forward * 0.4
-    } else if cadence::spread(bot, salt, k ^ 2 << 32, 0.0, 1.0) < 0.5 {
-        right * 0.5
+        if room { -forward * 0.35 } else { Vec3::ZERO }
+    } else if f < aside {
+        let side = if cadence::spread(bot, salt, k ^ 2 << 32, 0.0, 1.0) < 0.5 {
+            1.0
+        } else {
+            -1.0
+        };
+        right * side * 0.4
     } else {
-        -right * 0.5
+        Vec3::ZERO
     }
 }
 
@@ -1327,8 +1353,14 @@ impl Session {
                             deadline: c.deadline,
                         },
                     }),
-                goal: b.goal.map(|g| g.point(b.leash).to_array()),
-                next: b.plan.first().map(|p| p.feet.to_array()),
+                // Standing still for a goof it wants to go nowhere: its
+                // route waits for it.
+                goal: (!b.surprise.standing())
+                    .then(|| b.goal.map(|g| g.point(b.leash).to_array()))
+                    .flatten(),
+                next: (!b.surprise.standing())
+                    .then(|| b.plan.first().map(|p| p.feet.to_array()))
+                    .flatten(),
                 path_steps: b.plan.len(),
                 searching: b.search.is_some(),
                 search_phase: b.evidence_search.phase(),
@@ -2297,6 +2329,11 @@ impl Session {
         };
         let tall = self.peers[&bot].player.tuning().stand_height;
         let deficit = self.team_deficit(bot);
+        // The target it went after died or left (not merely out of sight).
+        let target_gone = self.bots.brains[&bot]
+            .choice_was
+            .target
+            .is_some_and(|t| !self.peers.get(&t).is_some_and(|p| p.combat.alive));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2427,16 +2464,21 @@ impl Session {
             )
         });
         // What the choice must answer at once (`behaviour::Hold`): urgent
-        // damage, an objective offered or gone, picked up or dropped, an
-        // enemy coming into
-        // sight, lost or dead. A choice no longer possible, or a must-do
+        // damage, an objective offered (one gone a moment is held, `paused`),
+        // picked up or dropped, an enemy coming into sight, another target,
+        // or the target dead or gone (one out of sight a moment is held). A choice no longer possible, or a must-do
         // one winning, the rule sees for itself.
         let target = sight.target.map(|seen| seen.owner);
+        let retarget = brain
+            .choice_was
+            .target
+            .is_some_and(|t| target.is_some_and(|now| now != t));
         let interrupt = hurt_now
-            || situation.objective != brain.choice_was.objective
+            || situation.objective && !brain.choice_was.objective
             || situation.committed != brain.choice_was.committed
             || situation.holding != brain.choice_was.holding
-            || brain.choice_was.target.is_some_and(|t| target != Some(t))
+            || retarget
+            || target_gone
             || brain.behaviour == Behaviour::Wander
                 && brain.choice_was.target.is_none()
                 && target.is_some();
@@ -2487,7 +2529,15 @@ impl Session {
             kind.hold,
             &scores,
             interrupt,
-            brain.behaviour == Behaviour::Objective && brain.objective.between_steps(),
+            // Between steps, or the objective gone a moment as one step
+            // hands over to the next (a checkpoint reached), or the enemy
+            // it chases out of sight a moment (heading for where it was
+            // last seen): held, not dropped for a tick.
+            brain.behaviour == Behaviour::Objective
+                && (brain.objective.between_steps() || objective.is_none())
+                || brain.behaviour == Behaviour::Chase
+                    && target.is_none()
+                    && brain.memory.is_some(),
             if can_retaliate {
                 &behaviour::MUST_ARMED
             } else {
@@ -2912,19 +2962,34 @@ impl Session {
             .map(|(_, p)| Vec3::from(p.player.state().feet))
             .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
-        // Now and then something idle (`surprise`): with nothing to do, or
-        // playing an objective it does not carry; never with an enemy about.
+        // Now and then something idle (`surprise`): goofing is an option
+        // the chooser weighs against playing, whatever the bot is doing,
+        // when nothing presses it. Never while it fights or was just hurt,
+        // with an enemy in sight close by, on the objective it carries or
+        // is right at, or off its feet. An enemy in sight far off, or one
+        // it remembers, brakes it.
         let idle = behaviour == Behaviour::Wander && objective.is_none();
-        let natural = (idle
-            || behaviour == Behaviour::Objective
-                && selected_objective.is_none_or(|v| v.enemy.is_none()))
-            && sight.target.is_none()
+        let at_objective = objective_holding
+            || gate.carrying
+                && objective
+                    .as_ref()
+                    .is_some_and(|v| flat(v.point - feet).length() < ON_OBJECTIVE);
+        let enemy_near = sight
+            .target
+            .is_some_and(|seen| flat(seen.feet - feet).length() < GOOF_ENEMY_NEAR);
+        let natural = !enemy_near
             && threat.is_none()
+            && selected_objective.is_none_or(|v| v.enemy.is_none())
+            && !matches!(behaviour, Behaviour::Fight | Behaviour::Fly)
             && !holding
             && driving.is_none()
             && swim.is_none()
-            && !self.seated(bot)
-            && self.bots.brains[&bot].memory.is_none();
+            && !self.seated(bot);
+        let pause_gate = surprise::Gate {
+            carrying: at_objective,
+            ..gate
+        };
+        let pressed = sight.target.is_some() || self.bots.brains[&bot].memory.is_some();
         // Carrying: the catch hangs off the floor, or it drags and trails
         // back into its holder's path, and under the roof, or it snags on
         // the roof's edge on the way out. The hold's point is raised or
@@ -2946,7 +3011,8 @@ impl Session {
                 )
             })
             .flatten();
-        let mut pause = self.surprise_pause(bot, natural, idle, gate, eye);
+        let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye);
+        pause.brake = if pressed { PRESSED_BRAKE } else { 0.0 };
         (pause.pull, pause.copy) = self.team_mood(bot, feet, eye, tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain
@@ -3112,10 +3178,11 @@ impl Session {
                     // circling its target.
                     if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
                         direction = forward;
-                    } else if gap.is_some() {
+                    } else if let Some(gap) = gap {
                         // In its band it keeps its feet moving: in, back
                         // out and aside, on its own seeded beat.
-                        direction = footwork(bot, tick, forward, right);
+                        let room = gap + FOOTWORK_BACK <= near.max(1.0);
+                        direction = footwork(bot, tick, forward, right, room);
                     }
                 } else {
                     // A ranged fighter strafes one way for a while, but
@@ -3153,6 +3220,25 @@ impl Session {
                         brain.strafe_leg(tick, kind.fighting.strafe_seconds, &ground, parted);
                     if ground(side) {
                         direction = right * side * 0.7;
+                    }
+                    // Now and then it presses in a little as it strafes (a
+                    // slow seeded lean, never back toward an edge), so a
+                    // strafe cut short and turned back is not a pace on
+                    // the spot. Never inside its band's near edge.
+                    let lean = cadence::drift(bot, cadence::salt::LEAN, 0, tick, LEAN_TICKS)
+                        .max(0.0)
+                        * LEAN;
+                    if lean > 0.0
+                        && gap.is_some_and(|gap| gap > near + LEAN_ROOM)
+                        && super::admin_players::world_ray(
+                            &self.simulation,
+                            feet + forward * 0.9 + Vec3::Y * 0.5,
+                            Vec3::NEG_Y,
+                            0.5 + body.step + body.drop,
+                        )
+                        .is_some()
+                    {
+                        direction += forward * lean;
                     }
                 }
                 if back_off {
@@ -3274,7 +3360,9 @@ impl Session {
         if driving.is_none()
             && pushing.is_none()
             && brain.stuck > 20
-            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP) % HOP_SPREAD) % 40 < 5
+            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP) % HOP_SPREAD)
+                % 40
+                < 5
         {
             input.jump = true;
         }
@@ -3756,11 +3844,11 @@ mod footwork_tests {
     use super::*;
 
     #[test]
-    fn melee_footwork_moves_in_out_and_aside_unlike_its_neighbours() {
+    fn melee_footwork_steps_in_out_aside_and_stands_unlike_its_neighbours() {
         let (forward, right) = (Vec3::NEG_Z, Vec3::X);
         let steps = |bot| {
             (0..1200)
-                .map(|t| footwork(bot, t, forward, right))
+                .map(|t| footwork(bot, t, forward, right, true))
                 .collect::<Vec<_>>()
         };
         for bot in 1..=4 {
@@ -3768,15 +3856,20 @@ mod footwork_tests {
             let into = s.iter().filter(|d| d.dot(forward) > 0.0).count();
             let out = s.iter().filter(|d| d.dot(forward) < 0.0).count();
             let aside = s.iter().filter(|d| d.dot(right).abs() > 0.0).count();
+            let still = s.iter().filter(|d| **d == Vec3::ZERO).count();
             assert!(
-                into > 200 && out > 200 && aside > 200,
-                "bot {bot}: {into} {out} {aside}"
+                into > 150 && out > 150 && aside > 150 && still > 150,
+                "bot {bot}: {into} {out} {aside} {still}"
             );
             // Net drift stays small: it does not walk off its band.
             let net: f32 = s.iter().map(|d| d.dot(forward)).sum::<f32>() / s.len() as f32;
             assert!(net.abs() < 0.2, "bot {bot} drifts {net}");
         }
         assert_ne!(steps(1), steps(2));
+        // At the edge of its reach it never steps back out of it.
+        for bot in 1..=4 {
+            assert!((0..1200).all(|t| footwork(bot, t, forward, right, false).dot(forward) >= 0.0));
+        }
     }
 }
 

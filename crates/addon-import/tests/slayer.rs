@@ -4265,3 +4265,253 @@ fn four_teams_of_one_fill_with_bots_named_from_a_long_list() {
         }
     }
 }
+
+/// What a Slayer soccer match with team-fill bots came to.
+#[derive(Debug, Default)]
+struct BotMatch {
+    goals: u32,
+    deaths: u32,
+    /// Team score changes that came with no goal (a kill scoring).
+    scored_without_a_goal: Vec<(u64, i64)>,
+    /// Bot-ticks in all, and those up in the air well above the pitch.
+    bot_ticks: u64,
+    high: u64,
+    /// Bot-ticks standing on the parked tank, and right beside it.
+    on_tank: u64,
+    by_tank: u64,
+}
+
+/// Max's Slayer soccer with bots: Slayer Team Deathmatch, its teams filled
+/// with bots by Preferred Player Count (not spawn bricks), a goal at each
+/// end painted the colour that scores there (onObjectEnter -> Team(Brick)
+/// -> IncScore 1, then Object resetObject), kills worth nothing (Slayer's
+/// Kill Bot and Friendly Fire, and the game's own kill, suicide and death
+/// points, all 0), and a tank parked by the pitch. `armed` gives everyone
+/// the test gun.
+fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
+    use bri_sim::session::ToolCatalog;
+    use bri_world::authority::WrenchProperties;
+    let ball = bri_vehicles::testing::BALL;
+    let tank = bri_vehicles::testing::TANK;
+    let mut g = Game::new(if armed { "bot-soccer-armed" } else { "bot-soccer" });
+    with_events(&mut g);
+    let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/blockhead_bot/assets")
+        .canonicalize()
+        .unwrap();
+    let kinds =
+        bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
+            .unwrap();
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), kinds.clone())
+        .unwrap();
+    g.s.set_bot_kinds(kinds).unwrap();
+    let gun = bri_weapons::testing::GUN_ITEM;
+    if armed {
+        g.s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+    }
+    g.s.set_tool_catalog(ToolCatalog {
+        items: if armed { [gun.to_owned()].into() } else { Default::default() },
+        vehicles: [ball.to_owned(), tank.to_owned()].into(),
+        vehicle_bricks: [BALL_SPAWN.to_owned()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let max =
+        g.s.join("Max".into(), Vec3::new(0.0, 0.05, -60.0), true)
+            .unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    if armed {
+        loadout[0] = Some(gun.into());
+    }
+    g.cmd(
+        max,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout,
+                points_kill_player: 0,
+                points_kill_self: 0,
+                points_die: 0,
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.steps(2);
+    g.set(
+        max,
+        &[
+            (&key(SLAYER, "mode"), Value::Text(TEAM_MODE.into())),
+            (&key(SLAYER, "points_kill_bot"), Value::Int(0)),
+            (&key(SLAYER, "points_friendly_fire"), Value::Int(0)),
+        ],
+    );
+    // Team spawns at each end, behind the goal it defends.
+    g.plant(max, TEAM_SPAWN, -18.0, 0.0, RED);
+    g.plant(max, TEAM_SPAWN, 18.0, 0.0, BLUE);
+    let spawn = g.plant(max, BALL_SPAWN, 0.0, 0.0, 2);
+    g.s.edit_brick(
+        max,
+        spawn,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(ball.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    // Blue scores at -x (Red's end, painted Blue), Red at +x.
+    for (x, colour) in [(-12.0f32, BLUE), (12.0, RED)] {
+        let goal = g.plant(max, GOAL, x, 0.0, colour);
+        g.s.edit_brick(
+            max,
+            goal,
+            Edit::Properties(WrenchProperties {
+                rule_region: Some([2.0, 6.0, 8.0]),
+                raycast: true,
+                visible: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        g.s.edit_brick(
+            max,
+            goal,
+            Edit::Events(vec![
+                team_event(
+                    "onObjectEnter",
+                    "Team(Brick)",
+                    "IncScore",
+                    vec![EventValue::Int(1)],
+                ),
+                event("onObjectEnter", "Object", "resetObject", vec![]),
+            ]),
+        )
+        .unwrap();
+    }
+    // A tank parked beside the pitch.
+    let parked = g.plant(max, BALL_SPAWN, 0.0, 12.0, 3);
+    g.s.edit_brick(
+        max,
+        parked,
+        Edit::Properties(WrenchProperties {
+            vehicle: Some(tank.into()),
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    // Two bots a side: Max's own team takes one fewer.
+    save_and_reset_new_teams(
+        &mut g,
+        max,
+        &[RED, BLUE],
+        2,
+        vec![SettingEdit {
+            key: key(SLAYER, "mode"),
+            value: Some(Value::Text(TEAM_MODE.into())),
+        }],
+    );
+    g.steps(240);
+    let bots: Vec<OwnerId> = g
+        .s
+        .vitals()
+        .keys()
+        .copied()
+        .filter(|o| g.s.is_bot(*o))
+        .collect();
+    assert!(bots.len() >= 3, "the team fill made bots: {bots:?}");
+    let the = |g: &Game, def: &str| {
+        g.s.vehicle_infos()
+            .into_iter()
+            .find(|v| v.definition == def)
+            .map(|v| v.id)
+    };
+    let team_scores = |g: &Game| -> BTreeMap<u32, i64> {
+        let mut out = BTreeMap::new();
+        for v in g.s.vitals().values() {
+            if let Some(t) = v.team {
+                *out.entry(t).or_default() += v.score;
+            }
+        }
+        out
+    };
+    let mut m = BotMatch::default();
+    let mut ball_was = the(&g, ball);
+    let mut scores = team_scores(&g);
+    let mut alive: BTreeMap<OwnerId, bool> =
+        g.s.vitals().iter().map(|(o, v)| (*o, v.alive)).collect();
+    let mut last_goal = 0u64;
+    for tick in 0..(seconds * 120) as u64 {
+        g.steps(1);
+        let now_ball = the(&g, ball);
+        if now_ball != ball_was && ball_was.is_some() {
+            m.goals += 1;
+            last_goal = tick;
+        }
+        ball_was = now_ball.or(ball_was);
+        let now = team_scores(&g);
+        for (team, score) in &now {
+            let was = scores.get(team).copied().unwrap_or(0);
+            // A goal resets the ball the tick it scores; a score with no
+            // goal near it came from something else.
+            if *score != was && tick.saturating_sub(last_goal) > 3 {
+                m.scored_without_a_goal.push((tick, score - was));
+            }
+        }
+        scores = now;
+        let tank_box = the(&g, tank).and_then(|id| {
+            g.s.vehicle_poses()
+                .into_iter()
+                .find(|v| v.id == id)
+                .map(|v| Vec3::from(v.position))
+        });
+        for (o, v) in g.s.vitals() {
+            if alive.insert(o, v.alive) == Some(true) && !v.alive {
+                m.deaths += 1;
+            }
+            if !g.s.is_bot(o) || !v.alive {
+                continue;
+            }
+            m.bot_ticks += 1;
+            let feet = g.feet(o);
+            if feet.y > 4.0 {
+                m.high += 1;
+            }
+            if let Some(at) = tank_box {
+                let across = Vec3::new(feet.x - at.x, 0.0, feet.z - at.z).length();
+                if across < 2.0 && feet.y > at.y + 0.8 {
+                    m.on_tank += 1;
+                }
+                if across < 3.0 {
+                    m.by_tank += 1;
+                }
+            }
+        }
+    }
+    eprintln!("bot soccer (armed {armed}): {m:?}");
+    m
+}
+
+/// Bots filled in by Slayer's team counts play the ball and score; kills
+/// score nothing; they do not all fly up empty-handed (Max: "they all just
+/// fly upward") nor pile onto and stand on a parked tank.
+#[test]
+fn team_fill_bots_play_slayer_soccer_with_or_without_weapons() {
+    for armed in [false, true] {
+        let m = bot_soccer(armed, 90);
+        assert!(m.goals >= 2, "armed {armed}: only {} goals: {m:?}", m.goals);
+        assert!(
+            m.scored_without_a_goal.is_empty(),
+            "armed {armed}: a kill or death scored: {m:?}"
+        );
+        let share = |n: u64| n as f32 / m.bot_ticks.max(1) as f32;
+        assert!(share(m.high) < 0.02, "armed {armed}: up in the air {:.3}", share(m.high));
+        assert!(share(m.on_tank) < 0.01, "armed {armed}: on the tank {:.3}", share(m.on_tank));
+        assert!(share(m.by_tank) < 0.1, "armed {armed}: by the tank {:.3}", share(m.by_tank));
+    }
+}

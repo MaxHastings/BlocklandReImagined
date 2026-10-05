@@ -1082,13 +1082,12 @@ fn a_splash_weapon_aims_low_more_often_than_not() {
                     continue;
                 }
                 let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
-                match thought
+                let aim = thought
                     .surprise
                     .decisions
                     .iter()
-                    .find(|d| d.domain == "aim")
-                    .map(|d| d.chosen.as_str())
-                {
+                    .find(|d| d.domain == "aim");
+                match aim.map(|d| d.chosen.as_str()) {
                     Some("feet" | "surface") => low += 1,
                     _ => chest += 1,
                 }

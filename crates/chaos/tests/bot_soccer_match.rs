@@ -657,6 +657,8 @@ struct Report {
     wrong_way: f32,
     /// Bot-seconds spent fighting or chasing an opponent.
     combat: f32,
+    /// Bot-seconds in a goof (`surprise`: a look, an emote, a hop).
+    goof: f32,
     /// Rounds won (five goals); the host resets the game after each, as
     /// the Mini-Game window's Reset does.
     rounds: u32,
@@ -759,6 +761,9 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
         for t in &thoughts {
             if matches!(t.behaviour, "fight" | "chase") {
                 r.combat += dt;
+            }
+            if t.surprise.interrupt.is_some() {
+                r.goof += dt;
             }
             let Some(&(f, yaw)) = feet.get(&t.bot) else {
                 continue;
@@ -1092,6 +1097,7 @@ fn two_against_two_play_a_clean_match_across_seeds() {
     };
     let mut failures = Vec::new();
     let (mut goals, mut own_goals) = (0, 0);
+    let (mut goof, mut bot_time) = (0.0, 0.0);
     let first: u64 = env("BRI_SOCCER_FIRST", 1);
     for kit in kits {
         for seed in first..=seeds {
@@ -1100,6 +1106,8 @@ fn two_against_two_play_a_clean_match_across_seeds() {
             println!("{kit:?} seed {seed}: {r:?}");
             goals += r.goals.values().sum::<u32>();
             own_goals += r.own_goals;
+            goof += r.goof;
+            bot_time += 4.0 * r.seconds;
             let label = format!("{kit:?} 2v2 seed {seed}");
             if let Err(e) = std::panic::catch_unwind(|| assert_clean(&label, &setup, &r)) {
                 failures.push(e.downcast_ref::<String>().cloned().unwrap_or_default());
@@ -1107,6 +1115,13 @@ fn two_against_two_play_a_clean_match_across_seeds() {
         }
     }
     println!("{own_goals} own goals of {goals} goals");
+    // Goofing is one of the bot's options mid-match too (a look, an emote
+    // between plays), not only with nothing to do: a little, never a lot.
+    let goofing = goof / bot_time.max(1.0);
+    println!("goof share {:.2}%", goofing * 100.0);
+    if goofing <= 0.0 || goofing > 0.1 {
+        failures.push(format!("goof share {goofing:.4} outside (0, 0.1]"));
+    }
     if own_goals * 5 > goals {
         failures.push(format!("{own_goals} own goals of {goals} over all seeds"));
     }

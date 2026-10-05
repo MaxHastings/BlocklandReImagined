@@ -377,6 +377,10 @@ fn water_between_the_sides() {
     // band walks at its enemy rather than strafing, and some cross: stuck
     // 13-30%, 6-15 kills, 7-15 changes (the chase/fight of a real fight)
     // over the runs while these fixes landed. TARGET stuck < 5%.
+    // 2026-10-05: with the one hold rule more cross (stuck 5-8%) and kill
+    // (20-23, about 3.4 changes a kill), so a respawn no longer counts as
+    // a switch (`Track::last_behaviour` resets with a new life); a
+    // killer's turn to its next target still does. The bar stays 20.
     within(&r, 0.35, 0.01, 0.02, 20.0);
     assert!(r.kills > 0, "the water was crossed");
 }
@@ -948,7 +952,7 @@ fn tuning_dials_and_seeds_reach_the_scenario() {
     let settings = [
         Setting {
             label: "plain".into(),
-            dials: Vec::new(),
+            dials: vec![("surprise.strength".into(), 0.0)],
         },
         Setting {
             label: "on".into(),

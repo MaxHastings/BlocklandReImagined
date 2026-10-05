@@ -298,6 +298,9 @@ pub(super) struct Pause {
     /// from bots nearby doing one.
     pub pull: f32,
     pub copy: [f32; 11],
+    /// Share of a goof's score something pressing takes (an enemy it
+    /// remembers), 0 to 1.
+    pub brake: f32,
 }
 /// A goof this tick.
 #[derive(Clone, Copy, Debug)]
@@ -582,13 +585,25 @@ impl Mind {
             return Moment::Continue(i);
         }
         let strength = cfg.strength.clamp(0.0, 1.0);
-        if strength <= 0.0 || !pause.natural || pause.gate.closed().is_some() {
+        if strength <= 0.0 || pause.gate.closed().is_some() {
+            return Moment::None;
+        }
+        // Playing grows boring all the while, so a bot that has played a
+        // long time goofs at the first moment it can.
+        if !pause.natural {
+            let di = Domain::Flavour as usize;
+            let seconds = tick.saturating_sub(self.last_pick[di]).min(120) as f32 / TICKS;
+            self.last_pick[di] = tick;
+            self.accrue(strength, Domain::Flavour, PLAY, seconds, tick);
             return Moment::None;
         }
         let possible = |f: Flavour| match f {
             Flavour::Stare | Flavour::Spray => pause.player.is_some(),
             Flavour::Tool => pause.other_tool,
             Flavour::Drop => pause.spare_weapon,
+            // A walk round or off somewhere only with nothing to do: in
+            // the middle of a match it reads as a bot gone aimless.
+            Flavour::Circle | Flavour::Detour => pause.idle,
             _ => true,
         };
         let weights: Vec<(Flavour, f32)> = Flavour::ALL
@@ -605,7 +620,7 @@ impl Mind {
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
         // Others about goofing make it likelier (`team::mood`).
         let goof = if total > 0.0 {
-            GOOF_SCORE * (1.0 + MOOD_LIFT * pause.pull)
+            GOOF_SCORE * (1.0 + MOOD_LIFT * pause.pull) * (1.0 - pause.brake.clamp(0.0, 1.0))
         } else {
             0.0
         };
@@ -661,6 +676,12 @@ impl Mind {
     }
     pub(super) fn flavour(&self) -> Option<Flavour> {
         self.interrupt.map(|i| i.flavour)
+    }
+    /// A goof it stands still for (a look, an emote, a hop): while it
+    /// lasts the bot wants to go nowhere.
+    pub(super) fn standing(&self) -> bool {
+        self.flavour()
+            .is_some_and(|f| !matches!(f, Flavour::Circle | Flavour::Detour | Flavour::Light))
     }
     pub(super) fn view(&self, cfg: &BotSurprise) -> BotSurpriseView {
         BotSurpriseView {
