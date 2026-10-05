@@ -199,7 +199,11 @@ mod tests {
             let errors: Vec<(f32, f32)> = (0..2400)
                 .map(|t| super::super::aim_error(bot, 600 + t, size))
                 .collect();
-            assert!(errors.iter().all(|e| e.0.abs() <= size + 1e-6));
+            assert!(
+                errors
+                    .iter()
+                    .all(|e| e.0.abs() <= size * super::super::DRIFT_SPREAD + 1e-6)
+            );
             for w in errors.windows(60) {
                 let (lo, hi) = w
                     .iter()

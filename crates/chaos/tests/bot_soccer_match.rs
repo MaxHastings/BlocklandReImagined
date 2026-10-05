@@ -858,7 +858,11 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
             let Some(&(f, _)) = feet.get(&t.bot) else {
                 continue;
             };
-            let goofing = if t.surprise.interrupt.is_some() { dt } else { 0.0 };
+            let goofing = if t.surprise.interrupt.is_some() {
+                dt
+            } else {
+                0.0
+            };
             let d = Vec3::new(f.x - at.x, 0.0, f.z - at.z).length();
             if d > LULL_DISTANCE {
                 r.far += dt;
@@ -1137,7 +1141,10 @@ fn two_against_two_play_a_clean_match_across_seeds() {
             own_goals += r.own_goals;
             goof += r.goof;
             bot_time += 4.0 * r.seconds;
-            for (sum, v) in lull.iter_mut().zip([r.far, r.goof_far, r.near, r.goof_near]) {
+            for (sum, v) in lull
+                .iter_mut()
+                .zip([r.far, r.goof_far, r.near, r.goof_near])
+            {
                 *sum += v;
             }
             let label = format!("{kit:?} 2v2 seed {seed}");

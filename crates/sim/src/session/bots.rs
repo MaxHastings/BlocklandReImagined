@@ -653,10 +653,13 @@ struct Weapon {
     spread: f32,
 }
 /// Half the width a scattering weapon's spread may cover where it fights:
-/// about a body's height, so most of its shot lands.
-const SPREAD_BODY: f32 = 1.5;
+/// a little over a body's height, so some of its shot lands on a target
+/// that strafes and hops, and not every pellet (`fair_hit_rate`).
+const SPREAD_BODY: f32 = 3.5;
 /// The nearest a scattering weapon's band ends, however wide its spread.
 const SPREAD_MIN_FAR: f32 = 3.0;
+/// How far above the feet a splash weapon aims.
+const FEET_AIM: f32 = 0.2;
 impl Weapon {
     /// Closest and farthest it likes to fight from.
     fn band(&self) -> (f32, f32) {
@@ -729,10 +732,16 @@ impl Bots {
 fn yaw_to(delta: Vec3) -> f32 {
     delta.x.atan2(-delta.z)
 }
+/// Easing between seeded points pulls a drift toward zero: its spread is
+/// sqrt(0.743) of one uniform draw's (the smoothstep's mean square). The
+/// aim error is scaled back up to a uniform draw's spread, so `size` (the
+/// kind's aim error, `perception`'s tracking lag) keeps its meaning.
+const DRIFT_SPREAD: f32 = 1.16;
 /// The aim error in radians (yaw, pitch) at `size`: a smooth seeded
-/// drift within it, so it never jumps and never settles.
+/// drift within about it, so it never jumps and never settles.
 fn aim_error(bot: OwnerId, tick: u64, size: f32) -> (f32, f32) {
     let salt = cadence::salt::AIM;
+    let size = size * DRIFT_SPREAD;
     (
         cadence::drift(bot, salt, 0, tick, ERROR_TICKS) * size,
         cadence::drift(bot, salt, 1, tick, ERROR_TICKS) * size * 0.5,
@@ -3217,7 +3226,13 @@ impl Session {
                 aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
             }
         } else if let Some(seen) = sight.target {
-            let mut at = seen.eye - Vec3::Y * 0.5;
+            // A blast hurts all around where it lands: a splash weapon
+            // aims at the feet, so a near miss still lands within it.
+            let mut at = if weapon.is_some_and(|w| !w.melee && w.splash > 0.0) {
+                seen.feet + Vec3::Y * FEET_AIM
+            } else {
+                seen.eye - Vec3::Y * 0.5
+            };
             if let Some(w) = weapon.filter(|w| !w.melee && w.speed > 0.0) {
                 let time = at.distance(eye) / w.speed;
                 at += target_velocity * lead(bot, tick) * time;
