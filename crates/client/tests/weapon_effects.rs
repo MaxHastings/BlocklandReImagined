@@ -570,7 +570,11 @@ fn an_add_on_explosion_with_a_light_plays_by_its_name() -> Result<()> {
     let mut fx = WeaponEffects::new(base, Arc::new(pack), EffectsLimits::default())?;
     fx.cues(&[cue(1, "boom", 0.)], pose)?;
     fx.advance(0.1, Vec3::ZERO, pose)?;
-    assert_eq!(fx.diagnostics.missing_bindings, 0, "{:?}", fx.diagnostics.messages);
+    assert_eq!(
+        fx.diagnostics.missing_bindings, 0,
+        "{:?}",
+        fx.diagnostics.messages
+    );
     assert!(
         fx.world().particle_count() >= 10,
         "{} particles",
