@@ -3508,8 +3508,10 @@ fn team_choices(
         c[at(Behaviour::Chase)].target = target;
         c[at(Behaviour::Fly)].target = target;
     }
+    // A search goes to look where the enemy was: searchers crowd one spot,
+    // but one coming to back up an ally on that enemy is not a pile-on.
     if let Some(k) = memory {
-        c[at(Behaviour::Search)].target = Some(Target::Player(k.subject));
+        c[at(Behaviour::Search)].place = Some(k.at);
     }
     c[at(Behaviour::Arm)].place = arm;
     c[at(Behaviour::Return)].place = Some(home);
