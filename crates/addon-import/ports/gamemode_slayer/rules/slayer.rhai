@@ -857,7 +857,11 @@ fn bot_name(kind, n) {
 // bots the server takes; what is left of it comes back.
 fn bot_fill(g, team, room) {
     let limit = team_setting(g.id, team.id, "team_bot_fill");
-    let list = members(g, team.id);
+    bot_fill_to(g, team, members(g, team.id), limit, room)
+}
+// `list`'s members brought to `limit` with bots on `team` (`()`: none):
+// `[room left, how many the room kept out]`.
+fn bot_fill_to(g, team, list, limit, room) {
     let n = list.len();
     for m in list {
         if n <= limit {
@@ -871,33 +875,69 @@ fn bot_fill(g, team, room) {
     }
     let kind = bot_kind_view();
     if kind == () {
-        return room;
+        return [room, 0];
     }
+    let seed = if team == () { 0 } else { team.id };
     while n < limit && room > 0 {
-        add_bot(g.id, #{ kind: kind.id, team: team.id, name: bot_name(kind, n * 64 + team.id) });
+        let bot = #{ kind: kind.id, name: bot_name(kind, n * 64 + seed) };
+        if team != () {
+            bot.team = team.id;
+        }
+        add_bot(g.id, bot);
         n += 1;
         room -= 1;
     }
-    room
+    [room, max(limit - n, 0)]
 }
 // Every team filled, and bots without a team taken away
 // (`Slayer_TeamSO::onRemove`'s `deleteAllBots`).
+//
+// Without teams (Deathmatch), Slayer took every bot away. Ours, not
+// Slayer's: Bots (free-for-all) keeps that many teamless bots in the game
+// instead, each everyone's enemy, spawning where players do.
 fn fill_bots(g) {
-    if !uses_teams(g.id) {
+    let room = bot_limit() - bots().len();
+    let short = 0;
+    if uses_teams(g.id) {
         for b in game_bots(g) {
-            remove_bot(b.id);
+            if b.team == () || team_by_id(g, b.team) == () {
+                remove_bot(b.id);
+                room += 1;
+            }
         }
+        for t in g.teams {
+            let r = bot_fill(g, t, room);
+            room = r[0];
+            short += r[1];
+        }
+    } else {
+        let free = [];
+        for b in game_bots(g) {
+            if b.team != () {
+                remove_bot(b.id);
+                room += 1;
+            } else {
+                free.push(b);
+            }
+        }
+        let r = bot_fill_to(g, (), free, max(setting(g.id, "ffa_bots"), 0), room);
+        short = r[1];
+    }
+    tell_bots_short(g, short);
+}
+// Whoever runs the game hears when the server's bot limit keeps bots out,
+// once each time how many it keeps out changes.
+fn tell_bots_short(g, short) {
+    let told = get("bot_short");
+    let key = `${g.id}`;
+    let was = if key in told { told[key] } else { 0 };
+    if short == was {
         return;
     }
-    let room = bot_limit() - bots().len();
-    for b in game_bots(g) {
-        if b.team == () || team_by_id(g, b.team) == () {
-            remove_bot(b.id);
-            room += 1;
-        }
-    }
-    for t in g.teams {
-        room = bot_fill(g, t, room);
+    told[key] = short;
+    set("bot_short", told);
+    if short > 0 && g.owner != () {
+        tell(g.owner, `${c5()}The server runs at most ${c3()}${bot_limit()} ${c5()}bots: ${c3()}${short} ${c5()}more could not join ${c3()}${g.title}${c5()}.`);
     }
 }
 // `AiPlayer::useRandomTool`: of the slots up to the last tool, each a
@@ -2299,6 +2339,12 @@ fn bot_fill_changed(g, fill) {
         if refused && g.owner != () {
             message_box(g.owner, "Slayer | Error", "You must enable the Blockhead Bot Add-On to use the Preferred Player Count setting.");
         }
+        if setting(g.id, "ffa_bots") > 0 {
+            set_setting(g.id, "ffa_bots", 0);
+            if g.owner != () {
+                message_box(g.owner, "Slayer | Error", "You must enable the Blockhead Bot Add-On to use the Bots (free-for-all) setting.");
+            }
+        }
         return;
     }
     if fill {
@@ -2576,7 +2622,7 @@ fn mg_settings(g, event) {
     if is_key(event.keys, "mode") {
         mode_changed(g);
     }
-    if is_key(event.keys, "team_bot_fill") {
+    if is_key(event.keys, "team_bot_fill") || is_key(event.keys, "ffa_bots") {
         bot_fill_changed(g, !is_key(event.keys, "mode"));
     }
     if is_key(event.keys, "lives") {

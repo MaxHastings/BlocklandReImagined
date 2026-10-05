@@ -2561,9 +2561,10 @@ fn save_and_reset_with_both_teams_counts_fills_them_with_bots() {
     g.quiet();
 }
 
-/// A host alone in a Team Deathmatch game with the Blockhead Bot Add-On's
-/// bots, as an enabled Add-On provides them; returns the host.
-fn host_alone_in_team_deathmatch(g: &mut Game) -> OwnerId {
+/// A host alone in a Deathmatch game (Slayer's default mode) with the
+/// Blockhead Bot Add-On's bots, as an enabled Add-On provides them;
+/// returns the host.
+fn host_alone_in_deathmatch(g: &mut Game) -> OwnerId {
     let addon = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/blockhead_bot/assets")
         .canonicalize()
@@ -2587,11 +2588,135 @@ fn host_alone_in_team_deathmatch(g: &mut Game) -> OwnerId {
     )
     .unwrap();
     g.steps(2);
+    max
+}
+
+/// A host alone in a Team Deathmatch game with the Blockhead Bot Add-On's
+/// bots, as an enabled Add-On provides them; returns the host.
+fn host_alone_in_team_deathmatch(g: &mut Game) -> OwnerId {
+    let max = host_alone_in_deathmatch(g);
     g.set(
         max,
         &[(&key(SLAYER, "mode"), Value::Text(TEAM_MODE.into()))],
     );
     max
+}
+
+/// This game's Slayer bots: (without a team, on one).
+fn free_and_team_bots(g: &Game) -> (Vec<OwnerId>, usize) {
+    let mut free = vec![];
+    let mut teamed = 0;
+    for (owner, v) in g.s.vitals() {
+        if g.s.is_bot(owner) {
+            match v.team {
+                None => free.push(owner),
+                Some(_) => teamed += 1,
+            }
+        }
+    }
+    (free, teamed)
+}
+
+/// Ours, not Slayer's: in Deathmatch, Bots (free-for-all) keeps that many
+/// teamless bots in the game. Each is everyone's enemy, so they hurt each
+/// other and a kill scores; a count of 0 takes them away.
+#[test]
+fn deathmatch_bots_fill_the_game_with_everyones_enemies() {
+    let mut g = Game::new("bots-ffa");
+    let max = host_alone_in_deathmatch(&mut g);
+    assert_eq!(free_and_team_bots(&g), (vec![], 0), "none by default");
+    let ffa = key(SLAYER, "ffa_bots");
+    g.set(max, &[(&ffa, Value::Int(4))]);
+    g.steps(4);
+    let (bots, teamed) = free_and_team_bots(&g);
+    assert_eq!((bots.len(), teamed), (4, 0));
+    assert!(g.s.vitals().values().all(|v| v.team.is_none()));
+    // Past their spawn protection.
+    g.steps(310);
+    let (a, b) = (bots[0], bots[1]);
+    g.run(
+        max,
+        "probe",
+        "hurts",
+        vec![PackageArg::Int(a as i64), PackageArg::Int(b as i64)],
+    );
+    let hurts =
+        g.s.package_state()
+            .packages
+            .get("probe")
+            .and_then(|ns| ns.global.get("hurts").cloned())
+            .and_then(|h| h.get(format!("{a}:{b}")).cloned());
+    assert_eq!(hurts, Some(serde_json::Value::Bool(true)), "enemies");
+    let before = g.score(a);
+    g.run(
+        max,
+        "probe",
+        "kill_by",
+        vec![PackageArg::Int(a as i64), PackageArg::Int(b as i64)],
+    );
+    g.steps(2);
+    assert!(!g.s.vitals()[&b].alive);
+    assert!(g.score(a) > before, "the kill scores");
+    g.set(max, &[(&ffa, Value::Int(0))]);
+    g.steps(4);
+    assert_eq!(free_and_team_bots(&g), (vec![], 0), "0 takes them away");
+    g.quiet();
+}
+
+/// Teams wanting more bots than the server runs take as many as it has
+/// room for, and whoever runs the game is told how many could not join,
+/// once, not at every fill.
+#[test]
+fn bots_the_server_has_no_room_for_are_told_to_the_owner() {
+    let mut g = Game::new("bots-no-room");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    for c in 1..=2u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 9.0, 0.0, c);
+    }
+    let _ = g.s.take_private_notices();
+    save_and_reset_new_teams(&mut g, max, &[1, 2], 20, vec![]);
+    g.steps(4);
+    let (free, teamed) = free_and_team_bots(&g);
+    assert!(free.is_empty());
+    assert_eq!(teamed, 16, "the server's bot limit");
+    assert!(g.heard("could not join"), "the owner is told");
+    g.steps(60);
+    assert!(!g.heard("could not join"), "once");
+    g.quiet();
+}
+
+/// Switching a Deathmatch with free-for-all bots to Team Deathmatch takes
+/// them away, and the teams' Preferred Player Counts fill instead.
+#[test]
+fn deathmatch_bots_give_way_to_the_team_fill_in_team_deathmatch() {
+    let mut g = Game::new("bots-ffa-to-teams");
+    let max = host_alone_in_deathmatch(&mut g);
+    for c in 1..=2u8 {
+        g.plant(max, TEAM_SPAWN, f32::from(c) * 6.0 - 9.0, 0.0, c);
+    }
+    g.set(max, &[(&key(SLAYER, "ffa_bots"), Value::Int(4))]);
+    g.steps(4);
+    assert_eq!(free_and_team_bots(&g).0.len(), 4);
+    save_and_reset_new_teams(
+        &mut g,
+        max,
+        &[1, 2],
+        1,
+        vec![SettingEdit {
+            key: key(SLAYER, "mode"),
+            value: Some(Value::Text(TEAM_MODE.into())),
+        }],
+    );
+    g.steps(4);
+    let (free, teamed) = free_and_team_bots(&g);
+    assert!(free.is_empty(), "{free:?}");
+    let members = team_members(&g);
+    assert!(
+        members.values().all(|&(n, _)| n == 1),
+        "one member a team: {members:?}"
+    );
+    assert_eq!(teamed, 1, "{members:?}");
+    g.quiet();
 }
 
 /// The Mini-Game window's Save & Reset adding `colors.len()` new teams

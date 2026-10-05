@@ -589,6 +589,18 @@
       "max": 99
     },
     {
+      "key": "ffa_bots",
+      "title": "Bots (free-for-all)",
+      "category": "Bots",
+      "type": "int",
+      "default": 0,
+      "editor": "admin",
+      "min": 0,
+      "max": 16,
+      "shown_when": { "setting": "mode", "is": ["{{dm_class}}"] },
+      "help": "Not in Slayer itself (a Blockland ReImagined addition): in a mode without teams, how many Blockhead Bots play, each everyone's enemy. Team modes use each team's Preferred Player Count instead."
+    },
+    {
       "key": "team_uniform",
       "title": "Uniform",
       "category": "Team",
@@ -1541,6 +1553,10 @@
         "persist": false
       },
       "team_lives": {
+        "default": {},
+        "persist": false
+      },
+      "bot_short": {
         "default": {},
         "persist": false
       },
