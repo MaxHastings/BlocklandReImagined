@@ -94,7 +94,56 @@ notices" layer. Base `claude/project-thread-pt64ji`, merged up to
 
 ## Evidence
 
-RESULTS
+Commands (shared target dir, a per-lane codegen config so no other
+worktree's artifacts are reused): `cargo test -p bri-sim --lib bots`,
+`cargo test -p bri-chaos --test <suite> -- --include-ignored` for every
+bot suite, `cargo clippy -p bri-sim -p bri-weapons -p bri-chaos --tests
+-- -D warnings` (clean), `cargo fmt --all`.
+
+Fair metric at the shipped `strength` 1 (steady hit rate; band 15-60%,
+enforced for all, gun and bow):
+
+| weapon | 10-12 units | 12-25 units |
+|---|---|---|
+| gun | 57.4% | 38.3% |
+| rocket | 35.3% | 15.0% |
+| shotgun | 5.6% | 10.5% |
+| bow | 44.4% | 51.6% |
+| bouncer | 0.0% | 0.0% |
+| all | 28.7% | |
+
+`fair_by_dial`: `perception.strength` 0.5 / 1 / 2 gives 38.2% / 28.7% /
+20.9%, falling as the dial rises. Before: gun 100% from the first second,
+not monotone.
+
+Passing: `bri-sim` bots unit tests (136), `bot_perception` (19),
+`bot_brain`, `bot_physical_objectives`, `bot_tactics`, the other bot
+suites, and the gauntlet except as below.
+
+Expectations changed, with the reason in each test:
+- `deathmatch_mixed_arsenal` kill bar 50 -> 40 (48 kills; 67 on the
+  release, when nearly every shot landed).
+- `water_between_the_sides` switch bar 20 -> 25 (21.6 a bot-minute with
+  19-22 kills; the release has 10.8 with 12, the same per kill).
+- `an_actual_attacker_can_interrupt_a_retained_delivery`: return fire must
+  land; the bot need not out-duel a scripted attacker who never misses and
+  shoots first.
+
+Still failing, not loosened:
+- `a_jeep_on_each_side` (one round): clumped 4.0%, stuck 9.5%. Every
+  clumped sample is a bot on a jeep roof beside its ally seated in that
+  jeep (the scorer counts seated neighbours); the stuck share is one bot
+  wedged on a parked jeep for 800 ticks. Chaotic: at strength 0 it passes,
+  with the cone open or a linear turn it fails; the old base failed it
+  too, and the release fails it over four rounds (circling 4.0%).
+- `bot_soccer_match` hands seed 2: wrong way 0.116 (bar 0.10; release
+  0.094, strength 0 0.095, a linear turn 0.047, other variants 0.13-0.16).
+  All the wrong-way pushes are in Objective, which already turns plainly.
+- `all_dials_on` (in `gate-known-failures`), `bot_think_time_16` (the
+  release also fails it on this loaded machine: 36979 us vs 42485 here).
+- Content-dependent tests (no generated content here) fail at
+  `crates/package/src/testing.rs:9` on both trees; `showcase
+  a_bot_carries_its_catch_out` fails on the base as well.
 
 ## Next
 
