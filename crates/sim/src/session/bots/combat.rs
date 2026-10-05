@@ -705,6 +705,7 @@ struct Solve {
 /// A splash aim at `solve.point` instead of the body: a solved intercept
 /// whose blast still reaches the body where it will be, safe and clear
 /// like any shot, and scored by its splash alone.
+#[allow(clippy::too_many_arguments)]
 fn variant(
     session: &Session,
     bot: OwnerId,
