@@ -263,9 +263,12 @@ impl Alertness {
         }
     }
 }
-/// Only an idle bot glances: one strolling about or walking home.
+/// Only an idle bot glances: one strolling about. Walking home is going
+/// somewhere (in a ball game, back to its place for the next play): a
+/// glance there held 2v2 soccer bots' looks off their way and doubled the
+/// pushes of the ball toward their own goal.
 pub(super) fn may_glance(behaviour: Behaviour) -> bool {
-    matches!(behaviour, Behaviour::Wander | Behaviour::Return)
+    behaviour == Behaviour::Wander
 }
 /// How much slower than plain it reacts (and how much wider its first aim
 /// errs): by alertness, and more from outside its view cone, blended by
@@ -832,9 +835,10 @@ mod tests {
                 .glance(&p, SIGHT, 102, EYE, true, [], &mut rng)
                 .is_none()
         );
-        // Behaviours: only strolling or walking home glances.
-        assert!(may_glance(Behaviour::Wander) && may_glance(Behaviour::Return));
+        // Behaviours: only strolling glances.
+        assert!(may_glance(Behaviour::Wander));
         for b in [
+            Behaviour::Return,
             Behaviour::Objective,
             Behaviour::Carry,
             Behaviour::Fight,

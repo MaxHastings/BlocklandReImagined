@@ -142,8 +142,8 @@ idle drift and a steady aim error that never settles, together. At 0 the
 bot reacts in exactly `reaction_seconds` with the plain narrowing error,
 the plain linear turn and the old fire gate.
 
-- **Glances.** A strolling or homeward bot (Wander, Return) with no enemy
-  in sight, no objective at hand, nothing held, no seat and no chassis may
+- **Glances.** A strolling bot (Wander; walking home is going somewhere)
+  with no enemy in sight, no objective at hand, nothing held, no seat and no chassis may
   turn its ordinary aim at something salient for about `glance_seconds`,
   then waits `cooldown_seconds`. Sources are engine data only: a
   projectile blast (the weapons runtime's `Blast` event), noticed out to
