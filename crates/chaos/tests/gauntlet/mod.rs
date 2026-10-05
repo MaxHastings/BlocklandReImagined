@@ -790,10 +790,13 @@ impl Scorer {
                 track.last_heading = Some((heading, tick));
             }
             let side = sides.get(bot);
+            // Inside a standing ally; one seated in a vehicle is not
+            // crowded by a bot boarding or riding on that vehicle.
             if side.is_some()
                 && states.iter().any(|(o, p)| {
                     o != bot
                         && alive(o)
+                        && vitals.get(o).is_some_and(|v| v.mounted.is_none())
                         && sides.get(o) == side
                         && Vec3::from(p.feet).distance(feet) < 0.9
                 })

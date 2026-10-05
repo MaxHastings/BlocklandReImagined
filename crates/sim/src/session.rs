@@ -15,7 +15,7 @@ use std::sync::Arc;
 mod admin;
 mod bots;
 pub use bots::{
-    BotCandidate, BotDecision, BotDrive, BotEvidence, BotObjectiveDetail, BotReload,
+    BotCandidate, BotDecision, BotDrive, BotEvidence, BotNotice, BotObjectiveDetail, BotReload,
     BotSurpriseView, BotTask, BotTeamView, BotThought, BotTuning,
 };
 mod breakables;

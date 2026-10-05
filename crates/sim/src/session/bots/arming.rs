@@ -149,6 +149,14 @@ fn best_item(
         .filter(|(_, item, _)| {
             hand_combat::item_attacks(session, item, scale) && !session.pickup_scripted(item)
         })
+        .filter(|(source, _, at)| {
+            let subject = match *source {
+                Source::Brick(id) => super::SightSubject::Brick(id),
+                Source::Drop(id) => super::SightSubject::Drop(id),
+            };
+            let urgency = super::SightUrgency::Ordinary;
+            (session.bot_sees(bot, Some(subject), eye, *at, REACH, urgency)).is_some()
+        })
         .map(|(source, item, at)| {
             let worth = hand_combat::item_worth(session, item, scale);
             (
@@ -158,7 +166,6 @@ fn best_item(
             )
         })
         .filter(|(_, _, score)| *score > 0.0)
-        .filter(|(_, at, _)| session.simulation.sight(eye, *at, REACH).is_some())
         .map(|(source, at, score)| {
             let taken = session.team_place_crowd(bot, Behaviour::Arm, at) > 0.0;
             (source, at, if taken { score * TAKEN } else { score })

@@ -24,6 +24,15 @@
       // longer possible take over at once.
       "hold": { "seconds": 0.5, "margin": 0.1 },
       "fighting": { "strafe_seconds": 3.5, "fly_rise": 2.5, "fly_drop": 3.0, "fly_give_up_seconds": 4.0 },
+      "perception": {
+        "salience": 1,
+        "glance_seconds": 0.8,
+        "cooldown_seconds": 6,
+        "strength": 1,
+        "relaxed_scale": 1.8,
+        "away_scale": 1.5,
+        "view_degrees": 180
+      },
       "mounted": {
         "anchor": "mount",
         "chase_radius": 96,
@@ -78,6 +87,11 @@
         // by the term that changed it.
         "callouts": { "uses": "Coming!", "harm": "Moving!" }
       },
+      // Extra options (docs/architecture/bots.md, "Extras"): idle play with
+      // a loose body or a teammate's vehicle, crouching under ranged fire, a
+      // hop out of a projectile's path, opening doors, handing a spare
+      // weapon to an unarmed teammate. 0 to 1: how much of them applies.
+      "extras": { "strength": 1 },
       "first_names": [
         "Alex",
         "Ben",

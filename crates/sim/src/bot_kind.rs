@@ -33,6 +33,22 @@ pub const BEHAVIOURS: [&str; 10] = [
     "objective",
     "wander",
 ];
+/// The small extra options (`session::bots::extras`): idle play with
+/// bodies and seats, crouching under ranged fire, a jet hop out of a
+/// projectile's path, opening doors, and handing a spare weapon to an
+/// unarmed teammate. One dial weighs them all.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotExtras {
+    /// 0 to 1: how much of the extra options applies. 0 turns them off;
+    /// at 1 a chance one is taken about half the time.
+    pub strength: f32,
+}
+impl Default for BotExtras {
+    fn default() -> Self {
+        Self { strength: 1.0 }
+    }
+}
 
 /// One bot kind: its spawn list entry and how its brain plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,6 +126,55 @@ pub struct BotKind {
     /// How teammates' intents, the mood about it and its team's score
     /// weigh in its choices (`team`).
     pub team: BotTeam,
+    /// What it notices: brief glances and how long it takes to react
+    /// (`session::bots::perception`).
+    pub perception: BotPerception,
+    /// How much of its extra options applies ([`BotExtras`]).
+    pub extras: BotExtras,
+}
+/// What a bot notices, from engine data only: a blast's radius, a sound's
+/// volume, someone staring at it, something moving fast; and how its
+/// reaction to a new target scales with what it was doing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotPerception {
+    /// Scales how far every source is noticed (a blast's radius, a sound's
+    /// volume, a stare or fast motion within part of its sight); 0 turns
+    /// glances off.
+    pub salience: f32,
+    /// How long a glance holds, give or take a quarter.
+    pub glance_seconds: f32,
+    /// Seconds after a glance before the next.
+    pub cooldown_seconds: f32,
+    /// How human its noticing and aim are, 0 to 4 (1 shipped): it scales
+    /// the reaction delay, the starting aim error, the view-cone delay and
+    /// slower turn, the warning delay, the turn's overshoot, the idle drift
+    /// and the aim error that remains however long it tracks, together. 0
+    /// keeps exactly `reaction_seconds`, the plain narrowing of
+    /// `aim_error_degrees` and the plain linear turn.
+    pub strength: f32,
+    /// While strolling or playing about, `reaction_seconds` and the starting
+    /// aim error are scaled by this (already fighting or hunting, they are
+    /// the kind's plain numbers)...
+    pub relaxed_scale: f32,
+    /// ...and by this more for a target outside its view cone, toward which
+    /// it also turns this many times slower until it has reacted.
+    pub away_scale: f32,
+    /// How wide its view cone is, in degrees.
+    pub view_degrees: f32,
+}
+impl Default for BotPerception {
+    fn default() -> Self {
+        Self {
+            salience: 1.0,
+            glance_seconds: 0.8,
+            cooldown_seconds: 6.0,
+            strength: 1.0,
+            relaxed_scale: 1.8,
+            away_scale: 1.5,
+            view_degrees: 180.0,
+        }
+    }
 }
 /// How a bot holds a choice (which behaviour, weapon, aim, route): the
 /// one rule against flip-flopping (`docs/architecture/bots.md`, "Holding
@@ -317,8 +382,10 @@ impl Default for BotKind {
             mounted: BotMounted::default(),
             fighting: BotFighting::default(),
             hold: BotHold::default(),
+            perception: BotPerception::default(),
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
+            extras: Default::default(),
         }
     }
 }
@@ -422,6 +489,11 @@ impl BotKind {
             self.id,
             BEHAVIOURS.join(", ")
         );
+        ensure!(
+            self.extras.strength.is_finite() && (0.0..=1.0).contains(&self.extras.strength),
+            "Bot `{}`: extras.strength is 0 to 1",
+            self.id
+        );
         let ranges = [
             ("sight", self.sight, 1.0, 400.0),
             ("wander_radius", self.wander_radius, 0.0, 64.0),
@@ -472,6 +544,38 @@ impl BotKind {
                 self.mounted.reverse_distance,
                 0.0,
                 64.0,
+            ),
+            ("perception.salience", self.perception.salience, 0.0, 8.0),
+            (
+                "perception.glance_seconds",
+                self.perception.glance_seconds,
+                0.05,
+                5.0,
+            ),
+            (
+                "perception.cooldown_seconds",
+                self.perception.cooldown_seconds,
+                0.0,
+                120.0,
+            ),
+            ("perception.strength", self.perception.strength, 0.0, 4.0),
+            (
+                "perception.relaxed_scale",
+                self.perception.relaxed_scale,
+                0.0,
+                8.0,
+            ),
+            (
+                "perception.away_scale",
+                self.perception.away_scale,
+                1.0,
+                8.0,
+            ),
+            (
+                "perception.view_degrees",
+                self.perception.view_degrees,
+                10.0,
+                360.0,
             ),
         ];
         for (name, value, min, max) in ranges {

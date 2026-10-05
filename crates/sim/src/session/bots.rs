@@ -42,14 +42,21 @@ pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
 mod contest;
+mod extras;
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod interactions;
+mod looks;
 mod objectives;
 mod package_objectives;
+mod perception;
+pub use perception::BotNotice;
+pub(super) use perception::Stimulus;
 mod physical_objectives;
 mod planning;
 mod search_memory;
+mod sightlines;
+pub(super) use sightlines::{Subject as SightSubject, Urgency as SightUrgency};
 mod surprise;
 pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
 mod tactics;
@@ -81,6 +88,8 @@ pub struct BotThought {
     /// Actual searches and unchanged failed-search reuse, for headless diagnostics.
     pub objective_searches: u64,
     pub objective_reused: u64,
+    /// The last glance or reaction and why (`perception`).
+    pub noticed: Option<BotNotice>,
     /// Why it chose as it did (`surprise`): its drives and the last
     /// decision at each choice point, every term's contribution.
     pub surprise: BotSurpriseView,
@@ -158,7 +167,7 @@ const TURN_BACK: f32 = 0.7;
 /// Ticks between the aim error's seeded points; it eases between them.
 const ERROR_TICKS: u64 = 48;
 /// How much of the kind's aim error stays after a long track.
-const ERROR_FLOOR: f32 = 0.5;
+const ERROR_FLOOR: f32 = 1.0 / 3.0;
 /// How far a bot's lead strays from the true intercept, as a fraction.
 const LEAD_STRAY: f32 = 0.15;
 /// Ticks between the lead's seeded points.
@@ -239,6 +248,10 @@ pub(super) struct Bots {
     objective_cursor: Option<OwnerId>,
     objective_candidate: Option<OwnerId>,
     combat_budget: hand_combat::Budget,
+    /// Blasts and sounds since bots last stepped (`perception`).
+    stimuli: Vec<Stimulus>,
+    /// The tick's shared sight-ray budget (`sightlines`).
+    sightlines: std::sync::Mutex<sightlines::Sightlines>,
     /// Live dials (`/botset`) and where overrides are kept.
     tuning: tuning::Tuning,
     /// Wall time spent in `step_bots`, for the bot performance bar.
@@ -303,6 +316,8 @@ struct Brain {
     target: Option<OwnerId>,
     /// Tick the current target was first seen.
     seen_since: u64,
+    /// Its aim error now, radians (yaw, pitch): a seeded drift.
+    error: (f32, f32),
     /// Where an enemy was last seen or heard, until when.
     memory: Option<Knowledge>,
     evidence_search: search_memory::State,
@@ -366,6 +381,10 @@ struct Brain {
     chase_offset: Vec3,
     /// What teammates' intents did to its last choice ([`team`]).
     team: team::State,
+    /// Glances and reaction delays (`perception`).
+    perception: perception::State,
+    /// The small extra options' memory ([`extras`]).
+    extras: extras::State,
 }
 /// How a flight is going: the nearest it came and when, and how long it
 /// stays on the ground after giving one up.
@@ -458,6 +477,7 @@ impl Brain {
             pitch: 0.0,
             target: None,
             seen_since: 0,
+            error: (0.0, 0.0),
             memory: None,
             evidence_search: Default::default(),
             evidence_context: None,
@@ -489,17 +509,15 @@ impl Brain {
             mount_anchor: None,
             brick_team: None,
             named: String::new(),
+            perception: Default::default(),
             surprise: surprise::Mind::new(bot),
             chase_offset: Vec3::ZERO,
             team: team::State::default(),
+            extras: Default::default(),
         }
     }
     fn random(&mut self) -> f32 {
-        self.rng = self
-            .rng
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+        perception::draw(&mut self.rng)
     }
     /// The way it strafes or weaves this tick (+1 right, -1 left). Each leg
     /// lasts a seeded `mean` × [`leg`] seconds and then usually turns back,
@@ -712,12 +730,9 @@ impl Bots {
 fn yaw_to(delta: Vec3) -> f32 {
     delta.x.atan2(-delta.z)
 }
-/// The aim error in radians (yaw, pitch): a smooth seeded drift, sized by
-/// how long the bot has tracked its target, from the kind's whole error
-/// down to `ERROR_FLOOR` of it. It never jumps and never settles.
-fn aim_error(bot: OwnerId, tick: u64, tracked: f32, degrees: f32) -> (f32, f32) {
-    let floor = 1.0 - ERROR_FLOOR;
-    let size = degrees.to_radians() * (1.0 - (tracked / 2.0).clamp(0.0, 1.0) * floor);
+/// The aim error in radians (yaw, pitch) at `size`: a smooth seeded
+/// drift within it, so it never jumps and never settles.
+fn aim_error(bot: OwnerId, tick: u64, size: f32) -> (f32, f32) {
     let salt = cadence::salt::AIM;
     (
         cadence::drift(bot, salt, 0, tick, ERROR_TICKS) * size,
@@ -876,7 +891,7 @@ impl Session {
             return Ok(());
         };
         let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
-        let name = self.brick_bot_name(&kind, brick_id);
+        let name = self.brick_bot_name(&kind, brick_id, None);
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
         if self.bots.brains.len() >= MAX_BOTS {
@@ -970,6 +985,10 @@ impl Session {
         };
         let pack = self.avatar_catalog.as_ref();
         let mut avatar = pack.map(|c| c.defaults.clone());
+        // Each bot its own seeded look (`looks`); its kind's look on top.
+        if let (Some(avatar), Some(pack)) = (avatar.as_mut(), pack) {
+            looks::seeded_look(bot, avatar, pack, &self.simulation.state().palette);
+        }
         if let (Some(look), Some(avatar)) = (&kind.look, avatar.as_mut()) {
             UniformParts {
                 parts: look.parts.clone(),
@@ -1200,24 +1219,38 @@ impl Session {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
     }
-    /// What a spawn brick's bot is called: its kind, then the brick's name
-    /// or else the team its Team choice names, so the Players list tells
-    /// one brick's bot from another's ("Blockhead Bot (Red)").
-    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId) -> String {
+    /// What a spawn brick's bot is called. A brick its builder named gives
+    /// "Kind (name)", so the Players list tells one brick's bot from
+    /// another's. Otherwise a first name of its kind no other player goes
+    /// by, kept while it lives (`looks`); a kind without a free one gives
+    /// its kind and the team its Team choice names ("Blockhead Bot (Red)").
+    fn brick_bot_name(&self, kind: &BotKind, brick: BrickId, bot: Option<OwnerId>) -> String {
         let Some(b) = self.simulation.state().bricks.get(&brick) else {
             return kind.name.clone();
         };
-        let label = b
+        let named = b
             .name
             .as_deref()
             .map(|n| n.trim().trim_start_matches('_').trim())
             .filter(|n| !n.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
-                let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
-                Some(game.teams.get(team)?.name.clone())
-            });
+            .map(str::to_owned);
+        if named.is_none() {
+            if let Some(own) = bot
+                .and_then(|o| self.bots.brains.get(&o))
+                .map(|b| &b.named)
+                .filter(|n| kind.first_names.contains(n))
+            {
+                return own.clone();
+            }
+            if let Some(first) = self.bot_first_name(kind, brick, bot) {
+                return first;
+            }
+        }
+        let label = named.or_else(|| {
+            let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
+            let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
+            Some(game.teams.get(team)?.name.clone())
+        });
         // The label is shortened, not the kind or the closing bracket.
         let room = MAX_PLAYER_NAME.saturating_sub(kind.name.chars().count() + 3);
         match label {
@@ -1333,7 +1366,8 @@ impl Session {
             }
             self.apply_brick_team(bot, wanted, team)?;
             let named = self.bots.brains.get(&bot).and_then(|b| {
-                let name = self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick);
+                let name =
+                    self.brick_bot_name(b.born.as_ref().unwrap_or(&b.kind), brick, Some(bot));
                 (name != b.named).then_some(name)
             });
             if let Some(name) = named {
@@ -1402,6 +1436,7 @@ impl Session {
                 }),
                 objective_searches: b.objective.searches,
                 objective_reused: b.objective.reused,
+                noticed: b.perception.why,
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
             })
@@ -1483,13 +1518,13 @@ impl Session {
     }
     fn bot_sight(&self, bot: OwnerId, brain: &Brain, eye: Vec3) -> Sight {
         let kind = &brain.kind;
-        let visible = |owner: OwnerId| -> Option<Seen> {
+        let visible = |owner: OwnerId, urgency: SightUrgency| -> Option<Seen> {
             let p = self.peers.get(&owner)?;
             if !self.bot_enemy(bot, kind, owner) {
                 return None;
             }
             let real = Vec3::from(p.player.state().feet);
-            let way = self.simulation.sight(eye, p.player.eye(), kind.sight)?;
+            let way = self.bot_sees_player(bot, owner, eye, kind.sight, urgency)?;
             Some(Seen {
                 owner,
                 eye: way.aim,
@@ -1513,13 +1548,13 @@ impl Session {
             .filter(valid_threat)
             .or(brain.objective_threat.filter(valid_threat));
         if let Some(threat) = threat {
-            let target = visible(threat.subject);
+            let target = visible(threat.subject, SightUrgency::Target);
             if target.is_some() || brain.objective.detail().is_some() {
                 return Sight { target };
             }
         }
         // Keep fighting the same enemy while it stays in view.
-        if let Some(seen) = brain.target.and_then(visible) {
+        if let Some(seen) = brain.target.and_then(|t| visible(t, SightUrgency::Target)) {
             return Sight { target: Some(seen) };
         }
         // Through an opening, anyone may be in sight wherever they stand.
@@ -1541,7 +1576,9 @@ impl Session {
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Sight {
-            target: candidates.into_iter().find_map(|(_, owner)| visible(owner)),
+            target: candidates
+                .into_iter()
+                .find_map(|(_, owner)| visible(owner, SightUrgency::Ordinary)),
         }
     }
     /// Where a bot flies to reach its enemy (in sight, or last seen) well
@@ -1776,6 +1813,7 @@ impl Session {
         self.bots
             .failed_told
             .retain(|b, _| self.bots.brains.contains_key(b));
+        self.bots.stimuli.clear();
         self.hear_alerts(tick);
         Ok(())
     }
@@ -1855,10 +1893,12 @@ impl Session {
                         .saturating_add((brain.kind.memory_seconds * 120.0) as u64),
                 );
                 if tick < expires {
-                    brain.memory = Some(Knowledge {
+                    // Acted on after a short, seeded reaction (`perception`).
+                    let k = Knowledge {
                         expires,
                         ..alert.knowledge
-                    });
+                    };
+                    brain.hear(k, bot, tick);
                 }
             }
         }
@@ -2127,8 +2167,23 @@ impl Session {
             splash: 0.0,
             spread: 0.0,
         }));
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if let Some(k) = brain.perception.heard(tick)
+            && brain.target.is_none()
+            && brain.memory.is_none_or(|old| old.observed < k.observed)
+        {
+            brain.memory = Some(k);
+        }
         let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
             tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+        });
+        // Out of sight, a hit gives only a rough idea where from.
+        let hurt_by = hurt_by.map(|k| match sight.target {
+            Some(seen) if seen.owner == k.subject => k,
+            _ => Knowledge {
+                at: perception::guess(feet, k.at, &mut self.bots.brains.get_mut(&bot).unwrap().rng),
+                ..k
+            },
         });
         if self.bots.brains[&bot].memory.is_some_and(|k| {
             tick >= k.expires || !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
@@ -2232,11 +2287,7 @@ impl Session {
         // A ranged shot that misses carries on to its reach, and goes as
         // far off as its aim errs now.
         let ranged = weapon.is_some_and(|w| !w.melee);
-        let (yaw_error, pitch_error) = {
-            let brain = &self.bots.brains[&bot];
-            let tracked = tick.saturating_sub(brain.seen_since) as f32 * TICK;
-            aim_error(bot, tick, tracked, brain.kind.aim_error_degrees)
-        };
+        let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
         let aim_off = yaw_error.hypot(pitch_error);
         let attack_clear = sight.target.is_none_or(|seen| {
             self.bot_fire_clear(
@@ -2329,6 +2380,9 @@ impl Session {
             self.bots.brains.get_mut(&bot).unwrap().arming.clear();
             None
         };
+        // A spawn-protected target is watched; its reaction waits until it
+        // can be hurt.
+        let damageable = sight.target.is_none_or(|s| !self.spawn_protected(s.owner));
         // What guards the surprise chooser: carrying an objective, urgency.
         let carrying = objective_holding || self.surprise_carrying(bot, objective.as_ref());
         let gate = self.surprise_gate(bot, feet, carrying, threat, tick);
@@ -2400,10 +2454,12 @@ impl Session {
         let mut warn = None;
         match sight.target {
             Some(seen) => {
-                if brain.target != Some(seen.owner) {
+                let fresh = brain.target != Some(seen.owner);
+                if fresh {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
                 }
+                brain.perceive(seen.owner, seen.real, feet, tick, fresh, damageable);
                 let knowledge = Knowledge {
                     subject: seen.owner,
                     at: seen.real,
@@ -2425,6 +2481,10 @@ impl Session {
                     warn = hurt_by;
                 }
             }
+        }
+        // A hit still interrupts at once; return fire waits its reaction.
+        if let Some(k) = hurt_by {
+            brain.hurt_by(&k, feet, tick);
         }
         if kind.alerts_allies
             && let Some(knowledge) = warn
@@ -2995,6 +3055,18 @@ impl Session {
             .map(|(_, p)| Vec3::from(p.player.state().feet))
             .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
+        let may_glance = perception::may_glance(behaviour) && sight.target.is_none();
+        let glance = self.bot_glance(
+            bot,
+            tick,
+            eye,
+            may_glance
+                && driving.is_none()
+                && !self.seated(bot)
+                && !situation.objective
+                && !situation.holding,
+            behaviour == Behaviour::Wander,
+        );
         // Now and then something idle (`surprise`): goofing is an option
         // the chooser weighs against playing, with a small worth of its
         // own. Playing is worth what the bot is doing now: the action
@@ -3068,6 +3140,19 @@ impl Session {
             .surprise
             .goof(&brain.kind.surprise, brain.kind.hold, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
+        let extra = self.bot_extras(
+            bot,
+            extras::Scene {
+                behaviour,
+                enemy_seen: sight.target.is_some(),
+                hurt_by,
+                holding: wanted.is_none(),
+                natural,
+                calm: !gate.urgent && !gate.carrying,
+                feet,
+            },
+            tick,
+        )?;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -3141,14 +3226,26 @@ impl Session {
             }
             let delta = native_choice.map_or(at - eye, |c| c.direction);
             let tracked = tick.saturating_sub(brain.seen_since) as f32 * TICK;
-            let error = aim_error(bot, tick, tracked, kind.aim_error_degrees);
-            aim_yaw = wrap(yaw_to(delta) + error.0);
-            aim_pitch = (delta.y.atan2(flat(delta).length()) + error.1).clamp(-1.5, 1.5);
+            // How fast it moves across the bot's line of sight, the bot's
+            // own motion included: tracking it lags (`perception`).
+            let line = (at - eye).normalize_or_zero();
+            let relative = target_velocity - Vec3::from(state.velocity);
+            let across = (relative - line * relative.dot(line)).length();
+            let size = kind.aim_error_degrees.to_radians()
+                * (1.0 - (tracked / 2.0).min(1.0) * (1.0 - ERROR_FLOOR))
+                * brain.perception.aim_scale(seen.owner, tracked)
+                + perception::steady_error(&kind.perception, across, at.distance(eye));
+            brain.error = aim_error(bot, tick, size);
+            aim_yaw = wrap(yaw_to(delta) + brain.error.0);
+            aim_pitch = (delta.y.atan2(flat(delta).length()) + brain.error.1).clamp(-1.5, 1.5);
             let reaction = (kind.reaction_seconds * 120.0) as u64;
             let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
             fire = enemy.is_some()
                 && (driving.is_none() || vehicle_weapon)
-                && tick >= brain.seen_since + reaction
+                && brain
+                    .perception
+                    .acted(seen.owner, tick)
+                    .unwrap_or(tick >= brain.seen_since + reaction)
                 && in_reach
                 && attack_clear
                 && crew_ready
@@ -3166,19 +3263,46 @@ impl Session {
             if tick < brain.next_grab {
                 fire = false;
             }
+        } else if let Some(at) = glance {
+            // A glance turns the ordinary aim; the walk goes on.
+            let delta = at - eye;
+            aim_yaw = yaw_to(delta);
+            aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
         } else if let Some(next) = wanted {
             let d = flat(next.through.unwrap_or(next.feet) - feet);
             if d.length() > 0.05 {
                 aim_yaw = yaw_to(d);
             }
+            // Strolling, the look drifts a little off the way.
+            if idle {
+                aim_yaw = wrap(aim_yaw + perception::drift(&kind.perception, bot, tick));
+            }
         } else if hold {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
         }
-        if let Some((yaw, pitch)) = act.aim {
+        if let Some((yaw, pitch)) = act.aim.or(extra.aim) {
             (aim_yaw, aim_pitch) = (yaw, pitch);
         }
-        brain.yaw = turn(brain.yaw, aim_yaw, step);
+        // Handling things (a carry's swing, an objective's or interaction's
+        // controls) keeps the plain turn its controllers are built on, and
+        // a startle does not stop it.
+        let handling = matches!(
+            behaviour,
+            Behaviour::Carry | Behaviour::Objective | Behaviour::Interact
+        );
+        if let Some(seen) = sight.target {
+            step *= brain.perception.turn_scale(seen.owner, tick);
+        } else if !handling && brain.perception.startled(tick) {
+            step = 0.0;
+        }
+        brain.yaw = if handling {
+            turn(brain.yaw, aim_yaw, step)
+        } else {
+            brain
+                .perception
+                .turn(&kind.perception, brain.yaw, aim_yaw, step)
+        };
         brain.pitch += (aim_pitch - brain.pitch).clamp(-step, step);
 
         // Move along the plan, facing wherever it aims.
@@ -3379,19 +3503,32 @@ impl Session {
                 input.crouch = to.y < feet.y - 0.4;
             }
         }
-        // A fight stands out of where a teammate's weapon will hit (`team`).
+        // A fight stands out of where a teammate's weapon will hit (`team`),
+        // where there is floor to stand on (as the strafe checks): on a
+        // deck the way out can be off its edge.
         if behaviour == Behaviour::Fight
             && let Some(out) = choices[Behaviour::Fight as usize]
                 .place
                 .filter(|out| *out != feet)
+            && super::admin_players::world_ray(
+                &self.simulation,
+                out + Vec3::Y * 0.5,
+                Vec3::NEG_Y,
+                0.5 + body.step + body.drop,
+            )
+            .is_some()
         {
             direction = flat(out - feet).normalize_or_zero();
         }
         if let Some(to) = act.direction {
             direction = to;
         }
-        input.jump |= act.jump;
-        input.crouch |= act.crouch;
+        input.jump |= act.jump || extra.jump;
+        input.crouch |= act.crouch || extra.crouch;
+        input.jet |= extra.jet;
+        if extra.stand {
+            direction = Vec3::ZERO;
+        }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up.
@@ -3642,11 +3779,21 @@ impl Session {
             return None;
         }
         let intent = brain.combat.intent(plan_tick);
+        // Judged where it believes it aims: its aim error misses for real.
+        // The miss itself must still spare its side.
+        let actual = direction;
+        let direction = perception::believed(&brain.kind.perception, direction, brain.error);
         let mut budget = std::mem::take(&mut self.bots.combat_budget);
         let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
             hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
         });
         self.bots.combat_budget = budget;
+        if allowed == FireAdmission::Allow
+            && actual != direction
+            && !self.bot_miss_spares_allies(bot, actual)
+        {
+            return Some(FireAdmission::Abort);
+        }
         Some(allowed)
     }
     /// Replace a speculative release with a safe native hold, without a

@@ -709,13 +709,12 @@ fn an_actual_attacker_can_interrupt_a_retained_delivery() {
         wounded,
         "the ordinary human weapon must actually damage the bot: {trace:?}"
     );
+    // Return fire that lands is the bar. With human aim (`perception`:
+    // a steady miss rate, not every shot landing) the bot no longer always
+    // wins a duel against a scripted attacker who never misses and shoots
+    // first; it used to kill them inside the 8 s.
     assert!(
-        interrupted
-            && returned_damage
-            && (!g.s.vitals()[&g.human].alive
-                && g.s
-                    .death_results()
-                    .any(|d| d.victim == g.human && d.killer == Some(g.bot))),
+        interrupted && returned_damage,
         "real threat must preempt delivery and receive ordinary return fire: {trace:?}; {:?}",
         g.s.vitals()
     );

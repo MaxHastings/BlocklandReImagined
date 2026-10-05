@@ -191,29 +191,24 @@ mod tests {
     }
 
     #[test]
-    fn the_aim_error_drifts_above_its_floor() {
-        // After a long track the error's size is its floor, and the error
-        // itself keeps drifting within it, never parked at one offset.
-        let floor = 5f32.to_radians() * super::super::ERROR_FLOOR;
+    fn the_aim_error_drifts_within_its_size() {
+        // The error keeps drifting within its size, never parked at one
+        // offset and not hugging zero.
+        let size = 2f32.to_radians();
         for bot in 1..=4 {
             let errors: Vec<(f32, f32)> = (0..2400)
-                .map(|t| super::super::aim_error(bot, 600 + t, 5.0 + t as f32 / 120.0, 5.0))
+                .map(|t| super::super::aim_error(bot, 600 + t, size))
                 .collect();
-            assert!(errors.iter().all(|e| e.0.abs() <= floor + 1e-6));
+            assert!(errors.iter().all(|e| e.0.abs() <= size + 1e-6));
             for w in errors.windows(60) {
                 let (lo, hi) = w
                     .iter()
                     .fold((1f32, -1f32), |(a, b), e| (a.min(e.0), b.max(e.0)));
-                assert!(hi - lo > floor * 0.005, "bot {bot} parked");
+                assert!(hi - lo > size * 0.005, "bot {bot} parked");
             }
-            let wide = errors.iter().filter(|e| e.0.abs() > floor * 0.5).count();
+            let wide = errors.iter().filter(|e| e.0.abs() > size * 0.5).count();
             assert!(wide > 300, "bot {bot} aims too true: {wide}");
         }
-        // Fresh on a target it is wider.
-        let fresh = (0..480)
-            .map(|t| super::super::aim_error(1, t, 0.0, 5.0).0.abs())
-            .fold(0f32, f32::max);
-        assert!(fresh > floor * 1.2);
     }
 
     #[test]
