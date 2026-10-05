@@ -1224,7 +1224,6 @@ impl Session {
             && self.bot_team_relation(bot, other).is_none()
             && (self.bot_allies(bot, other)
                 || !kind.fights_bots
-                    && self.game_of(bot).is_none()
                     && kind.side.is_none()
                     && self
                         .bots
@@ -1253,8 +1252,7 @@ impl Session {
 
     /// Whether two brick bots are on one side: one side (Bot_Hole's
     /// `hType`) never fights itself and fights every other; bots of no side
-    /// side with their builder, except in a mini-game without teams, where
-    /// everyone is everyone's enemy.
+    /// side with their builder.
     fn bot_allies(&self, bot: OwnerId, other: OwnerId) -> bool {
         if let Some(allied) = self.bot_team_relation(bot, other) {
             return allied;
@@ -1279,10 +1277,7 @@ impl Session {
                 .and_then(|b| b.kind.side.as_deref())
         };
         match (side(bot), side(other)) {
-            (None, None) => {
-                self.game_of(bot).is_none()
-                    && self.bot_brick_owner(other) == self.bot_brick_owner(bot)
-            }
+            (None, None) => self.bot_brick_owner(other) == self.bot_brick_owner(bot),
             (mine, theirs) => mine == theirs,
         }
     }
@@ -2040,7 +2035,7 @@ impl Session {
         });
         // Teammates' intents, and what this bot exposes to them (`team`).
         let intents = self.team_intents(bot, tick);
-        let seats = self.team_seats(bot);
+        let seats = self.team_seats(bot, tick);
         let mount = self.mounted(bot).map(|(v, _)| v);
         let sightline = if driving.is_none() {
             self.team_sightline(

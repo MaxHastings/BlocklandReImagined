@@ -342,12 +342,24 @@ impl Session {
         behind / (behind + 1.0)
     }
 
-    /// The vehicle whose controls `bot` holds while one of its seats is free.
-    pub(super) fn team_seats(&self, bot: OwnerId) -> Option<u64> {
+    /// The vehicle whose controls `bot` holds while one of its seats is free
+    /// and it would wait for crew: still at rest, within the driver's wait
+    /// for crew (`interactions::CREW_WAIT`). A seat on a vehicle already
+    /// under way is no offer.
+    pub(super) fn team_seats(&self, bot: OwnerId, tick: u64) -> Option<u64> {
         let (vehicle, seat) = self.mounted(bot)?;
         let w = self.vehicles.world.as_ref()?;
         let d = w.definition_of(bri_vehicles::VehicleId(vehicle))?;
-        (d.seats.get(usize::from(seat))?.controls
+        let v = self.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
+        let waits = self
+            .bots
+            .brains
+            .get(&bot)?
+            .vehicle_since
+            .is_none_or(|(id, since)| id != vehicle || tick < since + interactions::CREW_WAIT);
+        (waits
+            && Vec3::from(v.velocity).length() < 2.0
+            && d.seats.get(usize::from(seat))?.controls
             && (0..d.seats.len()).any(|s| {
                 w.seat_occupant(bri_vehicles::VehicleId(vehicle), s)
                     .is_none()

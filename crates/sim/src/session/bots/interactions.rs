@@ -8,7 +8,7 @@ use rapier3d::prelude::*;
 
 const DISCOVER: f32 = 24.0;
 const RETRY: u64 = 240;
-const CREW_WAIT: u64 = 360;
+pub(super) const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 
@@ -706,10 +706,11 @@ impl Session {
     /// `quarry`, the one it is going after, and one standing at `goal`, the
     /// spot it is making for, which it contests rather than walks round.
     /// It always passes on its left, so two walking into each other both
-    /// step aside the same way and get by. An ally ahead already going its
-    /// way is not passed but followed at its pace (`team` overlap: the
-    /// later of two on one path gives way), so a file through a narrow gap
-    /// keeps moving instead of every one stepping into the frame.
+    /// step aside the same way and get by. In a gap (solid close on both
+    /// sides), an ally ahead already going its
+    /// way is followed at its pace instead (`team` overlap: the later of
+    /// two on one path gives way), so a file through a narrow gap keeps
+    /// moving instead of every one stepping into the frame.
     pub(super) fn bot_walk_direction(
         &self,
         bot: OwnerId,
@@ -729,12 +730,20 @@ impl Session {
             let width = (own.tuning().width + p.player.tuning().width) * 0.5;
             along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
         };
+        let side = Vec3::new(-desired.z, 0.0, desired.x);
+        let waist = feet + Vec3::Y * own.tuning().stand_height * 0.5;
+        // A gap: something solid close on both sides.
+        let no_room = [side, -side].iter().all(|d| {
+            self.world_ray(waist, *d, own.tuning().width + 0.6)
+                .is_some()
+        });
         // The pace of an ally ahead going the same way, as a share of its own.
         let follow = self
             .peers
             .iter()
             .filter(|(o, p)| {
-                **o != bot
+                no_room
+                    && **o != bot
                     && p.combat.alive
                     && !self.seated(**o)
                     && self.bot_allies(bot, **o)
@@ -760,7 +769,7 @@ impl Session {
             ahead(p)
         });
         if blocked {
-            (desired * 0.25 + Vec3::new(-desired.z, 0.0, desired.x)).normalize_or_zero()
+            (desired * 0.25 + side).normalize_or_zero()
         } else {
             desired
         }

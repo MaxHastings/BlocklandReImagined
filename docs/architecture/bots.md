@@ -249,13 +249,13 @@ everything else (`bots/team.rs`). Nothing names a game, item or vehicle.
 
 Each bot publishes its current choice as an *intent* beside the claims
 (`claims::Intent`, lapsing three ticks after it stops): where it goes or
-stands, its target, a vehicle whose free seats it controls, the space its
+stands, its target, a vehicle whose free seats it controls while it waits for crew, the space its
 weapon will hit (`claims::Space`, from real reach, splash and aim error,
 the same test the hold-fire check uses) and, from a seat it does not drive,
 the line its mount needs. Allies' intents enter each option's score as
 **overlap** (an earlier ally on the same target, or doing the same option
 at the same spot, costs: the first keeps it, and a choice among places or
-targets prefers an uncrowded one; following an ally through a gap at its
+targets prefers an uncrowded one; following an ally through a gap too narrow to pass it, at its
 pace rather than walking round it is the same rule) and **interaction**
 (a seat an ally offers, or a driving place from which a seated ally's
 mount sees its target, pays; a fight's stance in an ally's line of fire

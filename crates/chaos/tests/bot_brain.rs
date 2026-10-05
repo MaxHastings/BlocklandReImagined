@@ -235,11 +235,8 @@ fn an_armed_bot_takes_a_moment_to_react_then_hits_its_enemy() {
     );
 }
 
-/// One builder's bots side with each other only outside a mini-game. This
-/// mini-game has no teams, so (audit T1, a Deathmatch of brick bots) every
-/// player in it, one builder's bots included, is everyone's enemy.
 #[test]
-fn bots_of_one_builder_fight_in_a_mini_game_without_teams() {
+fn bots_of_one_builder_are_on_one_side() {
     let mut s = session();
     // The builder stands far out of sight; the two bots only see each other.
     let human = s
@@ -270,12 +267,12 @@ fn bots_of_one_builder_fight_in_a_mini_game_without_teams() {
     let bots = bots(&s);
     assert_eq!(bots.len(), 2);
     let vitals = s.vitals();
-    assert!(
-        bots.iter()
-            .any(|bot| !vitals[bot].alive || vitals[bot].health < 100.0),
-        "one builder's bots fought: {:?}",
-        bots.iter().map(|b| vitals[b].health).collect::<Vec<_>>()
-    );
+    for bot in bots {
+        assert_eq!(
+            vitals[&bot].health, 100.0,
+            "bot {bot} was not attacked by its ally"
+        );
+    }
 }
 
 #[test]
