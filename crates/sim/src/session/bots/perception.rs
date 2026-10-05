@@ -263,12 +263,13 @@ impl Alertness {
         }
     }
 }
-/// Only an idle bot glances: one strolling about. Walking home is going
-/// somewhere (in a ball game, back to its place for the next play): a
-/// glance there held 2v2 soccer bots' looks off their way and doubled the
-/// pushes of the ball toward their own goal.
+/// Only an idle bot glances: one strolling about or walking home. Only a
+/// strolling one looks round at someone merely near (`Source::Near`):
+/// walking home is going somewhere (in a ball game, back to its place for
+/// the next play), and those looks held 2v2 soccer bots' heads off their
+/// way (every one of 293 glances in a seed-2 match was there).
 pub(super) fn may_glance(behaviour: Behaviour) -> bool {
-    behaviour == Behaviour::Wander
+    matches!(behaviour, Behaviour::Wander | Behaviour::Return)
 }
 /// How much slower than plain it reacts (and how much wider its first aim
 /// errs): by alertness, and more from outside its view cone, blended by
@@ -676,6 +677,7 @@ impl Session {
         tick: u64,
         eye: Vec3,
         eligible: bool,
+        strolling: bool,
     ) -> Option<Vec3> {
         let kind = &self.bots.brains.get(&bot)?.kind;
         let (p, sight) = (kind.perception.clone(), kind.sight);
@@ -688,7 +690,9 @@ impl Session {
         } else {
             (None, Vec::new())
         };
-        stimuli.extend(near);
+        if strolling {
+            stimuli.extend(near);
+        }
         if poll {
             stimuli.extend(
                 self.bots
@@ -835,10 +839,9 @@ mod tests {
                 .glance(&p, SIGHT, 102, EYE, true, [], &mut rng)
                 .is_none()
         );
-        // Behaviours: only strolling glances.
-        assert!(may_glance(Behaviour::Wander));
+        // Behaviours: only strolling or walking home glances.
+        assert!(may_glance(Behaviour::Wander) && may_glance(Behaviour::Return));
         for b in [
-            Behaviour::Return,
             Behaviour::Objective,
             Behaviour::Carry,
             Behaviour::Fight,

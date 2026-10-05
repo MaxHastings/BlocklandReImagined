@@ -7,7 +7,7 @@ notices" layer. Base `claude/project-thread-pt64ji`, merged up to
 ## What changed
 
 - `crates/sim/src/session/bots/perception.rs` (new):
-  - **Glances.** An idle bot (Wander only; no enemy in sight, no
+  - **Glances.** An idle bot (Wander or Return, only Wander for someone near; no enemy in sight, no
     objective at hand, nothing held, not seated or driving) turns its
     ordinary aim for about `glance_seconds` at the most salient of: a
     projectile blast (10 units of reach per unit of radius), a weapon sound

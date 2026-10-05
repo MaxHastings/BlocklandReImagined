@@ -2792,6 +2792,7 @@ impl Session {
                 && !self.seated(bot)
                 && !situation.objective
                 && !situation.holding,
+            behaviour == Behaviour::Wander,
         );
         // At a natural pause, now and then something idle (`surprise`).
         let natural = behaviour == Behaviour::Wander
