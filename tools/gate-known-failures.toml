@@ -57,3 +57,152 @@ target = "bri-client/night_qa"
 test = "all_dials_on"
 owner = "fix/bots-ball-games-2"
 reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/min (bound 12). The bots lane (surprise + hold rule) fixes it; remove this entry when all_dials_on passes."
+
+# v0.2.4 shipped with these failing, on Max's word in the release thread
+# (2026-10-05, "allow"). Each bot entry still expects bot behaviour from before
+# the v0.2.4 bot merge; Max playtests the bots. Remove each entry as it is fixed.
+
+[[failure]]
+test = "a_bot_jets_over_to_someone_above_it"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "a_charged_mounted_weapon_is_held_until_ready_then_released_and_rearmed"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "a_jeep_on_each_side"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "a_known_dead_subject_invalidates_a_live_search_before_its_expiry"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "a_long_stare_turns_an_idle_bots_head"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "a_swimming_bot_roams_its_water_at_every_depth_and_never_leaves_it"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "a_teams_preferred_player_count_fills_it_with_bots"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "allies_file_through_one_narrow_doorway_without_deadlock"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "an_armed_bot_passenger_aims_in_world_space_on_a_rotated_stationary_chassis"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "an_armed_bot_shoots_through_a_portal_from_where_it_stands"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "an_idle_bot_near_a_loose_ball_pushes_it"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "an_unseen_enemy_keeps_its_observed_position_and_timestamp"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "authored_tool_loss_releases_the_method_and_accepts_only_real_native_outcomes"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "becoming_an_ally_invalidates_remembered_hostility_before_expiry"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "blocked_contact_does_not_renew_a_push_forever_and_retry_waits"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "deathmatch_mixed_arsenal"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "expired_evidence_stops_searching_without_refresh_from_the_hidden_actor"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "imported_ctf_bot_takes_the_actual_flag_and_returns_it_for_its_team"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "profile_sixteen_bots_in_the_real_bedroom"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "stairs_to_a_deck"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "team_fill_bots_play_slayer_soccer_with_or_without_weapons"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "the_brain_keeps_a_loose_hazard_out_of_an_allies_corridor"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "the_real_brain_detours_to_push_an_unnamed_loose_hazard"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "water_between_the_sides"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
+
+[[failure]]
+test = "the_fixed_save_corpus_hosts_like_the_game"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Duplications/bed.bls now keeps 16 bricks (8 placed, 8 set aside) against the corpus's 8 after the v0.2.4 merge; decide which is right and update save-corpus.json or the loader."
+
+[[failure]]
+test = "a_tap_inside_one_frame_still_fires::content"
+owner = "v0.2.5 bot/test cleanup"
+reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
+
+[[failure]]
+test = "steady_play_builds_and_uploads_nothing_whole::content"
+owner = "v0.2.5 bot/test cleanup"
+reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
+
+[[failure]]
+test = "the_bundled_soccer_field_loads_whole_from_load_bricks"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
