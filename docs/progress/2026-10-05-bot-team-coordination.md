@@ -43,7 +43,10 @@ run with `--include-ignored --test-threads 2`.
 - Mood waves (12 minds, one hour): spread 0.142 against 0.068 with mood 0;
   108 s at half or more against 0; mean 0.137; gaps irregular.
 - Chaos suites, team off (base) and team on (this branch):
-  bot_brain 18 to 19 (new: allies file through one doorway),
+  bot_brain 18 to 19 (new: four allies through one 1.5-unit doorway, all
+  through by tick 1088; that doorway does not trip the both-sides gap test,
+  so the sidestep alone carries them and the follow rule is not exercised
+  there),
   bot_interactions 18 to 19 (new: seat offer read from seat data),
   bot_knowledge 8/8, bot_soccer_match 5/5, bot_soccer_teams 5/5,
   bot_tactics 13/13, bot_team 1/1 (new),
@@ -67,8 +70,9 @@ and objectives to Wander: harm now costs only a fight's stance, which
 steps out. Place crowding kept a second bot off a passenger seat: seats are
 the claim's. A gunner's weapon space covered its own driver: crew are
 exempt. Bots piled on one item: an item an ally went first for is left to
-it. Following in every case slowed a race: only where there is no room to
-step aside. Seat offers from a vehicle under way pulled bots into chasing
+it. Following in every case slowed a race (circling 17.5%) and broke 3v3
+soccer (seed 2: ball ignored 278 bot-s): only where solid stands close on
+both sides. Seat offers from a vehicle under way pulled bots into chasing
 it (jeep circling 3.4%): an offer stands only while the driver waits.
 
 ## Not done
