@@ -12,7 +12,7 @@ pub const TERMS: [&str; 3] = ["overlap", "uses", "harm"];
 /// What each term is worth at `teamwork` 1, on the 0-1 scale behaviour
 /// scores use. Fixed in code: their ratio is the mechanism, the dial is
 /// how much of it a kind shows. An ally on the same target or spot costs
-/// a third of a score at most, a seat or sightline it offers adds as much,
+/// a third of a score at most (each further one half the last), a seat or sightline it offers adds as much,
 /// and standing in its line of fire costs twice that, since it is a risk
 /// to both.
 const OVERLAP: f32 = 0.3;

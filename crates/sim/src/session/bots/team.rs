@@ -82,17 +82,23 @@ pub(super) fn terms(
     clear: &dyn Fn(Vec3, Vec3) -> bool,
 ) -> Terms {
     let mut t = Terms::default();
+    // Each further ally crowding it costs half the one before, so crowding
+    // never costs more than twice one ally's worth: a fourth bot on one
+    // enemy still goes after them rather than wander off.
+    let mut crowd = 1.0;
     for (ally, intent) in allies {
         // A seat is leased exclusively (`claims`), so taking one never
         // crowds the allies around it.
         if (intent.since, *ally) < (since, me) {
             if choice.target.is_some() && choice.target == intent.target {
-                t.overlap += cfg.overlap();
+                t.overlap += cfg.overlap() * crowd;
+                crowd *= 0.5;
             } else if let (Some(a), Some(b), None) = (choice.place, intent.place, choice.seat)
                 && intent.option == option
                 && a.distance(b) < CROWD
             {
-                t.overlap += cfg.overlap() * (1.0 - a.distance(b) / CROWD);
+                t.overlap += cfg.overlap() * crowd * (1.0 - a.distance(b) / CROWD);
+                crowd *= 0.5;
             }
         }
         if choice.seat.is_some() && choice.seat == intent.seats {
