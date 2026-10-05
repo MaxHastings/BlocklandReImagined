@@ -20,8 +20,13 @@
 //! only the return fire waits. Any other pause before acting on a change
 //! (a chooser's tell) takes its length from [`Brain::switch_delay`].
 //!
-//! Every number is the kind's `perception` (`bots.json`); 0 turns its part
-//! off, and the RNG is the bot's own seeded one.
+//! The kind's `perception` (`bots.json`) holds seven numbers: `salience`
+//! (scales every source's reach, 0 off), `glance_seconds`,
+//! `cooldown_seconds`, `alertness` (0 to 1, scales the delay, aim error,
+//! view-cone delay and turn cap together, 0 plain), `relaxed_scale`,
+//! `away_scale`, `view_degrees`. Reaches come from engine data (blast
+//! radius, sound volume, the kind's sight, the body's running speed) times
+//! fixed constants below. The RNG is the bot's own seeded one.
 use super::behaviour::Behaviour;
 use super::*;
 use crate::bot_kind::BotPerception;
@@ -30,15 +35,25 @@ use crate::bot_kind::BotPerception;
 const POLL_TICKS: u64 = 12;
 /// Most stimuli one tick keeps for bots to notice.
 const MAX_STIMULI: usize = 32;
+// Fixed by how perception works, not per kind (the kind's `salience`
+// scales every reach at once):
 /// A stare is someone's look within this many degrees of the bot's eye...
 const GAZE_DEGREES: f32 = 8.0;
 /// ...held this long.
 const GAZE_SECONDS: f32 = 1.5;
-/// Units a second over which a body counts as moving fast; it is fully
-/// salient at twice this.
-const FAST: f32 = 14.0;
+/// A blast is noticed out to this many units per unit of its radius...
+const BLAST_REACH: f32 = 10.0;
+/// ...a sound out to this many at full volume...
+const SOUND_REACH: f32 = 12.0;
+/// ...and a stare or fast motion out to this share of the kind's sight.
+const SEEN_REACH: f32 = 0.3;
+/// A body moving faster than this many times the bot's own running speed
+/// is moving fast; it is fully salient at twice that.
+const FAST: f32 = 2.0;
 /// Seconds the starting aim error takes to narrow (`bots.rs`' tracking).
 const SETTLE_SECONDS: f32 = 2.0;
+/// A reaction delay varies by up to this share either way.
+const JITTER: f32 = 0.3;
 
 /// The bots' seeded generator: the next value in [0, 1).
 pub(super) fn draw(rng: &mut u64) -> f32 {
@@ -59,10 +74,17 @@ pub(in crate::session) struct Stimulus {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Source {
-    Blast { radius: f32 },
-    Sound { volume: f32 },
+    Blast {
+        radius: f32,
+    },
+    Sound {
+        volume: f32,
+    },
     Gaze,
-    Motion { speed: f32 },
+    /// How much faster than fast, 0 to 1.
+    Motion {
+        strength: f32,
+    },
 }
 impl Source {
     fn name(self) -> &'static str {
@@ -87,15 +109,18 @@ impl Stimulus {
             source: Source::Sound { volume },
         }
     }
-    /// The chance it draws the eye of a bot at `from`: 1 at the source,
-    /// falling off to 0 at its reach (one reach per source).
-    fn salience(&self, p: &BotPerception, from: Vec3) -> f32 {
+    /// The chance it draws the eye of a bot at `from` that sees `sight`
+    /// units: 1 at the source, falling off to 0 at its reach, which the
+    /// kind's `salience` scales.
+    fn salience(&self, p: &BotPerception, sight: f32, from: Vec3) -> f32 {
+        let seen = sight * SEEN_REACH;
         let (strength, reach) = match self.source {
-            Source::Blast { radius } => (1.0, radius.max(0.0) * p.blast),
-            Source::Sound { volume } => (1.0, volume.clamp(0.0, 1.0) * p.sound),
-            Source::Gaze => (1.0, p.gaze),
-            Source::Motion { speed } => ((speed / FAST - 1.0).clamp(0.0, 1.0), p.motion),
+            Source::Blast { radius } => (1.0, radius.max(0.0) * BLAST_REACH),
+            Source::Sound { volume } => (1.0, volume.clamp(0.0, 1.0) * SOUND_REACH),
+            Source::Gaze => (1.0, seen),
+            Source::Motion { strength } => (strength, seen),
         };
+        let reach = reach * p.salience;
         let distance = from.distance(self.at);
         if !(strength > 0.0 && reach > 0.0 && distance < reach) {
             return 0.0;
@@ -153,15 +178,16 @@ pub(super) fn may_glance(behaviour: Behaviour) -> bool {
 /// the kind's `reaction` weight.
 fn scale(p: &BotPerception, alertness: Alertness, away: bool) -> f32 {
     let scale = match alertness {
-        Alertness::Combat => p.combat_scale,
+        // Fighting or hunting: the kind's plain numbers.
+        Alertness::Combat => 1.0,
         Alertness::Ordinary => 1.0,
         Alertness::Relaxed => p.relaxed_scale,
     } * if away { p.away_scale } else { 1.0 };
-    (1.0 + p.reaction * (scale - 1.0)).max(0.0)
+    (1.0 + p.alertness * (scale - 1.0)).max(0.0)
 }
 /// Ticks of delay before acting on something new: the kind's plain
-/// `reaction_seconds` scaled by alertness and view, varied by `jitter`.
-/// With the `reaction` weight 0, exactly `reaction_seconds`, drawing
+/// `reaction_seconds` scaled by alertness and view, varied by `JITTER`.
+/// With the kind's `alertness` 0, exactly `reaction_seconds`, drawing
 /// nothing. Any pause before acting on a change uses this.
 pub(super) fn delay_ticks(
     p: &BotPerception,
@@ -170,10 +196,10 @@ pub(super) fn delay_ticks(
     away: bool,
     rng: &mut u64,
 ) -> u64 {
-    if p.reaction <= 0.0 {
+    if p.alertness <= 0.0 {
         return ticks(reaction_seconds);
     }
-    let jitter = 1.0 + p.reaction * p.jitter * (draw(rng) * 2.0 - 1.0);
+    let jitter = 1.0 + p.alertness * JITTER * (draw(rng) * 2.0 - 1.0);
     ticks(reaction_seconds * scale(p, alertness, away) * jitter)
 }
 
@@ -214,9 +240,11 @@ impl State {
     /// Where it glances this tick, if anywhere. An ongoing glance holds;
     /// otherwise, off cooldown, the most salient of `stimuli` may start
     /// one, by a chance its salience gives.
+    #[allow(clippy::too_many_arguments)]
     fn glance(
         &mut self,
         p: &BotPerception,
+        sight: f32,
         tick: u64,
         eye: Vec3,
         eligible: bool,
@@ -238,7 +266,7 @@ impl State {
         }
         let (salience, best) = stimuli
             .into_iter()
-            .map(|s| (s.salience(p, eye), s))
+            .map(|s| (s.salience(p, sight, eye), s))
             .filter(|(salience, s)| *salience > 0.0 && s.at.distance(eye) > 0.5)
             .max_by(|a, b| a.0.total_cmp(&b.0))?;
         if draw(rng) >= salience {
@@ -246,7 +274,7 @@ impl State {
         }
         let until = tick + ticks(p.glance_seconds * (0.75 + 0.5 * draw(rng))).max(1);
         self.glance = Some(Glance { at: best.at, until });
-        self.next_glance = until + ticks(p.glance_cooldown_seconds);
+        self.next_glance = until + ticks(p.cooldown_seconds);
         self.why = Some(BotNotice {
             why: best.source.name(),
             since: tick,
@@ -307,7 +335,7 @@ impl State {
                 1.0
             },
         });
-        if p.reaction > 0.0 {
+        if p.alertness > 0.0 {
             self.why = Some(BotNotice {
                 why: alertness.name(away),
                 since: tick,
@@ -390,14 +418,14 @@ impl Brain {
             away,
             rng,
         );
-        if kind.perception.reaction > 0.0 && perception.why.is_some_and(|w| w.since == tick) {
+        if kind.perception.alertness > 0.0 && perception.why.is_some_and(|w| w.since == tick) {
             self.next_error = tick;
         }
     }
     /// It was hurt by `k.subject`, not the target it is fighting: with the
     /// reaction model on, its return fire waits a reaction.
     pub(super) fn hurt_by(&mut self, k: &Knowledge, feet: Vec3, tick: u64) {
-        if self.kind.perception.reaction > 0.0 && self.target != Some(k.subject) {
+        if self.kind.perception.alertness > 0.0 && self.target != Some(k.subject) {
             self.perceive(k.subject, k.at, feet, tick, true, true);
         }
     }
@@ -426,13 +454,14 @@ impl Session {
         eye: Vec3,
         eligible: bool,
     ) -> Option<Vec3> {
-        let p = self.bots.brains.get(&bot)?.kind.perception.clone();
+        let kind = &self.bots.brains.get(&bot)?.kind;
+        let (p, sight) = (kind.perception.clone(), kind.sight);
+        let reach = sight * SEEN_REACH * p.salience;
+        let fast = FAST * self.peers.get(&bot)?.player.tuning().forward.max(0.1);
         let mut stimuli = self.bots.stimuli.clone();
-        let poll = eligible && (tick + bot).is_multiple_of(POLL_TICKS);
-        let watcher = (poll && p.gaze > 0.0)
-            .then(|| self.bot_watcher(bot, eye, p.gaze))
-            .flatten();
-        if poll && p.motion > 0.0 {
+        let poll = eligible && reach > 0.0 && (tick + bot).is_multiple_of(POLL_TICKS);
+        let watcher = poll.then(|| self.bot_watcher(bot, eye, reach)).flatten();
+        if poll {
             stimuli.extend(
                 self.bots
                     .objects
@@ -440,14 +469,14 @@ impl Session {
                     .filter(|v| !v.destroyed)
                     .map(|v| (Vec3::from(v.transform.position), Vec3::from(v.velocity)))
                     .filter(|(at, velocity)| {
-                        velocity.length() > FAST
-                            && at.distance(eye) < p.motion
+                        velocity.length() > fast
+                            && at.distance(eye) < reach
                             && self.bot_sees_point(eye, *at)
                     })
                     .map(|(at, velocity)| Stimulus {
                         at,
                         source: Source::Motion {
-                            speed: velocity.length(),
+                            strength: (velocity.length() / fast - 1.0).min(1.0),
                         },
                     }),
             );
@@ -461,7 +490,7 @@ impl Session {
         let Brain {
             perception, rng, ..
         } = brain;
-        perception.glance(&p, tick, eye, eligible, stimuli, rng)
+        perception.glance(&p, sight, tick, eye, eligible, stimuli, rng)
     }
     /// The nearest player in plain view, within `range`, whose look points
     /// within `GAZE_DEGREES` of `bot`'s eye.
@@ -507,15 +536,10 @@ mod tests {
     use super::*;
 
     fn on() -> BotPerception {
-        BotPerception {
-            blast: 10.0,
-            sound: 20.0,
-            gaze: 24.0,
-            motion: 24.0,
-            reaction: 1.0,
-            ..Default::default()
-        }
+        BotPerception::default()
     }
+    /// The Blockhead's sight: a stare or fast motion reaches 24 units.
+    const SIGHT: f32 = 80.0;
     fn blast_at(x: f32) -> Stimulus {
         Stimulus::blast(Vec3::new(x, 1.0, 0.0), 4.0)
     }
@@ -527,7 +551,7 @@ mod tests {
         let mut rng = 7;
         let mut idle = State::default();
         assert_eq!(
-            idle.glance(&p, 100, EYE, true, [blast_at(1.0)], &mut rng),
+            idle.glance(&p, SIGHT, 100, EYE, true, [blast_at(1.0)], &mut rng),
             Some(blast_at(1.0).at)
         );
         assert_eq!(idle.why.unwrap().why, "glance: blast");
@@ -535,15 +559,18 @@ mod tests {
         let until = idle.why.unwrap().until;
         assert!(until > 100 && until <= 100 + ticks(p.glance_seconds * 1.25) + 1);
         assert!(
-            idle.glance(&p, until - 1, EYE, true, [], &mut rng)
+            idle.glance(&p, SIGHT, until - 1, EYE, true, [], &mut rng)
                 .is_some()
         );
-        assert!(idle.glance(&p, until, EYE, true, [], &mut rng).is_none());
+        assert!(
+            idle.glance(&p, SIGHT, until, EYE, true, [], &mut rng)
+                .is_none()
+        );
         // Carrying an objective, in combat aim or driving, the caller says
         // not eligible: no glance, and an ongoing one ends.
         let mut busy = State::default();
         assert!(
-            busy.glance(&p, 100, EYE, false, [blast_at(1.0)], &mut rng)
+            busy.glance(&p, SIGHT, 100, EYE, false, [blast_at(1.0)], &mut rng)
                 .is_none()
         );
         assert!(busy.why.is_none());
@@ -551,17 +578,17 @@ mod tests {
         let mut rng = 7;
         assert!(
             interrupted
-                .glance(&p, 100, EYE, true, [blast_at(1.0)], &mut rng)
+                .glance(&p, SIGHT, 100, EYE, true, [blast_at(1.0)], &mut rng)
                 .is_some()
         );
         assert!(
             interrupted
-                .glance(&p, 101, EYE, false, [], &mut rng)
+                .glance(&p, SIGHT, 101, EYE, false, [], &mut rng)
                 .is_none()
         );
         assert!(
             interrupted
-                .glance(&p, 102, EYE, true, [], &mut rng)
+                .glance(&p, SIGHT, 102, EYE, true, [], &mut rng)
                 .is_none()
         );
         // Behaviours: only strolling or walking home glances.
@@ -581,16 +608,16 @@ mod tests {
     #[test]
     fn salience_falls_off_to_each_sources_reach() {
         let p = on();
-        // Radius 4 reaches 4 * 10 = 40 units.
-        assert!(blast_at(20.0).salience(&p, EYE) > 0.49);
-        assert_eq!(blast_at(40.0).salience(&p, EYE), 0.0);
+        // Radius 4 reaches 4 * BLAST_REACH = 40 units at salience 1.
+        assert!(blast_at(20.0).salience(&p, SIGHT, EYE) > 0.49);
+        assert_eq!(blast_at(40.0).salience(&p, SIGHT, EYE), 0.0);
         let near = Vec3::new(1.0, 1.0, 0.0);
-        assert_eq!(Stimulus::sound(near, 0.0).salience(&p, EYE), 0.0);
-        assert!(Stimulus::sound(near, 1.0).salience(&p, EYE) > 0.9);
+        assert_eq!(Stimulus::sound(near, 0.0).salience(&p, SIGHT, EYE), 0.0);
+        assert!(Stimulus::sound(near, 1.0).salience(&p, SIGHT, EYE) > 0.9);
         let mut rng = 7;
         let mut s = State::default();
         assert!(
-            s.glance(&p, 1, EYE, true, [blast_at(41.0)], &mut rng)
+            s.glance(&p, SIGHT, 1, EYE, true, [blast_at(41.0)], &mut rng)
                 .is_none()
         );
     }
@@ -600,20 +627,20 @@ mod tests {
         let p = on();
         let mut rng = 11;
         let mut s = State::default();
-        s.glance(&p, 0, EYE, true, [blast_at(0.6)], &mut rng)
+        s.glance(&p, SIGHT, 0, EYE, true, [blast_at(0.6)], &mut rng)
             .unwrap();
         let until = s.why.unwrap().until;
-        let cooled = until + ticks(p.glance_cooldown_seconds);
+        let cooled = until + ticks(p.cooldown_seconds);
         for tick in until..cooled {
             assert!(
-                s.glance(&p, tick, EYE, true, [blast_at(0.6)], &mut rng)
+                s.glance(&p, SIGHT, tick, EYE, true, [blast_at(0.6)], &mut rng)
                     .is_none(),
                 "{tick}"
             );
         }
         let after = (cooled..cooled + 20)
             .find(|tick| {
-                s.glance(&p, *tick, EYE, true, [blast_at(0.6)], &mut rng)
+                s.glance(&p, SIGHT, *tick, EYE, true, [blast_at(0.6)], &mut rng)
                     .is_some()
             })
             .expect("a glance once cooled down");
@@ -636,7 +663,10 @@ mod tests {
         assert!(s.watched(2 * stare + 1, watcher).is_none());
         assert!(s.watched(2 * stare + 1, Some((8, EYE))).is_none());
         let mut rng = 3;
-        assert!(s.glance(&p, 0, EYE, true, [seen], &mut rng).is_some());
+        assert!(
+            s.glance(&p, SIGHT, 0, EYE, true, [seen], &mut rng)
+                .is_some()
+        );
         assert_eq!(s.why.unwrap().why, "glance: watched");
     }
 
@@ -644,12 +674,18 @@ mod tests {
     fn fast_motion_needs_speed_over_its_threshold() {
         let p = on();
         let at = Vec3::new(3.0, 1.0, 0.0);
-        let moving = |speed| Stimulus {
+        let moving = |strength| Stimulus {
             at,
-            source: Source::Motion { speed },
+            source: Source::Motion { strength },
         };
-        assert_eq!(moving(FAST).salience(&p, EYE), 0.0);
-        assert!(moving(FAST * 3.0).salience(&p, EYE) > 0.8);
+        assert_eq!(moving(0.0).salience(&p, SIGHT, EYE), 0.0);
+        assert!(moving(1.0).salience(&p, SIGHT, EYE) > 0.8);
+        // Out past its share of the kind's sight.
+        let far = Stimulus {
+            at: Vec3::new(25.0, 1.0, 0.0),
+            source: Source::Motion { strength: 1.0 },
+        };
+        assert_eq!(far.salience(&p, SIGHT, EYE), 0.0);
     }
 
     #[test]
@@ -661,7 +697,7 @@ mod tests {
             let slow = relaxed.react(&p, 0.35, 5, 1000, Alertness::Relaxed, false, &mut a);
             let quick = fighting.react(&p, 0.35, 5, 1000, Alertness::Combat, false, &mut b);
             assert!(slow > quick, "seed {seed}: {slow} vs {quick}");
-            assert!(relaxed.aim_scale(5, 0.0) > 1.0 && fighting.aim_scale(5, 0.0) < 1.0);
+            assert!(relaxed.aim_scale(5, 0.0) > 1.0 && fighting.aim_scale(5, 0.0) == 1.0);
             // From outside its view cone, slower again, and turning slower
             // until it has reacted.
             let mut c = seed;
@@ -721,13 +757,10 @@ mod tests {
     }
 
     #[test]
-    fn weights_at_zero_turn_noticing_off() {
+    fn salience_and_alertness_at_zero_turn_noticing_off() {
         let p = BotPerception {
-            blast: 0.0,
-            sound: 0.0,
-            gaze: 0.0,
-            motion: 0.0,
-            reaction: 0.0,
+            salience: 0.0,
+            alertness: 0.0,
             ..Default::default()
         };
         let mut rng = 5;
@@ -741,14 +774,14 @@ mod tests {
             },
             Stimulus {
                 at: EYE + Vec3::X,
-                source: Source::Motion { speed: 400.0 },
+                source: Source::Motion { strength: 1.0 },
             },
         ]
         .into_iter()
         .enumerate()
         {
             assert!(
-                s.glance(&p, tick as u64, EYE, true, [stimulus], &mut rng)
+                s.glance(&p, SIGHT, tick as u64, EYE, true, [stimulus], &mut rng)
                     .is_none()
             );
         }

@@ -115,35 +115,34 @@ bot does through the same code.
 ## Noticing
 
 `bots/perception.rs` adds two small mechanisms on top of sight, tuned by
-the kind's `perception` (12 numbers; on by default for every kind).
+the kind's `perception` (eight numbers, on by default for every kind).
 
 - **Glances.** A strolling or homeward bot (Wander, Return) with no enemy
   in sight, no objective at hand, nothing held, no seat and no chassis may
   turn its ordinary aim at something salient for about `glance_seconds`,
-  then waits `glance_cooldown_seconds`. Sources are engine data only, one
-  reach each: a projectile blast (the weapons runtime's `Blast` event),
-  noticed out to `blast` units per unit of its radius; a weapon sound, out
-  to `sound` units at full `volume`; someone in plain view looking within
-  8 degrees of it for 1.5 seconds, within `gaze` units; a body faster than
-  14 units a second (fully at twice that), within `motion` units. Salience
-  falls from 1 at the source to 0 at its reach and is the chance of a
-  glance. The walk goes on; only the look turns. A reach of 0 turns that
-  source off.
+  then waits `cooldown_seconds`. Sources are engine data only: a
+  projectile blast (the weapons runtime's `Blast` event), noticed out to
+  10 units per unit of its radius; a weapon sound, out to 12 units at full
+  `volume`; a stare (someone in plain view looking within 8 degrees of it
+  for 1.5 seconds) or a body faster than twice its own running speed,
+  within 0.3 of its `sight`. `salience` scales every reach (0 turns
+  glances off). Salience falls from 1 at the source to 0 at its reach and
+  is the chance of a glance. The walk goes on; only the look turns.
 - **Reaction.** A newly seen target, or an attacker it was not already
   fighting, starts a reaction: `reaction_seconds` times `combat_scale` when
   it was fighting or hunting (Fight, Chase, Fly, Search), `relaxed_scale`
   when strolling or playing about (Wander, Interact), times `away_scale`
-  for a target outside its `view_degrees` cone, varied by `jitter` from
-  its seeded RNG. It fires only after it, and turns `away_scale` times
-  slower toward a target from outside its cone until then. The same scale
-  multiplies its starting aim error (`aim_error_degrees`), which narrows
-  over the usual two seconds of tracking. A spawn-protected target is
-  watched but not reacted to: the clock starts when it can be hurt.
+  for a target outside its `view_degrees` cone, varied by 30% either way
+  from its seeded RNG. It fires only after it, and turns `away_scale`
+  times slower toward a target from outside its cone until then. The same
+  scale multiplies its starting aim error (`aim_error_degrees`), which
+  narrows over the usual two seconds of tracking. A spawn-protected target
+  is watched but not reacted to: the clock starts when it can be hurt.
   Damage still interrupts at once (the chooser sees it as before); only
-  the return fire waits. `reaction` blends the model in: 0 keeps exactly
-  `reaction_seconds` and the plain error. `perception::delay_ticks` and
-  `Brain::switch_delay` give the same delay to any other pause before
-  acting on a change (a chooser's tell).
+  the return fire waits. `alertness` (0 to 1) blends the delay, error and
+  turn cap in together: 0 keeps exactly `reaction_seconds` and the plain
+  error. `perception::delay_ticks` and `Brain::switch_delay` give the same
+  delay to any other pause before acting on a change (a chooser's tell).
 
 `BotThought::noticed` reads out the last glance or reaction (`glance:
 blast`, `glance: watched`, `reacting: relaxed, from behind`, ...) with

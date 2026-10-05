@@ -18,18 +18,13 @@
       "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4, "cover_distance": 6, "cover_side": 3, "clear_degrees": 60 },
       "fighting": { "band_slack": 0.15, "min_band_slack": 1.5, "dwell_seconds": 0.5, "strafe_seconds": 3.5 },
       "perception": {
+        "salience": 1,
         "glance_seconds": 0.8,
-        "glance_cooldown_seconds": 6,
-        "blast": 0,
-        "sound": 0,
-        "gaze": 0,
-        "motion": 0,
-        "reaction": 0,
-        "combat_scale": 0.6,
+        "cooldown_seconds": 6,
+        "alertness": 1,
         "relaxed_scale": 1.8,
         "away_scale": 1.5,
-        "view_degrees": 180,
-        "jitter": 0.3
+        "view_degrees": 180
       },
       "mounted": {
         "anchor": "mount",

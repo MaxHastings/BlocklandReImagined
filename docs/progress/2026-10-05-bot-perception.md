@@ -8,30 +8,39 @@ notices" layer. Base `claude/project-thread-pt64ji`.
 - `crates/sim/src/session/bots/perception.rs` (new). Two mechanisms:
   - **Glances.** An idle bot (Wander or Return; no enemy in sight, no
     objective at hand, nothing held, not seated or driving) turns its
-    ordinary aim for about 0.8 s at the most salient of: a projectile
-    blast (reach per unit of blast radius), a weapon sound (reach at full
-    volume), a 1.5 s stare from someone within 8 degrees and in plain view,
-    a body over 14 u/s. Salience is 1 at the source falling to 0 at its
-    reach and is the chance of a glance; a 6 s cooldown follows. The walk
-    goes on; only the look turns.
+    ordinary aim for about `glance_seconds` at the most salient of: a
+    projectile blast (10 units of reach per unit of blast radius), a weapon
+    sound (12 units at full volume), a 1.5 s stare from someone within 8
+    degrees and in plain view, a body faster than twice the bot's own
+    running speed (both within 0.3 of the kind's `sight`). `salience`
+    scales every reach. Salience is 1 at the source falling to 0 at its
+    reach and is the chance of a glance; `cooldown_seconds` follows. The
+    walk goes on; only the look turns.
   - **Reaction.** A newly seen target, or an attacker it was not fighting,
     gets a delay of `reaction_seconds` x `combat_scale` (fighting or
     hunting) or `relaxed_scale` (strolling, interacting), x `away_scale`
-    outside its `view_degrees` cone, +-`jitter`, from its own seeded RNG.
-    The same scale multiplies the starting aim error, which narrows over
-    the existing two seconds of tracking. Outside the cone it also turns
+    outside its `view_degrees` cone, +-30%, from its own seeded RNG. The
+    same scale multiplies the starting aim error, which narrows over the
+    existing two seconds of tracking. Outside the cone it also turns
     `away_scale` times slower toward the target until it has reacted (no
-    instant 180-degree snaps). A spawn-protected target is watched but not
-    reacted to; the clock starts when it can be hurt (edge case I8/A7: no
-    instant kill the tick protection ends). Damage still interrupts at once
-    through the existing threat path; only the return fire waits.
+    instant 180-degree snaps; edge case P2). A spawn-protected target is
+    watched but not reacted to; the clock starts when it can be hurt (edge
+    cases I8/A7: no instant kill the tick protection ends). Damage still
+    interrupts at once through the existing threat path; only the return
+    fire waits. `alertness` (0 to 1) blends delay, error and turn cap
+    together.
   - `delay_ticks` and `Brain::switch_delay` expose the same delay for the
     surprise chooser's tell (audit part 10: "merge into the reaction").
-- `BotKind::perception` (`bot_kind.rs`), 12 tunables, validated, on by
-  default for every kind (Max: no "off" stage). The Blockhead's
-  `bots.json` lists them. The audit counted 21 in the first cut; merged to
-  one reach per source, the wobble folded into the existing aim-error
-  narrowing, gaze cone/time and the "fast" speed made documented constants.
+- `BotKind::perception` (`bot_kind.rs`), validated, on by default for
+  every kind (Max: no "off" stage). Max asked for fewer knobs: the first
+  cut had 21; now 8: `salience`, `glance_seconds`, `cooldown_seconds`,
+  `alertness`, `combat_scale`, `relaxed_scale`, `away_scale`,
+  `view_degrees`. Reaches derive from engine data (blast radius, sound
+  volume, the kind's sight, the body's running speed) times documented
+  constants in `perception.rs` (gaze cone and time, reach factors, the
+  fast multiple, jitter, settle time). The wobble is the existing
+  aim-error narrowing scaled, not a separate model. The Blockhead's
+  `bots.json` lists the eight.
 - Weapons runtime: a `Blast { source, position, radius }` event from
   `explode` (engine data for bystanders). The sim feeds it and weapon
   `Sound` events (with the sound's `volume`) to `Bots::notice`.
@@ -66,8 +75,20 @@ notices" layer. Base `claude/project-thread-pt64ji`.
   turns an idle bot's look to within 12 degrees of the watcher; none at
   reach 0; an armed relaxed bot's first wound comes at least 100 ticks
   later than plain, with a 180-tick `reacting: relaxed` readout).
-- Full suites: see the lane report (bri-sim, bri-weapons, bri-chaos bot
-  tests with perception on).
+- Full suites with perception on (defaults): `cargo test -p bri-sim -p
+  bri-weapons --no-fail-fast` and every `bri-chaos` bot test file plus
+  shark, turret, gun-seat, spawn, session-chaos and weapons fuzz.
+  Two failures, both identical on the unmodified base (exported
+  `abd81c4e` built separately): `showcase::a_bot_carries_its_catch_out_into_the_open_to_throw`
+  (throws under the roof at the same coordinates with perception off) and
+  `bot_gauntlet::a_jeep_on_each_side` (switches per minute, line 199; the
+  audit already lists it as T8). Neither is in `tools/gate-known-failures.toml`.
+- Build note: with one `CARGO_TARGET_DIR` shared by lanes, workspace
+  crates from different worktrees share artifact hashes and can overwrite
+  each other between build and run (one run linked another lane's
+  `bri-sim` and rejected `perception` as an unknown field). The lane's
+  runs used a config with a different `codegen-units` for bri-weapons,
+  bri-sim and bri-chaos so their artifacts are its own.
 
 ## Next
 

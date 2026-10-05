@@ -105,49 +105,38 @@ pub struct BotKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BotPerception {
+    /// Scales how far every source is noticed (a blast's radius, a sound's
+    /// volume, a stare or fast motion within part of its sight); 0 turns
+    /// glances off.
+    pub salience: f32,
     /// How long a glance holds, give or take a quarter.
     pub glance_seconds: f32,
     /// Seconds after a glance before the next.
-    pub glance_cooldown_seconds: f32,
-    /// A blast is noticed out to this many units per unit of its radius.
-    pub blast: f32,
-    /// A sound out to this many units at full volume.
-    pub sound: f32,
-    /// A stare from someone within this many units.
-    pub gaze: f32,
-    /// A body moving fast within this many units. 0 turns any of these off.
-    pub motion: f32,
-    /// How far the reaction model below applies, 0 to 1: 0 keeps exactly
-    /// `reaction_seconds` and `aim_error_degrees`.
-    pub reaction: f32,
-    /// `reaction_seconds` and the starting aim error are scaled by this
-    /// while already fighting or hunting...
-    pub combat_scale: f32,
-    /// ...by this while strolling or playing about...
+    pub cooldown_seconds: f32,
+    /// How far the reaction model below applies, 0 to 1: it scales the
+    /// delay, the starting aim error and the slower turn together. 0 keeps
+    /// exactly `reaction_seconds` and `aim_error_degrees`.
+    pub alertness: f32,
+    /// While strolling or playing about, `reaction_seconds` and the starting
+    /// aim error are scaled by this (already fighting or hunting, they are
+    /// the kind's plain numbers)...
     pub relaxed_scale: f32,
     /// ...and by this more for a target outside its view cone, toward which
     /// it also turns this many times slower until it has reacted.
     pub away_scale: f32,
     /// How wide its view cone is, in degrees.
     pub view_degrees: f32,
-    /// The delay varies by up to this share either way.
-    pub jitter: f32,
 }
 impl Default for BotPerception {
     fn default() -> Self {
         Self {
+            salience: 1.0,
             glance_seconds: 0.8,
-            glance_cooldown_seconds: 6.0,
-            blast: 10.0,
-            sound: 12.0,
-            gaze: 24.0,
-            motion: 20.0,
-            reaction: 1.0,
-            combat_scale: 0.6,
+            cooldown_seconds: 6.0,
+            alertness: 1.0,
             relaxed_scale: 1.8,
             away_scale: 1.5,
             view_degrees: 180.0,
-            jitter: 0.3,
         }
     }
 }
@@ -506,6 +495,7 @@ impl BotKind {
                 0.0,
                 64.0,
             ),
+            ("perception.salience", self.perception.salience, 0.0, 8.0),
             (
                 "perception.glance_seconds",
                 self.perception.glance_seconds,
@@ -513,22 +503,12 @@ impl BotKind {
                 5.0,
             ),
             (
-                "perception.glance_cooldown_seconds",
-                self.perception.glance_cooldown_seconds,
+                "perception.cooldown_seconds",
+                self.perception.cooldown_seconds,
                 0.0,
                 120.0,
             ),
-            ("perception.blast", self.perception.blast, 0.0, 64.0),
-            ("perception.sound", self.perception.sound, 0.0, 256.0),
-            ("perception.gaze", self.perception.gaze, 0.0, 256.0),
-            ("perception.motion", self.perception.motion, 0.0, 256.0),
-            ("perception.reaction", self.perception.reaction, 0.0, 1.0),
-            (
-                "perception.combat_scale",
-                self.perception.combat_scale,
-                0.0,
-                4.0,
-            ),
+            ("perception.alertness", self.perception.alertness, 0.0, 1.0),
             (
                 "perception.relaxed_scale",
                 self.perception.relaxed_scale,
@@ -547,7 +527,6 @@ impl BotKind {
                 10.0,
                 360.0,
             ),
-            ("perception.jitter", self.perception.jitter, 0.0, 1.0),
         ];
         for (name, value, min, max) in ranges {
             ensure!(

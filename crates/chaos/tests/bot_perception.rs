@@ -191,9 +191,9 @@ fn off_human(g: &Game) -> f32 {
     d.abs().to_degrees()
 }
 
-fn watched(gaze: f32) -> Option<(BotThought, f32)> {
+fn watched(salience: f32) -> Option<(BotThought, f32)> {
     let mut kind = blockhead();
-    kind.perception.gaze = gaze;
+    kind.perception.salience = salience;
     let mut g = Game::new(kind, false);
     for _ in 0..120 * 8 {
         g.steps(1, true);
@@ -214,7 +214,8 @@ fn watched(gaze: f32) -> Option<(BotThought, f32)> {
 
 #[test]
 fn a_long_stare_turns_an_idle_bots_head() {
-    let (thought, off) = watched(40.0).expect("a long stare draws a glance");
+    // Sight 32: a stare reaches 0.3 of it, doubled to cover the 14 units.
+    let (thought, off) = watched(2.0).expect("a long stare draws a glance");
     assert_eq!(thought.behaviour, "wander", "{thought:?}");
     assert!(
         off < 12.0,
@@ -223,7 +224,7 @@ fn a_long_stare_turns_an_idle_bots_head() {
 }
 
 #[test]
-fn no_glance_at_weight_zero() {
+fn no_glance_at_salience_zero() {
     assert!(watched(0.0).is_none());
 }
 
@@ -235,10 +236,9 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
     kind.reaction_seconds = 0.5;
     kind.chase_radius = 128.0;
     kind.memory_seconds = 0.5;
-    kind.perception.reaction = reaction;
+    kind.perception.alertness = reaction;
     kind.perception.relaxed_scale = 3.0;
     kind.perception.away_scale = 1.0;
-    kind.perception.jitter = 0.0;
     let mut g = Game::new(kind, true);
     // Armed and fighting: it has hurt the human once.
     let mut armed = false;
@@ -274,14 +274,15 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
 #[test]
 fn a_relaxed_bot_returns_fire_after_its_longer_reaction() {
     let (plain, none) = first_wound(0.0);
-    assert!(none.is_none(), "weight 0 records no reaction: {none:?}");
+    assert!(none.is_none(), "alertness 0 records no reaction: {none:?}");
     let (relaxed, notice) = first_wound(1.0);
     let notice = notice.expect("the reaction is in the readout");
     assert!(notice.why.starts_with("reacting: relaxed"), "{notice:?}");
-    // 0.5 s plain; three times that from a stroll.
-    assert_eq!(notice.until - notice.since, 180);
+    // 0.5 s plain; three times that from a stroll, give or take 30%.
+    let delay = notice.until - notice.since;
+    assert!((126..=234).contains(&delay), "{delay} ticks");
     assert!(
-        relaxed >= plain + 100,
+        relaxed >= plain + 60,
         "relaxed {relaxed} ticks vs plain {plain}"
     );
 }
