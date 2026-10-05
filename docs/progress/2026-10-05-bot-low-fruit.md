@@ -8,13 +8,13 @@ in `bots/npc-edge-cases.md` and two on-camera tells from
 ## What changed
 
 - `crates/sim/src/session/bots/extras.rs` (new): five extra options, each
-  through ordinary controls and weighed by one number in the kind's
-  `extras` (`bot_kind::EXTRAS`, default 1, 0 off). See the "Extras" section
+  through ordinary controls, all weighed by one dial, the kind's
+  `extras.strength` (`bot_kind::BotExtras`, 0 to 1, default 1). See the "Extras" section
   of `docs/architecture/bots.md`.
   - `idle_play`: the Interact opportunity no longer needs an enemy. With
     none about, a push on a loose body toward the nearest player in sight
     (stopping short of them) and a passenger seat in a teammate-driven
-    vehicle score 0.2 x weight, between Wander and Return. A rider keeps
+    vehicle score 0.2 x strength, between Wander and Return. A rider keeps
     its seat while a teammate drives. Hooks: `interactions.rs`
     (`bot_interaction`, `bot_opportunity`, `act_bot_interaction`, the
     Wander dismount).
@@ -23,10 +23,11 @@ in `bots/npc-edge-cases.md` and two on-camera tells from
   - `dodge`: a harmful projectile (damage or splash damage), not its own or
     an ally's, whose predicted path (velocity, ballistic fall, splash
     radius) meets the body within 0.75 s: a jump, with jets if the body can.
-  - `activate`: a swap brick or a brick with an enabled `onActivate` row in
-    the way to its goal (2.5 units) is clicked with the empty hand; now and
-    then at a natural pause one within 8 units in sight is visited and
-    clicked for fun.
+  - `activate`: a door in the way to its goal (2.5 units) is clicked with
+    the empty hand; now and then at a natural pause one within 8 units in
+    sight is visited and clicked for fun. A door is a brick whose catalog
+    swap the next click swaps back, so the click only opens or closes the
+    brick itself. Event rows are never clicked.
   - `hand_weapon`: with two or more attacks and an unarmed teammate in
     sight, walk up, face them, drop a spare their way (`Command::DropTool`).
 - `crates/sim/src/session/bots/looks.rs` (new): every bot a seeded look
@@ -63,8 +64,9 @@ in `bots/npc-edge-cases.md` and two on-camera tells from
 
 ## Tunables added
 
-`extras.idle_play`, `extras.crouch`, `extras.dodge`, `extras.activate`,
-`extras.hand_weapon` in `packages/blockhead_bot/assets/bots.json`, all 1.
+`extras.strength` in `packages/blockhead_bot/assets/bots.json`, 1. The
+tuning tools find `<part>.strength` by themselves, so
+`crates/chaos/tests/data/bot_tuning.json` lists nothing for it.
 
 ## Evidence
 
@@ -75,6 +77,7 @@ with the option off or its cause absent:
 - `a_bot_under_ranged_fire_crouches_more_than_one_not_under_fire`
 - `a_predicted_hit_triggers_a_hop_more_often_than_a_shot_that_misses`
 - `an_activatable_door_on_the_route_gets_activated`
+- `a_bot_opens_a_door_for_fun_but_never_presses_an_event_button`
 - `a_spare_weapon_ends_up_with_an_unarmed_teammate`
 - `bots_of_one_kind_get_varied_seeded_looks`
 - `brick_bot_names_come_from_first_names_with_no_duplicates`
@@ -105,3 +108,28 @@ All with every extra on (the shipped defaults), on Linux, debug build:
   kick a ball about by itself.
 - Activation for objectives stays with the objective planner; this lane
   only adds the route and flavour clicks.
+
+## Review fixes (after the merge into claude/project-thread-pt64ji)
+
+The standing reviewer found two blockers:
+
+1. Clicks for fun pressed any brick with an `onActivate` row, so a bot
+   could press a builder's reset, win, teleport or blast button, on
+   free-build servers too. Now only a door is ever clicked, in the way or
+   for fun: a brick whose catalog swap the next click swaps back (a
+   reversible open/close of the brick itself, an affordance, not a name).
+   New test: a bot between a door and a button whose rows kill the
+   presser and mark the button opens or shuts the door for fun and never
+   presses the button; with the dial at 0 it clicks neither.
+2. Five new dials. They are one now, `extras.strength`; the five
+   `extras.*` paths are gone from the tuning tools' dial list. The tests
+   compare the dial at 1 and 0 (with the cause present or absent); none
+   needs a per-option switch.
+
+Results after merging c481371a: clippy `-D warnings` on bri-sim and
+bri-chaos clean; bri-sim lib 247 passed; `bot_extras` 8/8,
+`bot_brain` 19/19, `bot_interactions` 19/19, `bot_soccer_teams` 5/5.
+`bot_extras`' new test fails (the button is pressed once) when the old
+event-row rule is put back, so it guards the fix. `bot_gauntlet` 16 of 17
+pass: `stairs_to_a_deck` fails (circling 0.045 > 0.04) with identical
+numbers on c481371a itself and with the dial at 0, so it is not this lane's.

@@ -3,7 +3,8 @@
 //! weapon) and their looks and names (`looks`), through the authoritative
 //! session with invented content. No test moves a bot or presses its
 //! controls: the ordinary brain chooses, and each property is compared
-//! against the same scene with that option weighed 0 or its cause absent.
+//! against the same scene with the one `extras.strength` dial at 0 or its
+//! cause absent.
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::bot_kind::{BotKind, BotPack};
@@ -132,7 +133,7 @@ fn flat(v: Vec3) -> f32 {
 }
 
 /// How far a loose ball near two allied bots moves, with no enemy about.
-fn idle_push(idle_play: Option<f32>) -> f32 {
+fn idle_push(strength: Option<f32>) -> f32 {
     let mut s = session(|_| {});
     let (mut pack, _) = fixture::synthetic_vehicles().unwrap();
     for d in &mut pack.definitions {
@@ -144,8 +145,8 @@ fn idle_push(idle_play: Option<f32>) -> f32 {
         pack,
         blockhead(|k| {
             k.wander_radius = 2.0;
-            if let Some(w) = idle_play {
-                k.extras.insert("idle_play".into(), w);
+            if let Some(w) = strength {
+                k.extras.strength = w;
             }
         }),
     )
@@ -290,22 +291,11 @@ fn duel(
 
 #[test]
 fn a_bot_under_ranged_fire_crouches_more_than_one_not_under_fire() {
-    // Hits that hurt without killing; dodging is left out of this one.
+    // Hits that hurt without killing.
     let weak = |p: &mut bri_weapons::ProjectileDef| p.damage = 1.0;
-    let no_dodge = |k: &mut BotKind| {
-        k.extras.insert("dodge".into(), 0.0);
-    };
-    let (under_fire, _) = duel(no_dodge, weak, true, 0.0);
-    let (quiet, _) = duel(no_dodge, weak, false, 0.0);
-    let (off, _) = duel(
-        |k| {
-            k.extras.insert("dodge".into(), 0.0);
-            k.extras.insert("crouch".into(), 0.0);
-        },
-        weak,
-        true,
-        0.0,
-    );
+    let (under_fire, _) = duel(|_| {}, weak, true, 0.0);
+    let (quiet, _) = duel(|_| {}, weak, false, 0.0);
+    let (off, _) = duel(|k| k.extras.strength = 0.0, weak, true, 0.0);
     assert!(
         under_fire > quiet + 120,
         "crouched {under_fire} ticks under fire, {quiet} without"
@@ -323,20 +313,9 @@ fn a_predicted_hit_triggers_a_hop_more_often_than_a_shot_that_misses() {
         p.damage = 1.0;
         p.speed = 20.0;
     };
-    let no_crouch = |k: &mut BotKind| {
-        k.extras.insert("crouch".into(), 0.0);
-    };
-    let (_, at_it) = duel(no_crouch, slow, true, 0.0);
-    let (_, wide) = duel(no_crouch, slow, true, 0.6);
-    let (_, off) = duel(
-        |k| {
-            k.extras.insert("crouch".into(), 0.0);
-            k.extras.insert("dodge".into(), 0.0);
-        },
-        slow,
-        true,
-        0.0,
-    );
+    let (_, at_it) = duel(|_| {}, slow, true, 0.0);
+    let (_, wide) = duel(|_| {}, slow, true, 0.6);
+    let (_, off) = duel(|k| k.extras.strength = 0.0, slow, true, 0.0);
     assert!(
         at_it > wide + 60,
         "off the ground {at_it} ticks when shot at, {wide} when shots go wide"
@@ -350,23 +329,50 @@ fn a_predicted_hit_triggers_a_hop_more_often_than_a_shot_that_misses() {
 const DOOR: &str = "test/brick/door";
 const DOOR_OPEN: &str = "test/brick/door-open";
 
+/// The test catalog's tools, and a door: a brick whose click swaps it
+/// open, and whose next click swaps it shut again.
+fn door_catalog() -> ToolCatalog {
+    use bri_content::brick::Swap;
+    let mut tools = catalog();
+    let swap = |to: &str| Swap {
+        front: to.into(),
+        back: to.into(),
+    };
+    tools.swaps.insert(DOOR.into(), swap(DOOR_OPEN));
+    tools.swaps.insert(DOOR_OPEN.into(), swap(DOOR));
+    tools
+}
+
+/// The door's definitions next to the test set's.
+fn door_definitions() -> bri_sim::definitions::Definitions {
+    use bri_sim::testing as t;
+    let mut definitions = t::definitions();
+    for (id, height) in [(DOOR, 15), (DOOR_OPEN, 1)] {
+        let d = t::definition(
+            id,
+            [1, 4],
+            height,
+            bri_sim::definitions::Special::None,
+            false,
+        );
+        definitions.entries.insert(id.into(), d);
+    }
+    definitions
+}
+
+fn is_open(s: &Session, door: u64) -> bool {
+    matches!(
+        &s.simulation().state().bricks[&door].definition,
+        ContentRef::Resolved(id) if id == DOOR_OPEN
+    )
+}
+
 /// A glass room round a bot, its one way out a door a click opens; the
 /// builder stands outside in sight. Returns whether the door opened and
 /// whether the bot got out.
-fn door_room(activate: Option<f32>) -> (bool, bool) {
-    use bri_content::brick::Swap;
+fn door_room(strength: Option<f32>) -> (bool, bool) {
     use bri_sim::testing as t;
-    let mut definitions = t::definitions();
-    let door = t::definition(DOOR, [1, 4], 15, bri_sim::definitions::Special::None, false);
-    let open = t::definition(
-        DOOR_OPEN,
-        [1, 4],
-        1,
-        bri_sim::definitions::Special::None,
-        false,
-    );
-    definitions.entries.insert(DOOR.into(), door);
-    definitions.entries.insert(DOOR_OPEN.into(), open);
+    let definitions = door_definitions();
     let world = World::new("Door".into(), "chaos/map".into(), vec![[1.0; 4]]);
     let colliders = vec![
         rapier3d::prelude::ColliderBuilder::cuboid(100.0, 0.5, 100.0)
@@ -381,19 +387,13 @@ fn door_room(activate: Option<f32>) -> (bool, bool) {
     s.set_vehicle_pack(
         vehicles,
         blockhead(|k| {
-            if let Some(w) = activate {
-                k.extras.insert("activate".into(), w);
+            if let Some(w) = strength {
+                k.extras.strength = w;
             }
         }),
     )
     .unwrap();
-    let mut tools = catalog();
-    let swap = Swap {
-        front: DOOR_OPEN.into(),
-        back: DOOR_OPEN.into(),
-    };
-    tools.swaps.insert(DOOR.into(), swap);
-    s.set_tool_catalog(tools).unwrap();
+    s.set_tool_catalog(door_catalog()).unwrap();
     let human = s
         .join("Builder".into(), Vec3::new(8.0, 0.05, 0.0), true)
         .unwrap();
@@ -425,17 +425,14 @@ fn door_room(activate: Option<f32>) -> (bool, bool) {
     let door_id = bricks.len() as u64;
     load(&mut s, human, bricks, &mut sequence);
     minigame(&mut s, human, TOOLS_ONLY, &mut sequence);
-    let mut out = false;
+    let (mut out, mut opened) = (false, false);
     for _ in 0..120 * 25 {
         steps(&mut s, &[human], 1, &mut sequence);
         if let Some(bot) = bots(&s).first() {
             out |= feet(&s, *bot).x > -1.0;
         }
+        opened |= is_open(&s, door_id);
     }
-    let opened = matches!(
-        &s.simulation().state().bricks[&door_id].definition,
-        ContentRef::Resolved(id) if id == DOOR_OPEN
-    );
     (opened, out)
 }
 
@@ -448,15 +445,116 @@ fn an_activatable_door_on_the_route_gets_activated() {
     assert!(!opened && !out, "with activation off it stays shut in");
 }
 
+/// A bot alone beside a door or else a button, no enemy about, for a
+/// minute and a half. The button's rows do what a builder's button might:
+/// kill whoever presses it and mark the button (its colour effect) so a
+/// press shows. Returns how often the door changed or the button was
+/// pressed.
+fn fun_clicks(door: bool, strength: Option<f32>) -> usize {
+    use bri_events::{Row, Slot, Target, Value};
+    use bri_sim::testing as t;
+    let world = World::new("Fun".into(), "chaos/map".into(), vec![[1.0; 4]]);
+    let colliders = vec![
+        rapier3d::prelude::ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+            .translation(rapier3d::prelude::Vector::new(0.0, -0.5, 0.0)),
+    ];
+    let mut s = Session::new(
+        bri_sim::simulation::Simulation::new(world, door_definitions(), colliders).unwrap(),
+    );
+    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)])
+        .unwrap();
+    let (weapons, _) = fixture::synthetic_weapons().unwrap();
+    s.set_weapon_pack(weapons).unwrap();
+    let (vehicles, _) = fixture::synthetic_vehicles().unwrap();
+    s.set_vehicle_pack(
+        vehicles,
+        blockhead(|k| {
+            k.wander_radius = 2.0;
+            if let Some(w) = strength {
+                k.extras.strength = w;
+            }
+        }),
+    )
+    .unwrap();
+    s.set_tool_catalog(door_catalog()).unwrap();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())
+        .unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(90.0, 0.05, 90.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let row = |output: &str, target: Slot, params: Vec<Value>| Row {
+        enabled: true,
+        input: "onActivate".into(),
+        output: output.into(),
+        target: Target::Slot(target),
+        params,
+        conditions: vec![],
+        delay_ms: 0,
+        preserved: None,
+    };
+    let target = if door {
+        Brick::new(ContentRef::Resolved(DOOR.into()), [3.25, 1.5, 0.0], human)
+    } else {
+        let mut button = Brick::new(
+            ContentRef::Resolved(t::TALL.into()),
+            [3.25, 1.5, 0.0],
+            human,
+        );
+        button
+            .events
+            .push(row("setColorFX", Slot::SelfBrick, vec![Value::Int(3)]));
+        button.events.push(row("kill", Slot::Player, vec![]));
+        button
+    };
+    load(
+        &mut s,
+        human,
+        vec![bot_brick([0.0, 0.1, 0.0], human), target],
+        &mut sequence,
+    );
+    let (mut changes, mut was) = (0, false);
+    for _ in 0..120 * 90 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let now = if door {
+            is_open(&s, 2)
+        } else {
+            s.simulation().state().bricks[&2].color_effect != 0
+        };
+        changes += usize::from(now != was);
+        was = now;
+    }
+    changes
+}
+
+#[test]
+fn a_bot_opens_a_door_for_fun_but_never_presses_an_event_button() {
+    assert!(
+        fun_clicks(true, None) > 0,
+        "the door nearby was opened or shut for fun"
+    );
+    assert_eq!(
+        fun_clicks(false, None),
+        0,
+        "the button's rows are not the bot's to try"
+    );
+    assert_eq!(
+        fun_clicks(true, Some(0.0)),
+        0,
+        "with the extras off nothing is clicked"
+    );
+}
+
 /// Two bots of one builder on one side, no enemy about: one with a gun
 /// and a launcher, the other empty-handed. Whether the second ends up
 /// armed.
-fn hand_over(hand_weapon: Option<f32>) -> bool {
+fn hand_over(strength: Option<f32>) -> bool {
     let mut s = session(|_| {});
     s.set_bot_kinds(blockhead(|k| {
         k.wander_radius = 3.0;
-        if let Some(w) = hand_weapon {
-            k.extras.insert("hand_weapon".into(), w);
+        if let Some(w) = strength {
+            k.extras.strength = w;
         }
     }))
     .unwrap();
