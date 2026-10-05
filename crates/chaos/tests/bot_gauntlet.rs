@@ -214,7 +214,9 @@ fn deathmatch_open_field() {
     );
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
-    assert!(r.kills >= 50 * rounds() as u64, "a real fight: {}", r.kills);
+    // With human aim (`perception`) and dodge hops (`extras`) 41 kills
+    // where nearly every shot landing gave 69; 40 is still a fight.
+    assert!(r.kills >= 40 * rounds() as u64, "a real fight: {}", r.kills);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
     // Measured at the merge: circling 18% (strafing in its band), 55
     // changes a bot-minute (a respawned bot chased for a tick before it
@@ -235,7 +237,9 @@ fn deathmatch_mixed_arsenal() {
     );
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
-    assert!(r.kills >= 50 * rounds() as u64, "a real fight: {}", r.kills);
+    // With human aim (`perception`: the steady hit rate in the fair band,
+    // not every shot landing) 48 kills where 67 were; 40 is still a fight.
+    assert!(r.kills >= 40 * rounds() as u64, "a real fight: {}", r.kills);
     // Measured at the merge: circling 24% (strafing), 44 changes a
     // bot-minute, 69 kills, no suicide by splash. Now: circling 4.5%, 21
     // changes, reversals 66 -> 11, 67 kills.
@@ -1324,7 +1328,7 @@ fn fair_weapons() -> [(&'static str, &'static str); 5] {
 
 /// Every weapon class at every configured range, with a table; returns
 /// the total and whether its steady rate is out of band.
-fn fair_table() -> (Fair, String) {
+fn fair_table() -> (Fair, Vec<(&'static str, Fair)>, String) {
     let config = gauntlet::tuning::Config::shipped().fair;
     let pct = |r: Rate| {
         r.share()
@@ -1349,7 +1353,9 @@ fn fair_table() -> (Fair, String) {
         "eng"
     );
     let mut total = Fair::default();
+    let mut classes = Vec::new();
     for (class, item) in fair_weapons() {
+        let mut each = Fair::default();
         for range in &config.ranges {
             let f = fair_run(item, *range, config.seconds);
             text.push_str(&format!(
@@ -1368,7 +1374,9 @@ fn fair_table() -> (Fair, String) {
                 flag(f.steady)
             ));
             total.add(&f);
+            each.add(&f);
         }
+        classes.push((class, each));
     }
     text.push_str(&format!(
         "  {:<8} {:>5}  {} {} {}  {:>5} {:>4}  {}\n",
@@ -1381,20 +1389,36 @@ fn fair_table() -> (Fair, String) {
         total.engagements,
         flag(total.steady)
     ));
-    (total, text)
+    (total, classes, text)
 }
 
 /// The fair metric: a bot's hit rate against a player who strafes and
 /// hops, per weapon class and range, in the first seconds of a fight and
 /// in steady state, against a band (`bot_tuning.json` `fair`): never near
-/// perfect, never hopeless. Reported, not yet enforced: today's aim
-/// tightens to near perfect within about 2 s.
+/// perfect, never hopeless. Enforced for every class together and for the
+/// gun and the bow each: the steady aim error (`perception`'s tracking
+/// lag) keeps a strafing target from being hit every time.
 #[test]
 fn fair_hit_rate() {
-    let (total, text) = fair_table();
+    let config = gauntlet::tuning::Config::shipped().fair;
+    let (total, classes, text) = fair_table();
     eprint!("{text}");
     assert!(total.shots() > 0, "the bots shot at the target");
     assert!(total.engagements > 0, "the bots saw the target");
+    let band = config.min..=config.max;
+    let steady = |f: &Fair| f.steady.share().unwrap_or(0.0);
+    assert!(
+        band.contains(&steady(&total)),
+        "steady hit rate {:.1}% outside the band\n{text}",
+        100.0 * steady(&total)
+    );
+    for (class, f) in classes.iter().filter(|(c, _)| matches!(*c, "gun" | "bow")) {
+        assert!(
+            band.contains(&steady(f)),
+            "{class}: steady hit rate {:.1}% outside the band\n{text}",
+            100.0 * steady(f)
+        );
+    }
 }
 
 /// The fair metric against the alertness dial (the first of
@@ -1437,6 +1461,10 @@ fn fair_by_dial() {
             "NOT MONOTONE"
         },
         if sign > 0.0 { "rise" } else { "fall" }
+    );
+    assert!(
+        rising,
+        "{dial} moves the steady hit rate its way: {rates:?}"
     );
 }
 
