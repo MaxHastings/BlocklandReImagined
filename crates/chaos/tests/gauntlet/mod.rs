@@ -365,6 +365,8 @@ struct Track {
     last_heading: Option<(f32, u64)>,
     was_alive: bool,
     fallen: bool,
+    /// Ticks in a row in a flavour interrupt (`surprise`).
+    goofing: u64,
 }
 
 /// What looks bad on camera, summed over every bot.
@@ -411,6 +413,14 @@ pub struct Report {
     pub stuck_at: Vec<(OwnerId, &'static str, Vec3, Option<Vec3>)>,
     /// Circling ticks by behaviour.
     pub circling_in: BTreeMap<&'static str, u64>,
+    /// Distinct choices in effect (choice point and option, `surprise`)
+    /// summed over each bot's minutes: variety per bot-minute.
+    pub distinct_picks: u64,
+    /// Ticks a bot spent in a flavour interrupt, and the longest run.
+    pub goof: u64,
+    pub longest_goof: u64,
+    /// Switches to an option other than the plain pick.
+    pub surprised: u64,
 }
 
 impl Report {
@@ -454,6 +464,15 @@ impl Report {
             .map(|(b, t)| format!("{b}={:.0}%", 100.0 * self.share(*t)))
             .collect();
         eprintln!(
+            "GAUNTLET {} surprise: variety={:.1} distinct picks/bot-min goof={:.2}% \
+             longest goof={:.1}s surprised={:.1}/bot-min",
+            self.name,
+            self.per_bot_minute(self.distinct_picks),
+            100.0 * self.share(self.goof),
+            self.longest_goof as f32 / TICKS_PER_SECOND as f32,
+            self.per_bot_minute(self.surprised),
+        );
+        eprintln!(
             "GAUNTLET {} behaviours: {} top changes: {:?}",
             self.name,
             shares.join(" "),
@@ -483,6 +502,10 @@ pub struct Scorer {
     /// Floor height: under `floor - 2` is fallen.
     floor: f32,
     seen: BTreeSet<OwnerId>,
+    /// Choices each bot had in effect, by bot and minute.
+    picks: BTreeSet<(OwnerId, u64, String)>,
+    /// The option last in effect, by bot and choice point.
+    decided: BTreeMap<(OwnerId, &'static str), String>,
 }
 
 impl Scorer {
@@ -498,6 +521,8 @@ impl Scorer {
             last_death_tick: 0,
             floor,
             seen: BTreeSet::new(),
+            picks: BTreeSet::new(),
+            decided: BTreeMap::new(),
         }
     }
 
@@ -567,6 +592,27 @@ impl Scorer {
             }
             track.was_alive = true;
             self.report.bot_ticks += 1;
+            // Variety: the distinct choices in effect each bot-minute.
+            for d in &thought.surprise.decisions {
+                let pick = format!("{}:{}", d.domain, d.chosen);
+                if self
+                    .picks
+                    .insert((*bot, tick / (60 * TICKS_PER_SECOND as u64), pick))
+                {
+                    self.report.distinct_picks += 1;
+                }
+                let last = self.decided.insert((*bot, d.domain), d.chosen.clone());
+                if d.chosen != d.plain && last.is_some_and(|l| l != d.chosen) {
+                    self.report.surprised += 1;
+                }
+            }
+            if thought.surprise.interrupt.is_some() {
+                self.report.goof += 1;
+                track.goofing += 1;
+                self.report.longest_goof = self.report.longest_goof.max(track.goofing);
+            } else {
+                track.goofing = 0;
+            }
             let feet = Vec3::from(state.feet);
             let flat = Vec3::new(feet.x, 0.0, feet.z);
             if feet.y < self.floor - 2.0 {
