@@ -402,16 +402,7 @@ impl Session {
         &self,
         dispatch: &ev::Dispatch,
         call: &ev::PackageCall,
-    ) -> std::result::Result<
-        (
-            Vec<Dynamic>,
-            Option<OwnerId>,
-            bri_package_runtime::content::Behaviour,
-            u64,
-            u64,
-        ),
-        String,
-    > {
+    ) -> std::result::Result<OutputCall, String> {
         let Some(declared) = self.packages.as_ref().and_then(|host| {
             host.catalog
                 .behaviours()
@@ -643,3 +634,13 @@ fn row_view(
     );
     Some(view)
 }
+
+/// An Add-On output call's arguments, whoever set it off, its declared
+/// behaviour and the source brick.
+type OutputCall = (
+    Vec<Dynamic>,
+    Option<OwnerId>,
+    bri_package_runtime::content::Behaviour,
+    u64,
+    u64,
+);

@@ -235,7 +235,9 @@ impl Run<'_> {
             view.and_then(|v| v.weapons.images.get(&v.owner)),
             view.and_then(|v| v.vitals.get(&v.owner)),
             self.shots,
-            self.app.local_motion().map(|(p, eye)| (p.feet, p.yaw, p.pitch, eye)),
+            self.app
+                .local_motion()
+                .map(|(p, eye)| (p.feet, p.yaw, p.pitch, eye)),
             view.map(|v| {
                 v.world.bricks.values().fold(
                     (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),

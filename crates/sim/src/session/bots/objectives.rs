@@ -986,7 +986,7 @@ impl Session {
         ops: &[bri_package_runtime::ops::Op],
         facts: &mut Facts,
         guards: &mut Vec<Predicate>,
-    ) -> Result<Option<(Vec<Effect>, Option<bri_minigames::TeamId>)>, planning::Failure> {
+    ) -> Result<Option<PackageEffects>, planning::Failure> {
         use bri_package_runtime::ops::Op;
         use planning::Failure as F;
         let player = self
@@ -2923,3 +2923,7 @@ mod tests {
         );
     }
 }
+
+/// What an Add-On output does to a plan's facts, and the team whose score
+/// it changes, if any.
+type PackageEffects = (Vec<Effect>, Option<bri_minigames::TeamId>);

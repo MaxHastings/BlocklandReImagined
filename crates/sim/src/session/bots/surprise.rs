@@ -1385,7 +1385,9 @@ impl Session {
             .is_some_and(|item| hand_combat::item_attacks(self, item, scale));
         // What can hurt is used only on someone the rules say it cannot.
         let on = close.filter(|_| {
-            !attacks || i.target.is_some_and(|t| !self.can_damage_player(bot, t, false))
+            !attacks
+                || i.target
+                    .is_some_and(|t| !self.can_damage_player(bot, t, false))
         });
         let t = tick.saturating_sub(i.since) as f32 / TICKS;
         let turn = if i.roll < 0.5 { 1.0 } else { -1.0 };
