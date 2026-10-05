@@ -910,12 +910,15 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
                 facing_away += dt;
             }
             // Pushing it toward its own goal: behind the ball as it moves
-            // away from the goal it attacks.
-            let attack = goal_z(teams[b]);
+            // the way of the goal it defends. (The way, not from where the
+            // ball is to that goal: a ball pushed over the line into the
+            // pocket of the goal it attacks is past that goal, and moving
+            // on into it is scoring, not this.)
+            let defend = -goal_z(teams[b]);
             let moving = Vec3::new(velocity.x, 0.0, velocity.z);
             if moving.length() > 1.0
                 && to_ball.dot(moving.normalize()) > 0.5
-                && (attack - at.z).signum() * velocity.z < -0.5
+                && defend.signum() * velocity.z > 0.5
             {
                 wrong_way += dt;
             }

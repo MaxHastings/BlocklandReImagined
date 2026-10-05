@@ -2032,12 +2032,21 @@ impl Session {
         }
         // A live objective reservation is not a combat opportunity. Both use
         // the same advisory leases, occupancy and native action admission.
-        let opportunity =
-            if pausing_delivery || objective.is_some_and(|view| view.resource.is_some()) {
-                None
-            } else {
-                self.bot_interaction(bot, interaction_enemy, objective.is_none(), tick)
-            };
+        // Nor is anything taken up before its planning turn in a new game
+        // or round has said what that game asks (the body it would push at
+        // an enemy may be the game's own ball).
+        let unplanned = self.bots.brains[&bot].objective.unplanned();
+        if unplanned {
+            self.bots.claims.release_owner(bot);
+        }
+        let opportunity = if pausing_delivery
+            || unplanned
+            || objective.is_some_and(|view| view.resource.is_some())
+        {
+            None
+        } else {
+            self.bot_interaction(bot, interaction_enemy, objective.is_none(), tick)
+        };
         let objective_holding = objective
             .and_then(|view| view.held)
             .is_some_and(|target| self.held_by(bot) == Some(target));
