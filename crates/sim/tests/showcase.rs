@@ -1903,6 +1903,7 @@ fn add_launcher(
         aura: None,
         fixed_damage: false,
         slow: None,
+        collision_sound: None,
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);

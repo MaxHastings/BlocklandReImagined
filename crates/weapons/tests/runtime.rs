@@ -277,6 +277,12 @@ on_both_packs!(
 fn run(w: &mut WeaponsWorld, n: usize, q: &mut impl Query) -> Vec<Event> {
     (0..n).flat_map(|_| w.step(q)).collect()
 }
+/// `Player::spawnBall`'s `weaponSwitchSound` as a ball leaves a hand.
+fn released(e: &[Event]) -> usize {
+    e.iter()
+        .filter(|e| matches!(e, Event::Sound { profile, .. } if profile == "weaponSwitchSound"))
+        .count()
+}
 fn shots(e: &[Event]) -> usize {
     e.iter()
         .filter(|e| matches!(e, Event::Spawned { .. }))
@@ -712,6 +718,7 @@ fn sports_charge_throw_consume_catch_and_dodgeball_damage(fx: &Fx) {
         w.trigger(ActorId(1), false).unwrap();
         let e = run(&mut w, 1, &mut q);
         assert_eq!(shots(&e), 1, "{item}");
+        assert_eq!(released(&e), 1, "{item}: `spawnBall`'s throw sound");
         assert!(w.actor(ActorId(1)).unwrap().inventory[0].is_none());
     }
     let mut w = fx.world();
@@ -985,6 +992,7 @@ fn sports_actions_tackle_steal_and_touchdown(fx: &Fx) {
     run(&mut w, 40, &mut q);
     w.sport_action(ActorId(1), SportAction::SoccerPop).unwrap();
     assert!(w.projectiles().next().unwrap().velocity.y >= 9.0);
+    assert_eq!(released(&w.step(&mut q)), 1, "a pop plays the throw sound");
     let mut w = fx.world();
     w.add_actor(ActorId(1), 5).unwrap();
     w.add_actor(ActorId(2), 5).unwrap();
@@ -1457,4 +1465,76 @@ fn a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in() {
     w.drop_item(actor, slot + 1).unwrap();
     let paints: Vec<_> = w.drops().map(|d| (d.item.as_str(), d.paint)).collect();
     assert_eq!(paints, [(item, Some(4)), (CORE_TOOLS[0], None)]);
+}
+
+/// A ball's `onCollision` sound (`playSportBallSound`): at each hit while it
+/// moves faster than its guard, at the ball, never twice within the gap.
+#[test]
+fn a_ball_plays_its_collision_sound_on_fast_hits_only() {
+    use bri_weapons::testing::*;
+    let drop = |pack: Pack| {
+        let mut w = WeaponsWorld::new(pack).unwrap();
+        // Straight down onto a floor just below, bouncing until it rests.
+        let mut q = Scene {
+            hit: Some(Hit {
+                target: TargetId::Map(1),
+                position: Vec3::new(0.0, -0.5, 0.0),
+                normal: Vec3::Y,
+                fraction: 0.0,
+                color: None,
+            }),
+            ..Default::default()
+        };
+        w.spawn(
+            BASKETBALL_PROJECTILE,
+            ActorId(1),
+            Vec3::ZERO,
+            Vec3::NEG_Y * 20.0,
+            1.0,
+        )
+        .unwrap();
+        run(&mut w, 1200, &mut q)
+    };
+    let sounds = |e: &[Event]| {
+        e.iter()
+            .filter_map(|e| match e {
+                Event::Sound {
+                    profile, position, ..
+                } if profile == "testBallBounceSound" => Some(*position),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let e = drop(pack());
+    // Each bounce keeps 0.6 of the speed it hit with.
+    let hits: Vec<f32> = e
+        .iter()
+        .filter_map(|e| match e {
+            Event::Bounced { velocity, .. } => Some(velocity.length() / 0.6),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        hits.iter().any(|&s| s < 3.0),
+        "it slows below the guard: {hits:?}"
+    );
+    let fast = hits.iter().filter(|&&s| s > 3.0).count();
+    assert!(fast >= 3, "{hits:?}");
+    let heard = sounds(&e);
+    assert_eq!(heard.len(), fast, "one per fast hit: {hits:?}");
+    assert!(
+        heard.iter().all(|p| (p.y + 0.5).abs() < 0.01),
+        "at the ball"
+    );
+    // A gap longer than its whole flight: the first hit only.
+    let mut long_gap = pack();
+    long_gap
+        .projectiles
+        .get_mut(BASKETBALL_PROJECTILE)
+        .unwrap()
+        .collision_sound
+        .as_mut()
+        .unwrap()
+        .gap_ticks = 1200;
+    assert_eq!(sounds(&drop(long_gap)).len(), 1);
 }

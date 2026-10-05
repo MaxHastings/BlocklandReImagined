@@ -382,6 +382,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             aura: None,
             slow: None,
             fixed_damage: false,
+            collision_sound: None,
         };
         pack.projectiles.insert(id, p);
     }
@@ -674,6 +675,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
     let mut assets = BTreeMap::new();
     let mut imported_bytes = 0usize;
     let mut defs = vec![];
+    let mut scripts = vec![];
     // Load order: base defaults, base script, then add-ons alphabetically.
     let core_text = std::fs::read_to_string(core)?;
     let mut damage = damage_types(&std::fs::read_to_string(core_damage_types)?)?;
@@ -719,6 +721,11 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
                 let text = String::from_utf8_lossy(&data);
                 defs.extend(parse(&text, &virtual_path)?);
                 damage.extend(damage_types(&text)?);
+                // Function bodies, for what `onCollision` plays; a script
+                // this reader cannot follow just adds none.
+                if let Ok(script) = bri_convert::tscript::read(&text, &virtual_path) {
+                    scripts.push(script);
+                }
             }
             assets.insert(virtual_path.to_ascii_lowercase(), (virtual_path, data));
         }
@@ -785,6 +792,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
         }
     }
     let mut pack = lower(defs)?;
+    collision_sounds(&scripts, &mut pack);
     for t in damage {
         // `AddDamageType` refuses a type whose icon file is missing.
         let missing: Vec<_> = t
@@ -898,9 +906,198 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
     std::fs::write(out.join("weapons.json"), serde_json::to_vec_pretty(&pack)?)?;
     Ok(pack)
 }
+/// Each projectile's `onCollision` sound ([`CollisionSound`]): a
+/// `serverPlay3D(sound, ...)` in its body, or in a `Projectile::` method the
+/// body calls on the projectile (Item_Sports' `playSportBallSound`), with
+/// that method's sound argument or default. The call must be outside any
+/// block of `onCollision`, so a sound only some hits make is left out; the
+/// playing body's speed guard (`%speed > 3` of `vectorLen(getVelocity())`)
+/// and repeat guard (`getSimTime() + 50`) come with it.
+pub fn collision_sounds(scripts: &[bri_convert::tscript::Script], pack: &mut Pack) {
+    use bri_convert::tscript::Function;
+    let functions: BTreeMap<String, &Function> = scripts
+        .iter()
+        .flat_map(|s| &s.functions)
+        .map(|f| (f.qualified().to_ascii_lowercase(), f))
+        .collect();
+    let word = Regex::new(r"^[A-Za-z_]\w*$").unwrap();
+    // `%name = Sound;` in a body: a parameter's default.
+    let default = |f: &Function, var: &str| {
+        Regex::new(&format!(r"(?i){}\s*=\s*([A-Za-z_]\w*)\s*;", regex::escape(var)))
+            .ok()?
+            .captures(&f.body)
+            .map(|c| c[1].to_owned())
+    };
+    // A literal sound name, or a variable bound to one.
+    let resolve = |f: &Function, arg: &str, bound: &BTreeMap<String, String>| {
+        let arg = bri_convert::tscript::literal(arg);
+        if word.is_match(arg) {
+            return Some(arg.to_owned());
+        }
+        bound
+            .get(&arg.to_ascii_lowercase())
+            .cloned()
+            .or_else(|| default(f, arg))
+    };
+    let plays = |f: &Function, bound: &BTreeMap<String, String>| {
+        f.calls
+            .iter()
+            .filter(|c| c.receiver.is_none() && c.callee.eq_ignore_ascii_case("serverPlay3D"))
+            .find_map(|c| resolve(f, c.args.first()?, bound))
+            .map(|profile| {
+                let (min_speed, gap_ticks) = guards(f);
+                CollisionSound {
+                    profile,
+                    min_speed,
+                    gap_ticks,
+                }
+            })
+    };
+    for p in pack.projectiles.values_mut() {
+        let Some(f) = functions.get(&format!("{}::oncollision", p.name.to_ascii_lowercase()))
+        else {
+            continue;
+        };
+        let object = f.params.get(1).map(|o| o.to_ascii_lowercase());
+        let top = |callee: &str| at_top(&f.body, callee);
+        let mut sound = plays(f, &BTreeMap::new()).filter(|_| top("serverPlay3D"));
+        if sound.is_none() {
+            sound = f
+                .calls
+                .iter()
+                .filter(|c| {
+                    object.is_some()
+                        && c.receiver.as_ref().map(|r| r.to_ascii_lowercase()) == object
+                        && top(&c.callee)
+                })
+                .find_map(|c| {
+                    let method =
+                        functions.get(&format!("projectile::{}", c.callee.to_ascii_lowercase()))?;
+                    let bound = method
+                        .params
+                        .iter()
+                        .skip(1)
+                        .zip(&c.args)
+                        .filter_map(|(param, arg)| {
+                            resolve(f, arg, &BTreeMap::new())
+                                .map(|s| (param.to_ascii_lowercase(), s))
+                        })
+                        .collect();
+                    plays(method, &bound)
+                });
+        }
+        p.collision_sound = sound;
+    }
+}
+/// Whether the first call to `callee` in `body` sits outside every block.
+fn at_top(body: &str, callee: &str) -> bool {
+    let Ok(call) = Regex::new(&format!(r"(?i)\b{}\s*\(", regex::escape(callee))) else {
+        return false;
+    };
+    let body = bri_convert::tscript::without_comments(body);
+    call.find(&body).is_some_and(|m| {
+        let before = &body[..m.start()];
+        before.matches('{').count() == before.matches('}').count()
+    })
+}
+/// A body's speed and repeat guards: `%speed = vectorLen(%obj.getVelocity())`
+/// then `%speed > N`, and `getSimTime() + ms`.
+fn guards(f: &bri_convert::tscript::Function) -> (f32, u32) {
+    let body = bri_convert::tscript::without_comments(&f.body);
+    let speed = Regex::new(
+        r"(?i)(%\w+)\s*=\s*vectorLen\s*\(\s*%\w+\s*\.\s*getVelocity\s*\(\s*\)\s*\)",
+    )
+    .unwrap()
+    .captures(&body)
+    .and_then(|c| {
+        Regex::new(&format!(r"(?i){}\s*>=?\s*([0-9]*\.?[0-9]+)", regex::escape(&c[1])))
+            .ok()?
+            .captures(&body)?[1]
+            .parse::<f32>()
+            .ok()
+    })
+    .unwrap_or(0.0)
+    .clamped(0.0, 1000.0);
+    let gap = Regex::new(r"(?i)getSimTime\s*\(\s*\)\s*\+\s*([0-9]+)")
+        .unwrap()
+        .captures(&body)
+        .and_then(|c| c[1].parse::<u64>().ok())
+        .map_or(0, |ms| (ms * u64::from(TICK_HZ)).div_ceil(1000).min(1200) as u32);
+    (speed, gap)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Made-up scripts in the shapes the sports balls use: a shared helper
+    /// with a default and guards, called with and without a sound, and a
+    /// direct `serverPlay3D`. A sound only some hits play stays out.
+    #[test]
+    fn collision_sounds_follow_on_collision_into_its_helper() {
+        let script = r#"
+datablock AudioProfile(thudSound) { filename = "./thud.wav"; };
+datablock AudioProfile(bonkSound) { filename = "./bonk.wav"; };
+datablock ProjectileData(aBall) { isBallistic = true; };
+datablock ProjectileData(bBall) { isBallistic = true; };
+datablock ProjectileData(cBall) { isBallistic = true; };
+datablock ProjectileData(dBall) { isBallistic = true; };
+datablock ProjectileData(eBall) { isBallistic = true; };
+function Projectile::playBallNoise(%this, %noise)
+{
+    %vel = vectorLen(%this.getVelocity());
+    if(!isObject(%noise))
+        %noise = thudSound;
+    if(%this.quietUntil < getSimTime() && %vel > 2.5)
+    {
+        serverPlay3D(%noise, %this.getPosition());
+        %this.quietUntil = getSimTime() + 100;
+    }
+}
+function aBall::onCollision(%this, %obj, %col, %fade, %pos, %normal)
+{
+    %obj.playBallNoise(bonkSound);
+    parent::onCollision(%this, %obj, %col, %fade, %pos, %normal);
+}
+function bBall::onCollision(%this, %obj, %col, %fade, %pos, %normal)
+{
+    // %obj.playBallNoise(bonkSound);
+    %obj.playBallNoise();
+}
+function cBall::onCollision(%this, %obj, %col, %fade, %pos, %normal)
+{
+    serverPlay3D(bonkSound, %pos);
+}
+function dBall::onCollision(%this, %obj, %col, %fade, %pos, %normal)
+{
+    if(%col.getType() & $TypeMasks::PlayerObjectType)
+        { serverPlay3D(bonkSound, %pos); }
+}
+"#;
+        let path = "Add-Ons/Item_Test/server.cs";
+        let mut pack = lower(parse(script, path).unwrap()).unwrap();
+        collision_sounds(&[bri_convert::tscript::read(script, path).unwrap()], &mut pack);
+        let sound = |name: &str| {
+            pack.projectiles[&native_id("projectile", name)]
+                .collision_sound
+                .clone()
+        };
+        let guarded = |profile: &str| CollisionSound {
+            profile: profile.into(),
+            min_speed: 2.5,
+            gap_ticks: 12,
+        };
+        assert_eq!(sound("aBall"), Some(guarded("bonkSound")));
+        assert_eq!(sound("bBall"), Some(guarded("thudSound")), "the helper's default");
+        assert_eq!(
+            sound("cBall"),
+            Some(CollisionSound {
+                profile: "bonkSound".into(),
+                min_speed: 0.0,
+                gap_ticks: 0,
+            })
+        );
+        assert_eq!(sound("dBall"), None, "only player hits play it");
+        assert_eq!(sound("eBall"), None, "no onCollision");
+    }
     #[test]
     fn comments_inheritance_and_timing() {
         let d=parse("// no\ndatablock ItemData(x) {a=1; text=\"http://ok\";}; datablock ItemData(y:x){a=2;};","test").unwrap();

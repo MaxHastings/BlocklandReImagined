@@ -50,6 +50,16 @@ impl WeaponsWorld {
         });
         Some(image)
     }
+    /// `Player::spawnBall`'s sound: every ball a player throws, passes,
+    /// pops, fumbles or loses to a steal plays the catch sound half a unit
+    /// below its eye. (`dropBall` makes its projectile without it.)
+    pub(super) fn ball_released(&mut self, id: ActorId, eye: Vec3) {
+        self.events.push(Event::Sound {
+            source: TargetId::Actor(id),
+            profile: "weaponSwitchSound".into(),
+            position: eye - Vec3::Y * 0.5,
+        });
+    }
     /// The minigame's StartBall (`armor::onAdd`, `updatePlayerBalls`): mounted
     /// into empty hands without the catch timeout.
     pub fn start_ball(&mut self, id: ActorId, image: &str) -> Result<bool> {
@@ -164,6 +174,7 @@ impl WeaponsWorld {
             a.frame.scale,
         )?;
         let mut a = self.actors.remove(&id).unwrap();
+        self.ball_released(id, a.frame.eye);
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
         }
@@ -229,6 +240,7 @@ impl WeaponsWorld {
             a.frame.scale,
         )?;
         let mut a = self.actors.remove(&target).unwrap();
+        self.ball_released(target, a.frame.eye);
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
         }
@@ -290,6 +302,7 @@ impl WeaponsWorld {
         }
         let mut a = self.actors.remove(&victim).unwrap();
         if held {
+            self.ball_released(victim, a.frame.eye);
             if let Some(slot) = a.selected {
                 a.inventory[slot] = None;
             }
