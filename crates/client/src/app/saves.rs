@@ -158,7 +158,7 @@ impl App {
             },
             capture,
         );
-        self.files.save_shots.submitted();
+        self.files.save_shots.submitted(frame.queue);
         Ok(())
     }
     pub(super) fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {

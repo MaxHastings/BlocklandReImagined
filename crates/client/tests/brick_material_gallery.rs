@@ -121,10 +121,7 @@ fn render(gpu: &Headless, scene: &SceneData, path: &Path, min_pixels: usize) -> 
     readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(std::time::Duration::from_secs(30)),
-    })?;
+    support::gpu::wait(&gpu.device, "the material gallery frame")?;
     rx.recv_timeout(std::time::Duration::from_secs(30))??;
     let pixels = readback.slice(..).get_mapped_range()?;
     let background = &pixels[..4];
