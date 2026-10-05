@@ -66,6 +66,10 @@ const FLANK_SCORE: f32 = 0.95;
 const PLAY_BOREDOM: f32 = 0.12;
 const IDLE_BOREDOM: f32 = 0.24;
 const GOOF_SCORE: f32 = 0.5;
+/// Playing's worth (`Pause::play`) at which a goof is worth all of
+/// `GOOF_SCORE`, and the share it keeps with the action right here.
+const LULL: f32 = 0.55;
+const GOOF_FLOOR: f32 = 0.2;
 /// Goofing's own boredom a second (at strength 1): goofs grow stale, the
 /// brake on goofing that the mood's pull pushes against.
 const GOOF_BOREDOM: f32 = 0.3;
@@ -298,9 +302,9 @@ pub(super) struct Pause {
     /// from bots nearby doing one.
     pub pull: f32,
     pub copy: [f32; 11],
-    /// Share of a goof's score something pressing takes (an enemy it
-    /// remembers), 0 to 1.
-    pub brake: f32,
+    /// What playing is worth now, 0 to 1 (1: the action is right here),
+    /// against a goof's small worth: low in a lull.
+    pub play: f32,
 }
 /// A goof this tick.
 #[derive(Clone, Copy, Debug)]
@@ -620,7 +624,10 @@ impl Mind {
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
         // Others about goofing make it likelier (`team::mood`).
         let goof = if total > 0.0 {
-            GOOF_SCORE * (1.0 + MOOD_LIFT * pause.pull) * (1.0 - pause.brake.clamp(0.0, 1.0))
+            // Worth most in a lull (playing worth little), little with
+            // the action right here.
+            let lull = ((1.0 - pause.play) / (1.0 - LULL)).clamp(0.0, 1.0);
+            GOOF_SCORE * (GOOF_FLOOR + (1.0 - GOOF_FLOOR) * lull) * (1.0 + MOOD_LIFT * pause.pull)
         } else {
             0.0
         };
@@ -635,7 +642,7 @@ impl Mind {
         }
         let choice = Choice {
             domain: Domain::Flavour,
-            options: &[(PLAY, 1.0), (GOOF, goof)],
+            options: &[(PLAY, pause.play.clamp(0.05, 1.0)), (GOOF, goof)],
             interrupt: false,
             paused: false,
             must: &[],

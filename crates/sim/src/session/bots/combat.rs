@@ -393,6 +393,7 @@ fn movement_weapon(cap: Capability) -> Weapon {
         speed,
         fall,
         splash: cap.splash_radius,
+        spread: 0.0,
     }
 }
 

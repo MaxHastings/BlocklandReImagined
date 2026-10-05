@@ -789,6 +789,7 @@ mod tests {
                 let (pull, copy) = mood(team, i as u64, Vec3::ZERO, 20.0, others);
                 let pause = surprise::Pause {
                     natural: true,
+                    play: 0.75,
                     pull,
                     copy,
                     ..Default::default()

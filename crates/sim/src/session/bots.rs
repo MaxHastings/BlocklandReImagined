@@ -133,15 +133,22 @@ const STUCK_TICKS: u32 = 45;
 /// seeded phase: bots hop apart, and each still hops before it replans at
 /// `STUCK_TICKS`.
 const HOP_SPREAD: u64 = 5;
-/// Within this of the point its objective takes it to, a bot carrying that
-/// objective is on it and does not goof; farther off (a teammate covering,
-/// a long walk) it may.
+/// Within this of the point its objective takes it to, a bot is at its
+/// post, and playing is worth what it watches there (`View::aim`).
 const ON_OBJECTIVE: f32 = 6.0;
-/// Nearer than this, an enemy in sight leaves no time to goof.
-const GOOF_ENEMY_NEAR: f32 = 24.0;
-/// How much of a goof's score an enemy in sight far off, or one it
-/// remembers, takes.
-const PRESSED_BRAKE: f32 = 0.5;
+/// The action (an enemy, what a post watches) within this is worth all of
+/// playing; past `ACTION_FAR` playing is worth `LULL_PLAY`, in between it
+/// fades.
+const ACTION_NEAR: f32 = 16.0;
+const ACTION_FAR: f32 = 48.0;
+/// Playing's worth in a lull (far from the action, waiting, nothing to
+/// do), against a goof's `surprise::GOOF_SCORE`: a little more, so a lull
+/// needs some boredom before a goof wins.
+const LULL_PLAY: f32 = 0.55;
+/// Playing's worth going back home, or with an enemy remembered or an
+/// objective that wants one beaten but none in sight.
+const RETURN_PLAY: f32 = 0.7;
+const PRESSED_PLAY: f32 = 0.85;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
@@ -624,19 +631,33 @@ struct Weapon {
     fall: f32,
     /// Its explosion's radius, kept clear of.
     splash: f32,
+    /// How far each of its projectiles may turn off the aim, in radians
+    /// (`Shot::spread`): a scattering weapon closes in to land them.
+    spread: f32,
 }
+/// Half the width a scattering weapon's spread may cover where it fights:
+/// about a body's height, so most of its shot lands.
+const SPREAD_BODY: f32 = 1.5;
+/// The nearest a scattering weapon's band ends, however wide its spread.
+const SPREAD_MIN_FAR: f32 = 3.0;
 impl Weapon {
     /// Closest and farthest it likes to fight from.
     fn band(&self) -> (f32, f32) {
         if self.melee {
             (0.0, (self.reach * 0.8).max(1.2))
         } else {
-            let far = (self.reach * 0.7).clamp(6.0, 40.0).min(self.reach);
+            let mut far = (self.reach * 0.7).clamp(6.0, 40.0).min(self.reach);
+            // A scattering weapon lands its shot where its spread is still
+            // about a body wide: farther, most of it flies past.
+            if self.spread > 0.0 {
+                far = far.min((SPREAD_BODY / self.spread.tan()).max(SPREAD_MIN_FAR));
+            }
             let near = self
                 .near
                 .unwrap_or((self.splash + 3.0).max(5.0))
                 .min(far * 0.75);
-            (near, far.max(near + 4.0).min(self.reach))
+            let room = if self.spread > 0.0 { 2.0 } else { 4.0 };
+            (near, far.max(near + room).min(self.reach))
         }
     }
 }
@@ -1621,6 +1642,7 @@ impl Session {
                 speed,
                 fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
                 splash: p.explosion.radius,
+                spread: 0.0,
             });
         }
         None
@@ -1632,6 +1654,13 @@ impl Session {
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
         let using = image.bot.unwrap_or_default();
         let hold = using.fire == bri_weapons::BotFire::Hold;
+        // v20's `%spread`: each projectile turns by up to 5π·spread about
+        // each axis.
+        let spread = image
+            .shot
+            .as_ref()
+            .filter(|s| s.spread > 0.0)
+            .map_or(0.0, |s| (5.0 * std::f32::consts::PI * s.spread).min(1.4));
         if let Some(ray) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
             return Some(Weapon {
                 melee: false,
@@ -1642,6 +1671,7 @@ impl Session {
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
+                spread,
             });
         }
         let projectile = image
@@ -1659,6 +1689,7 @@ impl Session {
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
+                spread,
             });
         };
         let reach = using
@@ -1673,6 +1704,7 @@ impl Session {
             speed: p.speed,
             fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
             splash: p.explosion.radius,
+            spread,
         })
     }
     /// One brain tick per bot: see, choose a goal, find the way, aim and
@@ -2093,6 +2125,7 @@ impl Session {
             speed: 0.0,
             fall: 0.0,
             splash: 0.0,
+            spread: 0.0,
         }));
         let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
             tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
@@ -2963,33 +2996,49 @@ impl Session {
             .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
         // Now and then something idle (`surprise`): goofing is an option
-        // the chooser weighs against playing, whatever the bot is doing,
-        // when nothing presses it. Never while it fights or was just hurt,
-        // with an enemy in sight close by, on the objective it carries or
-        // is right at, or off its feet. An enemy in sight far off, or one
-        // it remembers, brakes it.
+        // the chooser weighs against playing, with a small worth of its
+        // own. Playing is worth what the bot is doing now: the action
+        // close by (an enemy near, the objective's focus near once it is
+        // at its post, on its way to it) wins easily; far from the action,
+        // waiting, or with nothing to do, playing is worth little and a
+        // goof wins now and then. Only what makes a goof impossible rules
+        // it out: fighting or flying, hurt just now (urgent), holding
+        // something, carrying the objective, or off its feet.
         let idle = behaviour == Behaviour::Wander && objective.is_none();
-        let at_objective = objective_holding
-            || gate.carrying
-                && objective
-                    .as_ref()
-                    .is_some_and(|v| flat(v.point - feet).length() < ON_OBJECTIVE);
-        let enemy_near = sight
-            .target
-            .is_some_and(|seen| flat(seen.feet - feet).length() < GOOF_ENEMY_NEAR);
-        let natural = !enemy_near
-            && threat.is_none()
-            && selected_objective.is_none_or(|v| v.enemy.is_none())
+        let action = |d: f32| {
+            let t = ((d - ACTION_NEAR) / (ACTION_FAR - ACTION_NEAR)).clamp(0.0, 1.0);
+            1.0 + (LULL_PLAY - 1.0) * t
+        };
+        let mut play: f32 = if idle { LULL_PLAY } else { RETURN_PLAY };
+        if let Some(view) = objective.as_ref() {
+            play = play.max(if view.waiting {
+                LULL_PLAY
+            } else if flat(view.point - feet).length() > ON_OBJECTIVE {
+                // On its way: on task.
+                1.0
+            } else {
+                // At its post: worth what it watches.
+                action(flat(view.aim - feet).length())
+            });
+        }
+        if selected_objective.is_some_and(|v| v.enemy.is_some()) {
+            play = play.max(PRESSED_PLAY);
+        }
+        if let Some(seen) = sight.target {
+            play = play.max(action(flat(seen.feet - feet).length()));
+        } else if self.bots.brains[&bot].memory.is_some() {
+            play = play.max(PRESSED_PLAY);
+        }
+        let natural = threat.is_none()
             && !matches!(behaviour, Behaviour::Fight | Behaviour::Fly)
             && !holding
             && driving.is_none()
             && swim.is_none()
             && !self.seated(bot);
         let pause_gate = surprise::Gate {
-            carrying: at_objective,
+            carrying: objective_holding || objective.as_ref().is_some_and(|v| v.committed),
             ..gate
         };
-        let pressed = sight.target.is_some() || self.bots.brains[&bot].memory.is_some();
         // Carrying: the catch hangs off the floor, or it drags and trails
         // back into its holder's path, and under the roof, or it snags on
         // the roof's edge on the way out. The hold's point is raised or
@@ -3012,7 +3061,7 @@ impl Session {
             })
             .flatten();
         let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye);
-        pause.brake = if pressed { PRESSED_BRAKE } else { 0.0 };
+        pause.play = play;
         (pause.pull, pause.copy) = self.team_mood(bot, feet, eye, tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain
