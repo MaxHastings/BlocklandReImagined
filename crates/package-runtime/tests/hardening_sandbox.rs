@@ -9,7 +9,7 @@ use bri_package_runtime::ops;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
     ops::{CAPABILITIES, ObjectRef, Op, authorize},
-    script::{Budget, Call, PlayerView, Runtime, Snapshot},
+    script::{BotKindView, Budget, Call, PlayerView, Runtime, Snapshot},
     state::{self, Namespace, check_value},
 };
 use serde_json::json;
@@ -335,6 +335,94 @@ fn a_map_is_walked_a_key_at_a_time_past_the_text_limit() {
         Budget::Command,
     );
     assert_eq!(result.unwrap_err().code, "script.limit");
+}
+
+/// `count` players and 16 bots, each with a full name and five long tool
+/// ids: far more, all together, than one script value may hold.
+fn crowd(count: u64) -> Snapshot {
+    let busy = |id: u64, bot: bool| {
+        let mut p = player(id);
+        p.name = format!("Bot Willetsworthi{id:06}");
+        p.bot = bot;
+        p.tools = (0..5)
+            .map(|i| format!("some_weapon_add_on:weapon/a_long_item_name_{i}"))
+            .collect();
+        p
+    };
+    Snapshot {
+        players: (1..=count).map(|id| busy(id, false)).collect(),
+        bots: (0..16).map(|i| busy(100_000 + i, true)).collect(),
+        // As many bot kinds as a server takes, with long ids.
+        bot_kinds: (0..64)
+            .map(|i| BotKindView {
+                id: format!("some.bot.add.on.with.a.long.identifying.name.number.{i:03}"),
+                name: format!("Bot Kind Number {i}"),
+                first_names: vec!["Alex".into()],
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// What the host lists (players, bots, bricks...) are views: a list of
+/// them, or a script's own array gathering them, never meets a script
+/// value's limits however many there are, and they still read like maps.
+/// Before views, 64 players and 16 bots with their tools were refused as
+/// one value too large (`script.limit`).
+#[test]
+fn host_lists_of_any_size_never_meet_a_scripts_limits() {
+    let (_, rt) = runtime(
+        "fn f() {\n\
+             let all = players();\n\
+             for b in bots() { all.push(b); }\n\
+             let named = 0;\n\
+             for p in all { if p.name.len() == 23 && \"tools\" in p && p.tools.len() == 5 && p[\"alive\"] { named += 1; } }\n\
+             let copy = all[0]; copy.note = 1;\n\
+             [all.len(), named, type_of(all[0]), player(1) == all[0], all[0] == all[1], all[0].missing == (), copy.note, \"note\" in all[0], player(1), bot_kinds().len()]\n\
+         }",
+        json!([]),
+    );
+    let mut request = call("f", Budget::Command);
+    request.snapshot = Arc::new(crowd(64));
+    let out = rt
+        .call("probe", request)
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .returned
+        .into_array()
+        .unwrap();
+    assert_eq!(out[0].as_int().unwrap(), 80);
+    assert_eq!(out[1].as_int().unwrap(), 80);
+    assert_eq!(out[2].clone().into_string().unwrap(), "map");
+    assert!(
+        out[3].as_bool().unwrap(),
+        "the same player is the same view"
+    );
+    assert!(!out[4].as_bool().unwrap());
+    assert!(out[5].as_bool().unwrap(), "a missing field is ()");
+    assert_eq!(out[6].as_int().unwrap(), 1, "a copy takes a field");
+    assert!(!out[7].as_bool().unwrap(), "the original keeps its own");
+    // What leaves the script is a plain map.
+    assert!(out[8].is_map(), "{}", out[8].type_name());
+    assert_eq!(out[9].as_int().unwrap(), 64);
+}
+
+/// Views keep a call's memory bounded: it makes at most so many, and
+/// writes at most so much into them.
+#[test]
+fn views_a_call_makes_and_writes_are_bounded() {
+    let (_, rt) = runtime("fn f() { players().len() }", json!([]));
+    let mut request = call("f", Budget::Command);
+    request.snapshot = Arc::new(crowd(20_000));
+    let e = rt.call("probe", request).unwrap_err();
+    assert!(e.message.contains("reads at most"), "{e:?}");
+    let (result, took) = run(
+        "fn f() { let s = \"\"; s.pad(4000, 'x'); let keep = []; for i in 0..1000 { let p = player(1); p.note = s; keep.push(p); } keep.len() }",
+        "f",
+        Budget::Command,
+    );
+    let e = result.unwrap_err();
+    assert!(e.message.contains("changes at most"), "{e:?}");
+    assert!(took < CALL_LIMIT, "{took:?}");
 }
 
 /// A script error names the functions it came out of and its line, not

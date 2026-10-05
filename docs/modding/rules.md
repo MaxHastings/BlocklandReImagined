@@ -352,6 +352,21 @@ on. Walk a map with `for key in map`, a key at a time: one script value
 holds at most 4096 bytes of text all together (every string in an array
 or map counts), and `keys()` gathers them into one.
 
+**Views.** What `players()`, `player(id)`, `bots()`, `bricks(kind)`,
+`brick(id)`, `entities()`, `me()`, `objects()`, `objects_near(...)`,
+`drops()`, `minigames()`, `minigame(id)`, `bot_kinds()` and
+`avatar_choices()` hand out are views: each reads like a map (`p.name`,
+`p["name"]`, `"team" in p`, `p.keys()`, `for key in p`, `type_of(p) ==
+"map"`, a missing field is `()`), and a script's own copy takes fields
+(`best.distance = d`). Unlike a map, a view's insides are the host's and
+never count against a script value's limits, so a list of 500 spawn
+bricks or 80 players with their tools, or a script's own array gathering
+them, works however big the build or the server. The same thing asked
+twice in a call is the same view (`player(1) == players()[0]`). A call
+makes at most 16 384 views and writes at most 1 MiB into them;
+`to_map()` gives the script its own counted map. What leaves the script
+(state, operations, a hook's answer) holds plain maps.
+
 **Rounds.** `end_round(game, #{ teams: [...], players: [...] })` ends a
 mini-game's round, won by those teams and players (or by nobody, with
 neither): the game's `round_over` is `true` until its next reset, and every
