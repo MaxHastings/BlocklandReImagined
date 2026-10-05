@@ -98,6 +98,9 @@ pub struct BotThought {
     pub surprise: BotSurpriseView,
     /// How teammates' intents moved its last choice (`team`).
     pub team: BotTeamView,
+    /// The opponent it is knocking off a body a teammate works
+    /// (`contest::clear`).
+    pub clearing: Option<OwnerId>,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {
@@ -337,6 +340,9 @@ struct Brain {
     native_combat_tick: Option<u64>,
     /// The selected objective owns the ordinary hand trigger this tick.
     objective_tool: bool,
+    /// The opponent it is clearing off the body a teammate works
+    /// (`contest::clear`), to call it out once.
+    clearing: Option<OwnerId>,
     /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
     /// someone damageable does not make them more urgent than winning.
     objective_threat: Option<Knowledge>,
@@ -475,6 +481,7 @@ impl Brain {
             combat: hand_combat::State::default(),
             native_combat_tick: None,
             objective_tool: false,
+            clearing: None,
             objective_threat: None,
             carry: None,
             next_grab: 0,
@@ -1456,6 +1463,7 @@ impl Session {
                 noticed: b.perception.why,
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
+                clearing: b.clearing,
             })
             .collect()
     }
@@ -2364,7 +2372,11 @@ impl Session {
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
-        // Where it would cover a body a teammate holds (`contest::cover`).
+        // Clearing an opponent off a body a teammate holds, with something
+        // that shoves (`contest::clear`), or else covering it (`contest::cover`).
+        let shove = objective.and_then(|view| {
+            contest::clear(self, bot, view.resource?, feet, eye).map(|c| (c, view))
+        });
         let cover = objective.and_then(|view| {
             contest::cover(self, bot, view.resource?, feet, view.heading).map(|point| (point, view))
         });
@@ -2713,6 +2725,8 @@ impl Session {
             },
         );
         let mut selected_objective = objective.filter(|_| behaviour == Behaviour::Objective);
+        let was_clearing = brain.clearing.take();
+        let mut clear_callout = None;
         let objective_resource = selected_objective
             .and_then(|view| view.resource)
             .filter(|_| {
@@ -2766,6 +2780,19 @@ impl Session {
                     selected_objective.unwrap().physical_progress || contest_engaged,
                     tick,
                 );
+            } else if let Some((c, view)) = shove {
+                // A teammate has the body and an opponent stands at it:
+                // knock the opponent off it with what shoves.
+                if was_clearing.is_none() {
+                    clear_callout = kind.team.callouts.get("clear").cloned();
+                }
+                brain.clearing = Some(c.opponent);
+                selected_objective = Some(objectives::View {
+                    equip: Some(c.slot),
+                    trigger: Some(c.swing),
+                    heading: view.heading,
+                    ..objectives::View::locomotion(c.point, c.aim)
+                });
             } else if let Some((point, view)) = cover {
                 // A teammate has the body: keep the objective and cover
                 // behind it instead, ready to take it up when the claim ends.
@@ -3085,17 +3112,29 @@ impl Session {
             }
         }
         // Standing on a body (a vehicle's roof, a crate, a head): the
-        // world has no floor under its feet.
+        // world has no floor anywhere under its feet (its middle can stand
+        // over a gap between bricks it stands on).
         let on_body = swim.is_none()
             && driving.is_none()
             && state.grounded
-            && super::admin_players::world_ray(
-                &self.simulation,
-                own_feet + Vec3::Y * 0.1,
-                Vec3::NEG_Y,
-                0.4,
-            )
-            .is_none();
+            && [
+                (0.0, 0.0),
+                (1.0, 1.0),
+                (1.0, -1.0),
+                (-1.0, 1.0),
+                (-1.0, -1.0),
+            ]
+            .into_iter()
+            .all(|(x, z)| {
+                let at = own_feet + Vec3::new(x, 0.0, z) * (body.width * 0.4);
+                super::admin_players::world_ray(
+                    &self.simulation,
+                    at + Vec3::Y * 0.1,
+                    Vec3::NEG_Y,
+                    0.4,
+                )
+                .is_none()
+            });
         // The walk grid has no place for its feet there and no route: it
         // walks straight off toward wherever it is going, and plans again
         // once down. One going nowhere, or whose goal is close by below it
@@ -3845,7 +3884,7 @@ impl Session {
         );
         let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
         self.movement(bot, sequence, input)?;
-        if let Some(line) = callout {
+        if let Some(line) = callout.or(clear_callout) {
             self.team_say(bot, line, tick)?;
         }
         if let (Some(m), Some(seen)) = (bites, sight.target) {

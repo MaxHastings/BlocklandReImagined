@@ -286,6 +286,33 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
 }
 
+/// The farthest an item may reach and still count as a shove: a swing or
+/// a short poke, not a shot.
+const SHOVE_REACH: f32 = 8.0;
+
+/// How far an item reaches to shove a player, from its data: a short swing
+/// or poke whose hit pushes (its projectile's impulse), whatever it does to
+/// health (a push broom, a sword). None for one that does not push, fires
+/// by a script, or reaches farther than `SHOVE_REACH`.
+pub(super) fn item_shove(session: &Session, item: &str, scale: f32) -> Option<f32> {
+    let pack = &session.weapons.pack;
+    let image = pack
+        .items
+        .get(item)
+        .and_then(|i| pack.images.get(&i.image))?;
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|id| pack.projectiles.get(id))?;
+    if projectile.impulse <= 0.0 && projectile.vertical <= 0.0 || !charge_release_only(image) {
+        return None;
+    }
+    let mut native = image.clone();
+    native.melee = false;
+    let cap = tactics::native_capability(&native, Some(projectile), scale, cadence(image)).ok()?;
+    (cap.reach <= SHOVE_REACH * scale).then_some(cap.reach)
+}
+
 /// How much splash damage counts for, against direct damage, in an item's
 /// worth: a blast hurts less the farther it lands.
 const SPLASH_WORTH: f32 = 0.6;

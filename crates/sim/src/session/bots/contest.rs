@@ -204,6 +204,96 @@ pub(super) fn cover(
     })
 }
 
+/// A cover going for an opponent at the body its teammate works
+/// (`clear`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Clear {
+    /// Where it walks: just on the body's side of the opponent.
+    pub point: Vec3,
+    /// Where it looks: the opponent's chest, so the hit knocks it away
+    /// from the body.
+    pub aim: Vec3,
+    /// The inventory slot of what it shoves with.
+    pub slot: usize,
+    /// In reach: swing.
+    pub swing: bool,
+    pub opponent: OwnerId,
+}
+
+/// While a teammate works a loose body, a cover holding something that
+/// shoves (`hand_combat::item_shove`) goes for the opponent standing at the
+/// body instead of standing back: from the body's side, so its hit knocks
+/// the opponent away while the teammate keeps the body moving. The
+/// opponent nearest the body within the kind's `contest.engage` of it is
+/// the one. None when no teammate works it, nobody contests it there, it
+/// has nothing that shoves, or the kind does not cover.
+pub(super) fn clear(
+    session: &Session,
+    bot: OwnerId,
+    resource: Resource,
+    feet: Vec3,
+    eye: Vec3,
+) -> Option<Clear> {
+    let Resource::Body { vehicle } = resource else {
+        return None;
+    };
+    let brain = session.bots.brains.get(&bot)?;
+    let tuning = &brain.kind.contest;
+    if tuning.cover_distance <= 0.0 {
+        return None;
+    }
+    let tick = session.simulation.state().tick;
+    let mut claimants = session.bots.claims.claimants_on(vehicle, tick);
+    if !claimants.any(|o| o != bot && session.bot_allies(bot, o)) {
+        return None;
+    }
+    let scale = session.peers.get(&bot)?.player.state().scale;
+    let actor = session.weapons.actor(ActorId(bot))?;
+    let (slot, reach) = actor
+        .inventory
+        .iter()
+        .enumerate()
+        .take(super::super::inventory::TOOL_SLOTS)
+        .filter_map(|(slot, item)| {
+            let reach = super::hand_combat::item_shove(session, item.as_deref()?, scale)?;
+            Some((slot, reach))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let centre = session.object_centre(ObjectRef::Vehicle(vehicle))?;
+    let game = session.game_of(bot)?;
+    let (opponent, at) = session
+        .peers
+        .iter()
+        .filter(|(o, p)| {
+            **o != bot
+                && p.combat.alive
+                && !session.seated(**o)
+                && session.game_of(**o) == Some(game)
+                && !session.bot_allies(bot, **o)
+        })
+        .map(|(o, p)| (*o, Vec3::from(p.player.state().feet)))
+        .filter(|(_, at)| flat(*at - centre).length() <= tuning.engage)
+        .min_by(|a, b| {
+            flat(a.1 - centre)
+                .length()
+                .total_cmp(&flat(b.1 - centre).length())
+        })?;
+    let away = flat(at - centre)
+        .try_normalize()
+        .or_else(|| flat(at - feet).try_normalize())?;
+    let mut point = at - away * (reach * 0.5).min(1.5);
+    point.y = feet.y;
+    let aim = at + Vec3::Y * 1.2;
+    let swing = (aim - eye).length() <= reach;
+    Some(Clear {
+        point,
+        aim,
+        slot,
+        swing,
+        opponent,
+    })
+}
+
 /// A body driven back toward the cover runs down the line it stands on:
 /// then it stands level with the body and twice `side` off its path
 /// instead, out of the way, so the opponent's drive is not deflected off

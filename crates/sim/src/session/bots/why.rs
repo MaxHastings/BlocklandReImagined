@@ -142,6 +142,7 @@ mod tests {
             objective_reused: 0,
             noticed: None,
             team: Default::default(),
+            clearing: None,
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,
