@@ -68,6 +68,7 @@ fn imported_ctf_bot_takes_the_actual_flag_and_returns_it_for_its_team() {
     hole.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, hole);
     let height = |id: &str| s.simulation().definitions.entries[id].mesh.height_plates as f32 * 0.1;

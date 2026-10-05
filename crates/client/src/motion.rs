@@ -1627,6 +1627,7 @@ mod tests {
         brick.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(bri_vehicles::testing::CAR.into()),
             recolor: true,
+            team: None,
         }));
         world.bricks.insert(1, brick);
         world.next_brick_id = 2;
@@ -1903,6 +1904,7 @@ mod tests {
             spawn_brick.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(definition.into()),
                 recolor: true,
+                team: None,
             }));
             world.bricks.insert(1, spawn_brick);
             let destination = if overlap {
@@ -2347,6 +2349,7 @@ mod tests {
             spawn_brick.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(definition.into()),
                 recolor: true,
+                team: None,
             }));
             world.bricks.insert(1, spawn_brick);
             for (id, position, turns) in [(2, [0., 3., -24.25], 0), (3, [30.25, 3., -24.], 1)] {

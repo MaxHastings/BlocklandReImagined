@@ -36,6 +36,7 @@ fn vehicle_world(f: &Fixture, vehicle: &str) -> World {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(vehicle.into()),
         recolor: true,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
@@ -1237,6 +1238,7 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider(f: &Fixture) -> anyhow::
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

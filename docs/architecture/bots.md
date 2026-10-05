@@ -45,6 +45,12 @@ bot does through the same code.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
    past its band, and a walk home goes all the way.
+
+   An on-foot bot's leash is its brick and `chase_radius`. A driver's leash
+   follows the kind's `mounted` policy instead: with `anchor: "mount"` it is
+   measured from where the bot took the controls, with `mounted.chase_radius`;
+   with `"home"` from its brick. So a bot that boards a vehicle 40 m out keeps
+   pursuing a target 60 m out rather than turning back at its walking leash.
 3. **Goal and path.** The behaviour sets the goal; the walk grid
    (`crate::nav`, shared by every bot of a body size, updated as bricks
    change, portals included) finds the way a little each tick. Gaps only
@@ -63,11 +69,44 @@ bot does through the same code.
    targets cancel a held charge without firing it. A driver steers the
    chassis independently of the gunner's world aim; an armed passenger's world
    aim is preserved when its seat converts the look to a relative angle.
+   A chassis backs onto a goal more than `mounted.reverse_degrees` off its
+   hull. While pursuing (Fight, Chase, Search, Fly) it does so only within
+   `mounted.reverse_distance`; a farther target behind is turned toward, so a
+   chase is not driven as a long retreat. Fixed deliveries and the walk home
+   still reverse.
 5. **Move and act.** The behaviour's movement, then getting unstuck (hop,
    plan again, give up the goal) on foot; drivers instead brake, replan and
    relinquish an unproductive seat. Shared claims are exclusive advisory
    intentions, released on success, preemption or invalidation. A claim never
    overrides human occupancy, trust, mini-game policy or an Add-On ride hook.
+   Claims on a loose body (a ball, a crate) conflict only between allies:
+   an opponent may pursue the same body and push it toward its own goal.
+   Seats stay exclusive for everyone. That contest is its own piece
+   (`bots/contest.rs`): when an opponent is the body's mover or holds a live
+   claim on it, the approach leads the body along its velocity
+   (`contest.lead_seconds`, at most `contest.max_lead`), and being within
+   `contest.engage` of it counts as progress, so the claim's lease does not
+   lapse while the two sides fight over it. A step waiting on an admitted
+   delivery holds no lease at all.
+
+   The contest piece also covers the other cases of a shared body:
+   - **Cover.** A bot whose claim is refused because a teammate holds the
+     body keeps its objective. It does not stand down into Wander: it holds
+     a cover point `contest.cover_distance` behind the body, against the
+     team's delivery heading, and `contest.cover_side` to the side. A lone
+     cover takes the side the working teammate is not on. Several covers
+     take id-ordered slots on both sides, each further pair further back and
+     wider. A cover point stops short of any wall between it and the body.
+     When an opponent drives the body back at the cover, the cover stands
+     beside the body's path instead, so the drive is not deflected off it.
+     When the claim frees, the cover takes the body up at once.
+   - **Clear.** A push or hammer on a body an opponent drives straight back
+     at it turns by `contest.clear_degrees` to the bot's side, knocking the
+     body out of its line rather than being carried back with it.
+   - **Walls.** When solid world geometry stands where a pusher would stand
+     (a wall or a corner behind the body), the push turns by the smallest of
+     30, 60, 90 or 120 degrees that leaves room. The body is worked along
+     and off the wall instead of being pressed into it.
    Physical pushing transfers only momentum stopped at actual motor contacts,
    through the same mechanism for humans and bots; mass and geometry determine
    the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
@@ -83,6 +122,16 @@ each executor requests normal controls. The existing event scheduler and native
 package callbacks alone apply their gameplay effects. Real input admission,
 physical state and canonical death/round observations decide what happened;
 a package completion counter does not claim a round winner.
+
+Rule outputs are projected by what they do, never by content names. A
+Team Score condition reads a fact, the team's total: the sum of its members'
+scores, which `addScore` and `addTeamScore` raise. A delayed `resetObject`
+on the captured Object, from a brick whose owner owns that object's
+spawner, is a known effect after the scoring group: the object is replaced
+by a new incarnation. A step that expects it does not fail when the object
+disappears, and the bot plans again at once for the replacement. Any other
+output the planner does not understand makes the plan unsupported rather
+than being skipped.
 
 Grounding, search and depth remain finite. Unknown script semantics, thrown-object
 trajectories, hookshot routes, cooperative stacking and aircraft/watercraft
@@ -111,6 +160,16 @@ of a moving target infallible or change damage permissions.
   rate, aim error, memory, whether it fights other builders' bots,
   whether it warns its side (`alerts_allies`), its `behaviours` weights,
   and:
+  - `objective_radius`: how far around itself it looks for loose objects
+    an objective can use (24 for the Blockhead).
+  - `contest` (`lead_seconds`, `max_lead`, `engage`, `cover_distance`,
+    `cover_side`, `clear_degrees`): how it plays a body an opponent is also
+    working, and how it covers one a teammate works (above). A
+    `cover_distance` of 0 stands down as before, and a `clear_degrees` of
+    0 meets a drive head on.
+  - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
+    `reverse_distance`): its pursuit policy while it drives (above). It is
+    the same for every vehicle; nothing checks a vehicle's name.
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is
@@ -125,6 +184,15 @@ of a moving target infallible or change damage permissions.
     roams up and down as well as across, and every goal is kept inside its
     water (`water::swim_point`), so an enemy on land brings it to the edge
     nearest them and no farther. Out of water it walks like any bot.
+- A spawn brick's `team` (`VehicleSpawn::team`, the wrench's Team menu,
+  listing the builder's mini-game teams): the team slot its bot plays for.
+  It is applied when the bot joins its builder's game, after every new life
+  (a reset or respawn), after a build loads, and whenever the choice or the
+  game changes; in between, the game's own commands (SetTeam) may move the
+  bot. A slot the game has not got is applied once the game has it. With no
+  choice, the team is left to the game. A spawn brick's bot is named after
+  its kind and then its brick's name, or else its team ("Blockhead Bot
+  (Red)"), so the MiniGame Players list tells the bots apart.
 - A hole brick (a brick catalog entry's `bot`, Bot_Hole's `isBotHole` and
   `holeBot`) keeps one bot of that kind from the moment it is planted, as
   a spawn brick keeps the one chosen in its wrench. Import Add-On turns a

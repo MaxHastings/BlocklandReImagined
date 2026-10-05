@@ -1253,6 +1253,7 @@ impl Session {
                     Box::new(bri_world::VehicleSpawn {
                         vehicle: bri_world::ContentRef::Resolved(v),
                         recolor: true,
+                        team: None,
                     })
                 });
             }

@@ -142,6 +142,10 @@ impl WrenchState {
         cur.rule_region = data.rule_region;
         cur.rule_region_default = data.rule_region_default;
         cur.region_inputs = data.region_inputs;
+        // So do its builder and its bot's Team choice, whose slots belong
+        // to the builder's game.
+        cur.builder = data.builder;
+        cur.vehicle_team = data.vehicle_team;
         let l = |f| self.locked(variant, f);
         use WrenchField::*;
         if !l(Name) {

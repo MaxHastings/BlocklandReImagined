@@ -115,7 +115,19 @@ impl Store {
             map_names,
             old,
         };
-        for world in &content.worlds {
+        // The converted originals, then the builds made for this game that
+        // ship beside them in the worlds pack.
+        let templates = content
+            .worlds
+            .iter()
+            .map(|w| (w, "Converted original", "Original converted build"))
+            .chain(
+                content
+                    .bundled_saves
+                    .iter()
+                    .map(|w| (w, "Bundled build", "Made for Blockland ReImagined")),
+            );
+        for (world, modified, description) in templates {
             let Some(name) = v20_save_name(&world.name) else {
                 continue;
             };
@@ -123,8 +135,8 @@ impl Store {
                 info: SaveFileInfo {
                     name,
                     map: store.map_name(&world.map_id),
-                    modified: "Converted original".into(),
-                    description: "Original converted build".into(),
+                    modified: modified.into(),
+                    description: description.into(),
                     brick_count: Some(world.brick_count as u32),
                     damaged: false,
                 },

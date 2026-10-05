@@ -80,6 +80,10 @@ fn object_centre(v: &VehicleSnapshot, d: &bri_vehicles::Definition) -> Vec3 {
             * (v.scale * 0.5)
 }
 use super::claims::Resource;
+/// How near the spot a bot makes for another body contests it rather than
+/// stands in its way (`Session::bot_walk_direction`).
+const CONTESTED: f32 = 3.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct Opportunity {
     resource: Resource,
@@ -198,8 +202,20 @@ impl Session {
     fn bot_claimed(&self, resource: Resource, except: OwnerId, tick: u64) -> bool {
         self.bots
             .claims
-            .resource_claim(resource, tick)
+            .contending_claim(resource, tick, |o| {
+                o == except || self.bot_allies(except, o)
+            })
             .is_some_and(|c| c.owner != except)
+    }
+
+    /// Live claimants on `bot`'s side. Claims coordinate allies; opponents'
+    /// intentions on the same loose body are a contest (`claims::contends`).
+    pub(super) fn claim_allies(&self, bot: OwnerId, tick: u64) -> BTreeSet<OwnerId> {
+        self.bots
+            .claims
+            .claimants(tick)
+            .filter(|o| *o == bot || self.bot_allies(bot, *o))
+            .collect()
     }
 
     fn bot_crew(&self, bot: OwnerId, v: &VehicleSnapshot, tick: u64) -> bool {
@@ -488,12 +504,14 @@ impl Session {
         }
         self.bots.brains.get_mut(&bot)?.object_cursor = (start + visited.max(1)) % len;
         let opportunity = best?;
+        let allies = self.claim_allies(bot, tick);
         if self.bots.claims.acquire(
             bot,
             enemy.subject,
             opportunity.resource,
             feet.distance(opportunity.point),
             tick,
+            |o| allies.contains(&o),
         ) {
             let brain = self.bots.brains.get_mut(&bot)?;
             brain.push_contact = None;
@@ -684,17 +702,34 @@ impl Session {
     /// The path describes fixed geometry. A small local sidestep lets living
     /// actors pass each other instead of hopping indefinitely at a shared
     /// waypoint; the ordinary motor still enforces physical clearance.
-    pub(super) fn bot_walk_direction(&self, bot: OwnerId, desired: Vec3) -> Vec3 {
+    /// Any ally in the way is passed. So is any other body, except
+    /// `quarry`, the one it is going after, and one standing at `goal`, the
+    /// spot it is making for, which it contests rather than walks round.
+    /// It always passes on its left, so two walking into each other both
+    /// step aside the same way and get by.
+    pub(super) fn bot_walk_direction(
+        &self,
+        bot: OwnerId,
+        desired: Vec3,
+        quarry: Option<OwnerId>,
+        goal: Option<Vec3>,
+    ) -> Vec3 {
         if desired == Vec3::ZERO || self.seated(bot) {
             return desired;
         }
         let own = &self.peers[&bot].player;
         let feet = Vec3::from(own.state().feet);
         let blocked = self.peers.iter().any(|(o, p)| {
-            if *o == bot || !p.combat.alive || self.seated(*o) || !self.bot_allies(bot, *o) {
+            if *o == bot || !p.combat.alive || self.seated(*o) {
                 return false;
             }
-            let delta = flat(Vec3::from(p.player.state().feet) - feet);
+            let at = Vec3::from(p.player.state().feet);
+            if !self.bot_allies(bot, *o)
+                && (Some(*o) == quarry || goal.is_some_and(|g| flat(at - g).length() < CONTESTED))
+            {
+                return false;
+            }
+            let delta = flat(at - feet);
             let along = delta.dot(desired);
             let width = (own.tuning().width + p.player.tuning().width) * 0.5;
             along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
@@ -818,12 +853,17 @@ impl Session {
         )
     }
 
+    /// No ally stands in the line of fire from `origin` to `target`, nor
+    /// within `past` beyond the target, where a miss carries on. The line
+    /// widens by `spread` radians, how far off its aim may send the shot.
     pub(super) fn bot_fire_clear(
         &self,
         bot: OwnerId,
         origin: Vec3,
         target: Vec3,
         splash: f32,
+        past: f32,
+        spread: f32,
     ) -> bool {
         let delta = target - origin;
         let length = delta.length();
@@ -842,9 +882,9 @@ impl Session {
             }
             let centre =
                 Vec3::from(p.player.state().feet) + Vec3::Y * p.player.tuning().stand_height * 0.5;
-            let along = (centre - origin).dot(direction).clamp(0.0, length);
+            let along = (centre - origin).dot(direction).clamp(0.0, length + past);
             centre.distance(origin + direction * along)
-                < p.player.tuning().stand_height * 0.5 + splash
+                < p.player.tuning().stand_height * 0.5 + splash + along * spread.tan()
         })
     }
 
@@ -952,9 +992,23 @@ impl Session {
                 .filter(|p| p.through.is_none())
                 .map(|p| flat(p.feet - at));
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
-            let reversing = error.abs() > 1.8
-                || self.bots.brains[&bot].vehicle_stuck > 360
-                    && self.bots.brains[&bot].vehicle_stuck < 480;
+            // Back onto a fixed goal behind (a delivery or a walk home). A
+            // pursued target behind is backed onto only when close; a farther
+            // one is turned toward, so a chase is not driven as a long retreat.
+            let brain = &self.bots.brains[&bot];
+            let remaining = brain
+                .plan
+                .last()
+                .filter(|p| p.through.is_none())
+                .map(|p| flat(p.feet - at).length())
+                .or(toward.map(|d| d.length()))
+                .unwrap_or(0.0);
+            let pursuing = matches!(
+                behaviour,
+                Behaviour::Fight | Behaviour::Chase | Behaviour::Search | Behaviour::Fly
+            );
+            let reversing = reverses(&brain.kind.mounted, error, remaining, pursuing)
+                || brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480;
             let travel_sign = if reversing { -1.0 } else { 1.0 };
             let heading_error = if reversing {
                 wrap(error + std::f32::consts::PI)
@@ -1077,5 +1131,40 @@ impl Session {
             let _ = self.dismount_vehicle(bot);
         }
         Ok(input)
+    }
+}
+
+/// A chassis reverses toward a goal more than the kind's
+/// `mounted.reverse_degrees` off its heading. While pursuing a target it
+/// does so only within `mounted.reverse_distance`; a farther target behind
+/// is turned toward instead.
+fn reverses(
+    policy: &crate::bot_kind::BotMounted,
+    error: f32,
+    remaining: f32,
+    pursuing: bool,
+) -> bool {
+    error.abs() > policy.reverse_degrees.to_radians()
+        && (!pursuing || remaining <= policy.reverse_distance)
+}
+
+#[cfg(test)]
+mod mounted_tests {
+    #[test]
+    fn a_pursuing_chassis_backs_onto_a_near_target_but_turns_toward_a_far_one() {
+        let policy = crate::bot_kind::BotMounted::default();
+        let behind = std::f32::consts::PI * 0.9;
+        assert!(super::reverses(&policy, behind, 3.0, true));
+        assert!(super::reverses(
+            &policy,
+            -behind,
+            policy.reverse_distance,
+            true
+        ));
+        assert!(!super::reverses(&policy, behind, 40.0, true));
+        assert!(!super::reverses(&policy, 0.5, 3.0, true));
+        // A fixed delivery behind the hull is still backed onto.
+        assert!(super::reverses(&policy, behind, 40.0, false));
+        assert!(!super::reverses(&policy, 0.5, 40.0, false));
     }
 }

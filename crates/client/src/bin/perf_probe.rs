@@ -123,6 +123,7 @@ fn main() -> Result<()> {
         brick.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(kind.into()),
             recolor: false,
+            team: None,
         }));
         spawners.bricks.insert(i as u64 + 1, brick);
     }

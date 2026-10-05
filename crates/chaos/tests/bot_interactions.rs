@@ -25,6 +25,9 @@ const CARRIER: &str = "test:vehicle/field-carrier";
 const CHARGED: &str = "test:vehicle/charged-rover";
 const UNARMED: &str = "test:vehicle/utility-chassis";
 const TALL_GUNNER: &str = "test:vehicle/elevated-gunner";
+// An unarmed chassis whose contact is harmless, so a long pursuit observes
+// driving rather than ending in the target's death and respawn.
+const PURSUER: &str = "test:vehicle/harmless-pursuer";
 const CHARGE_TICKS: u64 = 24;
 const CHARGE_STEPS: u8 = 3;
 const ENEMY: Vec3 = Vec3::new(-12.0, 0.05, 8.0);
@@ -49,6 +52,7 @@ fn session(interact: f32) -> Session {
         (CHARGED, [2, 1, 0], [2.6, 1.0, 4.8]),
         (UNARMED, [2, 1, 0], [2.6, 1.0, 4.8]),
         (TALL_GUNNER, [0, 1, 2], [3.0, 1.4, 5.0]),
+        (PURSUER, [2, 1, 0], [2.6, 1.0, 4.8]),
     ] {
         let mut d = bri_vehicles::testing::car();
         let seats = bri_vehicles::testing::tank().seats;
@@ -85,13 +89,13 @@ fn session(interact: f32) -> Session {
         }
         weapon.sound.clear();
         weapon.effect.clear();
-        if id == UNARMED {
+        if id == UNARMED || id == PURSUER {
             d.weapon = None;
             for seat in &mut d.seats {
                 seat.weapon = false;
             }
             d.runover_speed = 2.0;
-            d.runover_damage = 20.0;
+            d.runover_damage = if id == UNARMED { 20.0 } else { 0.0 };
         }
         pack.definitions.push(d);
     }
@@ -103,9 +107,17 @@ fn session(interact: f32) -> Session {
     kinds[0].behaviours.insert("interact".into(), interact);
     s.set_vehicle_pack(pack, kinds).unwrap();
     s.set_tool_catalog(ToolCatalog {
-        vehicles: [fixture::BOT, ROVER, CARRIER, CHARGED, UNARMED, TALL_GUNNER]
-            .map(String::from)
-            .into(),
+        vehicles: [
+            fixture::BOT,
+            ROVER,
+            CARRIER,
+            CHARGED,
+            UNARMED,
+            TALL_GUNNER,
+            PURSUER,
+        ]
+        .map(String::from)
+        .into(),
         vehicle_bricks: [fixture::PLATE.into()].into(),
         ..Default::default()
     })
@@ -123,6 +135,7 @@ fn bot_brick(at: Vec3, owner: OwnerId) -> Brick {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     brick
 }
@@ -1344,5 +1357,122 @@ fn a_crew_pursues_only_the_last_observation_after_its_target_hides() {
             a.diagnostics()
         );
         assert_eq!(a.s.mounted(driver), Some((a.vehicle, driver_seat as u8)));
+    }
+}
+
+/// A bot from a brick at the origin boards a chassis about 40 units out
+/// and pursues a visible human about 60 units out who then runs away. The
+/// mount's own pursuit leash (`mounted` in the kind) keeps the chase going
+/// past the on-foot chase radius, and a target behind the hull is turned
+/// toward rather than driven at in reverse.
+#[test]
+fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leash() {
+    for (human_at, label) in [
+        (Vec3::new(-44.0, 0.05, 44.0), "diagonal"),
+        (Vec3::new(-52.0, 0.05, 30.0), "renamed-flank"),
+    ] {
+        let mut s = session(1.0);
+        s.set_spawn_points(vec![human_at]).unwrap();
+        let mut g = Game::with_layout(s, PURSUER, &[Vec3::new(0.0, 0.1, 0.0)], false, false);
+        let bot = g.bots()[0];
+        let home = Vec3::new(0.25, 0.0, 0.25);
+        let mut boarded = false;
+        for _ in 0..120 * 20 {
+            g.steps(1);
+            if g.s.mounted(bot) == Some((g.vehicle, 2)) {
+                boarded = true;
+                break;
+            }
+        }
+        assert!(
+            boarded,
+            "the bot boarded the chassis to pursue ({label}); {}",
+            g.diagnostics()
+        );
+        let human = |g: &Game| {
+            Vec3::from(
+                g.s.snapshot()
+                    .players
+                    .into_iter()
+                    .find(|p| p.owner == g.human)
+                    .unwrap()
+                    .feet,
+            )
+        };
+        let start_chassis = g.position();
+        let start_human = human(&g);
+        let away = Vec3::new(start_human.x, 0.0, start_human.z).normalize();
+        let input = MoveInput {
+            forward: 1.0,
+            yaw: away.x.atan2(-away.z),
+            ..Default::default()
+        };
+        let gap = |g: &Game| {
+            let d = human(g) - g.position();
+            Vec3::new(d.x, 0.0, d.z).length()
+        };
+        let initial_gap = gap(&g);
+        let mut beyond_walking_leash = false;
+        let mut reversing = 0usize;
+        let mut far_ticks = 0usize;
+        let mut trace = Vec::new();
+        let mut last = g.position();
+        for tick in 0..120 * 8 {
+            g.steps_with_input(1, input);
+            let thought =
+                g.s.bot_thoughts()
+                    .into_iter()
+                    .find(|t| t.bot == bot)
+                    .unwrap();
+            let now = g.position();
+            let flat_home = Vec3::new(now.x - home.x, 0.0, now.z - home.z).length();
+            beyond_walking_leash |= flat_home > 52.0;
+            if tick % 60 == 0 && trace.len() < 20 {
+                trace.push((tick, thought.behaviour, now, gap(&g)));
+            }
+            assert!(
+                !matches!(thought.behaviour, "return" | "wander"),
+                "the driver kept pursuing its visible target instead of heading home ({label}) at {tick}: {thought:?}; trace={trace:?}"
+            );
+            assert_eq!(
+                g.s.mounted(bot),
+                Some((g.vehicle, 2)),
+                "still driving ({label})"
+            );
+            let pose =
+                g.s.vehicle_poses()
+                    .into_iter()
+                    .find(|v| v.id == g.vehicle)
+                    .unwrap();
+            let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+            let step = now - last;
+            last = now;
+            if gap(&g) > 12.0 {
+                far_ticks += 1;
+                reversing += usize::from(Vec3::new(step.x, 0.0, step.z).dot(forward) < -0.01);
+            }
+        }
+        let final_gap = gap(&g);
+        let retreat = (human(&g) - start_human).dot(away);
+        eprintln!(
+            "{label}: human_retreat={retreat:.2} gap {initial_gap:.2}->{final_gap:.2} reversing={reversing}/{far_ticks} chassis {start_chassis}->{}",
+            g.position()
+        );
+        assert!(
+            retreat > 20.0,
+            "the human genuinely retreated ({label}): {retreat}"
+        );
+        assert!(
+            beyond_walking_leash,
+            "the pursuit went past the on-foot chase radius ({label}); trace={trace:?}"
+        );
+        assert!(
+            final_gap < initial_gap - 5.0,
+            "the chassis closed on its retreating target ({label}): {initial_gap} -> {final_gap}; trace={trace:?}"
+        );
+        assert!(
+            reversing * 10 <= far_ticks,
+            "a far target is turned toward, not chased in reverse ({label}): {reversing}/{far_ticks}"
+        );
     }
 }

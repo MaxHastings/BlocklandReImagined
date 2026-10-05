@@ -146,6 +146,7 @@ fn game_scene_kind_with_packages(
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(fixture::BOT.into()),
         recolor: false,
+        team: None,
     }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;

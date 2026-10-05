@@ -354,6 +354,7 @@ impl AiScene {
             brick.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(id.into()),
                 recolor: false,
+                team: None,
             }));
             brick
         };

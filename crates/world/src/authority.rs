@@ -89,6 +89,9 @@ pub struct WrenchProperties {
     /// Vehicle spawn brick vehicle id and recolor flag.
     pub vehicle: Option<String>,
     pub recolor_vehicle: bool,
+    /// The spawn brick's bot team slot in its builder's mini-game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_team: Option<u32>,
     pub raycast: bool,
     pub colliding: bool,
     pub visible: bool,
@@ -327,6 +330,7 @@ impl Authority {
                     Box::new(crate::VehicleSpawn {
                         vehicle: ContentRef::Resolved(id),
                         recolor: properties.recolor_vehicle,
+                        team: properties.vehicle_team,
                     })
                 });
                 next.raycast = properties.raycast;
@@ -447,6 +451,7 @@ mod tests {
         full.vehicle = Some(Box::new(crate::VehicleSpawn {
             vehicle: ContentRef::Resolved(hostile.clone()),
             recolor: true,
+            team: None,
         }));
         full.events = (0..64)
             .map(|i| EventRow {

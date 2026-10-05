@@ -74,6 +74,7 @@ fn session(flags: usize) -> Result<(Session, u64, Vec<u64>)> {
         b.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(fixture::BOT.into()),
             recolor: false,
+            team: None,
         }));
         world.bricks.insert(n + 1, b);
     }

@@ -255,6 +255,22 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
     false
 }
 
+/// An item whose image has a native attack that does damage: one worth
+/// picking up to fight with. Unlike `has_possible_attack`, an unknown
+/// mechanism does not count.
+pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
+    let pack = &session.weapons.pack;
+    let Some(image) = pack.items.get(item).and_then(|i| pack.images.get(&i.image)) else {
+        return false;
+    };
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|id| pack.projectiles.get(id));
+    capability(image, projectile, scale)
+        .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
+}
+
 fn known_noncombat_manipulation(image: &bri_weapons::Image) -> bool {
     image.bot.and_then(|b| b.manipulation).is_some()
         && image.projectile.is_none()
@@ -696,7 +712,7 @@ fn clear_path(
         if q.passage(start, end).is_some() {
             return Some(false);
         }
-        if !session.bot_fire_clear(bot, start, end, 0.0) {
+        if !session.bot_fire_clear(bot, start, end, 0.0, 0.0, 0.0) {
             return Some(false);
         }
         // Future ally movement is conservatively enclosed about today's body.

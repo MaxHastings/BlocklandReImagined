@@ -33,6 +33,7 @@ fn spawn_brick(kind: &str, at: [f32; 3], owner: OwnerId) -> Brick {
     brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
+        team: None,
     }));
     brick
 }
