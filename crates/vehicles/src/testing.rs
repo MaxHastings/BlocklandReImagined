@@ -256,7 +256,8 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         },
         look_limits: [0., 1.],
         runover_speed: 0.,
-        runover_damage: 0.,
+        // Unset: the engine's default scale.
+        runover_damage: f32::MAX,
         runover_push: 0.,
         protect_direct: false,
         protect_radius: false,

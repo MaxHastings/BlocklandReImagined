@@ -1162,6 +1162,14 @@ impl Player {
         state.jetting = false;
         state.tether = None;
         self.restore(physics, state, self.tuning.clone())?;
+        // A relocation is a jump, not travel: the body is there at once.
+        // Left as the next kinematic pose, the step would sweep the body
+        // from where it was at the jump's speed (a respawn across the map
+        // is thousands of units a second), and the contact solver would
+        // hand that speed to whatever it was touching: a corpse lying on a
+        // parked jeep threw the jeep off the map as it respawned.
+        let pose = self.body_pose(feet, false);
+        physics.bodies[self.body].set_position(pose, true);
         self.relocations += 1;
         Ok(())
     }
@@ -1773,7 +1781,14 @@ impl Player {
             physics.colliders[self.collider].set_shape(shape);
         }
         let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
-        physics.bodies[self.body].set_next_kinematic_position(pose);
+        if passed.is_some() {
+            // Through an opening the body jumps to the partner, as a
+            // teleport does: driven there as its next pose, the step would
+            // sweep it across the gap and throw what it touched.
+            physics.bodies[self.body].set_position(pose, true);
+        } else {
+            physics.bodies[self.body].set_next_kinematic_position(pose);
+        }
         let touched = contacts.difference(&self.contacts).copied().collect();
         self.contacts = contacts;
         Ok(MotionEvents {

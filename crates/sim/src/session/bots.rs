@@ -28,7 +28,7 @@
 //! way it walked, through openings included.
 use super::*;
 use crate::bot_kind::{BotKind, MountAnchor, Moves};
-use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
+use crate::nav::{Body, Found, Ground, Mode, Nav, Search, Waypoint};
 use behaviour::{Behaviour, Situation};
 use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
@@ -75,6 +75,9 @@ pub use team::BotTeamView;
 pub struct BotThought {
     pub bot: OwnerId,
     pub behaviour: &'static str,
+    /// The leg of its route it is on: walk, swim, jet or drive (none: no
+    /// route).
+    pub leg: &'static str,
     pub visible: Option<OwnerId>,
     pub remembered: Option<BotEvidence>,
     pub task: Option<BotTask>,
@@ -152,8 +155,6 @@ const CARRY_CLEARANCE: f32 = 0.3;
 const SWING_TICKS: u64 = 36;
 /// After a throw, how long before it grabs again.
 const REGRAB_TICKS: u64 = 120;
-/// Farthest across an enemy above may be for a bot to fly to them.
-const AIR_CHASE: f32 = 30.0;
 /// Open space for a throw: sky this far up, room this far all round.
 const OPEN_SKY: f32 = 16.0;
 const OPEN_ROOM: f32 = 6.0;
@@ -167,9 +168,6 @@ const BOT_EMOTES: [&str; 4] = ["hug", "love", "hate", "confusion"];
 /// Running and gunning, the farthest off its way (cosine) an enemy is shot
 /// at: about 105 degrees, where sideways speed still holds.
 const GUN_BEHIND_COS: f32 = -0.26;
-/// A melee flyer farther across from its target than this climbs above
-/// their feet before it moves over.
-const FLY_OVER: f32 = 1.5;
 /// Ticks pressing at a waypoint within a step without moving before it is
 /// taken as reached.
 const WEDGED_TICKS: u32 = 30;
@@ -254,6 +252,13 @@ struct Brain {
     /// goal changes or the bot gets stuck.
     settled: bool,
     partial_route: bool,
+    /// A chase point whose best route ends beyond its reach (`reach`):
+    /// that enemy is not worth chasing while they stay there.
+    out_of_reach: Option<Vec3>,
+    /// How far across and up it hurts from where it stands.
+    reach: (f32, f32),
+    /// Where the enemy it chases stands (their feet, not their eyes).
+    chase_feet: Option<Vec3>,
     segment_anchor: Vec3,
     next_wander: u64,
     last_position: Vec3,
@@ -261,6 +266,8 @@ struct Brain {
     /// Ticks in a row it pressed on without getting anywhere across, hops
     /// and all.
     wedged: u32,
+    /// The walk leg's net progress (`route::Progress`).
+    progress: crate::route::Progress,
     replans: u32,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
@@ -303,8 +310,6 @@ struct Brain {
     posed: bool,
     /// Ticks in a row a swimmer spent out of water in a mini-game.
     dry: u32,
-    /// A flight's progress (`BotFighting::fly_give_up_seconds`).
-    fly: FlyProgress,
     /// The kind its brick made, while a bite has turned it into another
     /// (`BotMelee::converts_below`); it comes back as this one.
     born: Option<BotKind>,
@@ -315,6 +320,10 @@ struct Brain {
     vehicle_stuck: u32,
     vehicle_anchor: Option<Vec3>,
     vehicle_since: Option<(u64, u64)>,
+    /// The jet leg of its route it is flying, if any.
+    jet_leg: Option<crate::route::JetLeg>,
+    /// The gear its driving is in (`route::gear`).
+    drive_gear: crate::route::Gear,
     /// Where it took a mount's controls (the vehicle and its feet then):
     /// the anchor of a driver's leash under `BotMounted::anchor`.
     mount_anchor: Option<(u64, Vec3)>,
@@ -335,22 +344,6 @@ struct Brain {
     perception: perception::State,
     /// The small extra options' memory ([`extras`]).
     extras: extras::State,
-}
-/// How a flight is going: the nearest it came and when, and how long it
-/// stays on the ground after giving one up.
-#[derive(Clone, Copy, Debug, Default)]
-struct FlyProgress {
-    best: f32,
-    since: u64,
-    grounded_until: u64,
-}
-/// An enemy up where a bot flies to them ([`Session::air_chase`]).
-#[derive(Clone, Copy, Debug)]
-struct AirChase {
-    /// Where they stand.
-    to: Vec3,
-    /// Something just over the bot's head.
-    roofed: bool,
 }
 /// A bot holding something with a tool that holds (the Gravity Gun, or
 /// any tool whose trigger reaches and holds: `reach`, `hold`) carries it
@@ -417,11 +410,15 @@ impl Brain {
             search: None,
             settled: false,
             partial_route: false,
+            out_of_reach: None,
+            reach: (3.0, 2.0),
+            chase_feet: None,
             segment_anchor: home,
             next_wander: 0,
             last_position: home,
             stuck: 0,
             wedged: 0,
+            progress: crate::route::Progress::default(),
             replans: 0,
             yaw: 0.0,
             pitch: 0.0,
@@ -447,7 +444,6 @@ impl Brain {
             next_bite: 0,
             posed: false,
             dry: 0,
-            fly: FlyProgress::default(),
             born: None,
             next_interaction: 0,
             object_cursor: 0,
@@ -456,6 +452,8 @@ impl Brain {
             vehicle_stuck: 0,
             vehicle_anchor: None,
             vehicle_since: None,
+            jet_leg: None,
+            drive_gear: crate::route::Gear::Forward,
             mount_anchor: None,
             brick_team: None,
             named: String::new(),
@@ -483,12 +481,14 @@ impl Brain {
     /// The goal of going after an enemy: standing its ground in its band
     /// (`fight`), after the enemy in sight, or to where one was. Whether it
     /// stands, and whether it gives ground (closer than `near`).
+    /// `reach`: how near its body counts as at a search point.
     fn pursue(
         &mut self,
         enemy: Option<Seen>,
         fight: bool,
         near: f32,
         feet: Vec3,
+        reach: f32,
         tick: u64,
     ) -> (bool, bool) {
         match (enemy, self.memory) {
@@ -514,7 +514,9 @@ impl Brain {
                     && self.settled
                     && self.plan.is_empty()
                     && !self.partial_route;
-                let next = self.evidence_search.next(knowledge, feet, tick, failed);
+                let next = self
+                    .evidence_search
+                    .next(knowledge, feet, tick, failed, reach);
                 self.set_goal(next.map(Goal::Search));
                 (next.is_none(), false)
             }
@@ -1229,6 +1231,13 @@ impl Session {
             .map(|(bot, b)| BotThought {
                 bot: *bot,
                 behaviour: b.behaviour.name(),
+                leg: if self.bot_vehicle_body(*bot).is_some() && !b.plan.is_empty() {
+                    "drive"
+                } else {
+                    b.plan
+                        .first()
+                        .map_or("none", |w| crate::route::leg_name(w.mode))
+                },
                 visible: b.target,
                 remembered: b.memory.map(|k| BotEvidence {
                     subject: k.subject,
@@ -1427,44 +1436,6 @@ impl Session {
                 .into_iter()
                 .find_map(|(_, owner)| visible(owner, SightUrgency::Ordinary)),
         }
-    }
-    /// Where a bot flies to reach its enemy (in sight, or last seen) well
-    /// above it, and how the air between lies.
-    fn air_chase(
-        &self,
-        brain: &Brain,
-        sight: &Sight,
-        feet: Vec3,
-        eye: Vec3,
-        grounded: bool,
-    ) -> Option<AirChase> {
-        let to = sight
-            .target
-            .map(|seen| seen.feet)
-            .or(brain.memory.map(|k| k.at))?;
-        // Taking off for someone well above; once flying, until it is by
-        // them, or it has gone too long without getting closer.
-        let fighting = &brain.kind.fighting;
-        let flying = brain.behaviour == Behaviour::Fly;
-        let above = to.y - feet.y;
-        let across = flat(to - feet).length();
-        let landed = !grounded && above < 0.5 && across < 1.0;
-        let floor = if flying {
-            -fighting.fly_drop
-        } else {
-            fighting.fly_rise
-        };
-        let tick = self.simulation.state().tick;
-        if across > AIR_CHASE || above < floor || landed || tick < brain.fly.grounded_until {
-            return None;
-        }
-        let clear = |from: Vec3, d: Vec3, length: f32| {
-            matches!(self.simulation.target(from, d, length), Ok(None))
-        };
-        Some(AirChase {
-            to,
-            roofed: !clear(eye, Vec3::Y, 3.0),
-        })
     }
     /// Whether a body standing at `feet` has open sky above and room all
     /// round, to fling something.
@@ -1810,8 +1781,23 @@ impl Session {
         let eye = self
             .bot_weapon_origin(bot)
             .unwrap_or_else(|| peer.player.eye());
-        let can_fly =
-            peer.player.tuning().can_jet && state.energy >= peer.player.tuning().min_jet_energy;
+        // The legs its body can take now, costed from its own tuning: jets
+        // when it can lift itself and its kind flies at all.
+        let fly_weight = self.bots.brains[&bot]
+            .kind
+            .behaviours
+            .get("fly")
+            .copied()
+            .unwrap_or(1.0);
+        // A kind that keeps to its water (`moves: swim`) swims there by
+        // itself and takes no swim or jet legs.
+        let walker = self.bots.brains[&bot].kind.moves != Moves::Swim;
+        let costs = crate::route::Costs {
+            swim: walker.then(|| crate::route::Swim::of(peer.player.tuning())),
+            jets: (walker && !self.seated(bot))
+                .then(|| crate::route::Jets::of(peer.player.tuning(), state.energy, fly_weight))
+                .flatten(),
+        };
         let driving = self.bot_vehicle_body(bot);
         let (feet, body) = driving.unwrap_or((own_feet, Body::of(peer.player.tuning(), 1.0)));
         if driving.is_some() {
@@ -1981,9 +1967,6 @@ impl Session {
         let grabbing = holding || self.is_reaching(bot);
         let carry_to =
             (holding && self.bots.brains[&bot].carry.is_none()).then(|| self.open_spot(feet));
-        let air = (can_fly && !self.seated(bot))
-            .then(|| self.air_chase(&self.bots.brains[&bot], &sight, feet, eye, state.grounded))
-            .flatten();
         let interaction_enemy = sight
             .target
             .map(|s| Knowledge {
@@ -2049,12 +2032,21 @@ impl Session {
         }
         // A live objective reservation is not a combat opportunity. Both use
         // the same advisory leases, occupancy and native action admission.
-        let opportunity =
-            if pausing_delivery || objective.is_some_and(|view| view.resource.is_some()) {
-                None
-            } else {
-                self.bot_interaction(bot, interaction_enemy, tick)
-            };
+        // Nor is anything taken up before its planning turn in a new game
+        // or round has said what that game asks (the body it would push at
+        // an enemy may be the game's own ball).
+        let unplanned = self.bots.brains[&bot].objective.unplanned();
+        if unplanned {
+            self.bots.claims.release_owner(bot);
+        }
+        let opportunity = if pausing_delivery
+            || unplanned
+            || objective.is_some_and(|view| view.resource.is_some())
+        {
+            None
+        } else {
+            self.bot_interaction(bot, interaction_enemy, objective.is_none(), tick)
+        };
         let objective_holding = objective
             .and_then(|view| view.held)
             .is_some_and(|target| self.held_by(bot) == Some(target));
@@ -2119,6 +2111,7 @@ impl Session {
             objective.is_some_and(|view| view.enemy.is_none()) && threat.is_none();
         let objective_without_attack = peaceful_objective
             || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
+        let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
         let allies = self.claim_allies(bot, tick);
         // At a body an opponent is also moving, staying engaged in the
         // contest keeps this side's intention live (`contest::engaged`).
@@ -2276,17 +2269,8 @@ impl Session {
         } else {
             weapon.map_or((2.0, 3.0), |w| w.band())
         };
-        let walks_up = |to: Vec3| {
-            brain
-                .plan
-                .last()
-                .is_some_and(|w| w.feet.y > to.y - body.step - 0.5)
-        };
         let situation = Situation {
             holding: holding && !objective_hold_control,
-            fly: !objective_without_attack
-                && swim.is_none()
-                && air.is_some_and(|a| !walks_up(a.to)),
             interaction: opportunity.map_or(0.0, |o| o.utility),
             objective: objective.is_some(),
             committed: objective.is_some_and(|view| view.committed),
@@ -2295,6 +2279,13 @@ impl Session {
             // A swimmer reaches any depth: only how far counts.
             enemy: enemy
                 .filter(|_| !objective_without_attack)
+                // Where it was out of reach, not across from there: one
+                // that came down off a jump or a roof is in reach again.
+                .filter(|seen| {
+                    brain
+                        .out_of_reach
+                        .is_none_or(|p| p.distance(seen.real) > 2.5)
+                })
                 .map(|seen| match swim {
                     Some(_) => (seen.feet.distance(feet), 0.0),
                     None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
@@ -2302,11 +2293,22 @@ impl Session {
             far,
             slack: kind.fighting.slack(far),
             step: body.step,
-            remembers: brain.memory.is_some(),
+            // A ranged weapon shoots up at what its band reaches; only a
+            // body or melee hit must be level with its enemy.
+            reach_up: weapon
+                .filter(|w| !w.melee && far > 0.0)
+                .map_or(0.0, |_| far),
+            // Nor is searching where it cannot reach them.
+            remembers: brain
+                .memory
+                .is_some_and(|m| brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)),
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
             pursuing: brain.objective.pursuing(),
         };
+        // Across its band; up, what a jump brings within its band.
+        brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
+        brain.chase_feet = enemy.map(|seen| seen.feet);
         let mut scores = behaviour::scores(brain.behaviour, &situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
@@ -2326,7 +2328,15 @@ impl Session {
             objective,
             feet,
             brain.home,
-            team::exit(&intents, feet, tall),
+            team::exit(&intents, feet, tall, &|at| {
+                super::admin_players::world_ray(
+                    &self.simulation,
+                    at + Vec3::Y * 0.5,
+                    Vec3::NEG_Y,
+                    0.5 + body.step + body.drop,
+                )
+                .is_some()
+            }),
             carries,
         );
         // Its objective is worth more as its team falls behind, and what it
@@ -2397,22 +2407,6 @@ impl Session {
             brain.behaviour_since = tick;
         }
         brain.behaviour = behaviour;
-        // A flight that stops getting closer is given up for a while; one
-        // within its band of them is where it means to be.
-        if behaviour == Behaviour::Fly
-            && let Some(air) = air
-        {
-            let gap = air.to.distance(feet);
-            if brain.behaviour_since == tick || gap < brain.fly.best - 1.0 || gap <= far {
-                brain.fly.best = gap;
-                brain.fly.since = tick;
-            } else {
-                let give_up = (kind.fighting.fly_give_up_seconds * 120.0) as u64;
-                if tick > brain.fly.since + give_up {
-                    brain.fly.grounded_until = tick + give_up;
-                }
-            }
-        }
         let chosen = choices[behaviour as usize];
         self.bots.claims.publish(
             bot,
@@ -2469,6 +2463,14 @@ impl Session {
                 tick,
                 |o| allies.contains(&o),
             ) {
+                // Boarding ends the walk to the seat and starts the drive:
+                // the drive's progress counts from where it begins.
+                self.bots.claims.leg(
+                    bot,
+                    mounted == Some(resource.vehicle()),
+                    selected_objective.unwrap().point.distance(feet),
+                    tick,
+                );
                 self.bots.claims.progress(
                     bot,
                     selected_objective.unwrap().point.distance(feet),
@@ -2537,7 +2539,7 @@ impl Session {
                             flat(seen.feet - feet).length() <= far
                                 && (seen.feet.y - feet.y).abs() <= body.step + 1.0
                         });
-                        brain.pursue(intended, in_band, near, feet, tick)
+                        brain.pursue(intended, in_band, near, feet, body.width * 0.5, tick)
                     } else {
                         if step.waiting && !step.move_while_waiting {
                             brain.set_goal(None);
@@ -2555,7 +2557,7 @@ impl Session {
                 brain.set_goal(brain.carry.and_then(|c| c.to).map(Goal::Carry));
                 (false, false)
             }
-            Behaviour::Fight => brain.pursue(enemy, true, near, feet, tick),
+            Behaviour::Fight => brain.pursue(enemy, true, near, feet, body.width * 0.5, tick),
             Behaviour::Chase | Behaviour::Search => {
                 // Straight at them, or wide round a side (`surprise`).
                 if let Some(seen) = enemy.filter(|_| behaviour == Behaviour::Chase) {
@@ -2568,16 +2570,7 @@ impl Session {
                         tick,
                     );
                 }
-                brain.pursue(enemy, false, near, feet, tick)
-            }
-            // Flying goes after them as walking would, so its path tells
-            // when a walk leads up after all.
-            Behaviour::Fly => {
-                let fight = enemy.is_some_and(|seen| {
-                    flat(seen.feet - feet).length() <= far
-                        && (seen.feet.y - feet.y).abs() <= body.step + 1.0
-                });
-                brain.pursue(enemy, fight, near, feet, tick)
+                brain.pursue(enemy, false, near, feet, body.width * 0.5, tick)
             }
             Behaviour::Return => {
                 brain.set_goal(Some(Goal::Home));
@@ -2606,27 +2599,47 @@ impl Session {
                         brain.goal = None;
                     }
                 } else {
-                    wanted = Some(Waypoint {
-                        feet: to,
-                        jump: false,
-                        through: None,
-                        crouch: false,
-                    });
+                    wanted = Some(Waypoint::walk(to));
                 }
             }
         } else if let Some(goal) = brain.goal {
             let point = goal.point(home);
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
-                brain.search = Some(Search::new(feet, point, SEARCH_BOUND));
+                brain.search = Some(Search::with(feet, point, SEARCH_BOUND, costs));
             }
+            // Where a chase's route ends short of its enemy, and the enemy.
+            let mut gave_up = None;
             if brain.search.is_some() {
                 let physics = &self.simulation.physics;
                 let simulation = &self.simulation;
                 let terrain = |o: Vec3, d: Vec3, r: f32| simulation.terrain_ray(o, d, r);
+                let waters = simulation.liquids();
+                // Living bodies a takeoff must not climb into, nor a
+                // pulled straight walk cut through (`nav::pull`).
+                let (bodies, motions): (Vec<(Vec3, Vec3)>, Vec<Vec3>) = {
+                    self.peers
+                        .iter()
+                        .filter(|(o, p)| **o != bot && p.combat.alive)
+                        .map(|(_, p)| {
+                            let at = Vec3::from(p.player.state().feet);
+                            let half = p.player.tuning().width * 0.5;
+                            (
+                                (
+                                    at - Vec3::new(half, 0.0, half),
+                                    at + Vec3::new(half, p.player.tuning().stand_height, half),
+                                ),
+                                Vec3::from(p.player.state().velocity),
+                            )
+                        })
+                        .unzip()
+                };
                 let ground = Ground {
                     physics,
                     terrain: &terrain,
                     passages: simulation.passages(),
+                    waters: &waters,
+                    bodies: &bodies,
+                    motions: &motions,
                 };
                 let at = match self.bots.navs.iter().position(|(b, _)| *b == body) {
                     Some(at) => at,
@@ -2645,22 +2658,50 @@ impl Session {
                     match found {
                         Found::Path(path) if !path.is_empty() => {
                             brain.partial_route = false;
-                            brain.plan = path;
+                            if matches!(brain.goal, Some(Goal::Chase(_))) {
+                                brain.out_of_reach = None;
+                            }
+                            brain.plan = crate::nav::pull(&ground, &body, feet, path);
                         }
                         Found::Partial(path) if !path.is_empty() => {
+                            // The best route to an enemy ends where it cannot
+                            // hurt them: chasing them there is worth nothing.
+                            if let (Some(Goal::Chase(p)), Some(end)) = (brain.goal, path.last()) {
+                                let (across, up) = brain.reach;
+                                if let Some(at) = brain.chase_feet.filter(|_| !body.conservative)
+                                    && (flat(at - end.feet).length() > across
+                                        || at.y - end.feet.y > up)
+                                {
+                                    brain.out_of_reach = Some(p);
+                                    gave_up = Some((end.feet, at));
+                                }
+                            }
                             brain.partial_route = true;
                             brain.segment_anchor = feet;
-                            brain.plan = path;
+                            brain.plan = crate::nav::pull(&ground, &body, feet, path);
                         }
                         // Already as close as it gets, or nowhere to stand.
                         _ => brain.plan.clear(),
                     }
                 }
             }
+            // A door it may open stands across the way on from where the
+            // route ends: the enemy is in reach once it is clicked open.
+            if let Some((end, at)) = gave_up
+                && self.bot_opens_way(bot, end, at)
+            {
+                self.bots.brains.get_mut(&bot).unwrap().out_of_reach = None;
+            }
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             while let Some(next) = brain.plan.first() {
                 let d = next.feet - feet;
-                // One through an opening is reached by going through.
+                // A chassis is at a point once its side is: half its
+                // footprint, never a pedestrian's tolerance.
+                let near = if body.conservative {
+                    (body.width * 0.5).max(1.2)
+                } else {
+                    0.4
+                };
                 // One it presses against without moving, within a step of
                 // it (wedged on a door jamb), it takes as reached, if more
                 // of the route follows. (Not on the way to work a body or a
@@ -2669,13 +2710,26 @@ impl Session {
                     && brain.plan.len() > 1
                     && flat(d).length() < 1.0
                     && !matches!(brain.goal, Some(Goal::Objective(_) | Goal::Interact(_)));
-                if next.through.is_none()
-                    && (flat(d).length() < if body.conservative { 1.2 } else { 0.4 } || wedged)
-                    && d.y.abs() < body.step + 0.5
-                {
+                // One through an opening is reached by going through; one
+                // swum to by being over it, at whatever depth; one flown to
+                // by standing on it after the landing.
+                let reached = match next.mode {
+                    Mode::Walk => {
+                        next.through.is_none()
+                            && (flat(d).length() < near || wedged)
+                            && d.y.abs() < body.step + 0.5
+                    }
+                    Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
+                    Mode::Jet { .. } => {
+                        state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
+                    }
+                };
+                if reached {
                     brain.plan.remove(0);
                     brain.stuck = 0;
                     brain.wedged = 0;
+                    // Reaching a waypoint is getting somewhere.
+                    brain.progress.reset();
                 } else {
                     break;
                 }
@@ -2700,16 +2754,24 @@ impl Session {
                 }
             }
             wanted = brain.plan.first().copied();
-            // Standing over a drop's landing, at the very edge: heading for
-            // the landing itself just wobbles on the edge, so walk on
-            // toward what comes after it until the drop carries it down.
+            // Standing over a drop's landing, at the very edge or on a body
+            // above it (a vehicle's roof, which a route from the floor
+            // beneath starts under): heading for the landing itself just
+            // wobbles there, so walk on toward the first of what comes
+            // after it that is not underfoot until the drop carries it down.
             if let Some(next) = wanted.as_mut()
                 && next.through.is_none()
                 && state.grounded
                 && next.feet.y < feet.y - body.step - 0.05
                 && flat(next.feet - feet).length() < 0.6
             {
-                let beyond = brain.plan.get(1).map_or(point, |w| w.feet);
+                let beyond = brain
+                    .plan
+                    .iter()
+                    .skip(1)
+                    .map(|w| w.feet)
+                    .find(|at| flat(*at - feet).length() > 0.6)
+                    .unwrap_or(point);
                 if flat(beyond - feet).length() > 0.6 {
                     next.through = Some(beyond);
                 }
@@ -2728,23 +2790,20 @@ impl Session {
                 && flat(point - feet).length() > 0.1
                 && (point.y - feet.y).abs() < body.step + 0.5
             {
-                wanted = Some(Waypoint {
-                    feet: point,
-                    jump: false,
-                    through: None,
-                    crouch: false,
-                });
+                wanted = Some(Waypoint::walk(point));
             }
         }
-        // Standing on a body (a vehicle's roof, a crate) the walk grid has
-        // no place for its feet and no route from there: it walks straight
-        // off toward the enemy it is after, and plans again once down.
+        // Standing on a body (a vehicle's roof, a crate, a head) the walk
+        // grid has no place for its feet and no route from there: it walks
+        // straight off toward the enemy it is after, and plans again once
+        // down. One whose enemy is close by below it (under its feet or at
+        // the body's foot) goes nowhere walking at them: it steps off to the
+        // nearest free floor instead, toward them where that side is open.
         if wanted.is_none()
             && swim.is_none()
             && driving.is_none()
             && state.grounded
             && let Some(Goal::Chase(point)) = self.bots.brains[&bot].goal
-            && flat(point - feet).length() > 1.5
             && self.bots.brains[&bot].search.is_none()
             && super::admin_players::world_ray(
                 &self.simulation,
@@ -2754,13 +2813,17 @@ impl Session {
             )
             .is_none()
         {
-            wanted = Some(Waypoint {
-                feet: point,
-                jump: false,
-                through: None,
-                crouch: false,
-            });
-            self.bots.brains.get_mut(&bot).unwrap().settled = false;
+            let to = if flat(point - feet).length() > 1.5 {
+                Some(point)
+            } else if point.y < feet.y - body.step - 0.5 {
+                self.bot_step_off(bot, feet, &body, point)
+            } else {
+                None
+            };
+            if let Some(to) = to {
+                wanted = Some(Waypoint::walk(to));
+                self.bots.brains.get_mut(&bot).unwrap().settled = false;
+            }
         }
         let pushing = if behaviour == Behaviour::Interact {
             self.act_bot_interaction(bot, interaction_enemy.map(|k| k.at), tick)?
@@ -3059,8 +3122,16 @@ impl Session {
                 let gap = enemy.map(|seen| flat(seen.feet - feet).length());
                 if melee {
                     // A melee fighter closes to its band rather than
-                    // circling its target.
-                    if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
+                    // circling its target; one on its head, or under it,
+                    // steps off sideways (no swing reaches straight up or
+                    // down its own body).
+                    let stacked = enemy.is_some_and(|seen| {
+                        flat(seen.feet - feet).length() < body.width
+                            && (seen.feet.y - feet.y).abs() > body.step
+                    });
+                    if stacked {
+                        direction = right;
+                    } else if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
                         direction = forward;
                     }
                 } else {
@@ -3090,10 +3161,38 @@ impl Session {
                         })
                     };
                     let ground = |side: f32| floor(side) && !ally(side);
+                    // In the air (a hop, a jump off a body) its momentum
+                    // carries it on: where it lands is where it is going
+                    // as it falls, so with no floor there it steers back
+                    // and does not strafe on.
+                    let overshoots = !state.grounded && {
+                        let velocity = Vec3::from(state.velocity);
+                        let gravity = self.peers[&bot].player.tuning().gravity;
+                        let below = super::admin_players::world_ray(
+                            &self.simulation,
+                            feet + Vec3::Y * 0.05,
+                            Vec3::NEG_Y,
+                            0.05 + body.drop,
+                        )
+                        .map(|d| (d - 0.05).max(0.0));
+                        below.is_some_and(|h| {
+                            let at = crate::route::landing(feet, velocity, gravity, h);
+                            super::admin_players::world_ray(
+                                &self.simulation,
+                                at + Vec3::Y * 0.5,
+                                Vec3::NEG_Y,
+                                0.5 + body.step,
+                            )
+                            .is_none()
+                        })
+                    };
                     // Each leg turns back the other way, unless only this
-                    // way is open. One that reaches an edge stands there
-                    // until the leg is up; one that meets an ally turns
-                    // away from it at once.
+                    // way is open (a coin-flip carry-on round the enemy
+                    // drifted the fighter out of its band: the fair
+                    // metric's gun range rose from 12 to 23 and its hit
+                    // rate fell to 12%). One that reaches an edge stands
+                    // there until the leg is up; one that meets an ally
+                    // turns away from it at once.
                     let (mut side, mut until) = brain.strafe;
                     let parted = ally(side) && ground(-side);
                     if tick >= until || parted {
@@ -3104,7 +3203,9 @@ impl Session {
                         until = tick + (seconds * 120.0) as u64;
                     }
                     brain.strafe = (side, until);
-                    if ground(side) {
+                    if overshoots {
+                        direction = -flat(Vec3::from(state.velocity)).normalize_or_zero();
+                    } else if ground(side) {
                         direction = right * side * 0.7;
                     }
                 }
@@ -3112,82 +3213,48 @@ impl Session {
                     direction -= forward;
                 }
             }
-            // Up where no walk leads: jet up and over to them, as a player
-            // would, and come down by them. Jets lift hardest straight up
-            // and lean into the move, so it climbs first and then steers
-            // over, gliding down on them.
-            Behaviour::Fly => {
-                if let Some(air) = air {
-                    let toward = flat(air.to - feet);
-                    let across = toward.length();
-                    let toward = toward.normalize_or_zero();
-                    if !air.roofed && kind.moves != Moves::Swim && weapon.is_some_and(|w| w.melee) {
-                        let velocity = Vec3::from(state.velocity);
-                        let closing_speed = flat(velocity).dot(toward);
-                        // Still short of being over them, it climbs past
-                        // their feet first, so it clears the edge they
-                        // stand back from rather than pressing on its side.
-                        let climb = if across > FLY_OVER { 0.5 } else { -0.6 };
-                        if feet.y < air.to.y + climb
-                            || (!state.grounded && velocity.y < -1.0 && feet.y < air.to.y + 0.8)
-                        {
-                            // Recover the target's altitude before spending more
-                            // thrust on horizontal speed.
-                            input.jet = true;
-                            direction = Vec3::ZERO;
-                        } else {
-                            // Crouched jets trade lift for flat forward thrust.
-                            // Use them only with altitude in hand; near the target,
-                            // release thrust and walk against excess closing speed.
-                            input.crouch = true;
-                            if across > 2.5 && closing_speed < 3.0 {
-                                input.jet = true;
-                                direction = toward;
-                            } else {
-                                input.jet = false;
-                                let desired = (across * 0.8).clamp(0.35, 1.5);
-                                direction = if closing_speed > desired {
-                                    -toward
-                                } else {
-                                    toward
-                                };
-                            }
-                        }
-                    } else {
-                        let ranged = weapon.is_some_and(|w| !w.melee);
-                        // The live enemy supplies air.to. A close ranged
-                        // flyer must regain its weapon's band, including
-                        // when vertical separation selected Fly over Fight.
-                        let close = ranged
-                            && sight.target.is_some()
-                            && (back_off || feet.distance(air.to) < near);
-                        if close {
-                            input.jet = false;
-                            let side = if (tick / 90 + bot).is_multiple_of(2) {
-                                0.7
-                            } else {
-                                -0.7
-                            };
-                            direction =
-                                if across > 0.1 { -toward } else { -forward } + right * side;
-                        } else {
-                            // Clear a blocked roof/contact horizontally
-                            // instead of spending lift against the ceiling.
-                            let blocked = air.roofed || ranged && state.jump.ceiling;
-                            input.jet =
-                                (!ranged || !blocked) && (across > 1.0 || feet.y < air.to.y + 0.5);
-                            direction = if blocked {
-                                if across > 0.1 { -toward } else { forward }
-                            } else if feet.y > air.to.y + 1.0 && across > 1.0 {
-                                toward * (across / 3.0).min(1.0)
-                            } else {
-                                Vec3::ZERO
-                            };
-                        }
-                    }
+            _ => {}
+        }
+        // A jet leg flies itself: climb in the open, cross, land.
+        match wanted.map(|w| (w.feet, w.mode)) {
+            Some((to, Mode::Jet { apex, seconds })) if driving.is_none() => {
+                let leg = brain
+                    .jet_leg
+                    .get_or_insert(crate::route::JetLeg::start(to, feet, tick));
+                if leg.to != to {
+                    *leg = crate::route::JetLeg::start(to, feet, tick);
+                }
+                let control = crate::route::jet(
+                    leg,
+                    feet,
+                    Vec3::from(state.velocity),
+                    state.grounded,
+                    to,
+                    apex,
+                );
+                // Replan from what happened.
+                if leg.failed(feet, state.grounded, body.step, seconds, tick) {
+                    brain.jet_leg = None;
+                    brain.plan.clear();
+                    brain.search = None;
+                    brain.settled = false;
+                    brain.replans += 1;
+                } else {
+                    direction = control.direction;
+                    input.jet = control.jet;
+                    input.jump = control.jump;
+                    input.crouch = false;
                 }
             }
-            _ => {}
+            Some((to, Mode::Swim | Mode::Walk)) if swim.is_none() && wet && !state.grounded => {
+                // Afloat: swim on toward it, rising where the way on (out
+                // onto a higher bank) is higher.
+                brain.jet_leg = None;
+                if to.y > feet.y - 0.2 {
+                    input.jump = true;
+                }
+            }
+            _ => brain.jet_leg = None,
         }
         if swim.is_some() {
             // Up and down as a swimmer does: jump rises, crouch dives.
@@ -3229,11 +3296,43 @@ impl Session {
         if telling {
             direction = Vec3::ZERO;
         }
+        if driving.is_none() && pushing.is_none() {
+            direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);
+        }
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up.
         let trying = input.forward != 0.0 || input.right != 0.0;
-        if driving.is_none() && trying && moved < 0.01 {
+        // Getting somewhere is net progress across a window (`route`), not
+        // moving at an instant: wobbling on a roof's edge or between two
+        // spots is as stuck as standing against a wall.
+        // (Not pressing against what it came to work: an item to pick up, a
+        // brick or a body to use, at the goal itself.)
+        let at_work = matches!(
+            brain.goal,
+            Some(Goal::Objective(p) | Goal::Interact(p) | Goal::Arm(p))
+                if flat(p - feet).length() < body.width + 1.0
+        );
+        let walking = driving.is_none()
+            && trying
+            && pushing.is_none()
+            && !at_work
+            && wanted.is_some_and(|w| w.mode == Mode::Walk);
+        let stalled = walking
+            && brain
+                .progress
+                .stalled(feet, self.peers[&bot].player.tuning().forward, 120.0, tick);
+        if !walking {
+            brain.progress.reset();
+        }
+        if stalled && brain.progress.stalls() == 1 {
+            // The first window gone nowhere hops (off a body it stands on,
+            // over what its shins catch); the next plans again.
+            input.jump = true;
+        } else if stalled {
+            brain.stuck = brain.stuck.max(STUCK_TICKS + 1);
+        } else if driving.is_none() && trying && moved < 0.01 {
             brain.stuck += 1;
         } else {
             brain.stuck = 0;
@@ -3667,9 +3766,9 @@ fn team_choices(
     home: Vec3,
     exit: Option<Vec3>,
     carries: Option<(u64, Vec3)>,
-) -> [team::Choice; 10] {
+) -> [team::Choice; Behaviour::COUNT] {
     use claims::{Resource, Target};
-    let mut c = [team::Choice::default(); 10];
+    let mut c = [team::Choice::default(); Behaviour::COUNT];
     let at = |b: Behaviour| b as usize;
     if let Some(o) = opportunity {
         c[at(Behaviour::Interact)] = team::Choice {
@@ -3694,7 +3793,6 @@ fn team_choices(
             ..Default::default()
         };
         c[at(Behaviour::Chase)].target = target;
-        c[at(Behaviour::Fly)].target = target;
     }
     // A search goes to look where the enemy was: searchers crowd one spot,
     // but one coming to back up an ally on that enemy is not a pile-on.
@@ -3705,7 +3803,9 @@ fn team_choices(
     c[at(Behaviour::Return)].place = Some(home);
     if let Some(v) = objective {
         c[at(Behaviour::Objective)] = team::Choice {
-            place: Some(v.point),
+            // Only a team's step crowds a teammate's: one's own progress
+            // is not given way to an ally making the same.
+            place: (v.shared).then_some(v.point),
             target: v
                 .resource
                 .map(|r| Target::Object(r.vehicle()))

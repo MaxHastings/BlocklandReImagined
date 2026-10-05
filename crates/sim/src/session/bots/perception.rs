@@ -249,9 +249,7 @@ impl Alertness {
     /// Wander here.
     pub(super) fn of(behaviour: Behaviour) -> Self {
         match behaviour {
-            Behaviour::Fight | Behaviour::Chase | Behaviour::Fly | Behaviour::Search => {
-                Self::Combat
-            }
+            Behaviour::Fight | Behaviour::Chase | Behaviour::Search => Self::Combat,
             Behaviour::Wander | Behaviour::Interact => Self::Relaxed,
             _ => Self::Ordinary,
         }

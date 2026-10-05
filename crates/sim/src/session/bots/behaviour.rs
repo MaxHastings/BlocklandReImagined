@@ -16,8 +16,6 @@ pub(crate) enum Behaviour {
     /// Holding something with its tool: carry it out into the open and
     /// fling it.
     Carry,
-    /// An enemy up where no walk leads: jet up and over to them.
-    Fly,
     /// A useful, reservable opportunity in the environment.
     Interact,
     /// An enemy in sight within its weapon's band: stand its ground,
@@ -46,15 +44,12 @@ pub(crate) enum Behaviour {
 pub(crate) struct Situation {
     /// Its tool holds something.
     pub holding: bool,
-    /// An enemy it can fly to where its path does not walk up
-    /// (`Session::air_chase`).
-    pub fly: bool,
     /// Utility of an available interaction; zero when there is none.
     pub interaction: f32,
     /// A grounded objective is available.
     pub objective: bool,
     /// It carries what that objective delivers: it keeps going (shooting
-    /// back on the way) rather than stopping to fight or fly.
+    /// back on the way) rather than stopping to fight.
     pub committed: bool,
     /// It can shoot an enemy in sight on the way there (a ranged weapon,
     /// an objective that needs only its feet): it goes on, shooting,
@@ -73,6 +68,9 @@ pub(crate) struct Situation {
     pub slack: f32,
     /// How high it steps.
     pub step: f32,
+    /// How much farther above or below a step its attack reaches from where
+    /// it stands: a ranged weapon's band, nothing for a body or melee hit.
+    pub reach_up: f32,
     /// It remembers where an enemy was.
     pub remembers: bool,
     /// Farther from its brick than it strolls (never for a rules bot).
@@ -91,9 +89,10 @@ const RISE_SLACK: f32 = 1.0;
 
 impl Behaviour {
     /// Every behaviour, most urgent first.
-    pub(crate) const ALL: [Behaviour; 10] = [
+    /// How many there are.
+    pub(crate) const COUNT: usize = 9;
+    pub(crate) const ALL: [Behaviour; Self::COUNT] = [
         Behaviour::Carry,
-        Behaviour::Fly,
         Behaviour::Interact,
         Behaviour::Fight,
         Behaviour::Arm,
@@ -115,7 +114,6 @@ impl Behaviour {
         let fits = |on: bool, score: f32| if on { score } else { 0.0 };
         match self {
             Behaviour::Carry => fits(s.holding, 1.0),
-            Behaviour::Fly => fits(s.fly, 0.9),
             Behaviour::Interact => s.interaction,
             Behaviour::Fight => fits(
                 s.enemy.is_some_and(|(distance, rise)| {
@@ -124,7 +122,8 @@ impl Behaviour {
                     } else {
                         0.0
                     };
-                    distance <= s.far + slack && rise.abs() <= s.step + RISE_SLACK + slack
+                    distance <= s.far + slack
+                        && rise.abs() <= s.step + RISE_SLACK + slack + s.reach_up
                 }),
                 0.8,
             ),
@@ -172,12 +171,12 @@ pub(crate) fn scores(
     current: Behaviour,
     s: &Situation,
     weight: impl Fn(Behaviour) -> f32,
-) -> [f32; 10] {
+) -> [f32; Behaviour::COUNT] {
     Behaviour::ALL.map(|b| b.score(current, s) * weight(b))
 }
 
 /// The highest of `scores`, the earlier on a tie; Wander when none scores.
-pub(crate) fn best(scores: &[f32; 10]) -> Behaviour {
+pub(crate) fn best(scores: &[f32; Behaviour::COUNT]) -> Behaviour {
     let mut best = (Behaviour::Wander, 0.0);
     for b in Behaviour::ALL {
         let score = scores[b as usize];
@@ -211,24 +210,12 @@ mod tests {
     fn the_most_urgent_behaviour_wins() {
         let all = Situation {
             holding: true,
-            fly: true,
             remembers: true,
             strayed: true,
             ..enemy(3.0)
         };
         assert_eq!(pick(Wander, &all), Carry);
-        assert_eq!(
-            pick(
-                Wander,
-                &Situation {
-                    holding: false,
-                    ..all
-                }
-            ),
-            Fly
-        );
         let seen = Situation {
-            fly: false,
             holding: false,
             ..all
         };
@@ -277,6 +264,12 @@ mod tests {
             ..enemy(2.0)
         };
         assert_eq!(pick(Fight, &above), Chase);
+        // A ranged weapon whose band reaches up there shoots from here.
+        let ranged = Situation {
+            reach_up: 6.0,
+            ..above
+        };
+        assert_eq!(pick(Chase, &ranged), Fight);
     }
 
     /// At the band's edge it keeps doing what it does: no flip-flop as the
@@ -373,7 +366,6 @@ mod tests {
         let carrying = Situation {
             objective: true,
             committed: true,
-            fly: true,
             ..enemy(3.0)
         };
         assert_eq!(pick(Fight, &carrying), Objective);
@@ -385,7 +377,7 @@ mod tests {
                     ..carrying
                 }
             ),
-            Fly
+            Fight
         );
         assert_eq!(
             pick(

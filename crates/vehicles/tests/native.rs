@@ -654,6 +654,31 @@ fn velocity_transfer_and_runover_intents(f: &Fixture) {
 }
 
 on_both! {
+fn an_authored_zero_runover_scale_is_harmless_and_an_unset_one_is_the_default(f: &Fixture) {
+    for (scale, damage) in [(0., 0.), (f32::MAX, 10. * 5.)] {
+        let mut pack = f.pack.clone();
+        pack.definitions
+            .iter_mut()
+            .find(|d| d.id == f.car)
+            .unwrap()
+            .runover_damage = scale;
+        let (mut v, mut w) = (VehiclesWorld::new(pack).unwrap(), common::floor(500.));
+        spawn(&mut v, &mut w, f.car, 3.);
+        mount(&mut v, &w, 0);
+        let (_, b) = w.bodies.iter_mut().find(|(_, b)| b.is_dynamic()).unwrap();
+        b.set_linvel(Vec3::new(10., 0., 0.), true);
+        v.player_contact(&w, VehicleId(1), OccupantId(99), [0.; 3])
+            .unwrap();
+        let dealt = v.drain_intents().iter().find_map(|i| match i {
+            Intent::RunOver { damage, .. } => Some(*damage),
+            _ => None,
+        });
+        assert_eq!(dealt, Some(damage), "scale {scale}");
+    }
+}
+}
+
+on_both! {
 fn skis_drive_simple_dismount_and_wreck_transition(f: &Fixture) {
     let (mut v, mut w) = setup(f);
     spawn(&mut v, &mut w, f.skis, 2.);

@@ -11,6 +11,9 @@ const RETRY: u64 = 240;
 pub(super) const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
+/// How far past its own half-length a driver that only carries its bot to
+/// an enemy stops and gets out: about where the bot fights from on foot.
+const LEAVE_REACH: f32 = 3.0;
 /// Idle play (`extras`, no enemy about) scores between wandering and
 /// walking home, times the kind's `extras.strength`, so any purpose
 /// outranks it.
@@ -315,7 +318,7 @@ impl Session {
         bot: OwnerId,
         v: &VehicleSnapshot,
         resource: Resource,
-        enemy: Vec3,
+        (subject, enemy): (OwnerId, Vec3),
         idle: bool,
         tick: u64,
     ) -> Option<Opportunity> {
@@ -379,10 +382,37 @@ impl Session {
                 } else {
                     return None;
                 };
-                if !idle && !crew && feet.distance(enemy) < 8.0 && d.weapon.is_none() {
+                let point = self.bot_seat_approach(bot, v, seat)?;
+                // A seat is a leg of the way to the enemy (`route`): an
+                // armed vehicle serves the fight itself; any other only
+                // when walking to it, boarding and driving there beats
+                // walking. One that runs over an enemy on foot whom the
+                // rules let this bot hurt (`can_damage_player`) is the
+                // blow itself, so it is driven at them flat out, not
+                // eased up to at cruise.
+                let runs_over = d.runover_damage > 0.0
+                    && self.mounted(subject).is_none()
+                    && self.can_damage_player(bot, subject, false);
+                let cruise = if runs_over {
+                    d.max_speed
+                } else {
+                    d.max_speed * crate::route::CRUISE
+                };
+                // A blow is struck sooner from a seat nearer than the enemy.
+                let strikes = runs_over && feet.distance(point) < feet.distance(enemy);
+                if !idle
+                    && d.weapon.is_none()
+                    && !strikes
+                    && !crate::route::drive_serves(
+                        peer.player.tuning().forward,
+                        feet.distance(enemy),
+                        feet.distance(point),
+                        Vec3::from(v.transform.position).distance(enemy),
+                        cruise,
+                    )
+                {
                     return None;
                 }
-                let point = self.bot_seat_approach(bot, v, seat)?;
                 Some(Opportunity {
                     resource,
                     point,
@@ -462,10 +492,13 @@ impl Session {
         }
     }
 
+    /// `seats`: whether a seat may serve its goal at all (not while it has
+    /// a grounded objective, whose own plan decides what it drives).
     pub(super) fn bot_interaction(
         &mut self,
         bot: OwnerId,
         enemy: Option<Knowledge>,
+        seats: bool,
         tick: u64,
     ) -> Option<Opportunity> {
         let brain = &self.bots.brains[&bot];
@@ -496,17 +529,18 @@ impl Session {
         let brain = &self.bots.brains[&bot];
         let feet = Vec3::from(self.peers[&bot].player.state().feet);
         if let Some(claim) = self.bots.claims.owner_claim(bot, tick) {
-            let opportunity = (claim.subject == subject)
-                .then(|| {
-                    self.bots
-                        .objects
-                        .iter()
-                        .find(|v| v.id.0 == claim.resource.vehicle())
-                        .and_then(|v| {
-                            self.bot_opportunity(bot, v, claim.resource, toward, idle, tick)
-                        })
-                })
-                .flatten();
+            let opportunity = (claim.subject == subject
+                && (seats || matches!(claim.resource, Resource::Body { .. })))
+            .then(|| {
+                self.bots
+                    .objects
+                    .iter()
+                    .find(|v| v.id.0 == claim.resource.vehicle())
+                    .and_then(|v| {
+                        self.bot_opportunity(bot, v, claim.resource, (subject, toward), idle, tick)
+                    })
+            })
+            .flatten();
             if let Some(mut o) = opportunity {
                 self.bots
                     .claims
@@ -556,8 +590,11 @@ impl Session {
                     seat: s.index as u8,
                 })
                 .chain(std::iter::once(Resource::Body { vehicle: v.id.0 }))
+                .filter(|r| seats || matches!(r, Resource::Body { .. }))
             {
-                if let Some(mut o) = self.bot_opportunity(bot, v, resource, toward, idle, tick) {
+                if let Some(mut o) =
+                    self.bot_opportunity(bot, v, resource, (subject, toward), idle, tick)
+                {
                     if brain.kind.behaviours.get("chase").copied().unwrap_or(1.0) == 0.0
                         && feet.distance(o.point) > 2.0
                     {
@@ -716,8 +753,14 @@ impl Session {
                 let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle) else {
                     return Ok(None);
                 };
-                let Some(o) = self.bot_opportunity(bot, v, claim.resource, enemy, idle, tick)
-                else {
+                let Some(o) = self.bot_opportunity(
+                    bot,
+                    v,
+                    claim.resource,
+                    (claim.subject, enemy),
+                    idle,
+                    tick,
+                ) else {
                     return Ok(None);
                 };
                 let Some(d) = self
@@ -780,8 +823,10 @@ impl Session {
     /// Any ally in the way is passed. So is any other body, except
     /// `quarry`, the one it is going after, and one standing at `goal`, the
     /// spot it is making for, which it contests rather than walks round.
-    /// It always passes on its left, so two walking into each other both
-    /// step aside the same way and get by. In a gap (solid close on both
+    /// It passes on its left, so two walking straight into each other both
+    /// step aside the same way and get by, unless the one in the way
+    /// already stands off to its left: that one is passed on the right,
+    /// rather than crossed in front of. In a gap (solid close on both
     /// sides), an ally ahead already going its
     /// way is followed at its pace instead (`team` overlap: the later of
     /// two on one path gives way), so a file through a narrow gap keeps
@@ -831,23 +876,173 @@ impl Session {
         if let Some(pace) = follow {
             return desired * pace;
         }
-        let blocked = self.peers.iter().any(|(o, p)| {
-            if *o == bot || !p.combat.alive || self.seated(*o) {
-                return false;
+        // The nearest body in the way, and how far it stands off to the
+        // left of the line (negative: to the right).
+        let blocker = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                if **o == bot || !p.combat.alive || self.seated(**o) {
+                    return false;
+                }
+                let at = Vec3::from(p.player.state().feet);
+                if !self.bot_allies(bot, **o)
+                    && (Some(**o) == quarry
+                        || goal.is_some_and(|g| flat(at - g).length() < CONTESTED))
+                {
+                    return false;
+                }
+                ahead(p)
+            })
+            .map(|(_, p)| flat(Vec3::from(p.player.state().feet) - feet))
+            .min_by(|a, b| a.dot(desired).total_cmp(&b.dot(desired)));
+        match blocker {
+            // One already off to its left is passed on its right, not
+            // walked across; one dead ahead on its left.
+            Some(delta) if delta.dot(side) > own.tuning().width * 0.1 => {
+                (desired * 0.25 - side).normalize_or_zero()
             }
-            let at = Vec3::from(p.player.state().feet);
-            if !self.bot_allies(bot, *o)
-                && (Some(*o) == quarry || goal.is_some_and(|g| flat(at - g).length() < CONTESTED))
-            {
-                return false;
-            }
-            ahead(p)
-        });
-        if blocked {
-            (desired * 0.25 + side).normalize_or_zero()
-        } else {
-            desired
+            Some(_) => (desired * 0.25 + side).normalize_or_zero(),
+            None => desired,
         }
+    }
+
+    /// Where a bot standing on a body (a vehicle's roof, another player's
+    /// head) with its enemy close below steps down to: the nearest world
+    /// floor round it, no higher than its feet, open to walk to (no wall on
+    /// the way, no player standing there), the side toward `toward` first
+    /// among equally near ones. None when every side is closed.
+    pub(super) fn bot_step_off(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        toward: Vec3,
+    ) -> Option<Vec3> {
+        const SIDES: usize = 16;
+        let want = flat(toward - feet).normalize_or_zero();
+        let depth = (feet.y - toward.y).max(0.0) + body.step + 0.5;
+        let others: Vec<(Vec3, f32)> = self
+            .peers
+            .iter()
+            .filter(|(o, p)| **o != bot && p.combat.alive && !self.seated(**o))
+            .map(|(_, p)| (Vec3::from(p.player.state().feet), p.player.tuning().width))
+            .collect();
+        // Floor under a body (the vehicle it stands on, a crate beside it)
+        // is no floor to stand on: the world ray sees through bodies.
+        let world = self.vehicles.world.as_ref();
+        let covered = |at: Vec3| {
+            self.bots.objects.iter().any(|v| {
+                let Some(d) = world.and_then(|w| w.definition(&v.definition)) else {
+                    return false;
+                };
+                let rotation = glam::Quat::from_array(v.transform.rotation);
+                let half = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale * 0.5;
+                let l = rotation.inverse() * (at - object_centre(v, d));
+                let by = body.width * 0.5;
+                !v.destroyed && l.x.abs() <= half.x + by && l.z.abs() <= half.z + by
+            })
+        };
+        let mut best: Option<(f32, Vec3)> = None;
+        for i in 0..SIDES {
+            let angle = i as f32 * std::f32::consts::TAU / SIDES as f32;
+            let d = Vec3::new(angle.cos(), 0.0, angle.sin());
+            // Out in half-width steps to past a jeep's half length.
+            for k in 1..=8 {
+                let out = body.width * 0.5 * (k as f32 + 1.0);
+                let at = feet + d * out;
+                if self.world_ray(feet + Vec3::Y * body.step, d, out).is_some() {
+                    break;
+                }
+                let Some(down) = self.world_ray(at + Vec3::Y * 0.5, Vec3::NEG_Y, 0.5 + depth)
+                else {
+                    continue;
+                };
+                let floor = at + Vec3::Y * (0.5 - down);
+                let crowded = others.iter().any(|(p, width)| {
+                    flat(*p - floor).length() < (body.width + width) * 0.5
+                        && (p.y - floor.y).abs() < body.height
+                });
+                if crowded || covered(floor) {
+                    continue;
+                }
+                let score = out - want.dot(d) * body.width * 0.5;
+                if best.is_none_or(|(b, _)| score < b) {
+                    best = Some((score, floor));
+                }
+                break;
+            }
+        }
+        best.map(|(_, at)| at)
+    }
+
+    /// A vehicle is a body the walk grid leaves out (`nav`): one a walking
+    /// bot is about to walk into is walked round by its nearer side, not
+    /// pressed against (which pushes it, `movables`) or hopped onto. Not the
+    /// one it stands on or is inside, makes for (`goal`, a seat beside it)
+    /// or whose crew is its `quarry`.
+    pub(super) fn bot_vehicle_detour(
+        &self,
+        bot: OwnerId,
+        desired: Vec3,
+        quarry: Option<OwnerId>,
+        goal: Option<Vec3>,
+    ) -> Vec3 {
+        if desired == Vec3::ZERO || self.seated(bot) {
+            return desired;
+        }
+        let own = &self.peers[&bot].player;
+        let feet = Vec3::from(own.state().feet);
+        let Some(world) = self.vehicles.world.as_ref() else {
+            return desired;
+        };
+        let clearance = own.tuning().width * 0.5 + 0.1;
+        for v in &self.bots.objects {
+            let Some(d) = world.definition(&v.definition) else {
+                continue;
+            };
+            let rotation = glam::Quat::from_array(v.transform.rotation);
+            let centre = object_centre(v, d);
+            let half = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale * 0.5;
+            let local = |at: Vec3| rotation.inverse() * (at - centre);
+            let inside = |at: Vec3, by: f32| {
+                let l = local(at);
+                l.x.abs() <= half.x + by && l.z.abs() <= half.z + by
+            };
+            let on_top = local(feet).y > half.y - 0.3;
+            let crewed_by_quarry = quarry.is_some_and(|q| {
+                self.mounted(q)
+                    .is_some_and(|(vehicle, _)| vehicle == v.id.0)
+            });
+            // A loose body with no seats (a ball, a crate) is something to
+            // push or use, not a vehicle to keep clear of.
+            if v.destroyed
+                || d.seats.is_empty()
+                || on_top
+                || crewed_by_quarry
+                // Its goal on it, or right beside it and within reach.
+                || goal.is_some_and(|g| {
+                    inside(g, 0.0)
+                        || inside(g, clearance + 0.5) && flat(g - feet).length() < clearance * 2.0 + 1.0
+                })
+                || inside(feet, 0.0)
+            {
+                continue;
+            }
+            // Within a stride of walking into it.
+            let ahead = (1..=4).any(|i| inside(feet + desired * (i as f32 * 0.25), clearance));
+            if !ahead {
+                continue;
+            }
+            let side = desired.cross(centre - feet).y;
+            let tangent = if side > 0.0 {
+                Vec3::new(desired.z, 0.0, -desired.x)
+            } else {
+                Vec3::new(-desired.z, 0.0, desired.x)
+            };
+            return (desired * 0.25 + tangent).normalize_or_zero();
+        }
+        desired
     }
 
     /// Local execution uses the actual oriented chassis, above its wheel
@@ -1020,6 +1215,7 @@ impl Session {
                 floor_cos: 0.85,
                 conservative: true,
                 bottom: (min.y - support).max(0.0),
+                swims: false,
             },
         ))
     }
@@ -1045,6 +1241,23 @@ impl Session {
         let d = w
             .definition(&v.definition)
             .context("No vehicle definition")?;
+        // An affordance lost: a wreck, or a wheeled hull on its side or its
+        // roof, ends the drive (and any ride in it) at once.
+        if v.destroyed
+            || d.family == Family::Wheeled
+                && d.wheeled_flight.is_none()
+                && !crate::route::upright(v.transform.rotation)
+        {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.next_interaction = tick + RETRY;
+            brain.plan.clear();
+            brain.search = None;
+            let _ = self.dismount_vehicle(bot);
+            return Ok(MoveInput {
+                yaw: self.bots.brains[&bot].yaw,
+                ..Default::default()
+            });
+        }
         let role = &d.seats[usize::from(seat)];
         // Idle play: a passenger rides along while a teammate drives.
         let riding_along = !role.controls
@@ -1101,33 +1314,72 @@ impl Session {
                 }
                 next = Some(*p);
             }
+            // A chassis that runs over the enemy it fights on foot is the
+            // blow itself: with no route left to them (they are too close
+            // for one), it is driven at them, backing out first when they
+            // are inside its turning circle (`route::gear`).
+            let strike = self.bots.brains[&bot]
+                .target
+                .filter(|t| {
+                    matches!(behaviour, Behaviour::Fight | Behaviour::Chase)
+                        && d.runover_damage > 0.0
+                        && self.mounted(*t).is_none()
+                        && self.can_damage_player(bot, *t, false)
+                })
+                .and_then(|t| self.peers.get(&t))
+                .filter(|p| p.combat.alive)
+                .map(|p| flat(Vec3::from(p.player.state().feet) - at));
             let toward = next
                 .filter(|p| p.through.is_none())
-                .map(|p| flat(p.feet - at));
+                .map(|p| flat(p.feet - at))
+                .or(strike);
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
-            // Back onto a fixed goal behind (a delivery or a walk home). A
-            // pursued target behind is backed onto only when close; a farther
-            // one is turned toward, so a chase is not driven as a long retreat.
-            let brain = &self.bots.brains[&bot];
-            let remaining = brain
-                .plan
-                .last()
-                .filter(|p| p.through.is_none())
-                .map(|p| flat(p.feet - at).length())
-                .or(toward.map(|d| d.length()))
-                .unwrap_or(0.0);
+            // Pure pursuit that knows how tightly this chassis turns: a
+            // point inside its turning circle is backed out of, never
+            // circled (`route::gear`). A chassis that made no headway backs
+            // straight up for a while.
+            let chassis = crate::route::Chassis::of(
+                d.wheels
+                    .iter()
+                    .map(|w| (w.position[2] * v.scale, w.steering)),
+                d.max_steering,
+                (d.bounds_max[2] - d.bounds_min[2]) * v.scale,
+            );
+            let yaw_rate = -v.angular_velocity[1];
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            let turn = chassis.radius();
+            let cruise = (
+                d.max_speed * crate::route::CRUISE,
+                d.reverse_speed * crate::route::CRUISE,
+            );
+            // One reversing rule (`route::gear`): the kind's policy says
+            // what counts as behind, and how far back a pursued target is
+            // backed onto rather than turned round for.
             let pursuing = matches!(
                 behaviour,
-                Behaviour::Fight | Behaviour::Chase | Behaviour::Search | Behaviour::Fly
+                Behaviour::Fight | Behaviour::Chase | Behaviour::Search
             );
-            let reversing = reverses(&brain.kind.mounted, error, remaining, pursuing)
-                || brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480;
-            let travel_sign = if reversing { -1.0 } else { 1.0 };
-            let heading_error = if reversing {
-                wrap(error + std::f32::consts::PI)
-            } else {
-                error
+            let drive = crate::route::Driving {
+                radius: turn,
+                // It arrives once its side passes the point.
+                reach: (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5,
+                cruise,
+                behind: brain.kind.mounted.reverse_degrees.to_radians(),
+                reverse_limit: if pursuing {
+                    brain.kind.mounted.reverse_distance
+                } else {
+                    f32::INFINITY
+                },
             };
+            let gear = match toward {
+                _ if brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480 => {
+                    crate::route::Gear::Reverse { nose: false }
+                }
+                Some(delta) => crate::route::gear(&drive, error, delta.length(), brain.drive_gear),
+                None => crate::route::Gear::Forward,
+            };
+            brain.drive_gear = gear;
+            let (travel_sign, heading_error) = gear.steer(error);
             let hull_forward = flat(glam::Quat::from_array(v.transform.rotation) * Vec3::NEG_Z)
                 .normalize_or_zero();
             let signed_speed = flat(Vec3::from(v.velocity)).dot(hull_forward);
@@ -1139,7 +1391,6 @@ impl Session {
             } else {
                 travel_sign
             };
-            let yaw_rate = -v.angular_velocity[1];
             let desired_steer = (response_sign * (heading_error * 1.5 - yaw_rate * 0.25))
                 .clamp(-d.max_steering, d.max_steering);
             let previous = self.peers[&bot].input.yaw;
@@ -1165,16 +1416,54 @@ impl Session {
                 || !self.bot_vehicle_clear(bot, &v, travel, stopping);
             let waiting = crew_waiting && tick < since + CREW_WAIT && speed < 2.0;
             let distance = toward.map_or(0.0, |delta| delta.length());
-            let corner_speed = (d.max_speed * 0.6 / (1.0 + heading_error.abs() * 2.0)).max(2.0);
-            let arrival_speed = (2.0 * braking * distance).sqrt().max(2.0);
-            let brake =
-                signed_speed * travel_sign < -0.5 || speed > corner_speed.min(arrival_speed);
+            // The leave leg (`route`): a chassis that cannot hurt the one it
+            // chases (no gun, and no runover for someone not on foot) only
+            // carries the bot there. It pulls up with its nose about as far
+            // off as the bot fights from on foot (the standoff), never
+            // ramming them; once there, and on foot it would still close on
+            // them (they draw away slower than it walks), it gets out; one
+            // outrunning a walker is followed in the seat.
+            let walk = self.peers[&bot].player.tuning().forward;
+            let target = self.bots.brains[&bot].target.and_then(|t| {
+                self.peers.get(&t).map(|p| {
+                    let state = p.player.state();
+                    (
+                        self.mounted(t).is_some(),
+                        Vec3::from(state.feet),
+                        Vec3::from(state.velocity),
+                    )
+                })
+            });
+            let standoff = (d.bounds_max[2] - d.bounds_min[2]) * v.scale * 0.5 + LEAVE_REACH;
+            let carried = target.filter(|(mounted, _, _)| {
+                matches!(behaviour, Behaviour::Chase | Behaviour::Fight)
+                    && d.weapon.is_none()
+                    && (*mounted || d.runover_damage <= 0.0)
+            });
+            let gap = carried.map(|(_, enemy, _)| flat(enemy - at).length() - standoff);
+            let corner_speed =
+                crate::route::pace(turn, gear, heading_error, distance, cruise).max(2.0);
+            let arrival_speed =
+                (2.0 * braking * gap.map_or(distance, |g| distance.min(g)).max(0.0))
+                    .sqrt()
+                    .max(2.0);
+            let brake = signed_speed * travel_sign < -0.5
+                || speed > corner_speed.min(arrival_speed)
+                || gap.is_some_and(|g| g <= 0.0) && travel_sign > 0.0;
             input.forward = if toward.is_none() || hazard || waiting || brake {
                 0.0
             } else {
                 travel_sign * (1.0 - heading_error.abs() * 0.3).clamp(0.25, 0.8)
             };
             input.jump = input.forward == 0.0;
+            let leave = carried.is_some_and(|(_, enemy, velocity)| {
+                let toward = flat(enemy - at);
+                toward.length() <= standoff && crate::route::walk_closes(walk, toward, velocity)
+            });
+            if leave {
+                input.forward = 0.0;
+                input.jump = true;
+            }
             // Crew claims are bounded independently of steering. A stuck
             // chassis also gives up instead of permanently holding a seat.
             let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -1210,6 +1499,17 @@ impl Session {
                     yaw: self.bots.brains[&bot].yaw,
                     ..Default::default()
                 };
+            }
+            if leave && speed < 3.0 {
+                let brain = self.bots.brains.get_mut(&bot).unwrap();
+                brain.next_interaction = tick + RETRY;
+                brain.plan.clear();
+                brain.search = None;
+                let _ = self.dismount_vehicle(bot);
+                return Ok(MoveInput {
+                    yaw: self.bots.brains[&bot].yaw,
+                    ..Default::default()
+                });
             }
         } else {
             let has_driver = d
@@ -1252,37 +1552,3 @@ impl Session {
 /// How far a driven chassis must get from where it last made progress for
 /// that to count as progress again.
 const VEHICLE_PROGRESS: f32 = 3.0;
-/// A chassis reverses toward a goal more than the kind's
-/// `mounted.reverse_degrees` off its heading. While pursuing a target it
-/// does so only within `mounted.reverse_distance`; a farther target behind
-/// is turned toward instead.
-fn reverses(
-    policy: &crate::bot_kind::BotMounted,
-    error: f32,
-    remaining: f32,
-    pursuing: bool,
-) -> bool {
-    error.abs() > policy.reverse_degrees.to_radians()
-        && (!pursuing || remaining <= policy.reverse_distance)
-}
-
-#[cfg(test)]
-mod mounted_tests {
-    #[test]
-    fn a_pursuing_chassis_backs_onto_a_near_target_but_turns_toward_a_far_one() {
-        let policy = crate::bot_kind::BotMounted::default();
-        let behind = std::f32::consts::PI * 0.9;
-        assert!(super::reverses(&policy, behind, 3.0, true));
-        assert!(super::reverses(
-            &policy,
-            -behind,
-            policy.reverse_distance,
-            true
-        ));
-        assert!(!super::reverses(&policy, behind, 40.0, true));
-        assert!(!super::reverses(&policy, 0.5, 3.0, true));
-        // A fixed delivery behind the hull is still backed onto.
-        assert!(super::reverses(&policy, behind, 40.0, false));
-        assert!(!super::reverses(&policy, 0.5, 40.0, false));
-    }
-}

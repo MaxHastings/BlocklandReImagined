@@ -306,6 +306,10 @@ pub(super) struct View {
     /// It carries what the objective delivers (a declared carriage it
     /// picked up, a body it holds): stopping would put that at risk.
     pub committed: bool,
+    /// The step is planned for its mini-game team, so a teammate doing it
+    /// does it for the team; without one it is the bot's own progress
+    /// (a racer's checkpoint), which nobody else's arrival advances.
+    pub shared: bool,
 }
 impl View {
     /// The step needs only its feet: no tool, trigger, body, seat or enemy
@@ -336,6 +340,7 @@ impl View {
             physical_progress: false,
             heading: Vec3::ZERO,
             committed: false,
+            shared: false,
         }
     }
 }
@@ -392,6 +397,7 @@ impl Step {
             self.executor.view(session, bot)?
         };
         view.waiting = self.waiting.is_some();
+        view.shared = self.team.is_some();
         if view.waiting
             && matches!(&self.executor,Executor::Physical(action)
             if matches!(action.method,super::physical_objectives::Method::Hammer{..}))
@@ -580,6 +586,9 @@ pub(super) struct State {
     hold: Option<(View, u64)>,
     /// The nearest the current step's approach has come to its point.
     best: Option<f32>,
+    /// In a game, round or team it has not had a planning turn for yet:
+    /// it does not know yet what that game asks of it.
+    unplanned: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -650,6 +659,11 @@ impl State {
     /// offered, so it does not walk all the way home meanwhile.
     pub(super) fn pursuing(&self) -> bool {
         self.step.is_none() && !self.failed.is_empty()
+    }
+    /// Its game's objectives are not known to it yet: its planning turn
+    /// in this game, round and team is still to come.
+    pub(super) fn unplanned(&self) -> bool {
+        self.unplanned
     }
     pub(super) fn ready(&self, tick: u64) -> bool {
         self.step.is_none() && tick >= self.next
@@ -1734,6 +1748,10 @@ impl Session {
             state.desired = None;
             state.desired_context = context;
             state.failed_desired.clear();
+            // A new game, round or team is planned for at its next turn,
+            // not after a retry wait left from before it.
+            state.next = state.next.min(tick);
+            state.unplanned = context.is_some();
         }
         if tick >= state.next {
             state.failed.retain(|f| {
@@ -1879,6 +1897,7 @@ impl Session {
             self.bots.objective_budget_used = true;
             self.bots.objective_cursor = Some(bot);
             state.next = tick + RETRY;
+            state.unplanned = false;
             let mut budget = GroundingBudget::default();
             // Another offered objective not yet found wanting: one that
             // cannot be planned hands the bot's next turn to it.

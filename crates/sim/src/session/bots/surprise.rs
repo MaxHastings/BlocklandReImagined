@@ -78,7 +78,7 @@ pub(super) const AIM_SURFACE: u32 = 2;
 /// Which way round a chase goes: straight at them, or wide to a side.
 pub(super) const ROUTES: [&str; 3] = ["direct", "left", "right"];
 /// Behaviours the chooser may trade for each other. The rest (carrying a
-/// catch, arming, flying, walking home) are done when they apply.
+/// catch, arming, walking home) are done when they apply.
 const VARIED: [Behaviour; 6] = [
     Behaviour::Interact,
     Behaviour::Fight,
@@ -773,7 +773,7 @@ impl Mind {
 pub(super) fn behaviour(
     mind: &mut Mind,
     cfg: &BotSurprise,
-    scores: &[f32; 10],
+    scores: &[f32; Behaviour::COUNT],
     plain: Behaviour,
     current: Behaviour,
     gate: Gate,
@@ -1404,7 +1404,7 @@ mod tests {
         }
         assert_eq!(mind.rng, rng);
         // The behaviour hook likewise.
-        let mut scores = [0.0; 10];
+        let mut scores = [0.0; Behaviour::COUNT];
         scores[Behaviour::Objective as usize] = 0.65;
         scores[Behaviour::Chase as usize] = 0.6;
         scores[Behaviour::Wander as usize] = 0.1;
@@ -1744,7 +1744,7 @@ mod tests {
             tell_seconds: 0.0,
             ..on(1.0)
         };
-        let mut scores = [0.0; 10];
+        let mut scores = [0.0; Behaviour::COUNT];
         scores[Behaviour::Carry as usize] = 1.0;
         scores[Behaviour::Fight as usize] = 0.8;
         scores[Behaviour::Chase as usize] = 0.6;

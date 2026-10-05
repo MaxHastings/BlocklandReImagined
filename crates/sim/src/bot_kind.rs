@@ -21,9 +21,8 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_FIRST_NAMES: usize = 256;
 /// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
 /// order (`session::bots::behaviour::Behaviour`).
-pub const BEHAVIOURS: [&str; 10] = [
+pub const BEHAVIOURS: [&str; 9] = [
     "carry",
-    "fly",
     "interact",
     "fight",
     "arm",
@@ -33,6 +32,11 @@ pub const BEHAVIOURS: [&str; 10] = [
     "objective",
     "wander",
 ];
+/// Route legs a kind's `behaviours` may also weigh: `fly` scales how
+/// readily its routes take a jet leg (0: never), as `crate::route::Jets`
+/// costs them (`docs/architecture/bots.md`, Routes).
+pub const LEG_WEIGHTS: [&str; 1] = ["fly"];
+
 /// The small extra options (`session::bots::extras`): idle play with
 /// bodies and seats, crouching under ranged fire, a jet hop out of a
 /// projectile's path, opening doors, and handing a spare weapon to an
@@ -102,8 +106,9 @@ pub struct BotKind {
     /// sight that have nothing better to go on go and look where the enemy
     /// was (Bot_Hole's `hAlertOtherBots`).
     pub alerts_allies: bool,
-    /// Weights on its behaviours' scores by name (`carry`, `fly`,
-    /// `interact`, `fight`, `chase`, `search`, `return`, `wander`). Ordinary
+    /// Weights on its behaviours' scores by name (`carry`, `interact`,
+    /// `fight`, `chase`, `search`, `return`, `wander`), and on its route's
+    /// legs (`fly`: how readily it jets; 0 never). Ordinary
     /// behaviours default to 1; environmental interactions and objectives default to 0:
     /// 0 turns one off (a guard that never gives chase), more puts it ahead
     /// of others (`docs/architecture/bots.md`).
@@ -191,14 +196,6 @@ pub struct BotFighting {
     /// an ally at once. A melee fighter does not strafe: it closes to its
     /// band.
     pub strafe_seconds: f32,
-    /// It takes off for an enemy at least this many world units above it
-    /// that no walk reaches; once flying it keeps on until it is by them,
-    /// or no lower than this below them...
-    pub fly_rise: f32,
-    pub fly_drop: f32,
-    /// ...unless this many seconds pass without getting a unit closer:
-    /// then it lands and does not take off again for as long.
-    pub fly_give_up_seconds: f32,
 }
 impl Default for BotFighting {
     fn default() -> Self {
@@ -207,9 +204,6 @@ impl Default for BotFighting {
             min_band_slack: 1.5,
             dwell_seconds: 0.5,
             strafe_seconds: 3.5,
-            fly_rise: 2.5,
-            fly_drop: 3.0,
-            fly_give_up_seconds: 4.0,
         }
     }
 }
@@ -470,15 +464,16 @@ impl BotKind {
             self.id
         );
         ensure!(
-            self.behaviours.len() <= BEHAVIOURS.len()
+            self.behaviours.len() <= BEHAVIOURS.len() + LEG_WEIGHTS.len()
                 && self.behaviours.iter().all(|(name, weight)| {
-                    BEHAVIOURS.contains(&name.as_str())
+                    (BEHAVIOURS.contains(&name.as_str()) || LEG_WEIGHTS.contains(&name.as_str()))
                         && weight.is_finite()
                         && (0.0..=10.0).contains(weight)
                 }),
-            "Bot `{}`: behaviours weighs {} by 0 to 10",
+            "Bot `{}`: behaviours weighs {}, {} by 0 to 10",
             self.id,
-            BEHAVIOURS.join(", ")
+            BEHAVIOURS.join(", "),
+            LEG_WEIGHTS.join(", ")
         );
         ensure!(
             self.extras.strength.is_finite() && (0.0..=1.0).contains(&self.extras.strength),

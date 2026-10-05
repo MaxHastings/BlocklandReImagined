@@ -187,6 +187,26 @@ impl Session {
         })
     }
 
+    /// Whether a door it may click open (`activate`, with the kind's
+    /// extras on) stands across the way from `end` toward `to` within
+    /// reach: a route ending there is not the end of the way.
+    pub(super) fn bot_opens_way(&self, bot: OwnerId, end: Vec3, to: Vec3) -> bool {
+        let on = self
+            .bots
+            .brains
+            .get(&bot)
+            .is_some_and(|b| b.kind.extras.strength > 0.0);
+        let way = flat(to - end).normalize_or_zero();
+        on && way != Vec3::ZERO
+            && self
+                .simulation
+                .brick_ray(end + Vec3::Y, way, CLICK_REACH, |_, b| b.colliding)
+                .ok()
+                .flatten()
+                .and_then(|hit| hit.brick)
+                .is_some_and(|brick| self.bot_activatable(brick))
+    }
+
     /// The player idle play aims toward: the nearest other player it sees.
     pub(super) fn bot_idle_mark(&mut self, bot: OwnerId, tick: u64) -> Option<(OwnerId, Vec3)> {
         let brain = self.bots.brains.get(&bot)?;
@@ -350,7 +370,6 @@ impl Session {
         extra.crouch = tick < st.crouch_until
             && on_foot
             && state.grounded
-            && scene.behaviour != Behaviour::Fly
             && (scene.holding || scene.behaviour == Behaviour::Fight);
         if let Some(id) = incoming {
             let dodge = match st.judged {

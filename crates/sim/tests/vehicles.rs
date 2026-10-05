@@ -42,6 +42,31 @@ fn vehicle_world(f: &Fixture, vehicle: &str) -> World {
     world.next_brick_id = 2;
     world
 }
+/// The test world with its car changed by `change`, and nobody in it yet.
+/// With a `builder`, the spawn brick is theirs: they join as owner 1 with
+/// [`BUILDER`].
+const BUILDER: bri_admin::Principal = bri_admin::Principal([7; 32]);
+fn session_changing(
+    f: &Fixture,
+    builder: Option<&str>,
+    change: impl FnOnce(&mut bri_vehicles::Definition),
+) -> anyhow::Result<Session> {
+    let car = f.vehicle(Vehicle::Car);
+    let mut pack = f.vehicles();
+    change(pack.definitions.iter_mut().find(|d| d.id == car).unwrap());
+    let mut world = vehicle_world(f, car);
+    if let Some(name) = builder {
+        world.bricks.get_mut(&1).unwrap().owner = 1;
+        world
+            .owners
+            .insert(1, bri_world::OwnerRecord::new(BUILDER.0, name.into()));
+    }
+    let mut s = Session::new(Simulation::new(world, f.bricks(), vec![ground()])?);
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(pack, Vec::new())?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
+    Ok(s)
+}
 fn session_with(f: &Fixture, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     let mut s = Session::new(Simulation::new(
         vehicle_world(f, vehicle),
@@ -2053,4 +2078,139 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes(f: &Fixture) -> anyhow::Resul
     assert_eq!(s.steering_prefs(owner), DEFAULT_STEERING);
     Ok(())
 }
+}
+
+/// `WheeledVehicleData::onCollision` damages with the vehicle as source, so
+/// a runover is its driver's kill. The victim walking into the jeep pushes
+/// it and so becomes its mover; that once turned every runover into the
+/// victim's suicide (Slayer's -1), since the mover's credit came first.
+#[test]
+fn a_runover_is_the_drivers_kill_even_when_the_victim_walks_into_it() -> anyhow::Result<()> {
+    use bri_sim::session::MiniGameRequest;
+    let f = &Fixture::synthetic();
+    // One hit at driving speed kills, so the first contact decides.
+    // The driver's own jeep, which their mini-game lets them use.
+    let mut s = session_changing(f, Some("Driver"), |d| d.runover_damage = 50.0)?;
+    let driver = s.join_verified(
+        "Driver".into(),
+        Vec3::new(0.0, 0.05, 0.0),
+        true,
+        Some(BUILDER),
+    )?;
+    assert_eq!(driver, 1, "the spawn brick's builder");
+    s.command(
+        driver,
+        1,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                use_all_players_bricks: true,
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )?;
+    let game = s.minigame_views()[0].id;
+    // The victim joins far ahead of the jeep, facing it.
+    let ahead = Vec3::new(0.0, 0.05, -40.0);
+    s.set_spawn_points(vec![ahead])?;
+    let victim = s.join("Victim".into(), ahead, true)?;
+    s.command(victim, 1, Command::MiniGame(MiniGameRequest::Join { game }))?;
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
+    let mut p = Feeder {
+        owner: driver,
+        sequence: 0,
+    };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    p.board(&mut s, 0.0)?;
+    assert_eq!(s.mounted(driver).map(|m| m.1), Some(0), "driving");
+    let mut walk = 0;
+    for _ in 0..120 * 8 {
+        p.sequence += 1;
+        s.movement(
+            driver,
+            p.sequence,
+            MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+        )?;
+        walk += 1;
+        let toward = MoveInput {
+            forward: 1.0,
+            yaw: std::f32::consts::PI,
+            ..Default::default()
+        };
+        s.movement(victim, walk, toward)?;
+        s.step()?;
+        if !s.is_alive(victim) {
+            break;
+        }
+    }
+    assert!(!s.is_alive(victim), "the jeep ran the victim over");
+    let death = s
+        .death_results()
+        .rev()
+        .find(|d| d.victim == victim)
+        .cloned()
+        .expect("the runover is a recorded death");
+    assert_eq!(death.killer, Some(driver), "the driver's kill: {death:?}");
+    assert_eq!(s.vitals()[&victim].score, 0, "not a suicide");
+    Ok(())
+}
+
+/// A body that died on a parked jeep and respawns elsewhere jumps there:
+/// it must not sweep through the jeep at the speed of the jump. Its
+/// kinematic body once took the respawn as one step's travel, over 1000
+/// u/s, and the contact solver threw the jeep with it (bots that died on a
+/// jeep's roof sent it off the map in the gauntlet).
+#[test]
+fn respawning_from_a_parked_jeeps_roof_leaves_it_parked() -> anyhow::Result<()> {
+    let f = &Fixture::synthetic();
+    // No seats, so landing on its roof does not board it (as for a bot).
+    let mut s = session_changing(f, None, |d| d.seats.clear())?;
+    for _ in 0..120 {
+        s.step()?;
+    }
+    let jeep = |s: &Session| {
+        let v = &s.vehicle_poses()[0];
+        (
+            Vec3::from(v.position),
+            Vec3::from(v.velocity),
+            Vec3::from(v.angular_velocity),
+        )
+    };
+    let (at, _, _) = jeep(&s);
+    let owner = s.join("Standing".into(), at + Vec3::Y * 2.5, true)?;
+    let mut p = Feeder { owner, sequence: 0 };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    let feet = Vec3::from(
+        s.snapshot()
+            .players
+            .into_iter()
+            .find(|q| q.owner == owner)
+            .unwrap()
+            .feet,
+    );
+    assert!(feet.y > at.y + 1.0, "standing on the roof: {feet} {at}");
+    p.sequence += 1;
+    s.command(owner, p.sequence, Command::Suicide)?;
+    p.feed(&mut s, MoveInput::default(), 200)?;
+    let (parked, _, _) = jeep(&s);
+    p.sequence += 1;
+    s.command(owner, p.sequence, Command::Respawn)?;
+    assert!(s.is_alive(owner));
+    let (mut fastest, mut spin) = (0.0f32, 0.0f32);
+    for _ in 0..60 {
+        p.feed(&mut s, MoveInput::default(), 1)?;
+        let (_, v, w) = jeep(&s);
+        fastest = fastest.max(v.length());
+        spin = spin.max(w.length());
+    }
+    let (after, _, _) = jeep(&s);
+    assert!(
+        fastest < 1.0 && spin < 1.0 && after.distance(parked) < 0.2,
+        "the parked jeep was thrown: {fastest} u/s, {spin} rad/s, {parked} -> {after}"
+    );
+    Ok(())
 }

@@ -27,9 +27,8 @@ bot does through the same code.
    | Behaviour | When | Does |
    |---|---|---|
    | Carry | its tool holds something | carries it to open space, swings and lets go |
-   | Fly | an enemy up where its path does not walk, with usable jets | jets straight up, out from under cover, over, down by them |
    | Interact | a useful, permitted environmental opportunity | reserves a seat or loose hazard, approaches and executes through ordinary controls |
-   | Fight | an enemy in sight within its weapon's band | stands, strafes, backs off when too close |
+   | Fight | an enemy in sight within its weapon's band (level with it, or, for a ranged weapon, up to its band above) | stands, strafes, backs off when too close |
    | Chase | an enemy in sight out of its band | paths to them |
    | Search | an enemy remembered | goes where they were, looks around |
    | Return | strayed from its brick | walks home |
@@ -48,11 +47,6 @@ bot does through the same code.
    objective step cools down before it is tried again: then it does not
    walk home at all.
 
-   Fly is entered only for an enemy at least `fighting.fly_rise` above that
-   no walk reaches; once flying it keeps on until it is by them or more
-   than `fly_drop` below. A flight that gets no closer for
-   `fly_give_up_seconds` lands, and it does not take off again for as long.
-
    An objective outranks a fight while the bot carries what the objective
    delivers (`View::committed`, read from the step: a package carriage it
    holds, or a held body). On the way to a delivery that needs only its
@@ -64,9 +58,11 @@ bot does through the same code.
    measured from where the bot took the controls, with `mounted.chase_radius`;
    with `"home"` from its brick. So a bot that boards a vehicle 40 m out keeps
    pursuing a target 60 m out rather than turning back at its walking leash.
-3. **Goal and path.** The behaviour sets the goal; the walk grid
-   (`crate::nav`, shared by every bot of a body size, updated as bricks
-   change, portals included) finds the way a little each tick. Gaps only
+3. **Goal and path.** The behaviour sets the goal; the route planner (see
+   [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
+   walk grid (`crate::nav`, shared by every bot of a body size, updated as
+   bricks change, portals included) finds the way a little each tick,
+   walking, jumping, swimming or jetting wherever that is the cheapest. Gaps only
    a crouched body fits (crawlspaces) are on the grid: crawling costs
    more than walking, and the bot crouches into them. A wheeled driver's body
    uses the chassis footprint and clearance, with no pedestrian jump, crawl or
@@ -82,11 +78,11 @@ bot does through the same code.
    targets cancel a held charge without firing it. A driver steers the
    chassis independently of the gunner's world aim; an armed passenger's world
    aim is preserved when its seat converts the look to a relative angle.
-   A chassis backs onto a goal more than `mounted.reverse_degrees` off its
-   hull. While pursuing (Fight, Chase, Search, Fly) it does so only within
-   `mounted.reverse_distance`; a farther target behind is turned toward, so a
-   chase is not driven as a long retreat. Fixed deliveries and the walk home
-   still reverse.
+   How a chassis reverses is one rule, the drive leg's `route::gear`
+   (Routes, below): a goal more than `mounted.reverse_degrees` off its hull
+   is behind, and while pursuing (Fight, Chase, Search) it is backed onto
+   only within `mounted.reverse_distance`; a farther target behind is
+   turned toward, so a chase is not driven as a long retreat.
 5. **Move and act.** The behaviour's movement, then getting unstuck (hop,
    plan again, give up the goal) on foot; drivers instead brake, replan and
    relinquish an unproductive seat. Shared claims are exclusive advisory
@@ -125,6 +121,120 @@ bot does through the same code.
    the outcome. See [bot-interactions.md](bot-interactions.md) for the lifecycle,
    budgets, provider boundary and examples.
 
+## Routes: one planner for every way of getting about
+
+A behaviour only says where it wants to be (its goal). How the bot gets
+there is one question with one answer: the route planner
+(`crate::nav::Search` over the walk grid, `crate::route` for the costs and
+the per-leg controls). There is no flying behaviour, no swimming shortcut
+for walkers and no driving special case in the arbiter; there are legs.
+
+**The graph.** Nodes are the walk grid's cells (a floor and its height).
+Edges are the ways the bot's body can actually move between them now:
+
+| Edge | Exists when | Costs (seconds of travel, in walking units) |
+|---|---|---|
+| walk, step | the motor steps it (`Body::step`) | distance |
+| jump | a ledge within the body's jump apex | distance + a jump |
+| crawl | only a crouched body fits | distance + crawling |
+| portal | the body's middle goes in through a linked brick's opening | one cell |
+| swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
+| jet | the body can jet (`can_jet`, energy, the kind's `fly` weight above 0), the column up from the launch cell, the crossing at the apex and the descent are clear, and the climb is within the energy | the flight time from the jet's thrust, lift and gravity, plus takeoff |
+| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
+
+Edge costs come from the body's and vehicle's own numbers (`PlayerTuning`
+speeds, jet acceleration and lift, gravity, energy drain; a vehicle's
+`max_speed`, `max_steering`, wheelbase and `brake_force`), never from
+content names. Kinds keep one data knob per mode: the `fly` weight in
+`behaviours` (0: never takes a jet leg) scales how willing a kind is to
+jet, and `interact` (0: never) whether it may take a vehicle.
+
+**The plan.** A search returns one list of waypoints, each tagged with the
+leg it belongs to (`nav::Mode`: walk, swim or jet). A vehicle worth taking
+is a seat opportunity costed the same way (walk to it, board, drive), and
+once seated the same search plans the chassis's path. Behaviours ask for a
+goal and get back that plan.
+The search stays bounded: the same per-tick sample and expansion budgets,
+at most a few jet tests per search, one landing sample per goal.
+
+**Execution.** Each leg turns into ordinary controls, the same keys a
+person presses:
+
+- walk: step, jump, crouch into crawlspaces, walk through openings. The
+  grid's eight-way steps are pulled straight (`nav::pull`): each plain
+  walking waypoint heads for the farthest later one of the same walk that
+  the full-width standing body walks straight to (`Ground::walkable`: its
+  box sweeps clear a step up, of the map and of loose bodies such as a
+  ball or a parked vehicle (players step aside), and floor it can stand on, not deep water,
+  lies within a step all the way along). A jump, crawl, opening or other
+  leg's waypoint is never skipped, nor the one where it starts, so a
+  diagonal across open floor is one line and a corner the body would
+  catch on is still walked round. Walking eases off only at the leg's end.
+  A walker does not walk into a vehicle (which the grid leaves out): one
+  ahead is walked round by its nearer side, unless it is what the bot
+  makes for. Nor is a pulled line drawn past another player or where one
+  is heading over the next second (`Ground::crowds`, `MOTION_AHEAD`); a
+  player in the way is passed on the left, or on the right when already
+  off to the left. A bot standing on a body (a roof, a head) with its
+  target close below steps off to the nearest open floor
+  (`bot_step_off`). An airborne fighter whose arc (`route::landing`)
+  would come down off the floor steers back instead of strafing on, and
+  a way out of an ally's line of fire is only taken onto floor.
+- swim: head for the next waypoint across the water, whatever the depth,
+  holding jump to rise where the way out is higher.
+- jet: climb straight up at the launch cell until above the landing's
+  height (jets lift hardest with no move), cross at that height (jetting
+  again whenever it sinks to the lip), cut the jets over the landing and
+  brake onto it. A takeoff under a roof cannot happen: the planner only
+  launches where the column up is clear, so a bot under a platform walks
+  out from under it first.
+- drive (`route::gear`, `route::pace`): pure pursuit along the chassis
+  path. The chassis's tightest turn is its wheelbase over the tangents of
+  its front and rear lock (`route::Chassis`). A point deeper than half the
+  chassis's width inside either turning circle is not chased round in
+  circles: the driver backs away from it (nose swinging toward it) or
+  pulls ahead of it, until it is out of the circle. A point behind (past
+  the kind's `mounted.reverse_degrees`) is backed onto when that is
+  sooner, at the definition's cruise speeds, than turning round, and, for
+  a pursued target, only within `mounted.reverse_distance`. Speed is no more than the tyres hold on the arc pure
+  pursuit takes, manoeuvring speed while backing or pulling out, and what
+  it can still brake from by the point. A chassis is at a waypoint, or a
+  search probe, within half its footprint.
+- board: the ordinary seat approach, claim and mount. The seat claim's
+  progress is measured afresh once the bot is seated (the drive's own
+  distance), so a long drive is not judged by the walk to the seat.
+- leave: a chassis that cannot hurt the enemy it chases (no gun, and no
+  runover for someone not on foot) pulls up short of them: it brakes so
+  as to stop with its nose about as far off as the bot fights from on
+  foot (half its length plus that reach), and never rams them. There it
+  gets out, if on foot it would still close on them (`route::walk_closes`:
+  they draw away slower than it walks); one outrunning a walker is
+  followed in the seat. A wreck, or a wheeled hull on its side or roof,
+  ends the drive at once.
+
+**Replanning from outcomes.** Each leg watches what really happened: a walk
+leg that makes no headway hops, then plans again, then gives up as
+before. Headway is net displacement over a window (`route::Progress`):
+over three quarters of a second a walker must cover a fifth of what its
+walk speed would carry it, so one shuttling between two spots, or hopping
+in place, while its input says move, is as stuck as one standing against
+a wall. A bot at work beside its objective, a seat or an arming point is
+not judged by it; a jet leg that
+runs out of time or lands below where it took off plans again from where
+the bot came down, and the cells that failed are forgotten; a drive leg
+that makes no headway backs up, plans again and finally gives up the seat.
+A plan is never trusted past what the world shows. When the best route to
+an enemy ends where the bot cannot hurt them (farther across than its
+band, or higher than a jump brings within it), chasing them, or searching
+where they stand, is worth nothing until they move. A bot standing on
+something the grid leaves out (a vehicle's roof) plans from the floor
+beneath.
+
+Portals stay inside the same mechanism: an opening is a walk edge of the
+grid, so a route that crosses one is a walk leg like any other. Shark-like
+kinds (`moves: swim`) keep their own water roaming; their staying in water
+is package policy.
+
 ## Noticing
 
 `bots/perception.rs` adds a small "what a bot notices" layer on top of
@@ -158,7 +268,7 @@ the plain linear turn and the old fire gate.
   turns. Strolling, the look also drifts a few degrees off the way.
 - **Reaction.** A newly seen target, or an attacker it was not already
   fighting, starts a reaction: `reaction_seconds` as is when it was
-  fighting or hunting (Fight, Chase, Fly, Search), times `relaxed_scale`
+  fighting or hunting (Fight, Chase, Search), times `relaxed_scale`
   when strolling or playing about (Wander, Interact), times `away_scale`
   for a target outside its `view_degrees` cone, varied by 30% either way
   from its seeded RNG. It fires only after it, and turns `away_scale`
@@ -542,9 +652,9 @@ its kind and team label. See `bots/looks.rs`.
   - `extras` (`strength`): 0 to 1, how much of the extra options applies,
     1 when left out (above). The tuning tools find it by itself.
   - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
-    `strafe_seconds`, `fly_rise`, `fly_drop`, `fly_give_up_seconds`): the
-    leeway around its band, how long a choice is held, strafe legs, and
-    when it takes off and gives up a flight (above).
+    `strafe_seconds`): the
+    leeway around its band, how long a choice is held, and strafe legs.
+    Whether it flies at all is its `fly` leg weight (Routes).
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.

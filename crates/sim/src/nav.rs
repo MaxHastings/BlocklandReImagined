@@ -21,15 +21,26 @@
 //! whose body middle goes in through one, as the motor carries a body, leads
 //! to the cell it comes out at by the partner, so paths lead through portals
 //! wherever walking through one is the way.
+//!
+//! The grid is the bot route planner's graph (`docs/architecture/bots.md`,
+//! Routes): besides walking, a floor under water deep enough to float the
+//! body is a swim cell, and a body with jets ([`crate::route::Jets`]) may
+//! fly from any cell with open sky to the goal's floor. Each waypoint says
+//! which of those legs it belongs to ([`Mode`]); [`crate::route`] costs them
+//! from the body's tuning and turns each leg into controls.
+use crate::route::Costs;
 use bri_content::passage::Passages;
+use bri_content::water::Water;
 use glam::Vec3;
 use rapier3d::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
+/// Farthest (cells) a jet leg's landing moves off a goal someone stands on.
+const LANDING_RING: i32 = 4;
 /// Horizontal distance within which a grid node completes its search.
 pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 /// New ground samples all bots together may take in one tick.
@@ -63,6 +74,8 @@ pub struct Body {
     pub conservative: bool,
     /// Lower hull clearance above the support plane (wheels are not walls).
     pub bottom: f32,
+    /// Floats and swims in deep water (a player body); a chassis does not.
+    pub swims: bool,
 }
 impl Body {
     pub fn of(tuning: &bri_motor::player::PlayerTuning, scale: f32) -> Self {
@@ -78,6 +91,7 @@ impl Body {
             floor_cos: tuning.slope_degrees.to_radians().cos(),
             conservative: false,
             bottom: 0.0,
+            swims: true,
         }
     }
     /// The box a clearance test uses: narrower by one cell so a body that
@@ -110,10 +124,132 @@ pub struct Ground<'a> {
     pub terrain: &'a dyn Fn(Vec3, Vec3, f32) -> Option<(f32, Vec3)>,
     /// The openings bodies pass through.
     pub passages: &'a Passages,
+    /// Liquid volumes (map water and water bricks): deep water is swum.
+    pub waters: &'a [Water],
+    /// Boxes (min, max) of the moving bodies about (players): the grid
+    /// leaves them out, but nobody takes off into one, and a pulled
+    /// straight walk ([`pull`]) does not cut past one where the grid's own
+    /// route keeps its lane.
+    pub bodies: &'a [(Vec3, Vec3)],
+    /// Each body's velocity, in `bodies`' order (none: all standing): a
+    /// pulled walk also keeps clear of where one is going ([`MOTION_AHEAD`]).
+    pub motions: &'a [Vec3],
 }
+/// How far ahead (seconds) a moving body's path counts as taken for a
+/// pulled walk ([`Ground::crowds`]): two walkers heading into each other
+/// keep their grid lanes instead of both cutting onto one line.
+pub const MOTION_AHEAD: f32 = 1.0;
+/// Share of a standing body under water from which it floats: the walk
+/// grid's floor there is out of reach of its feet, and it swims.
+const FLOATS: f32 = 0.6;
 impl Ground<'_> {
     fn filter() -> QueryFilter<'static> {
         QueryFilter::only_fixed().exclude_sensors()
+    }
+    /// The surface of water that floats a body standing at `feet`, if any.
+    pub fn floats(&self, body: &Body, feet: Vec3) -> Option<f32> {
+        self.waters
+            .iter()
+            .filter(|w| w.coverage(feet.to_array(), body.height) >= FLOATS)
+            .map(|w| w.max[1])
+            .reduce(f32::max)
+    }
+    /// Whether a body at `feet` is in any water at all.
+    fn wet(&self, body: &Body, feet: Vec3) -> bool {
+        self.waters
+            .iter()
+            .any(|w| w.coverage(feet.to_array(), body.height) > 0.0)
+    }
+    /// Whether the standing body sweeps from `from` to `to` (feet) touching
+    /// no fixed collision: a flight's climb, crossing or descent.
+    pub fn sweep(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
+        let (half_width, _, _) = body.clearance(false);
+        let half = Vector::new(half_width, body.height * 0.5, half_width);
+        let shape = Cuboid::new(half);
+        let start = from + Vec3::Y * (body.height * 0.5 + 0.1);
+        let pose = Pose::translation(start.x, start.y, start.z);
+        let query = self.physics.query_pipeline_with_filter(Self::filter());
+        if query.intersect_shape(pose, &shape).next().is_some() {
+            return false;
+        }
+        query
+            .cast_shape(
+                &pose,
+                Vector::from_array((to - from).to_array()),
+                &shape,
+                rapier3d::parry::query::ShapeCastOptions {
+                    max_time_of_impact: 1.0,
+                    stop_at_penetration: true,
+                    ..Default::default()
+                },
+            )
+            .is_none()
+    }
+    /// Whether the full-width standing body walks straight from `from` to
+    /// `to` (feet): its box sweeps clear of fixed collision a step up, and
+    /// all the way along a floor it can stand on lies within a step of the
+    /// line, with no water deep enough to float it. What the grid's own
+    /// steps check cell by cell, along one line.
+    pub fn walkable(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
+        let rise = to.y - from.y;
+        let across = Vec3::new(to.x - from.x, 0.0, to.z - from.z).length();
+        if rise.abs() > body.step || across < 1e-3 {
+            return across < 1e-3 && rise.abs() <= body.step;
+        }
+        let (_, lift, tall) = body.clearance(false);
+        let half = Vector::new(body.width * 0.5, tall * 0.5, body.width * 0.5);
+        let shape = Cuboid::new(half);
+        let start = from + Vec3::Y * (lift + tall * 0.5);
+        let pose = Pose::translation(start.x, start.y, start.z);
+        // Loose bodies (a ball, a parked vehicle) count too: the grid
+        // leaves them out, so a straight line must not cut through one.
+        // Only players, who move out of the way, are left out.
+        let query = self
+            .physics
+            .query_pipeline_with_filter(QueryFilter::exclude_kinematic().exclude_sensors());
+        if query.intersect_shape(pose, &shape).next().is_some()
+            || query
+                .cast_shape(
+                    &pose,
+                    Vector::from_array((to - from).to_array()),
+                    &shape,
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: 1.0,
+                        stop_at_penetration: true,
+                        ..Default::default()
+                    },
+                )
+                .is_some()
+        {
+            return false;
+        }
+        let samples = (across / (CELL * 0.5)).ceil() as usize;
+        (1..samples).all(|i| {
+            let at = from.lerp(to, i as f32 / samples as f32);
+            let top = at + Vec3::Y * (body.step + 0.05);
+            self.ray(top, Vec3::NEG_Y, body.step * 2.0 + 0.1)
+                .is_some_and(|(distance, normal)| {
+                    (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
+                })
+                && self.floats(body, at).is_none()
+        })
+    }
+    /// Whether a straight walk from `from` to `to` passes within reach of a
+    /// moving body about (`bodies`), or of where it is going over the next
+    /// [`MOTION_AHEAD`] seconds (`motions`): the body's half width plus the
+    /// other's. Its own grid route is left to keep its lane there.
+    pub fn crowds(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
+        let (_, _, tall) = body.clearance(false);
+        self.bodies.iter().enumerate().any(|(i, (min, max))| {
+            let centre = (*min + *max) * 0.5;
+            if max.y < from.y.min(to.y) || min.y > from.y.max(to.y) + tall {
+                return false;
+            }
+            let motion = self.motions.get(i).copied().unwrap_or(Vec3::ZERO);
+            let going = centre + Vec3::new(motion.x, 0.0, motion.z) * MOTION_AHEAD;
+            let reach = body.width * 0.5 + (max.x - min.x).max(max.z - min.z) * 0.5;
+            segment_gap(from, to, centre, going) < reach
+        })
     }
     /// The nearest surface along a ray and its normal.
     fn ray(&self, origin: Vec3, direction: Vec3, reach: f32) -> Option<(f32, Vec3)> {
@@ -194,6 +330,101 @@ pub struct Waypoint {
     pub through: Option<Vec3>,
     /// Only a crouched body fits there.
     pub crouch: bool,
+    /// The leg of the route it belongs to: how the body gets there.
+    pub mode: Mode,
+}
+impl Waypoint {
+    /// A plain walk to `feet`.
+    pub fn walk(feet: Vec3) -> Self {
+        Self {
+            feet,
+            jump: false,
+            through: None,
+            crouch: false,
+            mode: Mode::Walk,
+        }
+    }
+}
+
+/// How a body gets to a waypoint: the leg of the route it belongs to.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Mode {
+    /// On foot: walking, stepping, jumping, crawling, through an opening.
+    #[default]
+    Walk,
+    /// Swimming: its floor lies under water that floats the body.
+    Swim,
+    /// Jetting from the waypoint before: up to `apex`, over at that height
+    /// and down onto this one, planned to take `seconds`.
+    Jet { apex: f32, seconds: f32 },
+}
+
+/// Most grid steps a pulled straight walk passes over at once.
+const PULL_REACH: usize = 16;
+
+/// A walk route off the grid with its corners pulled straight: from
+/// `from`, each plain walking waypoint (no jump, crawl, opening or other
+/// leg) heads for the farthest of the plain walk that follows which the
+/// body walks straight to ([`Ground::walkable`]), so a diagonal is one line,
+/// not a zig-zag of the grid's eight directions. Every waypoint of another
+/// kind, the one before it (where that step starts) and the route's end
+/// are kept; nothing is cut that the body would catch on. A chassis's
+/// route is left as it is: its drive leg steers by pursuit, not by corners.
+/// The least flat (x, z) distance between segments `a0`-`a1` and `b0`-`b1`.
+fn segment_gap(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
+    let flat = |v: Vec3| glam::Vec2::new(v.x, v.z);
+    let (a0, a1, b0, b1) = (flat(a0), flat(a1), flat(b0), flat(b1));
+    let to_segment = |p: glam::Vec2, s0: glam::Vec2, s1: glam::Vec2| {
+        let d = s1 - s0;
+        let t = ((p - s0).dot(d) / d.length_squared().max(1e-9)).clamp(0.0, 1.0);
+        (p - (s0 + d * t)).length()
+    };
+    let (da, db) = (a1 - a0, b1 - b0);
+    let cross = |u: glam::Vec2, v: glam::Vec2| u.x * v.y - u.y * v.x;
+    let denom = cross(da, db);
+    if denom.abs() > 1e-9 {
+        let t = cross(b0 - a0, db) / denom;
+        let u = cross(b0 - a0, da) / denom;
+        if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+            return 0.0;
+        }
+    }
+    to_segment(a0, b0, b1)
+        .min(to_segment(a1, b0, b1))
+        .min(to_segment(b0, a0, a1))
+        .min(to_segment(b1, a0, a1))
+}
+
+pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Vec<Waypoint> {
+    if body.conservative {
+        return path;
+    }
+    let plain = |w: &Waypoint| w.mode == Mode::Walk && !w.jump && !w.crouch && w.through.is_none();
+    let mut pulled = Vec::with_capacity(path.len());
+    let (mut anchor, mut i) = (from, 0);
+    while i < path.len() {
+        let mut keep = i;
+        if plain(&path[i]) {
+            let mut k = i + 1;
+            while k < path.len()
+                && k - i <= PULL_REACH
+                && plain(&path[k])
+                && ground.walkable(body, anchor, path[k].feet)
+                && !ground.crowds(body, anchor, path[k].feet)
+            {
+                keep = k;
+                // Where the next kind of step starts is kept.
+                if path.get(k + 1).is_some_and(|w| !plain(w)) {
+                    break;
+                }
+                k += 1;
+            }
+        }
+        pulled.push(path[keep]);
+        anchor = path[keep].feet;
+        i = keep + 1;
+    }
+    pulled
 }
 
 /// A step of the grid: the node it reaches, whether that takes a jump, the
@@ -280,10 +511,24 @@ impl Nav {
                 .map(|f| Node::at(x, z, f.y)),
         )
     }
-    /// Walkable neighbours of `node` and whether each takes a jump.
-    /// `None` when the budget ran out before all eight were known.
-    fn neighbours(&mut self, ground: &Ground, body: &Body, node: Node) -> Option<Vec<Step>> {
+    /// Walkable (or, when it `swims`, swimmable) neighbours of `node` and
+    /// whether each takes a jump. `None` when the budget ran out before all
+    /// eight were known.
+    fn neighbours(
+        &mut self,
+        ground: &Ground,
+        body: &Body,
+        node: Node,
+        swims: bool,
+    ) -> Option<Vec<Step>> {
         let from = node.feet().y;
+        // Afloat in deep water, the body rides high: it reaches the floors
+        // of the same water whatever their depth, and climbs out onto a
+        // bank from the surface.
+        let afloat = ground
+            .floats(body, node.feet())
+            .filter(|_| swims)
+            .map(|surface| (surface - body.height * 0.5).max(from));
         let mut straight = [None; 4];
         let mut out = Vec::with_capacity(8);
         const AXES: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
@@ -319,21 +564,30 @@ impl Nav {
                 }
                 continue;
             }
-            let floor = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
+            let (x, z) = (node.x + dx, node.z + dz);
+            let floor = self.floor(ground, body, x, z, from)?;
+            let mut step = floor.and_then(|f| Some((f, link(body, swims, from, afloat, f)?)));
+            // Afloat, a bank too high to be found from the bottom is looked
+            // for from the surface.
+            if step.is_none()
+                && let Some(level) = afloat.filter(|level| *level > from + body.step)
+            {
+                let floor = self.floor(ground, body, x, z, level)?;
+                step = floor.and_then(|f| Some((f, link(body, swims, from, afloat, f)?)));
+            }
             // A crawlspace is walked into, never jumped into.
-            if let Some(f) = floor
-                && let Some(jump) = edge(body, from, f.y)
+            if let Some((f, jump)) = step
                 && !(jump && f.low)
             {
-                let next = Node::at(node.x + dx, node.z + dz, f.y);
-                straight[i] = Some((next, jump));
+                let next = Node::at(x, z, f.y);
+                straight[i] = Some((next, jump, f));
                 out.push((next, jump, f, None));
             }
         }
         // Diagonals only where both sides are open at walking height, so a
         // body never cuts a corner it would catch on.
         for (a, b) in [(0, 2), (0, 3), (1, 2), (1, 3)] {
-            let (Some((na, false)), Some((nb, false))) = (straight[a], straight[b]) else {
+            let (Some((na, false, fa)), Some((nb, false, fb))) = (straight[a], straight[b]) else {
                 continue;
             };
             let (dx, dz) = (AXES[a].0, AXES[b].1);
@@ -343,14 +597,43 @@ impl Nav {
             }
             let floor = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
             if let Some(f) = floor
-                && edge(body, from, f.y) == Some(false)
-                && (f.y - na.feet().y).abs() <= body.step
-                && (f.y - nb.feet().y).abs() <= body.step
+                && link(body, swims, from, afloat, f) == Some(false)
+                && (f.wet && fa.wet && fb.wet
+                    || (f.y - na.feet().y).abs() <= body.step
+                        && (f.y - nb.feet().y).abs() <= body.step)
             {
                 out.push((Node::at(node.x + dx, node.z + dz, f.y), false, f, None));
             }
         }
         Some(out)
+    }
+}
+
+/// Whether a body standing at height `from` (afloat at `afloat`) gets to a
+/// neighbouring floor `to`: `Some(false)` walking or swimming, `Some(true)`
+/// with a jump. A chassis never goes into deep water; a body that does not
+/// take swim legs (`swims`) walks the bottom as if it were dry.
+fn link(body: &Body, swims: bool, from: f32, afloat: Option<f32>, to: Floor) -> Option<bool> {
+    if to.wet && !body.swims {
+        return None;
+    }
+    if !swims {
+        return edge(body, from, to.y);
+    }
+    if let Some(level) = afloat {
+        // Within the same water it swims; out of it onto a bank level with
+        // the bottom it swims out, onto a higher one it climbs from the
+        // surface.
+        return if to.wet || to.y - from <= body.step + 0.05 {
+            Some(false)
+        } else {
+            (to.y - level <= body.jump).then_some(true)
+        };
+    }
+    match edge(body, from, to.y) {
+        // Deep water breaks a drop of any height.
+        None if to.wet && to.y < from => Some(false),
+        found => found,
     }
 }
 
@@ -379,6 +662,8 @@ struct Floor {
     snug: bool,
     /// Only a crouched body fits.
     low: bool,
+    /// Under water that floats the body: swum, not walked.
+    wet: bool,
 }
 
 /// Find the floor of cell `x, z` for a body coming from height `from`.
@@ -409,6 +694,7 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Option<Flo
                 y: hit,
                 snug: !ground.fits(body, feet, false),
                 low: false,
+                wet: ground.floats(body, feet).is_some(),
             });
         }
         top = hit - 0.02;
@@ -430,6 +716,7 @@ fn crawl(ground: &Ground, body: &Body, px: f32, pz: f32, from: f32) -> Option<Fl
         y: top - distance,
         snug: !ground.fits(body, feet, true),
         low: true,
+        wet: ground.floats(body, feet).is_some(),
     })
 }
 
@@ -464,13 +751,30 @@ pub enum Found {
     Nowhere,
 }
 
-/// An A* search from a body's feet to a goal, resumable across ticks.
+/// How the search reached a node: from where, by which edge, at what cost.
+#[derive(Clone, Copy, Debug)]
+struct Came {
+    parent: Node,
+    jump: bool,
+    cost: f32,
+    through: Option<Vec3>,
+    crouch: bool,
+    mode: Mode,
+}
+
+/// Jet edges a search tests against the world (the shape sweeps) at most:
+/// a cheap ray up rules out roofed cells first.
+const MAX_JET_TESTS: u32 = 24;
+
+/// An A* search from a body's feet to a goal, resumable across ticks: the
+/// route planner's one search over every leg the body can take now
+/// ([`Costs`]).
 pub struct Search {
     pub goal: Vec3,
     start: Option<Node>,
     started: Vec3,
     open: BinaryHeap<Open>,
-    came: FxHashMap<Node, (Node, bool, f32, Option<Vec3>, bool)>,
+    came: FxHashMap<Node, Came>,
     best: Option<(Node, f32)>,
     expanded: u32,
     /// Nodes farther than this from the start (or from where an opening
@@ -481,9 +785,20 @@ pub struct Search {
     links: Vec<(Vec3, Vec3, f32)>,
     /// The node being expanded when the budget ran out.
     pending: Option<Node>,
+    costs: Costs,
+    /// The floor at the goal a jet leg lands on, once sampled.
+    landing: Option<Option<Node>>,
+    /// Columns a takeoff was considered from, and sweeps spent.
+    launches: FxHashSet<(i32, i32)>,
+    jet_tests: u32,
 }
 impl Search {
+    /// A search on foot and swimming, with no jets.
     pub fn new(from: Vec3, goal: Vec3, bound: f32) -> Self {
+        Self::with(from, goal, bound, Costs::default())
+    }
+    /// A search over every leg `costs` allows.
+    pub fn with(from: Vec3, goal: Vec3, bound: f32, costs: Costs) -> Self {
         Self {
             goal,
             start: None,
@@ -495,7 +810,15 @@ impl Search {
             bound,
             links: Vec::new(),
             pending: None,
+            costs,
+            landing: None,
+            launches: FxHashSet::default(),
+            jet_tests: 0,
         }
+    }
+    /// Whether this search takes swim legs for `body`.
+    fn swims(&self, body: &Body) -> bool {
+        body.swims && self.costs.swim.is_some()
     }
     fn estimate(a: Vec3, b: Vec3) -> f32 {
         let d = a - b;
@@ -512,49 +835,194 @@ impl Search {
     }
     fn arrived(&self, node: Node) -> bool {
         let d = node.feet() - self.goal;
-        Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS && d.y.abs() <= 2.0
+        let swum = self.came.get(&node).is_some_and(|c| c.mode == Mode::Swim);
+        Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS
+            // Over a swum floor the goal may be anywhere up the water.
+            && (d.y.abs() <= 2.0 || swum && d.y < 0.0)
+            // Beside someone standing on the goal is as near as it gets.
+            || self.landing == Some(Some(node))
+    }
+    /// Reach `to` the way `came` says, if that is cheaper than before.
+    fn relax(&mut self, to: Node, came: Came) {
+        if self.came.get(&to).is_some_and(|old| old.cost <= came.cost) {
+            return;
+        }
+        self.came.insert(to, came);
+        let h = self.h(to);
+        if self.best.is_none_or(|(_, best)| h < best) {
+            self.best = Some((to, h));
+        }
+        self.open.push(Open {
+            f: came.cost + h,
+            node: to,
+        });
+    }
+    /// The node a body standing (or floating) at its start begins from:
+    /// `None` inside when there is none, `None` when out of budget.
+    fn first_node(&self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Option<Node>> {
+        if let Some(node) = nav.node_at(ground, body, self.started)? {
+            return Some(Some(node));
+        }
+        // Afloat: its floor is under the water, out of reach of its feet.
+        if self.swims(body) && ground.wet(body, self.started) {
+            let top = self.started + Vec3::Y * 0.1;
+            if let Some((distance, _)) = ground.ray(top, Vec3::NEG_Y, 64.0) {
+                let bottom = Vec3::new(self.started.x, top.y - distance, self.started.z);
+                if let Some(node) = nav.node_at(ground, body, bottom)? {
+                    return Some(Some(node));
+                }
+            }
+        }
+        // Standing on an edge or a moving thing: try the cells around the
+        // feet.
+        let (x, z) = cell_of(self.started);
+        for (dx, dz) in [
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+        ] {
+            let floor = nav.floor(
+                ground,
+                body,
+                x + dx,
+                z + dz,
+                self.started.y + body.step * 0.5,
+            )?;
+            if let Some(f) = floor.filter(|f| (f.y - self.started.y).abs() <= body.step + 0.5) {
+                return Some(Some(Node::at(x + dx, z + dz, f.y)));
+            }
+        }
+        // Standing on something the grid leaves out (a vehicle's roof,
+        // another body): the floor beneath, when it can drop down to it.
+        let top = self.started + Vec3::Y * 0.1;
+        if let Some((distance, _)) = ground.ray(top, Vec3::NEG_Y, body.drop + 0.1) {
+            let bottom = Vec3::new(self.started.x, top.y - distance, self.started.z);
+            if distance > body.step
+                && let Some(node) = nav.node_at(ground, body, bottom)?
+            {
+                return Some(Some(node));
+            }
+        }
+        Some(None)
+    }
+    /// A jet leg from `node` to the goal's floor, if the body's jets reach
+    /// it and the air is clear: straight up where it stands, across at the
+    /// crossing height, down onto the landing.
+    fn jet_edge(&mut self, ground: &Ground, body: &Body, node: Node) -> Option<(Node, Came)> {
+        let jets = self.costs.jets?;
+        let landing = self.landing.flatten()?;
+        let here = *self.came.get(&node)?;
+        if landing == node || here.mode == Mode::Swim || !self.launches.insert((node.x, node.z)) {
+            return None;
+        }
+        let (from, to) = (node.feet(), landing.feet());
+        if to.y - from.y <= body.step + 0.05 {
+            return None;
+        }
+        let apex = to.y + crate::route::JET_CLEARANCE;
+        let seconds = jets.flight(from, to, apex)?;
+        // Open sky over its head up to the crossing height: a cheap ray
+        // rules out a roofed cell before the sweeps.
+        let head = from + Vec3::Y * body.height;
+        if self.jet_tests >= MAX_JET_TESTS || ground.ray(head, Vec3::Y, apex - from.y).is_some() {
+            return None;
+        }
+        // Nor into someone standing over it.
+        let (half_width, _, _) = body.clearance(false);
+        let (low, high) = (
+            from + Vec3::new(-half_width, 0.1, -half_width),
+            Vec3::new(from.x + half_width, apex + body.height, from.z + half_width),
+        );
+        if ground
+            .bodies
+            .iter()
+            .any(|(min, max)| min.cmplt(high).all() && max.cmpgt(low).all())
+        {
+            return None;
+        }
+        self.jet_tests += 1;
+        let top = Vec3::new(from.x, apex, from.z);
+        let over = Vec3::new(to.x, apex, to.z);
+        let clear = ground.sweep(body, from, top)
+            && ground.sweep(body, top, over)
+            && ground.sweep(body, over, to);
+        clear.then(|| {
+            (
+                landing,
+                Came {
+                    parent: node,
+                    jump: false,
+                    cost: here.cost + jets.cost(seconds, from, to),
+                    through: None,
+                    crouch: false,
+                    mode: Mode::Jet { apex, seconds },
+                },
+            )
+        })
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {
+        // Where a jet leg would land: the goal's own floor, or, where
+        // someone stands on it (a chased enemy), the nearest floor beside
+        // them at that height, so it does not come down on their head. A
+        // cell's leeway keeps the braking drift of the touchdown off them.
+        if self.costs.jets.is_some() && self.landing.is_none() {
+            let (x, z) = cell_of(self.goal);
+            let (half_width, _, _) = body.clearance(false);
+            let half_width = half_width + CELL;
+            let taken = |feet: Vec3| {
+                let (low, high) = (
+                    feet + Vec3::new(-half_width, 0.1, -half_width),
+                    feet + Vec3::new(half_width, body.height, half_width),
+                );
+                ground
+                    .bodies
+                    .iter()
+                    .any(|(min, max)| min.cmplt(high).all() && max.cmpgt(low).all())
+            };
+            let mut landing = None;
+            'rings: for ring in 0..=LANDING_RING {
+                let mut best: Option<(f32, Node)> = None;
+                for dx in -ring..=ring {
+                    for dz in -ring..=ring {
+                        if dx.abs().max(dz.abs()) != ring {
+                            continue;
+                        }
+                        let floor =
+                            nav.floor(ground, body, x + dx, z + dz, self.goal.y + body.step * 0.5)?;
+                        let Some(f) = floor
+                            .filter(|f| (f.y - self.goal.y).abs() <= body.step + 0.5 && !f.wet)
+                        else {
+                            continue;
+                        };
+                        let node = Node::at(x + dx, z + dz, f.y);
+                        let off = (dx * dx + dz * dz) as f32;
+                        if !taken(node.feet()) && best.is_none_or(|(b, _)| off < b) {
+                            best = Some((off, node));
+                        }
+                    }
+                }
+                if let Some((_, node)) = best {
+                    landing = Some(node);
+                    break 'rings;
+                }
+                if ring == 0 && !taken(self.goal) {
+                    // The goal's own cell has no floor: no landing.
+                    break;
+                }
+            }
+            self.landing = Some(landing);
+        }
         let start = match self.start {
             Some(start) => start,
             None => {
-                let node = match nav.node_at(ground, body, self.started)? {
-                    Some(node) => node,
-                    None => {
-                        // Standing on an edge or a moving thing: try the
-                        // cells around the feet.
-                        let (x, z) = cell_of(self.started);
-                        let mut near = None;
-                        for (dx, dz) in [
-                            (1, 0),
-                            (-1, 0),
-                            (0, 1),
-                            (0, -1),
-                            (1, 1),
-                            (-1, -1),
-                            (1, -1),
-                            (-1, 1),
-                        ] {
-                            let floor = nav.floor(
-                                ground,
-                                body,
-                                x + dx,
-                                z + dz,
-                                self.started.y + body.step * 0.5,
-                            )?;
-                            if let Some(f) =
-                                floor.filter(|f| (f.y - self.started.y).abs() <= body.step + 0.5)
-                            {
-                                near = Some(Node::at(x + dx, z + dz, f.y));
-                                break;
-                            }
-                        }
-                        match near {
-                            Some(node) => node,
-                            None => return Some(Found::Nowhere),
-                        }
-                    }
+                let Some(node) = self.first_node(nav, ground, body)? else {
+                    return Some(Found::Nowhere);
                 };
                 self.start = Some(node);
                 self.links = ground
@@ -566,7 +1034,18 @@ impl Search {
                         (p.centre, exit, Self::estimate(exit, self.goal))
                     })
                     .collect();
-                self.came.insert(node, (node, false, 0.0, None, false));
+                let swum = self.swims(body) && ground.floats(body, node.feet()).is_some();
+                self.came.insert(
+                    node,
+                    Came {
+                        parent: node,
+                        jump: false,
+                        cost: 0.0,
+                        through: None,
+                        crouch: false,
+                        mode: if swum { Mode::Swim } else { Mode::Walk },
+                    },
+                );
                 self.open.push(Open {
                     f: self.h(node),
                     node,
@@ -582,7 +1061,7 @@ impl Search {
                     let Some(open) = self.open.pop() else {
                         return Some(self.finish(false));
                     };
-                    let g = self.came[&open.node].2;
+                    let g = self.came[&open.node].cost;
                     // A stale heap entry for a node since reached cheaper.
                     if open.f > g + self.h(open.node) + 1e-4 {
                         continue;
@@ -601,13 +1080,14 @@ impl Search {
                 self.pending = Some(node);
                 return None;
             }
-            let Some(next) = nav.neighbours(ground, body, node) else {
+            let swims = self.swims(body);
+            let Some(next) = nav.neighbours(ground, body, node, swims) else {
                 self.pending = Some(node);
                 return None;
             };
             nav.expansions -= 1;
             self.expanded += 1;
-            let g = self.came[&node].2;
+            let here = self.came[&node];
             for (to, jump, floor, through) in next {
                 let within = |from: Vec3| {
                     let offset = to.feet() - from;
@@ -617,34 +1097,43 @@ impl Search {
                     continue;
                 }
                 let d = to.feet() - node.feet();
-                // Through an opening it is one step, wherever it lets out.
-                let (across, drop) = match through {
-                    Some(_) => (CELL, 0.0),
-                    None => (Vec3::new(d.x, 0.0, d.z).length(), (-d.y).max(0.0)),
+                let swim = floor.wet && swims;
+                let flat_d = Vec3::new(d.x, 0.0, d.z).length();
+                // Through an opening it is one step, wherever it lets out;
+                // a swim costs by the swimmer's speed, with no drop.
+                let travel = match through {
+                    Some(_) => CELL,
+                    None if swim => {
+                        let rate = self.costs.swim.unwrap_or_default();
+                        flat_d * rate.per_unit
+                            + if here.mode == Mode::Swim {
+                                0.0
+                            } else {
+                                rate.entry
+                            }
+                    }
+                    None => flat_d + (-d.y).max(0.0) * 0.1,
                 };
-                let cost = g
-                    + across
+                let cost = here.cost
+                    + travel
                     + if jump { 1.0 } else { 0.0 }
                     + if floor.snug { 0.6 } else { 0.0 }
                     // Crawling is slow: worth it only to save a detour.
-                    + if floor.low { 1.5 } else { 0.0 }
-                    + drop * 0.1;
-                if self
-                    .came
-                    .get(&to)
-                    .is_some_and(|(_, _, old, _, _)| *old <= cost)
-                {
-                    continue;
-                }
-                self.came.insert(to, (node, jump, cost, through, floor.low));
-                let h = self.h(to);
-                if self.best.is_none_or(|(_, best)| h < best) {
-                    self.best = Some((to, h));
-                }
-                self.open.push(Open {
-                    f: cost + h,
-                    node: to,
-                });
+                    + if floor.low { 1.5 } else { 0.0 };
+                self.relax(
+                    to,
+                    Came {
+                        parent: node,
+                        jump,
+                        cost,
+                        through,
+                        crouch: floor.low,
+                        mode: if swim { Mode::Swim } else { Mode::Walk },
+                    },
+                );
+            }
+            if let Some((landing, came)) = self.jet_edge(ground, body, node) {
+                self.relax(landing, came);
             }
         }
     }
@@ -654,17 +1143,18 @@ impl Search {
         };
         let mut steps = Vec::new();
         loop {
-            let (parent, jump, _, through, crouch) = self.came[&node];
+            let came = self.came[&node];
             steps.push(Waypoint {
                 feet: node.feet(),
-                jump,
-                through,
-                crouch,
+                jump: came.jump,
+                through: came.through,
+                crouch: came.crouch,
+                mode: came.mode,
             });
-            if parent == node {
+            if came.parent == node {
                 break;
             }
-            node = parent;
+            node = came.parent;
         }
         steps.reverse();
         let path = simplify(steps);
@@ -676,16 +1166,22 @@ impl Search {
     }
 }
 
-/// Drop waypoints in the middle of straight, level, jump-free runs that go
-/// through no opening.
+/// Drop waypoints in the middle of straight, level, jump-free runs of one
+/// leg that go through no opening.
 fn simplify(steps: Vec<Waypoint>) -> Vec<Waypoint> {
     let mut out: Vec<Waypoint> = Vec::with_capacity(steps.len());
     for (i, step) in steps.iter().enumerate() {
-        let special = |w: &Waypoint| w.jump || w.through.is_some() || w.crouch;
+        let special = |w: &Waypoint| {
+            w.jump || w.through.is_some() || w.crouch || matches!(w.mode, Mode::Jet { .. })
+        };
         let keep = i == 0 || i + 1 == steps.len() || special(step) || special(&steps[i + 1]) || {
             let a = step.feet - steps[i - 1].feet;
             let b = steps[i + 1].feet - step.feet;
-            (a.x - b.x).abs() > 1e-3 || (a.z - b.z).abs() > 1e-3 || (a.y - b.y).abs() > 0.05
+            step.mode != steps[i - 1].mode
+                || step.mode != steps[i + 1].mode
+                || (a.x - b.x).abs() > 1e-3
+                || (a.z - b.z).abs() > 1e-3
+                || (a.y - b.y).abs() > 0.05
         };
         if keep {
             out.push(*step);
@@ -731,6 +1227,9 @@ mod tests {
             physics,
             terrain: &no_terrain,
             passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
         };
         let body = body();
         let mut nav = Nav::default();
@@ -764,6 +1263,9 @@ mod tests {
             physics: &physics,
             terrain: &no_terrain,
             passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
         };
         let mut nav = Nav::default();
         nav.begin_tick();
@@ -790,6 +1292,9 @@ mod tests {
             physics: &physics,
             terrain: &no_terrain,
             passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
         };
         let mut chassis = body();
         chassis.width = 4.0;
@@ -823,6 +1328,9 @@ mod tests {
                     physics: &tall,
                     terrain: &no_terrain,
                     passages: &NO_PASSAGES,
+                    waters: &[],
+                    bodies: &[],
+                    motions: &[],
                 };
                 nav.clear();
                 nav.begin_tick();
@@ -931,6 +1439,9 @@ mod tests {
             physics: &physics,
             terrain: &no_terrain,
             passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
         };
         let mut search = Search::new(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), 60.0);
         let found = loop {
@@ -977,6 +1488,9 @@ mod tests {
             physics: &physics,
             terrain: &no_terrain,
             passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
         };
         let body = body();
         let mut nav = Nav::default();
@@ -1016,6 +1530,57 @@ mod tests {
     }
 
     #[test]
+    fn a_jet_leg_lands_beside_someone_standing_on_its_goal() {
+        // A 6-high platform with nothing to climb, and someone on it, in a
+        // yard small enough for the search to spend its budget there.
+        let physics = world(&[
+            (Vec3::new(0.0, -1.0, -6.0), Vec3::new(20.0, 0.0, 6.0)),
+            (Vec3::new(10.0, 0.0, -3.0), Vec3::new(15.0, 6.0, 3.0)),
+        ]);
+        let goal = Vec3::new(12.25, 6.0, 0.25);
+        let t = bri_motor::player::PlayerTuning::default();
+        let half = t.width * 0.5;
+        let bodies = [(
+            goal - Vec3::new(half, 0.0, half),
+            goal + Vec3::new(half, t.stand_height, half),
+        )];
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &bodies,
+            motions: &[],
+        };
+        let costs = crate::route::Costs {
+            jets: crate::route::Jets::of(&t, t.max_energy, 1.0),
+            ..Default::default()
+        };
+        let mut nav = Nav::default();
+        let mut search = Search::with(Vec3::new(4.0, 0.0, 0.25), goal, 60.0, costs);
+        let found = loop {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, &body()) {
+                break found;
+            }
+        };
+        let p = path(found);
+        let landing = p
+            .iter()
+            .find(|w| matches!(w.mode, Mode::Jet { .. }))
+            .expect("it jets up onto the platform");
+        let (min, max) = bodies[0];
+        let (width, _, _) = body().clearance(false);
+        let clear = landing.feet.x + width <= min.x
+            || landing.feet.x - width >= max.x
+            || landing.feet.z + width <= min.z
+            || landing.feet.z - width >= max.z;
+        assert!(clear, "landed on their head: {landing:?} {p:?}");
+        assert!((landing.feet.y - 6.0).abs() < 0.2, "{landing:?}");
+        assert!(landing.feet.distance(goal) < 2.5, "{landing:?}");
+    }
+
+    #[test]
     fn a_portal_is_a_way_through_a_wall_with_no_way_round() {
         // A wall too tall to jump across the whole floor. An opening stands
         // in the open on the near side, facing the start, and lets out ten
@@ -1041,6 +1606,9 @@ mod tests {
             physics: &physics,
             terrain: &no_terrain,
             passages: &passages,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
         };
         let goal = Vec3::new(16.0, 0.0, 3.0);
         let mut nav = Nav::default();
@@ -1064,5 +1632,133 @@ mod tests {
         assert!(through.feet.x > 12.25 && through.feet.x < 13.5, "{p:?}");
         assert!(p[..at].iter().all(|w| w.feet.x < 2.25), "{p:?}");
         assert!((p.last().unwrap().feet - goal).length() < 1.0, "{p:?}");
+    }
+
+    fn open_ground(physics: &PhysicsWorld) -> Ground<'_> {
+        Ground {
+            physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        }
+    }
+    fn walked(from: Vec3, p: &[Waypoint]) -> f32 {
+        std::iter::once(from)
+            .chain(p.iter().map(|w| w.feet))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|s| s[0].distance(s[1]))
+            .sum()
+    }
+    /// Every leg of a pulled route is one the body walks straight.
+    fn every_leg_walkable(ground: &Ground, from: Vec3, p: &[Waypoint]) {
+        let mut at = from;
+        for w in p {
+            assert!(
+                w.jump || ground.walkable(&body(), at, w.feet),
+                "{at} -> {} is cut through something: {p:?}",
+                w.feet
+            );
+            at = w.feet;
+        }
+    }
+
+    #[test]
+    fn a_pulled_diagonal_across_open_floor_is_about_a_straight_line() {
+        let physics = world(&[floor()]);
+        let ground = open_ground(&physics);
+        for (from, goal) in [
+            (Vec3::ZERO, Vec3::new(12.0, 0.0, 5.0)),
+            (Vec3::new(-3.0, 0.0, 9.0), Vec3::new(14.0, 0.0, -2.0)),
+        ] {
+            let (found, _) = search(&physics, from, goal);
+            let raw = path(found);
+            let end = raw.last().unwrap().feet;
+            assert!(end.distance(goal) < 1.0, "{raw:?}");
+            let straight = from.distance(end);
+            // The grid's eight directions zig-zag a diagonal.
+            assert!(walked(from, &raw) > straight * 1.05, "{raw:?}");
+            let pulled = pull(&ground, &body(), from, raw);
+            assert!(
+                walked(from, &pulled) <= straight * 1.05,
+                "{} of {straight}: {pulled:?}",
+                walked(from, &pulled)
+            );
+            every_leg_walkable(&ground, from, &pulled);
+        }
+    }
+
+    #[test]
+    fn a_pulled_route_still_takes_the_door_and_cuts_no_corner() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(5.0, 0.0, -20.0), Vec3::new(5.5, 4.0, 9.0)),
+            (Vec3::new(5.0, 0.0, 11.0), Vec3::new(5.5, 4.0, 20.0)),
+            // A block whose corner a diagonal past it would clip.
+            (Vec3::new(-6.0, 0.0, 3.0), Vec3::new(-2.0, 4.0, 7.0)),
+        ]);
+        let ground = open_ground(&physics);
+        for (from, goal) in [
+            (Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)),
+            (Vec3::new(-8.0, 0.0, 1.0), Vec3::new(10.0, 0.0, 12.0)),
+            (Vec3::new(-4.0, 0.0, 0.0), Vec3::new(-4.0, 0.0, 10.0)),
+        ] {
+            let (found, _) = search(&physics, from, goal);
+            let raw = path(found);
+            let pulled = pull(&ground, &body(), from, raw.clone());
+            assert!(pulled.len() <= raw.len());
+            assert!((pulled.last().unwrap().feet - raw.last().unwrap().feet).length() < 1e-4);
+            every_leg_walkable(&ground, from, &pulled);
+            if goal.x > 5.25 {
+                let crossing = std::iter::once(from)
+                    .chain(pulled.iter().map(|w| w.feet))
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .find_map(|s| {
+                        let (a, b) = (s[0], s[1]);
+                        (a.x < 5.25 && b.x >= 5.25)
+                            .then(|| a.z + (b.z - a.z) * (5.25 - a.x) / (b.x - a.x))
+                    })
+                    .expect("crosses the wall");
+                // The whole body passes through the 2-unit door.
+                assert!(
+                    (crossing - 10.0).abs() <= 1.0 - body().width * 0.5,
+                    "{crossing}: {pulled:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pulling_keeps_every_jump_and_where_it_starts() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(3.0, 0.0, -2.0), Vec3::new(6.0, 0.6, 2.0)),
+            (Vec3::new(6.0, 0.0, -2.0), Vec3::new(9.0, 2.6, 2.0)),
+        ]);
+        let ground = open_ground(&physics);
+        let from = Vec3::new(0.0, 0.0, -6.0);
+        let (found, _) = search(&physics, from, Vec3::new(7.5, 2.6, 0.0));
+        let raw = path(found);
+        let pulled = pull(&ground, &body(), from, raw.clone());
+        let jumps = |p: &[Waypoint]| {
+            p.iter()
+                .filter(|w| w.jump)
+                .map(|w| w.feet)
+                .collect::<Vec<_>>()
+        };
+        assert!(!jumps(&raw).is_empty(), "{raw:?}");
+        assert_eq!(jumps(&raw), jumps(&pulled));
+        for (i, w) in pulled.iter().enumerate().filter(|(_, w)| w.jump) {
+            let before = raw.iter().position(|r| r.feet == w.feet).unwrap();
+            if before > 0 {
+                assert!(
+                    i > 0 && pulled[i - 1].feet == raw[before - 1].feet,
+                    "{pulled:?}"
+                );
+            }
+        }
     }
 }

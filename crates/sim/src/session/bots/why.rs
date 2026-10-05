@@ -125,6 +125,7 @@ mod tests {
         let mut t = BotThought {
             bot: 7,
             behaviour: "chase",
+            leg: "walk",
             visible: None,
             remembered: Some(BotEvidence {
                 subject: 3,

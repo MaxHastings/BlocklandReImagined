@@ -570,8 +570,14 @@ fn nearby_blast_risk_selects_the_safe_second_inventory_slot() {
     assert!(s.vitals()[&human].health < 100.0);
 }
 
+/// A ranged bot with a blast weapon starts under a low roof, close to an
+/// enemy standing on a column above it. Before the route planner it flew
+/// (the Fly behaviour) and had to recover its blast clearance in the air;
+/// now flying is only a route leg, and a ranged weapon fights from where it
+/// can reach up: it backs out to its band in the open and delivers a safe
+/// blast, never jetting against the roof.
 #[test]
-fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
+fn a_close_ranged_bot_backs_out_from_under_a_low_roof_and_delivers_a_safe_blast() {
     let geometry = vec![
         Brick::new(
             ContentRef::Resolved(fixture::TALL.into()),
@@ -591,31 +597,31 @@ fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
         [-24.75, 0.1, 31.25],
         geometry,
     );
-    let mut saw_close_fly = false;
-    let mut saw_released_lift = false;
+    let mut started_close = false;
     let mut escaped = false;
+    let mut roofed_jetting = 0;
     let mut observed = BTreeSet::new();
     for _ in 0..120 * 25 {
         ticks(&mut s, human, &mut seq, 1);
         let distance = feet(&s, bot).distance(feet(&s, human));
-        let flying = s
-            .bot_thoughts()
-            .iter()
-            .any(|t| t.bot == bot && t.behaviour == "fly");
-        if flying && distance < 7.0 {
-            saw_close_fly = true;
-            saw_released_lift |= s
-                .snapshot()
+        started_close |= distance < 7.0;
+        escaped |= started_close && distance >= 7.0;
+        let at = feet(&s, bot);
+        // The roof: an 8 x 8 baseplate 6.2 up over z 27.25 to 35.25.
+        if (27.25..35.25).contains(&at.z)
+            && (-28.75..-20.75).contains(&at.x)
+            && s.snapshot()
                 .players
                 .iter()
-                .any(|p| p.owner == bot && !p.jetting);
+                .any(|p| p.owner == bot && p.jetting)
+        {
+            roofed_jetting += 1;
         }
-        escaped |= saw_close_fly && distance >= 7.0;
         for p in s.weapon_view().fired().filter(|p| p.source.0 == bot) {
             if observed.insert(p.id) {
                 assert!(
                     p.origin.distance(feet(&s, human)) > 7.0,
-                    "unsafe blast during flight recovery"
+                    "unsafe blast while backing out"
                 );
             }
         }
@@ -623,9 +629,15 @@ fn a_close_ranged_flyer_escapes_a_low_roof_and_delivers_a_safe_blast() {
             break;
         }
     }
-    assert!(saw_close_fly, "authored scene never exercised close Fly");
-    assert!(saw_released_lift, "kept jetting in close blast range");
+    assert!(
+        started_close,
+        "the authored scene starts inside blast range"
+    );
     assert!(escaped, "never regained blast clearance");
+    assert!(
+        roofed_jetting < 30,
+        "jetted under the roof for {roofed_jetting} ticks"
+    );
     assert!(
         s.vitals()[&human].health < 100.0,
         "no actual delivery after recovery: {:?}",
