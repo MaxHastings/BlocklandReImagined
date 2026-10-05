@@ -95,6 +95,81 @@ pub struct BotKind {
     pub mounted: BotMounted,
     /// How it moves while it fights.
     pub fighting: BotFighting,
+    /// What it notices: brief glances and how long it takes to react
+    /// (`session::bots::perception`). Off unless a kind weighs it.
+    pub perception: BotPerception,
+}
+/// What a bot notices, from engine data only: a blast's radius and damage,
+/// a sound's volume, how straight someone looks at it, how fast something
+/// moves. Each weight scales its source; 0 turns it off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BotPerception {
+    /// How long a glance holds, give or take a quarter.
+    pub glance_seconds: f32,
+    /// Seconds after a glance before the next.
+    pub glance_cooldown_seconds: f32,
+    /// Weight of blasts. One is noticed out to `blast_reach` units per unit
+    /// of its radius plus `blast_damage_reach` per point of its damage.
+    pub blast: f32,
+    pub blast_reach: f32,
+    pub blast_damage_reach: f32,
+    /// Weight of sounds, noticed out to `sound_reach` at full volume.
+    pub sound: f32,
+    pub sound_reach: f32,
+    /// Weight of being watched: someone within `gaze_range` whose look is
+    /// within `gaze_degrees` of it for `gaze_seconds`, in plain view.
+    pub gaze: f32,
+    pub gaze_seconds: f32,
+    pub gaze_degrees: f32,
+    pub gaze_range: f32,
+    /// Weight of fast motion: a body faster than `motion_speed` units a
+    /// second within `motion_range`, in plain view.
+    pub motion: f32,
+    pub motion_speed: f32,
+    pub motion_range: f32,
+    /// Weight of the reaction model below: 0 keeps the plain
+    /// `reaction_seconds` and aim error.
+    pub reaction: f32,
+    /// `reaction_seconds` is scaled by this while already fighting...
+    pub combat_scale: f32,
+    /// ...by this while strolling or playing about...
+    pub relaxed_scale: f32,
+    /// ...and by this more when it was facing away.
+    pub away_scale: f32,
+    /// The delay varies by up to this share either way.
+    pub jitter: f32,
+    /// Extra aim error, as a share of the error it starts with, times the
+    /// scale above; it settles to none over `settle_seconds`.
+    pub wobble: f32,
+    pub settle_seconds: f32,
+}
+impl Default for BotPerception {
+    fn default() -> Self {
+        Self {
+            glance_seconds: 0.8,
+            glance_cooldown_seconds: 6.0,
+            blast: 0.0,
+            blast_reach: 8.0,
+            blast_damage_reach: 0.2,
+            sound: 0.0,
+            sound_reach: 24.0,
+            gaze: 0.0,
+            gaze_seconds: 1.5,
+            gaze_degrees: 6.0,
+            gaze_range: 24.0,
+            motion: 0.0,
+            motion_speed: 14.0,
+            motion_range: 24.0,
+            reaction: 0.0,
+            combat_scale: 0.6,
+            relaxed_scale: 1.8,
+            away_scale: 1.5,
+            jitter: 0.3,
+            wobble: 1.5,
+            settle_seconds: 1.2,
+        }
+    }
 }
 /// How a bot moves in a fight: when a fight turns into a chase and back,
 /// and how a ranged fighter strafes.
@@ -285,6 +360,7 @@ impl Default for BotKind {
             contest: BotContest::default(),
             mounted: BotMounted::default(),
             fighting: BotFighting::default(),
+            perception: BotPerception::default(),
         }
     }
 }
@@ -449,6 +525,97 @@ impl BotKind {
                 self.mounted.reverse_distance,
                 0.0,
                 64.0,
+            ),
+            (
+                "perception.glance_seconds",
+                self.perception.glance_seconds,
+                0.05,
+                5.0,
+            ),
+            (
+                "perception.glance_cooldown_seconds",
+                self.perception.glance_cooldown_seconds,
+                0.0,
+                120.0,
+            ),
+            ("perception.blast", self.perception.blast, 0.0, 10.0),
+            (
+                "perception.blast_reach",
+                self.perception.blast_reach,
+                0.0,
+                64.0,
+            ),
+            (
+                "perception.blast_damage_reach",
+                self.perception.blast_damage_reach,
+                0.0,
+                4.0,
+            ),
+            ("perception.sound", self.perception.sound, 0.0, 10.0),
+            (
+                "perception.sound_reach",
+                self.perception.sound_reach,
+                0.0,
+                256.0,
+            ),
+            ("perception.gaze", self.perception.gaze, 0.0, 10.0),
+            (
+                "perception.gaze_seconds",
+                self.perception.gaze_seconds,
+                0.0,
+                30.0,
+            ),
+            (
+                "perception.gaze_degrees",
+                self.perception.gaze_degrees,
+                0.0,
+                90.0,
+            ),
+            (
+                "perception.gaze_range",
+                self.perception.gaze_range,
+                0.0,
+                256.0,
+            ),
+            ("perception.motion", self.perception.motion, 0.0, 10.0),
+            (
+                "perception.motion_speed",
+                self.perception.motion_speed,
+                0.1,
+                400.0,
+            ),
+            (
+                "perception.motion_range",
+                self.perception.motion_range,
+                0.0,
+                256.0,
+            ),
+            ("perception.reaction", self.perception.reaction, 0.0, 1.0),
+            (
+                "perception.combat_scale",
+                self.perception.combat_scale,
+                0.0,
+                4.0,
+            ),
+            (
+                "perception.relaxed_scale",
+                self.perception.relaxed_scale,
+                0.0,
+                8.0,
+            ),
+            (
+                "perception.away_scale",
+                self.perception.away_scale,
+                0.0,
+                8.0,
+            ),
+            ("perception.jitter", self.perception.jitter, 0.0, 1.0),
+            ("perception.wobble", self.perception.wobble, 0.0, 10.0),
+            (
+                "perception.settle_seconds",
+                self.perception.settle_seconds,
+                0.01,
+                30.0,
             ),
         ];
         for (name, value, min, max) in ranges {

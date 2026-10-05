@@ -46,6 +46,9 @@ mod hand_combat;
 mod interactions;
 mod objectives;
 mod package_objectives;
+mod perception;
+pub use perception::BotNotice;
+pub(super) use perception::Stimulus;
 mod physical_objectives;
 mod planning;
 mod search_memory;
@@ -73,6 +76,8 @@ pub struct BotThought {
     /// Actual searches and unchanged failed-search reuse, for headless diagnostics.
     pub objective_searches: u64,
     pub objective_reused: u64,
+    /// The last glance or reaction and why (`perception`).
+    pub noticed: Option<BotNotice>,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {
@@ -162,6 +167,8 @@ pub(super) struct Bots {
     objective_cursor: Option<OwnerId>,
     objective_candidate: Option<OwnerId>,
     combat_budget: hand_combat::Budget,
+    /// Blasts and sounds since bots last stepped (`perception`).
+    stimuli: Vec<Stimulus>,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {
@@ -274,6 +281,8 @@ struct Brain {
     /// The name this brick bot last asked for (before a number makes it
     /// unique).
     named: String,
+    /// Glances and reaction delays (`perception`).
+    perception: perception::State,
 }
 /// An enemy up where a bot flies to them ([`Session::air_chase`]).
 #[derive(Clone, Copy, Debug)]
@@ -388,14 +397,11 @@ impl Brain {
             mount_anchor: None,
             brick_team: None,
             named: String::new(),
+            perception: Default::default(),
         }
     }
     fn random(&mut self) -> f32 {
-        self.rng = self
-            .rng
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+        perception::draw(&mut self.rng)
     }
     fn set_goal(&mut self, goal: Option<Goal>) {
         if self.goal != goal {
@@ -1183,6 +1189,7 @@ impl Session {
                 }),
                 objective_searches: b.objective.searches,
                 objective_reused: b.objective.reused,
+                noticed: b.perception.why,
             })
             .collect()
     }
@@ -1518,6 +1525,7 @@ impl Session {
         for bot in bots {
             self.step_bot(bot, tick)?;
         }
+        self.bots.stimuli.clear();
         self.hear_alerts(tick);
         Ok(())
     }
@@ -2011,6 +2019,7 @@ impl Session {
                 if brain.target != Some(seen.owner) {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
+                    brain.react_to(seen.owner, seen.real, feet, tick);
                 }
                 let knowledge = Knowledge {
                     subject: seen.owner,
@@ -2033,6 +2042,10 @@ impl Session {
                     warn = hurt_by;
                 }
             }
+        }
+        // A hit still interrupts at once; return fire waits its reaction.
+        if let Some(k) = hurt_by.filter(|k| brain.target != Some(k.subject)) {
+            brain.react_to(k.subject, k.at, feet, tick);
         }
         if kind.alerts_allies
             && let Some(knowledge) = warn
@@ -2414,6 +2427,16 @@ impl Session {
             .map(|(_, p)| Vec3::from(p.player.state().feet))
             .filter(|at| flat(*at - feet).length() < 3.0)
             .collect();
+        let idle = perception::may_glance(behaviour) && sight.target.is_none();
+        let glance = self.bot_glance(
+            bot,
+            tick,
+            eye,
+            idle && driving.is_none()
+                && !self.seated(bot)
+                && !situation.objective
+                && !situation.holding,
+        );
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets, or long enough): swing,
         // after holding it up a moment.
@@ -2480,7 +2503,8 @@ impl Session {
             if tick >= brain.next_error {
                 let tracked = (tick - brain.seen_since) as f32 * TICK;
                 let size = kind.aim_error_degrees.to_radians()
-                    * (1.0 - (tracked / 2.0).min(1.0) * 2.0 / 3.0);
+                    * (1.0 - (tracked / 2.0).min(1.0) * 2.0 / 3.0)
+                    * brain.perception.wobble(&kind.perception, seen.owner, tick);
                 brain.error = (
                     (brain.random() * 2.0 - 1.0) * size,
                     (brain.random() * 2.0 - 1.0) * size * 0.5,
@@ -2493,7 +2517,10 @@ impl Session {
             let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
             fire = enemy.is_some()
                 && (driving.is_none() || vehicle_weapon)
-                && tick >= brain.seen_since + reaction
+                && brain
+                    .perception
+                    .acted(seen.owner, tick)
+                    .unwrap_or(tick >= brain.seen_since + reaction)
                 && in_reach
                 && attack_clear
                 && crew_ready
@@ -2508,6 +2535,11 @@ impl Session {
             if tick < brain.next_grab {
                 fire = false;
             }
+        } else if let Some(at) = glance {
+            // A glance turns the ordinary aim; the walk goes on.
+            let delta = at - eye;
+            aim_yaw = yaw_to(delta);
+            aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
         } else if let Some(next) = wanted {
             let d = flat(next.through.unwrap_or(next.feet) - feet);
             if d.length() > 0.05 {
