@@ -206,3 +206,8 @@ reason = "The soak's rocket knocks none of its floating test wall out after the 
 test = "the_bundled_soccer_field_loads_whole_from_load_bricks"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
+
+[[failure]]
+test = "long_soak_builds_and_uploads_nothing_whole"
+owner = "v0.2.5 bot/test cleanup"
+reason = "Same cause as the other app_soak entries: the rocket knocks none of its floating test wall out after the v0.2.4 merge. Max OK'd shipping with it (2026-10-05)."
