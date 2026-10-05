@@ -142,6 +142,56 @@ fn a_pass_is_caught_by_a_player_in_the_same_game(f: &Fixture) {
 }
 
 on_both! {
+/// `CatchFootballMessage`: the first thrown catch sets the record, so the
+/// reward sound plays at both players and the win star over the passer, as
+/// well as the one every clean catch puts over the catcher.
+fn a_record_football_catch_rewards_both_and_stars_the_passer(f: &Fixture) {
+    use bri_sim::presentation::CueKind;
+    let mut s = session(f, Item::Football);
+    let a = s
+        .join("Passer".into(), Vec3::new(0., 0.35, 0.), false)
+        .unwrap();
+    step(&mut s, a, 130);
+    let b = s
+        .join("Catcher".into(), Vec3::new(0., 0.35, -4.), false)
+        .unwrap();
+    step(&mut s, a, 30);
+    s.take_cues();
+    throw(&mut s, a, 1);
+    let mut cues = s.take_cues();
+    for _ in 0..240 {
+        hold_still(&mut s, b);
+        step(&mut s, a, 1);
+        cues.extend(s.take_cues());
+        if held(&s, b).is_some() {
+            break;
+        }
+    }
+    assert!(held(&s, b).is_some(), "the pass was not caught");
+    // The catch's cues follow on the next steps.
+    for _ in 0..3 {
+        step(&mut s, a, 1);
+        cues.extend(s.take_cues());
+    }
+    let rewards = cues
+        .iter()
+        .filter(|c| matches!(&c.kind, CueKind::WeaponSound { profile } if profile == "rewardSound"))
+        .count();
+    assert_eq!(rewards, 2, "receiver and passer");
+    let stars: Vec<_> = cues
+        .iter()
+        .filter(|c| {
+            matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if definition == "WinStarExplosion")
+        })
+        .collect();
+    assert_eq!(stars.len(), 2, "catcher and passer");
+    let near = |at: Vec3| stars.iter().any(|c| Vec3::from(c.position).distance(at) < 2.5);
+    assert!(near(Vec3::new(0., 0.35, 0.)), "over the passer");
+    assert!(near(Vec3::new(0., 0.35, -4.)), "over the catcher");
+}
+}
+
+on_both! {
 fn a_resting_football_becomes_an_item_that_mounts_on_touch(f: &Fixture) {
     let mut s = session(f, Item::Football);
     let a = s

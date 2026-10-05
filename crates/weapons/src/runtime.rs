@@ -3734,18 +3734,7 @@ impl WeaponsWorld {
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
                     {
-                        if StockProjectile::of(&d) == Some(StockProjectile::Football) && !p.bounced
-                        {
-                            let catcher = self.actors[&target].frame.position;
-                            let delta = catcher - p.origin;
-                            self.events.push(Event::FootballCatch {
-                                source: p.source,
-                                catcher: target,
-                                distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length() * 1.875)
-                                    .round() as u32,
-                                was_thrown: p.was_thrown,
-                            });
-                        }
+                        self.football_catch(p, &d, target);
                         self.events.push(Event::BallCaught {
                             actor: target,
                             projectile: p.id,

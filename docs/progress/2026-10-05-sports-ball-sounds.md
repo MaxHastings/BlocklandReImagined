@@ -37,11 +37,19 @@ The basketball and football share `basketballBounceSound` (the football calls
   tackle fumbles and steals.
 - The session plays `rewardSound` at both players when a pass sets the
   football record.
+- The football's win star (`emote(winStarProjectile)`, a 10 ms projectile
+  whose `WinStarExplosion` plays at the eye): over the catcher on every
+  catch before the ball touched the ground, and over the passer on a
+  record. It goes out as the existing `WeaponEffect` cue, as `/bsd` does,
+  so no new wire message.
+- A football caught by walking into it (`grab_ball`) now sends the same
+  `FootballCatch` as one that flies into the catcher. Before, only the
+  second did, so a catch the session's contact check took first skipped
+  the catch messages, record, sounds and stars.
 
 Not changed: third-party Add-Ons through `bri-addon-import`. Its ports already
 turn an `onCollision` sound into a bounce effect per Add-On (HE Grenade,
-Explosive 1), so reading `onCollision` there too would play those twice. The
-football record's star emote on the passer is visual and still missing.
+Explosive 1), so reading `onCollision` there too would play those twice.
 
 ## Evidence
 
@@ -51,6 +59,11 @@ football record's star emote on the passer is visual and still missing.
   no v20 content) and the throw-sound checks added to
   `sports_charge_throw_consume_catch_and_dodgeball_damage` and
   `sports_actions_tackle_steal_and_touchdown`.
+- `cargo test -p bri-sim --test sports`: pass, including
+  `a_record_football_catch_rewards_both_and_stars_the_passer` (two reward
+  sounds, stars over catcher and passer).
+- `cargo clippy -D warnings` clean on bri-weapons, bri-weapons-import,
+  bri-sim, bri-net and bri-client, all targets.
 - `bri-weapons-import` run on the vanilla reference into a scratch folder:
   the four balls above get their sounds.
 
