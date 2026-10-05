@@ -88,6 +88,22 @@ from the first second (near-perfect aim, as the review expected). Bow
 from too far). Bouncer 0% at 11-14. Overall 57% steady, 46% in the first
 2 s. Reported, not enforced.
 
+**Fair by dial** (`fair_by_dial`; `perception.alertness` is not on this
+base, so it moved `aim_error_degrees`): steady 56.4% at 2.5 degrees,
+57.0% at 5, 57.1% at 10, flagged NOT MONOTONE. The aim error shrinks to a
+third after 2 s of tracking and the steady phase starts at 4 s, so at these
+ranges the error stays inside the hit box: the dial does not move the
+steady hit rate. Misses come from lead and range (rocket, shotgun,
+bouncer), not from aim error. Bounded hit rates need a perception or aim
+dial that acts after the first seconds.
+
+**Sweep** (`BRI_TUNING_SCENARIOS=race,runners`, 9 points, 1 seed, 35 s):
+`behaviours.objective=0` ranks last (2 scenarios broken). Every other
+point ties at 2 bands flagged (goof DORMANT in both). The ranking between
+them follows frame cost, which is noise. Output:
+`target/bot-tuning/sweep.csv` and `sweep_summary.txt`. Scenario filters
+match function-name substrings (`capture`, not `ctf`).
+
 **Perf**, 16 bots, mixed arsenal, all on: bot think time 7528 us a tick
 (470 us a bot), whole step 8474 us, in a debug build. The debug bar is
 15000 us. The release bar of 2000 us is not measured: there was no disk
