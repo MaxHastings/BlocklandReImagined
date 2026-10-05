@@ -436,7 +436,9 @@ impl Session {
             if !p.combat.alive || *o == bot || feet.distance(at) >= radius {
                 return None;
             }
-            let seen = self.clear_between(eye, p.player.eye());
+            let seen = self
+                .bot_sees_player(bot, *o, eye, radius, SightUrgency::Ordinary)
+                .is_some();
             if self.bots.is_bot(*o) {
                 let i = intents.get(o)?;
                 let what = match i.flavour {
@@ -475,10 +477,7 @@ impl Session {
         worked: &[(surprise::Domain, u32)],
         tick: u64,
     ) {
-        let Some(eye) = self.peers.get(&bot).map(|p| p.player.eye()) else {
-            return;
-        };
-        if worked.is_empty() {
+        if worked.is_empty() || !self.peers.contains_key(&bot) {
             return;
         }
         let watchers: Vec<(OwnerId, f32)> = self
@@ -489,7 +488,9 @@ impl Session {
             .filter_map(|(o, brain)| {
                 let p = self.peers.get(o).filter(|p| p.combat.alive)?;
                 let from = p.player.eye();
-                let seen = from.distance(eye) < brain.kind.sight && self.clear_between(from, eye);
+                let seen = self
+                    .bot_sees_player(*o, bot, from, brain.kind.sight, SightUrgency::Ordinary)
+                    .is_some();
                 Some((*o, copied(&brain.kind.team, seen)))
             })
             .filter(|(_, copy)| *copy > 0.0)
@@ -502,13 +503,6 @@ impl Session {
                     .saw(&brain.kind.surprise, *domain, *option, copy, tick);
             }
         }
-    }
-
-    /// Nothing solid between two points.
-    pub(super) fn clear_between(&self, from: Vec3, to: Vec3) -> bool {
-        let d = to - from;
-        self.world_ray(from, d.normalize_or_zero(), d.length())
-            .is_none()
     }
 
     /// What a seated bot needs from whoever drives it: a line from its
