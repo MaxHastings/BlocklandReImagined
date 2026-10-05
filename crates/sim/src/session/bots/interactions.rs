@@ -870,7 +870,12 @@ impl Session {
         if length < 0.01 {
             return false;
         }
-        let direction = delta / length;
+        let space = super::claims::Space {
+            from: origin,
+            to: origin + delta / length * (length + past),
+            radius: splash,
+            spread: spread.tan(),
+        };
         !self.peers.iter().any(|(o, p)| {
             if *o == bot || !p.combat.alive || !self.bot_allies(bot, *o) {
                 return false;
@@ -880,11 +885,8 @@ impl Session {
             {
                 return false;
             }
-            let centre =
-                Vec3::from(p.player.state().feet) + Vec3::Y * p.player.tuning().stand_height * 0.5;
-            let along = (centre - origin).dot(direction).clamp(0.0, length + past);
-            centre.distance(origin + direction * along)
-                < p.player.tuning().stand_height * 0.5 + splash + along * spread.tan()
+            let half = p.player.tuning().stand_height * 0.5;
+            space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
         })
     }
 

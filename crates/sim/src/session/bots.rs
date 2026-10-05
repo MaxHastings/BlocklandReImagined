@@ -1324,12 +1324,20 @@ impl Session {
         }
         // Through an opening, anyone may be in sight wherever they stand.
         let portals = !self.simulation.passages().list.is_empty();
+        // Each enemy in view is its own option: the nearest, but each ally
+        // already after one makes it farther (`team` overlap).
         let mut candidates: Vec<(f32, OwnerId)> = self
             .peers
             .iter()
             .filter(|(owner, p)| **owner != bot && p.combat.alive)
             .map(|(owner, p)| (p.player.eye().distance(eye), *owner))
             .filter(|(d, _)| portals || *d < kind.sight)
+            .map(|(d, owner)| {
+                (
+                    d * (1.0 + kind.team.overlap() * self.team_crowd(bot, owner)),
+                    owner,
+                )
+            })
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         Sight {
@@ -1954,10 +1962,11 @@ impl Session {
         let harm = sight.target.filter(|_| ranged).map(|seen| {
             let to = seen.eye - Vec3::Y * 0.5;
             let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
-            claims::Harm {
+            claims::Space {
                 from: eye,
                 to: to + (to - eye).normalize_or_zero() * past,
                 radius: weapon.map_or(0.0, |w| w.splash).max(0.3),
+                spread: aim_error.tan(),
             }
         });
         let mounted_charging = self
@@ -2027,6 +2036,7 @@ impl Session {
         // Teammates' intents, and what this bot exposes to them (`team`).
         let intents = self.team_intents(bot, tick);
         let seats = self.team_seats(bot);
+        let mount = self.mounted(bot).map(|(v, _)| v);
         let sightline = if driving.is_none() {
             self.team_sightline(
                 bot,
@@ -2047,6 +2057,7 @@ impl Session {
                 .is_none()
         };
         let tall = self.peers[&bot].player.tuning().stand_height;
+        let deficit = self.team_deficit(bot);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2176,6 +2187,8 @@ impl Session {
             team::exit(&intents, feet, tall),
             carries,
         );
+        // Its objective is worth more as its team falls behind.
+        scores[Behaviour::Objective as usize] *= 1.0 + kind.team.pressure * deficit;
         let plain_before = behaviour::best(&scores) as usize;
         let (current, current_since) = (brain.behaviour as usize, brain.behaviour_since);
         brain.team.terms = if gate.carrying || gate.urgent {
@@ -2245,6 +2258,7 @@ impl Session {
                 target: chosen.target,
                 seats,
                 harm,
+                mount,
                 sight: sightline,
                 flavour: brain.surprise.flavour().map(|f| f as u8),
                 until: tick + 3,
@@ -2397,15 +2411,7 @@ impl Session {
                 (false, false)
             }
             Behaviour::Wander => {
-                // Out of where a teammate's weapon will hit, or a stroll.
-                match choices[Behaviour::Wander as usize].place {
-                    Some(out) if !matches!(brain.goal, Some(Goal::Wander(p)) if p.distance(out) < 1.0) =>
-                    {
-                        brain.set_goal(Some(Goal::Wander(out)));
-                    }
-                    Some(_) => {}
-                    None => brain.wander(feet, tick, swim.is_some()),
-                }
+                brain.wander(feet, tick, swim.is_some());
                 (false, false)
             }
         };
@@ -2888,6 +2894,14 @@ impl Session {
                 input.crouch = to.y < feet.y - 0.4;
             }
         }
+        // A fight stands out of where a teammate's weapon will hit (`team`).
+        if behaviour == Behaviour::Fight
+            && let Some(out) = choices[Behaviour::Fight as usize]
+                .place
+                .filter(|out| *out != feet)
+        {
+            direction = flat(out - feet).normalize_or_zero();
+        }
         if let Some(to) = act.direction {
             direction = to;
         }
@@ -3304,9 +3318,9 @@ impl Session {
     }
 }
 
-/// What each of a bot's options would do (`team::Choice`): where it takes
-/// the bot, what it acts on and whose seat it takes. Wander's place is the
-/// way out of a teammate's line of fire, when the bot stands in one.
+/// What each of a bot's options would do (`team::Choice`): where it would
+/// stand, what it acts on and whose seat it takes. A fight stands where it
+/// is, or at `exit`, the nearest place out of a teammate's line of fire.
 #[allow(clippy::too_many_arguments)]
 fn team_choices(
     opportunity: Option<interactions::Opportunity>,
@@ -3333,29 +3347,22 @@ fn team_choices(
                 Resource::Seat { vehicle, .. } => Some(vehicle),
                 Resource::Body { .. } => None,
             },
-            carries: None,
+            ..Default::default()
         };
     }
     if let Some(seen) = enemy {
         let target = Some(Target::Player(seen.owner));
         c[at(Behaviour::Fight)] = team::Choice {
-            place: Some(feet),
+            place: Some(exit.unwrap_or(feet)),
+            stand: true,
             target,
             ..Default::default()
         };
-        c[at(Behaviour::Chase)] = team::Choice {
-            place: Some(seen.real),
-            target,
-            ..Default::default()
-        };
+        c[at(Behaviour::Chase)].target = target;
         c[at(Behaviour::Fly)].target = target;
     }
     if let Some(k) = memory {
-        c[at(Behaviour::Search)] = team::Choice {
-            place: Some(k.at),
-            target: Some(Target::Player(k.subject)),
-            ..Default::default()
-        };
+        c[at(Behaviour::Search)].target = Some(Target::Player(k.subject));
     }
     c[at(Behaviour::Arm)].place = arm;
     c[at(Behaviour::Return)].place = Some(home);
@@ -3367,10 +3374,9 @@ fn team_choices(
                 .map(|r| Target::Object(r.vehicle()))
                 .or(v.enemy.map(Target::Player)),
             seat: v.board.map(|(vehicle, _)| vehicle),
-            carries: None,
+            ..Default::default()
         };
     }
-    c[at(Behaviour::Wander)].place = exit;
     for choice in &mut c {
         choice.carries = carries;
     }

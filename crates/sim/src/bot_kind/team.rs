@@ -1,6 +1,6 @@
-//! A kind's `team` weights (`docs/architecture/bots.md`, "Coordination"):
-//! how much teammates' current intents move its own scores. All zero, the
-//! default, is the brain without coordination.
+//! A kind's `team` dials (`docs/architecture/bots.md`, "Coordination"):
+//! how much teammates' current intents, the mood of the players it sees and
+//! its team's score move its own scores.
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -9,45 +9,67 @@ use std::collections::BTreeMap;
 /// template may be keyed by each.
 pub const TERMS: [&str; 3] = ["overlap", "uses", "harm"];
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// What each term is worth at `teamwork` 1, on the 0-1 scale behaviour
+/// scores use. Fixed in code: their ratio is the mechanism, the dial is
+/// how much of it a kind shows. An ally on the same target or spot costs
+/// a third of a score at most, a seat or sightline it offers adds as much,
+/// and standing in its line of fire costs twice that, since it is a risk
+/// to both.
+const OVERLAP: f32 = 0.3;
+const USES: f32 = 0.3;
+const HARM: f32 = 0.6;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BotTeam {
-    /// Cost per teammate already going for the same target, or for a place
-    /// within `overlap_radius` (less the farther apart).
-    pub overlap: f32,
-    pub overlap_radius: f32,
-    /// Bonus for an option that uses what a teammate's intent exposes.
-    pub uses: f32,
-    /// Cost of an option whose place lies where a teammate's weapon will hit.
-    pub harm: f32,
-    /// How much more often it takes up an idle flavour as the share of bots
-    /// within `mood_radius` (either side) doing one rises, at most `mood_cap`.
+    /// 0-1: how much allies' intents count, for crowding (overlap) and
+    /// for using or keeping clear of what they do (interaction) together.
+    pub teamwork: f32,
+    /// How much more often it takes up an idle flavour by the share of the
+    /// players it sees doing one, at most `mood_cap` times.
     pub mood: f32,
-    pub mood_radius: f32,
     pub mood_cap: f32,
     /// How much a person counts in that share against a bot's 1.
     pub mood_human: f32,
-    /// At most one callout this often, in seconds.
-    pub callout_seconds: f32,
+    /// Objectives are worth this much more as its team falls behind: by
+    /// `1 + pressure * behind / (behind + 1)`, `behind` in points.
+    pub pressure: f32,
     /// Team chat lines by the term that changed its choice ([`TERMS`]).
     pub callouts: BTreeMap<String, String>,
 }
+impl Default for BotTeam {
+    fn default() -> Self {
+        Self {
+            teamwork: 0.5,
+            mood: 16.0,
+            mood_cap: 10.0,
+            mood_human: 3.0,
+            pressure: 0.3,
+            callouts: BTreeMap::new(),
+        }
+    }
+}
 impl BotTeam {
+    /// Cost per earlier ally on the same target or spot.
+    pub fn overlap(&self) -> f32 {
+        self.teamwork * OVERLAP
+    }
+    /// Bonus for using what an ally's intent exposes.
+    pub fn uses(&self) -> f32 {
+        self.teamwork * USES
+    }
+    /// Cost of standing where an ally's weapon will hit.
+    pub fn harm(&self) -> f32 {
+        self.teamwork * HARM
+    }
     pub fn validate(&self) -> Result<()> {
-        let weight = |v: f32| v.is_finite() && (0.0..=2.0).contains(&v);
         ensure!(
-            weight(self.overlap)
-                && weight(self.uses)
-                && weight(self.harm)
+            (0.0..=1.0).contains(&self.teamwork)
+                && (0.0..=2.0).contains(&self.pressure)
                 && [self.mood, self.mood_cap, self.mood_human]
                     .iter()
-                    .all(|m| m.is_finite() && (0.0..=50.0).contains(m))
-                && [self.overlap_radius, self.mood_radius]
-                    .iter()
-                    .all(|r| r.is_finite() && (0.0..=64.0).contains(r))
-                && self.callout_seconds.is_finite()
-                && (0.0..=3600.0).contains(&self.callout_seconds),
-            "team weights out of range"
+                    .all(|m| (0.0..=50.0).contains(m)),
+            "team dials out of range"
         );
         for (term, line) in &self.callouts {
             ensure!(

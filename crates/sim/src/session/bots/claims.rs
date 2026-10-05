@@ -60,8 +60,10 @@ pub(super) struct Intent {
     pub target: Option<Target>,
     /// A vehicle whose controls it holds while a seat is free.
     pub seats: Option<u64>,
-    /// Where its weapon will hit.
-    pub harm: Option<Harm>,
+    /// Where its weapon will hit, and the vehicle it rides, whose crew
+    /// that does not endanger.
+    pub harm: Option<Space>,
+    pub mount: Option<u64>,
     /// From a seat it does not drive: the line it needs to what it is after.
     pub sight: Option<Sightline>,
     /// The idle flavour it is doing (`surprise`), if any.
@@ -83,12 +85,29 @@ pub(super) struct Sightline {
     pub to: Vec3,
 }
 
-/// A shot's line from `from` to `to`, within `radius` of it.
+/// A space: within `radius` of the segment from `from` to `to`, widening by
+/// `spread` per unit along it. The one test of whether a body stands in a
+/// line of fire or a blast (`bot_fire_clear`, `team`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Harm {
+pub(super) struct Space {
     pub from: Vec3,
     pub to: Vec3,
     pub radius: f32,
+    pub spread: f32,
+}
+impl Space {
+    /// Whether a body of half-size `margin` centred at `point` is in it.
+    pub(super) fn holds(&self, point: Vec3, margin: f32) -> bool {
+        let line = self.to - self.from;
+        let length = line.length();
+        let direction = if length > 1e-6 {
+            line / length
+        } else {
+            Vec3::ZERO
+        };
+        let along = (point - self.from).dot(direction).clamp(0.0, length);
+        point.distance(self.from + direction * along) < self.radius + margin + along * self.spread
+    }
 }
 
 #[derive(Default)]
