@@ -509,6 +509,15 @@ pub fn walk_closes(walk_speed: f32, toward: Vec3, velocity: Vec3) -> bool {
     velocity.dot(away) < walk_speed * 0.9
 }
 
+/// Where a body in the air at `feet` moving at `velocity` comes down on a
+/// floor `drop` below its feet, under `gravity` and no more steering: the
+/// rest of its arc (a hop's rise, then the fall to that floor).
+pub fn landing(feet: Vec3, velocity: Vec3, gravity: f32, drop: f32) -> Vec3 {
+    let (gravity, drop) = (gravity.max(1.0), drop.max(0.0));
+    let seconds = (velocity.y + (velocity.y * velocity.y + 2.0 * gravity * drop).sqrt()) / gravity;
+    feet + Vec3::new(velocity.x, 0.0, velocity.z) * seconds - Vec3::Y * drop
+}
+
 /// The label of a waypoint's leg, for diagnostics.
 pub fn leg_name(mode: Mode) -> &'static str {
     match mode {
@@ -521,6 +530,21 @@ pub fn leg_name(mode: Mode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hop_lands_where_its_momentum_carries_it() {
+        let g = 20.0;
+        // Straight up and down: back where it left.
+        let up = landing(Vec3::ZERO, Vec3::new(0.0, 10.0, 0.0), g, 0.0);
+        assert!(up.distance(Vec3::ZERO) < 1e-4, "{up}");
+        // Sideways at 3 a second through a one-second hop: 3 units on.
+        let side = landing(Vec3::ZERO, Vec3::new(0.0, 10.0, -3.0), g, 0.0);
+        assert!(side.distance(Vec3::new(0.0, 0.0, -3.0)) < 1e-4, "{side}");
+        // Falling from 5 up with no lift: the fall's time, sqrt(2h/g).
+        let fall = landing(Vec3::new(0.0, 5.0, 0.0), Vec3::new(2.0, 0.0, 0.0), g, 5.0);
+        let x = 2.0 * 0.5_f32.sqrt();
+        assert!(fall.distance(Vec3::new(x, 0.0, 0.0)) < 1e-4, "{fall}");
+    }
 
     #[test]
     fn a_body_wobbling_between_two_spots_is_stalled_within_a_window() {

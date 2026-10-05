@@ -3020,6 +3020,31 @@ impl Session {
                         })
                     };
                     let ground = |side: f32| floor(side) && !ally(side);
+                    // In the air (a hop, a jump off a body) its momentum
+                    // carries it on: where it lands is where it is going
+                    // as it falls, so with no floor there it steers back
+                    // and does not strafe on.
+                    let overshoots = !state.grounded && {
+                        let velocity = Vec3::from(state.velocity);
+                        let gravity = self.peers[&bot].player.tuning().gravity;
+                        let below = super::admin_players::world_ray(
+                            &self.simulation,
+                            feet + Vec3::Y * 0.05,
+                            Vec3::NEG_Y,
+                            0.05 + body.drop,
+                        )
+                        .map(|d| (d - 0.05).max(0.0));
+                        below.is_some_and(|h| {
+                            let at = crate::route::landing(feet, velocity, gravity, h);
+                            super::admin_players::world_ray(
+                                &self.simulation,
+                                at + Vec3::Y * 0.5,
+                                Vec3::NEG_Y,
+                                0.5 + body.step,
+                            )
+                            .is_none()
+                        })
+                    };
                     // A leg carries on round the enemy or turns back, as
                     // a coin falls, unless only one way is open (an arc
                     // round them goes somewhere; a shuttle back and forth
@@ -3042,7 +3067,9 @@ impl Session {
                         until = tick + (seconds * 120.0) as u64;
                     }
                     brain.strafe = (side, until);
-                    if ground(side) {
+                    if overshoots {
+                        direction = -flat(Vec3::from(state.velocity)).normalize_or_zero();
+                    } else if ground(side) {
                         direction = right * side * 0.7;
                     }
                 }
