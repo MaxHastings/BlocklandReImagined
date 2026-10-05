@@ -6,13 +6,22 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("object", |object: Dynamic| {
         with(|i| {
             let object = object_ref(&object)?;
-            Ok(i.snapshot
-                .object(object)
-                .map_or(Dynamic::UNIT, |o| object_map(&o)))
+            let snapshot = i.snapshot.clone();
+            match snapshot.object(object) {
+                Some(o) => view_in(i, None, || object_map(&o)),
+                None => Ok(Dynamic::UNIT),
+            }
         })
     });
     engine.register_fn("objects", || {
-        with(|i| Ok(i.snapshot.objects.iter().map(object_map).collect::<Array>()))
+        with(|i| {
+            let snapshot = i.snapshot.clone();
+            snapshot
+                .objects
+                .iter()
+                .map(|o| view_in(i, None, || object_map(o)))
+                .collect::<Fallible<Array>>()
+        })
     });
     engine.register_fn(
         "objects_near",
@@ -34,13 +43,15 @@ pub(super) fn register(engine: &mut Engine) {
                     .map(|p| ObjectRef::Player(p.id));
                 let entities = i.snapshot.entities.iter().map(|e| ObjectRef::Entity(e.id));
                 let vehicles = i.snapshot.objects.iter().map(|o| o.object);
-                Ok(players
+                let near: Vec<_> = players
                     .chain(entities)
                     .chain(vehicles)
                     .filter_map(|o| i.snapshot.object(o))
                     .filter(|o| near(o.position))
-                    .map(|o| object_map(&o))
-                    .collect::<Array>())
+                    .collect();
+                near.iter()
+                    .map(|o| view_in(i, None, || object_map(o)))
+                    .collect::<Fallible<Array>>()
             })
         },
     );

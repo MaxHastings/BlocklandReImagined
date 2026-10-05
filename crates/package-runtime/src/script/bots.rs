@@ -69,7 +69,14 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<()> {
 
 pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("bot_kinds", || {
-        with(|i| Ok(i.snapshot.bot_kinds.iter().map(kind_map).collect::<Array>()))
+        with(|i| {
+            let snapshot = i.snapshot.clone();
+            snapshot
+                .bot_kinds
+                .iter()
+                .map(|k| view_in(i, None, || kind_map(k)))
+                .collect::<Fallible<Array>>()
+        })
     });
     // One kind by id, or `()`: what rules that want one kind ask, so the
     // answer is the same size however many kinds the Add-Ons provide.

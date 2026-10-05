@@ -24,8 +24,10 @@ use std::sync::Arc;
 mod bots;
 mod games;
 mod physics;
+pub mod view;
 pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
+use view::{Of, view_in};
 
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
@@ -587,6 +589,12 @@ struct Invocation {
     /// only, and read only through `with_world`.
     world: Option<*const (dyn World + 'static)>,
     rays: usize,
+    /// The players, bricks and other things this call has read, by what
+    /// they are ([`view`]), and how many views it made and how much it
+    /// wrote into them.
+    views: BTreeMap<Of, view::View>,
+    views_made: usize,
+    view_writes: usize,
 }
 thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
@@ -696,7 +704,7 @@ fn permit_write(i: &mut Invocation) -> Fallible<()> {
     Ok(())
 }
 fn to_json(value: &Dynamic) -> Fallible<serde_json::Value> {
-    let json: serde_json::Value = rhai::serde::from_dynamic(value)?;
+    let json: serde_json::Value = rhai::serde::from_dynamic(&view::plain(value))?;
     check_value(&json).map_err(|e| e.to_string())?;
     Ok(json)
 }
@@ -1308,25 +1316,46 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("game_version", || {
         with(|i| Ok(i.snapshot.game_version.clone()))
     });
+    // Players, bots and entities are views ([`view`]): a list of them, or
+    // a script's own list of some, never meets a script value's limits.
     engine.register_fn("players", || {
-        with(|i| Ok(i.snapshot.players.iter().map(player_map).collect::<Array>()))
+        with(|i| {
+            let snapshot = i.snapshot.clone();
+            snapshot
+                .players
+                .iter()
+                .map(|p| view_in(i, Some(Of::Player(p.id)), || player_map(p)))
+                .collect::<Fallible<Array>>()
+        })
     });
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot.player(player).map_or(Dynamic::UNIT, player_map))
+            let snapshot = i.snapshot.clone();
+            match snapshot.player(player) {
+                Some(p) => view_in(i, Some(Of::Player(p.id)), || player_map(p)),
+                None => Ok(Dynamic::UNIT),
+            }
         })
     });
     engine.register_fn("bots", || {
-        with(|i| Ok(i.snapshot.bots.iter().map(player_map).collect::<Array>()))
+        with(|i| {
+            let snapshot = i.snapshot.clone();
+            snapshot
+                .bots
+                .iter()
+                .map(|p| view_in(i, Some(Of::Player(p.id)), || player_map(p)))
+                .collect::<Fallible<Array>>()
+        })
     });
     engine.register_fn("entities", || {
         with(|i| {
-            Ok(i.snapshot
+            let snapshot = i.snapshot.clone();
+            snapshot
                 .entities
                 .iter()
-                .map(entity_map)
-                .collect::<Array>())
+                .map(|e| view_in(i, Some(Of::Entity(e.id)), || entity_map(e)))
+                .collect::<Fallible<Array>>()
         })
     });
     engine.register_fn("me", || {
@@ -1334,11 +1363,11 @@ fn register_api(engine: &mut Engine) {
             let Some(me) = i.entity else {
                 return Ok(Dynamic::UNIT);
             };
-            Ok(i.snapshot
-                .entities
-                .iter()
-                .find(|e| e.id == me)
-                .map_or(Dynamic::UNIT, entity_map))
+            let snapshot = i.snapshot.clone();
+            match snapshot.entities.iter().find(|e| e.id == me) {
+                Some(e) => view_in(i, Some(Of::Entity(e.id)), || entity_map(e)),
+                None => Ok(Dynamic::UNIT),
+            }
         })
     });
     engine.register_fn("aim", || {
@@ -3415,6 +3444,7 @@ fn sandbox() -> Engine {
     engine.set_max_call_levels(32);
     engine.set_max_expr_depths(64, 32);
     engine.set_max_string_size(MAX_SCRIPT_TEXT);
+    view::register(&mut engine);
     // `for key in map`: a map's keys one at a time, so a script walks a
     // map of any size without `keys()` gathering all its text into one
     // value (the text limit counts a whole array's strings together).
@@ -3712,6 +3742,9 @@ impl Runtime {
                 write_attempted: false,
                 world,
                 rays: 0,
+                views: BTreeMap::new(),
+                views_made: 0,
+                view_writes: 0,
             })
         });
         let options = rhai::CallFnOptions::new()
@@ -3738,7 +3771,8 @@ impl Runtime {
         }
         match result {
             Ok(returned) => Ok(Outcome {
-                returned,
+                // What leaves the script holds plain maps, not views.
+                returned: view::plain(&returned),
                 ops: invocation.ops,
                 state: invocation.state,
                 entity_vars: invocation.written,

@@ -2994,6 +2994,81 @@ fn far_more_add_ons_than_max_leave_slayers_save_and_reset_working() {
     assert!(g.s.vitals()[&max].team.is_some(), "the host is sorted");
 }
 
+/// A build with 500 Team Spawns (250 a team): Slayer lists them all when
+/// it picks a spawn (once more than one script value could hold), each
+/// new team fills with its bots, and every bot appears on one of its own
+/// team's spawns.
+#[test]
+fn five_hundred_team_spawns_still_spawn_each_team_on_its_own() {
+    const EACH: usize = 250;
+    let mut g = Game::new("bots-many-spawns");
+    let max = host_alone_in_team_deathmatch(&mut g);
+    let mut build = match g
+        .cmd(
+            max,
+            Command::SaveBuild {
+                events: true,
+                ownership: false,
+            },
+        )
+        .unwrap()
+    {
+        Reply::Saved(build) => build,
+        other => panic!("{other:?}"),
+    };
+    let mut next = build.world.next_brick_id;
+    for (color, x0) in [(1u8, -45.0f32), (2u8, 21.0f32)] {
+        for i in 0..EACH {
+            let at = [x0 + (i % 25) as f32, 0.1, -40.25 + (i / 25) as f32 * 2.0];
+            let mut brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved(TEAM_SPAWN.into()), at, max);
+            brick.color = color;
+            build.world.bricks.insert(next, brick);
+            next += 1;
+        }
+    }
+    build.world.next_brick_id = next;
+    g.cmd(
+        max,
+        Command::LoadBuild {
+            build,
+            ownership: false,
+        },
+    )
+    .unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(13);
+    assert_eq!(g.s.simulation().bricks_of(TEAM_SPAWN).count(), 2 * EACH);
+    save_and_reset_new_teams(&mut g, max, &[1, 2], 3, vec![]);
+    g.steps(4);
+    g.quiet();
+    let members = team_members(&g);
+    assert_eq!(
+        members.values().map(|&(n, _)| n).collect::<Vec<_>>(),
+        vec![3, 3],
+        "{members:?}"
+    );
+    assert_eq!(
+        members.values().map(|&(_, bots)| bots).sum::<usize>(),
+        5,
+        "{members:?}"
+    );
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let vitals = g.s.vitals();
+    for (owner, v) in &vitals {
+        let color = teams
+            .iter()
+            .find(|t| Some(t.id.0) == v.team)
+            .map(|t| t.color)
+            .unwrap();
+        let x = g.feet(*owner).x;
+        let on_own = if color == 1 { x < -10.0 } else { x > 10.0 };
+        assert!(on_own, "{owner} of colour {color} at x {x}");
+    }
+}
+
 /// Max's "Soccer Field Goo": a host alone in a build whose saved mini-game
 /// is Team Deathmatch with Team 1 and Team 2 at Preferred Player Count 2,
 /// Reset When Empty and the sorting settings on, and four team spawns a
