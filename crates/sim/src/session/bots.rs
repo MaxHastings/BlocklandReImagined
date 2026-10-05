@@ -137,6 +137,10 @@ const ERROR_TICKS: u64 = 48;
 const CARRY_TICKS: u64 = 720;
 /// Shortest hold before the throw: it holds its catch up a moment.
 const LIFT_TICKS: u64 = 90;
+/// A roof closer than this over its eyes is one a carried catch must clear.
+const CARRY_HEADROOM: f32 = 8.0;
+/// How far a carried catch keeps off the floor and the roof.
+const CARRY_CLEARANCE: f32 = 0.3;
 /// How long the throwing swing turns before it lets go.
 const SWING_TICKS: u64 = 36;
 /// After a throw, how long before it grabs again.
@@ -2749,6 +2753,27 @@ impl Session {
             && swim.is_none()
             && !self.seated(bot)
             && self.bots.brains[&bot].memory.is_none();
+        // Carrying: the catch hangs off the floor, or it drags and trails
+        // back into its holder's path, and under the roof, or it snags on
+        // the roof's edge on the way out. The hold's point is raised or
+        // lowered by how far the catch's body is off that band.
+        let carry_pitch = holding
+            .then(|| {
+                let (_, distance, grip, _) = self.bot_hold_geometry(bot)?;
+                let (low, high) = self.held_extent(bot)?;
+                let ceiling =
+                    super::admin_players::world_ray(&self.simulation, eye, Vec3::Y, CARRY_HEADROOM)
+                        .map_or(f32::INFINITY, |up| eye.y + up);
+                let lift = (feet.y + CARRY_CLEARANCE - low).max(0.0);
+                let duck = (high - (ceiling - CARRY_CLEARANCE)).max(0.0);
+                let wanted = grip.y + if duck > 0.0 { -duck } else { lift };
+                Some(
+                    ((wanted - eye.y) / distance.max(0.5))
+                        .clamp(-1.0, 1.0)
+                        .asin(),
+                )
+            })
+            .flatten();
         let mut pause = self.surprise_pause(bot, natural, gate, eye);
         (pause.pull, pause.copy) = self.team_mood(bot, feet, eye, tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -2819,7 +2844,7 @@ impl Session {
                             aim_yaw = yaw_to(d);
                         }
                     }
-                    aim_pitch = 0.15;
+                    aim_pitch = carry_pitch.unwrap_or(0.15);
                 }
             }
         } else if behaviour == Behaviour::Objective
