@@ -897,9 +897,19 @@ def ci_test():
         output, code = run_binary(label, executable, [], cwd)
         print(output, end="", flush=True)
         if code:
-            failed.append(label)
+            failed.append((label, output))
     if failed:
-        say(f"failing test targets: {', '.join(failed)}")
+        # The CI log viewer keeps only the end of a long log, so repeat each
+        # failing target's libtest failure report here.
+        for label, output in failed:
+            lines = output.splitlines()
+            if "failures:" in lines:
+                lines = lines[lines.index("failures:") :]
+            else:
+                lines = lines[-200:]
+            say(f"failures in {label}:")
+            print("\n".join(lines[:200]), flush=True)
+        say(f"failing test targets: {', '.join(label for label, _ in failed)}")
         return False
     say("all content-free test targets passed")
     return True
