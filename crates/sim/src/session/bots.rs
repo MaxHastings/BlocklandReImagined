@@ -129,6 +129,10 @@ const BRICK_RESPAWN: (f32, f32) = (0.75, 1.75);
 const SEARCH_BOUND: f32 = 72.0;
 /// Ticks without progress before a bot plans again.
 const STUCK_TICKS: u32 = 45;
+/// How many ticks earlier than the 40th a stuck bot may hop, by its own
+/// seeded phase: bots hop apart, and each still hops before it replans at
+/// `STUCK_TICKS`.
+const HOP_SPREAD: u64 = 5;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
@@ -3270,7 +3274,7 @@ impl Session {
         if driving.is_none()
             && pushing.is_none()
             && brain.stuck > 20
-            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP)) % 40 < 5
+            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP) % HOP_SPREAD) % 40 < 5
         {
             input.jump = true;
         }
