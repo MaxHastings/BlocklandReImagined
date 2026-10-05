@@ -55,5 +55,5 @@ target = "bri-client/night_qa"
 # behaviour 12.2 times a bot-minute against its bound of 12.
 [[failure]]
 test = "all_dials_on"
-owner = "fix/bot-surprise"
-reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/min (bound 12). The surprise lane tunes strength or the hold rule; remove this entry when all_dials_on passes."
+owner = "fix/bots-ball-games-2"
+reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/min (bound 12). The bots lane (surprise + hold rule) fixes it; remove this entry when all_dials_on passes."
