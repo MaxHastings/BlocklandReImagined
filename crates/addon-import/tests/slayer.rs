@@ -4310,13 +4310,24 @@ fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
     let kinds =
         bri_net::content_identity::bot_kinds_from(&[("blockhead_bot/assets".into(), addon)])
             .unwrap();
+    let gun = bri_weapons::testing::GUN_ITEM;
+    // The test gun beside the content's items.
+    if armed {
+        let content = bri_weapons::Pack::from_json(
+            &std::fs::read(
+                g._root
+                    .0
+                    .join("addons/gamemode_slayer_ctf/assets/weapons.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let (pack, _) = content.merge(vec![("test".into(), bri_weapons::testing::pack())]);
+        g.s.set_weapon_pack(pack).unwrap();
+    }
     g.s.set_vehicle_pack(bri_vehicles::testing::pack(), kinds.clone())
         .unwrap();
     g.s.set_bot_kinds(kinds).unwrap();
-    let gun = bri_weapons::testing::GUN_ITEM;
-    if armed {
-        g.s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
-    }
     g.s.set_tool_catalog(ToolCatalog {
         items: if armed {
             [gun.to_owned()].into()
@@ -4356,6 +4367,8 @@ fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
             (&key(SLAYER, "mode"), Value::Text(TEAM_MODE.into())),
             (&key(SLAYER, "points_kill_bot"), Value::Int(0)),
             (&key(SLAYER, "points_friendly_fire"), Value::Int(0)),
+            // Max's soccer setup turns Bonus Kills off too.
+            (&key(SLAYER, "bk_enable"), Value::Bool(false)),
         ],
     );
     // Team spawns at each end, behind the goal it defends.
@@ -4475,7 +4488,14 @@ fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
             }
         }
         scores = now;
-        let tank_box = the(&g, tank).and_then(|id| {
+        // Parked: nobody aboard. A driven tank scoops up whoever it runs
+        // into; riding it then is the driver's doing, not piling on.
+        let parked =
+            g.s.vehicle_infos()
+                .into_iter()
+                .find(|v| v.definition == tank)
+                .is_some_and(|v| v.occupants.iter().all(Option::is_none));
+        let tank_box = the(&g, tank).filter(|_| parked).and_then(|id| {
             g.s.vehicle_poses()
                 .into_iter()
                 .find(|v| v.id == id)
@@ -4493,7 +4513,9 @@ fn bot_soccer(armed: bool, seconds: usize) -> BotMatch {
             if feet.y > 4.0 {
                 m.high += 1;
             }
-            if let Some(at) = tank_box {
+            // Riding in it (driving it into play) is using it, not
+            // standing on it.
+            if let Some(at) = tank_box.filter(|_| v.mounted.is_none()) {
                 let across = Vec3::new(feet.x - at.x, 0.0, feet.z - at.z).length();
                 if across < 2.0 && feet.y > at.y + 0.8 {
                     m.on_tank += 1;

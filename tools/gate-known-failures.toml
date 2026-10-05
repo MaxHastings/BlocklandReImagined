@@ -50,18 +50,6 @@ reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run 
 [[port_bound]]
 target = "bri-client/night_qa"
 
-# The all-on bot gauntlet (every dial at its ON value) fails on its first
-# run, 2026-10-05: with surprise.strength 0.6 zombie_survival changes
-# behaviour 12.2 times a bot-minute against its bound of 12.
-[[failure]]
-test = "all_dials_on"
-owner = "fix/bots-ball-games-2"
-reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/min (bound 12). The bots lane (surprise + hold rule) fixes it; remove this entry when all_dials_on passes."
-
-# v0.2.4 shipped with these failing, on Max's word in the release thread
-# (2026-10-05, "allow"). Each bot entry still expects bot behaviour from before
-# the v0.2.4 bot merge; Max playtests the bots. Remove each entry as it is fixed.
-
 [[failure]]
 test = "a_bot_jets_over_to_someone_above_it"
 owner = "v0.2.5 bot/test cleanup"
@@ -81,11 +69,6 @@ reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on 
 test = "profile_sixteen_bots_in_the_real_bedroom"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "team_fill_bots_play_slayer_soccer_with_or_without_weapons"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Bots cannot read Slayer's Team(Brick) IncScore goal (an Add-On output: unsupported rule semantics), so they never score. The general fix adds a layer and is parked for after v0.2.5 (bots/next-version.md)."
 
 [[failure]]
 test = "the_fixed_save_corpus_hosts_like_the_game"

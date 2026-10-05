@@ -394,25 +394,38 @@ impl Session {
     /// rules may answer with one of their own inputs, `"onTeamCheckTrue"`
     /// or `#{ input, rows: [first, last] }`, and the brick's rows that
     /// listen to it run next (only rows `first..=last` with `rows`).
-    pub(in crate::session) fn package_output(
-        &mut self,
+    /// What a row's call of an Add-On output passes to its
+    /// `on_brick_output`, as [`Self::package_output`] describes: the
+    /// arguments, whoever set it off, the declared behaviour and the source
+    /// brick. Rejected with the reason a row would be.
+    fn package_output_call(
+        &self,
         dispatch: &ev::Dispatch,
         call: &ev::PackageCall,
-    ) -> ev::Apply {
+    ) -> std::result::Result<
+        (
+            Vec<Dynamic>,
+            Option<OwnerId>,
+            bri_package_runtime::content::Behaviour,
+            u64,
+            u64,
+        ),
+        String,
+    > {
         let Some(declared) = self.packages.as_ref().and_then(|host| {
             host.catalog
                 .behaviours()
                 .find(|(id, _)| **id == call.package)
                 .map(|(_, b)| b.clone())
         }) else {
-            return ev::Apply::Rejected(format!("Add-On `{}` is not running", call.package));
+            return Err(format!("Add-On `{}` is not running", call.package));
         };
         let class = match dispatch.target.class {
             ev::Class::Brick => "fxDTSBrick",
             ev::Class::Player => "Player",
             ev::Class::Client => "GameConnection",
             ev::Class::MiniGame => "MiniGame",
-            _ => return ev::Apply::Rejected("not a target Add-On outputs act on".into()),
+            _ => return Err("not a target Add-On outputs act on".into()),
         };
         // An Add-On target's rows act on its base entity; the rules find
         // what the target stands for.
@@ -424,7 +437,7 @@ impl Session {
             {
                 Some(target) => Some(target),
                 None => {
-                    return ev::Apply::Rejected(format!(
+                    return Err(format!(
                         "`{name}` is not one of `{}`'s brick_targets",
                         call.package
                     ));
@@ -435,7 +448,7 @@ impl Session {
         let source = dispatch.source.index;
         let owner = self.simulation.state().bricks.get(&source).map(|b| b.owner);
         let Some(owner) = owner else {
-            return ev::Apply::Rejected("the brick is gone".into());
+            return Err("the brick is gone".into());
         };
         let client = dispatch
             .client
@@ -480,15 +493,53 @@ impl Session {
                 ev::Value::Rows(_) => Dynamic::UNIT,
             })
             .collect();
+        let args = vec![
+            call.output.clone().into(),
+            Dynamic::from_int(dispatch.target.id.index as i64),
+            Dynamic::from_array(params),
+            Dynamic::from_map(info),
+        ];
+        Ok((args, client, declared, source, owner))
+    }
+    /// The engine operations an Add-On output would perform if this row
+    /// ran now, read from a run of its own rules that commits nothing. A
+    /// bot learns what an Add-On's output does by asking its rules, not by
+    /// knowing the Add-On. `None` when the call fails or answers with one
+    /// of its own inputs (which this does not follow).
+    pub(in crate::session) fn package_output_ops(
+        &self,
+        dispatch: &ev::Dispatch,
+        call: &ev::PackageCall,
+    ) -> Option<Vec<bri_package_runtime::ops::Op>> {
+        let (args, client, _, _, _) = self.package_output_call(dispatch, call).ok()?;
+        let (result, _, _) = self
+            .call_package(
+                &call.package,
+                "on_brick_output",
+                args,
+                Budget::Think,
+                client,
+                None,
+                None,
+            )
+            .ok()?;
+        let outcome = result.ok()?;
+        outcome.returned.is_unit().then_some(outcome.ops)
+    }
+    pub(in crate::session) fn package_output(
+        &mut self,
+        dispatch: &ev::Dispatch,
+        call: &ev::PackageCall,
+    ) -> ev::Apply {
+        let (args, client, declared, source, owner) = match self.package_output_call(dispatch, call)
+        {
+            Ok(call) => call,
+            Err(reason) => return ev::Apply::Rejected(reason),
+        };
         let answer = self.run_package(
             &call.package,
             "on_brick_output",
-            vec![
-                call.output.clone().into(),
-                Dynamic::from_int(dispatch.target.id.index as i64),
-                Dynamic::from_array(params),
-                Dynamic::from_map(info),
-            ],
+            args,
             Budget::Think,
             client,
             None,

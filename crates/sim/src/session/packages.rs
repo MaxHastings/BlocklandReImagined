@@ -1257,11 +1257,13 @@ impl Session {
             self.charge_work(&package);
         }
     }
-    /// Run one package function, then commit its state and apply its
-    /// operations. A failed call changes nothing and is reported.
+    /// Run one package function against the live session without
+    /// committing anything: its state, ops and output come back for the
+    /// caller to apply or only to read. Also how long the script ran, and
+    /// the package's state the call started from.
     #[allow(clippy::too_many_arguments)]
-    fn run_package(
-        &mut self,
+    fn call_package(
+        &self,
         package: &str,
         function: &str,
         args: Vec<Dynamic>,
@@ -1269,7 +1271,14 @@ impl Session {
         caller: Option<OwnerId>,
         aim: Option<script::Aim>,
         entity: Option<u64>,
-    ) -> std::result::Result<Dynamic, Diagnostic> {
+    ) -> std::result::Result<
+        (
+            std::result::Result<script::Outcome, Diagnostic>,
+            std::time::Duration,
+            Namespace,
+        ),
+        Diagnostic,
+    > {
         let shared = self
             .packages
             .as_ref()
@@ -1309,8 +1318,23 @@ impl Session {
         };
         let started = std::time::Instant::now();
         let result = host.runtime.call(package, call);
-        let took = started.elapsed();
-        drop(world);
+        Ok((result, started.elapsed(), input))
+    }
+    /// Run one package function, then commit its state and apply its
+    /// operations. A failed call changes nothing and is reported.
+    #[allow(clippy::too_many_arguments)]
+    fn run_package(
+        &mut self,
+        package: &str,
+        function: &str,
+        args: Vec<Dynamic>,
+        budget: Budget,
+        caller: Option<OwnerId>,
+        aim: Option<script::Aim>,
+        entity: Option<u64>,
+    ) -> std::result::Result<Dynamic, Diagnostic> {
+        let (result, took, input) =
+            self.call_package(package, function, args, budget, caller, aim, entity)?;
         let host = self.packages.as_mut().expect("checked above");
         match host.script_time.get_mut(package) {
             Some(total) => *total += took,

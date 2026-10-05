@@ -640,6 +640,14 @@ impl Session {
                 .map(|b| b.owner)
                 .filter(player)
                 .or(driver.filter(player))
+                // A rules bot (a team filled by the game) acts for the
+                // game's creator, whose rules it plays.
+                .or_else(|| {
+                    self.game_of(bot)
+                        .and_then(|g| self.minigames.game(g).ok())
+                        .map(|g| g.owner.account.0)
+                        .filter(player)
+                })
                 .or_else(|| {
                     self.lan_host
                         .then(|| self.peers.keys().copied().find(player))

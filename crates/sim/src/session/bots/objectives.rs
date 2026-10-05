@@ -35,6 +35,15 @@ pub(super) enum Completion {
         round: u64,
         actor: OwnerId,
     },
+    /// The actor's team's score (its own, without a team) above `from`
+    /// this round: what scoring is for when the plan cannot see the win.
+    ScoreRise {
+        game: bri_minigames::GameId,
+        round: u64,
+        team: Option<bri_minigames::TeamId>,
+        actor: OwnerId,
+        from: i64,
+    },
 }
 
 impl DesiredState {
@@ -52,6 +61,19 @@ impl DesiredState {
             Completion::PackageCounter(stamp) => stamp
                 .completion(session, stamp.actor)
                 .filter(|complete| *complete),
+            Completion::ScoreRise {
+                game,
+                round,
+                team,
+                actor,
+                from,
+            } => {
+                let g = session.minigames.game(*game).ok()?;
+                if g.round != *round || g.round_over {
+                    return Some(false);
+                }
+                (session.score_of(*game, *team, *actor)? > *from).then_some(true)
+            }
         }
     }
 }
@@ -769,14 +791,7 @@ impl Session {
     }
 
     fn team_score(&self, game: bri_minigames::GameId, team: bri_minigames::TeamId) -> Option<i64> {
-        let g = self.minigames.game(game).ok()?;
-        Some(
-            g.members
-                .iter()
-                .filter_map(|id| self.minigames.player(*id).ok())
-                .filter(|p| p.team == Some(team))
-                .fold(0i64, |sum, p| sum.saturating_add(p.score)),
-        )
+        self.minigames.team_score(game, team).ok()
     }
 
     pub(super) fn objective_fact_key(
@@ -959,6 +974,87 @@ impl Session {
         Some(result)
     }
 
+    /// What an Add-On output's engine operations do to the facts a plan
+    /// reads: a team's own points rise (Slayer's `IncScore`) or the round
+    /// ends with its winners. Messages and sounds change nothing it plans
+    /// on; any other operation has no known meaning here, so the output is
+    /// unsupported rather than guessed. `None` inside when it does nothing
+    /// a plan reads; with the team whose score it changes, if any.
+    fn package_effects(
+        &self,
+        bot: OwnerId,
+        ops: &[bri_package_runtime::ops::Op],
+        facts: &mut Facts,
+        guards: &mut Vec<Predicate>,
+    ) -> Result<Option<(Vec<Effect>, Option<bri_minigames::TeamId>)>, planning::Failure> {
+        use bri_package_runtime::ops::Op;
+        use planning::Failure as F;
+        let player = self
+            .peers
+            .get(&bot)
+            .and_then(|p| self.minigames.player(p.combat.player).ok())
+            .ok_or(F::Unsupported)?;
+        let mut effects = Vec::new();
+        let mut observed = None;
+        for op in ops {
+            match op {
+                Op::SetTeamPoints(p) if p.add => {
+                    let game = bri_minigames::GameId(p.game);
+                    let team = u32::try_from(p.team)
+                        .map(bri_minigames::TeamId)
+                        .map_err(|_| F::Unsupported)?;
+                    let key = team_score_key(game, team);
+                    let current = self.team_score(game, team).ok_or(F::Unsupported)?;
+                    facts.insert(key.clone(), FactValue::Number(current));
+                    // As for rule scores: no projection where it saturates.
+                    let (compare, bound) = if p.value >= 0 {
+                        (Compare::AtMost, i64::MAX - p.value)
+                    } else {
+                        (Compare::AtLeast, i64::MIN - p.value)
+                    };
+                    guards.push(Predicate {
+                        key: key.clone(),
+                        compare,
+                        value: FactValue::Number(bound),
+                    });
+                    effects.push(Effect::Add {
+                        key,
+                        amount: p.value,
+                    });
+                    observed.get_or_insert(team);
+                }
+                Op::EndRound(end) => {
+                    let game = bri_minigames::GameId(end.game);
+                    let g = self.minigames.game(game).map_err(|_| F::Unsupported)?;
+                    let key = round_key(game, g.round);
+                    facts.insert(key.clone(), FactValue::Bool(g.round_over));
+                    guards.push(eq(key.clone(), FactValue::Bool(false)));
+                    effects.push(Effect::Set {
+                        key,
+                        value: FactValue::Bool(true),
+                    });
+                    let won = end.players.contains(&bot)
+                        || player
+                            .team
+                            .is_some_and(|t| end.teams.contains(&u64::from(t.0)));
+                    effects.push(Effect::Set {
+                        key: win_key(bot),
+                        value: FactValue::Bool(won),
+                    });
+                }
+                Op::Tell(_)
+                | Op::TellMinigame(_)
+                | Op::TellPlayers(_)
+                | Op::Print(_)
+                | Op::PrintMinigame(_)
+                | Op::Broadcast(_)
+                | Op::Sound(_) => {}
+                _ => return Err(F::Unsupported),
+            }
+        }
+        Ok((!effects.is_empty()).then_some((effects, observed)))
+    }
+
     pub(super) fn project_objective_input(
         &self,
         bot: OwnerId,
@@ -1124,6 +1220,54 @@ impl Session {
                             _ => return Err(F::Unsupported),
                         };
                         (effects, subject, property, key, value)
+                    }
+                    // An Add-On's output: what its own rules would do,
+                    // read from a run that commits nothing.
+                    Intent::Package(call) => {
+                        let dispatch = ev::Dispatch {
+                            context: cx.clone(),
+                            source: cx.source,
+                            target,
+                            origin: cx.origin,
+                            client: cx
+                                .client
+                                .or_else(|| cx.targets.get(&ev::Slot::Client).copied()),
+                            input: cx.input.clone(),
+                            row: index as u16,
+                            output: row.output.clone(),
+                            derived: match &row.target {
+                                ev::Target::Derived(name) => Some(name.clone()),
+                                _ => None,
+                            },
+                            scheduled_us: 0,
+                            now_us: 0,
+                            delay_ms: row.delay_ms,
+                            intent: intent.clone(),
+                        };
+                        let ops = self
+                            .package_output_ops(&dispatch, call)
+                            .ok_or(F::Unsupported)?;
+                        let Some((effects, team)) =
+                            self.package_effects(bot, &ops, facts, &mut guards)?
+                        else {
+                            continue;
+                        };
+                        match team {
+                            Some(team) => (
+                                effects,
+                                Subject::Team,
+                                Property::Score,
+                                team.0.to_string(),
+                                Datum::Number(0),
+                            ),
+                            None => (
+                                effects,
+                                Subject::MiniGame,
+                                Property::RoundOver,
+                                String::new(),
+                                Datum::Bool(false),
+                            ),
+                        }
                     }
                     Intent::Brick(ev::BrickOp::Color(value)) => {
                         let key = format!("brick/color/{}", target.id.index);
@@ -1427,6 +1571,59 @@ impl Session {
         })
     }
 
+    /// Raise its side's score: tried when no plan reaches the win itself,
+    /// as when an Add-On decides the win from a score its rules keep (a
+    /// Slayer points limit). Score is the game's own measure of doing well.
+    fn score_desired_state(&self, bot: OwnerId) -> Option<DesiredState> {
+        let game = self.game_of(bot)?;
+        let g = self.minigames.game(game).ok()?;
+        if g.round_over {
+            return None;
+        }
+        let team = self
+            .minigames
+            .player(self.peers.get(&bot)?.combat.player)
+            .ok()?
+            .team;
+        let from = self.score_of(game, team, bot)?;
+        let key = match team {
+            Some(team) => team_score_key(game, team),
+            None => format!("score/{bot}"),
+        };
+        Some(DesiredState {
+            id: format!("rules/score/{}/{}/{bot}", game.0, g.round),
+            predicates: Goal(vec![Predicate {
+                key,
+                compare: Compare::AtLeast,
+                value: FactValue::Number(from.saturating_add(1)),
+            }]),
+            completion: Completion::ScoreRise {
+                game,
+                round: g.round,
+                team,
+                actor: bot,
+                from,
+            },
+        })
+    }
+    /// The team's canonical score, or the player's own without a team.
+    fn score_of(
+        &self,
+        game: bri_minigames::GameId,
+        team: Option<bri_minigames::TeamId>,
+        actor: OwnerId,
+    ) -> Option<i64> {
+        match team {
+            Some(team) => self.team_score(game, team),
+            None => Some(
+                self.minigames
+                    .player(self.peers.get(&actor)?.combat.player)
+                    .ok()?
+                    .score,
+            ),
+        }
+    }
+
     fn discover_desired_states(
         &mut self,
         bot: OwnerId,
@@ -1434,6 +1631,7 @@ impl Session {
     ) -> Result<DesiredDiscovery, planning::Failure> {
         budget.reserve(1, 1, 128)?;
         let mut desired = vec![self.rule_desired_state(bot)?];
+        desired.extend(self.score_desired_state(bot));
         let offered = self.discover_package_objectives(bot, budget)?;
         desired.extend(offered.desired);
         Ok(DesiredDiscovery {
@@ -1807,6 +2005,8 @@ impl Session {
                 Completion::PackageCounter(_) => "objective completed: declared package state",
                 Completion::RoundWin { .. } if outcome => "objective completed: canonical winner",
                 Completion::RoundWin { .. } => "objective ended without requested winner",
+                Completion::ScoreRise { .. } if outcome => "objective completed: score rose",
+                Completion::ScoreRise { .. } => "objective ended before the score rose",
             };
             state.step = None;
             state.desired = None;
@@ -1902,7 +2102,9 @@ impl Session {
                     });
                     if state.desired.as_ref().is_some_and(|d| match &d.completion {
                         Completion::PackageCounter(stamp) => !stamp.validate(self, bot),
-                        Completion::RoundWin { .. } => !desireds.iter().any(|offered| offered == d),
+                        Completion::RoundWin { .. } | Completion::ScoreRise { .. } => {
+                            !desireds.iter().any(|offered| offered == d)
+                        }
                     }) {
                         state.desired = None;
                     }

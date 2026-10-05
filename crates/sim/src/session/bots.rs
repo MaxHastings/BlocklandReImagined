@@ -3084,32 +3084,29 @@ impl Session {
                 wanted = Some(Waypoint::walk(point));
             }
         }
-        // Standing on a body (a vehicle's roof, a crate, a head) the walk
-        // grid has no place for its feet and no route from there: it walks
-        // straight off toward the enemy it is after, and plans again once
-        // down. One whose enemy is close by below it (under its feet or at
-        // the body's foot) goes nowhere walking at them: it steps off to the
-        // nearest free floor instead, toward them where that side is open.
-        if wanted.is_none()
-            && swim.is_none()
+        // Standing on a body (a vehicle's roof, a crate, a head): the
+        // world has no floor under its feet.
+        let on_body = swim.is_none()
             && driving.is_none()
             && state.grounded
-            && let Some(Goal::Chase(point)) = self.bots.brains[&bot].goal
-            && self.bots.brains[&bot].search.is_none()
             && super::admin_players::world_ray(
                 &self.simulation,
                 own_feet + Vec3::Y * 0.1,
                 Vec3::NEG_Y,
                 0.4,
             )
-            .is_none()
-        {
-            let to = if flat(point - feet).length() > 1.5 {
-                Some(point)
-            } else if point.y < feet.y - body.step - 0.5 {
-                self.bot_step_off(bot, feet, &body, point)
-            } else {
-                None
+            .is_none();
+        // The walk grid has no place for its feet there and no route: it
+        // walks straight off toward wherever it is going, and plans again
+        // once down. One going nowhere, or whose goal is close by below it
+        // (under its feet or at the body's foot), goes nowhere walking at
+        // it: it steps off to the nearest free floor instead, toward the
+        // goal where that side is open.
+        if wanted.is_none() && on_body {
+            let to = match self.bots.brains[&bot].goal.map(|g| g.point(home)) {
+                Some(point) if flat(point - feet).length() > 1.5 => Some(point),
+                Some(point) if point.y >= feet.y - body.step - 0.5 => None,
+                point => self.bot_step_off(bot, feet, &body, point.unwrap_or(feet)),
             };
             if let Some(to) = to {
                 wanted = Some(Waypoint::walk(to));
@@ -3212,10 +3209,12 @@ impl Session {
         }
         // Idle play with a body (Interact) is already the bot's fun: a goof
         // would stand it still beside the ball it came to push.
+        // Fooling about is done on the floor, not on top of something.
         let natural = threat.is_none()
             && !matches!(behaviour, Behaviour::Interact | Behaviour::Carry)
             && !holding
             && driving.is_none()
+            && !on_body
             // A swimmer's idle hops and walks would take it out of its
             // water at the surface.
             && kind.moves != Moves::Swim
