@@ -18,10 +18,11 @@ bot does through the same code.
    nearby allies (`hear_alerts`, after every bot has stepped). A receiver keeps
    the observation's original age and accepts newer evidence, without extending
    its lifetime. Friendly-fire permission does not make teammates enemies.
-2. **Choose a behaviour.** `behaviour::choose` scores each behaviour
+2. **Choose a behaviour.** `behaviour::scores` scores each behaviour
    from a `Situation` (what it holds, the enemy's distance and height, its
-   memory, how far it strayed), scales each score by the kind's
-   `behaviours` weight and follows the highest. The base scores keep this
+   memory, how far it strayed, an item worth arming with), scales each
+   score by the kind's `behaviours` weight, and the hold rule picks among
+   them (below). The base scores keep this
    order (ties go to the earlier):
 
    | Behaviour | When | Does |
@@ -29,7 +30,8 @@ bot does through the same code.
    | Carry | its tool holds something | carries it to open space, swings and lets go |
    | Fly | an enemy up where its path does not walk, with usable jets | jets straight up, out from under cover, over, down by them |
    | Interact | a useful, permitted environmental opportunity | reserves a seat or loose hazard, approaches and executes through ordinary controls |
-   | Fight | an enemy in sight within its weapon's band | stands, strafes, backs off when too close |
+   | Fight | an enemy in sight within its weapon's band | stands, strafes (melee: steps in, out and aside), backs off when too close |
+   | Arm | no attack and a weapon in sight, or a better weapon in sight and a free slot | walks to it and picks it up |
    | Chase | an enemy in sight out of its band | paths to them |
    | Search | an enemy remembered | goes where they were, looks around |
    | Return | strayed from its brick | walks home |
@@ -43,10 +45,26 @@ bot does through the same code.
    requires its explicit kind opt-in; it does not grant a creature a new brain. Creature policy remains
    in its package. Nothing scoring: it wanders.
 
-   Leeway stops flip-flopping: a fighting bot gives chase only one unit
-   past its band, and a walk home goes all the way, except while a failed
-   objective step cools down before it is tried again: then it does not
-   walk home at all.
+   **Holding a choice.** One rule keeps every choice from flip-flopping,
+   at every strength (`behaviour::Hold`, `bots.json` `hold`): a choice is
+   kept for `hold.seconds` (0.5), and after that a challenger must beat
+   it by more than `hold.margin` (10%). The scores themselves are
+   continuous, with no thresholds to sit on: a fight fades out past its
+   band's far edge (over half the band, at least 4.5 units) and with
+   height, and a walk home grows with how far past its stroll the bot is.
+   An interrupt bypasses the hold at once: urgent damage, an objective
+   offered or gone, picked up or dropped, an enemy coming into sight, lost
+   or dead, a must-do option winning (a catch in its tool, arming an empty
+   hand), or the held option scoring nothing. An objective between two of
+   its steps (a step done, the next not yet planned) is held for the hold
+   time after it last scored. While a failed objective step cools down
+   before it is tried again, the bot does not walk home. The same rule
+   holds weapons, aims and chase routes (below), and a weapon in hand is
+   kept, its fire held, through a spell shorter than the hold time in
+   which it cannot attack (the target inside its blast, an ally across the
+   line, a reload) rather than swapped out and back. This replaced the
+   band slack, the fight-to-chase dwell, the walk-home-all-the-way rule,
+   the objective's one-second step grace and the weapon switch margin.
 
    Fly is entered only for an enemy at least `fighting.fly_rise` above that
    no walk reaches; once flying it keeps on until it is by them or more
@@ -183,47 +201,41 @@ mechanisms over the choices the brain already scores: no personality,
 emotion or mood, and no item, vehicle or game names
 (`crates/sim/src/session/bots/surprise.rs`).
 
-**One chooser.** Each choice point asks the same chooser (`Mind::pick`)
-once a tick, with the options the brain scored and its own plain pick:
+**Score terms, one hold rule.** Each choice point scores its options and
+hands them to `Mind::pick`, which adjusts each score by the bot's own
+terms and then applies the hold rule (above) to the adjusted scores:
 
-| Choice point | Options and scores | Plain pick |
-|---|---|---|
-| Behaviour | Interact, Fight, Chase, Search, Objective, Wander, by their weighted scores (`behaviour::scores`) | the highest (`behaviour::best`) |
-| Weapon | each inventory slot the hand-combat planner found usable now, by `tactics::suitability` | `tactics::select`, on the bot's planning turn |
-| Aim | the body; with a splash weapon (real `splash_radius` and `splash_damage`) also its feet, and a brick, vehicle or terrain face beside it within 0.7 of the radius, each scored by splash alone | the body |
-| Route | for a chase: straight at the enemy, or `flank_distance` to either side where there is floor | straight |
+| Choice point | Options and scores |
+|---|---|
+| Behaviour | Interact, Fight, Chase, Search, Objective, Wander, by their weighted scores (`behaviour::scores`); Carry, Fly, Arm and Return are never varied |
+| Weapon | each inventory slot the hand-combat planner found usable now, by `tactics::suitability`, on the bot's planning turn |
+| Aim | the body; with a splash weapon (real `splash_radius` and `splash_damage`) also its feet and a brick, vehicle or terrain face beside it within 0.7 of the radius, scored by splash alone and preferred by half again (a blast at the feet lands when a dodging body would make the shot miss), so rockets go low by default |
+| Route | for a chase: straight at the enemy, or 5 units to either side where there is floor |
+| Flavour | play, or goof off at a natural pause (below) |
 
-Carrying a catch, arming, flying and walking home are never traded away.
-An option's score counts with its *effectiveness* (1 working, lower after
-failures): options whose adjusted score is within `band` of the best are
-eligible, so an option that keeps failing drops out of the band and
-another takes over. Each eligible option weighs (adjusted / best)^4,
-times e^drift, divided by 1 + boredom; one is drawn from the bot's own
-seeded random stream, so a seed always plays the same.
+The adjusted score is score × (1 − strength × (1 − effectiveness)) ×
+e^drift / (1 + boredom), the last two together bounded to ±15% ×
+strength (except flavour, which boredom alone drives):
 
 - *Drift*: every option a bot has met carries a slow random walk
-  (Ornstein-Uhlenbeck, a step a second, reverting over `drift_seconds`,
-  bounded by `drift`), so each bot's preferences wander apart over time.
-- *Boredom*: an option in use gains `boredom` a second; it halves every
-  `boredom_seconds` once out of use.
+  (Ornstein-Uhlenbeck, a step a second, reverting over 90 s), so each
+  bot's preferences wander apart over time.
+- *Boredom*: an option in use gains boredom; it halves every 20 s once
+  out of use.
 - *Effectiveness*: a shot is judged after its flight plus 0.6 s (the
-  target lost health or died, or not) for the weapon, aim and behaviour
-  that fired it; getting stuck fails the behaviour and chase route. A
-  failure takes `failure` of it away, a success restores `success` of the
-  gap, and it recovers on its own over `effectiveness_seconds`. A spear
-  that keeps missing gives way to the sword; torso shots that keep being
-  dodged give way to the feet or a wall beside the target.
+  target lost health or died, or not) for the weapon and aim that fired
+  it; getting stuck fails the behaviour and chase route. A failure costs a
+  quarter of it, a success restores half the gap, and it recovers on its
+  own over 30 s. A spear that keeps missing gives way to the sword; torso
+  shots that keep being dodged give way to the feet or a wall beside the
+  target. A shot does not judge the behaviour: whether to stand or close
+  in answers to the band.
 
-**Guards.** A pick is held at least `commit_seconds` (up to half again),
-unless it falls out of the band (the situation changed). Nothing varies
-while the bot carries an objective (a body its tool holds, a mount to
-deliver, a loose body it pushes, or a picked-up item on its way to a
-destination) or is urgent (under `urgent_health`, or hurt by an enemy
-within `urgent_range` in the last `urgent_seconds`): the plain pick, every
-time. Only options the brain scored above zero are options: what cannot
-work now is never picked. A switch of behaviour or weapon that the
-variation causes is preceded by a tell: the old one is held and the bot
-stands still with its fire held for `tell_seconds`, then switches.
+**Gates.** Nothing varies while the bot carries an objective (a body its
+tool holds, a mount to deliver, a loose body it pushes, or a picked-up item
+on its way) or is urgent (under 30% health, or hurt by an enemy within 8
+units in the last 1.5 s): the plain scores, through the same hold rule.
+Only options scored above zero are options.
 
 **Splash aims** are solved and checked like any shot: an intercept for
 the aimed point, the blast clear of itself and allies (`safe_blast`), the
@@ -231,36 +243,105 @@ path clear. A surface aim counts its path clear when it reaches that
 surface, and at the firing gate its impact must lie within the splash
 radius of the body rather than inside it.
 
-**Flavour interrupts.** At a natural pause (wandering, no enemy seen or
-remembered, no threat, no objective, on its own feet, not carrying), now
-and then (`interrupts_per_minute`, then `interrupt_cooldown_seconds` of
-rest) a bot does something idle for `interrupt_seconds` (up to half
-again), each an ordinary player action through the player's own path:
-look at a player in sight, strike an emote (`Command::Emote`: love, hate,
-confusion, alarm), hop, run a small circle, walk a short detour, look
-round, crouch, paint the floor toward a player with the spray can
-(`Command::UseSprayCan`, then the trigger, only once the can is in hand),
-take out another tool and put it back, drop the weapon in hand
-(`Command::DropTool`, only with a second attack in inventory), or flick
-the light (`Command::ToggleLight`). Each weighs by `interrupts`; an
-interrupt ends at once if an enemy, a threat or an objective turns up.
+**Goofing off.** Flavour is a choice like any other, between play and
+goof, with boredom per kind of moment: play gains boredom while the bot is
+at a natural pause (wandering with no objective, or at an objective with
+no enemy in view, no threat, on its own feet, not carrying), faster when
+it is idle, and a goof relieves it. When goof wins, the bot does something
+idle for about 2 s, each an ordinary player action through the player's
+own path: look at a player in sight, strike an emote (`Command::Emote`:
+love, hate, confusion, alarm), hop, run a small circle, walk a short
+detour, look round, crouch, paint the floor toward a player with the spray
+can, take out another tool and put it back, drop the weapon in hand (only
+with a second attack in inventory), or flick the light. The kind's
+`surprise.flavours` weights pick among them (0 turns one off). A goof ends
+at once if an enemy, a threat or an objective turns up. So bots goof in
+objective games too, between plays.
 
-**Strength.** `strength` (0 to 1) scales the band, the drift, boredom,
-effectiveness failures and the interrupt rate. At 0, the default, every
-choice is the plain pick and no random number is drawn: the brain plays
-exactly as without surprise (the gauntlet's mixed-arsenal numbers are
-identical). The mind still records plain decisions for the readout.
+**Strength.** `surprise.strength` (0 to 1, 0.5 by default) is the one
+dial: it scales the drift's bound, the band, boredom and effectiveness
+failures. At 0 no term is applied and no random number is drawn: the
+plain scores through the hold rule. Every other constant is in code
+(`surprise.rs`). The kind's tunables are `strength` and `flavours`.
 
 **Why.** `BotThought::surprise` (`BotSurpriseView`) gives the strength,
-the guard in force, a tell or interrupt under way, every drive (drift,
-boredom, effectiveness) and the last decision at each choice point: the
-plain and chosen options, the reason (off, carrying, urgent, plain,
-committed, picked, telling, switched) and each candidate's score, adjusted
-score, eligibility, drift, boredom, effectiveness and weight.
+the gate in force, a goof under way, every drive (drift, boredom,
+effectiveness) and the last decision at each choice point: the plain and
+chosen options, whether the terms changed the pick (`varied`), what the
+hold rule did (`reason`: first, best, committed, margin, paused, beaten,
+interrupt, impossible) and each candidate's score, adjusted score, drift,
+boredom and effectiveness.
 
 The gauntlet's `surprise_by_strength` reports variety (distinct choices in
-effect per bot-minute), goof share, longest goof and switches away from
-the plain pick at strengths 0, 0.5 and 1; bands come later.
+effect per bot-minute), goof share, longest goof and picks the terms
+changed, at strengths 0, 0.5 and 1.
+
+## Timing and aim, per bot
+
+Bots never act on the shared game tick. Every cadence (the refire pulse
+of script and mounted weapons, sighting alerts, the stuck hop, the
+vehicle dismount check, melee footwork, bursts, aim drift, lead) goes
+through `bots::cadence`: `beat(bot, salt, tick, period)` fires once per
+cycle at a seeded point (gaps of half to one and a half periods, mean the
+period), `cycle` gives the phase of a bot's own cycle, `drift` a smooth
+seeded signal, and `spread` a seeded value per occasion (a death, a leg).
+All are pure functions of the bot, a salt per cadence and the tick: no
+state and no random draws.
+
+- *Aim error* drifts smoothly between seeded points every 0.4 s, sized by
+  how long the bot has tracked its target from `aim_error_degrees` down to
+  a floor of half of it: never a jump, never exact.
+- *Lead* is the target's velocity times 1 ± 0.15, drifting per bot over a
+  second: a little under or over, never a perfect intercept.
+- *Fire* comes in bursts: each cycle of about 1.25 s ends in a seeded
+  pause of 0.15 to 0.5 s (a charge being wound up is let go when ready
+  instead).
+- *Strafe and weave* are one pattern (`Brain::strafe_leg`): each leg lasts
+  0.5 to 1.5 times its mean (`fighting.strafe_seconds` in a fight, 0.75 s
+  weaving at an objective or in water) from the bot's seeded generator,
+  and turns back seven times in ten; it turns at once from a way with no
+  floor or a wall, or toward open ground from an ally.
+- *Melee footwork*: in its band a melee bot steps in, back out and aside,
+  each for a seeded share of its own 0.9 s cycle.
+- *Respawn*: each death adds a seeded 0.3 to 1.5 s (rules bots) or 0.75 to
+  1.75 s (brick bots), so bots one blast killed do not return together.
+
+## Weapons and upgrades
+
+What an item is worth to fight with comes from its data alone
+(`hand_combat::item_worth`): damage a second (splash at 0.6) times the
+square root of its reach's share of 48 units, from its native profile or,
+for a weapon a script fires, from its projectile, ray and shot data; an
+unknown attack is worth 1. A bot whose weapons the native chooser does not
+handle equips the best by this worth, not the first.
+
+Empty-handed, a weapon in sight within 24 units arms it, and arming takes
+over at once. Armed, with a free slot and in a game, a better weapon in
+sight is an upgrade the Arm behaviour scores: 0.75 × √(share of extra
+worth) × (1 − 0.4 × walk share), less the risk of turning from an enemy
+within 8 to 32 units; an equal or worse weapon scores nothing. The hold
+rule and boredom weigh it like any behaviour. An item it reached without
+getting (an item whose pickup the package decides, or one that did not
+come) or found no way to is passed over for 30 s. Pickups a script
+decides are never candidates.
+
+## Ball games: own goals
+
+A pushed body is never aimed at another sensor: the regions of bricks
+that act on `onObjectEnter`, other than the one it is being delivered to
+(in a ball game, the goal that scores for the other side). If the line
+ahead of the ball along the delivery heading crosses one (grown by the
+ball's radius), the push turns off it by the smallest of 20, 40, 60 or 90
+degrees either way that misses; and within 10 units of one the approach
+circles the ball a unit wider, so walking round it does not knock it in.
+
+## One bot's failure
+
+`step_bots` steps every bot each tick; one bot's failing step is that
+bot's alone. It is told as an Add-On problem (`bot.step`, to the log and
+the host's admins, at most once a minute per bot), the bot stays, and the
+rest step and hear alerts as usual. Nothing a bot's step does is fatal to
+the session, so none is passed up.
 
 ## Data
 
@@ -275,13 +356,14 @@ the plain pick at strengths 0, 0.5 and 1; bands come later.
     working, and how it covers one a teammate works (above). A
     `cover_distance` of 0 stands down as before, and a `clear_degrees` of
     0 meets a drive head on.
-  - `surprise`: every tunable of the chooser and the interrupts (above),
-    each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
-    comments outside strings.
-  - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
-    `strafe_seconds`, `fly_rise`, `fly_drop`, `fly_give_up_seconds`): the
-    leeway around its band, how long a choice is held, strafe legs, and
-    when it takes off and gives up a flight (above).
+  - `hold` (`seconds`, `margin`): how long a choice is kept and by how
+    much a challenger must beat it after that (above).
+  - `surprise` (`strength`, `flavours`): the one variation dial and the
+    weights of the idle flavours (above), commented in the Blockhead's
+    `bots.json`; `bots.json` takes `//` comments outside strings.
+  - `fighting` (`strafe_seconds`, `fly_rise`, `fly_drop`,
+    `fly_give_up_seconds`): the mean strafe leg, and when it takes off
+    and gives up a flight (above).
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.

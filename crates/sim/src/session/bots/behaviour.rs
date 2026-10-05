@@ -60,8 +60,10 @@ pub(crate) struct Situation {
     /// an objective that needs only its feet): it goes on, shooting,
     /// rather than standing to fight.
     pub gunning: bool,
-    /// It has no attack, and sees an item that would give it one.
-    pub arm: bool,
+    /// How much it wants an item it sees lying in reach: [`arming::ARM`]
+    /// with no attack, else an upgrade's score (`arming::upgrade_score`);
+    /// 0 for none.
+    pub arm: f32,
     /// The enemy in sight within its chase radius: how far across, and how
     /// much higher.
     pub enemy: Option<(f32, f32)>,
@@ -94,6 +96,8 @@ const FIGHT_FADE_SHARE: f32 = 0.5;
 /// Behaviours that take over at once when they win: a catch in its tool,
 /// and arming an empty hand.
 pub(crate) const MUST: [u32; 2] = [Behaviour::Carry as u32, Behaviour::Arm as u32];
+/// The same for an armed bot: an upgrade is weighed by the hold rule.
+pub(crate) const MUST_ARMED: [u32; 1] = [Behaviour::Carry as u32];
 
 /// 1 up to `edge`, falling to 0 over `width` past it.
 fn fade(value: f32, edge: f32, width: f32) -> f32 {
@@ -135,9 +139,9 @@ impl Behaviour {
                 0.8 * fade(distance, s.far, width)
                     * fade(rise.abs(), s.step + RISE_SLACK, FIGHT_FADE)
             }),
-            // Before going after an enemy or an objective that wants one
-            // beaten, which it cannot do empty-handed.
-            Behaviour::Arm => fits(s.arm, 0.95),
+            // Empty-handed, before going after an enemy or an objective
+            // that wants one beaten; armed, an upgrade by its worth.
+            Behaviour::Arm => s.arm,
             Behaviour::Chase => fits(s.enemy.is_some(), 0.6),
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
@@ -437,7 +441,7 @@ mod tests {
     #[test]
     fn an_empty_handed_bot_arms_before_its_objective() {
         let unarmed = Situation {
-            arm: true,
+            arm: 0.95,
             objective: true,
             ..Default::default()
         };
@@ -447,7 +451,7 @@ mod tests {
             pick(
                 Fight,
                 &Situation {
-                    arm: true,
+                    arm: 0.95,
                     ..enemy(2.0)
                 }
             ),
@@ -457,7 +461,7 @@ mod tests {
             pick(
                 Chase,
                 &Situation {
-                    arm: true,
+                    arm: 0.95,
                     ..enemy(20.0)
                 }
             ),
@@ -477,7 +481,7 @@ mod tests {
             pick(
                 Arm,
                 &Situation {
-                    arm: false,
+                    arm: 0.0,
                     ..unarmed
                 }
             ),

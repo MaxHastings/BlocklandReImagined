@@ -559,16 +559,17 @@ mod tests {
         let pack = BotPack::from_json(
             br#"{"schema_version":1, // the format
             "bots":[{"id":"bot.a","name":"A // B", // its name
-            "surprise":{"strength":0.5}}]}"#,
+            "surprise":{"strength":0.25}}]}"#,
         )
         .unwrap();
         assert_eq!(pack.bots[0].name, "A // B");
-        assert_eq!(pack.bots[0].surprise.strength, 0.5);
-        assert_eq!(BotKind::default().surprise.strength, 0.0);
+        assert_eq!(pack.bots[0].surprise.strength, 0.25);
+        // On by default.
+        assert_eq!(BotKind::default().surprise.strength, 0.5);
         for bad in [
             r#""surprise":{"strength":2}"#,
             r#""surprise":{"band":-0.1}"#,
-            r#""surprise":{"interrupts":{"teleport":1}}"#,
+            r#""surprise":{"flavours":{"teleport":1}}"#,
             r#""surprise":{"loud":1}"#,
         ] {
             let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);

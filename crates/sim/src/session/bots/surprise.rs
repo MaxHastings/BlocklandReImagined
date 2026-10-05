@@ -214,7 +214,6 @@ pub(super) struct Choice<'a> {
 pub(super) struct Shot {
     pub weapon: Option<u32>,
     pub aim: u32,
-    pub behaviour: u32,
     pub target: OwnerId,
     pub spawn: u64,
     pub health: f32,
@@ -641,6 +640,7 @@ pub(super) fn behaviour(
     scores: &[f32; 10],
     interrupt: bool,
     paused: bool,
+    must: &[u32],
     gate: Gate,
     tick: u64,
 ) -> Behaviour {
@@ -658,7 +658,7 @@ pub(super) fn behaviour(
         options: &options,
         interrupt,
         paused,
-        must: &behaviour::MUST,
+        must,
         fixed: &fixed,
     };
     Behaviour::ALL[mind.pick(cfg, rule, choice, gate, tick) as usize]
@@ -853,12 +853,12 @@ impl Session {
             if let Some(slot) = shot.weapon {
                 brain.surprise.outcome(cfg, Domain::Weapon, slot, hit, tick);
             }
+            // A shot judges what aimed and fired it, not whether to stand
+            // or close in: that answers to the band, and a miss judged
+            // there flips a fight to a chase and back.
             brain
                 .surprise
                 .outcome(cfg, Domain::Aim, shot.aim, hit, tick);
-            brain
-                .surprise
-                .outcome(cfg, Domain::Behaviour, shot.behaviour, hit, tick);
         }
     }
     /// A shot to judge once it has had time to land.
@@ -867,7 +867,6 @@ impl Session {
         bot: OwnerId,
         choice: Option<hand_combat::Choice>,
         target: Option<OwnerId>,
-        behaviour: Behaviour,
         tick: u64,
     ) {
         let Some(peer) = target.and_then(|t| self.peers.get(&t)) else {
@@ -893,7 +892,6 @@ impl Session {
         brain.surprise.fired(Shot {
             weapon: choice.map(|c| c.slot as u32),
             aim,
-            behaviour: behaviour as u32,
             target: target.unwrap_or_default(),
             spawn,
             health,

@@ -52,6 +52,8 @@ impl Arena {
             simulation.definitions.entries.insert(id.to_string(), d);
         }
         let mut s = Session::new(simulation);
+        // A fixed load pace, so a scenario plays the same on every machine.
+        s.set_load_pace(bri_sim::session::LoadPace::Bricks(4096));
         let (mut pack, mut item_ids) = fixture::synthetic_weapons().unwrap();
         for (item_id, image_id) in items {
             let mut item = pack.items[bri_weapons::testing::GUN_ITEM].clone();

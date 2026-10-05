@@ -418,6 +418,9 @@ impl Match {
             ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
         ];
         let mut s = Session::new(Simulation::new(world, definitions, floor).unwrap());
+        // A field loads at a fixed pace, not as fast as this machine can
+        // place bricks: the match then plays the same on every machine.
+        s.set_load_pace(bri_sim::session::LoadPace::Bricks(4096));
         s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
         let mut vehicles = bri_vehicles::testing::pack();
         let kit_pack = bri_vehicles::Pack::load(
@@ -993,8 +996,9 @@ fn env<T: std::str::FromStr>(key: &str, default: T) -> T {
 
 /// What a viewer would call a clean match. Shares are of bot-time (bots x
 /// seconds) or of the match, as each field says.
-/// Own goals: at most half of a match's goals (and a fifth over all
-/// seeds, checked by the caller). A defender blocking on its goal line is
+/// Own goals: about one in five of a match's goals (one more than a fifth
+/// rounds down, so a single own goal in a four-goal match passes), and a
+/// fifth over all seeds, checked by the caller. A defender blocking on its goal line is
 /// credited with a ball an attacker drives in off it, since the engine
 /// credits the last body to move the ball. A lone
 /// defender blocking in its own goal mouth is credited with the ball the
@@ -1019,7 +1023,7 @@ fn assert_clean(label: &str, setup: &Setup, r: &Report) {
             format!("one side never scored: {:?}", r.goals),
         ),
         (
-            !own_goals_bounded || r.own_goals * 2 <= total.max(1),
+            !own_goals_bounded || r.own_goals * 5 <= total.max(1) + 1,
             format!("{} own goals of {total}", r.own_goals),
         ),
         (
