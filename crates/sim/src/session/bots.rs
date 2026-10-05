@@ -658,6 +658,9 @@ struct Weapon {
 const SPREAD_BODY: f32 = 3.5;
 /// The nearest a scattering weapon's band ends, however wide its spread.
 const SPREAD_MIN_FAR: f32 = 3.0;
+/// The share of a scattering weapon's spread kept clear of allies: its
+/// pellets fall evenly across the cone, so the outer edge is thin.
+const SPREAD_CLEAR: f32 = 0.6;
 /// How far above the feet a splash weapon aims.
 const FEET_AIM: f32 = 0.2;
 impl Weapon {
@@ -736,7 +739,7 @@ fn yaw_to(delta: Vec3) -> f32 {
 /// sqrt(0.743) of one uniform draw's (the smoothstep's mean square). The
 /// aim error is scaled back up to a uniform draw's spread, so `size` (the
 /// kind's aim error, `perception`'s tracking lag) keeps its meaning.
-const DRIFT_SPREAD: f32 = 1.16;
+const DRIFT_SPREAD: f32 = 1.08;
 /// The aim error in radians (yaw, pitch) at `size`: a smooth seeded
 /// drift within about it, so it never jumps and never settles.
 fn aim_error(bot: OwnerId, tick: u64, size: f32) -> (f32, f32) {
@@ -2304,7 +2307,10 @@ impl Session {
         // far off as its aim errs now.
         let ranged = weapon.is_some_and(|w| !w.melee);
         let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
-        let aim_off = yaw_error.hypot(pitch_error);
+        // A scattering weapon's shot also fans out by its spread: allies
+        // inside most of that cone are in the line of fire too.
+        let aim_off =
+            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| w.spread * SPREAD_CLEAR);
         let attack_clear = sight.target.is_none_or(|seen| {
             self.bot_fire_clear(
                 bot,
