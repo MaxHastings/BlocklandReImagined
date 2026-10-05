@@ -57,11 +57,29 @@ impl App {
             self.ui.apply_session(id, UiUpdate::Lagging(lagging));
         }
     }
+    /// Ask this game's own host for its bots' readout, or stop asking.
+    fn want_bot_why(&self, wanted: bool) {
+        let host = self
+            .net
+            .attempt
+            .as_ref()
+            .and_then(|a| a.worker.probes.get())
+            .and_then(|p| p.host.clone());
+        if let Some(host) = host {
+            let mut held = host.lock().unwrap_or_else(|e| e.into_inner());
+            if held.bots_wanted != wanted {
+                held.bots_wanted = wanted;
+            }
+        }
+    }
     /// Feed the net graph and performance overlay while they show; nothing
     /// is sampled while both are hidden.
     pub(super) fn update_perf(&mut self) {
         let wants_net = self.ui.core.net_graph.is_some() || self.ui.core.perf.wants_net();
         let wants_stats = self.ui.core.perf.visible();
+        if !wants_stats {
+            self.want_bot_why(false);
+        }
         if !wants_net && !wants_stats {
             self.perf.net_sampler.reset();
             return;
@@ -91,14 +109,39 @@ impl App {
         self.perf.perf_stats_due = now + Duration::from_millis(500);
         let memory = crate::perf::process_memory();
         let view = self.network_view();
+        let mut bots = Vec::new();
         let server = probes.as_ref().and_then(|p| p.host.as_ref()).map(|host| {
-            let p = host.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let mut held = host.lock().unwrap_or_else(|e| e.into_inner());
+            // The host refreshes its bots' readout while this shows.
+            held.bots_wanted = true;
+            let p = held.clone();
+            drop(held);
+            bots = p.bots.clone();
             bri_ui::models::perf::ServerStats {
                 ticks_per_second: p.ticks_per_second,
                 tick_ms_mean: p.tick_ms_mean,
                 tick_ms_max: p.tick_ms_max,
                 script_ms: p.script_ms,
             }
+        });
+        // The bot the player looks at, read from the host's own readout.
+        let bot = view.and_then(|v| {
+            let me = v.poses.get(&v.owner)?.player.clone();
+            let eye = glam::Vec3::from(me.feet) + glam::Vec3::Y * 2.0 * me.scale;
+            let looked = bri_ui::models::perf::looked_at(
+                eye.to_array(),
+                me.forward().to_array(),
+                bots.iter().filter_map(|(id, _)| {
+                    let p = &v.poses.get(id)?.player;
+                    Some((
+                        *id,
+                        (glam::Vec3::from(p.feet) + glam::Vec3::Y * 1.2 * p.scale).to_array(),
+                    ))
+                }),
+            )?;
+            let (_, why) = bots.iter().find(|(id, _)| *id == looked)?;
+            let name = v.names.get(&looked).cloned().unwrap_or_default();
+            Some((name, why.clone()))
         });
         let stats = bri_ui::models::perf::PerfStats {
             bricks: view.map(|v| v.world.bricks.len()),
@@ -116,6 +159,7 @@ impl App {
                 .iter()
                 .map(|(pass, ms)| ((*pass).to_string(), *ms))
                 .collect(),
+            bot,
         };
         self.ui.apply(UiUpdate::PerfStats(stats));
     }

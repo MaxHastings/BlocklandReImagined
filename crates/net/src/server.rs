@@ -192,7 +192,14 @@ pub struct ServerPerf {
     /// Script time per Add-On package, averaged per step, busiest first.
     pub script_ms: Vec<(String, f32)>,
     pub players: u32,
+    /// Set by the host's own game while its overlay (F3) shows: the host
+    /// then refreshes [`Self::bots`] four times a second.
+    pub bots_wanted: bool,
+    /// Each bot's "why" readout (`BotThought::why`), by bot.
+    pub bots: Vec<(u64, Vec<String>)>,
 }
+/// Ticks between bot readout refreshes while the host's overlay wants them.
+const BOT_WHY_TICKS: u64 = 30;
 /// Collects step times until a window (about a second) closes.
 #[derive(Default)]
 struct PerfWindow {
@@ -233,6 +240,7 @@ impl PerfWindow {
             tick_ms_max: ms(self.max),
             script_ms,
             players,
+            ..Default::default()
         };
         *self = PerfWindow {
             started: Some(now),
@@ -1546,6 +1554,14 @@ async fn run(
             // A failing gameplay adapter must not stop the host for everyone.
             if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
             let tick=session.simulation().state().tick;
+            if tick.is_multiple_of(BOT_WHY_TICKS) {
+                let mut held=perf.lock().unwrap_or_else(|e|e.into_inner());
+                if held.bots_wanted {
+                    held.bots=session.bot_why();
+                } else if !held.bots.is_empty() {
+                    held.bots.clear();
+                }
+            }
             if tick.is_multiple_of(POSE_INTERVAL) {
                 let viewers:Vec<_>=peers.keys().map(|owner|(*owner,session.viewpoint(*owner))).collect();
                 send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers));
@@ -1592,7 +1608,10 @@ async fn run(
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
                 && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {
-                *perf.lock().unwrap_or_else(|e|e.into_inner())=summary;
+                let mut held=perf.lock().unwrap_or_else(|e|e.into_inner());
+                // The overlay's request and the bots' readout carry over.
+                let bots=std::mem::take(&mut held.bots);
+                *held=ServerPerf{bots_wanted:held.bots_wanted,bots,..summary};
             }
         },
     }}Ok(())})).await;

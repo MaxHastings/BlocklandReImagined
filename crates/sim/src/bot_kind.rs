@@ -9,6 +9,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 mod surprise;
+pub mod tuning;
 pub use surprise::{BotSurprise, INTERRUPTS};
 
 pub const SCHEMA_VERSION: u32 = 1;

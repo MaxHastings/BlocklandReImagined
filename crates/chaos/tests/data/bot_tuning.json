@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "note": "The bot tuning tools' settings (docs/architecture/bots.md, Tuning). Dials are read by path from packages/blockhead_bot/assets/bots.json: every section's `strength` is found by itself, plus each path listed here that bots.json has (a missing one is reported and skipped). BRI_TUNING_DIALS=a.b,c.d replaces the list.",
+  "dials": [
+    "surprise.strength",
+    "behaviours.interact",
+    "behaviours.objective"
+  ],
+  "on_value": 1.0,
+  "grid": {
+    "surprise.strength": [0, 0.5, 1]
+  },
+  "unchanged": {
+    "note": "An ablation moving every metric less than this is 'no measurable change': a cut candidate. Frame cost is reported but not judged (timing noise).",
+    "objective_share": 0.05,
+    "variety": 0.05,
+    "goof": 0.005,
+    "goof_waves": 0.005,
+    "stuck": 0.005,
+    "team_kills": 0.5
+  },
+  "weights": {
+    "note": "Sweep score: stay inside every band first (each band broken, and each scenario that failed its own checks, costs its weight), then the most variety and goof waves, then the least stuck time and frame cost (relative to the base point).",
+    "band": 10.0,
+    "broken": 20.0,
+    "variety": 1.0,
+    "goof_waves": 20.0,
+    "stuck": 5.0,
+    "frame": 0.5
+  }
+}

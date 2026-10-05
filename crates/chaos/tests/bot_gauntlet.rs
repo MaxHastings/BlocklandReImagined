@@ -145,7 +145,7 @@ impl Battle {
     ) -> Report {
         let mut scorer = Scorer::new(self.name, floor);
         for _ in 0..seconds * TICKS_PER_SECOND * rounds() {
-            self.arena.step(1);
+            timed_step(&mut self.arena, &mut scorer.report);
             let s = &self.arena.s;
             let vitals = s.vitals();
             let sides = &self.sides;
@@ -156,7 +156,7 @@ impl Battle {
             });
             each(s, &mut scorer.report);
         }
-        scorer.report.print();
+        finish(&scorer.report);
         scorer.report
     }
 }
@@ -797,7 +797,7 @@ fn checkpoint_race() {
     let mut scorer = Scorer::new("checkpoint_race", 0.0);
     let mut won_at = None;
     for tick in 0..90 * TICKS_PER_SECOND * rounds() {
-        arena.step(1);
+        timed_step(&mut arena, &mut scorer.report);
         // Racing is the work: any strolling is idling.
         scorer.sample(&arena.s, &sides, |_| true);
         if won_at.is_none() && arena.s.round_results().next().is_some() {
@@ -820,7 +820,7 @@ fn checkpoint_race() {
         "racers_with_a_lap".into(),
         laps.iter().filter(|l| **l > 0).count() as i64,
     );
-    scorer.report.print();
+    finish(&scorer.report);
     let r = scorer.report;
 
     // Measured: stuck 0.5%, idle 0.2%, circling 14% (out-and-back track),
@@ -895,4 +895,96 @@ fn surprise_by_strength() {
             );
         }
     }
+}
+
+/// The scenarios the tuning tools replay (`gauntlet::tuning`): every one
+/// above that plays the shipped kinds (`surprise_by_strength` sets its own
+/// strengths).
+const SCENARIOS: &[gauntlet::tuning::Scenario] = &[
+    ("deathmatch_open_field", deathmatch_open_field),
+    ("deathmatch_mixed_arsenal", deathmatch_mixed_arsenal),
+    ("rooftop_brawl_without_rails", rooftop_brawl_without_rails),
+    ("stairs_to_a_deck", stairs_to_a_deck),
+    ("water_between_the_sides", water_between_the_sides),
+    ("a_jeep_on_each_side", a_jeep_on_each_side),
+    ("weapons_lying_on_the_ground", weapons_lying_on_the_ground),
+    ("zombie_survival", zombie_survival),
+    ("capture_the_flag", capture_the_flag),
+    ("runners_cross_head_on", runners_cross_head_on),
+    (
+        "a_run_longer_than_the_approach_timeout",
+        a_run_longer_than_the_approach_timeout,
+    ),
+    ("checkpoint_race", checkpoint_race),
+];
+
+/// The off-switch check: each top-level dial of `bots.json` at 0, one at a
+/// time (a dial shipped at 0 is turned on instead), over the scenarios;
+/// prints and writes `target/bot-tuning/ablation.{csv,txt}`, flagging a
+/// dial whose change moves nothing as a cut candidate.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet off_switches -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning tool: slow"]
+fn off_switches() {
+    eprintln!("{}", gauntlet::tuning::ablation(SCENARIOS));
+}
+
+/// The sweep: dial values over the scenarios, `BRI_TUNING_SEEDS` seeds a
+/// point, scored against the bands and ranked; writes
+/// `target/bot-tuning/sweep.csv` and `sweep_summary.txt`.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet dial_sweep -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning tool: slow"]
+fn dial_sweep() {
+    eprintln!("{}", gauntlet::tuning::sweep(SCENARIOS));
+}
+
+/// The tools' plumbing: a dial set for a run reaches the kinds its
+/// scenario builds, a scenario's report is handed over, and a seed other
+/// than 0 plays other random streams.
+#[test]
+fn tuning_dials_and_seeds_reach_the_scenario() {
+    use gauntlet::tuning::{Setting, run_all};
+    let settings = [
+        Setting {
+            label: "plain".into(),
+            dials: Vec::new(),
+        },
+        Setting {
+            label: "on".into(),
+            dials: vec![("surprise.strength".into(), 1.0)],
+        },
+    ];
+    let runs = run_all(&[("probe", tuning_probe)], &settings, 2);
+    assert_eq!(runs.len(), 4);
+    for (_, _, _, m) in &runs {
+        assert!(m.broken.is_none(), "{:?}", m.broken);
+    }
+    let goof = |setting: usize, seed: u64| {
+        runs.iter()
+            .find(|r| r.0 == setting && r.2 == seed)
+            .unwrap()
+            .3
+            .goof
+    };
+    assert_eq!(
+        goof(0, 0) + goof(0, 1),
+        0.0,
+        "the plain brain does not goof"
+    );
+    assert!(goof(1, 0) > 0.0, "strength 1 reached the kinds");
+    assert_ne!(goof(1, 0), goof(1, 1), "another seed, other streams");
+}
+
+/// Three idle bots for 30 s (surprise's idle pause), for the test above.
+fn tuning_probe() {
+    use bri_weapons::testing::*;
+    let mut spec = Spec::new(
+        "tuning_probe",
+        line(-73.0, 0.0, 50.0, 3),
+        Vec::new(),
+        &[ROCKET_ITEM, GUN],
+    );
+    spec.blue_bricks = floor(Vec3::new(60.0, 0.0, 60.0), [1, 1], 1.0);
+    battle(spec, |_| {}).play(0.0, 30, |_, _| {});
 }
