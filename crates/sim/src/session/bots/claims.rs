@@ -1,5 +1,6 @@
 //! Advisory reservations, separate from occupancy and action authority.
 use super::OwnerId;
+use glam::Vec3;
 use std::collections::BTreeMap;
 
 const MAX_CLAIMS: usize = 16;
@@ -47,10 +48,54 @@ pub(super) struct Claim {
     pub best_distance: f32,
 }
 
+/// What a bot is doing now, published for its side to read (`team`). Not a
+/// reservation: any number may share a target. It lapses unless renewed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Intent {
+    /// The chosen option (a behaviour's index) and since when.
+    pub option: u8,
+    pub since: u64,
+    /// Where the option takes it, and what it acts on.
+    pub place: Option<Vec3>,
+    pub target: Option<Target>,
+    /// A vehicle whose controls it holds while a seat is free.
+    pub seats: Option<u64>,
+    /// Where its weapon will hit.
+    pub harm: Option<Harm>,
+    /// From a seat it does not drive: the line it needs to what it is after.
+    pub sight: Option<Sightline>,
+    /// The idle flavour it is doing (`surprise`), if any.
+    pub flavour: Option<u8>,
+    pub until: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Target {
+    Player(OwnerId),
+    Object(u64),
+}
+
+/// A line from a mount `offset` from `vehicle`'s origin to `to`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Sightline {
+    pub vehicle: u64,
+    pub offset: Vec3,
+    pub to: Vec3,
+}
+
+/// A shot's line from `from` to `to`, within `radius` of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Harm {
+    pub from: Vec3,
+    pub to: Vec3,
+    pub radius: f32,
+}
+
 #[derive(Default)]
 pub(super) struct Claims {
     active: BTreeMap<OwnerId, Claim>,
     failures: BTreeMap<(OwnerId, Resource), u64>,
+    intents: BTreeMap<OwnerId, Intent>,
 }
 
 fn valid_distance(distance: f32) -> bool {
@@ -58,6 +103,22 @@ fn valid_distance(distance: f32) -> bool {
 }
 
 impl Claims {
+    pub(super) fn publish(&mut self, owner: OwnerId, intent: Intent) {
+        self.intents.insert(owner, intent);
+    }
+
+    pub(super) fn forget(&mut self, owner: OwnerId) {
+        self.intents.remove(&owner);
+    }
+
+    /// Live intents; a caller keeps its allies'.
+    pub(super) fn intents(&self, tick: u64) -> impl Iterator<Item = (OwnerId, Intent)> + '_ {
+        self.intents
+            .iter()
+            .filter(move |(_, i)| tick < i.until)
+            .map(|(o, i)| (*o, *i))
+    }
+
     pub(super) fn owner_claim(&self, owner: OwnerId, tick: u64) -> Option<Claim> {
         self.active
             .get(&owner)
@@ -230,6 +291,7 @@ impl Claims {
             .filter(|c| tick >= c.deadline)
             .collect();
         self.active.retain(|_, c| tick < c.deadline);
+        self.intents.retain(|_, i| tick < i.until);
         self.failures.retain(|_, until| tick < *until);
         for c in expired {
             let until = c.deadline.saturating_add(RETRY);

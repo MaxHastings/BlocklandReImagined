@@ -241,6 +241,10 @@ pub(super) struct Pause {
     /// the one in hand.
     pub other_tool: bool,
     pub spare_weapon: bool,
+    /// Mood (`team::mood`): how much likelier any flavour is, and each one,
+    /// from bots nearby doing one.
+    pub pull: f32,
+    pub copy: [f32; 11],
 }
 /// An interrupt this tick.
 #[derive(Clone, Copy, Debug)]
@@ -266,6 +270,9 @@ pub(super) struct Mind {
     pub gate: Gate,
     interrupt: Option<Interrupt>,
     next_interrupt: u64,
+    /// Seconds spent in flavours, halving every `boredom_seconds` (as of
+    /// the tick beside it): the whole kind grows stale, not one flavour.
+    stale: (f32, u64),
     shots: Vec<Shot>,
 }
 impl Mind {
@@ -569,8 +576,13 @@ impl Mind {
         if let Some(i) = self.interrupt {
             if !pause.natural || pause.gate.closed().is_some() || tick >= i.until {
                 self.interrupt = None;
-                self.next_interrupt =
-                    tick + (cfg.interrupt_cooldown_seconds * TICKS).round() as u64;
+                // Others about still at it cut the rest short (`team::mood`).
+                self.next_interrupt = tick
+                    + (cfg.interrupt_cooldown_seconds * TICKS / (1.0 + pause.pull)).round() as u64;
+                self.stale = (
+                    self.stale(cfg, tick) + tick.saturating_sub(i.since) as f32 / TICKS,
+                    tick,
+                );
                 return Moment::End(i);
             }
             return Moment::Continue(i);
@@ -583,7 +595,9 @@ impl Mind {
         {
             return Moment::None;
         }
-        let chance = cfg.interrupts_per_minute * cfg.strength / (60.0 * TICKS);
+        let chance = cfg.interrupts_per_minute * cfg.strength * (1.0 + pause.pull)
+            / (1.0 + cfg.boredom * self.stale(cfg, tick))
+            / (60.0 * TICKS);
         if self.random() >= chance {
             return Moment::None;
         }
@@ -596,7 +610,12 @@ impl Mind {
         let weights: Vec<(Flavour, f32)> = Flavour::ALL
             .into_iter()
             .filter(|f| possible(*f))
-            .map(|f| (f, cfg.interrupt_weight(f.name())))
+            .map(|f| {
+                (
+                    f,
+                    cfg.interrupt_weight(f.name()) * (1.0 + pause.copy[f as usize]),
+                )
+            })
             .filter(|(_, w)| *w > 0.0)
             .collect();
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
@@ -623,6 +642,11 @@ impl Mind {
         };
         self.interrupt = Some(i);
         Moment::Begin(i)
+    }
+    fn stale(&self, cfg: &BotSurprise, tick: u64) -> f32 {
+        let (seconds, at) = self.stale;
+        let half_lives = tick.saturating_sub(at) as f32 / (cfg.boredom_seconds * TICKS);
+        seconds * 0.5f32.powf(half_lives)
     }
     /// Keep what an interrupt under way remembers (the tool to put back).
     pub(super) fn set_restore(&mut self, restore: Option<usize>) {
@@ -1008,6 +1032,7 @@ impl Session {
             player,
             other_tool,
             spare_weapon,
+            ..Default::default()
         }
     }
     /// Carry out a flavour interrupt: the commands a player would give as

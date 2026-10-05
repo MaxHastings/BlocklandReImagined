@@ -9,7 +9,9 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 mod surprise;
+mod team;
 pub use surprise::{BotSurprise, INTERRUPTS};
+pub use team::{BotTeam, TERMS};
 
 pub const SCHEMA_VERSION: u32 = 1;
 /// Bot kinds one server knows, over every Add-On.
@@ -101,6 +103,9 @@ pub struct BotKind {
     /// How its choices vary and change over time (`surprise`); its
     /// `strength` 0 is the plain brain.
     pub surprise: BotSurprise,
+    /// How teammates' intents weigh in its choices (`team`); all zero is
+    /// no coordination.
+    pub team: BotTeam,
 }
 /// How a bot moves in a fight: when a fight turns into a chase and back,
 /// and how a ranged fighter strafes.
@@ -292,6 +297,7 @@ impl Default for BotKind {
             mounted: BotMounted::default(),
             fighting: BotFighting::default(),
             surprise: BotSurprise::default(),
+            team: BotTeam::default(),
         }
     }
 }
@@ -468,6 +474,9 @@ impl BotKind {
         self.surprise
             .validate()
             .with_context(|| format!("Bot `{}`", self.id))?;
+        self.team
+            .validate()
+            .with_context(|| format!("Bot `{}`", self.id))?;
         Ok(())
     }
 }
@@ -561,6 +570,8 @@ mod tests {
             r#""surprise":{"band":-0.1}"#,
             r#""surprise":{"interrupts":{"teleport":1}}"#,
             r#""surprise":{"loud":1}"#,
+            r#""team":{"harm":-1}"#,
+            r#""team":{"callouts":{"shout":"Hi"}}"#,
         ] {
             let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
             assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");

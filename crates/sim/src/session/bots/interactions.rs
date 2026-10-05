@@ -86,7 +86,7 @@ const CONTESTED: f32 = 3.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Opportunity {
-    resource: Resource,
+    pub(super) resource: Resource,
     pub point: Vec3,
     pub utility: f32,
 }

@@ -1,0 +1,651 @@
+//! Coordination (`docs/architecture/bots.md`, "Coordination"). Every bot
+//! publishes its current choice as an intent beside the claims: where it
+//! goes, what it acts on, a vehicle whose free seats it controls, and the
+//! line its weapon will hit. Each bot then reads its allies' intents into
+//! its own scores through two terms: overlap (the same target, or a place
+//! close to theirs, costs more) and interaction (taking a seat they expose
+//! scores more, a place their weapon will hit costs more). A third, mood,
+//! raises the chance of an idle flavour as nearby bots of either side are
+//! doing one, and of the same one. Nothing here chooses: the brain's
+//! chooser, with its surprise and commitments, still picks.
+use super::claims::{Harm, Intent, Sightline, Target};
+use super::*;
+use crate::bot_kind::BotTeam;
+
+/// What one of a bot's options would do.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Choice {
+    pub place: Option<Vec3>,
+    pub target: Option<Target>,
+    /// The vehicle whose seat it would take.
+    pub seat: Option<u64>,
+    /// The vehicle it drives there, and that vehicle's origin from its place.
+    pub carries: Option<(u64, Vec3)>,
+}
+
+/// What allies' intents add to one option's score.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Terms {
+    pub overlap: f32,
+    pub uses: f32,
+    pub harm: f32,
+}
+impl Terms {
+    pub(super) fn total(self) -> f32 {
+        self.uses - self.overlap - self.harm
+    }
+}
+
+/// A bot's coordination state: the terms of its last choice and when it
+/// may call out again.
+#[derive(Clone, Debug, Default)]
+pub(super) struct State {
+    pub terms: [Terms; 10],
+    pub allies: usize,
+    pub next_callout: u64,
+    pub said: Option<String>,
+}
+
+/// Whether a body standing at `feet`, `body` high, is where `harm` hits.
+fn inside(harm: &Harm, feet: Vec3, body: f32) -> bool {
+    let centre = feet + Vec3::Y * body * 0.5;
+    let line = harm.to - harm.from;
+    let along = (centre - harm.from).dot(line) / line.length_squared().max(1e-6);
+    let nearest = harm.from + line * along.clamp(0.0, 1.0);
+    centre.distance(nearest) < harm.radius + body * 0.5
+}
+
+/// The terms allies' intents add to `choice`, which `me` holds `since`.
+/// Only an ally who took its target or place up first makes an overlap,
+/// so the later of two gives way and the first keeps it. `clear` says
+/// whether nothing solid stands between two points.
+pub(super) fn terms(
+    cfg: &BotTeam,
+    me: OwnerId,
+    since: u64,
+    choice: Choice,
+    allies: &[(OwnerId, Intent)],
+    body: f32,
+    clear: &dyn Fn(Vec3, Vec3) -> bool,
+) -> Terms {
+    let mut t = Terms::default();
+    for (ally, intent) in allies {
+        if (intent.since, *ally) < (since, me) {
+            if choice.target.is_some() && choice.target == intent.target {
+                t.overlap += cfg.overlap;
+            } else if let (Some(a), Some(b)) = (choice.place, intent.place)
+                && a.distance(b) < cfg.overlap_radius
+            {
+                t.overlap += cfg.overlap * (1.0 - a.distance(b) / cfg.overlap_radius);
+            }
+        }
+        if choice.seat.is_some() && choice.seat == intent.seats {
+            t.uses += cfg.uses;
+        }
+        // Taking an ally's mount where it sees what it is after.
+        if let (Some(at), Some((vehicle, origin)), Some(s)) =
+            (choice.place, choice.carries, intent.sight)
+            && vehicle == s.vehicle
+            && clear(at + origin + s.offset, s.to)
+        {
+            t.uses += cfg.uses;
+        }
+        if let (Some(at), Some(harm)) = (choice.place, intent.harm.as_ref())
+            && inside(harm, at, body)
+        {
+            t.harm += cfg.harm;
+        }
+    }
+    t
+}
+
+/// The nearest place to `feet` that no ally's weapon will hit, when it
+/// stands where one will.
+pub(super) fn exit(allies: &[(OwnerId, Intent)], feet: Vec3, body: f32) -> Option<Vec3> {
+    let mut at = feet;
+    for _ in 0..3 {
+        let Some(h) = allies
+            .iter()
+            .filter_map(|(_, i)| i.harm)
+            .find(|h| inside(h, at, body))
+        else {
+            return (at != feet).then_some(at);
+        };
+        let line = flat(h.to - h.from);
+        let along = flat(at - h.from).dot(line) / line.length_squared().max(1e-6);
+        let nearest = h.from + (h.to - h.from) * along.clamp(0.0, 1.0);
+        let away = flat(at - nearest)
+            .try_normalize()
+            .unwrap_or_else(|| Vec3::new(-line.z, 0.0, line.x).normalize_or(Vec3::X));
+        let out = flat(nearest) + away * (h.radius + body + 0.5);
+        at = Vec3::new(out.x, feet.y, out.z);
+    }
+    None
+}
+
+/// Adjust each live option's score by allies' intents. An option keeps a
+/// score above zero: what the brain could do stays an option.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn adjust(
+    cfg: &BotTeam,
+    me: OwnerId,
+    sinces: impl Fn(usize) -> u64,
+    scores: &mut [f32; 10],
+    choices: &[Choice; 10],
+    allies: &[(OwnerId, Intent)],
+    body: f32,
+    clear: &dyn Fn(Vec3, Vec3) -> bool,
+) -> [Terms; 10] {
+    let mut all = [Terms::default(); 10];
+    for (b, score) in scores.iter_mut().enumerate() {
+        if *score > 0.0 {
+            all[b] = terms(cfg, me, sinces(b), choices[b], allies, body, clear);
+            *score = (*score + all[b].total()).max(f32::MIN_POSITIVE);
+        }
+    }
+    all
+}
+
+/// The callout for a choice the terms changed from `before` to `after`:
+/// the template of whichever term moved it most.
+pub(super) fn callout<'a>(
+    cfg: &'a BotTeam,
+    terms: &[Terms; 10],
+    before: usize,
+    after: usize,
+) -> Option<&'a str> {
+    let pulls = [
+        ("overlap", terms[before].overlap - terms[after].overlap),
+        ("uses", terms[after].uses - terms[before].uses),
+        ("harm", terms[before].harm - terms[after].harm),
+    ];
+    let (term, by) = pulls.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))?;
+    (by > 0.0).then(|| cfg.callouts.get(term).map(String::as_str))?
+}
+
+/// How much more likely an idle flavour is, and each one, from players it
+/// sees within `mood_radius` of `at`, of either side, doing one: `mood`
+/// times the share doing any, and times the share doing each, both at
+/// most `mood_cap`. Each counts by its weight (a person `mood_human`, a
+/// bot 1); one out of sight counts not at all.
+pub(super) fn mood(
+    cfg: &BotTeam,
+    me: OwnerId,
+    at: Vec3,
+    others: impl Iterator<Item = (OwnerId, Vec3, Option<u8>, f32, bool)>,
+) -> (f32, [f32; 11]) {
+    let mut near = 0.0f32;
+    let mut doing = [0.0f32; 11];
+    for (who, feet, flavour, weight, seen) in others {
+        if who != me && seen && feet.distance(at) < cfg.mood_radius {
+            near += weight;
+            if let Some(f) = flavour.filter(|f| usize::from(*f) < 11) {
+                doing[usize::from(f)] += weight;
+            }
+        }
+    }
+    if near <= 0.0 {
+        return (0.0, [0.0; 11]);
+    }
+    let pull = |n: f32| (cfg.mood * n / near).min(cfg.mood_cap);
+    (pull(doing.iter().sum()), doing.map(pull))
+}
+
+/// Why a bot's last choice moved, for the why-view: how many allies'
+/// intents it read, each option's terms that are not zero (behaviour,
+/// overlap, uses, harm), and its last callout.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BotTeamView {
+    pub allies: usize,
+    pub terms: Vec<(&'static str, f32, f32, f32)>,
+    pub said: Option<String>,
+}
+impl State {
+    pub(super) fn view(&self) -> BotTeamView {
+        BotTeamView {
+            allies: self.allies,
+            terms: Behaviour::ALL
+                .into_iter()
+                .zip(self.terms)
+                .filter(|(_, t)| *t != Terms::default())
+                .map(|(b, t)| (b.name(), t.overlap, t.uses, t.harm))
+                .collect(),
+            said: self.said.clone(),
+        }
+    }
+}
+
+impl Session {
+    /// Allies' live intents, read by `bot`.
+    pub(super) fn team_intents(&self, bot: OwnerId, tick: u64) -> Vec<(OwnerId, Intent)> {
+        self.bots
+            .claims
+            .intents(tick)
+            .filter(|(o, _)| *o != bot && self.bot_allies(bot, *o))
+            .collect()
+    }
+
+    /// The vehicle whose controls `bot` holds while one of its seats is free.
+    pub(super) fn team_seats(&self, bot: OwnerId) -> Option<u64> {
+        let (vehicle, seat) = self.mounted(bot)?;
+        let w = self.vehicles.world.as_ref()?;
+        let d = w.definition_of(bri_vehicles::VehicleId(vehicle))?;
+        (d.seats.get(usize::from(seat))?.controls
+            && (0..d.seats.len()).any(|s| {
+                w.seat_occupant(bri_vehicles::VehicleId(vehicle), s)
+                    .is_none()
+            }))
+        .then_some(vehicle)
+    }
+
+    /// The mood pull on `bot` at `at`, its eye at `eye`: each bot's
+    /// published flavour, and a person's one visible flavour, an emote in
+    /// the last `EMOTED` ticks; only those it has in sight count.
+    pub(super) fn team_mood(
+        &self,
+        bot: OwnerId,
+        at: Vec3,
+        eye: Vec3,
+        tick: u64,
+    ) -> (f32, [f32; 11]) {
+        const EMOTED: u64 = 240;
+        let Some(brain) = self.bots.brains.get(&bot) else {
+            return (0.0, [0.0; 11]);
+        };
+        let cfg = &brain.kind.team;
+        let intents: BTreeMap<_, _> = self.bots.claims.intents(tick).collect();
+        let others = self.peers.iter().filter_map(|(o, p)| {
+            let feet = Vec3::from(p.player.state().feet);
+            if !p.combat.alive || *o == bot || feet.distance(at) >= cfg.mood_radius {
+                return None;
+            }
+            let seen = self.clear_between(eye, p.player.eye());
+            if self.bots.is_bot(*o) {
+                return Some((*o, feet, intents.get(o)?.flavour, 1.0, seen));
+            }
+            let emoted = p
+                .combat
+                .voice
+                .is_some_and(|t| tick.saturating_sub(t) < EMOTED);
+            Some((*o, feet, emoted.then_some(1), cfg.mood_human, seen))
+        });
+        mood(cfg, bot, at, others)
+    }
+
+    /// Nothing solid between two points.
+    pub(super) fn clear_between(&self, from: Vec3, to: Vec3) -> bool {
+        let d = to - from;
+        self.world_ray(from, d.normalize_or_zero(), d.length())
+            .is_none()
+    }
+
+    /// What a seated bot needs from whoever drives it: a line from its
+    /// mount (`eye`) to what it is after.
+    pub(super) fn team_sightline(
+        &self,
+        bot: OwnerId,
+        eye: Vec3,
+        to: Option<Vec3>,
+    ) -> Option<Sightline> {
+        let (vehicle, _) = self.mounted(bot)?;
+        let v = self.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
+        Some(Sightline {
+            vehicle,
+            offset: eye - Vec3::from(v.transform.position),
+            to: to?,
+        })
+    }
+
+    /// The vehicle `bot` drives, and its origin from the bot's `feet`.
+    pub(super) fn team_carries(&self, bot: OwnerId, feet: Vec3) -> Option<(u64, Vec3)> {
+        let (vehicle, _) = self.mounted(bot)?;
+        let v = self.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
+        Some((vehicle, Vec3::from(v.transform.position) - feet))
+    }
+
+    /// Say a callout in team chat, as a player would type it.
+    pub(super) fn team_say(&mut self, bot: OwnerId, line: String, tick: u64) -> Result<()> {
+        let Some(brain) = self.bots.brains.get_mut(&bot) else {
+            return Ok(());
+        };
+        brain.team.next_callout = tick + (brain.kind.team.callout_seconds * 120.0) as u64;
+        brain.team.said = Some(line.clone());
+        let sequence = brain.sequence;
+        let _ = self.command(bot, sequence, Command::TeamChat(line));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg() -> BotTeam {
+        BotTeam {
+            overlap: 0.2,
+            overlap_radius: 4.0,
+            uses: 0.15,
+            harm: 0.6,
+            mood: 16.0,
+            mood_radius: 20.0,
+            mood_cap: 10.0,
+            mood_human: 3.0,
+            callout_seconds: 10.0,
+            callouts: [("harm".to_string(), "Moving!".to_string())].into(),
+        }
+    }
+
+    fn intent(since: u64) -> Intent {
+        Intent {
+            option: 0,
+            since,
+            place: None,
+            target: None,
+            seats: None,
+            harm: None,
+            sight: None,
+            flavour: None,
+            until: u64::MAX,
+        }
+    }
+
+    fn open(_: Vec3, _: Vec3) -> bool {
+        true
+    }
+
+    fn at(x: f32, z: f32) -> Choice {
+        Choice {
+            place: Some(Vec3::new(x, 0.0, z)),
+            ..Default::default()
+        }
+    }
+
+    fn shooter() -> Intent {
+        Intent {
+            harm: Some(Harm {
+                from: Vec3::ZERO,
+                to: Vec3::new(0.0, 0.0, -20.0),
+                radius: 3.0,
+            }),
+            ..intent(0)
+        }
+    }
+
+    #[test]
+    fn overlap_with_an_earlier_allys_target_or_place_costs_more() {
+        let cfg = cfg();
+        let x = Target::Player(9);
+        let ally = Intent {
+            target: Some(x),
+            place: Some(Vec3::ZERO),
+            ..intent(10)
+        };
+        let same = Choice {
+            target: Some(x),
+            ..Default::default()
+        };
+        let cost = |allies: &[(OwnerId, Intent)], since| {
+            terms(&cfg, 2, since, same, allies, 2.0, &open).overlap
+        };
+        assert_eq!(cost(&[(1, ally)], 20), 0.2);
+        assert!(
+            cost(&[(1, ally), (3, ally)], 20) > 0.2,
+            "each ally on it adds"
+        );
+        assert_eq!(
+            cost(&[(1, ally)], 5),
+            0.0,
+            "the one who took it first keeps it"
+        );
+        let near = |d: f32| terms(&cfg, 2, 20, at(d, 0.0), &[(1, ally)], 2.0, &open).overlap;
+        assert!(near(1.0) > near(3.0) && near(3.0) > 0.0 && near(5.0) == 0.0);
+    }
+
+    #[test]
+    fn an_exposed_seat_scores_more_and_a_harm_volume_costs() {
+        let cfg = cfg();
+        let driver = Intent {
+            seats: Some(44),
+            ..intent(0)
+        };
+        let seat = |vehicle| Choice {
+            seat: Some(vehicle),
+            ..Default::default()
+        };
+        assert_eq!(
+            terms(&cfg, 2, 0, seat(44), &[(1, driver)], 2.0, &open).uses,
+            0.15
+        );
+        assert_eq!(
+            terms(&cfg, 2, 0, seat(45), &[(1, driver)], 2.0, &open).uses,
+            0.0
+        );
+        let harm = |c| terms(&cfg, 2, 0, c, &[(1, shooter())], 2.0, &open).harm;
+        // On the line, and in its blast radius at the end: cost. Beside: none.
+        assert_eq!(harm(at(0.5, -10.0)), 0.6);
+        assert_eq!(harm(at(2.0, -21.0)), 0.6);
+        assert_eq!(harm(at(8.0, -10.0)), 0.0);
+        let out = exit(&[(1, shooter())], Vec3::new(0.5, 0.0, -10.0), 2.0).unwrap();
+        assert!(!inside(&shooter().harm.unwrap(), out, 2.0) && out.x > 0.5);
+        assert_eq!(
+            exit(&[(1, shooter())], Vec3::new(8.0, 0.0, -10.0), 2.0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_driver_scores_places_that_give_its_seated_ally_a_line_of_sight() {
+        let cfg = cfg();
+        // The gunner's mount is 2 up from the vehicle's origin; a wall
+        // stands between x < 0 and the target at the origin's far side.
+        let gunner = Intent {
+            sight: Some(Sightline {
+                vehicle: 7,
+                offset: Vec3::Y * 2.0,
+                to: Vec3::new(0.0, 1.0, -30.0),
+            }),
+            ..intent(0)
+        };
+        let wall = |from: Vec3, _: Vec3| from.x >= 0.0;
+        let drive = |x: f32, vehicle: u64| Choice {
+            carries: Some((vehicle, Vec3::Y * 0.5)),
+            ..at(x, 0.0)
+        };
+        let uses = |c| terms(&cfg, 2, 0, c, &[(1, gunner)], 2.0, &wall).uses;
+        assert_eq!(uses(drive(4.0, 7)), 0.15, "a place the mount sees from");
+        assert_eq!(uses(drive(-4.0, 7)), 0.0, "a place behind the wall");
+        assert_eq!(uses(drive(4.0, 8)), 0.0, "another vehicle's mount");
+        assert_eq!(uses(at(4.0, 0.0)), 0.0, "on foot it carries no mount");
+    }
+
+    #[test]
+    fn a_clearly_better_own_option_still_wins_and_options_stay_options() {
+        let cfg = cfg();
+        let mut choices = [Choice::default(); 10];
+        choices[Behaviour::Fight as usize] = at(0.0, -10.0);
+        let pick = |fight: f32| {
+            let mut scores = [0.0; 10];
+            scores[Behaviour::Fight as usize] = fight;
+            scores[Behaviour::Wander as usize] = 0.1;
+            let all = [(1, shooter())];
+            adjust(&cfg, 2, |_| 0, &mut scores, &choices, &all, 2.0, &open);
+            (behaviour::best(&scores), scores)
+        };
+        assert_eq!(pick(1.0).0, Behaviour::Fight, "0.4 still beats 0.1");
+        let (b, scores) = pick(0.65);
+        assert_eq!(b, Behaviour::Wander);
+        assert!(
+            scores[Behaviour::Fight as usize] > 0.0,
+            "a costed option stays one"
+        );
+        assert_eq!(scores[0], 0.0, "no option is made up");
+    }
+
+    #[test]
+    fn the_surprise_band_and_hold_still_apply_to_adjusted_scores() {
+        let team = cfg();
+        let surprise = crate::bot_kind::BotSurprise {
+            strength: 1.0,
+            ..Default::default()
+        };
+        // An ally on the same target costs Fight into Chase's band: over
+        // many seeds the chooser takes each sometimes, and holds its pick.
+        let ally = Intent {
+            target: Some(Target::Player(9)),
+            ..intent(0)
+        };
+        let mut choices = [Choice::default(); 10];
+        choices[Behaviour::Fight as usize].target = Some(Target::Player(9));
+        let (mut fights, mut chases) = (0, 0);
+        for seed in 1..200u64 {
+            let mut scores = [0.0; 10];
+            scores[Behaviour::Fight as usize] = 0.8;
+            scores[Behaviour::Chase as usize] = 0.6;
+            let all = [(0, ally)];
+            adjust(&team, seed, |_| 10, &mut scores, &choices, &all, 2.0, &open);
+            let mut mind = surprise::Mind::new(seed);
+            let gate = surprise::Gate::default();
+            let plain = behaviour::best(&scores);
+            let (first, _) = surprise::behaviour(
+                &mut mind,
+                &surprise,
+                &scores,
+                plain,
+                Behaviour::Wander,
+                gate,
+                100,
+            );
+            let (again, _) =
+                surprise::behaviour(&mut mind, &surprise, &scores, plain, first, gate, 101);
+            assert_eq!(first, again, "a pick is held");
+            match first {
+                Behaviour::Fight => fights += 1,
+                Behaviour::Chase => chases += 1,
+                _ => {}
+            }
+        }
+        assert!(fights > 0 && chases > 0, "{fights} fights, {chases} chases");
+    }
+
+    #[test]
+    fn mood_pull_rises_with_the_share_seen_doing_a_flavour_and_is_capped() {
+        let cfg = cfg();
+        let crowd = |doing: u64, of: u64| {
+            let others = (1..=of).map(move |o| (o, Vec3::X, (o <= doing).then_some(2), 1.0, true));
+            mood(&cfg, 0, Vec3::ZERO, others)
+        };
+        assert_eq!(crowd(0, 4).0, 0.0);
+        assert!(crowd(1, 8).0 < crowd(2, 8).0 && crowd(2, 8).0 < crowd(4, 8).0);
+        assert_eq!(crowd(8, 8).0, cfg.mood_cap);
+        assert_eq!(crowd(1, 4).1[2], cfg.mood * 0.25);
+        assert_eq!(crowd(1, 4).1[3], 0.0);
+        let one = |feet: Vec3, seen: bool, weight: f32| {
+            let first = [(1, feet, Some(2), weight, seen)];
+            let rest = (2..=8).map(|o| (o, Vec3::X, None, 1.0, true));
+            mood(&cfg, 0, Vec3::ZERO, first.into_iter().chain(rest)).0
+        };
+        assert!(one(Vec3::X, true, 1.0) > 0.0);
+        assert_eq!(one(Vec3::X, false, 1.0), 0.0, "out of sight, no pull");
+        assert_eq!(one(Vec3::X * 99.0, true, 1.0), 0.0, "out of range, no pull");
+        assert!(
+            one(Vec3::X, true, cfg.mood_human) > one(Vec3::X, true, 1.0),
+            "a person pulls harder than a bot"
+        );
+        let people = (1..=8).map(|o| (o, Vec3::X, Some(2), cfg.mood_human, true));
+        assert_eq!(mood(&cfg, 0, Vec3::ZERO, people).0, cfg.mood_cap);
+    }
+
+    /// Twelve bots in sight of each other at a long pause, each taking up
+    /// flavours by its own chooser with the mood pull from the others: the
+    /// share doing one, once a second, over an hour.
+    fn waves(team: &BotTeam) -> Vec<f32> {
+        let surprise = crate::bot_kind::BotSurprise {
+            strength: 1.0,
+            ..Default::default()
+        };
+        let mut minds: Vec<_> = (0..12u64).map(surprise::Mind::new).collect();
+        let mut doing: Vec<Option<u8>> = vec![None; minds.len()];
+        let mut shares = Vec::new();
+        for tick in 0..120 * 3600u64 {
+            for (i, mind) in minds.iter_mut().enumerate() {
+                let others = doing
+                    .iter()
+                    .enumerate()
+                    .map(|(o, f)| (o as u64, Vec3::X, *f, 1.0, true));
+                let (pull, copy) = mood(team, i as u64, Vec3::ZERO, others);
+                let pause = surprise::Pause {
+                    natural: true,
+                    pull,
+                    copy,
+                    ..Default::default()
+                };
+                mind.interrupt(&surprise, &pause, tick);
+                doing[i] = mind.flavour().map(|f| f as u8);
+            }
+            if tick % 120 == 0 {
+                shares.push(doing.iter().flatten().count() as f32 / doing.len() as f32);
+            }
+        }
+        shares
+    }
+
+    fn spread(shares: &[f32]) -> f32 {
+        let mean = shares.iter().sum::<f32>() / shares.len() as f32;
+        (shares.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / shares.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn mood_makes_irregular_waves_that_flatten_without_it() {
+        let team = cfg();
+        let shares = waves(&team);
+        let plain = waves(&BotTeam {
+            mood: 0.0,
+            ..team.clone()
+        });
+        let busy = |s: &[f32]| s.iter().filter(|v| **v >= 0.5).count();
+        // Pinned at neither end, swinging wider with the pull than without.
+        assert!(shares.iter().any(|s| *s == 0.0) && shares.iter().any(|s| *s > 0.0));
+        assert!(shares.iter().filter(|s| **s >= 1.0).count() < shares.len() / 10);
+        assert!(
+            spread(&shares) > spread(&plain) * 1.2,
+            "{} vs {}",
+            spread(&shares),
+            spread(&plain)
+        );
+        assert!(busy(&shares) > busy(&plain));
+        // No fixed period: the gaps between waves vary.
+        let rises: Vec<usize> = shares
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[0] < 0.5 && w[1] >= 0.5)
+            .map(|(i, _)| i)
+            .collect();
+        let gaps: Vec<usize> = rises.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps.len() >= 3, "waves: {rises:?}");
+        assert!(gaps.iter().min() != gaps.iter().max(), "gaps {gaps:?}");
+        eprintln!(
+            "mood waves: spread {:.3} (plain {:.3}), seconds at half or more {} (plain {}), mean {:.3}, gaps {:?}",
+            spread(&shares),
+            spread(&plain),
+            busy(&shares),
+            busy(&plain),
+            shares.iter().sum::<f32>() / shares.len() as f32,
+            &gaps[..gaps.len().min(12)]
+        );
+    }
+
+    #[test]
+    fn a_callout_names_the_term_that_changed_the_choice() {
+        let cfg = cfg();
+        let mut terms = [Terms::default(); 10];
+        terms[3].harm = 0.6;
+        assert_eq!(callout(&cfg, &terms, 3, 9), Some("Moving!"));
+        assert_eq!(
+            callout(&cfg, &terms, 9, 3),
+            None,
+            "the harm did not move it"
+        );
+        terms[5].uses = 0.15;
+        assert_eq!(callout(&cfg, &terms, 9, 5), None, "no template for uses");
+    }
+}
