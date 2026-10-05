@@ -78,11 +78,6 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "a_known_dead_subject_invalidates_a_live_search_before_its_expiry"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "a_long_stare_turns_an_idle_bots_head"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
@@ -118,17 +113,7 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "an_unseen_enemy_keeps_its_observed_position_and_timestamp"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "authored_tool_loss_releases_the_method_and_accepts_only_real_native_outcomes"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "becoming_an_ally_invalidates_remembered_hostility_before_expiry"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
@@ -144,11 +129,6 @@ reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on 
 
 [[failure]]
 test = "deathmatch_mixed_arsenal"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "expired_evidence_stops_searching_without_refresh_from_the_hidden_actor"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 

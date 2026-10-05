@@ -4,7 +4,7 @@
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::{
-    bot_kind::BotPack,
+    bot_kind::{BotHold, BotPack},
     player::MoveInput,
     session::{
         ActionAim, BotTask, BotThought, CameraView, Command, MiniGameRequest, PackageArg,
@@ -223,6 +223,20 @@ impl Game {
         );
         assert!(feet(&self.s, self.human).distance(feet(&self.s, self.bot)) > 32.0);
         assert_eq!(thought(&self.s, self.bot).visible, None);
+        // The hold rule keeps a chase through a moment out of sight
+        // (`Ask::paused`), still heading for where the enemy was seen; past
+        // the hold it searches.
+        let seen = thought(&self.s, self.bot).remembered.unwrap().position;
+        let hold = (BotHold::default().seconds * 120.0) as usize;
+        for _ in 0..=hold {
+            let now = thought(&self.s, self.bot);
+            if now.behaviour != "chase" {
+                break;
+            }
+            assert_eq!(now.goal, Some(seen), "a held chase heads for the sighting");
+            self.steps(1);
+        }
+        assert_eq!(thought(&self.s, self.bot).behaviour, "search");
     }
 }
 
@@ -705,3 +719,4 @@ fn becoming_an_ally_cancels_an_armed_hand_spear_without_throwing_it() {
         "cancellation preserves subsequent legitimate combat"
     );
 }
+
