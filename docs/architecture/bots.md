@@ -171,7 +171,8 @@ the plain linear turn and the old fire gate.
   target is missed by about the same distance at any range and a still one
   is hit as before. The native fire gate judges a shot by where the bot believes it
   aims (its look without its error), so the error misses for real instead
-  of holding the shot back. With the fair metric the Blockhead's steady hit
+  of holding the shot back; a shot whose actual line passes within 1.2
+  units of a living ally (60 units ahead) is still withheld. With the fair metric the Blockhead's steady hit
   rate falls as `strength` rises and sits inside the 15-60% band at 1.
   A spawn-protected target is watched but not
   reacted to: the clock starts when it can be hurt. Damage still
@@ -502,7 +503,7 @@ other choices draw as before. Nothing reads a content name.
 |---|---|---|
 | `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2 x weight, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
 | `crouch` | hurt from more than 5 units while fighting or holding its ground | crouches for 1.5 s after the last such hit (damage already scales with crouching) |
-| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
+| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius, where floor lies under the spot 0.8 s of its current drift reaches | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
 | `activate` | a brick a click does something to (a catalog swap, an enabled `onActivate` row) within 2.5 units on the straight way to its goal, while not fighting; now and then (about every 2 s at a natural pause, at a quarter of the chance) one within 8 units in sight | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
 | `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
 

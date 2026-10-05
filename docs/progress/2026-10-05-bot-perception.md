@@ -2,19 +2,22 @@
 
 Lane `fix/bot-perception`, approved by Max: a small, general "what a bot
 notices" layer. Base `claude/project-thread-pt64ji`, merged up to
-7b34b7b9 (teamwork and tuning tools).
+c481371a (teamwork, tuning tools, release extras).
 
 ## What changed
 
 - `crates/sim/src/session/bots/perception.rs` (new):
-  - **Glances.** An idle bot (Wander or Return, only Wander for someone near; no enemy in sight, no
+  - **Glances.** An idle bot (Wander or Return; no enemy in sight, no
     objective at hand, nothing held, not seated or driving) turns its
     ordinary aim for about `glance_seconds` at the most salient of: a
     projectile blast (10 units of reach per unit of radius), a weapon sound
     (12 units at full volume), a 1.5 s stare within 8 degrees, a body
     faster than twice the bot's running speed (both within 0.3 of the
-    kind's `sight`), and, at a low chance, anyone of any team close by in
-    plain view. `salience` scales every reach; salience is the chance of a
+    kind's `sight`), and, at a low chance and only while strolling
+    (Wander), anyone of any team close by in plain view. A homeward bot
+    looking round at teammates near it walked the ball the wrong way
+    (2v2 hands seed 2, wrong way 0.116 over the 0.10 bar); with no glances
+    in Return at all, 3v3 bots turned from an attacker in plain view. `salience` scales every reach; salience is the chance of a
     glance; `cooldown_seconds` follows. The look-round runs on the bot's
     own `cadence` beat.
   - **Reaction.** A newly seen target, or an attacker it was not fighting,
@@ -35,7 +38,10 @@ notices" layer. Base `claude/project-thread-pt64ji`, merged up to
     bot believes it aims (`perception::believed`: its look without its
     error), so the error is a real miss instead of a withheld shot; before,
     `validate_fire` only admitted shots that would hit, which is why the
-    fair metric read 100% for the gun whatever the error.
+    fair metric read 100% for the gun whatever the error. A shot whose
+    actual line passes within 1.2 units of a living ally (60 units ahead)
+    is still withheld (`bot_miss_spares_allies`): the gate's ally check
+    looked along the believed line, and a CTF miss hit a teammate.
   - **Hurt from out of sight.** `guess`: the incoming direction to within
     25 degrees, the distance to within 40%, never nearer than a unit to
     the truth; the look holds until the reaction; allies get the guess;
@@ -76,6 +82,12 @@ notices" layer. Base `claude/project-thread-pt64ji`, merged up to
   On the rooftop deck its spot was off the edge; a bot walked off, wandered
   below for the rest of the round, and the six-unit deck read idle 9.8%
   (bar 1%). With the probe: idle 0.0%, no falls, 57 kills.
+- `bots/extras.rs` (release lane): a dodge hop is taken only where floor
+  lies under where 0.8 s of the current drift lands. On the rooftop deck a
+  hop carried a bot off the edge (idle share over the 1% bar).
+- Gauntlet scorer (`tests/gauntlet/mod.rs`): an ally seated in a vehicle
+  is not a clumped neighbour. Every clumped sample in
+  `a_jeep_on_each_side` (4.0%, bar 3%) was a bot beside its ally's jeep.
 - Weapons runtime `Blast` event; weapon sounds and blasts feed
   `Bots::notice`. `BotThought::noticed`, also shown in `why()` while under
   way.
@@ -123,22 +135,25 @@ suites, and the gauntlet except as below.
 Expectations changed, with the reason in each test:
 - `deathmatch_mixed_arsenal` kill bar 50 -> 40 (48 kills; 67 on the
   release, when nearly every shot landed).
-- `water_between_the_sides` switch bar 20 -> 25 (21.6 a bot-minute with
-  19-22 kills; the release has 10.8 with 12, the same per kill).
+- `deathmatch_open_field` kill bar 60 -> 40 (41 kills with fair aim and
+  dodges; 69 on the release).
 - `an_actual_attacker_can_interrupt_a_retained_delivery`: return fire must
   land; the bot need not out-duel a scripted attacker who never misses and
   shoots first.
+- `a_depleted_stored_magazine_switches_to_the_usable_undrawn_slot`: each
+  one-round magazine must fire exactly once and all damage must come from
+  those two rounds, but each round need not land: at 20 units a moving bot
+  missed both (about 6 degrees each). Removing the bot's own motion from
+  the tracking lag fixed it but put `fair_hit_rate` and
+  `deathmatch_mixed_arsenal` out of their bands, so the lag stays.
 
 Still failing, not loosened:
-- `a_jeep_on_each_side` (one round): clumped 4.0%, stuck 9.5%. Every
-  clumped sample is a bot on a jeep roof beside its ally seated in that
-  jeep (the scorer counts seated neighbours); the stuck share is one bot
-  wedged on a parked jeep for 800 ticks. Chaotic: at strength 0 it passes,
-  with the cone open or a linear turn it fails; the old base failed it
-  too, and the release fails it over four rounds (circling 4.0%).
-- `bot_soccer_match` hands seed 2: wrong way 0.116 (bar 0.10; release
-  0.094, strength 0 0.095, a linear turn 0.047, other variants 0.13-0.16).
-  All the wrong-way pushes are in Objective, which already turns plainly.
+- `a_jeep_on_each_side`: stuck 9.5% (bar 5%), one bot wedged on a
+  parked jeep for 800 ticks; the route planner lane owns it. Clumped is
+  fixed in the scorer (above).
+- `water_between_the_sides`: 21.6 behaviour switches a bot-minute (bar
+  20, kept; the release has 10.8). The bots lane is fixing that metric at
+  its cause.
 - `all_dials_on` (in `gate-known-failures`), `bot_think_time_16` (the
   release also fails it on this loaded machine: 36979 us vs 42485 here).
 - Content-dependent tests (no generated content here) fail at
