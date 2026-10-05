@@ -1039,3 +1039,61 @@ fn a_jetting_bot_closes_on_an_enemy_on_a_high_brick_platform() {
     );
     assert!(s.vitals()[&human].health < 100.0, "it reached melee range");
 }
+
+/// One bot whose thinking fails every tick does not stop the others: the
+/// near bot still sees the enemy and warns its side, and the far one comes
+/// to look, while the failing bot stays (and is told about, once).
+#[test]
+fn a_bot_that_fails_to_think_leaves_the_others_thinking() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.sight = 32.0;
+        k.wander_radius = 0.0;
+        k.side = Some("pack".into());
+        k.alerts_allies = true;
+        k.melee = Some(bite(5.0));
+    });
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(
+        &mut s,
+        human,
+        vec![
+            bot_brick([10.0, 0.1, 24.0], human),
+            bot_brick([10.0, 0.1, 38.0], human),
+            bot_brick([-14.0, 0.1, 40.0], human),
+        ],
+    );
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let all = bots(&s);
+    assert_eq!(all.len(), 3);
+    // The one off to the side fails; it may come first or last in a tick.
+    let broken = *all
+        .iter()
+        .min_by(|a, b| feet(&s, **a).x.total_cmp(&feet(&s, **b).x))
+        .unwrap();
+    let far = *all
+        .iter()
+        .filter(|b| **b != broken)
+        .max_by(|a, b| feet(&s, **a).z.total_cmp(&feet(&s, **b).z))
+        .unwrap();
+    s.fail_bot_steps(Some(broken));
+    let start = feet(&s, far).distance(feet(&s, human));
+    steps(&mut s, &[human], 120 * 3, &mut sequence);
+    let now = feet(&s, far).distance(feet(&s, human));
+    assert!(
+        now < start - 6.0,
+        "the warned bot came to look: {start} to {now}"
+    );
+    assert!(bots(&s).contains(&broken), "the failing bot stays");
+    let told = s
+        .package_diagnostics()
+        .iter()
+        .filter(|d| d.code == "bot.step")
+        .count();
+    assert!(told <= 1, "told {told} times in three seconds");
+}

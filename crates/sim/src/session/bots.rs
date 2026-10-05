@@ -36,9 +36,6 @@ use bri_weapons::ActorId;
 
 mod arming;
 mod behaviour;
-// Only the extras beat here so far; its other users (fire, alerts, hops,
-// dismounts, respawns) come with fix/bots-ball-games-2.
-#[allow(dead_code)]
 pub(crate) mod cadence;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
@@ -134,14 +131,49 @@ pub enum BotTask {
 }
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
 const TICK: f32 = 1.0 / 120.0;
+/// Ticks before a bot's failing step is told again.
+const BOT_FAILURE_EVERY: u64 = 60 * 120;
+/// Seconds a rules bot waits past its game's respawn time, as a seeded range.
+const RULES_RESPAWN: (f32, f32) = (0.3, 1.5);
+/// Seconds a brick bot waits past its respawn time, as a seeded range.
+const BRICK_RESPAWN: (f32, f32) = (0.75, 1.75);
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
 /// Ticks without progress before a bot plans again.
 const STUCK_TICKS: u32 = 45;
+/// How many ticks earlier than the 40th a stuck bot may hop, by its own
+/// seeded phase: bots hop apart, and each still hops before it replans at
+/// `STUCK_TICKS`.
+const HOP_SPREAD: u64 = 5;
+/// Within this of the point its objective takes it to, a bot is at its
+/// post, and playing is worth what it watches there (`View::aim`).
+const ON_OBJECTIVE: f32 = 6.0;
+/// The action (an enemy, what a post watches) within this is worth all of
+/// playing; past `ACTION_FAR` playing is worth `LULL_PLAY`, in between it
+/// fades.
+const ACTION_NEAR: f32 = 10.0;
+const ACTION_FAR: f32 = 30.0;
+/// Playing's worth in a lull (far from the action, waiting, nothing to
+/// do): where a goof is worth all of its small score.
+const LULL_PLAY: f32 = surprise::LULL;
+/// Playing's worth going back home, or with an enemy remembered or an
+/// objective that wants one beaten but none in sight.
+const RETURN_PLAY: f32 = 0.8;
+const PRESSED_PLAY: f32 = 0.85;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
-/// Ticks between aim error changes.
+/// The mean seconds of one weave leg at an objective or in water.
+const WEAVE_SECONDS: f32 = 0.75;
+/// How often a strafe leg turns back rather than keeps on.
+const TURN_BACK: f32 = 0.7;
+/// Ticks between the aim error's seeded points; it eases between them.
 const ERROR_TICKS: u64 = 48;
+/// How much of the kind's aim error stays after a long track.
+const ERROR_FLOOR: f32 = 1.0 / 3.0;
+/// How far a bot's lead strays from the true intercept, as a fraction.
+const LEAD_STRAY: f32 = 0.15;
+/// Ticks between the lead's seeded points.
+const LEAD_TICKS: u64 = 120;
 /// Longest a bot carries what it holds toward open space before it throws
 /// anyway.
 const CARRY_TICKS: u64 = 720;
@@ -171,6 +203,17 @@ const GUN_BEHIND_COS: f32 = -0.26;
 /// Ticks pressing at a waypoint within a step without moving before it is
 /// taken as reached.
 const WEDGED_TICKS: u32 = 30;
+/// Over how many units past the edge of its stroll a brick bot's urge to
+/// walk home grows to full.
+const STRAY: f32 = 4.0;
+/// What a bot's last behaviour choice saw ([`Brain::choice_was`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct ChoiceWas {
+    objective: bool,
+    committed: bool,
+    holding: bool,
+    target: Option<OwnerId>,
+}
 /// How much of a swimmer the water covers for it to swim rather than walk.
 const SWIM_COVERAGE: f32 = 0.5;
 
@@ -189,6 +232,10 @@ pub(super) struct Bots {
     /// Warnings bots gave this tick (`BotKind::alerts_allies`), heard by
     /// their side once every bot has stepped.
     alerts: Vec<Alert>,
+    /// When each bot's failed step was last told (`step_bots`).
+    failed_told: BTreeMap<OwnerId, u64>,
+    /// A bot whose every step fails, for tests of that isolation.
+    failing: Option<OwnerId>,
     /// Geometry observed once per tick; admission still reads live occupancy.
     objects: Vec<bri_vehicles::VehicleSnapshot>,
     claims: claims::Claims,
@@ -275,17 +322,19 @@ struct Brain {
     target: Option<OwnerId>,
     /// Tick the current target was first seen.
     seen_since: u64,
+    /// Its aim error now, radians (yaw, pitch): a seeded drift.
+    error: (f32, f32),
     /// Where an enemy was last seen or heard, until when.
     memory: Option<Knowledge>,
     evidence_search: search_memory::State,
     evidence_context: Option<(bri_minigames::GameId, u64, Option<bri_minigames::TeamId>)>,
-    error: (f32, f32),
-    next_error: u64,
     fire_down: bool,
     /// What it is doing ([`behaviour`]).
     behaviour: Behaviour,
     /// Tick it took up `behaviour`.
     behaviour_since: u64,
+    /// What its last behaviour choice saw, to tell an interrupt.
+    choice_was: ChoiceWas,
     /// The weapon it is going to pick up, with nothing to attack with
     /// (`arming`).
     arming: arming::Arming,
@@ -424,14 +473,14 @@ impl Brain {
             pitch: 0.0,
             target: None,
             seen_since: 0,
+            error: (0.0, 0.0),
             memory: None,
             evidence_search: Default::default(),
             evidence_context: None,
-            error: (0.0, 0.0),
-            next_error: 0,
             fire_down: false,
             behaviour: Behaviour::default(),
             behaviour_since: 0,
+            choice_was: ChoiceWas::default(),
             arming: Default::default(),
             strafe: (1.0, 0),
             objective: objectives::State::default(),
@@ -466,6 +515,36 @@ impl Brain {
     }
     fn random(&mut self) -> f32 {
         perception::draw(&mut self.rng)
+    }
+    /// The way it strafes or weaves this tick (+1 right, -1 left). Each leg
+    /// lasts a seeded `mean` × [`leg`] seconds and then usually turns back,
+    /// sometimes keeps on; it turns at once from a way that is not open
+    /// (`open`), or when an ally stands that way and the other is open
+    /// (`parted`). One pattern for the fight's strafe and every weave.
+    fn strafe_leg(
+        &mut self,
+        tick: u64,
+        mean: f32,
+        open: &dyn Fn(f32) -> bool,
+        parted: bool,
+    ) -> f32 {
+        let (mut side, mut until) = self.strafe;
+        if tick >= until || parted {
+            // The first leg goes the other way when it can; later legs
+            // sometimes keep on.
+            let turn = if until == 0 {
+                parted || open(-side) || !open(side)
+            } else {
+                parted || !open(side) || open(-side) && self.random() < TURN_BACK
+            };
+            if turn {
+                side = -side;
+            }
+            let u = self.random();
+            until = tick + (leg(u, mean) * 120.0) as u64;
+        }
+        self.strafe = (side, until);
+        side
     }
     fn set_goal(&mut self, goal: Option<Goal>) {
         if self.goal != goal {
@@ -571,19 +650,39 @@ struct Weapon {
     fall: f32,
     /// Its explosion's radius, kept clear of.
     splash: f32,
+    /// How far each of its projectiles may turn off the aim, in radians
+    /// (`Shot::spread`): a scattering weapon closes in to land them.
+    spread: f32,
 }
+/// Half the width a scattering weapon's spread may cover where it fights:
+/// a little over a body's height, so some of its shot lands on a target
+/// that strafes and hops, and not every pellet (`fair_hit_rate`).
+const SPREAD_BODY: f32 = 3.5;
+/// The nearest a scattering weapon's band ends, however wide its spread.
+const SPREAD_MIN_FAR: f32 = 3.0;
+/// The share of a scattering weapon's spread kept clear of allies: its
+/// pellets fall evenly across the cone, so the outer edge is thin.
+const SPREAD_CLEAR: f32 = 0.6;
+/// How far above the feet a splash weapon aims.
+const FEET_AIM: f32 = 0.2;
 impl Weapon {
     /// Closest and farthest it likes to fight from.
     fn band(&self) -> (f32, f32) {
         if self.melee {
             (0.0, (self.reach * 0.8).max(1.2))
         } else {
-            let far = (self.reach * 0.7).clamp(6.0, 40.0).min(self.reach);
+            let mut far = (self.reach * 0.7).clamp(6.0, 40.0).min(self.reach);
+            // A scattering weapon lands its shot where its spread is still
+            // about a body wide: farther, most of it flies past.
+            if self.spread > 0.0 {
+                far = far.min((SPREAD_BODY / self.spread.tan()).max(SPREAD_MIN_FAR));
+            }
             let near = self
                 .near
                 .unwrap_or((self.splash + 3.0).max(5.0))
                 .min(far * 0.75);
-            (near, far.max(near + 4.0).min(self.reach))
+            let room = if self.spread > 0.0 { 2.0 } else { 4.0 };
+            (near, far.max(near + room).min(self.reach))
         }
     }
 }
@@ -638,6 +737,73 @@ impl Bots {
 fn yaw_to(delta: Vec3) -> f32 {
     delta.x.atan2(-delta.z)
 }
+/// Easing between seeded points pulls a drift toward zero: its spread is
+/// sqrt(0.743) of one uniform draw's (the smoothstep's mean square). The
+/// aim error is scaled back up to a uniform draw's spread, so `size` (the
+/// kind's aim error, `perception`'s tracking lag) keeps its meaning.
+const DRIFT_SPREAD: f32 = 1.08;
+/// The aim error in radians (yaw, pitch) at `size`: a smooth seeded
+/// drift within about it, so it never jumps and never settles.
+fn aim_error(bot: OwnerId, tick: u64, size: f32) -> (f32, f32) {
+    let salt = cadence::salt::AIM;
+    let size = size * DRIFT_SPREAD;
+    (
+        cadence::drift(bot, salt, 0, tick, ERROR_TICKS) * size,
+        cadence::drift(bot, salt, 1, tick, ERROR_TICKS) * size * 0.5,
+    )
+}
+
+/// How much of the target's velocity a bot leads by: about all of it,
+/// drifting a little under and over, seeded per bot.
+pub(super) fn lead(bot: OwnerId, tick: u64) -> f32 {
+    1.0 + LEAD_STRAY * cadence::drift(bot, cadence::salt::LEAD, 0, tick, LEAD_TICKS)
+}
+
+/// A strafe leg's length, in seconds, from a uniform draw `u`: `mean`
+/// × 0.5 to 1.5, so legs keep their mean and vary by over a quarter.
+fn leg(u: f32, mean: f32) -> f32 {
+    mean * (0.5 + u.clamp(0.0, 1.0))
+}
+
+/// Ticks in one melee footwork cycle: in, back out, aside.
+const FOOTWORK_TICKS: u64 = 110;
+/// About how far a step back carries a melee fighter, in units.
+const FOOTWORK_BACK: f32 = 0.6;
+/// A ranged fighter's lean in as it strafes: its most (a share of a
+/// walk), the ticks its seeded drift takes to wander, and how far outside
+/// its band's near edge it must be to lean in.
+const LEAN: f32 = 0.35;
+const LEAN_TICKS: u64 = 360;
+const LEAN_ROOM: f32 = 2.0;
+
+/// Where a melee fighter in its band steps this tick: in toward its target,
+/// back out, a step aside, then a moment planted, each for a seeded share
+/// of its own cycle, so no two bots step alike and none walks a circle.
+/// Without `room` to give ground and stay in reach it plants instead of
+/// stepping back, so its footwork never carries it out of its band (and
+/// its fight into a chase and back).
+fn footwork(bot: OwnerId, tick: u64, forward: Vec3, right: Vec3, room: bool) -> Vec3 {
+    let salt = cadence::salt::FOOTWORK;
+    let (k, f) = cadence::cycle(bot, salt, tick, FOOTWORK_TICKS);
+    let lunge = cadence::spread(bot, salt, k, 0.15, 0.3);
+    let back = lunge + cadence::spread(bot, salt, k ^ 1 << 32, 0.15, 0.25);
+    let aside = back + cadence::spread(bot, salt, k ^ 3 << 32, 0.15, 0.25);
+    if f < lunge {
+        forward * 0.5
+    } else if f < back {
+        if room { -forward * 0.35 } else { Vec3::ZERO }
+    } else if f < aside {
+        let side = if cadence::spread(bot, salt, k ^ 2 << 32, 0.0, 1.0) < 0.5 {
+            1.0
+        } else {
+            -1.0
+        };
+        right * side * 0.4
+    } else {
+        Vec3::ZERO
+    }
+}
+
 fn wrap(a: f32) -> f32 {
     (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
@@ -1262,8 +1428,14 @@ impl Session {
                             deadline: c.deadline,
                         },
                     }),
-                goal: b.goal.map(|g| g.point(b.leash).to_array()),
-                next: b.plan.first().map(|p| p.feet.to_array()),
+                // Standing still for a goof it wants to go nowhere: its
+                // route waits for it.
+                goal: (!b.surprise.standing())
+                    .then(|| b.goal.map(|g| g.point(b.leash).to_array()))
+                    .flatten(),
+                next: (!b.surprise.standing())
+                    .then(|| b.plan.first().map(|p| p.feet.to_array()))
+                    .flatten(),
                 path_steps: b.plan.len(),
                 searching: b.search.is_some(),
                 search_phase: b.evidence_search.phase(),
@@ -1285,7 +1457,7 @@ impl Session {
                 objective_searches: b.objective.searches,
                 objective_reused: b.objective.reused,
                 noticed: b.perception.why,
-                surprise: b.surprise.view(&b.kind.surprise, tick),
+                surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
             })
             .collect()
@@ -1497,6 +1669,7 @@ impl Session {
                 speed,
                 fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
                 splash: p.explosion.radius,
+                spread: 0.0,
             });
         }
         None
@@ -1508,6 +1681,13 @@ impl Session {
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
         let using = image.bot.unwrap_or_default();
         let hold = using.fire == bri_weapons::BotFire::Hold;
+        // v20's `%spread`: each projectile turns by up to 5π·spread about
+        // each axis.
+        let spread = image
+            .shot
+            .as_ref()
+            .filter(|s| s.spread > 0.0)
+            .map_or(0.0, |s| (5.0 * std::f32::consts::PI * s.spread).min(1.4));
         if let Some(ray) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
             return Some(Weapon {
                 melee: false,
@@ -1518,6 +1698,7 @@ impl Session {
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
+                spread,
             });
         }
         let projectile = image
@@ -1535,6 +1716,7 @@ impl Session {
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
+                spread,
             });
         };
         let reach = using
@@ -1549,6 +1731,7 @@ impl Session {
             speed: p.speed,
             fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
             splash: p.explosion.radius,
+            spread,
         })
     }
     /// One brain tick per bot: see, choose a goal, find the way, aim and
@@ -1608,12 +1791,56 @@ impl Session {
             let len = bots.len();
             bots.rotate_left(tick as usize % len);
         }
+        // One bot's failure is that bot's: it is told and the rest step.
+        // Nothing a bot's step does can fail the whole session (its errors
+        // are refused controls, commands or embodiment for that bot), so
+        // none is passed up.
         for bot in bots {
-            self.step_bot(bot, tick)?;
+            if let Err(error) = self.step_bot(bot, tick) {
+                self.bot_step_failed(bot, tick, &error);
+            }
         }
+        self.bots
+            .failed_told
+            .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
         Ok(())
+    }
+    /// Tell that `bot`'s step failed: to the log and the host's admins as
+    /// an Add-On problem (`packages::note`, told at most once a minute per
+    /// code), and at most once a minute per bot however often it fails.
+    /// The bot stays; it steps again next tick.
+    fn bot_step_failed(&mut self, bot: OwnerId, tick: u64, error: &anyhow::Error) {
+        let due = self
+            .bots
+            .failed_told
+            .get(&bot)
+            .is_none_or(|at| tick >= at.saturating_add(BOT_FAILURE_EVERY));
+        if !due {
+            return;
+        }
+        self.bots.failed_told.insert(bot, tick);
+        let kind = self
+            .bots
+            .brains
+            .get(&bot)
+            .map_or("?", |b| b.kind.id.as_str());
+        let message = format!("bot {bot} ({kind}) could not think this tick: {error:#}");
+        match self.packages.as_mut() {
+            Some(host) => super::packages::note(
+                host,
+                bri_package_runtime::Diagnostic::warning("bot.step", message)
+                    .at(format!("bots/{kind}")),
+            ),
+            None => bri_console::warn(&message),
+        }
+    }
+    /// Make every step of `bot` fail (None: none), to test that one bot's
+    /// failure leaves the others thinking.
+    #[doc(hidden)]
+    pub fn fail_bot_steps(&mut self, bot: Option<OwnerId>) {
+        self.bots.failing = bot;
     }
     /// Bots of a warner's side within its reach that have nothing better
     /// to go on remember where the enemy was, and go and look (Bot_Hole's
@@ -1667,6 +1894,9 @@ impl Session {
         }
     }
     fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
+        if self.bots.failing == Some(bot) {
+            anyhow::bail!("this bot's steps were made to fail");
+        }
         if self.bots.brains[&bot].objective.drive(self, bot).is_none() {
             self.promote_bot_seat(bot)?;
         }
@@ -1694,13 +1924,23 @@ impl Session {
             return Ok(());
         };
         if !peer.combat.alive {
-            // A brick's bot comes back a second after it may; a rules bot
-            // as soon as its game lets it (Slayer's bot respawn time).
-            let wait = if self.bots.by_rules.contains_key(&bot) {
-                0
+            // A brick's bot comes back about a second after it may; a rules
+            // bot soon after its game lets it (Slayer's bot respawn time).
+            // Each death adds its own seeded delay, so bots one blast killed
+            // do not all come back on the same tick.
+            let (lo, hi) = if self.bots.by_rules.contains_key(&bot) {
+                RULES_RESPAWN
             } else {
-                120
+                BRICK_RESPAWN
             };
+            let delay = cadence::spread(
+                bot,
+                cadence::salt::RESPAWN,
+                peer.combat.respawn_tick,
+                lo,
+                hi,
+            );
+            let wait = (delay * 120.0) as u64;
             if tick >= peer.combat.respawn_tick + wait {
                 // A bot a bite turned comes back as its own kind.
                 if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
@@ -1930,6 +2170,7 @@ impl Session {
             speed: 0.0,
             fall: 0.0,
             splash: 0.0,
+            spread: 0.0,
         }));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         if let Some(k) = brain.perception.heard(tick)
@@ -2058,7 +2299,10 @@ impl Session {
         // far off as its aim errs now.
         let ranged = weapon.is_some_and(|w| !w.melee);
         let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
-        let aim_error = yaw_error.hypot(pitch_error);
+        // A scattering weapon's shot also fans out by its spread: allies
+        // inside most of that cone are in the line of fire too.
+        let aim_off =
+            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| w.spread * SPREAD_CLEAR);
         let attack_clear = sight.target.is_none_or(|seen| {
             self.bot_fire_clear(
                 bot,
@@ -2068,7 +2312,7 @@ impl Session {
                 weapon
                     .filter(|_| ranged)
                     .map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0)),
-                if ranged { aim_error } else { 0.0 },
+                if ranged { aim_off } else { 0.0 },
             )
         });
         // Where its weapon will hit, for its side to keep out of (`team`):
@@ -2080,7 +2324,7 @@ impl Session {
                 from: eye,
                 to: to + (to - eye).normalize_or_zero() * past,
                 radius: weapon.map_or(0.0, |w| w.splash).max(0.3),
-                spread: aim_error.tan(),
+                spread: aim_off.tan(),
             }
         });
         let mounted_charging = self
@@ -2124,20 +2368,29 @@ impl Session {
         });
         // Nothing to attack with (a driver has its chassis), an enemy about
         // and no peaceful objective: it arms itself from a weapon in sight
-        // before it goes after anyone.
-        let arm = if !can_retaliate
-            && driving.is_none()
+        // before it goes after anyone. Armed and in a game, a better weapon
+        // in sight is an upgrade it may go for (`arming`).
+        let enemy_known =
+            sight.target.is_some() || threat.is_some() || self.bots.brains[&bot].memory.is_some();
+        let enemy_distance = sight
+            .target
+            .map(|seen| seen.feet)
+            .or(self.bots.brains[&bot].memory.map(|k| k.at))
+            .map(|at| flat(at - feet).length());
+        let wants_arm = driving.is_none()
             && !peaceful_objective
-            && (sight.target.is_some()
-                || threat.is_some()
-                || self.bots.brains[&bot].memory.is_some())
             && self.bots.brains[&bot]
                 .kind
                 .behaviours
                 .get("arm")
                 .is_none_or(|w| *w > 0.0)
-        {
-            arming::arm_point(self, bot, feet, tick)
+            && if can_retaliate {
+                self.game_of(bot).is_some()
+            } else {
+                enemy_known
+            };
+        let arm = if wants_arm {
+            arming::arm_point(self, bot, feet, enemy_distance, can_retaliate, tick)
         } else {
             self.bots.brains.get_mut(&bot).unwrap().arming.clear();
             None
@@ -2148,6 +2401,8 @@ impl Session {
         // What guards the surprise chooser: carrying an objective, urgency.
         let carrying = objective_holding || self.surprise_carrying(bot, objective.as_ref());
         let gate = self.surprise_gate(bot, feet, carrying, threat, tick);
+        // Hurt just now, and it matters (low health, or from close by).
+        let hurt_now = hurt_by.is_some() && gate.urgent;
         let flanks = sight.target.map_or([None, None], |seen| {
             self.surprise_flanks(bot, feet, seen.real)
         });
@@ -2176,6 +2431,11 @@ impl Session {
         };
         let tall = self.peers[&bot].player.tuning().stand_height;
         let deficit = self.team_deficit(bot);
+        // The target it went after died or left (not merely out of sight).
+        let target_gone = self.bots.brains[&bot]
+            .choice_was
+            .target
+            .is_some_and(|t| !self.peers.get(&t).is_some_and(|p| p.combat.alive));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2223,7 +2483,7 @@ impl Session {
                 };
                 brain.memory = Some(knowledge);
                 brain.evidence_search.observe(knowledge, feet);
-                if tick.is_multiple_of(30) || brain.seen_since == tick {
+                if cadence::beat(bot, cadence::salt::ALERT, tick, 30) || brain.seen_since == tick {
                     warn = Some(knowledge);
                 }
             }
@@ -2275,8 +2535,9 @@ impl Session {
             objective: objective.is_some(),
             committed: objective.is_some_and(|view| view.committed),
             gunning: can_gun,
-            arm: arm.is_some(),
-            // A swimmer reaches any depth: only how far counts.
+            arm: arm.map_or(0.0, |(_, score)| score),
+            // A swimmer reaches any depth, and a swing reaches round it
+            // alike: only how far counts.
             enemy: enemy
                 .filter(|_| !objective_without_attack)
                 // Where it was out of reach, not across from there: one
@@ -2286,12 +2547,14 @@ impl Session {
                         .out_of_reach
                         .is_none_or(|p| p.distance(seen.real) > 2.5)
                 })
-                .map(|seen| match swim {
-                    Some(_) => (seen.feet.distance(feet), 0.0),
-                    None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
+                .map(|seen| {
+                    if swim.is_some() || weapon.is_none_or(|w| w.melee) {
+                        (seen.feet.distance(feet), 0.0)
+                    } else {
+                        (flat(seen.feet - feet).length(), seen.feet.y - feet.y)
+                    }
                 }),
             far,
-            slack: kind.fighting.slack(far),
             step: body.step,
             // A ranged weapon shoots up at what its band reaches; only a
             // body or melee hit must be level with its enemy.
@@ -2302,14 +2565,17 @@ impl Session {
             remembers: brain
                 .memory
                 .is_some_and(|m| brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)),
-            strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
-            home: brain.goal != Some(Goal::Home),
+            strayed: if brain.brick.is_some() {
+                (away - kind.wander_radius) / STRAY
+            } else {
+                0.0
+            },
             pursuing: brain.objective.pursuing(),
         };
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
         brain.chase_feet = enemy.map(|seen| seen.feet);
-        let mut scores = behaviour::scores(brain.behaviour, &situation, |b| {
+        let mut scores = behaviour::scores(&situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
                     0.0
@@ -2318,13 +2584,42 @@ impl Session {
                 },
             )
         });
+        // What the choice must answer at once (`behaviour::Hold`): urgent
+        // damage, an objective offered (one gone a moment is held, `paused`),
+        // picked up or dropped, an enemy coming into sight, another target,
+        // or the target dead or gone (one out of sight a moment is held). A choice no longer possible, or a must-do
+        // one winning, the rule sees for itself.
+        let target = sight.target.map(|seen| seen.owner);
+        let retarget = brain
+            .choice_was
+            .target
+            .is_some_and(|t| target.is_some_and(|now| now != t));
+        // Hurt by the one it already went after tells it nothing new: only
+        // a hit from someone else re-opens the choice at once.
+        let hurt_anew =
+            hurt_now && hurt_by.is_some_and(|k| brain.choice_was.target != Some(k.subject));
+        let interrupt = hurt_anew
+            || situation.objective && !brain.choice_was.objective
+            || situation.committed != brain.choice_was.committed
+            || situation.holding != brain.choice_was.holding
+            || retarget
+            || target_gone
+            || brain.behaviour == Behaviour::Wander
+                && brain.choice_was.target.is_none()
+                && target.is_some();
+        brain.choice_was = ChoiceWas {
+            objective: situation.objective,
+            committed: situation.committed,
+            holding: situation.holding,
+            target,
+        };
         // What each option would do, and what allies' intents add to it
         // (`team`): never while it carries an objective or is urgent.
         let choices = team_choices(
             opportunity,
             enemy,
             brain.memory,
-            arm,
+            arm.map(|(at, _)| at),
             objective,
             feet,
             brain.home,
@@ -2339,15 +2634,9 @@ impl Session {
             }),
             carries,
         );
-        // Its objective is worth more as its team falls behind, and what it
-        // saw work for a teammate a little more (`team` copy).
+        // Its objective is worth more as its team falls behind. (What it saw
+        // work for a teammate the surprise chooser weighs: `team` copy.)
         scores[Behaviour::Objective as usize] *= 1.0 + kind.team.pressure * deficit;
-        for (b, score) in scores.iter_mut().enumerate() {
-            *score *= 1.0
-                + brain
-                    .surprise
-                    .seen(&kind.surprise, surprise::Domain::Behaviour, b as u32, tick);
-        }
         let plain_before = behaviour::best(&scores) as usize;
         let (current, current_since) = (brain.behaviour as usize, brain.behaviour_since);
         brain.team.terms = if gate.carrying || gate.urgent {
@@ -2367,28 +2656,29 @@ impl Session {
         brain.team.allies = intents.len();
         // The plain pick, or a near one the surprise chooser takes.
         brain.surprise.gate = gate;
-        let (mut behaviour, _) = surprise::behaviour(
+        let behaviour = surprise::behaviour(
             &mut brain.surprise,
             &kind.surprise,
+            kind.hold,
             &scores,
-            behaviour::best(&scores),
-            brain.behaviour,
+            interrupt,
+            // Between steps, or the objective gone a moment as one step
+            // hands over to the next (a checkpoint reached), or the enemy
+            // it chases out of sight a moment (heading for where it was
+            // last seen): held, not dropped for a tick.
+            brain.behaviour == Behaviour::Objective
+                && (brain.objective.between_steps() || objective.is_none())
+                || brain.behaviour == Behaviour::Chase
+                    && target.is_none()
+                    && brain.memory.is_some(),
+            if can_retaliate {
+                &behaviour::MUST_ARMED
+            } else {
+                &behaviour::MUST
+            },
             gate,
             tick,
         );
-        // Pausing a moment before a switch the variation causes.
-        let telling = brain.surprise.telling(tick);
-        // A fight just taken up holds a moment before it turns into a
-        // chase while the enemy is still in sight: no flip-flop at the
-        // band's edge as either steps back and forth. (A chase that
-        // reaches the band fights at once.)
-        let dwell = (kind.fighting.dwell_seconds * 120.0) as u64;
-        if situation.enemy.is_some()
-            && (brain.behaviour, behaviour) == (Behaviour::Fight, Behaviour::Chase)
-            && tick < brain.behaviour_since + dwell
-        {
-            behaviour = brain.behaviour;
-        }
         // A choice the terms changed is called out (`team`).
         let callout = (behaviour != brain.behaviour
             && behaviour as usize != plain_before
@@ -2503,7 +2793,7 @@ impl Session {
         brain.chase_offset = Vec3::ZERO;
         let (hold, back_off) = match behaviour {
             Behaviour::Arm => {
-                if let Some(at) = arm
+                if let Some((at, _)) = arm
                     && !matches!(brain.goal, Some(Goal::Arm(p)) if p.distance(at) < 0.2)
                 {
                     brain.set_goal(Some(Goal::Arm(at)));
@@ -2550,6 +2840,9 @@ impl Session {
                         (false, false)
                     }
                 } else {
+                    // Between steps, held by the hold rule: it stands where
+                    // the last step finished until the next is planned.
+                    brain.set_goal(None);
                     (false, false)
                 }
             }
@@ -2564,6 +2857,7 @@ impl Session {
                     brain.chase_offset = surprise::route(
                         &mut brain.surprise,
                         &kind.surprise,
+                        kind.hold,
                         seen.real,
                         flanks,
                         gate,
@@ -2857,27 +3151,62 @@ impl Session {
             })
             .map(|(_, p)| Vec3::from(p.player.state().feet))
             .collect();
-        let idle = perception::may_glance(behaviour) && sight.target.is_none();
+        let may_glance = perception::may_glance(behaviour) && sight.target.is_none();
         let glance = self.bot_glance(
             bot,
             tick,
             eye,
-            idle && driving.is_none()
+            may_glance
+                && driving.is_none()
                 && !self.seated(bot)
                 && !situation.objective
                 && !situation.holding,
             behaviour == Behaviour::Wander,
         );
-        // At a natural pause, now and then something idle (`surprise`).
-        let natural = behaviour == Behaviour::Wander
-            && sight.target.is_none()
-            && threat.is_none()
-            && objective.is_none()
+        // Now and then something idle (`surprise`): goofing is an option
+        // the chooser weighs against playing, with a small worth of its
+        // own. Playing is worth what the bot is doing now: the action
+        // close by (an enemy near, the objective's focus near once it is
+        // at its post, on its way to it) wins easily; far from the action,
+        // waiting, or with nothing to do, playing is worth little and a
+        // goof wins now and then. Only what makes a goof impossible rules
+        // it out: fighting or flying, hurt just now (urgent), holding
+        // something, carrying the objective, or off its feet.
+        let idle = behaviour == Behaviour::Wander && objective.is_none();
+        let action = |d: f32| {
+            let t = ((d - ACTION_NEAR) / (ACTION_FAR - ACTION_NEAR)).clamp(0.0, 1.0);
+            1.0 + (LULL_PLAY - 1.0) * t
+        };
+        let mut play: f32 = if idle { LULL_PLAY } else { RETURN_PLAY };
+        if let Some(view) = objective.as_ref() {
+            play = play.max(if view.waiting {
+                LULL_PLAY
+            } else if flat(view.point - feet).length() > ON_OBJECTIVE {
+                // On its way: on task.
+                1.0
+            } else {
+                // At its post: worth what it watches.
+                action(flat(view.aim - feet).length())
+            });
+        }
+        if selected_objective.is_some_and(|v| v.enemy.is_some()) {
+            play = play.max(PRESSED_PLAY);
+        }
+        if let Some(seen) = sight.target {
+            play = play.max(action(flat(seen.feet - feet).length()));
+        } else if self.bots.brains[&bot].memory.is_some() {
+            play = play.max(PRESSED_PLAY);
+        }
+        let natural = threat.is_none()
+            && behaviour != Behaviour::Fight
             && !holding
             && driving.is_none()
             && swim.is_none()
-            && !self.seated(bot)
-            && self.bots.brains[&bot].memory.is_none();
+            && !self.seated(bot);
+        let pause_gate = surprise::Gate {
+            carrying: objective_holding || objective.as_ref().is_some_and(|v| v.committed),
+            ..gate
+        };
         // Carrying: the catch hangs off the floor, or it drags and trails
         // back into its holder's path, and under the roof, or it snags on
         // the roof's edge on the way out. The hold's point is raised or
@@ -2899,10 +3228,13 @@ impl Session {
                 )
             })
             .flatten();
-        let mut pause = self.surprise_pause(bot, natural, gate, eye);
+        let mut pause = self.surprise_pause(bot, natural, idle, pause_gate, eye);
+        pause.play = play;
         (pause.pull, pause.copy) = self.team_mood(bot, feet, eye, tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let moment = brain.surprise.interrupt(&brain.kind.surprise, &pause, tick);
+        let moment = brain
+            .surprise
+            .goof(&brain.kind.surprise, brain.kind.hold, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
         let extra = self.bot_extras(
             bot,
@@ -2982,30 +3314,30 @@ impl Session {
                 aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
             }
         } else if let Some(seen) = sight.target {
-            let mut at = seen.eye - Vec3::Y * 0.5;
+            // A blast hurts all around where it lands: a splash weapon
+            // aims at the feet, so a near miss still lands within it.
+            let mut at = if weapon.is_some_and(|w| !w.melee && w.splash > 0.0) {
+                seen.feet + Vec3::Y * FEET_AIM
+            } else {
+                seen.eye - Vec3::Y * 0.5
+            };
             if let Some(w) = weapon.filter(|w| !w.melee && w.speed > 0.0) {
                 let time = at.distance(eye) / w.speed;
-                at += target_velocity * time;
+                at += target_velocity * lead(bot, tick) * time;
                 at.y += 0.5 * w.fall * time * time;
             }
             let delta = native_choice.map_or(at - eye, |c| c.direction);
-            if tick >= brain.next_error {
-                let tracked = (tick - brain.seen_since) as f32 * TICK;
-                // How fast it moves across the bot's line of sight, the
-                // bot's own motion included: tracking it lags (`perception`).
-                let line = (at - eye).normalize_or_zero();
-                let relative = target_velocity - Vec3::from(state.velocity);
-                let across = (relative - line * relative.dot(line)).length();
-                let size = kind.aim_error_degrees.to_radians()
-                    * (1.0 - (tracked / 2.0).min(1.0) * 2.0 / 3.0)
-                    * brain.perception.aim_scale(seen.owner, tracked)
-                    + perception::steady_error(&kind.perception, across, at.distance(eye));
-                brain.error = (
-                    (brain.random() * 2.0 - 1.0) * size,
-                    (brain.random() * 2.0 - 1.0) * size * 0.5,
-                );
-                brain.next_error = tick + ERROR_TICKS;
-            }
+            let tracked = tick.saturating_sub(brain.seen_since) as f32 * TICK;
+            // How fast it moves across the bot's line of sight, the bot's
+            // own motion included: tracking it lags (`perception`).
+            let line = (at - eye).normalize_or_zero();
+            let relative = target_velocity - Vec3::from(state.velocity);
+            let across = (relative - line * relative.dot(line)).length();
+            let size = kind.aim_error_degrees.to_radians()
+                * (1.0 - (tracked / 2.0).min(1.0) * (1.0 - ERROR_FLOOR))
+                * brain.perception.aim_scale(seen.owner, tracked)
+                + perception::steady_error(&kind.perception, across, at.distance(eye));
+            brain.error = aim_error(bot, tick, size);
             aim_yaw = wrap(yaw_to(delta) + brain.error.0);
             aim_pitch = (delta.y.atan2(flat(delta).length()) + brain.error.1).clamp(-1.5, 1.5);
             let reaction = (kind.reaction_seconds * 120.0) as u64;
@@ -3020,7 +3352,10 @@ impl Session {
                 && attack_clear
                 && crew_ready
                 && wrap(aim_yaw - brain.yaw).abs() < 0.1
-                && (aim_pitch - brain.pitch).abs() < 0.12;
+                && (aim_pitch - brain.pitch).abs() < 0.12
+                // It fires in bursts with short pauses, as a player does;
+                // a charge it winds up is let go when it is ready instead.
+                && (weapon.is_some_and(|w| w.charge) || cadence::bursting(bot, tick));
             // A tool reaching to hold keeps its trigger down while it
             // watches its target, until it catches; none just after a
             // throw.
@@ -3050,9 +3385,6 @@ impl Session {
         }
         if let Some((yaw, pitch)) = act.aim.or(extra.aim) {
             (aim_yaw, aim_pitch) = (yaw, pitch);
-        }
-        if telling {
-            fire = false;
         }
         // Handling things (a carry's swing, an objective's or interaction's
         // controls) keeps the plain turn its controllers are built on, and
@@ -3107,11 +3439,7 @@ impl Session {
                     && hold
                     && (behaviour == Behaviour::Objective || kind.moves == Moves::Swim) =>
             {
-                let side = if (tick / 90 + bot).is_multiple_of(2) {
-                    0.7
-                } else {
-                    -0.7
-                };
+                let side = brain.strafe_leg(tick, WEAVE_SECONDS, &|_| true, false) * 0.7;
                 direction = right * side;
                 if back_off {
                     direction -= forward;
@@ -3132,7 +3460,15 @@ impl Session {
                     if stacked {
                         direction = right;
                     } else if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
-                        direction = forward;
+                        // Straight at it: not along its facing, which its
+                        // aim error turns off the line (off a stair's edge).
+                        direction = enemy
+                            .map_or(forward, |seen| flat(seen.feet - feet).normalize_or(forward));
+                    } else if let Some(gap) = gap {
+                        // In its band it keeps its feet moving: in, back
+                        // out and aside, on its own seeded beat.
+                        let room = gap + FOOTWORK_BACK <= near.max(1.0);
+                        direction = footwork(bot, tick, forward, right, room);
                     }
                 } else {
                     // A ranged fighter strafes one way for a while, but
@@ -3187,26 +3523,35 @@ impl Session {
                         })
                     };
                     // Each leg turns back the other way, unless only this
-                    // way is open (a coin-flip carry-on round the enemy
-                    // drifted the fighter out of its band: the fair
-                    // metric's gun range rose from 12 to 23 and its hit
-                    // rate fell to 12%). One that reaches an edge stands
-                    // there until the leg is up; one that meets an ally
-                    // turns away from it at once.
-                    let (mut side, mut until) = brain.strafe;
-                    let parted = ally(side) && ground(-side);
-                    if tick >= until || parted {
-                        if parted || ground(-side) || !ground(side) {
-                            side = -side;
-                        }
-                        let seconds = kind.fighting.strafe_seconds * (0.75 + 0.5 * brain.random());
-                        until = tick + (seconds * 120.0) as u64;
-                    }
-                    brain.strafe = (side, until);
+                    // way is open. One that reaches an edge stands there
+                    // until the leg is up; one that meets an ally turns
+                    // away from it at once.
+                    let parted = ally(brain.strafe.0) && ground(-brain.strafe.0);
+                    let side =
+                        brain.strafe_leg(tick, kind.fighting.strafe_seconds, &ground, parted);
                     if overshoots {
                         direction = -flat(Vec3::from(state.velocity)).normalize_or_zero();
                     } else if ground(side) {
                         direction = right * side * 0.7;
+                    }
+                    // Now and then it presses in a little as it strafes (a
+                    // slow seeded lean, never back toward an edge), so a
+                    // strafe cut short and turned back is not a pace on
+                    // the spot. Never inside its band's near edge.
+                    let lean = cadence::drift(bot, cadence::salt::LEAN, 0, tick, LEAN_TICKS)
+                        .max(0.0)
+                        * LEAN;
+                    if lean > 0.0
+                        && gap.is_some_and(|gap| gap > near + LEAN_ROOM)
+                        && super::admin_players::world_ray(
+                            &self.simulation,
+                            feet + forward * 0.9 + Vec3::Y * 0.5,
+                            Vec3::NEG_Y,
+                            0.5 + body.step + body.drop,
+                        )
+                        .is_some()
+                    {
+                        direction += forward * lean;
                     }
                 }
                 if back_off {
@@ -3293,9 +3638,6 @@ impl Session {
         if extra.stand {
             direction = Vec3::ZERO;
         }
-        if telling {
-            direction = Vec3::ZERO;
-        }
         if driving.is_none() && pushing.is_none() {
             direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);
         }
@@ -3342,7 +3684,13 @@ impl Session {
         } else {
             brain.wedged = 0;
         }
-        if driving.is_none() && pushing.is_none() && brain.stuck > 20 && brain.stuck % 40 < 5 {
+        if driving.is_none()
+            && pushing.is_none()
+            && brain.stuck > 20
+            && (u64::from(brain.stuck) + cadence::bot_phase(bot, cadence::salt::HOP) % HOP_SPREAD)
+                % 40
+                < 5
+        {
             input.jump = true;
         }
         let mut forget = false;
@@ -3371,6 +3719,10 @@ impl Session {
             forget = true;
             if brain.replans > MAX_REPLANS {
                 brain.goal = None;
+                if behaviour == Behaviour::Arm {
+                    // No way to the item: pass it over.
+                    brain.arming.pass_over(tick);
+                }
                 if behaviour == Behaviour::Objective {
                     brain.objective.fail(tick, "objective navigation blocked");
                 }
@@ -3391,13 +3743,15 @@ impl Session {
         // it down.
         let charging = weapon.is_some_and(|w| w.charge);
         let held_down = grabbing || charging || weapon.is_some_and(|w| w.hold);
-        let pulse = fire && !held_down && tick.is_multiple_of(40) && bite.is_none();
+        // Each bot taps on its own beat, so gunners do not fire in unison.
+        let beat = cadence::beat(bot, cadence::salt::FIRE, tick, 40);
+        let pulse = fire && !held_down && beat && bite.is_none();
         // A charged weapon is held until letting go fires it, then let go.
         let pulse = pulse
             || fire
                 && charging
                 && (if vehicle_weapon {
-                    charged_ready || !mounted_charging && tick.is_multiple_of(40)
+                    charged_ready || !mounted_charging && beat
                 } else {
                     self.weapons
                         .image_state(ActorId(bot), 0)
@@ -3546,7 +3900,7 @@ impl Session {
                 if down {
                     self.note_shot(bot);
                     let target = sight.target.map(|s| s.owner);
-                    self.surprise_fired(bot, native_choice, target, behaviour, tick);
+                    self.surprise_fired(bot, native_choice, target, tick);
                 }
             }
         }
@@ -3699,27 +4053,61 @@ impl Session {
         self.peers.get_mut(&target).unwrap().combat.health = max;
         Ok(())
     }
-    /// Equip the first real weapon (not a building tool) in the inventory,
-    /// unless it holds one already (the rules may have put one in its
-    /// hand).
+    /// Equip the best weapon in the inventory by its data
+    /// (`hand_combat::item_worth`), for a weapon the native chooser does not
+    /// handle (a script fires it, or a seat holds the bot), unless it holds
+    /// one already that is as good (the rules may have put it in its hand).
+    /// With none that attacks by its data, the first real tool.
     fn bot_arm(&mut self, bot: OwnerId) -> Result<()> {
+        // Holding or reaching for something with its tool: the tool stays.
+        if self.held_by(bot).is_some() || self.is_reaching(bot) {
+            return Ok(());
+        }
         let Some(actor) = self.weapons.actor(ActorId(bot)) else {
             return Ok(());
         };
+        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+        let worth = |slot: usize| {
+            actor.inventory[slot]
+                .as_deref()
+                .map_or(0.0, |id| hand_combat::item_worth(self, id, scale))
+        };
+        let held = actor
+            .selected
+            .filter(|s| *s < actor.inventory.len())
+            .map_or(0.0, worth);
+        let best = (0..actor.inventory.len())
+            .map(|slot| (slot, worth(slot)))
+            .filter(|(_, w)| *w > 0.0)
+            .fold(None::<(usize, f32)>, |best, (slot, w)| {
+                if best.is_none_or(|(_, b)| w > b) {
+                    Some((slot, w))
+                } else {
+                    best
+                }
+            });
+        // Nothing that attacks by its data (a tool that grabs, say): the
+        // first that is not a building tool, unless it holds one.
         let real = |item: &Option<String>| {
             item.as_deref()
                 .is_some_and(|id| !bri_weapons::CORE_TOOLS.contains(&id))
         };
-        if actor
-            .selected
-            .and_then(|s| actor.inventory.get(s))
-            .is_some_and(real)
+        let slot = match best {
+            Some((slot, w)) if w > held => Some(slot),
+            Some(_) => None,
+            None if actor
+                .selected
+                .and_then(|s| actor.inventory.get(s))
+                .is_some_and(real) =>
+            {
+                None
+            }
+            None => actor.inventory.iter().position(real),
+        };
+        if let Some(slot) = slot
+            && actor.selected != Some(slot)
         {
-            return Ok(());
-        }
-        let weapon = actor.inventory.iter().position(real);
-        if weapon.is_some() && actor.selected != weapon {
-            let _ = self.equip_tool(bot, weapon);
+            let _ = self.equip_tool(bot, Some(slot));
         }
         Ok(())
     }
@@ -3749,6 +4137,76 @@ impl Session {
             .iter()
             .map(|k| (k.id.clone(), k.name.clone()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod strafe_tests {
+    use super::*;
+
+    #[test]
+    fn strafe_legs_vary_about_their_mean() {
+        for bot in [1, 7, 42] {
+            let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+            let mean = 3.5;
+            let (mut tick, mut legs, mut sides) = (0u64, Vec::new(), Vec::new());
+            for _ in 0..400 {
+                let side = brain.strafe_leg(tick, mean, &|_| true, false);
+                let until = brain.strafe.1;
+                legs.push((until - tick) as f32 / 120.0);
+                sides.push(side);
+                tick = until;
+            }
+            let n = legs.len() as f32;
+            let m = legs.iter().sum::<f32>() / n;
+            let sd = (legs.iter().map(|l| (l - m).powi(2)).sum::<f32>() / n).sqrt();
+            assert!((m - mean).abs() < 0.25, "bot {bot} mean {m}");
+            assert!(sd / m > 0.25, "bot {bot} cv {}", sd / m);
+            let kept = sides.windows(2).filter(|w| w[0] == w[1]).count();
+            assert!(kept > 40 && kept < 160, "bot {bot} kept on {kept} times");
+        }
+    }
+
+    #[test]
+    fn a_strafe_turns_at_once_from_a_closed_side() {
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, 3, 0);
+        let side = brain.strafe_leg(0, 3.5, &|_| true, false);
+        let other = brain.strafe_leg(1, 3.5, &|s| s != side, true);
+        assert_eq!(other, -side);
+    }
+}
+
+#[cfg(test)]
+mod footwork_tests {
+    use super::*;
+
+    #[test]
+    fn melee_footwork_steps_in_out_aside_and_stands_unlike_its_neighbours() {
+        let (forward, right) = (Vec3::NEG_Z, Vec3::X);
+        let steps = |bot| {
+            (0..1200)
+                .map(|t| footwork(bot, t, forward, right, true))
+                .collect::<Vec<_>>()
+        };
+        for bot in 1..=4 {
+            let s = steps(bot);
+            let into = s.iter().filter(|d| d.dot(forward) > 0.0).count();
+            let out = s.iter().filter(|d| d.dot(forward) < 0.0).count();
+            let aside = s.iter().filter(|d| d.dot(right).abs() > 0.0).count();
+            let still = s.iter().filter(|d| **d == Vec3::ZERO).count();
+            assert!(
+                into > 150 && out > 150 && aside > 150 && still > 150,
+                "bot {bot}: {into} {out} {aside} {still}"
+            );
+            // Net drift stays small: it does not walk off its band.
+            let net: f32 = s.iter().map(|d| d.dot(forward)).sum::<f32>() / s.len() as f32;
+            assert!(net.abs() < 0.2, "bot {bot} drifts {net}");
+        }
+        assert_ne!(steps(1), steps(2));
+        // At the edge of its reach it never steps back out of it.
+        for bot in 1..=4 {
+            assert!((0..1200).all(|t| footwork(bot, t, forward, right, false).dot(forward) >= 0.0));
+        }
     }
 }
 

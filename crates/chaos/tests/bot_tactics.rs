@@ -1000,3 +1000,118 @@ fn an_alternative_weapon_cannot_replace_a_live_charge_during_a_real_range_excurs
         s.bot_thoughts()
     );
 }
+
+/// The image a bot holds in its hand, if any.
+fn held_image(s: &Session, bot: u64) -> Option<String> {
+    s.weapon_view()
+        .images
+        .get(&bot)
+        .and_then(|images| images.iter().find(|i| i.hand == 0).map(|i| i.image.clone()))
+}
+
+/// A pack with a weak and a strong copy of the gun; `scripted` gives both
+/// a two-projectile shot, which the native profile does not describe, so
+/// only their data ranks them.
+fn weak_and_strong(scripted: bool) -> Pack {
+    let mut p = pack();
+    for (name, damage) in [("weak", 2.0), ("strong", 40.0)] {
+        alias(
+            &mut p,
+            testing::GUN_ITEM,
+            testing::GUN_IMAGE,
+            testing::GUN_PROJECTILE,
+            &format!("tactics:weapon/{name}"),
+        );
+        p.projectiles
+            .get_mut(&format!("tactics:projectile/{name}"))
+            .unwrap()
+            .damage = damage;
+        if scripted {
+            p.images
+                .get_mut(&format!("tactics:image/{name}"))
+                .unwrap()
+                .shot = Some(
+                serde_json::from_value(serde_json::json!({ "projectiles": 2, "spread": 0.0 }))
+                    .unwrap(),
+            );
+        }
+    }
+    p
+}
+
+#[test]
+fn the_strongest_weapon_is_used_not_the_first() {
+    for scripted in [false, true] {
+        let (mut s, human, bot, mut seq) = game(
+            weak_and_strong(scripted),
+            &[
+                "tactics:weapon/weak",
+                "tactics:weapon/weak",
+                "tactics:weapon/strong",
+            ],
+            14.0,
+        );
+        let mut strong_ticks = 0;
+        let mut weak_ticks = 0;
+        for _ in 0..120 * 12 {
+            ticks(&mut s, human, &mut seq, 1);
+            match held_image(&s, bot).as_deref() {
+                Some("tactics:image/strong") => strong_ticks += 1,
+                Some("tactics:image/weak") => weak_ticks += 1,
+                _ => {}
+            }
+            if s.vitals()[&human].health <= 20.0 {
+                break;
+            }
+        }
+        assert!(
+            strong_ticks > weak_ticks * 4,
+            "scripted={scripted}: strong {strong_ticks} weak {weak_ticks} thoughts={:?}",
+            s.bot_thoughts()
+        );
+        assert!(
+            s.vitals()[&human].health < 100.0,
+            "scripted={scripted}: never hit"
+        );
+    }
+}
+
+#[test]
+fn a_splash_weapon_aims_low_more_often_than_not() {
+    // A rocket kills in a couple of hits, so several fresh duels at a few
+    // ranges give the count.
+    let (mut low, mut chest) = (0, 0);
+    for distance in [14.0, 18.0, 22.0, 26.0, 30.0, 16.0] {
+        let (mut s, human, bot, mut seq) = game(pack(), &[B], distance);
+        let mut seen = BTreeSet::new();
+        for _ in 0..120 * 20 {
+            ticks(&mut s, human, &mut seq, 1);
+            let fired: Vec<u64> = s
+                .weapon_view()
+                .fired()
+                .filter(|p| p.source.0 == bot)
+                .map(|p| p.id)
+                .collect();
+            for id in fired {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+                let aim = thought
+                    .surprise
+                    .decisions
+                    .iter()
+                    .find(|d| d.domain == "aim");
+                match aim.map(|d| d.chosen.as_str()) {
+                    Some("feet" | "surface") => low += 1,
+                    _ => chest += 1,
+                }
+            }
+            if s.vitals()[&human].health <= 0.0 || seen.len() >= 6 {
+                break;
+            }
+        }
+    }
+    assert!(low + chest >= 6, "only {} rockets", low + chest);
+    assert!(low > chest, "aimed low {low} times, at the chest {chest}");
+}

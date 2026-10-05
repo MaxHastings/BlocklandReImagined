@@ -53,8 +53,6 @@ impl BotThought {
         let mut parts: Vec<String> = terms.into_iter().take(3).map(|(_, t)| t).collect();
         if let Some(gate) = self.surprise.gate {
             parts.push(format!("hold: {gate}"));
-        } else if let Some(tell) = &self.surprise.telling {
-            parts.push(format!("hold: telling {tell}"));
         } else if decision.is_some_and(|d| d.reason == "committed") {
             parts.push("hold: committed".into());
         }
@@ -112,11 +110,9 @@ mod tests {
             option: option.into(),
             score: adjusted,
             adjusted,
-            eligible: true,
             drift,
             boredom,
             effectiveness: 1.0,
-            weight: 1.0,
         }
     }
 
@@ -149,7 +145,6 @@ mod tests {
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,
-                telling: None,
                 interrupt: None,
                 drives: Vec::new(),
                 decisions: vec![BotDecision {
@@ -157,6 +152,7 @@ mod tests {
                     tick: 1200,
                     plain: "fight".into(),
                     chosen: "chase".into(),
+                    varied: true,
                     reason: "committed",
                     candidates: vec![
                         candidate("wander", 0.1, 0.0, 0.0),

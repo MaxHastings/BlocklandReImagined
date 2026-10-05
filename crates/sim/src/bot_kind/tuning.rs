@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn a_dial_is_read_and_set_by_its_path() {
         let k = kind();
-        assert_eq!(dial(&k, "surprise.strength"), Some(0.0));
+        assert_eq!(dial(&k, "surprise.strength"), Some(0.5));
         let k = with_dial(&k, "surprise.strength", 0.6).unwrap();
         assert!((k.surprise.strength - 0.6).abs() < 1e-6);
         assert!((dial(&k, "surprise.strength").unwrap() - 0.6).abs() < 1e-6);
@@ -200,11 +200,7 @@ mod tests {
         let k = with_dial(&k, "behaviours.objective", 1.0).unwrap();
         let k = with_dial(&k, "behaviours.chase", 0.0).unwrap();
         assert_eq!(k.behaviours["chase"], 0.0);
-        assert!(
-            dials(&k)
-                .iter()
-                .any(|(p, _)| p == "surprise.interrupts_per_minute")
-        );
+        assert!(dials(&k).iter().any(|(p, _)| p == "hold.seconds"));
     }
 
     #[test]

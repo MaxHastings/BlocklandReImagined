@@ -388,6 +388,9 @@ struct Track {
     fallen: bool,
     /// Ticks in a row in a flavour interrupt (`surprise`).
     goofing: u64,
+    /// The behaviour a respawned bot's brain still holds from the life it
+    /// lost, and the tick it came back (`last_behaviour`).
+    carried: Option<(&'static str, u64)>,
 }
 
 /// What looks bad on camera, summed over every bot.
@@ -659,6 +662,13 @@ impl Scorer {
                 track.path.clear();
                 track.last_heading = None;
                 track.fallen = false;
+                // A respawn starts a new life, not a choice the bot made:
+                // what it did before it died and what it does after are
+                // not one behaviour switch. The brain keeps the choice it
+                // died with until its new life's first think, so that one
+                // change is not counted. (A killer's turn to its next
+                // target is its own choice and still counts.)
+                track.carried = Some((thought.behaviour, tick));
             }
             track.was_alive = true;
             self.report.bot_ticks += 1;
@@ -672,7 +682,7 @@ impl Scorer {
                     self.report.distinct_picks += 1;
                 }
                 let last = self.decided.insert((*bot, d.domain), d.chosen.clone());
-                if d.chosen != d.plain && last.is_some_and(|l| l != d.chosen) {
+                if d.varied && last.is_some_and(|l| l != d.chosen) {
                     self.report.surprised += 1;
                 }
             }
@@ -744,13 +754,24 @@ impl Scorer {
                 self.report.idle += 1;
             }
             *self.report.behaviours.entry(thought.behaviour).or_default() += 1;
+            if track
+                .carried
+                .is_some_and(|(_, at)| tick > at + TICKS_PER_SECOND as u64)
+            {
+                track.carried = None;
+            }
             if let Some(last) = track.last_behaviour.filter(|b| *b != thought.behaviour) {
-                self.report.switches += 1;
-                *self
-                    .report
-                    .transitions
-                    .entry((last, thought.behaviour))
-                    .or_default() += 1;
+                if track.carried.is_some_and(|(b, _)| b == last) {
+                    // Its new life's first choice.
+                    track.carried = None;
+                } else {
+                    self.report.switches += 1;
+                    *self
+                        .report
+                        .transitions
+                        .entry((last, thought.behaviour))
+                        .or_default() += 1;
+                }
             }
             track.last_behaviour = Some(thought.behaviour);
             let v = Vec3::new(state.velocity[0], 0.0, state.velocity[2]);

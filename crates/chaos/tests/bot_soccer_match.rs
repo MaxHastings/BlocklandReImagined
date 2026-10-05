@@ -657,6 +657,14 @@ struct Report {
     wrong_way: f32,
     /// Bot-seconds spent fighting or chasing an opponent.
     combat: f32,
+    /// Bot-seconds in a goof (`surprise`: a look, an emote, a hop).
+    goof: f32,
+    /// Bot-seconds far from the ball (a lull for that bot) and near it,
+    /// and of each the seconds in a goof.
+    far: f32,
+    goof_far: f32,
+    near: f32,
+    goof_near: f32,
     /// Rounds won (five goals); the host resets the game after each, as
     /// the Mini-Game window's Reset does.
     rounds: u32,
@@ -667,6 +675,8 @@ struct Report {
 const CONTACT: f32 = 2.4;
 /// A ball with a bot this near is being played.
 const ATTENDED: f32 = 6.0;
+/// A bot this far from the ball is in a lull: the play is up the field.
+const LULL_DISTANCE: f32 = 22.0;
 /// Seconds over which a bot's headway and turning are judged.
 const WINDOW: f32 = 2.0;
 /// A sharp turn, in degrees per sample, for jitter.
@@ -760,6 +770,9 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
             if matches!(t.behaviour, "fight" | "chase") {
                 r.combat += dt;
             }
+            if t.surprise.interrupt.is_some() {
+                r.goof += dt;
+            }
             let Some(&(f, yaw)) = feet.get(&t.bot) else {
                 continue;
             };
@@ -841,6 +854,24 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
             continue;
         };
         absent_since = None;
+        for t in &thoughts {
+            let Some(&(f, _)) = feet.get(&t.bot) else {
+                continue;
+            };
+            let goofing = if t.surprise.interrupt.is_some() {
+                dt
+            } else {
+                0.0
+            };
+            let d = Vec3::new(f.x - at.x, 0.0, f.z - at.z).length();
+            if d > LULL_DISTANCE {
+                r.far += dt;
+                r.goof_far += goofing;
+            } else if d < CONTACT * 3.0 {
+                r.near += dt;
+                r.goof_near += goofing;
+            }
+        }
         if ball_id != Some(id) {
             ball_id = Some(id);
             fresh_since = Some(now);
@@ -959,8 +990,14 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
             walled_run = 0.0;
         }
         for (b, (f, _)) in &feet {
+            // A bot goofing (a look, an emote) stands still on purpose:
+            // that is the goof share, bounded on its own, not idling.
+            let goofing = thoughts
+                .iter()
+                .any(|t| t.bot == *b && t.surprise.interrupt.is_some());
             if let Some(prev) = last_feet.insert(*b, *f)
                 && prev.distance(*f) < 0.02
+                && !goofing
                 && Vec3::new(f.x - at.x, 0.0, f.z - at.z).length() > 8.0
             {
                 r.idle += dt;
@@ -999,8 +1036,9 @@ fn env<T: std::str::FromStr>(key: &str, default: T) -> T {
 
 /// What a viewer would call a clean match. Shares are of bot-time (bots x
 /// seconds) or of the match, as each field says.
-/// Own goals: at most half of a match's goals (and a fifth over all
-/// seeds, checked by the caller). A defender blocking on its goal line is
+/// Own goals: about one in five of a match's goals (one more than a fifth
+/// rounds down, so a single own goal in a four-goal match passes), and a
+/// fifth over all seeds, checked by the caller. A defender blocking on its goal line is
 /// credited with a ball an attacker drives in off it, since the engine
 /// credits the last body to move the ball. A lone
 /// defender blocking in its own goal mouth is credited with the ball the
@@ -1025,7 +1063,7 @@ fn assert_clean(label: &str, setup: &Setup, r: &Report) {
             format!("one side never scored: {:?}", r.goals),
         ),
         (
-            !own_goals_bounded || r.own_goals * 2 <= total.max(1),
+            !own_goals_bounded || r.own_goals * 5 <= total.max(1) + 1,
             format!("{} own goals of {total}", r.own_goals),
         ),
         (
@@ -1094,6 +1132,8 @@ fn two_against_two_play_a_clean_match_across_seeds() {
     };
     let mut failures = Vec::new();
     let (mut goals, mut own_goals) = (0, 0);
+    let (mut goof, mut bot_time) = (0.0, 0.0);
+    let mut lull = [0.0f32; 4];
     let first: u64 = env("BRI_SOCCER_FIRST", 1);
     for kit in kits {
         for seed in first..=seeds {
@@ -1102,6 +1142,14 @@ fn two_against_two_play_a_clean_match_across_seeds() {
             println!("{kit:?} seed {seed}: {r:?}");
             goals += r.goals.values().sum::<u32>();
             own_goals += r.own_goals;
+            goof += r.goof;
+            bot_time += 4.0 * r.seconds;
+            for (sum, v) in lull
+                .iter_mut()
+                .zip([r.far, r.goof_far, r.near, r.goof_near])
+            {
+                *sum += v;
+            }
             let label = format!("{kit:?} 2v2 seed {seed}");
             if let Err(e) = std::panic::catch_unwind(|| assert_clean(&label, &setup, &r)) {
                 failures.push(e.downcast_ref::<String>().cloned().unwrap_or_default());
@@ -1109,6 +1157,27 @@ fn two_against_two_play_a_clean_match_across_seeds() {
         }
     }
     println!("{own_goals} own goals of {goals} goals");
+    // Goofing is one of the bot's options mid-match too (a look, an emote
+    // between plays), not only with nothing to do: a little, never a lot.
+    let goofing = goof / bot_time.max(1.0);
+    println!("goof share {:.2}%", goofing * 100.0);
+    if goofing <= 0.0 || goofing > 0.1 {
+        failures.push(format!("goof share {goofing:.4} outside (0, 0.1]"));
+    }
+    // A lull: a bot far up the field from the ball now and then goofs; one
+    // at the ball hardly ever does, so it stops when the ball comes back.
+    let far = lull[1] / lull[0].max(1.0);
+    let near = lull[3] / lull[2].max(1.0);
+    println!(
+        "goof far from the ball {:.2}% of {:.0} bot-s, at it {:.2}% of {:.0} bot-s",
+        far * 100.0,
+        lull[0],
+        near * 100.0,
+        lull[2]
+    );
+    if far <= 0.0 || near > far * 0.25 {
+        failures.push(format!("lull goofs: far {far:.4}, near {near:.4}"));
+    }
     if own_goals * 5 > goals {
         failures.push(format!("{own_goals} own goals of {goals} over all seeds"));
     }

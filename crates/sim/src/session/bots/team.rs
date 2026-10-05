@@ -463,9 +463,7 @@ impl Session {
         for (o, copy) in watchers {
             let brain = self.bots.brains.get_mut(&o).unwrap();
             for (domain, option) in worked {
-                brain
-                    .surprise
-                    .saw(&brain.kind.surprise, *domain, *option, copy, tick);
+                brain.surprise.saw(*domain, *option, copy, tick);
             }
         }
     }
@@ -725,18 +723,14 @@ mod tests {
             adjust(&team, seed, |_| 10, &mut scores, &choices, &all, 2.0, &open);
             let mut mind = surprise::Mind::new(seed);
             let gate = surprise::Gate::default();
-            let plain = behaviour::best(&scores);
-            let (first, _) = surprise::behaviour(
-                &mut mind,
-                &surprise,
-                &scores,
-                plain,
-                Behaviour::Wander,
-                gate,
-                100,
+            let hold = crate::bot_kind::BotHold::default();
+            let must = &behaviour::MUST;
+            let first = surprise::behaviour(
+                &mut mind, &surprise, hold, &scores, false, false, must, gate, 100,
             );
-            let (again, _) =
-                surprise::behaviour(&mut mind, &surprise, &scores, plain, first, gate, 101);
+            let again = surprise::behaviour(
+                &mut mind, &surprise, hold, &scores, false, false, must, gate, 101,
+            );
             assert_eq!(first, again, "a pick is held");
             match first {
                 Behaviour::Fight => fights += 1,
@@ -824,11 +818,12 @@ mod tests {
                 let (pull, copy) = mood(team, i as u64, Vec3::ZERO, 20.0, others);
                 let pause = surprise::Pause {
                     natural: true,
+                    play: 0.75,
                     pull,
                     copy,
                     ..Default::default()
                 };
-                mind.interrupt(&surprise, &pause, tick);
+                mind.goof(&surprise, crate::bot_kind::BotHold::default(), &pause, tick);
                 doing[i] = mind.flavour().map(|f| f as u8);
             }
             if tick % 120 == 0 {
@@ -887,37 +882,30 @@ mod tests {
     fn a_seen_teammate_success_lifts_that_option_and_fades_capped() {
         use surprise::Domain;
         let team = BotTeam::default();
-        let surprise = crate::bot_kind::BotSurprise::default();
         let (fight, chase) = (Behaviour::Fight as u32, Behaviour::Chase as u32);
         let mut mind = surprise::Mind::new(1);
-        mind.saw(&surprise, Domain::Behaviour, fight, copied(&team, true), 0);
-        let lift = mind.seen(&surprise, Domain::Behaviour, fight, 0);
+        mind.saw(Domain::Behaviour, fight, copied(&team, true), 0);
+        let lift = mind.seen(Domain::Behaviour, fight, 0);
         assert!(lift > 0.0, "a seen success lifts the same option");
-        assert_eq!(mind.seen(&surprise, Domain::Behaviour, chase, 0), 0.0);
-        assert_eq!(mind.seen(&surprise, Domain::Aim, fight, 0), 0.0);
+        assert_eq!(mind.seen(Domain::Behaviour, chase, 0), 0.0);
+        assert_eq!(mind.seen(Domain::Aim, fight, 0), 0.0);
         // Occluded: it never saw it.
         let mut blind = surprise::Mind::new(1);
-        blind.saw(&surprise, Domain::Behaviour, fight, copied(&team, false), 0);
-        assert_eq!(blind.seen(&surprise, Domain::Behaviour, fight, 0), 0.0);
+        blind.saw(Domain::Behaviour, fight, copied(&team, false), 0);
+        assert_eq!(blind.seen(Domain::Behaviour, fight, 0), 0.0);
         // It fades to nothing as the enemy adapts.
-        let half = (surprise.effectiveness_seconds * 120.0) as u64;
-        let later = mind.seen(&surprise, Domain::Behaviour, fight, half);
+        let half = (surprise::EFFECTIVENESS_SECONDS * 120.0) as u64;
+        let later = mind.seen(Domain::Behaviour, fight, half);
         assert!(
             (later - lift / 2.0).abs() < 1e-4,
             "{later} after a half-life"
         );
-        assert_eq!(
-            mind.seen(&surprise, Domain::Behaviour, fight, half * 20),
-            0.0
-        );
+        assert_eq!(mind.seen(Domain::Behaviour, fight, half * 20), 0.0);
         // However often it sees it, the lift stays within `copy`.
         for t in 0..50 {
-            mind.saw(&surprise, Domain::Behaviour, fight, team.copy, t);
+            mind.saw(Domain::Behaviour, fight, team.copy, t);
         }
-        assert_eq!(
-            mind.seen(&surprise, Domain::Behaviour, fight, 49),
-            team.copy
-        );
+        assert_eq!(mind.seen(Domain::Behaviour, fight, 49), team.copy);
     }
 
     /// Coordination reads data, never names: outside comments the module's

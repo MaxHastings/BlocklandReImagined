@@ -55,17 +55,15 @@ pub(crate) struct Situation {
     /// an objective that needs only its feet): it goes on, shooting,
     /// rather than standing to fight.
     pub gunning: bool,
-    /// It has no attack, and sees an item that would give it one.
-    pub arm: bool,
+    /// How much it wants an item it sees lying in reach: [`arming::ARM`]
+    /// with no attack, else an upgrade's score (`arming::upgrade_score`);
+    /// 0 for none.
+    pub arm: f32,
     /// The enemy in sight within its chase radius: how far across, and how
     /// much higher.
     pub enemy: Option<(f32, f32)>,
     /// The far edge of its weapon's band.
     pub far: f32,
-    /// Leeway past `far`, and in height, before a fighting bot gives chase
-    /// (`BotFighting::slack`): an enemy that jumps or steps back a little
-    /// is still fought.
-    pub slack: f32,
     /// How high it steps.
     pub step: f32,
     /// How much farther above or below a step its attack reaches from where
@@ -73,19 +71,39 @@ pub(crate) struct Situation {
     pub reach_up: f32,
     /// It remembers where an enemy was.
     pub remembers: bool,
-    /// Farther from its brick than it strolls (never for a rules bot).
-    pub strayed: bool,
-    /// Its walk back home is done.
-    pub home: bool,
+    /// How far past the edge of its stroll it is, 0 inside it to 1 a few
+    /// units out (always 0 for a rules bot).
+    pub strayed: f32,
     /// A step of an objective the game still offers failed and is cooling
-    /// down: it does not walk all the way home meanwhile.
+    /// down: it does not walk home meanwhile.
     pub pursuing: bool,
 }
 
 /// An objective it can run and gun on the way to, against Fight's 0.8.
 const GUNNING: f32 = 0.65;
-/// Leeway in height before a fighting bot gives chase, beyond a step.
+/// Height an enemy may stand above or below it, beyond a step, and still
+/// be fought at full score.
 const RISE_SLACK: f32 = 1.0;
+/// A ranged band reaches up and down too: this share of its far edge (a
+/// gunner fights one a few units up a slope or a jet's hop).
+const RISE_SHARE: f32 = 0.25;
+/// Over how many units past its band's far edge (or past that height) a
+/// fight's score fades to nothing, at least: a fight just past the edge
+/// still scores, so the hold rule's margin, not a threshold, decides when
+/// it turns into a chase.
+const FIGHT_FADE: f32 = 4.5;
+/// The share of a band's far edge it fades over, when that is more.
+const FIGHT_FADE_SHARE: f32 = 0.5;
+/// Behaviours that take over at once when they win: a catch in its tool,
+/// and arming an empty hand.
+pub(crate) const MUST: [u32; 2] = [Behaviour::Carry as u32, Behaviour::Arm as u32];
+/// The same for an armed bot: an upgrade is weighed by the hold rule.
+pub(crate) const MUST_ARMED: [u32; 1] = [Behaviour::Carry as u32];
+
+/// 1 up to `edge`, falling to 0 over `width` past it.
+fn fade(value: f32, edge: f32, width: f32) -> f32 {
+    (1.0 - (value - edge).max(0.0) / width.max(1e-3)).clamp(0.0, 1.0)
+}
 
 impl Behaviour {
     /// Every behaviour, most urgent first.
@@ -108,35 +126,31 @@ impl Behaviour {
         crate::bot_kind::BEHAVIOURS[self as usize]
     }
 
-    /// How much it wants the bot now, after `current`: 0 not at all. The
-    /// base scores keep the urgency order; weights may reorder them.
-    fn score(self, current: Behaviour, s: &Situation) -> f32 {
+    /// How much it wants the bot now: 0 not at all. The base scores keep
+    /// the urgency order; weights may reorder them. A score says only what
+    /// is true now: holding a choice is the hold rule's job ([`Hold`]).
+    fn score(self, s: &Situation) -> f32 {
         let fits = |on: bool, score: f32| if on { score } else { 0.0 };
         match self {
             Behaviour::Carry => fits(s.holding, 1.0),
             Behaviour::Interact => s.interaction,
-            Behaviour::Fight => fits(
-                s.enemy.is_some_and(|(distance, rise)| {
-                    let slack = if current == Behaviour::Fight {
-                        s.slack
-                    } else {
-                        0.0
-                    };
-                    distance <= s.far + slack
-                        && rise.abs() <= s.step + RISE_SLACK + slack + s.reach_up
-                }),
-                0.8,
-            ),
-            // Before going after an enemy or an objective that wants one
-            // beaten, which it cannot do empty-handed.
-            Behaviour::Arm => fits(s.arm, 0.95),
+            // Full in its band, fading past the far edge and with height.
+            Behaviour::Fight => s.enemy.map_or(0.0, |(distance, rise)| {
+                let width = (s.far * FIGHT_FADE_SHARE).max(FIGHT_FADE);
+                0.8 * fade(distance, s.far, width)
+                    * fade(
+                        rise.abs(),
+                        (s.step + RISE_SLACK).max(s.far * RISE_SHARE) + s.reach_up,
+                        FIGHT_FADE,
+                    )
+            }),
+            // Empty-handed, before going after an enemy or an objective
+            // that wants one beaten; armed, an upgrade by its worth.
+            Behaviour::Arm => s.arm,
             Behaviour::Chase => fits(s.enemy.is_some(), 0.6),
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
-            Behaviour::Return => fits(
-                !s.pursuing && (s.strayed || (current == Behaviour::Return && !s.home)),
-                0.3,
-            ),
+            Behaviour::Return => fits(!s.pursuing, 0.3 * s.strayed.clamp(0.0, 1.0)),
             Behaviour::Objective => fits(
                 s.objective,
                 if s.committed {
@@ -152,27 +166,43 @@ impl Behaviour {
     }
 }
 
-/// The behaviour to follow now, after `current`, its scores scaled by
-/// `weight` (a kind's `behaviours`). Wander when nothing scores. The
-/// brain takes [`scores`] and [`best`] apart, so the surprise chooser can
-/// weigh the near ones.
+/// The behaviour the scores alone pick (the hold rule aside), its scores
+/// scaled by `weight` (a kind's `behaviours`). Wander when nothing scores.
+#[cfg(test)]
+pub(crate) fn plain(s: &Situation, weight: impl Fn(Behaviour) -> f32) -> Behaviour {
+    best(&scores(s, weight))
+}
+
+/// What follows `current` (held since long ago) by the hold rule, with no
+/// interrupt: for tests of the scores and the rule together.
 #[cfg(test)]
 pub(crate) fn choose(
     current: Behaviour,
     s: &Situation,
     weight: impl Fn(Behaviour) -> f32,
 ) -> Behaviour {
-    best(&scores(current, s, weight))
+    let scores = scores(s, weight);
+    let options: Vec<(u32, f32)> = Behaviour::ALL
+        .iter()
+        .map(|b| (*b as u32, scores[*b as usize]))
+        .collect();
+    let mut hold = Hold {
+        option: Some(current as u32),
+        since: 0,
+        scored: 0,
+    };
+    let ask = Ask {
+        options: &options,
+        interrupt: false,
+        paused: false,
+        must: &MUST,
+    };
+    Behaviour::ALL[hold.choose(BotHold::default(), &ask, 1_000_000).0 as usize]
 }
 
-/// Every behaviour's weighted score, in [`Behaviour::ALL`] order: what
-/// [`choose`] (and the surprise chooser) picks from.
-pub(crate) fn scores(
-    current: Behaviour,
-    s: &Situation,
-    weight: impl Fn(Behaviour) -> f32,
-) -> [f32; Behaviour::COUNT] {
-    Behaviour::ALL.map(|b| b.score(current, s) * weight(b))
+/// Every behaviour's weighted score, in [`Behaviour::ALL`] order.
+pub(crate) fn scores(s: &Situation, weight: impl Fn(Behaviour) -> f32) -> [f32; Behaviour::COUNT] {
+    Behaviour::ALL.map(|b| b.score(s) * weight(b))
 }
 
 /// The highest of `scores`, the earlier on a tie; Wander when none scores.
@@ -185,6 +215,129 @@ pub(crate) fn best(scores: &[f32; Behaviour::COUNT]) -> Behaviour {
         }
     }
     best.0
+}
+
+use crate::bot_kind::BotHold;
+
+/// The one rule for holding a choice, whatever is chosen (a behaviour, a
+/// weapon, an aim, a route, a goof): what is chosen is held at least
+/// [`BotHold::seconds`]; after that another takes over only by scoring
+/// more than [`BotHold::margin`] above it. An interrupt takes over at
+/// once: one the caller names (urgent damage, an objective picked up or
+/// dropped, the target lost or dead), a [`Ask::must`] option winning, or
+/// the held option no longer possible (scoring nothing). A held option
+/// that pauses between steps ([`Ask::paused`]) is held through the pause
+/// for as long as a choice is held.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Hold {
+    /// What is chosen.
+    pub option: Option<u32>,
+    /// Since when.
+    pub since: u64,
+    /// When it last scored.
+    pub scored: u64,
+}
+/// One choice to make.
+pub(crate) struct Ask<'a> {
+    /// Each option and its score; 0 (or not finite) is not possible now.
+    pub options: &'a [(u32, f32)],
+    /// Something happened that the choice must answer at once.
+    pub interrupt: bool,
+    /// The held option scores nothing only because it is between steps.
+    pub paused: bool,
+    /// Options that take over at once when they win.
+    pub must: &'a [u32],
+}
+/// Why the rule kept or changed a choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Held {
+    /// The first choice.
+    First,
+    /// The best is what is held.
+    Best,
+    /// Held: chosen too recently to change.
+    Committed,
+    /// Held: the best does not beat it by the margin.
+    Margin,
+    /// Held: between steps.
+    Paused,
+    /// Changed: the best beat it by the margin.
+    Beaten,
+    /// Changed at once: an interrupt, or a must-do option.
+    Interrupt,
+    /// Changed at once: the held option is no longer possible.
+    Impossible,
+}
+impl Held {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Best => "best",
+            Self::Committed => "committed",
+            Self::Margin => "margin",
+            Self::Paused => "paused",
+            Self::Beaten => "beaten",
+            Self::Interrupt => "interrupt",
+            Self::Impossible => "impossible",
+        }
+    }
+}
+impl Hold {
+    /// Choose among `ask`'s options at `tick`, holding the last choice by
+    /// `rule`.
+    pub(crate) fn choose(&mut self, rule: BotHold, ask: &Ask, tick: u64) -> (u32, Held) {
+        let score = |o: u32| {
+            ask.options
+                .iter()
+                .find(|(x, _)| *x == o)
+                .map_or(0.0, |(_, s)| if s.is_finite() { s.max(0.0) } else { 0.0 })
+        };
+        // The best now, the earlier on a tie.
+        let mut best: Option<(u32, f32)> = None;
+        for (option, _) in ask.options {
+            let s = score(*option);
+            if s > 0.0 && best.is_none_or(|(_, b)| s > b) {
+                best = Some((*option, s));
+            }
+        }
+        let commit = (rule.seconds.max(0.0) * 120.0).round() as u64;
+        let Some(current) = self.option else {
+            let first = best.map_or(ask.options.first().map_or(0, |o| o.0), |b| b.0);
+            *self = Hold {
+                option: Some(first),
+                since: tick,
+                scored: tick,
+            };
+            return (first, Held::First);
+        };
+        let held = score(current);
+        if held > 0.0 {
+            self.scored = tick;
+        }
+        let Some((challenger, challenge)) = best.filter(|(b, _)| *b != current) else {
+            return (current, Held::Best);
+        };
+        let why = if ask.interrupt || ask.must.contains(&challenger) {
+            Held::Interrupt
+        } else if held <= 0.0 {
+            if ask.paused && tick < self.scored + commit {
+                return (current, Held::Paused);
+            }
+            Held::Impossible
+        } else if tick < self.since + commit {
+            return (current, Held::Committed);
+        } else if challenge > held * (1.0 + rule.margin) {
+            Held::Beaten
+        } else {
+            return (current, Held::Margin);
+        };
+        *self = Hold {
+            option: Some(challenger),
+            since: tick,
+            scored: tick,
+        };
+        (challenger, why)
+    }
 }
 
 #[cfg(test)]
@@ -200,7 +353,6 @@ mod tests {
         Situation {
             enemy: Some((distance, 0.0)),
             far: 6.0,
-            slack: 1.0,
             step: 0.6,
             ..Default::default()
         }
@@ -211,7 +363,7 @@ mod tests {
         let all = Situation {
             holding: true,
             remembers: true,
-            strayed: true,
+            strayed: 1.0,
             ..enemy(3.0)
         };
         assert_eq!(pick(Wander, &all), Carry);
@@ -245,16 +397,7 @@ mod tests {
             ),
             Return
         );
-        assert_eq!(
-            pick(
-                Return,
-                &Situation {
-                    home: true,
-                    ..Default::default()
-                }
-            ),
-            Wander
-        );
+        assert_eq!(pick(Return, &Situation::default()), Wander);
     }
 
     #[test]
@@ -273,16 +416,17 @@ mod tests {
     }
 
     /// At the band's edge it keeps doing what it does: no flip-flop as the
-    /// enemy steps back and forth across it.
+    /// enemy steps back and forth across it. The fight's score fades past
+    /// the edge; the hold rule's margin keeps either choice there.
     #[test]
     fn the_band_edge_does_not_flip_flop() {
-        assert_eq!(pick(Chase, &enemy(6.5)), Chase);
-        assert_eq!(pick(Fight, &enemy(6.5)), Fight);
-        assert_eq!(pick(Fight, &enemy(7.5)), Chase);
-        assert_eq!(pick(Chase, &enemy(5.5)), Fight);
+        assert_eq!(pick(Chase, &enemy(7.0)), Chase);
+        assert_eq!(pick(Fight, &enemy(7.0)), Fight);
+        assert_eq!(pick(Fight, &enemy(7.6)), Chase);
+        assert_eq!(pick(Chase, &enemy(6.5)), Fight);
         // Nor as it jumps: a little above is still fought once fighting.
         let jumped = Situation {
-            enemy: Some((4.0, 2.2)),
+            enemy: Some((4.0, 2.5)),
             ..enemy(4.0)
         };
         assert_eq!(pick(Fight, &jumped), Fight);
@@ -295,18 +439,17 @@ mod tests {
     #[test]
     fn an_empty_handed_bot_arms_before_its_objective() {
         let unarmed = Situation {
-            arm: true,
+            arm: 0.95,
             objective: true,
             ..Default::default()
         };
         assert_eq!(pick(Wander, &unarmed), Arm);
         assert_eq!(pick(Objective, &unarmed), Arm);
-        // An enemy in its bare hands' band, or out of it, waits.
         assert_eq!(
             pick(
                 Fight,
                 &Situation {
-                    arm: true,
+                    arm: 0.95,
                     ..enemy(2.0)
                 }
             ),
@@ -316,7 +459,7 @@ mod tests {
             pick(
                 Chase,
                 &Situation {
-                    arm: true,
+                    arm: 0.95,
                     ..enemy(20.0)
                 }
             ),
@@ -336,7 +479,7 @@ mod tests {
             pick(
                 Arm,
                 &Situation {
-                    arm: false,
+                    arm: 0.0,
                     ..unarmed
                 }
             ),
@@ -344,19 +487,17 @@ mod tests {
         );
     }
 
-    /// A long band's slack is proportional: a sniper at 40 keeps fighting
+    /// A long band fades over a longer way: a sniper at 40 keeps fighting
     /// an enemy that steps a few units past it.
     #[test]
     fn a_long_band_holds_its_fight_further_out() {
-        let fighting = crate::bot_kind::BotFighting::default();
         let sniper = |distance: f32| Situation {
             far: 40.0,
-            slack: fighting.slack(40.0),
             ..enemy(distance)
         };
         assert_eq!(pick(Fight, &sniper(45.0)), Fight);
         assert_eq!(pick(Fight, &sniper(47.0)), Chase);
-        assert_eq!(pick(Chase, &sniper(41.0)), Chase);
+        assert_eq!(pick(Chase, &sniper(44.0)), Chase);
     }
 
     /// Carrying what its objective delivers, it keeps going past an enemy
@@ -391,14 +532,26 @@ mod tests {
         );
     }
 
-    /// Once walking home it walks all the way, not just back inside the
-    /// edge.
+    /// Walking home it does not flicker at the edge of its stroll: the
+    /// hold rule's margin keeps either choice a little way either side.
     #[test]
-    fn a_walk_home_goes_all_the_way() {
-        let near = Situation::default();
-        assert_eq!(pick(Return, &near), Return);
-        assert_eq!(pick(Return, &Situation { home: true, ..near }), Wander);
-        assert_eq!(pick(Wander, &near), Wander);
+    fn a_walk_home_does_not_flicker_at_the_edge() {
+        let edge = Situation {
+            strayed: 0.35,
+            ..Default::default()
+        };
+        assert_eq!(pick(Return, &edge), Return);
+        assert_eq!(pick(Wander, &edge), Wander);
+        let back = Situation {
+            strayed: 0.2,
+            ..Default::default()
+        };
+        assert_eq!(pick(Return, &back), Wander);
+        let out = Situation {
+            strayed: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(pick(Wander, &out), Return);
     }
 
     /// A bot whose objective step failed and is cooling down (it timed out)
@@ -406,7 +559,7 @@ mod tests {
     #[test]
     fn a_bot_after_an_objective_does_not_walk_home() {
         let strayed = Situation {
-            strayed: true,
+            strayed: 1.0,
             ..Default::default()
         };
         assert_eq!(pick(Wander, &strayed), Return);
@@ -430,16 +583,130 @@ mod tests {
         let lost = Situation {
             enemy: None,
             remembers: true,
-            strayed: true,
+            strayed: 1.0,
             ..far
         };
         assert_eq!(pick(Wander, &lost), Search);
         let homebody = |b: Behaviour| if b == Return { 2.0 } else { 1.0 };
         assert_eq!(choose(Wander, &lost, homebody), Return);
+        assert_eq!(plain(&lost, homebody), Return);
         for (i, b) in Behaviour::ALL.into_iter().enumerate() {
             assert_eq!(b as usize, i, "named in order");
         }
         // With nothing scoring, it wanders.
         assert_eq!(choose(Wander, &far, |_| 0.0), Wander);
+    }
+
+    const RULE: BotHold = BotHold {
+        seconds: 0.5,
+        margin: 0.1,
+    };
+    fn held(option: u32, since: u64) -> Hold {
+        Hold {
+            option: Some(option),
+            since,
+            scored: since,
+        }
+    }
+    fn ask(options: &[(u32, f32)]) -> Ask<'_> {
+        Ask {
+            options,
+            interrupt: false,
+            paused: false,
+            must: &[],
+        }
+    }
+
+    /// A challenger that does not beat the held choice by the margin never
+    /// takes over, however long it waits; one that does, takes over once
+    /// the choice has been held long enough.
+    #[test]
+    fn a_challenger_below_the_margin_does_not_switch() {
+        let mut h = held(0, 0);
+        for tick in 0..10_000 {
+            let (o, why) = h.choose(RULE, &ask(&[(0, 1.0), (1, 1.09)]), tick);
+            assert_eq!(o, 0, "{why:?} at {tick}");
+        }
+        let mut h = held(0, 0);
+        let (o, why) = h.choose(RULE, &ask(&[(0, 1.0), (1, 1.2)]), 30);
+        assert_eq!((o, why), (0, Held::Committed));
+        let (o, why) = h.choose(RULE, &ask(&[(0, 1.0), (1, 1.2)]), 60);
+        assert_eq!((o, why), (1, Held::Beaten));
+        assert_eq!(h.since, 60);
+        // And the new choice is held in turn.
+        let (o, _) = h.choose(RULE, &ask(&[(0, 2.0), (1, 1.2)]), 61);
+        assert_eq!(o, 1);
+    }
+
+    /// Each interrupt kind takes over at once from a choice just made:
+    /// one the caller names (urgent damage, an objective picked up or
+    /// dropped, a target lost or dead), a must-do option, and the held
+    /// option no longer possible.
+    #[test]
+    fn a_held_choice_yields_at_once_to_each_interrupt() {
+        let options = [(0, 1.0), (1, 1.01)];
+        let mut h = held(0, 100);
+        let named = Ask {
+            interrupt: true,
+            ..ask(&options)
+        };
+        assert_eq!(h.choose(RULE, &named, 101), (1, Held::Interrupt));
+        let mut h = held(0, 100);
+        let must = Ask {
+            must: &[1],
+            ..ask(&options)
+        };
+        assert_eq!(h.choose(RULE, &must, 101), (1, Held::Interrupt));
+        let mut h = held(0, 100);
+        assert_eq!(
+            h.choose(RULE, &ask(&[(0, 0.0), (1, 0.1)]), 101),
+            (1, Held::Impossible)
+        );
+        let mut h = held(0, 100);
+        assert_eq!(
+            h.choose(RULE, &ask(&[(0, f32::NAN), (1, 0.1)]), 101),
+            (1, Held::Impossible)
+        );
+        // Without one, the same choice holds.
+        let mut h = held(0, 100);
+        assert_eq!(h.choose(RULE, &ask(&options), 101), (0, Held::Committed));
+    }
+
+    /// Between an objective's steps it scores nothing for a moment: the
+    /// rule holds it through the pause (no blink to Wander), and lets go
+    /// once the pause outlasts a held choice.
+    #[test]
+    fn an_objective_is_held_between_its_steps() {
+        let objective = Objective as u32;
+        let wander = Wander as u32;
+        let mut h = held(objective, 0);
+        let during = [(objective, 0.65), (wander, 0.1)];
+        let between = [(objective, 0.0), (wander, 0.1)];
+        assert_eq!(h.choose(RULE, &ask(&during), 1000).0, objective);
+        let paused = |options| Ask {
+            paused: true,
+            ..ask(options)
+        };
+        for tick in 1001..1060 {
+            assert_eq!(
+                h.choose(RULE, &paused(&between), tick),
+                (objective, Held::Paused)
+            );
+        }
+        assert_eq!(h.choose(RULE, &ask(&during), 1060).0, objective);
+        // A pause longer than a held choice ends it.
+        for tick in 1061..1120 {
+            assert_eq!(h.choose(RULE, &paused(&between), tick).0, objective);
+        }
+        assert_eq!(
+            h.choose(RULE, &paused(&between), 1120),
+            (wander, Held::Impossible)
+        );
+        // Not paused, it lets go at once.
+        let mut h = held(objective, 0);
+        assert_eq!(
+            h.choose(RULE, &ask(&between), 10),
+            (wander, Held::Impossible)
+        );
     }
 }

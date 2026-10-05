@@ -13,6 +13,18 @@ use bri_weapons::BotManipulation;
 // action/model budget before cloning rows. The discovery envelope is the
 // kind's `objective_radius`.
 const OBJECTS: usize = 8;
+/// Degrees a push turns off a heading that would send the body into another
+/// sensor, smallest first, each way.
+const HAZARD_TURNS: [f32; 4] = [20.0, 40.0, 60.0, 90.0];
+/// How far ahead of the body a push heading is checked against other
+/// sensors, at most.
+const HAZARD_LOOKAHEAD: f32 = 14.0;
+/// Within this many units of another sensor (the body by its mouth) the
+/// approach circles the body wider (`HAZARD_ARC`), so walking round it does
+/// not knock it in.
+const HAZARD_NEAR: f32 = 5.0;
+/// How much wider, in units.
+const HAZARD_ARC: f32 = 1.0;
 /// Degrees a push turns away from a wall behind the body, smallest first.
 const WALL_TURNS: [f32; 4] = [30.0, 60.0, 90.0, 120.0];
 
@@ -176,6 +188,93 @@ fn region(session: &Session, source: BrickId) -> Option<(OwnerId, (Vec3, Vec3))>
     let b = session.simulation.state().bricks.get(&source)?;
     let bounds = bri_world::regions::bounds(b.rule_region, session.simulation.brick_box(source)?);
     (bounds.0.is_finite() && bounds.1.is_finite()).then_some((b.owner, bounds))
+}
+
+/// Other sensors a loose body could be pushed into near `near`: the regions
+/// of bricks that act when an object enters them (`onObjectEnter`), other
+/// than the one it is being delivered to. Entering one fires what the plan
+/// did not choose; in a ball game, the goal that scores for the other side.
+fn hazards(session: &Session, goal: BrickId, near: Vec3, within: f32) -> Vec<(Vec3, Vec3)> {
+    let Some(world) = session.events.world.as_ref() else {
+        return Vec::new();
+    };
+    world
+        .listeners("onObjectEnter")
+        .into_iter()
+        .filter(|id| id.index != goal)
+        .filter_map(|id| region(session, id.index).map(|(_, bounds)| bounds))
+        .filter(|bounds| flat_gap(near, *bounds) <= within)
+        .take(OBJECTS)
+        .collect()
+}
+
+/// Horizontal distance from `point` to a box (0 inside it).
+fn flat_gap(point: Vec3, (min, max): (Vec3, Vec3)) -> f32 {
+    let dx = (min.x - point.x).max(point.x - max.x).max(0.0);
+    let dz = (min.z - point.z).max(point.z - max.z).max(0.0);
+    (dx * dx + dz * dz).sqrt()
+}
+
+/// Whether the flat segment from `a` to `b` crosses a box grown by
+/// `margin`.
+fn crosses(a: Vec3, b: Vec3, (min, max): (Vec3, Vec3), margin: f32) -> bool {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, d, lo, hi) in [
+        (a.x, b.x - a.x, min.x - margin, max.x + margin),
+        (a.z, b.z - a.z, min.z - margin, max.z + margin),
+    ] {
+        if d.abs() < 1e-6 {
+            if p < lo || p > hi {
+                return false;
+            }
+        } else {
+            let (mut u, mut v) = ((lo - p) / d, (hi - p) / d);
+            if u > v {
+                std::mem::swap(&mut u, &mut v);
+            }
+            t0 = t0.max(u);
+            t1 = t1.min(v);
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// A push heading that does not send the body into another sensor: the
+/// delivery heading `toward` unless the body's line along it (up to
+/// `ahead` units) crosses a hazard, else the smallest turn off it whose
+/// line misses them all. An own goal costs more than any turn; when every
+/// turn is blocked too, the delivery heading stands.
+fn hazard_clear_heading(
+    centre: Vec3,
+    toward: Vec3,
+    ahead: f32,
+    hazards: &[(Vec3, Vec3)],
+    margin: f32,
+) -> Vec3 {
+    let hits = |h: Vec3| {
+        hazards
+            .iter()
+            .any(|b| crosses(centre, centre + h * ahead, *b, margin))
+    };
+    if hazards.is_empty() || !hits(toward) {
+        return toward;
+    }
+    HAZARD_TURNS
+        .iter()
+        .flat_map(|d| [d.to_radians(), -d.to_radians()])
+        .map(|a| {
+            let (s, c) = a.sin_cos();
+            Vec3::new(
+                toward.x * c - toward.z * s,
+                0.0,
+                toward.x * s + toward.z * c,
+            )
+        })
+        .find(|h| !hits(*h))
+        .unwrap_or(toward)
 }
 
 fn inside(point: Vec3, bounds: (Vec3, Vec3)) -> bool {
@@ -733,7 +832,14 @@ impl Choice {
                 let toward = wall_clear_heading(feet, centre, toward, |back| {
                     session.world_ray(centre, back, room).is_none()
                 });
-                let approach = push_approach(feet, centre, toward, radius, width)
+                // Never a heading that sends the body into another sensor
+                // (its own goal), and round it wider when one is near.
+                let near = hazards(session, self.goal.source, centre, HAZARD_LOOKAHEAD);
+                let ahead = flat(destination - centre).length().min(HAZARD_LOOKAHEAD);
+                let toward = hazard_clear_heading(centre, toward, ahead, &near, radius);
+                let close = near.iter().any(|b| flat_gap(centre, *b) <= HAZARD_NEAR);
+                let arc = if close { radius + HAZARD_ARC } else { radius };
+                let approach = push_approach(feet, centre, toward, arc, width)
                     .ok_or(Rejection::Unsupported)?;
                 out.point = approach.point;
                 if let Method::Hammer { slot, image } = &self.method {
@@ -882,6 +988,55 @@ mod tests {
 
     fn push_point(feet: Vec3, centre: Vec3, toward: Vec3, radius: f32, width: f32) -> Option<Vec3> {
         push_approach(feet, centre, toward, radius, width).map(|a| a.point)
+    }
+
+    #[test]
+    fn a_push_that_would_score_an_own_goal_turns_off_it() {
+        // Delivery is north (-z), but the pitch bends: a sensor (its own
+        // goal) lies on the line ahead.
+        let centre = Vec3::new(0.0, 0.0, 0.0);
+        let own = (Vec3::new(-2.0, 0.0, -8.0), Vec3::new(2.0, 2.0, -6.0));
+        let heading = hazard_clear_heading(centre, Vec3::NEG_Z, 12.0, &[own], 0.5);
+        assert!(!crosses(centre, centre + heading * 12.0, own, 0.5));
+        assert!(heading.dot(Vec3::NEG_Z) > 0.5, "turned too far: {heading}");
+        // A clear line keeps its heading.
+        let clear = hazard_clear_heading(centre, Vec3::X, 12.0, &[own], 0.5);
+        assert_eq!(clear, Vec3::X);
+        assert_eq!(
+            hazard_clear_heading(centre, Vec3::NEG_Z, 12.0, &[], 0.5),
+            Vec3::NEG_Z
+        );
+    }
+
+    #[test]
+    fn segment_box_crossing_is_exact_at_the_edges() {
+        let b = (Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+        assert!(crosses(
+            Vec3::new(-1.0, 0.0, 0.5),
+            Vec3::new(2.0, 0.0, 0.5),
+            b,
+            0.0
+        ));
+        assert!(!crosses(
+            Vec3::new(-1.0, 0.0, 1.5),
+            Vec3::new(2.0, 0.0, 1.5),
+            b,
+            0.0
+        ));
+        assert!(crosses(
+            Vec3::new(-1.0, 0.0, 1.5),
+            Vec3::new(2.0, 0.0, 1.5),
+            b,
+            0.6
+        ));
+        assert!(!crosses(
+            Vec3::new(-3.0, 0.0, 0.5),
+            Vec3::new(-1.0, 0.0, 0.5),
+            b,
+            0.0
+        ));
+        assert_eq!(flat_gap(Vec3::new(0.5, 9.0, 0.5), b), 0.0);
+        assert!((flat_gap(Vec3::new(4.0, 0.0, 0.5), b) - 3.0).abs() < 1e-5);
     }
 
     #[test]

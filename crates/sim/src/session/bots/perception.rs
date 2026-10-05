@@ -619,7 +619,7 @@ impl Brain {
         let to = flat(at - feet);
         let half_cone = (self.kind.perception.view_degrees * 0.5).to_radians();
         let away = to.length() > 0.01 && wrap(yaw_to(to) - self.yaw).abs() > half_cone;
-        let alertness = Alertness::of(self.behaviour);
+        let alertness = self.alertness();
         let Self {
             perception,
             kind,
@@ -635,9 +635,6 @@ impl Brain {
             away,
             rng,
         );
-        if kind.perception.strength > 0.0 && perception.why.is_some_and(|w| w.since == tick) {
-            self.next_error = tick;
-        }
     }
     /// It was hurt by `k.subject`, not the target it is fighting: with the
     /// reaction model on, its return fire waits a reaction.
@@ -651,15 +648,24 @@ impl Brain {
     }
     /// An ally's warning reached it (`State::hear`).
     pub(super) fn hear(&mut self, k: Knowledge, bot: OwnerId, tick: u64) {
-        let alertness = Alertness::of(self.behaviour);
+        let alertness = self.alertness();
         self.perception
             .hear(&self.kind.perception, k, alertness, bot, tick);
+    }
+    /// How alert it is now: a bot goofing (`surprise`) is relaxed,
+    /// whatever its behaviour.
+    pub(super) fn alertness(&self) -> Alertness {
+        if self.surprise.flavour().is_some() {
+            Alertness::Relaxed
+        } else {
+            Alertness::of(self.behaviour)
+        }
     }
     /// Ticks to pause before acting on a change of mind (a chooser's tell):
     /// the same reaction delay, by how alert it is now.
     #[allow(dead_code)]
     pub(super) fn switch_delay(&mut self) -> u64 {
-        let alertness = Alertness::of(self.behaviour);
+        let alertness = self.alertness();
         delay_ticks(
             &self.kind.perception,
             self.kind.reaction_seconds,

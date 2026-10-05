@@ -9,13 +9,14 @@ const PATH_TICKS: u32 = 256;
 const SOLVES_PER_TICK: u32 = 2048;
 const RAYS_PER_TICK: u32 = 544;
 const CHEAP_RESERVE: u32 = 32;
-const SWITCH_MARGIN: f32 = 0.15;
 
 #[derive(Default)]
 pub(super) struct State {
     movement: Option<Weapon>,
     intent: Option<Intent>,
     cursor: usize,
+    /// The last tick the weapon in hand was one it could attack with.
+    usable: u64,
 }
 impl State {
     pub(super) fn intent(&self, tick: u64) -> Option<Intent> {
@@ -154,6 +155,17 @@ fn charge_release_only(image: &Image) -> bool {
     super::charged_control::release_only(image)
 }
 
+/// Whether a weapon last usable at `usable` is still held at `tick`: for
+/// the hold time after it last could attack.
+fn keep_held(usable: u64, tick: u64, rule: crate::bot_kind::BotHold) -> bool {
+    usable > 0 && tick < usable + (rule.seconds.max(0.0) * 120.0) as u64
+}
+
+/// How much a splash aim (feet, or a surface beside the target) is
+/// preferred over the body: a blast at the feet still lands when a dodging
+/// body would have made the shot miss, so players aim rockets low.
+const SPLASH_AIM: f32 = 1.5;
+
 fn capability(
     image: &Image,
     projectile: Option<&bri_weapons::ProjectileDef>,
@@ -274,6 +286,67 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
 }
 
+/// How much splash damage counts for, against direct damage, in an item's
+/// worth: a blast hurts less the farther it lands.
+const SPLASH_WORTH: f32 = 0.6;
+/// The reach at and past which an item's reach adds nothing more.
+const FULL_REACH: f32 = 48.0;
+/// The worth of an item with an attack its data does not describe (a
+/// script fires it): something to fight with, below any described one.
+const UNKNOWN_WORTH: f32 = 1.0;
+
+/// What an item is worth to fight with, from its data alone: the damage it
+/// deals a second (splash counted at `SPLASH_WORTH`), times how much of
+/// `FULL_REACH` it reaches (square-rooted, so reach matters less than
+/// damage). 0 for a building tool or a tool known not to attack. The same
+/// estimate ranks the inventory and the upgrades lying about.
+pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
+    if bri_weapons::CORE_TOOLS.contains(&item) {
+        return 0.0;
+    }
+    let pack = &session.weapons.pack;
+    let Some(image) = pack.items.get(item).and_then(|i| pack.images.get(&i.image)) else {
+        return 0.0;
+    };
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|id| pack.projectiles.get(id));
+    let (damage, reach) = match capability(image, projectile, scale) {
+        Some(cap) => (
+            cap.direct_damage + cap.splash_damage * SPLASH_WORTH,
+            cap.reach,
+        ),
+        None => {
+            if known_noncombat_manipulation(image) {
+                return 0.0;
+            }
+            // A script fires it: estimate from what its data does say.
+            let shot = image.shot.as_ref();
+            let ray = shot.and_then(|s| s.hitscan.as_ref());
+            let count = shot.map_or(1, |s| s.projectiles.max(1)) as f32;
+            let direct = ray
+                .and_then(|r| r.damage)
+                .or(projectile.map(|p| p.damage))
+                .unwrap_or(0.0)
+                .max(0.0);
+            let splash = projectile.map_or(0.0, |p| p.explosion.damage.max(0.0));
+            let reach =
+                ray.map(|r| r.range * scale).or(projectile
+                    .map(|p| p.speed * p.lifetime_ticks as f32 / bri_weapons::TICK_HZ as f32));
+            let reach = image.bot.and_then(|b| b.reach).or(reach).unwrap_or(3.0);
+            (count * direct + splash * SPLASH_WORTH, reach)
+        }
+    };
+    let rate = bri_weapons::TICK_HZ as f32 / cadence(image).max(1) as f32;
+    let worth = damage * rate * (reach / FULL_REACH).clamp(0.05, 1.0).sqrt();
+    if worth.is_finite() && worth > 0.0 {
+        worth
+    } else {
+        UNKNOWN_WORTH
+    }
+}
+
 fn known_noncombat_manipulation(image: &bri_weapons::Image) -> bool {
     image.bot.and_then(|b| b.manipulation).is_some()
         && image.projectile.is_none()
@@ -320,6 +393,7 @@ fn movement_weapon(cap: Capability) -> Weapon {
         speed,
         fall,
         splash: cap.splash_radius,
+        spread: 0.0,
     }
 }
 
@@ -337,13 +411,7 @@ pub(super) fn choose(
     state.movement = None;
     let previous = state.intent.take();
     let turn = budget.register(bot, tick);
-    let surprise = session
-        .bots
-        .brains
-        .get(&bot)
-        .map(|b| &b.kind.surprise)
-        .filter(|s| s.strength > 0.0);
-    // Splash aims a varying bot may take instead, by slot.
+    // Splash aims it may take instead of the body, by slot.
     let mut variants: Vec<(usize, u32, Choice, f32)> = Vec::new();
     if seen.way.carry.is_some() || session.mounted(bot).is_some() {
         return Decision::Unsupported;
@@ -359,7 +427,9 @@ pub(super) fn choose(
     };
     let origin = peer.player.eye();
     let velocity = Vec3::from(peer.player.state().velocity);
-    let target_velocity = Vec3::from(target.player.state().velocity);
+    // A bot leads by about the target's velocity, a little under or over
+    // as its own seeded drift goes, never a perfect intercept.
+    let target_velocity = Vec3::from(target.player.state().velocity) * super::lead(bot, tick);
     let target_point = seen.eye - Vec3::Y * 0.5;
     // Gathered when a candidate first needs them.
     let bodies = std::cell::LazyCell::new(|| Bodies::of(session, bot));
@@ -562,13 +632,9 @@ pub(super) fn choose(
                 context,
             });
             choices.push(choice);
-            // A varying bot may aim a splash weapon at the feet, or at a
-            // surface beside the target, where its real blast still hurts.
-            if surprise.is_some()
-                && gate == super::surprise::Gate::default()
-                && cap.splash_radius > 0.0
-                && cap.splash_damage > 0.0
-            {
+            // A splash weapon may aim at the feet, or at a surface beside
+            // the target, where its real blast still hurts.
+            if cap.splash_radius > 0.0 && cap.splash_damage > 0.0 {
                 let feet = seen.feet + Vec3::Y * 0.15;
                 let centre = target_point;
                 let surface =
@@ -589,7 +655,7 @@ pub(super) fn choose(
                     if let Some((c, score)) = variant(
                         session, bot, seen.owner, cap, solve, context, &bodies, budget,
                     ) {
-                        variants.push((slot, aim, c, score));
+                        variants.push((slot, aim, c, score * SPLASH_AIM));
                     }
                 }
             }
@@ -599,10 +665,24 @@ pub(super) fn choose(
     if turn {
         state.cursor = state.cursor.wrapping_add(1);
     }
-    match tactics::select(&candidates, selected.map(|s| s as u8), SWITCH_MARGIN) {
+    // The weapon in hand is held through a brief spell where it cannot
+    // attack (the target inside its blast, an ally across the line, a
+    // reload): the bot holds fire for the hold time instead of swapping
+    // to another and back.
+    if let Some(held) = selected {
+        if candidates.iter().any(|c| usize::from(c.slot) == held) {
+            state.usable = tick;
+        } else if charge_continuation.is_none()
+            && keep_held(state.usable, tick, session.bots.brains[&bot].kind.hold)
+        {
+            return Decision::Pending;
+        }
+    }
+    match tactics::select(&candidates) {
         Ok(Some(selection)) => {
-            use super::surprise::{AIM_TORSO, Domain};
-            let cfg = &session.bots.brains[&bot].kind.surprise;
+            use super::surprise::{AIM_TORSO, Choice, Domain};
+            let kind = &session.bots.brains[&bot].kind;
+            let (cfg, rule) = (&kind.surprise, kind.hold);
             let scores: Vec<(u32, f32)> = candidates
                 .iter()
                 .filter_map(|c| {
@@ -611,21 +691,24 @@ pub(super) fn choose(
                         .map(|s| (u32::from(c.slot), s))
                 })
                 .collect();
-            // The chooser picks among weapons on the planning turn, when
-            // every slot is weighed (`surprise`); otherwise the plain pick.
-            let mut slot = usize::from(selection.slot);
+            // The hold rule picks among weapons on the planning turn, when
+            // every slot is weighed; otherwise the held weapon while it
+            // still works, else the best.
+            let viable = |slot: u32| scores.iter().any(|(s, v)| *s == slot && *v > 0.0);
+            let mut slot = mind
+                .chosen(Domain::Weapon)
+                .filter(|s| viable(*s))
+                .map_or(usize::from(selection.slot), |s| s as usize);
             if turn && charge_continuation.is_none() {
-                slot = mind
-                    .pick(
-                        cfg,
-                        Domain::Weapon,
-                        &scores,
-                        u32::from(selection.slot),
-                        selected.map(|s| s as u32),
-                        gate,
-                        tick,
-                    )
-                    .option as usize;
+                let ask = Choice {
+                    domain: Domain::Weapon,
+                    options: &scores,
+                    interrupt: false,
+                    paused: false,
+                    must: &[],
+                    fixed: &[],
+                };
+                slot = mind.pick(cfg, rule, ask, gate, tick) as usize;
             }
             let mut choice = choices
                 .into_iter()
@@ -638,10 +721,15 @@ pub(super) fn choose(
             let aims: Vec<(u32, f32)> = std::iter::once((AIM_TORSO, torso))
                 .chain(variants.iter().filter(|v| v.0 == slot).map(|v| (v.1, v.3)))
                 .collect();
-            let current = mind.chosen(Domain::Aim);
-            let aim = mind
-                .pick(cfg, Domain::Aim, &aims, AIM_TORSO, current, gate, tick)
-                .option;
+            let ask = Choice {
+                domain: Domain::Aim,
+                options: &aims,
+                interrupt: false,
+                paused: false,
+                must: &[],
+                fixed: &[],
+            };
+            let aim = mind.pick(cfg, rule, ask, gate, tick);
             if let Some(v) = variants.iter().find(|v| v.0 == slot && v.1 == aim) {
                 choice = v.2;
             }
@@ -1180,6 +1268,20 @@ pub(super) fn trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_weapon_is_held_through_a_brief_spell_it_cannot_attack() {
+        // A weapon last usable at tick 1000 is held, firing nothing, for
+        // the hold time: no swap to another and back within it.
+        let rule = crate::bot_kind::BotHold::default();
+        let commit = (rule.seconds * 120.0) as u64;
+        assert!(commit > 0);
+        for t in 1000..1000 + commit {
+            assert!(keep_held(1000, t, rule), "{t}");
+        }
+        assert!(!keep_held(1000, 1000 + commit, rule));
+        // Never usable: nothing to hold.
+        assert!(!keep_held(0, 10, rule));
+    }
     #[test]
     fn shared_budget_rotates_colliding_owner_residues_without_starvation() {
         let owners = [

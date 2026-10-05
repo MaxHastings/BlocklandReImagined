@@ -290,14 +290,14 @@ mod tests {
 
         let said = typed(&mut s, player, 1, "botset surprise.strength 0.6");
         assert_eq!(said, ["Only an administrator can tune bots."]);
-        assert_eq!(s.bots.kinds[0].surprise.strength, 0.0);
+        assert_eq!(s.bots.kinds[0].surprise.strength, 0.5);
 
         let said = typed(&mut s, admin, 1, "botset surprise.strength 0.6");
         assert_eq!(
             said,
             [
-                "test:bot/a: surprise.strength = 0.6 (was 0)",
-                "test:bot/b: surprise.strength = 0.6 (was 0)"
+                "test:bot/a: surprise.strength = 0.6 (was 0.5)",
+                "test:bot/b: surprise.strength = 0.6 (was 0.5)"
             ]
         );
         assert!(
@@ -322,7 +322,7 @@ mod tests {
         let said = typed(&mut s, admin, 6, "botreload");
         assert_eq!(said, ["Bot settings reloaded: 2 kinds, 0 overrides."]);
         assert_eq!(s.bots.kinds[0].sight, 50.0);
-        assert_eq!(s.bots.kinds[0].surprise.strength, 0.0);
+        assert_eq!(s.bots.kinds[0].surprise.strength, 0.5);
 
         typed(&mut s, admin, 7, "botset surprise.strength 0.25 test:bot/a");
         let said = typed(&mut s, admin, 8, "botsave");
@@ -330,7 +330,7 @@ mod tests {
         let said = typed(&mut s, admin, 9, "botreload");
         assert_eq!(said, ["Bot settings reloaded: 2 kinds, 1 overrides."]);
         assert!((s.bots.kinds[0].surprise.strength - 0.25).abs() < 1e-6);
-        assert_eq!(s.bots.kinds[1].surprise.strength, 0.0);
+        assert_eq!(s.bots.kinds[1].surprise.strength, 0.5);
 
         // A new host on the same user file starts with the saved value.
         let mut next = session();

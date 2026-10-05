@@ -1259,6 +1259,9 @@ impl Session {
             });
         }
         let role = &d.seats[usize::from(seat)];
+        // A seat with neither controls nor a weapon carries a bot, but it
+        // fights nothing from there.
+        let carried_only = !role.controls && !role.weapon;
         // Idle play: a passenger rides along while a teammate drives.
         let riding_along = !role.controls
             && !role.weapon
@@ -1542,7 +1545,16 @@ impl Session {
         }
         // Once no enemy or remembered task remains, safely relinquish the
         // vehicle. A stationary gunner without a driver need not sit forever.
-        if behaviour == Behaviour::Wander && tick.is_multiple_of(CREW_WAIT) && !riding_along {
+        if behaviour == Behaviour::Wander
+            && super::cadence::beat(bot, super::cadence::salt::DISMOUNT, tick, CREW_WAIT)
+            && !riding_along
+            // Carried to an enemy now in its band: it gets off to fight.
+            || carried_only && behaviour == Behaviour::Fight
+        {
+            if carried_only && behaviour == Behaviour::Fight {
+                // Not straight back on board for the fight it got off for.
+                self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + RETRY;
+            }
             let _ = self.dismount_vehicle(bot);
         }
         Ok(input)

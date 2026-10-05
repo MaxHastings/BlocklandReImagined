@@ -16,7 +16,14 @@
       "behaviours": { "interact": 1, "objective": 1 },
       "objective_radius": 24,
       "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4, "cover_distance": 6, "cover_side": 3, "clear_degrees": 60 },
-      "fighting": { "band_slack": 0.15, "min_band_slack": 1.5, "dwell_seconds": 0.5, "strafe_seconds": 3.5 },
+      // Holding a choice (docs/architecture/bots.md, "Holding a choice"):
+      // every choice it makes (behaviour, weapon, aim, route, goofing) is
+      // held at least `seconds`; after that another takes over only by
+      // scoring more than `margin` (a share) above it. Urgent damage, an
+      // objective picked up or dropped, a target lost, or a choice no
+      // longer possible take over at once.
+      "hold": { "seconds": 0.5, "margin": 0.1 },
+      "fighting": { "strafe_seconds": 3.5 },
       "perception": {
         "salience": 1,
         "glance_seconds": 0.8,
@@ -33,48 +40,17 @@
         "reverse_distance": 16
       },
       // Surprise: variation among the bot's choices that changes over time
-      // (docs/architecture/bots.md, "Surprise"). One chooser picks at
-      // random, by weight, among the options scoring near the best at each
-      // choice point: behaviour, weapon, aim point, chase route.
+      // (docs/architecture/bots.md, "Surprise"). Each option's score at
+      // each choice point (behaviour, weapon, aim, chase route) leans with
+      // a slow per-bot drift, boredom and how well it has been working,
+      // within a band; then the hold rule above chooses. Goofing is such a
+      // choice too: playing grows boring until a goof wins.
       "surprise": {
-        // 0 to 1: how much of everything below applies. 0 is the plain
-        // brain, exactly as before (no random number drawn). Off for now:
-        // tuning comes after the bot fixes land.
-        "strength": 0,
-        // Options scoring within this share of the best are eligible.
-        "band": 0.15,
-        // A per-bot drift on each option's weight wanders up to e^0.4
-        // either way, reverting over about 90 seconds.
-        "drift": 0.4,
-        "drift_seconds": 90,
-        // Weight lost per second an option is in use, and the half-life of
-        // that boredom once it is not.
-        "boredom": 0.02,
-        "boredom_seconds": 20,
-        // Effectiveness: a failure (shot dodged, no damage, stuck) takes
-        // this share away; a success gives back this share of the gap;
-        // what is lost halves on its own every effectiveness_seconds.
-        "failure": 0.25,
-        "success": 0.5,
-        "effectiveness_seconds": 30,
-        // A pick is held at least this long (up to half again), and a
-        // switch the variation causes is preceded by a pause this long.
-        "commit_seconds": 3,
-        "tell_seconds": 0.35,
-        // Urgent, so nothing varies: under this share of health, or hurt
-        // by an enemy within urgent_range in the last urgent_seconds.
-        "urgent_health": 0.3,
-        "urgent_range": 8,
-        "urgent_seconds": 1.5,
-        // How far to the side a flanking chase aims.
-        "flank_distance": 5,
-        // Flavour interrupts at natural pauses (never while carrying an
-        // objective): how many a minute, the rest after one, how long one
-        // lasts (up to half again), and the weight of each kind.
-        "interrupts_per_minute": 2,
-        "interrupt_cooldown_seconds": 12,
-        "interrupt_seconds": 2,
-        "interrupts": {
+        // 0 to 1: how much its choices vary and how often it goofs (about
+        // every half minute of play at 0.5). 0 is the plain brain.
+        "strength": 0.5,
+        // How often each goof is picked when it goofs.
+        "flavours": {
           "stare": 2,      // look at a player in sight
           "emote": 2,      // love, hate, confusion or the alarm, as /love does
           "hop": 1,        // a few jumps
