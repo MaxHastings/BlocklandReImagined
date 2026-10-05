@@ -2590,6 +2590,8 @@ impl Session {
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
                 brain.search = Some(Search::with(feet, point, SEARCH_BOUND, costs));
             }
+            // Where a chase's route ends short of its enemy, and the enemy.
+            let mut gave_up = None;
             if brain.search.is_some() {
                 let physics = &self.simulation.physics;
                 let simulation = &self.simulation;
@@ -2654,6 +2656,7 @@ impl Session {
                                         || at.y - end.feet.y > up)
                                 {
                                     brain.out_of_reach = Some(p);
+                                    gave_up = Some((end.feet, at));
                                 }
                             }
                             brain.partial_route = true;
@@ -2664,6 +2667,13 @@ impl Session {
                         _ => brain.plan.clear(),
                     }
                 }
+            }
+            // A door it may open stands across the way on from where the
+            // route ends: the enemy is in reach once it is clicked open.
+            if let Some((end, at)) = gave_up
+                && self.bot_opens_way(bot, end, at)
+            {
+                self.bots.brains.get_mut(&bot).unwrap().out_of_reach = None;
             }
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             while let Some(next) = brain.plan.first() {
