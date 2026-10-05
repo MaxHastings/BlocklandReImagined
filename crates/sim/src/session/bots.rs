@@ -2547,8 +2547,9 @@ impl Session {
                 let simulation = &self.simulation;
                 let terrain = |o: Vec3, d: Vec3, r: f32| simulation.terrain_ray(o, d, r);
                 let waters = simulation.liquids();
-                // Living bodies a takeoff must not climb into.
-                let bodies: Vec<(Vec3, Vec3)> = if costs.jets.is_some() {
+                // Living bodies a takeoff must not climb into, nor a
+                // pulled straight walk cut through (`nav::pull`).
+                let bodies: Vec<(Vec3, Vec3)> = {
                     self.peers
                         .iter()
                         .filter(|(o, p)| **o != bot && p.combat.alive)
@@ -2561,8 +2562,6 @@ impl Session {
                             )
                         })
                         .collect()
-                } else {
-                    Vec::new()
                 };
                 let ground = Ground {
                     physics,

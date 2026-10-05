@@ -125,7 +125,9 @@ pub struct Ground<'a> {
     /// Liquid volumes (map water and water bricks): deep water is swum.
     pub waters: &'a [Water],
     /// Boxes (min, max) of the moving bodies about (players): the grid
-    /// leaves them out, but nobody takes off into one.
+    /// leaves them out, but nobody takes off into one, and a pulled
+    /// straight walk ([`pull`]) does not cut past one where the grid's own
+    /// route keeps its lane.
     pub bodies: &'a [(Vec3, Vec3)],
 }
 /// Share of a standing body under water from which it floats: the walk
@@ -221,6 +223,23 @@ impl Ground<'_> {
                     (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
                 })
                 && self.floats(body, at).is_none()
+        })
+    }
+    /// Whether a straight walk from `from` to `to` passes within reach of a
+    /// moving body about (`bodies`): the body's half width plus the
+    /// other's. Its own grid route is left to keep its lane there.
+    pub fn crowds(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
+        let (_, _, tall) = body.clearance(false);
+        let line = Vec3::new(to.x - from.x, 0.0, to.z - from.z);
+        self.bodies.iter().any(|(min, max)| {
+            let centre = (*min + *max) * 0.5;
+            if max.y < from.y.min(to.y) || min.y > from.y.max(to.y) + tall {
+                return false;
+            }
+            let offset = Vec3::new(centre.x - from.x, 0.0, centre.z - from.z);
+            let along = (offset.dot(line) / line.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            let reach = body.width * 0.5 + (max.x - min.x).max(max.z - min.z) * 0.5;
+            (offset - line * along).length() < reach
         })
     }
     /// The nearest surface along a ray and its normal.
@@ -357,6 +376,7 @@ pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Ve
                 && k - i <= PULL_REACH
                 && plain(&path[k])
                 && ground.walkable(body, anchor, path[k].feet)
+                && !ground.crowds(body, anchor, path[k].feet)
             {
                 keep = k;
                 // Where the next kind of step starts is kept.
