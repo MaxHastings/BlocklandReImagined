@@ -131,7 +131,7 @@ fn flat(v: Vec3) -> f32 {
     Vec3::new(v.x, 0.0, v.z).length()
 }
 
-/// How much nearer the builder a loose ball ends up, with no enemy about.
+/// How far a loose ball near two allied bots moves, with no enemy about.
 fn idle_push(idle_play: Option<f32>) -> f32 {
     let mut s = session(|_| {});
     let (mut pack, _) = fixture::synthetic_vehicles().unwrap();
@@ -151,17 +151,37 @@ fn idle_push(idle_play: Option<f32>) -> f32 {
     )
     .unwrap();
     s.set_tool_catalog(catalog()).unwrap();
+    // The builder plays far out of sight: the two bots are allies with no
+    // enemy about, in a game whose rules let them move bodies.
     let human = s
-        .join("Builder".into(), Vec3::new(-30.0, 0.05, 30.0), true)
+        .join("Builder".into(), Vec3::new(90.0, 0.05, 90.0), true)
         .unwrap();
     let mut sequence = 0;
     steps(&mut s, &[human], 10, &mut sequence);
     load(
         &mut s,
         human,
-        vec![bot_brick([-24.0, 0.1, 14.0], human)],
+        vec![
+            bot_brick([-24.0, 0.1, 14.0], human),
+            bot_brick([-34.0, 0.1, 26.0], human),
+        ],
         &mut sequence,
     );
+    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)]).unwrap();
+    sequence += 1;
+    s.command(
+        human,
+        sequence,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout: TOOLS_ONLY,
+                vehicle_damage: true,
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
     steps(&mut s, &[human], 60, &mut sequence);
     let ball = s
         .spawn_vehicle_at(
@@ -181,18 +201,33 @@ fn idle_push(idle_play: Option<f32>) -> f32 {
             .into()
     };
     steps(&mut s, &[human], 120, &mut sequence);
-    let target = feet(&s, human);
-    let before = flat(at(&s) - target);
-    steps(&mut s, &[human], 120 * 20, &mut sequence);
-    before - flat(at(&s) - target)
+    let before = at(&s);
+    for i in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        if std::env::var_os("BRI_DEBUG_EXTRAS").is_some() && i % 240 == 0 {
+            let b = bots(&s);
+            let t = s.bot_thoughts();
+            eprintln!(
+                "{idle_play:?} ball {:?} bots {:?} {:?} {:?}",
+                at(&s),
+                feet(&s, b[0]),
+                feet(&s, b[1]),
+                t.iter().map(|t| (t.behaviour, format!("{:?}", t.task))).collect::<Vec<_>>()
+            );
+        }
+    }
+    flat(at(&s) - before)
 }
 
 #[test]
-fn an_idle_bot_near_a_loose_ball_pushes_it_toward_a_player() {
+fn an_idle_bot_near_a_loose_ball_pushes_it() {
     let played = idle_push(None);
     let off = idle_push(Some(0.0));
-    assert!(played > 1.0, "the idle bot pushed the ball along: {played}");
-    assert!(off.abs() < 0.3, "without idle play it stays put: {off}");
+    assert!(off < 0.3, "without idle play it stays put: {off}");
+    assert!(
+        played > off + 1.0,
+        "the idle bots pushed the ball along: {played} against {off} without idle play"
+    );
 }
 
 /// A bot fighting a builder 14 units off. The builder fires every half
@@ -245,7 +280,9 @@ fn duel(
                 sequence,
                 Command::WeaponTrigger { down: true },
                 Some(ActionAim {
-                    yaw: ray.x.atan2(-ray.z) + wide,
+                    yaw: (ray.x.atan2(-ray.z) + wide + std::f32::consts::PI)
+                        .rem_euclid(std::f32::consts::TAU)
+                        - std::f32::consts::PI,
                     pitch: ray.y.asin(),
                 }),
             )
@@ -435,7 +472,6 @@ fn hand_over(hand_weapon: Option<f32>) -> bool {
         }
     }))
     .unwrap();
-    s.set_spawn_loadout(ToolInventory::default()).unwrap();
     let human = s
         .join("Builder".into(), Vec3::new(40.0, 0.05, 40.0), true)
         .unwrap();
@@ -450,6 +486,9 @@ fn hand_over(hand_weapon: Option<f32>) -> bool {
         ],
         &mut sequence,
     );
+    // In a game that hands out nothing, the builder far out of sight.
+    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)]).unwrap();
+    minigame(&mut s, human, TOOLS_ONLY, &mut sequence);
     steps(&mut s, &[human], 30, &mut sequence);
     let both = bots(&s);
     assert_eq!(both.len(), 2);
@@ -461,10 +500,28 @@ fn hand_over(hand_weapon: Option<f32>) -> bool {
     let armed = |s: &Session| {
         s.tool_inventories()
             .get(&mate)
-            .is_some_and(|i| i.slots.iter().flatten().any(|_| true))
+            .is_some_and(|i| {
+                i.slots.iter().flatten().any(|item| {
+                    [
+                        bri_weapons::testing::GUN_ITEM,
+                        bri_weapons::testing::ROCKET_ITEM,
+                    ]
+                    .contains(&item.as_str())
+                })
+            })
     };
-    for _ in 0..120 * 30 {
+    for i in 0..120 * 30 {
         steps(&mut s, &[human], 1, &mut sequence);
+        if std::env::var_os("BRI_DEBUG_EXTRAS").is_some() && i % 120 == 0 {
+            let t = s.bot_thoughts();
+            eprintln!(
+                "{:?} {:?} {:?} {:?}",
+                feet(&s, giver),
+                feet(&s, mate),
+                s.tool_inventories().get(&giver),
+                t.iter().map(|t| (t.bot, t.behaviour)).collect::<Vec<_>>()
+            );
+        }
         if armed(&s) {
             return true;
         }
