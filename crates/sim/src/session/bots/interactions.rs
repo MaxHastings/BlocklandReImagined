@@ -924,6 +924,23 @@ impl Session {
         let d = w
             .definition(&v.definition)
             .context("No vehicle definition")?;
+        // An affordance lost: a wreck, or a wheeled hull on its side or its
+        // roof, ends the drive (and any ride in it) at once.
+        if v.destroyed
+            || d.family == Family::Wheeled
+                && d.wheeled_flight.is_none()
+                && !crate::route::upright(v.transform.rotation)
+        {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.next_interaction = tick + RETRY;
+            brain.plan.clear();
+            brain.search = None;
+            let _ = self.dismount_vehicle(bot);
+            return Ok(MoveInput {
+                yaw: self.bots.brains[&bot].yaw,
+                ..Default::default()
+            });
+        }
         let role = &d.seats[usize::from(seat)];
         // The bot knows its seat immediately. Human clients report the same
         // handover through SeatSince when they learn where they are sitting.

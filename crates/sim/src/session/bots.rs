@@ -207,6 +207,13 @@ struct Brain {
     /// goal changes or the bot gets stuck.
     settled: bool,
     partial_route: bool,
+    /// A chase point whose best route ends beyond its reach (`reach`):
+    /// that enemy is not worth chasing while they stay there.
+    out_of_reach: Option<Vec3>,
+    /// How far across and up it hurts from where it stands.
+    reach: (f32, f32),
+    /// Where the enemy it chases stands (their feet, not their eyes).
+    chase_feet: Option<Vec3>,
     segment_anchor: Vec3,
     next_wander: u64,
     last_position: Vec3,
@@ -312,6 +319,9 @@ impl Brain {
             search: None,
             settled: false,
             partial_route: false,
+            out_of_reach: None,
+            reach: (3.0, 2.0),
+            chase_feet: None,
             segment_anchor: home,
             next_wander: 0,
             last_position: home,
@@ -1846,6 +1856,11 @@ impl Session {
             // A swimmer reaches any depth: only how far counts.
             enemy: enemy
                 .filter(|_| !objective_without_attack)
+                .filter(|seen| {
+                    brain
+                        .out_of_reach
+                        .is_none_or(|p| flat(p - seen.real).length() > 2.5)
+                })
                 .map(|seen| match swim {
                     Some(_) => (seen.feet.distance(feet), 0.0),
                     None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
@@ -1857,10 +1872,18 @@ impl Session {
             reach_up: weapon
                 .filter(|w| !w.melee && far > 0.0)
                 .map_or(0.0, |_| far),
-            remembers: brain.memory.is_some(),
+            // Nor is searching where it cannot reach them.
+            remembers: brain.memory.is_some_and(|m| {
+                brain
+                    .out_of_reach
+                    .is_none_or(|p| flat(p - m.at).length() > 2.5)
+            }),
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
         };
+        // Across its band; up, what a jump brings within its band.
+        brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
+        brain.chase_feet = enemy.map(|seen| seen.feet);
         let behaviour = choose(brain.behaviour, &situation, |b| {
             kind.behaviours.get(b.name()).copied().unwrap_or(
                 if matches!(b, Behaviour::Interact | Behaviour::Objective) {
@@ -2060,9 +2083,23 @@ impl Session {
                     match found {
                         Found::Path(path) if !path.is_empty() => {
                             brain.partial_route = false;
+                            if matches!(brain.goal, Some(Goal::Chase(_))) {
+                                brain.out_of_reach = None;
+                            }
                             brain.plan = path;
                         }
                         Found::Partial(path) if !path.is_empty() => {
+                            // The best route to an enemy ends where it cannot
+                            // hurt them: chasing them there is worth nothing.
+                            if let (Some(Goal::Chase(p)), Some(end)) = (brain.goal, path.last()) {
+                                let (across, up) = brain.reach;
+                                if let Some(at) = brain.chase_feet.filter(|_| !body.conservative)
+                                    && (flat(at - end.feet).length() > across
+                                        || at.y - end.feet.y > up)
+                                {
+                                    brain.out_of_reach = Some(p);
+                                }
+                            }
                             brain.partial_route = true;
                             brain.segment_anchor = feet;
                             brain.plan = path;
@@ -2075,7 +2112,13 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             while let Some(next) = brain.plan.first() {
                 let d = next.feet - feet;
-                let near = if body.conservative { 1.2 } else { 0.4 };
+                // A chassis is at a point once its side is: half its
+                // footprint, never a pedestrian's tolerance.
+                let near = if body.conservative {
+                    (body.width * 0.5).max(1.2)
+                } else {
+                    0.4
+                };
                 // One through an opening is reached by going through; one
                 // swum to by being over it, at whatever depth; one flown to
                 // by standing on it after the landing.

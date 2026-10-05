@@ -417,6 +417,12 @@ pub fn pace(radius: f32, gear: Gear, heading: f32, distance: f32, cruise: (f32, 
     }
 }
 
+/// Whether a hull at `rotation` (x, y, z, w) still stands on its wheels:
+/// its up within 60 degrees of the world's.
+pub fn upright(rotation: [f32; 4]) -> bool {
+    (glam::Quat::from_array(rotation) * Vec3::Y).y >= 0.5
+}
+
 /// Seconds getting into a seat takes once beside it.
 pub const BOARD_SECONDS: f32 = 1.0;
 /// The share of its top speed a driver cruises at.
@@ -488,6 +494,16 @@ mod tests {
         let (sign, heading) = Gear::Reverse { nose: false }.steer(3.0);
         assert_eq!(sign, -1.0);
         assert!((heading - (3.0 - std::f32::consts::PI)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_hull_on_its_side_or_roof_is_not_upright() {
+        assert!(upright(glam::Quat::IDENTITY.to_array()));
+        assert!(upright(glam::Quat::from_rotation_x(0.9).to_array()));
+        assert!(!upright(glam::Quat::from_rotation_z(1.2).to_array()));
+        assert!(!upright(
+            glam::Quat::from_rotation_x(std::f32::consts::PI).to_array()
+        ));
     }
 
     #[test]

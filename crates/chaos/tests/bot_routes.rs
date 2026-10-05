@@ -865,3 +865,51 @@ fn a_driver_searches_round_a_wall_from_an_allys_sighting() {
         s.bot_thoughts().into_iter().find(|t| t.bot == driver)
     );
 }
+
+/// The enemy stands on a platform eight up that a melee bot without jets
+/// has no way onto: its best route ends underneath, out of reach. Chasing
+/// there is worth nothing, so it goes about its business instead of
+/// standing under the platform for good (as the old chase did).
+#[test]
+fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.melee = Some(bite(5.0));
+        k.behaviours.insert("fly".into(), 0.0);
+    });
+    let top = 8.2;
+    let centre = Vec3::new(16.0, top, 30.0);
+    let spawn = centre + Vec3::Y * 0.05;
+    s.set_spawn_points(vec![spawn]).unwrap();
+    let human = s.join("Builder".into(), spawn, true).unwrap();
+    let mut sequence = 1 << 41;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let mut platform = brick(fixture::BASEPLATE, [16.0, top - 0.1, 30.0], human);
+    platform.raycast = false;
+    let bricks = vec![
+        spawn_brick(fixture::BOT, [15.5, 0.1, 29.5], human),
+        platform,
+    ];
+    load(&mut s, human, bricks);
+    minigame(&mut s, human);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut chased = 0;
+    let mut gave_up = None;
+    for tick in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let t = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
+        if matches!(t.behaviour, "chase" | "fight" | "search") {
+            chased += 1;
+            gave_up = None;
+        } else if gave_up.is_none() {
+            gave_up = Some(tick);
+        }
+    }
+    assert!(chased > 0, "it went for the enemy at first");
+    assert!(
+        gave_up.is_some_and(|tick| tick < 120 * 10),
+        "it chased an enemy it cannot reach for {chased} ticks: {:?}",
+        s.bot_thoughts()
+    );
+}
