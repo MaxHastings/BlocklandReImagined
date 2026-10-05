@@ -606,6 +606,10 @@ impl Mind {
         d.seen = (now + copy * 0.5).min(copy);
         d.seen_at = tick;
     }
+    /// An idle flavour is under way.
+    pub(super) fn interrupting(&self) -> bool {
+        self.interrupt.is_some()
+    }
     /// In a tell: pausing before a switch.
     pub(super) fn telling(&self, tick: u64) -> bool {
         self.tell.is_some_and(|t| tick < t.until)

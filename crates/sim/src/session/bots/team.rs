@@ -16,6 +16,9 @@ use crate::bot_kind::BotTeam;
 const CROWD: f32 = 4.0;
 /// At most one callout this often, in seconds, as a person would.
 const CALLOUT_SECONDS: f32 = 30.0;
+/// About how often, in ticks, a bot at a pause looks round for the mood:
+/// half a second, on its own staggered beat (`cadence`).
+const MOOD_TICKS: u64 = 60;
 
 /// What one of a bot's options would do.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -50,6 +53,8 @@ impl Terms {
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
     pub terms: [Terms; 10],
+    /// The mood as last looked at (`Session::team_mood`).
+    pub mood: Option<(f32, [f32; 11])>,
     pub allies: usize,
     pub next_callout: u64,
     pub said: Option<String>,
@@ -370,6 +375,40 @@ impl Session {
                     .is_none()
             }))
         .then_some(vehicle)
+    }
+
+    /// The mood pull on `bot`, only while it can matter: at a natural
+    /// pause (when an idle flavour may start) or during one (whose end it
+    /// shortens), with the surprise and the mood on. It is looked at afresh
+    /// on the bot's own beat, about every `MOOD_TICKS`, and kept between,
+    /// so a crowd costs a few rays a bot each half second, not each tick.
+    pub(super) fn team_mood_now(
+        &mut self,
+        bot: OwnerId,
+        (at, eye): (Vec3, Vec3),
+        natural: bool,
+        tick: u64,
+    ) -> (f32, [f32; 11]) {
+        let Some(brain) = self.bots.brains.get(&bot) else {
+            return (0.0, [0.0; 11]);
+        };
+        let s = &brain.kind.surprise;
+        let matters = brain.kind.team.mood > 0.0
+            && s.strength > 0.0
+            && s.interrupts_per_minute > 0.0
+            && (natural || brain.surprise.interrupting());
+        if !matters {
+            self.bots.brains.get_mut(&bot).unwrap().team.mood = None;
+            return (0.0, [0.0; 11]);
+        }
+        if let Some(mood) = brain.team.mood
+            && !cadence::beat(bot, cadence::salt::MOOD, tick, MOOD_TICKS)
+        {
+            return mood;
+        }
+        let mood = self.team_mood(bot, at, eye, tick);
+        self.bots.brains.get_mut(&bot).unwrap().team.mood = Some(mood);
+        mood
     }
 
     /// The mood pull on `bot` at `at`, its eye at `eye`: each bot's

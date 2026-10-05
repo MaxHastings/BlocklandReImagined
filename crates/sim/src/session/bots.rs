@@ -2787,7 +2787,7 @@ impl Session {
             })
             .flatten();
         let mut pause = self.surprise_pause(bot, natural, gate, eye);
-        (pause.pull, pause.copy) = self.team_mood(bot, feet, eye, tick);
+        (pause.pull, pause.copy) = self.team_mood_now(bot, (feet, eye), natural, tick);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain.surprise.interrupt(&brain.kind.surprise, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;

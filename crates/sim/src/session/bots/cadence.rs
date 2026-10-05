@@ -65,6 +65,8 @@ pub(crate) mod salt {
     pub(crate) const DISMOUNT: u64 = 3;
     pub(crate) const RESPAWN: u64 = 6;
     pub(crate) const HOP: u64 = 9;
+    /// Looking round for the mood (`team`).
+    pub(crate) const MOOD: u64 = 21;
 }
 
 #[cfg(test)]
