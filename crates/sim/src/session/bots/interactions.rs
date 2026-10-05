@@ -378,6 +378,13 @@ impl Session {
                         || d.smash.is_some())
                     || !self.may_move(bot, ObjectRef::Vehicle(v.id.0))
                     || self.object_held(ObjectRef::Vehicle(v.id.0))
+                    // Idle play leaves a body anyone else means to work.
+                    || idle
+                        && self
+                            .bots
+                            .claims
+                            .claimants_on(v.id.0, tick)
+                            .any(|o| o != bot)
                 {
                     return None;
                 }
@@ -677,17 +684,16 @@ impl Session {
                 Ok(None)
             }
             Resource::Body { vehicle } => {
-                let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle) else {
-                    return Ok(None);
-                };
                 // Idle play pushes toward the player it was aimed at.
                 let idle = enemy.is_none();
                 let Some(enemy) = enemy.or_else(|| {
-                    self.peers
-                        .get(&claim.subject)
-                        .filter(|p| p.combat.alive)
-                        .map(|p| Vec3::from(p.player.state().feet))
+                    self.bot_idle_mark(bot, tick)
+                        .filter(|(mark, _)| *mark == claim.subject)
+                        .map(|(_, at)| at)
                 }) else {
+                    return Ok(None);
+                };
+                let Some(v) = self.bots.objects.iter().find(|v| v.id.0 == vehicle) else {
                     return Ok(None);
                 };
                 let Some(o) = self.bot_opportunity(bot, v, claim.resource, enemy, idle, tick)

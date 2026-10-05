@@ -21,6 +21,7 @@
 //! Nothing here reads a content name: only capabilities (damage, splash,
 //! swaps, event rows, attack items, seats) and authority (allies, sight,
 //! the session's own command checks).
+use super::cadence;
 use super::*;
 
 /// A hit from farther than this is ranged.
@@ -49,9 +50,17 @@ const HAND_NEAR: f32 = 2.6;
 const HAND_SIGHT: f32 = 16.0;
 const HAND_TICKS: u64 = 1200;
 const HAND_REST: u64 = 2400;
+/// How long a bot must have seen no objective in play in its game before
+/// it plays: the start of a round, before anyone has picked an objective,
+/// does not count as calm.
+const CALM_TICKS: u64 = 120 * 10;
 /// How long an idle-play mark (a player in sight to play toward) holds.
 const MARK_TICKS: u64 = 30;
 const MARK_SIGHT: f32 = 20.0;
+/// Cadence names (`cadence::salt`) of the extras' own checks.
+const ROUTE_LOOK_SALT: u64 = 0x4558_0001;
+const FLAVOUR_CLICK_SALT: u64 = 0x4558_0002;
+const HAND_SALT: u64 = 0x4558_0003;
 
 /// The extra options' own memory. Its random stream is separate from the
 /// brain's, so the brain's choices draw exactly as without extras.
@@ -72,6 +81,8 @@ pub(super) struct State {
     next_hand: u64,
     /// The player idle play is aimed toward, and until when.
     mark: Option<(Option<OwnerId>, u64)>,
+    /// Since when no objective has been in play in its game.
+    calm_since: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -176,6 +187,23 @@ impl Session {
             Some((mark, _)) => mark,
             None => {
                 let eye = self.peers.get(&bot)?.player.eye();
+                // Play is for when nothing is at stake: while anyone in its
+                // game works an objective, and until it has been calm a
+                // while, it does not play with what that game may be about
+                // (a ball kicked "toward a friend" could go into its own
+                // goal).
+                let game = self.game_of(bot);
+                let busy = self.bots.brains.iter().any(|(o, b)| {
+                    (b.objective.detail().is_some() || b.objective.pursuing())
+                        && self.game_of(*o) == game
+                });
+                let calm = &mut self.bots.brains.get_mut(&bot)?.extras.calm_since;
+                *calm = if busy {
+                    None
+                } else {
+                    Some(calm.unwrap_or(tick))
+                };
+                let at_stake = calm.is_none_or(|since| tick < since + CALM_TICKS);
                 let mut near: Vec<(f32, OwnerId)> = self
                     .peers
                     .iter()
@@ -184,11 +212,16 @@ impl Session {
                     .filter(|(d, _)| *d <= MARK_SIGHT)
                     .collect();
                 near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-                let mark = near.into_iter().take(3).map(|(_, o)| o).find(|o| {
-                    self.simulation
-                        .sight(eye, self.peers[o].player.eye(), MARK_SIGHT)
-                        .is_some()
-                });
+                let mark = near
+                    .into_iter()
+                    .take(3)
+                    .map(|(_, o)| o)
+                    .filter(|_| !at_stake)
+                    .find(|o| {
+                        self.simulation
+                            .sight(eye, self.peers[o].player.eye(), MARK_SIGHT)
+                            .is_some()
+                    });
                 self.bots.brains.get_mut(&bot)?.extras.mark = Some((mark, tick + MARK_TICKS));
                 mark
             }
@@ -288,10 +321,11 @@ impl Session {
             .flatten();
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let st = &mut brain.extras;
-        if crouch_w > 0.0 && ranged_hit {
-            if tick < st.crouch_until || st.roll(bot) < chance(crouch_w) {
-                st.crouch_until = tick + CROUCH_TICKS;
-            }
+        if crouch_w > 0.0
+            && ranged_hit
+            && (tick < st.crouch_until || st.roll(bot) < chance(crouch_w))
+        {
+            st.crouch_until = tick + CROUCH_TICKS;
         }
         extra.crouch = tick < st.crouch_until
             && on_foot
@@ -316,6 +350,9 @@ impl Session {
             extra.jump = state.grounded;
             extra.jet = tuning.can_jet;
             extra.crouch = false;
+            // Straight up: a hop that also carried it on could take it
+            // off a ledge it was holding back from.
+            extra.stand = true;
         }
 
         // Clicks: one under way, then a tool taken out again.
@@ -371,7 +408,7 @@ impl Session {
             && tick >= self.bots.brains[&bot].extras.next_click;
         // A brick in its way to its goal: the click serves the route.
         if ready
-            && (tick + bot).is_multiple_of(15)
+            && cadence::beat(bot, ROUTE_LOOK_SALT, tick, 15)
             && let Some(goal) = goal
             && flat(goal - feet).length() > 1.5
         {
@@ -395,7 +432,7 @@ impl Session {
         let ready = ready && self.bots.brains[&bot].extras.click.is_none();
         if ready
             && scene.natural
-            && (tick + bot).is_multiple_of(240)
+            && cadence::beat(bot, FLAVOUR_CLICK_SALT, tick, 240)
             && self.bots.brains.get_mut(&bot).unwrap().extras.roll(bot) < chance(activate_w) * 0.5
         {
             let reach = Vec3::new(FLAVOUR_REACH, 3.0, FLAVOUR_REACH);
@@ -435,7 +472,7 @@ impl Session {
         }
 
         // Hand a spare weapon to an unarmed teammate.
-        if hand_w > 0.0 {
+        if hand_w > 0.0 && !extra.stand {
             self.bot_hand_weapon(bot, &scene, on_foot, hand_w, eye, &mut extra, tick)?;
             if extra.stand
                 && let Some(at) = self.bots.brains[&bot].extras.hand
@@ -548,7 +585,7 @@ impl Session {
         }
         if !open
             || tick < self.bots.brains[&bot].extras.next_hand
-            || !(tick + bot).is_multiple_of(60)
+            || !cadence::beat(bot, HAND_SALT, tick, 60)
         {
             return Ok(());
         }

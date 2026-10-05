@@ -36,6 +36,10 @@ use bri_weapons::ActorId;
 
 mod arming;
 mod behaviour;
+// Only the extras beat here so far; its other users (fire, alerts, hops,
+// dismounts, respawns) come with fix/bots-ball-games-2.
+#[allow(dead_code)]
+pub(crate) mod cadence;
 mod charged_control;
 pub(super) use charged_control::FireAdmission;
 mod claims;
@@ -1032,36 +1036,38 @@ impl Session {
         let player = self.peers.get(&owner)?.combat.player;
         self.minigames.player(player).ok()?.game
     }
-    /// What a spawn brick's bot is called: a first name of its kind no
-    /// other player goes by, kept while it lives (`looks`). A kind without
-    /// a free one: its kind, then the brick's name or else the team its
-    /// Team choice names, so the Players list tells one brick's bot from
-    /// another's ("Blockhead Bot (Red)").
+    /// What a spawn brick's bot is called. A brick its builder named gives
+    /// "Kind (name)", so the Players list tells one brick's bot from
+    /// another's. Otherwise a first name of its kind no other player goes
+    /// by, kept while it lives (`looks`); a kind without a free one gives
+    /// its kind and the team its Team choice names ("Blockhead Bot (Red)").
     fn brick_bot_name(&self, kind: &BotKind, brick: BrickId, bot: Option<OwnerId>) -> String {
-        if let Some(own) = bot
-            .and_then(|o| self.bots.brains.get(&o))
-            .map(|b| &b.named)
-            .filter(|n| kind.first_names.contains(n))
-        {
-            return own.clone();
-        }
-        if let Some(first) = self.bot_first_name(kind, brick, bot) {
-            return first;
-        }
         let Some(b) = self.simulation.state().bricks.get(&brick) else {
             return kind.name.clone();
         };
-        let label = b
+        let named = b
             .name
             .as_deref()
             .map(|n| n.trim().trim_start_matches('_').trim())
             .filter(|n| !n.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
-                let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
-                Some(game.teams.get(team)?.name.clone())
-            });
+            .map(str::to_owned);
+        if named.is_none() {
+            if let Some(own) = bot
+                .and_then(|o| self.bots.brains.get(&o))
+                .map(|b| &b.named)
+                .filter(|n| kind.first_names.contains(n))
+            {
+                return own.clone();
+            }
+            if let Some(first) = self.bot_first_name(kind, brick, bot) {
+                return first;
+            }
+        }
+        let label = named.or_else(|| {
+            let team = bri_minigames::TeamId(b.vehicle.as_ref()?.team?);
+            let game = self.minigames.game(self.spawn_brick_game(brick)?).ok()?;
+            Some(game.teams.get(team)?.name.clone())
+        });
         // The label is shortened, not the kind or the closing bracket.
         let room = MAX_PLAYER_NAME.saturating_sub(kind.name.chars().count() + 3);
         match label {

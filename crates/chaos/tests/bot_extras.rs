@@ -8,7 +8,7 @@ use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::bot_kind::{BotKind, BotPack};
 use bri_sim::player::MoveInput;
-use bri_sim::session::{ActionAim, Command, MiniGameRequest, Session, ToolCatalog, ToolInventory};
+use bri_sim::session::{ActionAim, Command, MiniGameRequest, Session, ToolCatalog};
 use bri_world::{Brick, ContentRef, OwnerId, VehicleSpawn, World, build::SavedBuild};
 use glam::Vec3;
 
@@ -167,7 +167,8 @@ fn idle_push(idle_play: Option<f32>) -> f32 {
         ],
         &mut sequence,
     );
-    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)]).unwrap();
+    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)])
+        .unwrap();
     sequence += 1;
     s.command(
         human,
@@ -202,20 +203,7 @@ fn idle_push(idle_play: Option<f32>) -> f32 {
     };
     steps(&mut s, &[human], 120, &mut sequence);
     let before = at(&s);
-    for i in 0..120 * 20 {
-        steps(&mut s, &[human], 1, &mut sequence);
-        if std::env::var_os("BRI_DEBUG_EXTRAS").is_some() && i % 240 == 0 {
-            let b = bots(&s);
-            let t = s.bot_thoughts();
-            eprintln!(
-                "{idle_play:?} ball {:?} bots {:?} {:?} {:?}",
-                at(&s),
-                feet(&s, b[0]),
-                feet(&s, b[1]),
-                t.iter().map(|t| (t.behaviour, format!("{:?}", t.task))).collect::<Vec<_>>()
-            );
-        }
-    }
+    steps(&mut s, &[human], 120 * 20, &mut sequence);
     flat(at(&s) - before)
 }
 
@@ -487,7 +475,8 @@ fn hand_over(hand_weapon: Option<f32>) -> bool {
         &mut sequence,
     );
     // In a game that hands out nothing, the builder far out of sight.
-    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)]).unwrap();
+    s.set_spawn_points(vec![Vec3::new(90.0, 0.05, 90.0)])
+        .unwrap();
     minigame(&mut s, human, TOOLS_ONLY, &mut sequence);
     steps(&mut s, &[human], 30, &mut sequence);
     let both = bots(&s);
@@ -498,30 +487,18 @@ fn hand_over(hand_weapon: Option<f32>) -> bool {
     s.give_tool(giver, bri_weapons::testing::ROCKET_ITEM, false)
         .unwrap();
     let armed = |s: &Session| {
-        s.tool_inventories()
-            .get(&mate)
-            .is_some_and(|i| {
-                i.slots.iter().flatten().any(|item| {
-                    [
-                        bri_weapons::testing::GUN_ITEM,
-                        bri_weapons::testing::ROCKET_ITEM,
-                    ]
-                    .contains(&item.as_str())
-                })
+        s.tool_inventories().get(&mate).is_some_and(|i| {
+            i.slots.iter().flatten().any(|item| {
+                [
+                    bri_weapons::testing::GUN_ITEM,
+                    bri_weapons::testing::ROCKET_ITEM,
+                ]
+                .contains(&item.as_str())
             })
+        })
     };
-    for i in 0..120 * 30 {
+    for _ in 0..120 * 30 {
         steps(&mut s, &[human], 1, &mut sequence);
-        if std::env::var_os("BRI_DEBUG_EXTRAS").is_some() && i % 120 == 0 {
-            let t = s.bot_thoughts();
-            eprintln!(
-                "{:?} {:?} {:?} {:?}",
-                feet(&s, giver),
-                feet(&s, mate),
-                s.tool_inventories().get(&giver),
-                t.iter().map(|t| (t.bot, t.behaviour)).collect::<Vec<_>>()
-            );
-        }
         if armed(&s) {
             return true;
         }
