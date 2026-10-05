@@ -550,12 +550,28 @@ pub(super) fn register(engine: &mut Engine) {
             value,
         }))
     });
-    // The lines of one of these rules' data files (`data` provides).
-    engine.register_fn("data_lines", |file: &str| {
+    // One of these rules' data files (`data` provides), a line at a time:
+    // `data_line_count(file)` lines (`()` without the file) and
+    // `data_line(file, i)`. A whole file as one array would count every
+    // line's text against the script's string limit, so a name list longer
+    // than that (Slayer's 36 KB of first names) could not be read at all.
+    engine.register_fn("data_line_count", |file: &str| {
         with_world(|world, _| {
-            Ok(world.data_lines(file).map_or(Dynamic::UNIT, |lines| {
-                Dynamic::from_array(lines.into_iter().map(Into::into).collect())
-            }))
+            Ok(world
+                .data_lines(file)
+                .map_or(Dynamic::UNIT, |lines| (lines.len() as i64).into()))
+        })
+    });
+    engine.register_fn("data_line", |file: &str, i: i64| {
+        with_world(|world, _| {
+            Ok(world
+                .data_lines(file)
+                .and_then(|lines| {
+                    usize::try_from(i)
+                        .ok()
+                        .and_then(|i| lines.into_iter().nth(i))
+                })
+                .map_or(Dynamic::UNIT, Into::into))
         })
     });
     engine.register_fn("minigame_snapshot", |game: Dynamic| {

@@ -831,14 +831,19 @@ fn bot_kind_view() {
 }
 // "Bot " and a random first name (`"Bot" SPC getRandomFirstName()`).
 // `getRandomFirstName` draws from Slayer's own first-names.txt
-// (Module_Names).
+// (Module_Names), a line at a time: the whole list is longer than a
+// script may hold.
 fn bot_name(kind, n) {
-    let names = data_lines("first_names").filter(|line| line != "");
-    if names.is_empty() {
+    let count = data_line_count("first_names");
+    if count == () || count == 0 {
         return "Bot";
     }
-    let i = (hash3(seed(), tick(), n, names.len()) * names.len()).to_int();
-    `Bot ${names[i]}`
+    let i = (hash3(seed(), tick(), n, count) * count).to_int();
+    let name = data_line("first_names", i);
+    if name == () || name == "" {
+        return "Bot";
+    }
+    `Bot ${name}`
 }
 // `Slayer_TeamSO::botFillTeam`: bots go while the team has more members
 // than its count, and come while it has fewer. `room` is how many more
