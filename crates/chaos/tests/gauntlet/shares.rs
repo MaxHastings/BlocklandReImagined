@@ -269,6 +269,7 @@ pub fn variety(report: &Report) -> f32 {
         .map(|p| -p * p.log2())
         .sum::<f32>()
         .max(0.0)
+        + 0.0
 }
 
 /// Standard deviation of the goof share over ten-second windows: goofing

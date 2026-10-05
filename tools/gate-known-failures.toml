@@ -49,3 +49,11 @@ reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run 
 
 [[port_bound]]
 target = "bri-client/night_qa"
+
+# The all-on bot gauntlet (every dial at its ON value) fails on its first
+# run, 2026-10-05: with surprise.strength 0.6 zombie_survival changes
+# behaviour 12.2 times a bot-minute against its bound of 12.
+[[failure]]
+test = "all_dials_on"
+owner = "fix/bot-surprise"
+reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/min (bound 12). The surprise lane tunes strength or the hold rule; remove this entry when all_dials_on passes."

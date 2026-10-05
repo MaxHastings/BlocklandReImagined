@@ -1234,15 +1234,15 @@ fn fair_run(weapon: &str, range: f32, seconds: usize) -> Fair {
         // Facing -z (toward the bot): forward is -z, right is +x.
         let input = if to_post.length() > 2.0 {
             bri_sim::player::MoveInput {
-                forward: (-to_post.z / 3.0).clamp(-1.0, 1.0),
-                right: (to_post.x / 3.0 + 0.5 * side).clamp(-1.0, 1.0),
+                forward: unit(-to_post.z / 3.0),
+                right: unit(to_post.x / 3.0 + 0.5 * side),
                 jump,
                 ..Default::default()
             }
         } else {
             bri_sim::player::MoveInput {
-                forward: (lean - to_post.z * 0.3).clamp(-1.0, 1.0),
-                right: (side + to_post.x * 0.3).clamp(-1.0, 1.0),
+                forward: unit(lean - to_post.z * 0.3),
+                right: unit(side + to_post.x * 0.3),
                 jump,
                 ..Default::default()
             }
@@ -1302,6 +1302,12 @@ fn fair_run(weapon: &str, range: f32, seconds: usize) -> Fair {
         }
     }
     out
+}
+
+/// `v` within -1..=1 (a control's range).
+#[allow(clippy::manual_clamp)]
+fn unit(v: f32) -> f32 {
+    v.max(-1.0).min(1.0)
 }
 
 /// The weapon classes the fair metric shoots with.
