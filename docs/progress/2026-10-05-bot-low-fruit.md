@@ -125,3 +125,11 @@ The standing reviewer found two blockers:
    `extras.*` paths are gone from the tuning tools' dial list. The tests
    compare the dial at 1 and 0 (with the cause present or absent); none
    needs a per-option switch.
+
+Results after merging c481371a: clippy `-D warnings` on bri-sim and
+bri-chaos clean; bri-sim lib 247 passed; `bot_extras` 8/8,
+`bot_brain` 19/19, `bot_interactions` 19/19, `bot_soccer_teams` 5/5.
+`bot_extras`' new test fails (the button is pressed once) when the old
+event-row rule is put back, so it guards the fix. `bot_gauntlet` 16 of 17
+pass: `stairs_to_a_deck` fails (circling 0.045 > 0.04) with identical
+numbers on c481371a itself and with the dial at 0, so it is not this lane's.
