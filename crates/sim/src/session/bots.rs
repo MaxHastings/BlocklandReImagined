@@ -160,6 +160,8 @@ const LULL_PLAY: f32 = surprise::LULL;
 /// objective that wants one beaten but none in sight.
 const RETURN_PLAY: f32 = 0.8;
 const PRESSED_PLAY: f32 = 0.85;
+/// How far ahead a fighter's step looks for a portal it would go through.
+const FIGHT_PORTAL_REACH: f32 = 0.8;
 /// The pitch of a bot looking at what it handles (an emote, a tool).
 const LOOK_DOWN: f32 = -0.3;
 /// Plans in a row that got stuck before a bot drops its goal.
@@ -3215,7 +3217,9 @@ impl Session {
             && behaviour != Behaviour::Fight
             && !holding
             && driving.is_none()
-            && swim.is_none()
+            // A swimmer's idle hops and walks would take it out of its
+            // water at the surface.
+            && kind.moves != Moves::Swim
             && !self.seated(bot);
         let pause_gate = surprise::Gate {
             carrying: objective_holding || objective.as_ref().is_some_and(|v| v.committed),
@@ -3644,6 +3648,15 @@ impl Session {
             .is_some()
         {
             direction = flat(out - feet).normalize_or_zero();
+        }
+        // A fight's footwork never steps through a portal (`passage`):
+        // going after someone through one is a chase's move.
+        if behaviour == Behaviour::Fight && direction != Vec3::ZERO {
+            let from = feet + Vec3::Y * 0.9;
+            let to = from + flat(direction).normalize_or_zero() * FIGHT_PORTAL_REACH;
+            if self.simulation.passages().first(from, to).is_some() {
+                direction = Vec3::ZERO;
+            }
         }
         if let Some(to) = act.direction {
             direction = to;
