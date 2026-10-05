@@ -3213,8 +3213,13 @@ impl Session {
         } else if self.bots.brains[&bot].memory.is_some() {
             play = play.max(PRESSED_PLAY);
         }
+        // Idle play with a body (Interact) is already the bot's fun: a goof
+        // would stand it still beside the ball it came to push.
         let natural = threat.is_none()
-            && behaviour != Behaviour::Fight
+            && !matches!(
+                behaviour,
+                Behaviour::Fight | Behaviour::Interact | Behaviour::Carry
+            )
             && !holding
             && driving.is_none()
             // A swimmer's idle hops and walks would take it out of its
