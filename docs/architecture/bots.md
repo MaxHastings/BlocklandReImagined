@@ -243,47 +243,37 @@ the plain pick at strengths 0, 0.5 and 1; bands come later.
 
 ## Coordination
 
-Two principles. Every option is scored by what it adds to the team's
-objective and the bot's own survival, less its cost. What teammates do is
-information that moves those scores, never an order: it goes through the
-same chooser, with surprise and commitment, as everything else
-(`bots/team.rs`).
+What teammates do is information that moves a bot's scores, never an
+order: it goes through the same chooser, with surprise and commitment, as
+everything else (`bots/team.rs`). Nothing names a game, item or vehicle.
 
-**Mechanism.** Each bot publishes its current choice as an *intent*
-beside the claims (`claims::Intent`, renewed every tick, gone three ticks
-after it stops): the place the option takes it, its target, a vehicle
-whose free seats it controls, the space its weapon will hit (the line to
-its target and on to its reach, as wide as the real splash radius and
-aim error: the same `claims::Space` the hold-fire check uses) and, from a
-seat it does not drive, the line its mount needs to what it is after.
-Before choosing, a bot reads its allies' intents into each option's score
-through two terms: **overlap**, `overlap` per ally that took up the same
-target, or a place within `overlap_radius`, first (the first keeps it);
-**interaction**, `uses` for taking a seat an ally exposes or driving to a
-place from which a seated ally's mount sees its target, and `harm` for an
-option whose place lies in an ally's weapon space (a fight then stands at
-the nearest point outside it; crew of one vehicle are not in each
-other's way; chasing and searching are scored by target only). Targets are options too:
-each enemy in view counts as farther by `overlap` per ally after it. An
-objective is worth `1 + pressure * behind / (behind + 1)` as much while
-the team trails by `behind` points. None of this applies while the bot
-carries an objective or is urgent (surprise's gate). **Mood**: an idle
-flavour is `1 + mood × share` times likelier, and the rest after one that
-much shorter, where share is the part of the players it sees (line of
-sight, within `mood_radius`, either side) doing one, a person counting
-`mood_human`, capped at `mood_cap`; each flavour is likewise likelier by
-the share doing that one. Seconds spent goofing make further goofs less
-likely (`boredom`, halving every `boredom_seconds`), so a spreading goof
-goes stale. A choice the terms changed may be said in team chat, the line
-keyed by the term that moved it most (`callouts`), at most once every
-`callout_seconds`. `BotThought::team` (`BotTeamView`) shows how many
-intents it read, each option's non-zero terms and its last callout.
+Each bot publishes its current choice as an *intent* beside the claims
+(`claims::Intent`, lapsing three ticks after it stops): where it goes or
+stands, its target, a vehicle whose free seats it controls, the space its
+weapon will hit (`claims::Space`, from real reach, splash and aim error,
+the same test the hold-fire check uses) and, from a seat it does not drive,
+the line its mount needs. Allies' intents enter each option's score as
+**overlap** (an earlier ally on the same target, or doing the same option
+at the same spot, costs: the first keeps it, and a choice among places or
+targets prefers an uncrowded one; following an ally through a gap at its
+pace rather than walking round it is the same rule) and **interaction**
+(a seat an ally offers, or a driving place from which a seated ally's
+mount sees its target, pays; a fight's stance in an ally's line of fire
+costs, so it steps out). Crew of one vehicle neither crowd nor endanger
+each other; a seat stays the claim's to arbitrate. Socially, an objective
+is worth more as the team trails; idle flavours grow likelier with the
+share of the players a bot sees goofing, less those it sees playing, a
+person counting `mood_human`, capped; and an option it saw work for a
+teammate (a hit) scores a little more for a while (`copy`, fading over
+the surprise `effectiveness_seconds`), with boredom as the brake. A choice
+the terms changed may be said in team chat, keyed by the term that moved
+it (`callouts`). `BotThought::team` shows what it read and each option's
+terms.
 
-Nothing names a game, item or vehicle: seats come from the vehicle's seat
-data, weapon spaces from the projectile's reach and splash. A person
-publishes no intent; only an emote within the last two seconds counts as
-a person's visible flavour. Still unsupported: a goal to defend (no option
-exists for it yet), passing, and focus fire beyond the target overlap.
+The kind's `team` dials: `teamwork` (0-1, scales overlap and interaction
+together), `mood` and `mood_cap`, `mood_human`, `pressure` and `copy`;
+radii come from its sight, the rest are constants in code. Still
+unsupported: a goal to defend, passing.
 
 ## Data
 

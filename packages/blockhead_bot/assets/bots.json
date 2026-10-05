@@ -95,6 +95,9 @@
         "mood_human": 3,
         // Objectives are worth up to this much more as its team falls behind.
         "pressure": 0.3,
+        // Seeing a teammate's option work makes it score up to this much
+        // more for a while (fading over effectiveness_seconds).
+        "copy": 0.15,
         // A choice an ally's intent changed may be said in team chat, keyed
         // by the term that changed it.
         "callouts": { "uses": "Coming!", "harm": "Moving!" }

@@ -61,6 +61,34 @@ impl Field {
     /// Three Blockhead Bot pads, a mini-game with two teams, every bot on
     /// the first team.
     fn new() -> Self {
+        let mut f = Self::teamless();
+        let game = f.game();
+        f.mg(MiniGameRequest::AddOnSettings {
+            game,
+            settings: vec![],
+            teams: Some(
+                [("Blue", 0), ("Red", 1)]
+                    .into_iter()
+                    .map(|(name, color)| TeamEdit {
+                        id: None,
+                        name: name.into(),
+                        color,
+                        settings: vec![],
+                    })
+                    .collect(),
+            ),
+            quiet: true,
+            reset: false,
+        });
+        let blue = f.team(0);
+        for bot in f.bots() {
+            f.set_team(bot, blue);
+        }
+        f.steps(10);
+        f
+    }
+    /// The same pads, one builder's, in a mini-game without teams.
+    fn teamless() -> Self {
         let mut s = fixture::synthetic().unwrap().session;
         s.set_vehicle_pack(
             bri_vehicles::testing::pack(),
@@ -119,29 +147,6 @@ impl Field {
             },
         });
         f.steps(20);
-        let game = f.game();
-        f.mg(MiniGameRequest::AddOnSettings {
-            game,
-            settings: vec![],
-            teams: Some(
-                [("Blue", 0), ("Red", 1)]
-                    .into_iter()
-                    .map(|(name, color)| TeamEdit {
-                        id: None,
-                        name: name.into(),
-                        color,
-                        settings: vec![],
-                    })
-                    .collect(),
-            ),
-            quiet: true,
-            reset: false,
-        });
-        let blue = f.team(0);
-        for bot in f.bots() {
-            f.set_team(bot, blue);
-        }
-        f.steps(10);
         f
     }
     fn run(&mut self, command: Command) {

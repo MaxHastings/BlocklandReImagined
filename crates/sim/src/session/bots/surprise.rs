@@ -121,6 +121,10 @@ struct Drive {
     /// 1 works; lower when it has not been working.
     effectiveness: f32,
     updated: u64,
+    /// Seen it work for a teammate (`team` copy): a bonus on its score that
+    /// fades over `effectiveness_seconds`, as of `seen_at`.
+    seen: f32,
+    seen_at: u64,
 }
 
 /// One option's terms in a decision.
@@ -314,6 +318,8 @@ impl Mind {
                     boredom: 0.0,
                     effectiveness: 1.0,
                     updated: tick,
+                    seen: 0.0,
+                    seen_at: tick,
                 });
                 return self.drives.len() - 1;
             }
@@ -404,7 +410,9 @@ impl Mind {
             terms.push(Term {
                 option: *option,
                 score: *score,
-                adjusted: score * (1.0 - cfg.strength * (1.0 - d.effectiveness)),
+                adjusted: score
+                    * (1.0 - cfg.strength * (1.0 - d.effectiveness))
+                    * (1.0 + Self::faded(cfg, &d, tick)),
                 eligible: false,
                 drift: d.drift,
                 boredom: d.boredom,
@@ -548,6 +556,55 @@ impl Mind {
             d.effectiveness * (1.0 - cfg.failure * cfg.strength)
         }
         .clamp(0.05, 1.0);
+    }
+    /// What seeing `option` work for a teammate is still worth, at `tick`.
+    fn faded(cfg: &BotSurprise, d: &Drive, tick: u64) -> f32 {
+        let seconds = tick.saturating_sub(d.seen_at) as f32 / TICKS;
+        let seen = d.seen * 0.5f32.powf(seconds / cfg.effectiveness_seconds);
+        if seen < 1e-3 { 0.0 } else { seen }
+    }
+    /// The bonus on `option` from having seen it work for a teammate.
+    /// Draws nothing, so the plain brain stays as it was.
+    pub(super) fn seen(&self, cfg: &BotSurprise, domain: Domain, option: u32, tick: u64) -> f32 {
+        self.drives
+            .iter()
+            .find(|d| d.domain == domain && d.option == option)
+            .map_or(0.0, |d| Self::faded(cfg, d, tick))
+    }
+    /// A teammate's `option` worked where this bot saw it: each sighting
+    /// adds half of `copy`, and the bonus never passes `copy`.
+    pub(super) fn saw(
+        &mut self,
+        cfg: &BotSurprise,
+        domain: Domain,
+        option: u32,
+        copy: f32,
+        tick: u64,
+    ) {
+        let at = match self
+            .drives
+            .iter()
+            .position(|d| d.domain == domain && d.option == option)
+        {
+            Some(at) => at,
+            None => {
+                self.drives.push(Drive {
+                    domain,
+                    option,
+                    drift: 0.0,
+                    boredom: 0.0,
+                    effectiveness: 1.0,
+                    updated: tick,
+                    seen: 0.0,
+                    seen_at: tick,
+                });
+                self.drives.len() - 1
+            }
+        };
+        let now = Self::faded(cfg, &self.drives[at], tick);
+        let d = &mut self.drives[at];
+        d.seen = (now + copy * 0.5).min(copy);
+        d.seen_at = tick;
     }
     /// In a tell: pausing before a switch.
     pub(super) fn telling(&self, tick: u64) -> bool {
@@ -916,9 +973,10 @@ impl Session {
         let Some(brain) = self.bots.brains.get_mut(&bot) else {
             return;
         };
-        if brain.kind.surprise.strength <= 0.0 {
+        if brain.kind.surprise.strength <= 0.0 && brain.kind.team.copy <= 0.0 {
             return;
         }
+        let mut worked = Vec::new();
         for shot in brain.surprise.due(tick) {
             let hit = self.peers.get(&shot.target).is_none_or(|p| {
                 !p.combat.alive
@@ -928,6 +986,9 @@ impl Session {
             let cfg = &brain.kind.surprise;
             if let Some(slot) = shot.weapon {
                 brain.surprise.outcome(cfg, Domain::Weapon, slot, hit, tick);
+                if hit {
+                    worked.push((Domain::Weapon, slot));
+                }
             }
             brain
                 .surprise
@@ -935,7 +996,11 @@ impl Session {
             brain
                 .surprise
                 .outcome(cfg, Domain::Behaviour, shot.behaviour, hit, tick);
+            if hit {
+                worked.extend([(Domain::Aim, shot.aim), (Domain::Behaviour, shot.behaviour)]);
+            }
         }
+        self.team_copy(bot, &worked, tick);
     }
     /// A shot to judge once it has had time to land.
     pub(super) fn surprise_fired(
@@ -954,7 +1019,7 @@ impl Session {
             .bots
             .brains
             .get_mut(&bot)
-            .filter(|b| b.kind.surprise.strength > 0.0)
+            .filter(|b| b.kind.surprise.strength > 0.0 || b.kind.team.copy > 0.0)
         else {
             return;
         };

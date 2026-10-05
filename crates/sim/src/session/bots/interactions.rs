@@ -706,7 +706,10 @@ impl Session {
     /// `quarry`, the one it is going after, and one standing at `goal`, the
     /// spot it is making for, which it contests rather than walks round.
     /// It always passes on its left, so two walking into each other both
-    /// step aside the same way and get by.
+    /// step aside the same way and get by. An ally ahead already going its
+    /// way is not passed but followed at its pace (`team` overlap: the
+    /// later of two on one path gives way), so a file through a narrow gap
+    /// keeps moving instead of every one stepping into the frame.
     pub(super) fn bot_walk_direction(
         &self,
         bot: OwnerId,
@@ -719,6 +722,31 @@ impl Session {
         }
         let own = &self.peers[&bot].player;
         let feet = Vec3::from(own.state().feet);
+        let ahead = |p: &super::Peer| {
+            let at = Vec3::from(p.player.state().feet);
+            let delta = flat(at - feet);
+            let along = delta.dot(desired);
+            let width = (own.tuning().width + p.player.tuning().width) * 0.5;
+            along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
+        };
+        // The pace of an ally ahead going the same way, as a share of its own.
+        let follow = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                **o != bot
+                    && p.combat.alive
+                    && !self.seated(**o)
+                    && self.bot_allies(bot, **o)
+                    && ahead(p)
+            })
+            .map(|(_, p)| flat(Vec3::from(p.player.state().velocity)).dot(desired))
+            .filter(|pace| *pace > 0.5)
+            .map(|pace| (pace / own.tuning().forward.max(0.1)).min(1.0))
+            .reduce(f32::min);
+        if let Some(pace) = follow {
+            return desired * pace;
+        }
         let blocked = self.peers.iter().any(|(o, p)| {
             if *o == bot || !p.combat.alive || self.seated(*o) {
                 return false;
@@ -729,10 +757,7 @@ impl Session {
             {
                 return false;
             }
-            let delta = flat(at - feet);
-            let along = delta.dot(desired);
-            let width = (own.tuning().width + p.player.tuning().width) * 0.5;
-            along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
+            ahead(p)
         });
         if blocked {
             (desired * 0.25 + Vec3::new(-desired.z, 0.0, desired.x)).normalize_or_zero()

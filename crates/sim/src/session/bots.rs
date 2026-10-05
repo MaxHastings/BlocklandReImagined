@@ -1224,6 +1224,7 @@ impl Session {
             && self.bot_team_relation(bot, other).is_none()
             && (self.bot_allies(bot, other)
                 || !kind.fights_bots
+                    && self.game_of(bot).is_none()
                     && kind.side.is_none()
                     && self
                         .bots
@@ -1252,7 +1253,8 @@ impl Session {
 
     /// Whether two brick bots are on one side: one side (Bot_Hole's
     /// `hType`) never fights itself and fights every other; bots of no side
-    /// side with their builder.
+    /// side with their builder, except in a mini-game without teams, where
+    /// everyone is everyone's enemy.
     fn bot_allies(&self, bot: OwnerId, other: OwnerId) -> bool {
         if let Some(allied) = self.bot_team_relation(bot, other) {
             return allied;
@@ -1277,7 +1279,10 @@ impl Session {
                 .and_then(|b| b.kind.side.as_deref())
         };
         match (side(bot), side(other)) {
-            (None, None) => self.bot_brick_owner(other) == self.bot_brick_owner(bot),
+            (None, None) => {
+                self.game_of(bot).is_none()
+                    && self.bot_brick_owner(other) == self.bot_brick_owner(bot)
+            }
             (mine, theirs) => mine == theirs,
         }
     }
@@ -2187,8 +2192,15 @@ impl Session {
             team::exit(&intents, feet, tall),
             carries,
         );
-        // Its objective is worth more as its team falls behind.
+        // Its objective is worth more as its team falls behind, and what it
+        // saw work for a teammate a little more (`team` copy).
         scores[Behaviour::Objective as usize] *= 1.0 + kind.team.pressure * deficit;
+        for (b, score) in scores.iter_mut().enumerate() {
+            *score *= 1.0
+                + brain
+                    .surprise
+                    .seen(&kind.surprise, surprise::Domain::Behaviour, b as u32, tick);
+        }
         let plain_before = behaviour::best(&scores) as usize;
         let (current, current_since) = (brain.behaviour as usize, brain.behaviour_since);
         brain.team.terms = if gate.carrying || gate.urgent {

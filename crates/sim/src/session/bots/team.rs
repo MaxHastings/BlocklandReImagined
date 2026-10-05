@@ -68,8 +68,7 @@ fn inside(space: &Space, feet: Vec3, body: f32) -> bool {
 pub(super) fn terms(
     cfg: &BotTeam,
     me: OwnerId,
-    option: u8,
-    since: u64,
+    (option, since): (u8, u64),
     choice: Choice,
     allies: &[(OwnerId, Intent)],
     body: f32,
@@ -150,7 +149,15 @@ pub(super) fn adjust(
     let mut all = [Terms::default(); 10];
     for (b, score) in scores.iter_mut().enumerate() {
         if *score > 0.0 {
-            all[b] = terms(cfg, me, b as u8, sinces(b), choices[b], allies, body, clear);
+            all[b] = terms(
+                cfg,
+                me,
+                (b as u8, sinces(b)),
+                choices[b],
+                allies,
+                body,
+                clear,
+            );
             *score = (*score + all[b].total()).max(f32::MIN_POSITIVE);
         }
     }
@@ -174,33 +181,51 @@ pub(super) fn callout<'a>(
     (by > 0.0).then(|| cfg.callouts.get(term).map(String::as_str))?
 }
 
+/// What a player it sees is visibly doing, for the mood.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Doing {
+    Idle,
+    /// Going about the game: moving with purpose, firing, holding something.
+    Play,
+    /// An idle flavour (`surprise::Flavour` index).
+    Goof(u8),
+}
+
 /// How much more likely an idle flavour is, and each one, from players it
-/// sees within `radius` (its sight) of `at`, of either side, doing one: `mood`
-/// times the share doing any, and times the share doing each, both at
-/// most `mood_cap`. Each counts by its weight (a person `mood_human`, a
-/// bot 1); one out of sight counts not at all.
+/// sees within `radius` (its sight) of `at`, of either side: `mood` times
+/// the share goofing less the share playing, and times the share doing
+/// each flavour, both at most `mood_cap`. Each counts by its weight (a
+/// person `mood_human`, a bot 1); one out of sight counts not at all.
 pub(super) fn mood(
     cfg: &BotTeam,
     me: OwnerId,
     at: Vec3,
     radius: f32,
-    others: impl Iterator<Item = (OwnerId, Vec3, Option<u8>, f32, bool)>,
+    others: impl Iterator<Item = (OwnerId, Vec3, Doing, f32, bool)>,
 ) -> (f32, [f32; 11]) {
-    let mut near = 0.0f32;
+    let (mut near, mut play) = (0.0f32, 0.0f32);
     let mut doing = [0.0f32; 11];
-    for (who, feet, flavour, weight, seen) in others {
+    for (who, feet, what, weight, seen) in others {
         if who != me && seen && feet.distance(at) < radius {
             near += weight;
-            if let Some(f) = flavour.filter(|f| usize::from(*f) < 11) {
-                doing[usize::from(f)] += weight;
+            match what {
+                Doing::Goof(f) if usize::from(f) < 11 => doing[usize::from(f)] += weight,
+                Doing::Play => play += weight,
+                _ => {}
             }
         }
     }
     if near <= 0.0 {
         return (0.0, [0.0; 11]);
     }
-    let pull = |n: f32| (cfg.mood * n / near).min(cfg.mood_cap);
-    (pull(doing.iter().sum()), doing.map(pull))
+    let pull = |n: f32| (cfg.mood * n.max(0.0) / near).min(cfg.mood_cap);
+    (pull(doing.iter().sum::<f32>() - play), doing.map(pull))
+}
+
+/// What a teammate's success is worth to a bot that `seen` it: `copy`, and
+/// nothing out of sight.
+pub(super) fn copied(cfg: &BotTeam, seen: bool) -> f32 {
+    if seen { cfg.copy } else { 0.0 }
 }
 
 /// Why a bot's last choice moved, for the why-view: how many allies'
@@ -278,8 +303,7 @@ impl Session {
         terms(
             &brain.kind.team,
             bot,
-            option as u8,
-            since,
+            (option as u8, since),
             choice,
             &allies,
             0.0,
@@ -332,8 +356,9 @@ impl Session {
     }
 
     /// The mood pull on `bot` at `at`, its eye at `eye`: each bot's
-    /// published flavour, and a person's one visible flavour, an emote in
-    /// the last `EMOTED` ticks; only those it has in sight count.
+    /// published flavour or work, and a person's visible goof (an emote in
+    /// the last `EMOTED` ticks) or play (firing, holding something, moving
+    /// faster than `PURPOSE`); only those it has in sight count.
     pub(super) fn team_mood(
         &self,
         bot: OwnerId,
@@ -342,6 +367,8 @@ impl Session {
         tick: u64,
     ) -> (f32, [f32; 11]) {
         const EMOTED: u64 = 240;
+        /// Faster than a stroll, in world units a second: going somewhere.
+        const PURPOSE: f32 = 3.0;
         let Some(brain) = self.bots.brains.get(&bot) else {
             return (0.0, [0.0; 11]);
         };
@@ -355,15 +382,70 @@ impl Session {
             }
             let seen = self.clear_between(eye, p.player.eye());
             if self.bots.is_bot(*o) {
-                return Some((*o, feet, intents.get(o)?.flavour, 1.0, seen));
+                let i = intents.get(o)?;
+                let what = match i.flavour {
+                    Some(f) => Doing::Goof(f),
+                    None if i.option != Behaviour::Wander as u8 => Doing::Play,
+                    None => Doing::Idle,
+                };
+                return Some((*o, feet, what, 1.0, seen));
             }
             let emoted = p
                 .combat
                 .voice
                 .is_some_and(|t| tick.saturating_sub(t) < EMOTED);
-            Some((*o, feet, emoted.then_some(1), cfg.mood_human, seen))
+            let moving = flat(Vec3::from(p.player.state().velocity)).length() > PURPOSE;
+            let firing = self
+                .weapons
+                .actor(ActorId(*o))
+                .is_some_and(|a| a.trigger_held());
+            let what = if emoted {
+                Doing::Goof(1)
+            } else if moving || firing || self.held_by(*o).is_some() {
+                Doing::Play
+            } else {
+                Doing::Idle
+            };
+            Some((*o, feet, what, cfg.mood_human, seen))
         });
         mood(cfg, bot, at, radius, others)
+    }
+
+    /// Allies that see `bot` and its `worked` options succeed take a liking
+    /// to the same options (`copy`, fading as the enemy adapts).
+    pub(super) fn team_copy(
+        &mut self,
+        bot: OwnerId,
+        worked: &[(surprise::Domain, u32)],
+        tick: u64,
+    ) {
+        let Some(eye) = self.peers.get(&bot).map(|p| p.player.eye()) else {
+            return;
+        };
+        if worked.is_empty() {
+            return;
+        }
+        let watchers: Vec<(OwnerId, f32)> = self
+            .bots
+            .brains
+            .iter()
+            .filter(|(o, _)| **o != bot && self.bot_allies(bot, **o))
+            .filter_map(|(o, brain)| {
+                let p = self.peers.get(o).filter(|p| p.combat.alive)?;
+                let from = p.player.eye();
+                let seen = from.distance(eye) < brain.kind.sight && self.clear_between(from, eye);
+                Some((*o, copied(&brain.kind.team, seen)))
+            })
+            .filter(|(_, copy)| *copy > 0.0)
+            .collect();
+        for (o, copy) in watchers {
+            let brain = self.bots.brains.get_mut(&o).unwrap();
+            for (domain, option) in worked {
+                brain
+                    .surprise
+                    .saw(&brain.kind.surprise, *domain, *option, copy, tick);
+            }
+        }
     }
 
     /// Nothing solid between two points.
@@ -475,7 +557,7 @@ mod tests {
             ..Default::default()
         };
         let cost = |allies: &[(OwnerId, Intent)], since| {
-            terms(&cfg, 2, 0, since, same, allies, 2.0, &open).overlap
+            terms(&cfg, 2, (0, since), same, allies, 2.0, &open).overlap
         };
         assert_eq!(cost(&[(1, ally)], 20), cfg.overlap());
         assert!(
@@ -488,7 +570,7 @@ mod tests {
             "the one who took it first keeps it"
         );
         let near = |d: f32, option| {
-            terms(&cfg, 2, option, 20, at(d, 0.0), &[(1, ally)], 2.0, &open).overlap
+            terms(&cfg, 2, (option, 20), at(d, 0.0), &[(1, ally)], 2.0, &open).overlap
         };
         assert!(near(1.0, 0) > near(3.0, 0) && near(3.0, 0) > 0.0 && near(5.0, 0) == 0.0);
         assert_eq!(near(1.0, 1), 0.0, "an ally doing something else there");
@@ -506,14 +588,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            terms(&cfg, 2, 0, 0, seat(44), &[(1, driver)], 2.0, &open).uses,
+            terms(&cfg, 2, (0, 0), seat(44), &[(1, driver)], 2.0, &open).uses,
             cfg.uses()
         );
         assert_eq!(
-            terms(&cfg, 2, 0, 0, seat(45), &[(1, driver)], 2.0, &open).uses,
+            terms(&cfg, 2, (0, 0), seat(45), &[(1, driver)], 2.0, &open).uses,
             0.0
         );
-        let harm = |c| terms(&cfg, 2, 0, 0, c, &[(1, shooter())], 2.0, &open).harm;
+        let harm = |c| terms(&cfg, 2, (0, 0), c, &[(1, shooter())], 2.0, &open).harm;
         // On the line, and in its blast radius at the end: cost. Beside: none.
         assert_eq!(harm(at(0.5, -10.0)), cfg.harm());
         assert_eq!(harm(at(2.0, -21.0)), cfg.harm());
@@ -544,7 +626,7 @@ mod tests {
             carries: Some((vehicle, Vec3::Y * 0.5)),
             ..at(x, 0.0)
         };
-        let uses = |c| terms(&cfg, 2, 0, 0, c, &[(1, gunner)], 2.0, &wall).uses;
+        let uses = |c| terms(&cfg, 2, (0, 0), c, &[(1, gunner)], 2.0, &wall).uses;
         assert_eq!(
             uses(drive(4.0, 7)),
             cfg.uses(),
@@ -628,7 +710,14 @@ mod tests {
     fn mood_pull_rises_with_the_share_seen_doing_a_flavour_and_is_capped() {
         let cfg = cfg();
         let crowd = |doing: u64, of: u64| {
-            let others = (1..=of).map(move |o| (o, Vec3::X, (o <= doing).then_some(2), 1.0, true));
+            let others = (1..=of).map(move |o| {
+                let what = if o <= doing {
+                    Doing::Goof(2)
+                } else {
+                    Doing::Idle
+                };
+                (o, Vec3::X, what, 1.0, true)
+            });
             mood(&cfg, 0, Vec3::ZERO, 20.0, others)
         };
         assert_eq!(crowd(0, 4).0, 0.0);
@@ -637,8 +726,8 @@ mod tests {
         assert_eq!(crowd(1, 4).1[2], cfg.mood * 0.25);
         assert_eq!(crowd(1, 4).1[3], 0.0);
         let one = |feet: Vec3, seen: bool, weight: f32| {
-            let first = [(1, feet, Some(2), weight, seen)];
-            let rest = (2..=8).map(|o| (o, Vec3::X, None, 1.0, true));
+            let first = [(1, feet, Doing::Goof(2), weight, seen)];
+            let rest = (2..=8).map(|o| (o, Vec3::X, Doing::Idle, 1.0, true));
             mood(&cfg, 0, Vec3::ZERO, 20.0, first.into_iter().chain(rest)).0
         };
         assert!(one(Vec3::X, true, 1.0) > 0.0);
@@ -648,8 +737,25 @@ mod tests {
             one(Vec3::X, true, cfg.mood_human) > one(Vec3::X, true, 1.0),
             "a person pulls harder than a bot"
         );
-        let people = (1..=8).map(|o| (o, Vec3::X, Some(2), cfg.mood_human, true));
+        let people = (1..=8).map(|o| (o, Vec3::X, Doing::Goof(2), cfg.mood_human, true));
         assert_eq!(mood(&cfg, 0, Vec3::ZERO, 20.0, people).0, cfg.mood_cap);
+        // A person seen playing pulls the other way; an idle one does not.
+        let beside = |what| {
+            let them = [
+                (1, Vec3::X, Doing::Goof(2), 1.0, true),
+                (2, Vec3::X, what, cfg.mood_human, true),
+            ];
+            mood(&cfg, 0, Vec3::ZERO, 20.0, them.into_iter()).0
+        };
+        assert!(
+            beside(Doing::Play) < beside(Doing::Idle),
+            "play counts against goofing"
+        );
+        assert_eq!(
+            beside(Doing::Play),
+            0.0,
+            "one person playing outweighs a goofing bot"
+        );
     }
 
     /// Twelve bots in sight of each other at a long pause, each taking up
@@ -665,10 +771,15 @@ mod tests {
         let mut shares = Vec::new();
         for tick in 0..120 * 3600u64 {
             for (i, mind) in minds.iter_mut().enumerate() {
-                let others = doing
-                    .iter()
-                    .enumerate()
-                    .map(|(o, f)| (o as u64, Vec3::X, *f, 1.0, true));
+                let others = doing.iter().enumerate().map(|(o, f)| {
+                    (
+                        o as u64,
+                        Vec3::X,
+                        f.map_or(Doing::Idle, Doing::Goof),
+                        1.0,
+                        true,
+                    )
+                });
                 let (pull, copy) = mood(team, i as u64, Vec3::ZERO, 20.0, others);
                 let pause = surprise::Pause {
                     natural: true,
@@ -728,6 +839,43 @@ mod tests {
             busy(&plain),
             shares.iter().sum::<f32>() / shares.len() as f32,
             &gaps[..gaps.len().min(12)]
+        );
+    }
+
+    #[test]
+    fn a_seen_teammate_success_lifts_that_option_and_fades_capped() {
+        use surprise::Domain;
+        let team = BotTeam::default();
+        let surprise = crate::bot_kind::BotSurprise::default();
+        let (fight, chase) = (Behaviour::Fight as u32, Behaviour::Chase as u32);
+        let mut mind = surprise::Mind::new(1);
+        mind.saw(&surprise, Domain::Behaviour, fight, copied(&team, true), 0);
+        let lift = mind.seen(&surprise, Domain::Behaviour, fight, 0);
+        assert!(lift > 0.0, "a seen success lifts the same option");
+        assert_eq!(mind.seen(&surprise, Domain::Behaviour, chase, 0), 0.0);
+        assert_eq!(mind.seen(&surprise, Domain::Aim, fight, 0), 0.0);
+        // Occluded: it never saw it.
+        let mut blind = surprise::Mind::new(1);
+        blind.saw(&surprise, Domain::Behaviour, fight, copied(&team, false), 0);
+        assert_eq!(blind.seen(&surprise, Domain::Behaviour, fight, 0), 0.0);
+        // It fades to nothing as the enemy adapts.
+        let half = (surprise.effectiveness_seconds * 120.0) as u64;
+        let later = mind.seen(&surprise, Domain::Behaviour, fight, half);
+        assert!(
+            (later - lift / 2.0).abs() < 1e-4,
+            "{later} after a half-life"
+        );
+        assert_eq!(
+            mind.seen(&surprise, Domain::Behaviour, fight, half * 20),
+            0.0
+        );
+        // However often it sees it, the lift stays within `copy`.
+        for t in 0..50 {
+            mind.saw(&surprise, Domain::Behaviour, fight, team.copy, t);
+        }
+        assert_eq!(
+            mind.seen(&surprise, Domain::Behaviour, fight, 49),
+            team.copy
         );
     }
 

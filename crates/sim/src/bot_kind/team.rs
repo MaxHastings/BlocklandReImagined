@@ -34,6 +34,9 @@ pub struct BotTeam {
     /// Objectives are worth this much more as its team falls behind: by
     /// `1 + pressure * behind / (behind + 1)`, `behind` in points.
     pub pressure: f32,
+    /// Seeing a teammate's option work (a hit) makes the same option score
+    /// up to this much more, fading over the surprise `effectiveness_seconds`.
+    pub copy: f32,
     /// Team chat lines by the term that changed its choice ([`TERMS`]).
     pub callouts: BTreeMap<String, String>,
 }
@@ -45,6 +48,7 @@ impl Default for BotTeam {
             mood_cap: 10.0,
             mood_human: 3.0,
             pressure: 0.3,
+            copy: 0.15,
             callouts: BTreeMap::new(),
         }
     }
@@ -66,6 +70,7 @@ impl BotTeam {
         ensure!(
             (0.0..=1.0).contains(&self.teamwork)
                 && (0.0..=2.0).contains(&self.pressure)
+                && (0.0..=1.0).contains(&self.copy)
                 && [self.mood, self.mood_cap, self.mood_human]
                     .iter()
                     .all(|m| (0.0..=50.0).contains(m)),
