@@ -201,7 +201,6 @@ pub(crate) fn scores(s: &Situation, weight: impl Fn(Behaviour) -> f32) -> [f32; 
 }
 
 /// The highest of `scores`, the earlier on a tie; Wander when none scores.
-#[cfg(test)]
 pub(crate) fn best(scores: &[f32; 10]) -> Behaviour {
     let mut best = (Behaviour::Wander, 0.0);
     for b in Behaviour::ALL {

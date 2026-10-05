@@ -50,7 +50,7 @@ const BOREDOM_SECONDS: f32 = 20.0;
 /// effectiveness takes to halve on its own.
 const FAILURE: f32 = 0.25;
 const SUCCESS: f32 = 0.5;
-const EFFECTIVENESS_SECONDS: f32 = 30.0;
+pub(super) const EFFECTIVENESS_SECONDS: f32 = 30.0;
 /// Urgent, so nothing varies: under this share of health, or hurt by an
 /// enemy this close this recently.
 const URGENT_HEALTH: f32 = 0.3;
@@ -66,7 +66,13 @@ const FLANK_SCORE: f32 = 0.95;
 const PLAY_BOREDOM: f32 = 0.12;
 const IDLE_BOREDOM: f32 = 0.24;
 const GOOF_SCORE: f32 = 0.5;
+/// Goofing's own boredom a second (at strength 1): goofs grow stale, the
+/// brake on goofing that the mood's pull pushes against.
+const GOOF_BOREDOM: f32 = 0.3;
 const GOOF_SECONDS: f32 = 2.0;
+/// How much of the mood's pull (`team::mood`, up to its cap) lifts a
+/// goof's score: at the cap of 10, by half again.
+const MOOD_LIFT: f32 = 0.05;
 /// The [`Domain::Flavour`] options.
 const PLAY: u32 = 0;
 const GOOF: u32 = 1;
@@ -167,6 +173,10 @@ struct Drive {
     /// 1 works; lower when it has not been working.
     effectiveness: f32,
     updated: u64,
+    /// Seen it work for a teammate (`team` copy): a bonus on its score that
+    /// fades over `effectiveness_seconds`, as of `seen_at`.
+    seen: f32,
+    seen_at: u64,
 }
 
 /// One option's terms in a decision.
@@ -284,6 +294,10 @@ pub(super) struct Pause {
     /// the one in hand.
     pub other_tool: bool,
     pub spare_weapon: bool,
+    /// Mood (`team::mood`): how much likelier any flavour is, and each one,
+    /// from bots nearby doing one.
+    pub pull: f32,
+    pub copy: [f32; 11],
 }
 /// A goof this tick.
 #[derive(Clone, Copy, Debug)]
@@ -340,13 +354,19 @@ impl Mind {
         {
             Some(at) => at,
             None => {
+                // A new drive starts anywhere its walk would have taken it
+                // (about half its limit either way), so bots differ from
+                // their first choice on.
+                let drift = (self.random() * 2.0 - 1.0) * DRIFT * strength * 0.5;
                 self.drives.push(Drive {
                     domain,
                     option,
-                    drift: 0.0,
+                    drift,
                     boredom: 0.0,
                     effectiveness: 1.0,
                     updated: tick,
+                    seen: 0.0,
+                    seen_at: tick,
                 });
                 return self.drives.len() - 1;
             }
@@ -413,6 +433,11 @@ impl Mind {
                 term.boredom = d.boredom;
                 term.effectiveness = d.effectiveness;
             }
+            // Seen working for a teammate (`team` copy): draws nothing.
+            let copied = self.seen(domain, *option, tick);
+            if copied > 0.0 {
+                term.adjusted *= 1.0 + copied;
+            }
             terms.push(term);
         }
         let first = |by: &dyn Fn(&Term) -> f32| {
@@ -451,7 +476,7 @@ impl Mind {
     /// The option in use grows boring.
     fn accrue(&mut self, strength: f32, domain: Domain, option: u32, seconds: f32, tick: u64) {
         let rate = match (domain, option) {
-            (Domain::Flavour, GOOF) => 0.0,
+            (Domain::Flavour, GOOF) => GOOF_BOREDOM,
             (Domain::Flavour, _) => PLAY_BOREDOM,
             _ => BOREDOM,
         };
@@ -480,6 +505,48 @@ impl Mind {
             d.effectiveness * (1.0 - FAILURE * strength)
         }
         .clamp(0.05, 1.0);
+    }
+    /// What seeing `option` work for a teammate is still worth, at `tick`.
+    fn faded(d: &Drive, tick: u64) -> f32 {
+        let seconds = tick.saturating_sub(d.seen_at) as f32 / TICKS;
+        let seen = d.seen * 0.5f32.powf(seconds / EFFECTIVENESS_SECONDS);
+        if seen < 1e-3 { 0.0 } else { seen }
+    }
+    /// The bonus on `option` from having seen it work for a teammate.
+    /// Draws nothing, so the plain brain stays as it was.
+    pub(super) fn seen(&self, domain: Domain, option: u32, tick: u64) -> f32 {
+        self.drives
+            .iter()
+            .find(|d| d.domain == domain && d.option == option)
+            .map_or(0.0, |d| Self::faded(d, tick))
+    }
+    /// A teammate's `option` worked where this bot saw it: each sighting
+    /// adds half of `copy`, and the bonus never passes `copy`.
+    pub(super) fn saw(&mut self, domain: Domain, option: u32, copy: f32, tick: u64) {
+        let at = match self
+            .drives
+            .iter()
+            .position(|d| d.domain == domain && d.option == option)
+        {
+            Some(at) => at,
+            None => {
+                self.drives.push(Drive {
+                    domain,
+                    option,
+                    drift: 0.0,
+                    boredom: 0.0,
+                    effectiveness: 1.0,
+                    updated: tick,
+                    seen: 0.0,
+                    seen_at: tick,
+                });
+                self.drives.len() - 1
+            }
+        };
+        let now = Self::faded(&self.drives[at], tick);
+        let d = &mut self.drives[at];
+        d.seen = (now + copy * 0.5).min(copy);
+        d.seen_at = tick;
     }
     /// The option chosen at `domain`.
     pub(super) fn chosen(&self, domain: Domain) -> Option<u32> {
@@ -527,11 +594,21 @@ impl Mind {
         let weights: Vec<(Flavour, f32)> = Flavour::ALL
             .into_iter()
             .filter(|f| possible(*f))
-            .map(|f| (f, cfg.flavour_weight(f.name())))
+            .map(|f| {
+                (
+                    f,
+                    cfg.flavour_weight(f.name()) * (1.0 + pause.copy[f as usize]),
+                )
+            })
             .filter(|(_, w)| *w > 0.0)
             .collect();
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
-        let goof = if total > 0.0 { GOOF_SCORE } else { 0.0 };
+        // Others about goofing make it likelier (`team::mood`).
+        let goof = if total > 0.0 {
+            GOOF_SCORE * (1.0 + MOOD_LIFT * pause.pull)
+        } else {
+            0.0
+        };
         // With nothing to do, playing (strolling) bores twice as fast.
         if pause.idle {
             let at = self.drive(strength, Domain::Flavour, PLAY, tick);
@@ -840,9 +917,10 @@ impl Session {
         let Some(brain) = self.bots.brains.get_mut(&bot) else {
             return;
         };
-        if brain.kind.surprise.strength <= 0.0 {
+        if brain.kind.surprise.strength <= 0.0 && brain.kind.team.copy <= 0.0 {
             return;
         }
+        let mut worked = Vec::new();
         for shot in brain.surprise.due(tick) {
             let hit = self.peers.get(&shot.target).is_none_or(|p| {
                 !p.combat.alive
@@ -852,6 +930,9 @@ impl Session {
             let cfg = &brain.kind.surprise;
             if let Some(slot) = shot.weapon {
                 brain.surprise.outcome(cfg, Domain::Weapon, slot, hit, tick);
+                if hit {
+                    worked.push((Domain::Weapon, slot));
+                }
             }
             // A shot judges what aimed and fired it, not whether to stand
             // or close in: that answers to the band, and a miss judged
@@ -859,7 +940,11 @@ impl Session {
             brain
                 .surprise
                 .outcome(cfg, Domain::Aim, shot.aim, hit, tick);
+            if hit {
+                worked.push((Domain::Aim, shot.aim));
+            }
         }
+        self.team_copy(bot, &worked, tick);
     }
     /// A shot to judge once it has had time to land.
     pub(super) fn surprise_fired(
@@ -877,7 +962,7 @@ impl Session {
             .bots
             .brains
             .get_mut(&bot)
-            .filter(|b| b.kind.surprise.strength > 0.0)
+            .filter(|b| b.kind.surprise.strength > 0.0 || b.kind.team.copy > 0.0)
         else {
             return;
         };
@@ -956,6 +1041,7 @@ impl Session {
             player,
             other_tool,
             spare_weapon,
+            ..Default::default()
         }
     }
     /// Carry out a flavour interrupt: the commands a player would give as

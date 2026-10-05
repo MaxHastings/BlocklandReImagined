@@ -945,6 +945,53 @@ fn a_bot_enters_through_a_brick_building_doorway() {
     assert!(closest < 3.5, "reached the builder inside: {closest}");
 }
 
+/// Four allies make for one narrow doorway at once. Each one ahead going
+/// the same way is followed, not walked round, so the file keeps moving:
+/// every bot gets through and none is left wedged at the jambs.
+#[test]
+fn allies_file_through_one_narrow_doorway_without_deadlock() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.melee = Some(bite(5.0));
+        k.side = Some("file".into());
+    });
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 30.0)])
+        .unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let mut bricks = glass_wall(8.0, 22.0, 38.0, human);
+    bricks.retain(|b| !(29.5..=30.5).contains(&(b.position[2] - 0.25)));
+    for z in [27.0, 29.0, 31.0, 33.0] {
+        bricks.push(bot_brick([16.0, 0.1, z], human));
+    }
+    load(&mut s, human, bricks);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let all = bots(&s);
+    assert_eq!(all.len(), 4);
+    let mut through = std::collections::BTreeMap::new();
+    for tick in 0..120 * 30 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        for bot in &all {
+            if feet(&s, *bot).x < 8.0 {
+                through.entry(*bot).or_insert(tick);
+            }
+        }
+        if through.len() == all.len() {
+            break;
+        }
+    }
+    eprintln!("through the doorway at ticks {through:?}");
+    assert_eq!(
+        through.len(),
+        all.len(),
+        "every bot got through: {through:?}"
+    );
+}
+
 #[test]
 fn a_jetting_bot_closes_on_an_enemy_on_a_high_brick_platform() {
     let mut s = session();

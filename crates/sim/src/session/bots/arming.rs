@@ -30,6 +30,8 @@ const TRAVEL: f32 = 0.4;
 const CLOSE: f32 = 8.0;
 /// Past this many units an enemy costs an upgrade nothing.
 const FAR: f32 = 32.0;
+/// What an item an ally went for first is worth to another bot, as a share.
+const TAKEN: f32 = 0.5;
 
 /// Where an item to arm with lies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +102,8 @@ fn holding(session: &Session, bot: OwnerId, scale: f32) -> (f32, bool) {
 }
 
 /// The item in sight most worth going for, where it lies and its score.
+/// One an ally went for first counts for less, so it is left to them while
+/// another is in sight (`team` overlap).
 fn best_item(
     session: &Session,
     bot: OwnerId,
@@ -155,6 +159,10 @@ fn best_item(
         })
         .filter(|(_, _, score)| *score > 0.0)
         .filter(|(_, at, _)| session.simulation.sight(eye, *at, REACH).is_some())
+        .map(|(source, at, score)| {
+            let taken = session.team_place_crowd(bot, Behaviour::Arm, at) > 0.0;
+            (source, at, if taken { score * TAKEN } else { score })
+        })
         .max_by(|a, b| a.2.total_cmp(&b.2))
 }
 

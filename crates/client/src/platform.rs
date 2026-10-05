@@ -1172,7 +1172,7 @@ impl Runner {
         if self.last_present.is_none() {
             crate::perf::startup::mark("first frame drawn");
         }
-        self.screenshots.submitted();
+        self.screenshots.submitted(&g.queue);
         for text in self.screenshots.poll(&g.device) {
             self.config
                 .app
@@ -1294,9 +1294,15 @@ struct Reading {
     shot: Shot,
     capture: Capture,
     mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
-    since: Instant,
+    /// Set once the GPU has finished the submission holding the copy.
+    copied: Arc<std::sync::atomic::AtomicBool>,
+    /// When a poll first saw the copy finished.
+    since: Option<Instant>,
 }
-/// How long a readback may wait for the GPU before the screenshot fails.
+/// How long a readback may stay unmapped after the GPU has finished its
+/// copy before the screenshot fails. The GPU's own time is not limited: a
+/// software adapter can take many seconds over a frame, and a GPU that
+/// stops altogether is lost, which fails the mapping with an error.
 const SCREENSHOT_READBACK_LIMIT: Duration = Duration::from_secs(5);
 impl Screenshots {
     /// Whether any screenshot is still being copied, read back or written.
@@ -1308,14 +1314,22 @@ impl Screenshots {
     pub(crate) fn copied(&mut self, shot: Shot, capture: Capture) {
         self.copied.push((shot, capture));
     }
-    /// Every encoder holding a copy so far has been submitted: start
-    /// reading those copies back.
-    pub(crate) fn submitted(&mut self) {
+    /// Every encoder holding a copy so far has been submitted to `queue`:
+    /// start reading those copies back.
+    pub(crate) fn submitted(&mut self, queue: &wgpu::Queue) {
+        if self.copied.is_empty() {
+            return;
+        }
+        let copied = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = copied.clone();
+        queue.on_submitted_work_done(move || {
+            done.store(true, std::sync::atomic::Ordering::Release);
+        });
         for (shot, capture) in std::mem::take(&mut self.copied) {
-            self.start(shot, capture);
+            self.start(shot, capture, copied.clone());
         }
     }
-    fn start(&mut self, shot: Shot, capture: Capture) {
+    fn start(&mut self, shot: Shot, capture: Capture, copied: Arc<std::sync::atomic::AtomicBool>) {
         let (tx, mapped) = std::sync::mpsc::channel();
         capture
             .buffer
@@ -1327,8 +1341,21 @@ impl Screenshots {
             shot,
             capture,
             mapped,
-            since: Instant::now(),
+            copied,
+            since: None,
         });
+    }
+    /// A failed screenshot: news for a player's shot; for a save's picture,
+    /// which is written quietly, a console warning.
+    fn failed(shot: &Shot, error: impl std::fmt::Display, messages: &mut Vec<String>) {
+        if shot.fit.is_some() {
+            bri_console::warn(format!(
+                "Save picture {} failed: {error}",
+                shot.path.display()
+            ));
+        } else {
+            messages.push(format!("Screenshot failed: {error}"));
+        }
     }
     /// Hand finished readbacks to writer threads and return the messages
     /// for screenshots written or failed since the last call. Never blocks.
@@ -1338,11 +1365,17 @@ impl Screenshots {
             let _ = device.poll(wgpu::PollType::Poll);
             let (done, _) = self.written.get_or_insert_with(std::sync::mpsc::channel);
             let mut waiting = Vec::new();
-            for reading in self.reading.drain(..) {
+            for mut reading in self.reading.drain(..) {
+                if reading.since.is_none()
+                    && reading.copied.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    reading.since = Some(Instant::now());
+                }
                 match reading.mapped.try_recv() {
                     Ok(Ok(())) => {
                         let done = done.clone();
                         let Reading { shot, capture, .. } = reading;
+                        let failed_shot = shot.clone();
                         let spawned = std::thread::Builder::new().name("screenshot".into()).spawn(
                             move || {
                                 let result = capture.write(&shot.path, shot.fit);
@@ -1351,19 +1384,27 @@ impl Screenshots {
                         );
                         match spawned {
                             Ok(_) => self.writing += 1,
-                            Err(error) => messages.push(format!("Screenshot failed: {error}")),
+                            Err(error) => Self::failed(&failed_shot, error, &mut messages),
                         }
                     }
-                    Ok(Err(error)) => {
-                        messages.push(format!("Screenshot failed: screenshot readback: {error}"))
-                    }
+                    Ok(Err(error)) => Self::failed(
+                        &reading.shot,
+                        format_args!("screenshot readback: {error}"),
+                        &mut messages,
+                    ),
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        messages.push("Screenshot failed: the GPU dropped the readback".into())
+                        Self::failed(&reading.shot, "the GPU dropped the readback", &mut messages)
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty)
-                        if reading.since.elapsed() >= SCREENSHOT_READBACK_LIMIT =>
+                        if reading
+                            .since
+                            .is_some_and(|since| since.elapsed() >= SCREENSHOT_READBACK_LIMIT) =>
                     {
-                        messages.push("Screenshot failed: the GPU did not finish the copy".into())
+                        Self::failed(
+                            &reading.shot,
+                            "the copy finished but its readback never mapped",
+                            &mut messages,
+                        )
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(reading),
                 }
@@ -2200,7 +2241,7 @@ mod tests {
         ];
         for copies in frames {
             // The app reads back what it copied in the frame before.
-            app.submitted();
+            app.submitted(&gpu.queue);
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             for (by_app, shot) in copies {
                 let capture = capture_copy(&gpu.device, &mut encoder, &texture, format)?;
@@ -2208,7 +2249,7 @@ mod tests {
                 owner.copied(shot.clone(), capture);
             }
             gpu.queue.submit([encoder.finish()]);
-            window.submitted();
+            window.submitted(&gpu.queue);
             window.poll(&gpu.device);
             app.poll(&gpu.device);
         }

@@ -162,6 +162,10 @@ pub struct HostSetup {
     /// The game version players are told (the New Duplicator's
     /// `/DupVersion`); None leaves the session's own.
     pub game_version: Option<String>,
+    /// Where `/botreload` reads bot kinds again and the user's bot dial
+    /// overrides are kept (`/botset`, `/botsave`); applied as each session
+    /// starts. None: the shipped kinds only.
+    pub bot_tuning: Option<bri_sim::session::BotTuning>,
 }
 
 impl HostSetup {
@@ -187,6 +191,11 @@ impl HostSetup {
         session.set_avatar_catalog(content.avatar_catalog.clone())?;
         session.set_body_mount_points(BLOCKHEAD_MODEL, content.body_mounts.clone())?;
         session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
+        if let Some(tuning) = &self.bot_tuning {
+            for problem in session.set_bot_tuning(tuning.clone())? {
+                bri_console::warn(format!("Bot override left out: {problem}"));
+            }
+        }
         session.set_event_catalog(content.event_catalog.clone(), content.event_sounds.clone())?;
         session.set_spawn_points(map.spawn_points.clone())?;
         session.set_breakables(map.breakables)?;

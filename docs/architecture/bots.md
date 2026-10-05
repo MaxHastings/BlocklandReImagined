@@ -273,8 +273,9 @@ interrupt, impossible) and each candidate's score, adjusted score, drift,
 boredom and effectiveness.
 
 The gauntlet's `surprise_by_strength` reports variety (distinct choices in
-effect per bot-minute), goof share, longest goof and picks the terms
-changed, at strengths 0, 0.5 and 1.
+effect per bot-minute), goof share, longest goof and switches away from
+the plain pick at strengths 0, 0.5 and 1; the share report below holds
+them to bands.
 
 ## Timing and aim, per bot
 
@@ -332,7 +333,7 @@ that act on `onObjectEnter`, other than the one it is being delivered to
 (in a ball game, the goal that scores for the other side). If the line
 ahead of the ball along the delivery heading crosses one (grown by the
 ball's radius), the push turns off it by the smallest of 20, 40, 60 or 90
-degrees either way that misses; and within 10 units of one the approach
+degrees either way that misses; and within 5 units of one the approach
 circles the ball a unit wider, so walking round it does not knock it in.
 
 ## One bot's failure
@@ -342,6 +343,146 @@ bot's alone. It is told as an Add-On problem (`bot.step`, to the log and
 the host's admins, at most once a minute per bot), the bot stays, and the
 rest step and hear alerts as usual. Nothing a bot's step does is fatal to
 the session, so none is passed up.
+
+## Tuning
+
+The rule is *nothing dormant, nothing dominant*. Everything below reads
+the brain's own readout (`BotThought`, the chooser's decisions and
+candidates); none of it steers a bot. All of it lives in
+`crates/chaos/tests/` (`bot_gauntlet.rs`, `gauntlet/shares.rs`,
+`gauntlet/tuning.rs`) and its two data files, except the live dials.
+
+**Share report.** Every gauntlet scenario prints a `SHARES` table: the
+share of bot time each kind of activity got (a behaviour, `goof` while a
+flavour interrupt runs, `vehicle` while mounted) and, per other choice
+point, each option's share of that point's time (`aim:feet`,
+`route:left`). Each kind has a band in `tests/data/behaviour_bands.json`.
+A kind the chooser offered (scored above zero; or one its band's
+`offered_by` names) but that stays under `min` is DORMANT; one over `max`
+is DOMINANT; one never offered is `-`. Only an `enforced` edge (`floor`,
+`ceiling` or `both`) fails a test: today the floors of `fight` and
+`objective`. A scenario may change a band (`scenarios`, a trailing `*`
+matching a prefix). It runs with the gauntlet:
+`cargo test -p bri-chaos --test bot_gauntlet -- --nocapture`.
+
+**Off-switch check** (`off_switches`): each dial at 0, one at a time
+(a dial shipped at 0 is turned on to its `on` value instead, and marked
+OFF AT BASE), over every scenario, against the shipped values. It reports
+how far each moved objective success (captures, laps or kills), variety
+(entropy of the kind shares, in bits), goof share and goof waves (the
+standard deviation of the goof share over ten-second windows), stuck
+time, team kills, bands broken and frame cost per bot. A dial that moves
+none of them past `unchanged` in `tests/data/bot_tuning.json` is a CUT
+CANDIDATE. Output: `target/bot-tuning/ablation.{csv,txt}`.
+
+**Sweep** (`dial_sweep`): each point of a grid, `BRI_TUNING_SEEDS` seeds
+each (default 1), scored by `weights`: each band broken and each scenario
+that failed its own checks costs a lot, then the most variety and goof
+waves, then the least stuck time and frame cost. One dial at a time from
+the shipped values by default; `BRI_TUNING_GRID=full` tries every
+combination; `BRI_TUNING_POINTS="surprise.strength=0,0.3,0.6;behaviours.interact=1,2"`
+gives the grid. Output: `target/bot-tuning/sweep.csv` and the ranked
+`sweep_summary.txt`.
+
+Both tools find their dials by name in the shipped `bots.json`: every
+section's `strength`, plus the paths `bot_tuning.json` lists under
+`dials` that `bots.json` has (a lane that names its main dial
+`<part>.strength` is found by itself; another adds one line there).
+`BRI_TUNING_DIALS=a.b,c.d` replaces the list, `BRI_TUNING_SCENARIOS=ctf,race`
+picks scenarios by part of their names, `BRI_TUNING_JOBS` sets the
+worker threads. A seed other than 0 joins that many idle spectators and
+waits a few ticks before the scenario, so bots' ids and timing (their
+random streams) differ. Both are slow and opt-in (`#[ignore = "tuning
+tool: slow"]`, skipped by the push gate):
+
+    cargo test --release -p bri-chaos --test bot_gauntlet off_switches -- --ignored --nocapture
+    BRI_TUNING_SEEDS=2 cargo test --release -p bri-chaos --test bot_gauntlet dial_sweep -- --ignored --nocapture
+
+**Fair metric** (`fair_hit_rate`, in the gauntlet): one bot per weapon
+class against a scripted player who strafes in legs of 0.4 to 1.2 s and
+hops every 1.5 to 3 s, at each range in `bot_tuning.json` `fair`. It
+reports the bot's hit rate (health drops per trigger tick) in the first
+seconds of an engagement and in steady state, against a band: never near
+perfect, never hopeless. Reported, not enforced yet. `fair_by_dial`
+(opt-in) runs it with the alertness dial (the first of `fair.dials` that
+`bots.json` has: `perception.alertness` once that lane lands,
+`aim_error_degrees` today) at half, shipped and double, and says whether
+the rate moves the dial's way.
+
+**All-on run** (`all_dials_on`): every scenario with every dial at its ON
+value together (dials shipped at 0 take their `on` value), with the share
+report. Every scenario's own checks and every enforced band must hold;
+this is the configuration that gates merges. Ignored by default for its
+length; the push gate runs ignored tests.
+
+**Performance bar** (`bot_think_time_16`): 16 bots (`MAX_BOTS`) in an
+eight-a-side mixed-arsenal deathmatch with every dial on; it measures bot
+think time per tick (`Session::bot_think_nanos`, wall time in
+`step_bots`) and fails over `perf.debug_us` or `perf.release_us`.
+
+**Live dials.** An administrator types, in chat or the console:
+
+- `/botset surprise.strength`: shows the dial on every bot kind that has it.
+- `/botset surprise.strength 0.6`: sets it on every kind that has it
+  (`/botset sight 40 bot.blockhead` on one kind). Any number in a kind's
+  `bots.json` is a dial, by its path; the kind's own validation applies,
+  so an out-of-range value is refused and changes nothing. Bots take it up
+  at their next decision.
+- `/botsave`: writes the dials set so far to `bot-overrides.json` in the
+  user's data directory, beside `settings.json`
+  (`%LOCALAPPDATA%\BlocklandReImagined` on Windows), never the install
+  folder. Every game this computer hosts starts with them; one that no
+  longer fits (a kind or dial gone) is left out with a console warning.
+- `/botreload`: reads the Add-Ons' `bots.json` and the override file again
+  (unsaved `/botset`s are dropped), so an edited `bots.json` takes effect
+  without restarting.
+
+A player who is not an administrator is told so and nothing changes. A
+dedicated server reloads `bots.json` but keeps no overrides. Changing map
+starts the new session from the files, so unsaved `/botset`s end with it.
+
+**Why readout.** With the performance overlay open (F3), the bot the host
+player looks at shows a few lines under it (`BotThought::why`): what it
+is doing and the chooser's reason, the top three candidates with their
+scores, the biggest terms on them (drift, boredom, effectiveness, the
+hold in force) and what it last noticed. The host fills it four times a
+second only while the overlay asks (`ServerPerf::bots_wanted`, host-local,
+never sent to players), so it shows for games this computer hosts and not
+on another computer's server.
+
+## Coordination
+
+What teammates do is information that moves a bot's scores, never an
+order: it goes through the same chooser, with surprise and commitment, as
+everything else (`bots/team.rs`). Nothing names a game, item or vehicle.
+
+Each bot publishes its current choice as an *intent* beside the claims
+(`claims::Intent`, lapsing three ticks after it stops): where it goes or
+stands, its target, a vehicle whose free seats it controls while it waits for crew, the space its
+weapon will hit (`claims::Space`, from real reach, splash and aim error,
+the same test the hold-fire check uses) and, from a seat it does not drive,
+the line its mount needs. Allies' intents enter each option's score as
+**overlap** (an earlier ally on the same target, or doing the same option
+at the same spot, costs: the first keeps it, and a choice among places or
+targets prefers an uncrowded one; following an ally through a gap too narrow to pass it, at its
+pace rather than walking round it is the same rule) and **interaction**
+(a seat an ally offers, or a driving place from which a seated ally's
+mount sees its target, pays; a fight's stance in an ally's line of fire
+costs, so it steps out). Crew of one vehicle neither crowd nor endanger
+each other; a seat stays the claim's to arbitrate. Socially, an objective
+is worth more as the team trails; idle flavours grow likelier with the
+share of the players a bot sees goofing, less those it sees playing, a
+person counting `mood_human`, capped; and an option it saw work for a
+teammate (a hit) scores a little more for a while (`copy`, fading over
+the surprise `effectiveness_seconds`), with boredom as the brake. A choice
+the terms changed may be said in team chat, keyed by the term that moved
+it (`callouts`). `BotThought::team` shows what it read and each option's
+terms.
+
+The kind's `team` dials: `teamwork` (0-1, scales overlap and interaction
+together), `mood` and `mood_cap`, `mood_human`, `pressure` and `copy`;
+radii come from its sight, the rest are constants in code. Still
+unsupported: a goal to defend, passing.
 
 ## Data
 

@@ -1476,3 +1476,25 @@ fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leas
         );
     }
 }
+
+#[test]
+fn a_drivers_free_seats_are_read_from_the_vehicles_own_seat_data() {
+    // The carrier is invented content: its seats, their order and roles are
+    // only data. A bot at its controls publishes its free seats, and a bot
+    // weighing a seat on it scores that as using what an ally exposes.
+    let mut g = Game::new(CARRIER, 3, 1.0, false);
+    let mut used = false;
+    for _ in 0..120 * 15 {
+        g.steps(1);
+        used = g.s.bot_thoughts().iter().any(|t| {
+            t.team
+                .terms
+                .iter()
+                .any(|(option, _, uses, _)| *option == "interact" && *uses > 0.0)
+        });
+        if used {
+            break;
+        }
+    }
+    assert!(used, "no seat offer was read: {}", g.diagnostics());
+}
