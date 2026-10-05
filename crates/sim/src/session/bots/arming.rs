@@ -42,7 +42,8 @@ impl Arming {
 }
 
 /// The nearest item in sight that would give `bot` an attack, and where it
-/// lies.
+/// lies. Only one bot gets an item, so one an ally went for first is left
+/// to it while another is in sight (`team` overlap).
 fn nearest(session: &Session, bot: OwnerId, feet: Vec3, tick: u64) -> Option<(Source, Vec3)> {
     let peer = session.peers.get(&bot)?;
     let eye = peer.player.eye();
@@ -84,8 +85,12 @@ fn nearest(session: &Session, bot: OwnerId, feet: Vec3, tick: u64) -> Option<(So
             let urgency = super::SightUrgency::Ordinary;
             (session.bot_sees(bot, Some(subject), eye, *at, REACH, urgency)).is_some()
         })
-        .map(|(source, _, at)| (source, at))
-        .min_by(|a, b| feet.distance(a.1).total_cmp(&feet.distance(b.1)))
+        .map(|(source, _, at)| {
+            let taken = session.team_place_crowd(bot, Behaviour::Arm, at) > 0.0;
+            (source, at, (taken, feet.distance(at)))
+        })
+        .min_by(|a, b| a.2.0.cmp(&b.2.0).then(a.2.1.total_cmp(&b.2.1)))
+        .map(|(source, at, _)| (source, at))
 }
 
 /// Where `bot`, which has no attack, goes to arm itself, if anywhere. It

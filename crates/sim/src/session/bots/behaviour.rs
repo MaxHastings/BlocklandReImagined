@@ -53,6 +53,13 @@ pub(crate) struct Situation {
     pub interaction: f32,
     /// A grounded objective is available.
     pub objective: bool,
+    /// It carries what that objective delivers: it keeps going (shooting
+    /// back on the way) rather than stopping to fight or fly.
+    pub committed: bool,
+    /// It can shoot an enemy in sight on the way there (a ranged weapon,
+    /// an objective that needs only its feet): it goes on, shooting,
+    /// rather than standing to fight.
+    pub gunning: bool,
     /// It has no attack, and sees an item that would give it one.
     pub arm: bool,
     /// The enemy in sight within its chase radius: how far across, and how
@@ -72,8 +79,13 @@ pub(crate) struct Situation {
     pub strayed: bool,
     /// Its walk back home is done.
     pub home: bool,
+    /// A step of an objective the game still offers failed and is cooling
+    /// down: it does not walk all the way home meanwhile.
+    pub pursuing: bool,
 }
 
+/// An objective it can run and gun on the way to, against Fight's 0.8.
+const GUNNING: f32 = 0.65;
 /// Leeway in height before a fighting bot gives chase, beyond a step.
 const RISE_SLACK: f32 = 1.0;
 
@@ -122,23 +134,53 @@ impl Behaviour {
             Behaviour::Chase => fits(s.enemy.is_some(), 0.6),
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
-            Behaviour::Return => fits(s.strayed || (current == Behaviour::Return && !s.home), 0.3),
-            Behaviour::Objective => fits(s.objective, 0.65),
+            Behaviour::Return => fits(
+                !s.pursuing && (s.strayed || (current == Behaviour::Return && !s.home)),
+                0.3,
+            ),
+            Behaviour::Objective => fits(
+                s.objective,
+                if s.committed {
+                    0.92
+                } else if s.gunning {
+                    GUNNING
+                } else {
+                    0.65
+                },
+            ),
             Behaviour::Wander => 0.1,
         }
     }
 }
 
 /// The behaviour to follow now, after `current`, its scores scaled by
-/// `weight` (a kind's `behaviours`). Wander when nothing scores.
+/// `weight` (a kind's `behaviours`). Wander when nothing scores. The
+/// brain takes [`scores`] and [`best`] apart, so the surprise chooser can
+/// weigh the near ones.
+#[cfg(test)]
 pub(crate) fn choose(
     current: Behaviour,
     s: &Situation,
     weight: impl Fn(Behaviour) -> f32,
 ) -> Behaviour {
+    best(&scores(current, s, weight))
+}
+
+/// Every behaviour's weighted score, in [`Behaviour::ALL`] order: what
+/// [`choose`] (and the surprise chooser) picks from.
+pub(crate) fn scores(
+    current: Behaviour,
+    s: &Situation,
+    weight: impl Fn(Behaviour) -> f32,
+) -> [f32; 10] {
+    Behaviour::ALL.map(|b| b.score(current, s) * weight(b))
+}
+
+/// The highest of `scores`, the earlier on a tie; Wander when none scores.
+pub(crate) fn best(scores: &[f32; 10]) -> Behaviour {
     let mut best = (Behaviour::Wander, 0.0);
     for b in Behaviour::ALL {
-        let score = b.score(current, s) * weight(b);
+        let score = scores[b as usize];
         if score > best.1 {
             best = (b, score);
         }
@@ -324,6 +366,39 @@ mod tests {
         assert_eq!(pick(Chase, &sniper(41.0)), Chase);
     }
 
+    /// Carrying what its objective delivers, it keeps going past an enemy
+    /// in its band, or one up high; only a carry of its own comes first.
+    #[test]
+    fn a_carrier_delivers_rather_than_stopping_to_fight() {
+        let carrying = Situation {
+            objective: true,
+            committed: true,
+            fly: true,
+            ..enemy(3.0)
+        };
+        assert_eq!(pick(Fight, &carrying), Objective);
+        assert_eq!(
+            pick(
+                Objective,
+                &Situation {
+                    committed: false,
+                    ..carrying
+                }
+            ),
+            Fly
+        );
+        assert_eq!(
+            pick(
+                Objective,
+                &Situation {
+                    holding: true,
+                    ..carrying
+                }
+            ),
+            Carry
+        );
+    }
+
     /// Once walking home it walks all the way, not just back inside the
     /// edge.
     #[test]
@@ -332,6 +407,23 @@ mod tests {
         assert_eq!(pick(Return, &near), Return);
         assert_eq!(pick(Return, &Situation { home: true, ..near }), Wander);
         assert_eq!(pick(Wander, &near), Wander);
+    }
+
+    /// A bot whose objective step failed and is cooling down (it timed out)
+    /// does not walk home meanwhile.
+    #[test]
+    fn a_bot_after_an_objective_does_not_walk_home() {
+        let strayed = Situation {
+            strayed: true,
+            ..Default::default()
+        };
+        assert_eq!(pick(Wander, &strayed), Return);
+        let pursuing = Situation {
+            pursuing: true,
+            ..strayed
+        };
+        assert_eq!(pick(Wander, &pursuing), Wander);
+        assert_eq!(pick(Return, &pursuing), Wander);
     }
 
     /// A kind's weights turn a behaviour off or put it first.

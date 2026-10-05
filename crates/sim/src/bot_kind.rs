@@ -8,6 +8,12 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod surprise;
+mod team;
+pub mod tuning;
+pub use surprise::{BotSurprise, INTERRUPTS};
+pub use team::{BotTeam, TERMS};
+
 pub const SCHEMA_VERSION: u32 = 1;
 /// Bot kinds one server knows, over every Add-On.
 pub const MAX_KINDS: usize = 64;
@@ -95,6 +101,12 @@ pub struct BotKind {
     pub mounted: BotMounted,
     /// How it moves while it fights.
     pub fighting: BotFighting,
+    /// How its choices vary and change over time (`surprise`); its
+    /// `strength` 0 is the plain brain.
+    pub surprise: BotSurprise,
+    /// How teammates' intents, the mood about it and its team's score
+    /// weigh in its choices (`team`).
+    pub team: BotTeam,
     /// What it notices: brief glances and how long it takes to react
     /// (`session::bots::perception`).
     pub perception: BotPerception,
@@ -161,6 +173,14 @@ pub struct BotFighting {
     /// an ally at once. A melee fighter does not strafe: it closes to its
     /// band.
     pub strafe_seconds: f32,
+    /// It takes off for an enemy at least this many world units above it
+    /// that no walk reaches; once flying it keeps on until it is by them,
+    /// or no lower than this below them...
+    pub fly_rise: f32,
+    pub fly_drop: f32,
+    /// ...unless this many seconds pass without getting a unit closer:
+    /// then it lands and does not take off again for as long.
+    pub fly_give_up_seconds: f32,
 }
 impl Default for BotFighting {
     fn default() -> Self {
@@ -169,6 +189,9 @@ impl Default for BotFighting {
             min_band_slack: 1.5,
             dwell_seconds: 0.5,
             strafe_seconds: 3.5,
+            fly_rise: 2.5,
+            fly_drop: 3.0,
+            fly_give_up_seconds: 4.0,
         }
     }
 }
@@ -333,6 +356,8 @@ impl Default for BotKind {
             mounted: BotMounted::default(),
             fighting: BotFighting::default(),
             perception: BotPerception::default(),
+            surprise: BotSurprise::default(),
+            team: BotTeam::default(),
         }
     }
 }
@@ -538,6 +563,12 @@ impl BotKind {
                 self.id
             );
         }
+        self.surprise
+            .validate()
+            .with_context(|| format!("Bot `{}`", self.id))?;
+        self.team
+            .validate()
+            .with_context(|| format!("Bot `{}`", self.id))?;
         Ok(())
     }
 }
@@ -550,8 +581,10 @@ pub struct BotPack {
     pub bots: Vec<BotKind>,
 }
 impl BotPack {
+    /// Reads a `bots.json`. A `//` outside a string starts a comment that
+    /// runs to the end of its line, so tunables can say what they do.
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
-        let pack: Self = serde_json::from_slice(bytes).context("bots.json")?;
+        let pack: Self = serde_json::from_slice(&strip_comments(bytes)).context("bots.json")?;
         ensure!(
             pack.schema_version == SCHEMA_VERSION,
             "bots.json schema_version must be {SCHEMA_VERSION}"
@@ -578,9 +611,64 @@ impl BotPack {
     }
 }
 
+/// `bytes` with every `//` comment outside a JSON string blanked out
+/// (spaces keep error positions where they were).
+fn strip_comments(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let (mut string, mut escaped, mut comment) = (false, false, false);
+    for i in 0..out.len() {
+        let c = out[i];
+        if comment {
+            if c == b'\n' {
+                comment = false;
+            } else {
+                out[i] = b' ';
+            }
+        } else if string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                string = false;
+            }
+        } else if c == b'"' {
+            string = true;
+        } else if c == b'/' && out.get(i + 1) == Some(&b'/') {
+            comment = true;
+            out[i] = b' ';
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Comments explain tunables; a `//` inside a string is text.
+    #[test]
+    fn comments_are_skipped_but_not_inside_strings() {
+        let pack = BotPack::from_json(
+            br#"{"schema_version":1, // the format
+            "bots":[{"id":"bot.a","name":"A // B", // its name
+            "surprise":{"strength":0.5}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(pack.bots[0].name, "A // B");
+        assert_eq!(pack.bots[0].surprise.strength, 0.5);
+        assert_eq!(BotKind::default().surprise.strength, 0.0);
+        for bad in [
+            r#""surprise":{"strength":2}"#,
+            r#""surprise":{"band":-0.1}"#,
+            r#""surprise":{"interrupts":{"teleport":1}}"#,
+            r#""surprise":{"loud":1}"#,
+            r#""team":{"teamwork":1.5}"#,
+            r#""team":{"callouts":{"shout":"Hi"}}"#,
+        ] {
+            let json = format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{bad}}}]}}"#);
+            assert!(BotPack::from_json(json.as_bytes()).is_err(), "{bad}");
+        }
+    }
     #[test]
     fn packs_validate_and_later_ids_replace_earlier_ones() {
         let a = BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"bot.a","name":"A"}]}"#)

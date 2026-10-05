@@ -44,7 +44,20 @@ bot does through the same code.
    in its package. Nothing scoring: it wanders.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
-   past its band, and a walk home goes all the way.
+   past its band, and a walk home goes all the way, except while a failed
+   objective step cools down before it is tried again: then it does not
+   walk home at all.
+
+   Fly is entered only for an enemy at least `fighting.fly_rise` above that
+   no walk reaches; once flying it keeps on until it is by them or more
+   than `fly_drop` below. A flight that gets no closer for
+   `fly_give_up_seconds` lands, and it does not take off again for as long.
+
+   An objective outranks a fight while the bot carries what the objective
+   delivers (`View::committed`, read from the step: a package carriage it
+   holds, or a held body). On the way to a delivery that needs only its
+   feet it shoots an enemy ahead or to the side as it goes (run and gun);
+   an enemy behind is left, as walking backwards is slow.
 
    An on-foot bot's leash is its brick and `chase_radius`. A driver's leash
    follows the kind's `mounted` policy instead: with `anchor: "mount"` it is
@@ -223,7 +236,15 @@ positions. Source, object incarnation, tool, permission and game/round/team
 changes invalidate assumptions. Explain exposes desired state, selected
 action/provider, phase, proposed route and bounded failure diagnostics.
 An interrupted approach excludes time spent in another behavior, while an event
-that was already scheduled keeps its absolute due time. Failed search reuse
+that was already scheduled keeps its absolute due time. A step's 30 s approach
+deadline moves on each time the bot gets half a unit closer to the step's
+point, so only a stalled approach times out, however long the route.
+Between steps the bot keeps the finished step's view (standing where it
+finished, no trigger) for up to a second until the next is planned, rather
+than blinking to Wander. A completed objective looks for the next one 12
+ticks later (once the completing event's effects have landed), and a
+desired state that cannot be planned hands the bot's next planning turn to
+another offered one at once instead of after a retry's wait. Failed search reuse
 revalidates the authoritative model, game, round and team before accepting it.
 See [the current pipeline and verification limits](../audits/npc-pipeline-current.md),
 [the frozen acceptance contract](../audits/objective-driven-integration.md) and
@@ -236,6 +257,234 @@ mechanics retain their narrower existing executors. At the final attack boundary
 canonical spawn protection withholds ammunition-spending attacks and charge
 release, retaining aim and proven non-firing holds. It does not make prediction
 of a moving target infallible or change damage permissions.
+
+## Surprise
+
+Bots that always do the single best thing are predictable. Surprise is
+variation among a bot's choices that changes over time, built from plain
+mechanisms over the choices the brain already scores: no personality,
+emotion or mood, and no item, vehicle or game names
+(`crates/sim/src/session/bots/surprise.rs`).
+
+**One chooser.** Each choice point asks the same chooser (`Mind::pick`)
+once a tick, with the options the brain scored and its own plain pick:
+
+| Choice point | Options and scores | Plain pick |
+|---|---|---|
+| Behaviour | Interact, Fight, Chase, Search, Objective, Wander, by their weighted scores (`behaviour::scores`) | the highest (`behaviour::best`) |
+| Weapon | each inventory slot the hand-combat planner found usable now, by `tactics::suitability` | `tactics::select`, on the bot's planning turn |
+| Aim | the body; with a splash weapon (real `splash_radius` and `splash_damage`) also its feet, and a brick, vehicle or terrain face beside it within 0.7 of the radius, each scored by splash alone | the body |
+| Route | for a chase: straight at the enemy, or `flank_distance` to either side where there is floor | straight |
+
+Carrying a catch, arming, flying and walking home are never traded away.
+An option's score counts with its *effectiveness* (1 working, lower after
+failures): options whose adjusted score is within `band` of the best are
+eligible, so an option that keeps failing drops out of the band and
+another takes over. Each eligible option weighs (adjusted / best)^4,
+times e^drift, divided by 1 + boredom; one is drawn from the bot's own
+seeded random stream, so a seed always plays the same.
+
+- *Drift*: every option a bot has met carries a slow random walk
+  (Ornstein-Uhlenbeck, a step a second, reverting over `drift_seconds`,
+  bounded by `drift`), so each bot's preferences wander apart over time.
+- *Boredom*: an option in use gains `boredom` a second; it halves every
+  `boredom_seconds` once out of use.
+- *Effectiveness*: a shot is judged after its flight plus 0.6 s (the
+  target lost health or died, or not) for the weapon, aim and behaviour
+  that fired it; getting stuck fails the behaviour and chase route. A
+  failure takes `failure` of it away, a success restores `success` of the
+  gap, and it recovers on its own over `effectiveness_seconds`. A spear
+  that keeps missing gives way to the sword; torso shots that keep being
+  dodged give way to the feet or a wall beside the target.
+
+**Guards.** A pick is held at least `commit_seconds` (up to half again),
+unless it falls out of the band (the situation changed). Nothing varies
+while the bot carries an objective (a body its tool holds, a mount to
+deliver, a loose body it pushes, or a picked-up item on its way to a
+destination) or is urgent (under `urgent_health`, or hurt by an enemy
+within `urgent_range` in the last `urgent_seconds`): the plain pick, every
+time. Only options the brain scored above zero are options: what cannot
+work now is never picked. A switch of behaviour or weapon that the
+variation causes is preceded by a tell: the old one is held and the bot
+stands still with its fire held for `tell_seconds`, then switches.
+
+**Splash aims** are solved and checked like any shot: an intercept for
+the aimed point, the blast clear of itself and allies (`safe_blast`), the
+path clear. A surface aim counts its path clear when it reaches that
+surface, and at the firing gate its impact must lie within the splash
+radius of the body rather than inside it.
+
+**Flavour interrupts.** At a natural pause (wandering, no enemy seen or
+remembered, no threat, no objective, on its own feet, not carrying), now
+and then (`interrupts_per_minute`, then `interrupt_cooldown_seconds` of
+rest) a bot does something idle for `interrupt_seconds` (up to half
+again), each an ordinary player action through the player's own path:
+look at a player in sight, strike an emote (`Command::Emote`: love, hate,
+confusion, alarm), hop, run a small circle, walk a short detour, look
+round, crouch, paint the floor toward a player with the spray can
+(`Command::UseSprayCan`, then the trigger, only once the can is in hand),
+take out another tool and put it back, drop the weapon in hand
+(`Command::DropTool`, only with a second attack in inventory), or flick
+the light (`Command::ToggleLight`). Each weighs by `interrupts`; an
+interrupt ends at once if an enemy, a threat or an objective turns up.
+
+**Strength.** `strength` (0 to 1) scales the band, the drift, boredom,
+effectiveness failures and the interrupt rate. At 0, the default, every
+choice is the plain pick and no random number is drawn: the brain plays
+exactly as without surprise (the gauntlet's mixed-arsenal numbers are
+identical). The mind still records plain decisions for the readout.
+
+**Why.** `BotThought::surprise` (`BotSurpriseView`) gives the strength,
+the guard in force, a tell or interrupt under way, every drive (drift,
+boredom, effectiveness) and the last decision at each choice point: the
+plain and chosen options, the reason (off, carrying, urgent, plain,
+committed, picked, telling, switched) and each candidate's score, adjusted
+score, eligibility, drift, boredom, effectiveness and weight.
+
+The gauntlet's `surprise_by_strength` reports variety (distinct choices in
+effect per bot-minute), goof share, longest goof and switches away from
+the plain pick at strengths 0, 0.5 and 1; the share report below holds
+them to bands.
+
+## Tuning
+
+The rule is *nothing dormant, nothing dominant*. Everything below reads
+the brain's own readout (`BotThought`, the chooser's decisions and
+candidates); none of it steers a bot. All of it lives in
+`crates/chaos/tests/` (`bot_gauntlet.rs`, `gauntlet/shares.rs`,
+`gauntlet/tuning.rs`) and its two data files, except the live dials.
+
+**Share report.** Every gauntlet scenario prints a `SHARES` table: the
+share of bot time each kind of activity got (a behaviour, `goof` while a
+flavour interrupt runs, `vehicle` while mounted) and, per other choice
+point, each option's share of that point's time (`aim:feet`,
+`route:left`). Each kind has a band in `tests/data/behaviour_bands.json`.
+A kind the chooser offered (scored above zero; or one its band's
+`offered_by` names) but that stays under `min` is DORMANT; one over `max`
+is DOMINANT; one never offered is `-`. Only an `enforced` edge (`floor`,
+`ceiling` or `both`) fails a test: today the floors of `fight` and
+`objective`. A scenario may change a band (`scenarios`, a trailing `*`
+matching a prefix). It runs with the gauntlet:
+`cargo test -p bri-chaos --test bot_gauntlet -- --nocapture`.
+
+**Off-switch check** (`off_switches`): each dial at 0, one at a time
+(a dial shipped at 0 is turned on to its `on` value instead, and marked
+OFF AT BASE), over every scenario, against the shipped values. It reports
+how far each moved objective success (captures, laps or kills), variety
+(entropy of the kind shares, in bits), goof share and goof waves (the
+standard deviation of the goof share over ten-second windows), stuck
+time, team kills, bands broken and frame cost per bot. A dial that moves
+none of them past `unchanged` in `tests/data/bot_tuning.json` is a CUT
+CANDIDATE. Output: `target/bot-tuning/ablation.{csv,txt}`.
+
+**Sweep** (`dial_sweep`): each point of a grid, `BRI_TUNING_SEEDS` seeds
+each (default 1), scored by `weights`: each band broken and each scenario
+that failed its own checks costs a lot, then the most variety and goof
+waves, then the least stuck time and frame cost. One dial at a time from
+the shipped values by default; `BRI_TUNING_GRID=full` tries every
+combination; `BRI_TUNING_POINTS="surprise.strength=0,0.3,0.6;behaviours.interact=1,2"`
+gives the grid. Output: `target/bot-tuning/sweep.csv` and the ranked
+`sweep_summary.txt`.
+
+Both tools find their dials by name in the shipped `bots.json`: every
+section's `strength`, plus the paths `bot_tuning.json` lists under
+`dials` that `bots.json` has (a lane that names its main dial
+`<part>.strength` is found by itself; another adds one line there).
+`BRI_TUNING_DIALS=a.b,c.d` replaces the list, `BRI_TUNING_SCENARIOS=ctf,race`
+picks scenarios by part of their names, `BRI_TUNING_JOBS` sets the
+worker threads. A seed other than 0 joins that many idle spectators and
+waits a few ticks before the scenario, so bots' ids and timing (their
+random streams) differ. Both are slow and opt-in (`#[ignore = "tuning
+tool: slow"]`, skipped by the push gate):
+
+    cargo test --release -p bri-chaos --test bot_gauntlet off_switches -- --ignored --nocapture
+    BRI_TUNING_SEEDS=2 cargo test --release -p bri-chaos --test bot_gauntlet dial_sweep -- --ignored --nocapture
+
+**Fair metric** (`fair_hit_rate`, in the gauntlet): one bot per weapon
+class against a scripted player who strafes in legs of 0.4 to 1.2 s and
+hops every 1.5 to 3 s, at each range in `bot_tuning.json` `fair`. It
+reports the bot's hit rate (health drops per trigger tick) in the first
+seconds of an engagement and in steady state, against a band: never near
+perfect, never hopeless. Reported, not enforced yet. `fair_by_dial`
+(opt-in) runs it with the alertness dial (the first of `fair.dials` that
+`bots.json` has: `perception.alertness` once that lane lands,
+`aim_error_degrees` today) at half, shipped and double, and says whether
+the rate moves the dial's way.
+
+**All-on run** (`all_dials_on`): every scenario with every dial at its ON
+value together (dials shipped at 0 take their `on` value), with the share
+report. Every scenario's own checks and every enforced band must hold;
+this is the configuration that gates merges. Ignored by default for its
+length; the push gate runs ignored tests.
+
+**Performance bar** (`bot_think_time_16`): 16 bots (`MAX_BOTS`) in an
+eight-a-side mixed-arsenal deathmatch with every dial on; it measures bot
+think time per tick (`Session::bot_think_nanos`, wall time in
+`step_bots`) and fails over `perf.debug_us` or `perf.release_us`.
+
+**Live dials.** An administrator types, in chat or the console:
+
+- `/botset surprise.strength`: shows the dial on every bot kind that has it.
+- `/botset surprise.strength 0.6`: sets it on every kind that has it
+  (`/botset sight 40 bot.blockhead` on one kind). Any number in a kind's
+  `bots.json` is a dial, by its path; the kind's own validation applies,
+  so an out-of-range value is refused and changes nothing. Bots take it up
+  at their next decision.
+- `/botsave`: writes the dials set so far to `bot-overrides.json` in the
+  user's data directory, beside `settings.json`
+  (`%LOCALAPPDATA%\BlocklandReImagined` on Windows), never the install
+  folder. Every game this computer hosts starts with them; one that no
+  longer fits (a kind or dial gone) is left out with a console warning.
+- `/botreload`: reads the Add-Ons' `bots.json` and the override file again
+  (unsaved `/botset`s are dropped), so an edited `bots.json` takes effect
+  without restarting.
+
+A player who is not an administrator is told so and nothing changes. A
+dedicated server reloads `bots.json` but keeps no overrides. Changing map
+starts the new session from the files, so unsaved `/botset`s end with it.
+
+**Why readout.** With the performance overlay open (F3), the bot the host
+player looks at shows a few lines under it (`BotThought::why`): what it
+is doing and the chooser's reason, the top three candidates with their
+scores, the biggest terms on them (drift, boredom, effectiveness, the
+hold in force) and what it last noticed. The host fills it four times a
+second only while the overlay asks (`ServerPerf::bots_wanted`, host-local,
+never sent to players), so it shows for games this computer hosts and not
+on another computer's server.
+
+## Coordination
+
+What teammates do is information that moves a bot's scores, never an
+order: it goes through the same chooser, with surprise and commitment, as
+everything else (`bots/team.rs`). Nothing names a game, item or vehicle.
+
+Each bot publishes its current choice as an *intent* beside the claims
+(`claims::Intent`, lapsing three ticks after it stops): where it goes or
+stands, its target, a vehicle whose free seats it controls while it waits for crew, the space its
+weapon will hit (`claims::Space`, from real reach, splash and aim error,
+the same test the hold-fire check uses) and, from a seat it does not drive,
+the line its mount needs. Allies' intents enter each option's score as
+**overlap** (an earlier ally on the same target, or doing the same option
+at the same spot, costs: the first keeps it, and a choice among places or
+targets prefers an uncrowded one; following an ally through a gap too narrow to pass it, at its
+pace rather than walking round it is the same rule) and **interaction**
+(a seat an ally offers, or a driving place from which a seated ally's
+mount sees its target, pays; a fight's stance in an ally's line of fire
+costs, so it steps out). Crew of one vehicle neither crowd nor endanger
+each other; a seat stays the claim's to arbitrate. Socially, an objective
+is worth more as the team trails; idle flavours grow likelier with the
+share of the players a bot sees goofing, less those it sees playing, a
+person counting `mood_human`, capped; and an option it saw work for a
+teammate (a hit) scores a little more for a while (`copy`, fading over
+the surprise `effectiveness_seconds`), with boredom as the brake. A choice
+the terms changed may be said in team chat, keyed by the term that moved
+it (`callouts`). `BotThought::team` shows what it read and each option's
+terms.
+
+The kind's `team` dials: `teamwork` (0-1, scales overlap and interaction
+together), `mood` and `mood_cap`, `mood_human`, `pressure` and `copy`;
+radii come from its sight, the rest are constants in code. Still
+unsupported: a goal to defend, passing.
 
 ## Data
 
@@ -251,6 +500,13 @@ of a moving target infallible or change damage permissions.
     `cover_distance` of 0 stands down as before, and a `clear_degrees` of
     0 meets a drive head on.
   - `perception`: glances, reaction delays and turning (Noticing, above).
+  - `surprise`: every tunable of the chooser and the interrupts (above),
+    each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
+    comments outside strings.
+  - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
+    `strafe_seconds`, `fly_rise`, `fly_drop`, `fly_give_up_seconds`): the
+    leeway around its band, how long a choice is held, strafe legs, and
+    when it takes off and gives up a flight (above).
   - `mounted` (`anchor`, `chase_radius`, `reverse_degrees`,
     `reverse_distance`): its pursuit policy while it drives (above). It is
     the same for every vehicle; nothing checks a vehicle's name.

@@ -253,6 +253,11 @@ impl Action {
             *rearming = false;
         }
     }
+    /// Delivering what it picked up (a visit with the carriage on).
+    pub(super) fn carrying(&self, session: &Session, bot: OwnerId) -> bool {
+        matches!(self, Self::Visit { stamp, .. }
+            if stamp.carried(session, bot) == Some(Carried::ThisSource))
+    }
     pub(super) fn view(&self, session: &Session, bot: OwnerId) -> Option<objectives::View> {
         if !self.validate(session, bot) {
             return None;

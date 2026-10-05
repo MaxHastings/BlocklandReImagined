@@ -145,7 +145,7 @@ impl Battle {
     ) -> Report {
         let mut scorer = Scorer::new(self.name, floor);
         for _ in 0..seconds * TICKS_PER_SECOND * rounds() {
-            self.arena.step(1);
+            timed_step(&mut self.arena, &mut scorer.report);
             let s = &self.arena.s;
             let vitals = s.vitals();
             let sides = &self.sides;
@@ -156,7 +156,7 @@ impl Battle {
             });
             each(s, &mut scorer.report);
         }
-        scorer.report.print();
+        finish(&scorer.report);
         scorer.report
     }
 }
@@ -409,8 +409,14 @@ fn a_jeep_on_each_side() {
     });
     // Measured: on foot stuck 59% (stood on a jeep roof with no route),
     // 78% of bot time driving, 1 kill in 60 s (drivers circle each other):
-    // TARGET kills > 10, stuck < 5%.
-    within(&r, 0.65, 0.01, 0.02, 14.0);
+    // TARGET kills > 10, stuck < 5%. Walking straight off a vehicle's
+    // roof toward the enemy, and a driver rocking against what blocks it
+    // giving up its seat: stuck 3.4-3.9%, 10 kills a minute, 25-28 changes
+    // a bot-minute (boarding and getting off), idle 0-9.1% (over three
+    // rounds a bot that lost sight of every enemy wanders: nothing seeks
+    // an enemy it has never seen). Drivers ramming and orbiting one
+    // another is open work (finding 7).
+    within(&r, 0.08, 0.12, 0.03, 32.0);
     assert!(
         r.progress["mounted_ticks"] >= 10_000 * rounds() as i64,
         "the jeeps were used: {:?}",
@@ -461,7 +467,8 @@ fn weapons_lying_on_the_ground() {
     // 41), most of the circling a ranged strafe's legs back and forth.
     within(&r, 0.01, 0.01, 0.10, 50.0);
     assert!(
-        r.progress["armed_bots"] == 4 * rounds() as i64,
+        // The bots that ever armed: the same four however long it runs.
+        r.progress["armed_bots"] == 4,
         "every bot armed itself: {:?}",
         r.progress
     );
@@ -508,8 +515,10 @@ fn zombie_survival() {
     );
     // Measured at the merge: circling 22% (melee circles its target), 33
     // changes a bot-minute (chase/fly flip-flop), 47 kills. Now melee
-    // closes: circling 5%, 25 changes, 48 kills.
-    within(&r, 0.01, 0.01, 0.08, 32.0);
+    // closes: circling 5%, 25 changes, 48 kills. Taking off only for an
+    // enemy well above and giving up a flight that gets no closer: 7
+    // changes.
+    within(&r, 0.01, 0.01, 0.08, 12.0);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }
 
@@ -521,17 +530,21 @@ fn capture_the_flag() {
         line(-36.0, 0.0, 50.0, 2),
         &[GUN],
     );
-    let r = flags(spec, 90);
+    let r = flags(spec, NEAR_POSTS, 90);
     // Measured at the merge: stuck 34.5% (opposing runners deadlock
     // head-on), circling 1%, 39 changes a bot-minute, 34 kills, 1656 ticks
     // carrying, and no capture in 90 s. Now, with fights held through a
     // jump: stuck 0.4-20%, 43-53 kills. The changes a bot-minute rose with
     // the fighting, to 44-60 (each fight is an objective/fight change and
-    // back). TARGET captures > 0.
-    within(&r, 0.25, 0.01, 0.03, 65.0);
+    // back). With a carrier that delivers rather than stopping to fight
+    // (shooting ahead on the way) and no blink between steps: 6 captures
+    // in 90 s (19 in three rounds), stuck 0.1%, 23 changes, circling 5.6%
+    // (each pickup's turn back).
+    within(&r, 0.05, 0.01, 0.07, 30.0);
+    let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(
-        r.progress["carry_ticks"] >= 1000 * rounds() as i64,
-        "flags were taken: {:?}",
+        caps >= 3 * rounds() as i64,
+        "flags were run home: {:?}",
         r.progress
     );
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
@@ -554,13 +567,17 @@ fn runners_cross_head_on() {
             k.behaviours.insert(b.into(), 0.0);
         }
     })];
-    let r = flags(spec, 60);
+    let r = flags(spec, NEAR_POSTS, 60);
     // Measured while bots sidestepped only allies: stuck 7.7% (the two
     // runners push into each other head-on, hopping, until one slides by).
     // Passing any body: stuck 0.2%, circling 6.6% (out and back), 15
-    // changes a bot-minute. Idle 11.7% is the objective blinking off for a
-    // few seconds after each capture. TARGET idle < 1%.
-    within(&r, 0.02, 0.12, 0.08, 18.0);
+    // changes a bot-minute. Idle 11.7% was the objective blinking off for a
+    // few seconds after each capture (a retry's wait, then the round win
+    // tried first and found unplannable, then another wait). Looking for
+    // the next objective once the capture's effects land, and trying the
+    // next offered objective at once: idle 0.7%, 8 captures rather than 6,
+    // so circling (each pickup's turn back) 9.5-10.7%.
+    within(&r, 0.02, 0.01, 0.12, 18.0);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(
         caps >= 2 * rounds() as i64,
@@ -569,23 +586,68 @@ fn runners_cross_head_on() {
     );
 }
 
+/// Where each side's flag and base stand: red flag, red base, blue flag,
+/// blue base.
+type Posts = [Vec3; 4];
+/// Each flag beside the other side's spawns, each base behind its own.
+const NEAR_POSTS: Posts = [
+    Vec3::new(-79.75, 0.1, 50.25),
+    Vec3::new(-79.75, 0.1, 44.25),
+    Vec3::new(-32.25, 0.1, 50.25),
+    Vec3::new(-32.25, 0.1, 56.25),
+];
+
+/// A run longer than a fixed approach timeout (30 s): runners spawn by
+/// their base in one corner of the floor, and the flag they take stands in
+/// the opposite corner, about 245 units off, 35 s at a run.
+#[test]
+fn a_run_longer_than_the_approach_timeout() {
+    const RUNNER: &str = "gauntlet:bot/runner";
+    let mut spec = Spec::new(
+        "a_run_longer_than_the_approach_timeout",
+        vec![Vec3::new(-88.0, 0.0, -84.0)],
+        vec![Vec3::new(88.0, 0.0, 84.0)],
+        &[],
+    );
+    spec.kinds = [RUNNER, RUNNER];
+    spec.extra_kinds = vec![kind(RUNNER, |k| {
+        for b in ["fight", "chase", "search", "arm", "fly", "return"] {
+            k.behaviours.insert(b.into(), 0.0);
+        }
+    })];
+    // Each side's flag and base by its own spawn: a runner crosses the
+    // floor for the other side's flag and back.
+    let posts = [
+        Vec3::new(-91.75, 0.1, -80.25),
+        Vec3::new(-91.75, 0.1, -88.25),
+        Vec3::new(91.75, 0.1, 80.25),
+        Vec3::new(91.75, 0.1, 88.25),
+    ];
+    let r = flags(spec, posts, 120);
+    // With a fixed 30 s approach timeout no runner ever reached the far
+    // flag: each walk was given up 30 s in, then idle 50% while the failed
+    // step cooled down, and no flag taken. Now the deadline moves on while
+    // the runner gets closer: idle 0.1%, a capture each in 120 s.
+    within(&r, 0.02, 0.01, 0.05, 6.0);
+    let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
+    assert!(
+        caps >= 2 * rounds() as i64,
+        "both ran the far flag home: {:?}",
+        r.progress
+    );
+}
+
 /// Capture the flag in `spec`'s layout and arsenal, for `seconds`: each
-/// side takes the other's flag from beside its spawns back to its base.
-fn flags(mut spec: Spec, seconds: usize) -> Report {
+/// side takes the other's flag from `posts` back to its base.
+fn flags(mut spec: Spec, posts: Posts, seconds: usize) -> Report {
     const FLAG: &str = "gauntlet-ctf:brick/flag";
     const BASE: &str = "gauntlet-ctf:brick/base";
     const FLAG_ITEM: &str = "gauntlet-ctf:weapon/flag";
     const FLAG_IMAGE: &str = "gauntlet-ctf:image/flag";
     spec.brick_defs = vec![(FLAG, fixture::PLATE), (BASE, fixture::PLATE)];
     spec.item_defs = vec![(FLAG_ITEM, FLAG_IMAGE)];
-    spec.bricks = vec![
-        brick(FLAG, Vec3::new(-79.75, 0.1, 50.25)),
-        brick(BASE, Vec3::new(-79.75, 0.1, 44.25)),
-    ];
-    spec.blue_bricks = vec![
-        brick(FLAG, Vec3::new(-32.25, 0.1, 50.25)),
-        brick(BASE, Vec3::new(-32.25, 0.1, 56.25)),
-    ];
+    spec.bricks = vec![brick(FLAG, posts[0]), brick(BASE, posts[1])];
+    spec.blue_bricks = vec![brick(FLAG, posts[2]), brick(BASE, posts[3])];
     let script = r#"
 fn flag() { "gauntlet-ctf:weapon/flag" }
 fn image() { "gauntlet-ctf:image/flag" }
@@ -735,7 +797,7 @@ fn checkpoint_race() {
     let mut scorer = Scorer::new("checkpoint_race", 0.0);
     let mut won_at = None;
     for tick in 0..90 * TICKS_PER_SECOND * rounds() {
-        arena.step(1);
+        timed_step(&mut arena, &mut scorer.report);
         // Racing is the work: any strolling is idling.
         scorer.sample(&arena.s, &sides, |_| true);
         if won_at.is_none() && arena.s.round_results().next().is_some() {
@@ -758,14 +820,659 @@ fn checkpoint_race() {
         "racers_with_a_lap".into(),
         laps.iter().filter(|l| **l > 0).count() as i64,
     );
-    scorer.report.print();
+    finish(&scorer.report);
     let r = scorer.report;
 
     // Measured: stuck 0.5%, idle 0.2%, circling 14% (out-and-back track),
     // 54 behaviour changes a bot-minute (objective blinks off for a tick at
-    // each checkpoint), won after 15 s with 9 laps run.
-    within(&r, 0.01, 0.01, 0.17, 62.0);
+    // each checkpoint), won after 15 s with 9 laps run. Holding a finished
+    // step's view until the next is planned: no changes at all.
+    within(&r, 0.01, 0.01, 0.17, 4.0);
     let won = r.progress["won_after_seconds"];
     assert!((0..=20).contains(&won), "the race was won in time: {won}");
     assert!(r.progress["laps_total"] >= 9, "laps run: {:?}", r.progress);
+}
+
+/// Bot surprise, measured but not yet held to bands
+/// (`docs/architecture/bots.md`, "Surprise"): variety (distinct choices in
+/// effect a bot-minute), goof share and the longest goof, at strengths 0,
+/// 0.5 and 1, in a mixed-arsenal fight and at an idle pause. Strength 0 is
+/// the plain brain: no goofing and no pick away from the plain one.
+#[test]
+fn surprise_by_strength() {
+    use bri_weapons::testing::*;
+    const RUNS: [(&str, &str, &str, f32); 3] = [
+        (
+            "gauntlet:bot/surprise0",
+            "surprise_fight_0",
+            "surprise_idle_0",
+            0.0,
+        ),
+        (
+            "gauntlet:bot/surprise5",
+            "surprise_fight_0.5",
+            "surprise_idle_0.5",
+            0.5,
+        ),
+        (
+            "gauntlet:bot/surprise10",
+            "surprise_fight_1",
+            "surprise_idle_1",
+            1.0,
+        ),
+    ];
+    for (id, fight, idle, strength) in RUNS {
+        let surprising = || kind(id, |k| k.surprise.strength = strength);
+        let mut spec = Spec::new(
+            fight,
+            line(-73.0, 0.0, 50.0, 3),
+            line(-37.0, 0.0, 50.0, 3),
+            &[ROCKET_ITEM, SHOTGUN_ITEM, BOW_ITEM, BOUNCER_ITEM, GUN],
+        );
+        spec.kinds = [id, id];
+        spec.extra_kinds = vec![surprising()];
+        let r = battle(spec, |_| {}).play(0.0, 60, |_, _| {});
+        assert!(r.kills > 0, "{fight}: a real fight");
+        // Three bots of one side and nobody to fight: a long pause.
+        let mut spec = Spec::new(
+            idle,
+            line(-73.0, 0.0, 50.0, 3),
+            Vec::new(),
+            &[ROCKET_ITEM, GUN],
+        );
+        spec.kinds = [id, id];
+        spec.extra_kinds = vec![surprising()];
+        // The other builder has only a plate far off.
+        spec.blue_bricks = floor(Vec3::new(60.0, 0.0, 60.0), [1, 1], 1.0);
+        let quiet = battle(spec, |_| {}).play(0.0, 60, |_, _| {});
+        if strength == 0.0 {
+            assert_eq!(r.goof + quiet.goof, 0, "the plain brain does not goof");
+            assert_eq!(r.surprised + quiet.surprised, 0, "nor varies its picks");
+        } else {
+            assert!(
+                quiet.goof > 0,
+                "{idle}: idle bots do something now and then"
+            );
+        }
+    }
+}
+
+/// The scenarios the tuning tools replay (`gauntlet::tuning`): every one
+/// above that plays the shipped kinds (`surprise_by_strength` sets its own
+/// strengths).
+const SCENARIOS: &[gauntlet::tuning::Scenario] = &[
+    ("deathmatch_open_field", deathmatch_open_field),
+    ("deathmatch_mixed_arsenal", deathmatch_mixed_arsenal),
+    ("rooftop_brawl_without_rails", rooftop_brawl_without_rails),
+    ("stairs_to_a_deck", stairs_to_a_deck),
+    ("water_between_the_sides", water_between_the_sides),
+    ("a_jeep_on_each_side", a_jeep_on_each_side),
+    ("weapons_lying_on_the_ground", weapons_lying_on_the_ground),
+    ("zombie_survival", zombie_survival),
+    ("capture_the_flag", capture_the_flag),
+    ("runners_cross_head_on", runners_cross_head_on),
+    (
+        "a_run_longer_than_the_approach_timeout",
+        a_run_longer_than_the_approach_timeout,
+    ),
+    ("checkpoint_race", checkpoint_race),
+];
+
+/// The off-switch check: each top-level dial of `bots.json` at 0, one at a
+/// time (a dial shipped at 0 is turned on instead), over the scenarios;
+/// prints and writes `target/bot-tuning/ablation.{csv,txt}`, flagging a
+/// dial whose change moves nothing as a cut candidate.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet off_switches -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning tool: slow"]
+fn off_switches() {
+    eprintln!("{}", gauntlet::tuning::ablation(SCENARIOS));
+}
+
+/// The sweep: dial values over the scenarios, `BRI_TUNING_SEEDS` seeds a
+/// point, scored against the bands and ranked; writes
+/// `target/bot-tuning/sweep.csv` and `sweep_summary.txt`.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet dial_sweep -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning tool: slow"]
+fn dial_sweep() {
+    eprintln!("{}", gauntlet::tuning::sweep(SCENARIOS));
+}
+
+/// The tools' plumbing: a dial set for a run reaches the kinds its
+/// scenario builds, a scenario's report is handed over, and a seed other
+/// than 0 plays other random streams.
+#[test]
+fn tuning_dials_and_seeds_reach_the_scenario() {
+    use gauntlet::tuning::{Setting, run_all};
+    let settings = [
+        Setting {
+            label: "plain".into(),
+            dials: Vec::new(),
+        },
+        Setting {
+            label: "on".into(),
+            dials: vec![("surprise.strength".into(), 1.0)],
+        },
+    ];
+    let runs = run_all(&[("probe", tuning_probe)], &settings, 2);
+    assert_eq!(runs.len(), 4);
+    for (_, _, _, m) in &runs {
+        assert!(m.broken.is_none(), "{:?}", m.broken);
+    }
+    let goof = |setting: usize, seed: u64| {
+        runs.iter()
+            .find(|r| r.0 == setting && r.2 == seed)
+            .unwrap()
+            .3
+            .goof
+    };
+    assert_eq!(
+        goof(0, 0) + goof(0, 1),
+        0.0,
+        "the plain brain does not goof"
+    );
+    assert!(goof(1, 0) > 0.0, "strength 1 reached the kinds");
+    assert_ne!(goof(1, 0), goof(1, 1), "another seed, other streams");
+}
+
+/// The all-on run: every scenario with every dial at its ON value
+/// together (`gauntlet::tuning::all_on`), with the share report. Every
+/// scenario's own checks and every enforced band must hold: this is the
+/// configuration that gates merges. Slow, so ignored by default; the push
+/// gate runs ignored tests.
+/// `cargo test -p bri-chaos --test bot_gauntlet all_dials_on -- --ignored --nocapture`
+#[test]
+#[ignore = "all-on gauntlet: slow; the push gate runs it"]
+fn all_dials_on() {
+    use gauntlet::tuning::{self, Config, Setting};
+    let config = Config::shipped();
+    let on = tuning::all_on(&config);
+    eprintln!("ALL ON: {on:?}");
+    let settings = [Setting {
+        label: "all on".into(),
+        dials: on,
+    }];
+    let runs = tuning::run_all(SCENARIOS, &settings, 1);
+    let bands = gauntlet::shares::Bands::shipped();
+    let mut broken = Vec::new();
+    for (_, name, _, m) in &runs {
+        eprintln!(
+            "ALL ON {name}: variety {:.2} bits, goof {:.1}%, waves {:.3}, stuck {:.1}%, flags [{}]",
+            m.variety,
+            100.0 * m.goof,
+            m.goof_waves,
+            100.0 * m.stuck,
+            m.flagged.join(", ")
+        );
+        for row in &m.rows {
+            if row.share > 0.0 || row.flag.bad() {
+                eprintln!(
+                    "    {:<14} {:>5.1}%  {}",
+                    row.kind,
+                    100.0 * row.share,
+                    row.flag.word()
+                );
+            }
+        }
+        if let Some(b) = &m.broken {
+            broken.push(format!("{name}: {b}"));
+        }
+        for row in &m.rows {
+            if let Some(band) = bands.band(name, &row.kind)
+                && band.enforced.fails(row.flag)
+            {
+                broken.push(format!("{name}: {} {}", row.kind, row.flag.word()));
+            }
+        }
+    }
+    assert!(broken.is_empty(), "all on: {broken:#?}");
+}
+
+/// Bot think time (`Session::bot_think_nanos`) per tick with the server's
+/// most bots (16, `MAX_BOTS`) in the busiest scenario (a mixed-arsenal
+/// deathmatch, eight a side) with every dial on, against the bar in
+/// `bot_tuning.json` (`perf`: one for debug builds, one for release).
+/// `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_16 -- --ignored --nocapture`
+#[test]
+#[ignore = "timing; run in release"]
+fn bot_think_time_16() {
+    use bri_weapons::testing::*;
+    use gauntlet::tuning::{self, Config};
+    let config = Config::shipped();
+    let us = tuning::with_dials(tuning::all_on(&config), || {
+        let spec = Spec::new(
+            "think_time_16",
+            line(-73.0, 0.0, 50.0, 8),
+            line(-37.0, 0.0, 50.0, 8),
+            &[ROCKET_ITEM, SHOTGUN_ITEM, BOW_ITEM, BOUNCER_ITEM, GUN],
+        );
+        let mut b = battle(spec, |_| {});
+        assert_eq!(b.sides.len(), bri_package_runtime::ops::MAX_BOTS);
+        // Warm up (spawns, first plans), then time 30 s of fighting.
+        b.arena.step(5 * TICKS_PER_SECOND);
+        let ticks = 30 * TICKS_PER_SECOND;
+        let before = b.arena.s.bot_think_nanos();
+        let started = std::time::Instant::now();
+        b.arena.step(ticks);
+        let step_us = started.elapsed().as_secs_f64() * 1e6 / ticks as f64;
+        let think = (b.arena.s.bot_think_nanos() - before) as f64 / 1000.0 / ticks as f64;
+        eprintln!(
+            "PERF 16 bots, all on: bot think {think:.0} us/tick ({:.1} us a bot), whole step {step_us:.0} us/tick",
+            think / 16.0
+        );
+        think
+    });
+    let bar = if cfg!(debug_assertions) {
+        config.perf.debug_us
+    } else {
+        config.perf.release_us
+    };
+    assert!(
+        us <= bar,
+        "bot think time {us:.0} us/tick over the bar of {bar:.0} us"
+    );
+}
+
+/// Hits and shots (trigger ticks) in one phase of an engagement.
+#[derive(Clone, Copy, Debug, Default)]
+struct Rate {
+    shots: u64,
+    hits: u64,
+}
+impl Rate {
+    fn share(self) -> Option<f32> {
+        (self.shots > 0).then(|| self.hits as f32 / self.shots as f32)
+    }
+}
+/// The fair metric's result for one weapon at one range.
+#[derive(Clone, Debug, Default)]
+struct Fair {
+    /// The first seconds after the bot first sees its target, the middle,
+    /// and steady state.
+    first: Rate,
+    middle: Rate,
+    steady: Rate,
+    engagements: u64,
+    range_sum: f32,
+}
+impl Fair {
+    fn add(&mut self, o: &Fair) {
+        for (a, b) in [
+            (&mut self.first, o.first),
+            (&mut self.middle, o.middle),
+            (&mut self.steady, o.steady),
+        ] {
+            a.shots += b.shots;
+            a.hits += b.hits;
+        }
+        self.engagements += o.engagements;
+        self.range_sum += o.range_sum;
+    }
+    fn shots(&self) -> u64 {
+        self.first.shots + self.middle.shots + self.steady.shots
+    }
+}
+
+/// One bot with `weapon` against a scripted player who strafes and jumps
+/// like an average player, from about `range` away, for `seconds`. A
+/// package takes the target's damage away and counts it (`on_damage`), so
+/// the fight runs long enough for a steady state; an engagement starts
+/// when the bot sees the target. A shot is a tick the bot fired on; it
+/// hits when damage lands within 2.5 s, at most once, in the phase it was
+/// fired in.
+fn fair_run(weapon: &str, range: f32, seconds: usize) -> Fair {
+    let config = gauntlet::tuning::Config::shipped().fair;
+    let spawn = Vec3::new(10.0, 0.05, 40.0);
+    let post = Vec3::new(40.0, 0.05, 10.0);
+    // Bots fight every other player of a free-for-all, their builder too:
+    // the builder walks out of sight before its bot is placed.
+    let away = Vec3::new(-50.0, 0.05, 90.0);
+    let mut arena = Arena::new(&[]);
+    arena.s.set_spawn_points(vec![spawn]).unwrap();
+    arena.package(
+        "gauntlet-fair",
+        &["player", "damage"],
+        serde_json::json!({
+            "on_damage": true,
+            "state": {"global": {
+                "hits": {"default": 0, "visible": "everyone", "persist": false}
+            }}
+        }),
+        "fn on_damage(victim, attacker, amount, info) { \
+         if player(victim).bot { return (); } \
+         set(\"hits\", get(\"hits\") + 1); 0 }",
+    );
+    let builder = arena.join("Bot builder", FAR_A);
+    let target = arena.join("Target", FAR_B);
+    let game = arena.minigame(
+        builder,
+        Settings {
+            loadout: loadout(&[weapon]),
+            use_all_players_bricks: true,
+            ..Default::default()
+        },
+    );
+    arena.join_game(target, game);
+    for _ in 0..30 * TICKS_PER_SECOND {
+        let Some(at) = arena.feet(builder) else { break };
+        let d = away - at;
+        if Vec3::new(d.x, 0.0, d.z).length() < 2.0 {
+            break;
+        }
+        arena.moves.insert(
+            builder,
+            bri_sim::player::MoveInput {
+                forward: 1.0,
+                yaw: d.x.atan2(-d.z),
+                ..Default::default()
+            },
+        );
+        arena.step(1);
+    }
+    arena.moves.remove(&builder);
+    arena.load(builder, vec![spawner(fixture::BOT, post - Vec3::Z * range)]);
+    arena.step(TICKS_PER_SECOND);
+    let bots = arena.bots();
+    assert_eq!(bots.len(), 1, "the bot spawned");
+    let bot = bots[0];
+    let mut b = Battle {
+        name: "fair",
+        sides: [(bot, 0)].into(),
+        arena,
+    };
+    let ticks = TICKS_PER_SECOND as u64;
+    let first_end = (config.first_seconds * ticks as f32) as u64;
+    let steady_from = (config.steady_after * ticks as f32) as u64;
+    let mut out = Fair::default();
+    // A seeded generator for the strafes: legs of 0.4 to 1.2 s, a hop
+    // every 1.5 to 3 s.
+    let mut rng = 0x9E37_79B9_7F4A_7C15u64 ^ gauntlet::tuning::seed();
+    let mut random = move || {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (rng >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let (mut leg_until, mut side, mut hop_at, mut lean) = (0u64, 1.0f32, 0u64, 0.0f32);
+    let mut seen_since: Option<u64> = None;
+    let mut life = 0u64;
+    let mut seen_shots = std::collections::BTreeSet::new();
+    let mut last_fire = 0u64;
+    // Shots in flight: when fired, and in which phase.
+    let mut pending: std::collections::VecDeque<(u64, usize)> = Default::default();
+    let mut hits_seen = 0i64;
+    let trace = std::env::var("BRI_FAIR_TRACE").is_ok();
+    for _ in 0..seconds * TICKS_PER_SECOND {
+        let s = &b.arena.s;
+        let tick = s.simulation().state().tick;
+        let vitals = s.vitals();
+        let v = &vitals[&target];
+        if !v.alive {
+            if tick >= v.respawn_tick && tick.is_multiple_of(30) {
+                b.arena.command(target, bri_sim::session::Command::Respawn);
+            }
+            b.arena.moves.remove(&target);
+            timed_step(&mut b.arena, &mut Default::default());
+            continue;
+        }
+        if v.spawn_tick != life {
+            life = v.spawn_tick;
+            seen_since = None;
+        }
+        let feet = b.arena.feet(target).unwrap_or(post);
+        let to_post = Vec3::new(post.x - feet.x, 0.0, post.z - feet.z);
+        if tick >= leg_until {
+            side = -side;
+            leg_until = tick + ((0.4 + 0.8 * random()) * ticks as f32) as u64;
+            lean = random() * 0.6 - 0.3;
+        }
+        let jump = tick >= hop_at;
+        if jump {
+            hop_at = tick + ((1.5 + 1.5 * random()) * ticks as f32) as u64;
+        }
+        // Facing -z (toward the bot): forward is -z, right is +x.
+        let input = if to_post.length() > 2.0 {
+            bri_sim::player::MoveInput {
+                forward: unit(-to_post.z / 3.0),
+                right: unit(to_post.x / 3.0 + 0.5 * side),
+                jump,
+                ..Default::default()
+            }
+        } else {
+            bri_sim::player::MoveInput {
+                forward: unit(lean - to_post.z * 0.3),
+                right: unit(side + to_post.x * 0.3),
+                jump,
+                ..Default::default()
+            }
+        };
+        b.arena.moves.insert(target, input);
+        let thought = s.bot_thoughts().into_iter().find(|t| t.bot == bot);
+        if trace && tick.is_multiple_of(120) {
+            eprintln!(
+                "FAIR T{tick} {weapon} bot {:?} target {feet:.1} {:?} {:?}",
+                b.arena.feet(bot),
+                thought.as_ref().map(|t| t.behaviour),
+                thought.as_ref().map(|t| t.visible)
+            );
+        }
+        if seen_since.is_none() && thought.is_some_and(|t| t.visible == Some(target)) {
+            seen_since = Some(tick);
+            out.engagements += 1;
+        }
+        timed_step(&mut b.arena, &mut Default::default());
+        let s = &b.arena.s;
+        let now = s.simulation().state().tick;
+        let hits = s
+            .package_state()
+            .packages
+            .get("gauntlet-fair")
+            .and_then(|ns| ns.global.get("hits")?.as_i64())
+            .unwrap_or(0);
+        let landed = hits > hits_seen;
+        hits_seen = hits;
+        pending.retain(|(at, _)| now - at <= 300);
+        if landed && let Some((_, phase)) = pending.pop_front() {
+            [&mut out.first, &mut out.middle, &mut out.steady][phase].hits += 1;
+        }
+        let Some(since) = seen_since else {
+            continue;
+        };
+        let age = now - since;
+        let index = if age < first_end {
+            0
+        } else if age < steady_from {
+            1
+        } else {
+            2
+        };
+        let fired = s
+            .weapon_view()
+            .fired()
+            .filter(|p| p.source.0 == bot && seen_shots.insert(p.id))
+            .count();
+        if fired > 0 && now != last_fire {
+            last_fire = now;
+            [&mut out.first, &mut out.middle, &mut out.steady][index].shots += 1;
+            pending.push_back((now, index));
+            if let (Some(a), Some(c)) = (b.arena.feet(bot), b.arena.feet(target)) {
+                out.range_sum += a.distance(c);
+            }
+        }
+    }
+    out
+}
+
+/// `v` within -1..=1 (a control's range).
+#[allow(clippy::manual_clamp)]
+fn unit(v: f32) -> f32 {
+    v.max(-1.0).min(1.0)
+}
+
+/// The weapon classes the fair metric shoots with.
+fn fair_weapons() -> [(&'static str, &'static str); 5] {
+    use bri_weapons::testing::*;
+    [
+        ("gun", GUN),
+        ("rocket", ROCKET_ITEM),
+        ("shotgun", SHOTGUN_ITEM),
+        ("bow", BOW_ITEM),
+        ("bouncer", BOUNCER_ITEM),
+    ]
+}
+
+/// Every weapon class at every configured range, with a table; returns
+/// the total and whether its steady rate is out of band.
+fn fair_table() -> (Fair, Vec<(&'static str, Fair)>, String) {
+    let config = gauntlet::tuning::Config::shipped().fair;
+    let pct = |r: Rate| {
+        r.share()
+            .map_or("   -  ".to_string(), |s| format!("{:>5.1}%", 100.0 * s))
+    };
+    let flag = |r: Rate| match r.share() {
+        Some(s) if s > config.max => "TOO GOOD",
+        Some(s) if s < config.min => "HOPELESS",
+        Some(_) => "ok",
+        None => "no shots",
+    };
+    let mut text = format!(
+        "FAIR hit rate vs a strafing, hopping player (band {:.0}-{:.0}% steady):\n  {:<8} {:>5}  {:>6} {:>6} {:>6}  {:>5} {:>4}\n",
+        100.0 * config.min,
+        100.0 * config.max,
+        "weapon",
+        "range",
+        "first",
+        "middle",
+        "steady",
+        "shots",
+        "eng"
+    );
+    let mut total = Fair::default();
+    let mut classes = Vec::new();
+    for (class, item) in fair_weapons() {
+        let mut each = Fair::default();
+        for range in &config.ranges {
+            let f = fair_run(item, *range, config.seconds);
+            text.push_str(&format!(
+                "  {:<8} {:>5.1}  {} {} {}  {:>5} {:>4}  {}\n",
+                class,
+                if f.shots() > 0 {
+                    f.range_sum / f.shots() as f32
+                } else {
+                    *range
+                },
+                pct(f.first),
+                pct(f.middle),
+                pct(f.steady),
+                f.shots(),
+                f.engagements,
+                flag(f.steady)
+            ));
+            total.add(&f);
+            each.add(&f);
+        }
+        classes.push((class, each));
+    }
+    text.push_str(&format!(
+        "  {:<8} {:>5}  {} {} {}  {:>5} {:>4}  {}\n",
+        "all",
+        "",
+        pct(total.first),
+        pct(total.middle),
+        pct(total.steady),
+        total.shots(),
+        total.engagements,
+        flag(total.steady)
+    ));
+    (total, classes, text)
+}
+
+/// The fair metric: a bot's hit rate against a player who strafes and
+/// hops, per weapon class and range, in the first seconds of a fight and
+/// in steady state, against a band (`bot_tuning.json` `fair`): never near
+/// perfect, never hopeless. Enforced for every class together and for the
+/// gun and the bow each: the steady aim error (`perception`'s tracking
+/// lag) keeps a strafing target from being hit every time.
+#[test]
+fn fair_hit_rate() {
+    let config = gauntlet::tuning::Config::shipped().fair;
+    let (total, classes, text) = fair_table();
+    eprint!("{text}");
+    assert!(total.shots() > 0, "the bots shot at the target");
+    assert!(total.engagements > 0, "the bots saw the target");
+    let band = config.min..=config.max;
+    let steady = |f: &Fair| f.steady.share().unwrap_or(0.0);
+    assert!(
+        band.contains(&steady(&total)),
+        "steady hit rate {:.1}% outside the band\n{text}",
+        100.0 * steady(&total)
+    );
+    for (class, f) in classes.iter().filter(|(c, _)| matches!(*c, "gun" | "bow")) {
+        assert!(
+            band.contains(&steady(f)),
+            "{class}: steady hit rate {:.1}% outside the band\n{text}",
+            100.0 * steady(f)
+        );
+    }
+}
+
+/// The fair metric against the alertness dial (the first of
+/// `bot_tuning.json`'s `fair.dials` that bots.json has): its value low,
+/// shipped and high should move the steady hit rate the dial's way.
+/// `cargo test -p bri-chaos --test bot_gauntlet fair_by_dial -- --ignored --nocapture`
+#[test]
+#[ignore = "tuning tool: slow"]
+fn fair_by_dial() {
+    use bri_sim::bot_kind::tuning as dials;
+    let config = gauntlet::tuning::Config::shipped().fair;
+    let kind = gauntlet::tuning::shipped_kind();
+    let Some((dial, sign, base)) = config
+        .dials
+        .iter()
+        .find_map(|d| Some((d.path.clone(), d.sign, dials::dial(&kind, &d.path)?)))
+    else {
+        panic!("no fair dial in bots.json: {:?}", config.dials);
+    };
+    let mut rates = Vec::new();
+    for value in [base * 0.5, base, base * 2.0] {
+        let total = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    gauntlet::tuning::with_dials(vec![(dial.clone(), value)], || fair_table().0)
+                })
+                .join()
+                .unwrap()
+        });
+        let rate = total.steady.share().unwrap_or(0.0);
+        eprintln!("FAIR {dial} = {value}: steady {:.1}%", 100.0 * rate);
+        rates.push(rate);
+    }
+    let rising = rates.windows(2).all(|w| (w[1] - w[0]) * sign >= 0.0);
+    eprintln!(
+        "FAIR {dial}: {} (expects the hit rate to {} with it)",
+        if rising {
+            "predictable"
+        } else {
+            "NOT MONOTONE"
+        },
+        if sign > 0.0 { "rise" } else { "fall" }
+    );
+    assert!(
+        rising,
+        "{dial} moves the steady hit rate its way: {rates:?}"
+    );
+}
+
+/// Three idle bots for 30 s (surprise's idle pause), for the test above.
+fn tuning_probe() {
+    use bri_weapons::testing::*;
+    let mut spec = Spec::new(
+        "tuning_probe",
+        line(-73.0, 0.0, 50.0, 3),
+        Vec::new(),
+        &[ROCKET_ITEM, GUN],
+    );
+    spec.blue_bricks = floor(Vec3::new(60.0, 0.0, 60.0), [1, 1], 1.0);
+    battle(spec, |_| {}).play(0.0, 30, |_, _| {});
 }

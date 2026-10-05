@@ -1,5 +1,6 @@
 //! Advisory reservations, separate from occupancy and action authority.
 use super::OwnerId;
+use glam::Vec3;
 use std::collections::BTreeMap;
 
 const MAX_CLAIMS: usize = 16;
@@ -47,10 +48,73 @@ pub(super) struct Claim {
     pub best_distance: f32,
 }
 
+/// What a bot is doing now, published for its side to read (`team`). Not a
+/// reservation: any number may share a target. It lapses unless renewed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Intent {
+    /// The chosen option (a behaviour's index) and since when.
+    pub option: u8,
+    pub since: u64,
+    /// Where the option takes it, and what it acts on.
+    pub place: Option<Vec3>,
+    pub target: Option<Target>,
+    /// A vehicle whose controls it holds while a seat is free.
+    pub seats: Option<u64>,
+    /// Where its weapon will hit, and the vehicle it rides, whose crew
+    /// that does not endanger.
+    pub harm: Option<Space>,
+    pub mount: Option<u64>,
+    /// From a seat it does not drive: the line it needs to what it is after.
+    pub sight: Option<Sightline>,
+    /// The idle flavour it is doing (`surprise`), if any.
+    pub flavour: Option<u8>,
+    pub until: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Target {
+    Player(OwnerId),
+    Object(u64),
+}
+
+/// A line from a mount `offset` from `vehicle`'s origin to `to`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Sightline {
+    pub vehicle: u64,
+    pub offset: Vec3,
+    pub to: Vec3,
+}
+
+/// A space: within `radius` of the segment from `from` to `to`, widening by
+/// `spread` per unit along it. The one test of whether a body stands in a
+/// line of fire or a blast (`bot_fire_clear`, `team`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Space {
+    pub from: Vec3,
+    pub to: Vec3,
+    pub radius: f32,
+    pub spread: f32,
+}
+impl Space {
+    /// Whether a body of half-size `margin` centred at `point` is in it.
+    pub(super) fn holds(&self, point: Vec3, margin: f32) -> bool {
+        let line = self.to - self.from;
+        let length = line.length();
+        let direction = if length > 1e-6 {
+            line / length
+        } else {
+            Vec3::ZERO
+        };
+        let along = (point - self.from).dot(direction).clamp(0.0, length);
+        point.distance(self.from + direction * along) < self.radius + margin + along * self.spread
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Claims {
     active: BTreeMap<OwnerId, Claim>,
     failures: BTreeMap<(OwnerId, Resource), u64>,
+    intents: BTreeMap<OwnerId, Intent>,
 }
 
 fn valid_distance(distance: f32) -> bool {
@@ -58,6 +122,22 @@ fn valid_distance(distance: f32) -> bool {
 }
 
 impl Claims {
+    pub(super) fn publish(&mut self, owner: OwnerId, intent: Intent) {
+        self.intents.insert(owner, intent);
+    }
+
+    pub(super) fn forget(&mut self, owner: OwnerId) {
+        self.intents.remove(&owner);
+    }
+
+    /// Live intents; a caller keeps its allies'.
+    pub(super) fn intents(&self, tick: u64) -> impl Iterator<Item = (OwnerId, Intent)> + '_ {
+        self.intents
+            .iter()
+            .filter(move |(_, i)| tick < i.until)
+            .map(|(o, i)| (*o, *i))
+    }
+
     pub(super) fn owner_claim(&self, owner: OwnerId, tick: u64) -> Option<Claim> {
         self.active
             .get(&owner)
@@ -230,6 +310,7 @@ impl Claims {
             .filter(|c| tick >= c.deadline)
             .collect();
         self.active.retain(|_, c| tick < c.deadline);
+        self.intents.retain(|_, i| tick < i.until);
         self.failures.retain(|_, until| tick < *until);
         for c in expired {
             let until = c.deadline.saturating_add(RETRY);

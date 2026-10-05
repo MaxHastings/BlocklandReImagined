@@ -16,7 +16,7 @@
       "behaviours": { "interact": 1, "objective": 1 },
       "objective_radius": 24,
       "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4, "cover_distance": 6, "cover_side": 3, "clear_degrees": 60 },
-      "fighting": { "band_slack": 0.15, "min_band_slack": 1.5, "dwell_seconds": 0.5, "strafe_seconds": 3.5 },
+      "fighting": { "band_slack": 0.15, "min_band_slack": 1.5, "dwell_seconds": 0.5, "strafe_seconds": 3.5, "fly_rise": 2.5, "fly_drop": 3.0, "fly_give_up_seconds": 4.0 },
       "perception": {
         "salience": 1,
         "glance_seconds": 0.8,
@@ -31,6 +31,85 @@
         "chase_radius": 96,
         "reverse_degrees": 103,
         "reverse_distance": 16
+      },
+      // Surprise: variation among the bot's choices that changes over time
+      // (docs/architecture/bots.md, "Surprise"). One chooser picks at
+      // random, by weight, among the options scoring near the best at each
+      // choice point: behaviour, weapon, aim point, chase route.
+      "surprise": {
+        // 0 to 1: how much of everything below applies. 0 is the plain
+        // brain, exactly as before (no random number drawn). Off for now:
+        // tuning comes after the bot fixes land.
+        "strength": 0,
+        // Options scoring within this share of the best are eligible.
+        "band": 0.15,
+        // A per-bot drift on each option's weight wanders up to e^0.4
+        // either way, reverting over about 90 seconds.
+        "drift": 0.4,
+        "drift_seconds": 90,
+        // Weight lost per second an option is in use, and the half-life of
+        // that boredom once it is not.
+        "boredom": 0.02,
+        "boredom_seconds": 20,
+        // Effectiveness: a failure (shot dodged, no damage, stuck) takes
+        // this share away; a success gives back this share of the gap;
+        // what is lost halves on its own every effectiveness_seconds.
+        "failure": 0.25,
+        "success": 0.5,
+        "effectiveness_seconds": 30,
+        // A pick is held at least this long (up to half again), and a
+        // switch the variation causes is preceded by a pause this long.
+        "commit_seconds": 3,
+        "tell_seconds": 0.35,
+        // Urgent, so nothing varies: under this share of health, or hurt
+        // by an enemy within urgent_range in the last urgent_seconds.
+        "urgent_health": 0.3,
+        "urgent_range": 8,
+        "urgent_seconds": 1.5,
+        // How far to the side a flanking chase aims.
+        "flank_distance": 5,
+        // Flavour interrupts at natural pauses (never while carrying an
+        // objective): how many a minute, the rest after one, how long one
+        // lasts (up to half again), and the weight of each kind.
+        "interrupts_per_minute": 2,
+        "interrupt_cooldown_seconds": 12,
+        "interrupt_seconds": 2,
+        "interrupts": {
+          "stare": 2,      // look at a player in sight
+          "emote": 2,      // love, hate, confusion or the alarm, as /love does
+          "hop": 1,        // a few jumps
+          "circle": 1,     // run a small circle
+          "detour": 1,     // walk somewhere close by
+          "look": 2,       // look round
+          "crouch": 1,     // crouch a moment
+          "spray": 0.5,    // paint the floor toward a player with the spray can
+          "tool": 0.5,     // take out another tool, then put it back
+          "drop": 0.2,     // drop the weapon in hand (only with another)
+          "light": 0.5     // flick the light on and off
+        }
+      },
+      // Coordination (docs/architecture/bots.md, "Coordination"): how
+      // teammates' published intents, the mood of the bots it sees and its
+      // team's score move its own choices. Each is a score term in the one
+      // chooser, never an order.
+      "team": {
+        // 0-1: how much allies' intents count. Crowding the same target or
+        // spot costs, using a seat or sightline an ally offers pays, and
+        // standing where an ally's weapon will hit costs (a fight steps out).
+        "teamwork": 0.5,
+        // Idle flavours grow likelier by mood times the share of the players
+        // it sees doing one (a person counting mood_human), at most mood_cap.
+        "mood": 16,
+        "mood_cap": 10,
+        "mood_human": 3,
+        // Objectives are worth up to this much more as its team falls behind.
+        "pressure": 0.3,
+        // Seeing a teammate's option work makes it score up to this much
+        // more for a while (fading over effectiveness_seconds).
+        "copy": 0.15,
+        // A choice an ally's intent changed may be said in team chat, keyed
+        // by the term that changed it.
+        "callouts": { "uses": "Coming!", "harm": "Moving!" }
       },
       "first_names": [
         "Alex",

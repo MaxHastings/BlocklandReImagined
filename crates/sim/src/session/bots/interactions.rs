@@ -8,7 +8,7 @@ use rapier3d::prelude::*;
 
 const DISCOVER: f32 = 24.0;
 const RETRY: u64 = 240;
-const CREW_WAIT: u64 = 360;
+pub(super) const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
 
@@ -86,7 +86,7 @@ const CONTESTED: f32 = 3.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Opportunity {
-    resource: Resource,
+    pub(super) resource: Resource,
     pub point: Vec3,
     pub utility: f32,
 }
@@ -706,7 +706,11 @@ impl Session {
     /// `quarry`, the one it is going after, and one standing at `goal`, the
     /// spot it is making for, which it contests rather than walks round.
     /// It always passes on its left, so two walking into each other both
-    /// step aside the same way and get by.
+    /// step aside the same way and get by. In a gap (solid close on both
+    /// sides), an ally ahead already going its
+    /// way is followed at its pace instead (`team` overlap: the later of
+    /// two on one path gives way), so a file through a narrow gap keeps
+    /// moving instead of every one stepping into the frame.
     pub(super) fn bot_walk_direction(
         &self,
         bot: OwnerId,
@@ -719,6 +723,39 @@ impl Session {
         }
         let own = &self.peers[&bot].player;
         let feet = Vec3::from(own.state().feet);
+        let ahead = |p: &super::Peer| {
+            let at = Vec3::from(p.player.state().feet);
+            let delta = flat(at - feet);
+            let along = delta.dot(desired);
+            let width = (own.tuning().width + p.player.tuning().width) * 0.5;
+            along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
+        };
+        let side = Vec3::new(-desired.z, 0.0, desired.x);
+        let waist = feet + Vec3::Y * own.tuning().stand_height * 0.5;
+        // A gap: something solid close on both sides.
+        let no_room = [side, -side].iter().all(|d| {
+            self.world_ray(waist, *d, own.tuning().width + 0.6)
+                .is_some()
+        });
+        // The pace of an ally ahead going the same way, as a share of its own.
+        let follow = self
+            .peers
+            .iter()
+            .filter(|(o, p)| {
+                no_room
+                    && **o != bot
+                    && p.combat.alive
+                    && !self.seated(**o)
+                    && self.bot_allies(bot, **o)
+                    && ahead(p)
+            })
+            .map(|(_, p)| flat(Vec3::from(p.player.state().velocity)).dot(desired))
+            .filter(|pace| *pace > 0.5)
+            .map(|pace| (pace / own.tuning().forward.max(0.1)).min(1.0))
+            .reduce(f32::min);
+        if let Some(pace) = follow {
+            return desired * pace;
+        }
         let blocked = self.peers.iter().any(|(o, p)| {
             if *o == bot || !p.combat.alive || self.seated(*o) {
                 return false;
@@ -729,13 +766,10 @@ impl Session {
             {
                 return false;
             }
-            let delta = flat(at - feet);
-            let along = delta.dot(desired);
-            let width = (own.tuning().width + p.player.tuning().width) * 0.5;
-            along > 0.0 && along < width + 0.6 && (delta - desired * along).length() < width
+            ahead(p)
         });
         if blocked {
-            (desired * 0.25 + Vec3::new(-desired.z, 0.0, desired.x)).normalize_or_zero()
+            (desired * 0.25 + side).normalize_or_zero()
         } else {
             desired
         }
@@ -870,7 +904,12 @@ impl Session {
         if length < 0.01 {
             return false;
         }
-        let direction = delta / length;
+        let space = super::claims::Space {
+            from: origin,
+            to: origin + delta / length * (length + past),
+            radius: splash,
+            spread: spread.tan(),
+        };
         !self.peers.iter().any(|(o, p)| {
             if *o == bot || !p.combat.alive || !self.bot_allies(bot, *o) {
                 return false;
@@ -880,11 +919,8 @@ impl Session {
             {
                 return false;
             }
-            let centre =
-                Vec3::from(p.player.state().feet) + Vec3::Y * p.player.tuning().stand_height * 0.5;
-            let along = (centre - origin).dot(direction).clamp(0.0, length + past);
-            centre.distance(origin + direction * along)
-                < p.player.tuning().stand_height * 0.5 + splash + along * spread.tan()
+            let half = p.player.tuning().stand_height * 0.5;
+            space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
         })
     }
 
@@ -1067,9 +1103,11 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             let pursuing = brain.memory.is_some()
                 || matches!(behaviour, Behaviour::Return | Behaviour::Objective);
+            // Progress is getting somewhere: a chassis rocking back and
+            // forth against what blocks it keeps moving but goes nowhere.
             let progressed = brain
                 .vehicle_anchor
-                .is_none_or(|old| flat(at - old).length() >= 0.5);
+                .is_none_or(|old| flat(at - old).length() >= VEHICLE_PROGRESS);
             if progressed || waiting || !pursuing {
                 brain.vehicle_anchor = Some(at);
                 brain.vehicle_stuck = 0;
@@ -1134,6 +1172,9 @@ impl Session {
     }
 }
 
+/// How far a driven chassis must get from where it last made progress for
+/// that to count as progress again.
+const VEHICLE_PROGRESS: f32 = 3.0;
 /// A chassis reverses toward a goal more than the kind's
 /// `mounted.reverse_degrees` off its heading. While pursuing a target it
 /// does so only within `mounted.reverse_distance`; a farther target behind

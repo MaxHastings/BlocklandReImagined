@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 mod admin;
 mod bots;
-pub use bots::{BotEvidence, BotNotice, BotObjectiveDetail, BotTask, BotThought};
+pub use bots::{
+    BotCandidate, BotDecision, BotDrive, BotEvidence, BotNotice, BotObjectiveDetail, BotReload,
+    BotSurpriseView, BotTask, BotTeamView, BotThought, BotTuning,
+};
 mod breakables;
 mod build_load;
 pub use build_load::LoadPace;
@@ -2621,7 +2624,10 @@ impl Session {
             }
         };
         contain("events", self.start_event_tick(tick + 1));
-        contain("bots", self.step_bots());
+        let thinking = std::time::Instant::now();
+        let bots = self.step_bots();
+        self.bots.think_nanos += thinking.elapsed().as_nanos() as u64;
+        contain("bots", bots);
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();

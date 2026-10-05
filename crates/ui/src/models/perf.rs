@@ -168,6 +168,39 @@ pub struct PerfStats {
     /// effects), in frame order, where the GPU has timestamps.
     #[serde(default)]
     pub gpu_passes: Vec<(String, f32)>,
+    /// Why the bot the player looks at does what it does, when this game
+    /// hosts it (`BotThought::why`): its name and the readout's lines.
+    #[serde(default)]
+    pub bot: Option<(String, Vec<String>)>,
+}
+
+/// How far off the view line a bot may stand and still be the one looked
+/// at: the cosine of 6 degrees.
+pub const LOOK_COS: f32 = 0.9945;
+/// The farthest a looked-at bot may be.
+pub const LOOK_RANGE: f32 = 150.0;
+
+/// Of `bots` (id and the middle of its body), the one nearest the line
+/// from `eye` along `forward` (a unit vector), within [`LOOK_COS`] and
+/// [`LOOK_RANGE`].
+pub fn looked_at(
+    eye: [f32; 3],
+    forward: [f32; 3],
+    bots: impl IntoIterator<Item = (u64, [f32; 3])>,
+) -> Option<u64> {
+    let mut best: Option<(f32, u64)> = None;
+    for (id, at) in bots {
+        let d = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if !(0.5..=LOOK_RANGE).contains(&length) {
+            continue;
+        }
+        let cos = (d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2]) / length;
+        if cos >= LOOK_COS && best.is_none_or(|(c, _)| cos > c) {
+            best = Some((cos, id));
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// Frame-time figures over the recent history.
@@ -302,6 +335,21 @@ mod tests {
         };
         assert_eq!(s.per_second(s.packets_received), 125.0);
         assert_eq!(NetSample::default().per_second(10.0), 0.0);
+    }
+
+    #[test]
+    fn the_bot_looked_at_is_the_one_nearest_the_view_line() {
+        let eye = [0.0, 2.0, 0.0];
+        let ahead = [0.0, 0.0, -1.0];
+        let bots = [
+            (1, [0.0, 1.2, -20.0]),
+            (2, [1.0, 1.2, -10.0]),
+            (3, [0.0, 1.2, 20.0]),
+            (4, [0.0, 2.0, -200.0]),
+        ];
+        assert_eq!(looked_at(eye, ahead, bots), Some(1), "off by 2.3 degrees");
+        assert_eq!(looked_at(eye, [1.0, 0.0, 0.0], bots), None);
+        assert_eq!(looked_at(eye, [0.0, 0.0, 1.0], bots), Some(3));
     }
 
     #[test]
