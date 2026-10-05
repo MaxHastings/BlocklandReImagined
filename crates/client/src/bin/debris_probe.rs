@@ -4,12 +4,13 @@
 //! an offscreen draw) around a rocket blast, a Destructo Wand chain and a
 //! mass kill. Reports each frame's cost by stage and the worst frames. Then
 //! big blasts at every Physics Quality limit, costed in this thread's CPU
-//! cycles and physics work counts (not wall clock), with and without the
-//! client's debris budget. It never opens a window or reads input.
+//! cycles and physics work counts (not wall clock). It never opens a
+//! window or reads input.
 //!
-//! Usage: debris_probe <content-root> <report.json> [world-name-substring]
+//! Usage: debris_probe <content-root> <report.json> [world-name-substring | save.bls]
+//! A `.bls` save is converted and laid on Slate.
 use anyhow::{Context, Result, ensure};
-use bri_client::brick_debris::{BUDGET, BrickDebris, DebrisModels, DebrisWork};
+use bri_client::brick_debris::{BrickDebris, DebrisModels, DebrisWork};
 use bri_client::building::Building;
 use bri_client::content::ClientContent;
 use bri_client::network::WorldChanges;
@@ -121,13 +122,11 @@ fn kill_cues(
 
 /// One run of `kills` with the debris limit at `limit`: each frame's CPU
 /// cycles for the client's debris work (cues, physics, instance upload) and
-/// what the physics had to do. With `budget` (this PC's cycles per ms),
-/// each frame's cost is fed to the client's budget as the game does.
+/// what the physics had to do.
 #[allow(clippy::too_many_arguments)] // probe inputs
 fn preset(
     kills: &[Kill],
     limit: usize,
-    budget: Option<f64>,
     world: &Arc<PublicWorld>,
     building: &mut Building,
     meshes: &BTreeMap<String, bri_content::brick::Brick>,
@@ -143,9 +142,7 @@ fn preset(
     let mut models = DebrisModels::default();
     let mut cue_id = 1_000_000u64;
     let (mut spent, mut work) = (Vec::new(), Vec::new());
-    // With the budget, a first blast teaches it this PC's cost and the
-    // reported one is the next: the steady state a player plays in.
-    for run in 0..if budget.is_some() { 2 } else { 1 } {
+    for run in 0..1 {
         building.sync_world(world)?;
         debris.clear();
         let mut current = (**world).clone();
@@ -178,9 +175,6 @@ fn preset(
                 &current.palette,
             )?;
             let c = cycles() - start;
-            if let Some(per_ms) = budget {
-                debris.spent(Duration::from_secs_f64(c as f64 / per_ms / 1000.0));
-            }
             spent.push(c);
             work.push(debris.work());
         }
@@ -446,40 +440,56 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
         (2..=3).contains(&args.len()),
-        "Usage: debris_probe <content-root> <report.json> [world-name-substring]"
+        "Usage: debris_probe <content-root> <report.json> [world-name-substring | save.bls]"
     );
     let root = PathBuf::from(&args[0]);
     let report_path = PathBuf::from(&args[1]);
     let wanted = args.get(2).map_or("Golden Gate", String::as_str);
     let content = ClientContent::load(&root)?;
-    let entry = content
-        .worlds
-        .iter()
-        .filter(|w| w.loadable && w.name.contains(wanted))
-        .max_by_key(|w| w.brick_count)
-        .with_context(|| {
-            let names: Vec<_> = content
-                .worlds
-                .iter()
-                .filter(|w| w.loadable)
-                .map(|w| &w.name)
-                .collect();
-            format!("No loadable reference world matches {wanted:?}; have {names:?}")
-        })?
-        .clone();
-    println!(
-        "World {} ({} bricks) on {}",
-        entry.name, entry.brick_count, entry.map_id
-    );
     let paths = content.paths.clone();
-    let loaded = paths.load_map(&entry.map_id, Some(&entry.id))?;
-    let state = loaded.simulation.state();
-    let world = Arc::new(PublicWorld {
-        name: state.name.clone(),
-        map_id: state.map_id.clone(),
-        palette: state.palette.clone(),
-        bricks: public_bricks(&state.bricks),
-    });
+    // A reference world by name, or a v20 save (`.bls`) on Slate.
+    let (name, map_id, loaded, world) = if wanted.to_ascii_lowercase().ends_with(".bls") {
+        let map_id = "v20/add-ons/map_slate/slate.mis".to_string();
+        let loaded = paths.load_map(&map_id, None)?;
+        let saved = bri_client::old_saves::Converter::new(&content)?.convert(
+            &std::fs::read(wanted)?,
+            "probe",
+            &loaded.simulation.state().map_id,
+        )?;
+        let world = Arc::new(PublicWorld {
+            name: saved.name.clone(),
+            map_id: map_id.clone(),
+            palette: saved.palette.clone(),
+            bricks: public_bricks(&saved.bricks),
+        });
+        (wanted.to_string(), map_id, loaded, world)
+    } else {
+        let entry = content
+            .worlds
+            .iter()
+            .filter(|w| w.loadable && w.name.contains(wanted))
+            .max_by_key(|w| w.brick_count)
+            .with_context(|| {
+                let names: Vec<_> = content
+                    .worlds
+                    .iter()
+                    .filter(|w| w.loadable)
+                    .map(|w| &w.name)
+                    .collect();
+                format!("No loadable reference world matches {wanted:?}; have {names:?}")
+            })?
+            .clone();
+        let loaded = paths.load_map(&entry.map_id, Some(&entry.id))?;
+        let state = loaded.simulation.state();
+        let world = Arc::new(PublicWorld {
+            name: state.name.clone(),
+            map_id: state.map_id.clone(),
+            palette: state.palette.clone(),
+            bricks: public_bricks(&state.bricks),
+        });
+        (entry.name.clone(), entry.map_id.clone(), loaded, world)
+    };
+    println!("World {name} ({} bricks) on {map_id}", world.bricks.len());
     let definitions = loaded.simulation.definitions.clone();
     let meshes: BTreeMap<_, _> = definitions
         .entries
@@ -559,7 +569,7 @@ fn main() -> Result<()> {
     let mut report = serde_json::Map::new();
     report.insert(
         "world".into(),
-        json!({ "name": entry.name, "map": entry.map_id, "bricks": entry.brick_count }),
+        json!({ "name": name, "map": map_id, "bricks": world.bricks.len() }),
     );
     report.insert("adapter".into(), json!(gpu.adapter));
     // A warm-up pass so one-off first-use costs show separately.
@@ -625,7 +635,6 @@ fn main() -> Result<()> {
     preset(
         &blasts[2].1,
         4096,
-        None,
         &world,
         &mut building,
         &meshes,
@@ -637,17 +646,16 @@ fn main() -> Result<()> {
     let to_ms = |c: u64| (c as f64 / per_ms * 1000.0).round() / 1000.0;
     let mut presets = serde_json::Map::new();
     presets.insert("mcycles_per_cpu_ms".into(), json!(per_ms / 1e6));
-    presets.insert("budget_ms".into(), json!(ms(BUDGET)));
     for (blast, kills) in blasts.iter().filter(|_| cfg!(windows)) {
         let mut rows = serde_json::Map::new();
         rows.insert("kills".into(), json!(kills[0].bricks.len()));
         for (name, limit) in limits {
             let mut row = serde_json::Map::new();
-            for (mode, budget) in [("raw", None), ("budgeted", Some(per_ms))] {
+            {
+                let mode = "raw";
                 let (spent, work, debris) = preset(
                     kills,
                     limit,
-                    budget,
                     &world,
                     &mut building,
                     &meshes,
@@ -666,7 +674,7 @@ fn main() -> Result<()> {
                         "peak_frame_mcycles": spent[peak] as f64 / 1e6,
                         "peak_frame_cpu_ms": to_ms(spent[peak]),
                         "first_second_avg_cpu_ms": to_ms(second / 60),
-                        "frames_over_budget": spent.iter().filter(|&&c| to_ms(c) > ms(BUDGET)).count(),
+                        "frames_over_16_7ms": spent.iter().filter(|&&c| to_ms(c) > 1000.0 / 60.0).count(),
                         "peak_bodies": most(|w| w.bodies),
                         "peak_awake": most(|w| w.awake),
                         "peak_touching": most(|w| w.touching),

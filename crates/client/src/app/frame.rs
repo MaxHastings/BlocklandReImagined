@@ -1452,8 +1452,6 @@ impl App {
             if limit != self.fx.brick_debris.limit() {
                 self.fx.brick_debris.set_limit(limit);
             }
-            // What debris costs this frame, so a PC it outgrows keeps less.
-            let debris_started = std::time::Instant::now();
             let kills = std::mem::take(&mut self.fx.brick_kills);
             let thrown = self.fx.brick_debris.cues(&kills, building);
             // A kill announced after its brick started fading out stops the
@@ -1513,7 +1511,6 @@ impl App {
                 .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
-            self.fx.brick_debris.spent(debris_started.elapsed());
             if bodies {
                 // A corpse does not shove bodies: it may be the one lying in
                 // them (a ragdoll drawn over it).
