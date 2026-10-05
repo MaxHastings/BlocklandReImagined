@@ -378,8 +378,11 @@ impl Session {
                 } else {
                     d.max_speed * crate::route::CRUISE
                 };
+                // A blow is struck sooner from a seat nearer than the enemy.
+                let strikes = runs_over && feet.distance(point) < feet.distance(enemy);
                 if !idle
                     && d.weapon.is_none()
+                    && !strikes
                     && !crate::route::drive_serves(
                         peer.player.tuning().forward,
                         feet.distance(enemy),
@@ -870,6 +873,78 @@ impl Session {
         }
     }
 
+    /// Where a bot standing on a body (a vehicle's roof, another player's
+    /// head) with its enemy close below steps down to: the nearest world
+    /// floor round it, no higher than its feet, open to walk to (no wall on
+    /// the way, no player standing there), the side toward `toward` first
+    /// among equally near ones. None when every side is closed.
+    pub(super) fn bot_step_off(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        toward: Vec3,
+    ) -> Option<Vec3> {
+        const SIDES: usize = 16;
+        let want = flat(toward - feet).normalize_or_zero();
+        let depth = (feet.y - toward.y).max(0.0) + body.step + 0.5;
+        let others: Vec<(Vec3, f32)> = self
+            .peers
+            .iter()
+            .filter(|(o, p)| **o != bot && p.combat.alive && !self.seated(**o))
+            .map(|(_, p)| (Vec3::from(p.player.state().feet), p.player.tuning().width))
+            .collect();
+        // Floor under a body (the vehicle it stands on, a crate beside it)
+        // is no floor to stand on: the world ray sees through bodies.
+        let world = self.vehicles.world.as_ref();
+        let covered = |at: Vec3| {
+            self.bots.objects.iter().any(|v| {
+                let Some(d) = world.and_then(|w| w.definition(&v.definition)) else {
+                    return false;
+                };
+                let rotation = glam::Quat::from_array(v.transform.rotation);
+                let half = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale * 0.5;
+                let l = rotation.inverse() * (at - object_centre(v, d));
+                let by = body.width * 0.5;
+                !v.destroyed && l.x.abs() <= half.x + by && l.z.abs() <= half.z + by
+            })
+        };
+        let mut best: Option<(f32, Vec3)> = None;
+        for i in 0..SIDES {
+            let angle = i as f32 * std::f32::consts::TAU / SIDES as f32;
+            let d = Vec3::new(angle.cos(), 0.0, angle.sin());
+            // Out in half-width steps to past a jeep's half length.
+            for k in 1..=8 {
+                let out = body.width * 0.5 * (k as f32 + 1.0);
+                let at = feet + d * out;
+                if self
+                    .world_ray(feet + Vec3::Y * body.step, d, out)
+                    .is_some()
+                {
+                    break;
+                }
+                let Some(down) = self.world_ray(at + Vec3::Y * 0.5, Vec3::NEG_Y, 0.5 + depth)
+                else {
+                    continue;
+                };
+                let floor = at + Vec3::Y * (0.5 - down);
+                let crowded = others.iter().any(|(p, width)| {
+                    flat(*p - floor).length() < (body.width + width) * 0.5
+                        && (p.y - floor.y).abs() < body.height
+                });
+                if crowded || covered(floor) {
+                    continue;
+                }
+                let score = out - want.dot(d) * body.width * 0.5;
+                if best.is_none_or(|(b, _)| score < b) {
+                    best = Some((score, floor));
+                }
+                break;
+            }
+        }
+        best.map(|(_, at)| at)
+    }
+
     /// A vehicle is a body the walk grid leaves out (`nav`): one a walking
     /// bot is about to walk into is walked round by its nearer side, not
     /// pressed against (which pushes it, `movables`) or hopped onto. Not the
@@ -1217,9 +1292,25 @@ impl Session {
                 }
                 next = Some(*p);
             }
+            // A chassis that runs over the enemy it fights on foot is the
+            // blow itself: with no route left to them (they are too close
+            // for one), it is driven at them, backing out first when they
+            // are inside its turning circle (`route::gear`).
+            let strike = self.bots.brains[&bot]
+                .target
+                .filter(|t| {
+                    matches!(behaviour, Behaviour::Fight | Behaviour::Chase)
+                        && d.runover_damage > 0.0
+                        && self.mounted(*t).is_none()
+                        && self.can_damage_player(bot, *t, false)
+                })
+                .and_then(|t| self.peers.get(&t))
+                .filter(|p| p.combat.alive)
+                .map(|p| flat(Vec3::from(p.player.state().feet) - at));
             let toward = next
                 .filter(|p| p.through.is_none())
-                .map(|p| flat(p.feet - at));
+                .map(|p| flat(p.feet - at))
+                .or(strike);
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
             // Pure pursuit that knows how tightly this chassis turns: a
             // point inside its turning circle is backed out of, never

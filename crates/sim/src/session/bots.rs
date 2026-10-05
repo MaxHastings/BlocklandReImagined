@@ -2714,15 +2714,17 @@ impl Session {
                 wanted = Some(Waypoint::walk(point));
             }
         }
-        // Standing on a body (a vehicle's roof, a crate) the walk grid has
-        // no place for its feet and no route from there: it walks straight
-        // off toward the enemy it is after, and plans again once down.
+        // Standing on a body (a vehicle's roof, a crate, a head) the walk
+        // grid has no place for its feet and no route from there: it walks
+        // straight off toward the enemy it is after, and plans again once
+        // down. One whose enemy is close by below it (under its feet or at
+        // the body's foot) goes nowhere walking at them: it steps off to the
+        // nearest free floor instead, toward them where that side is open.
         if wanted.is_none()
             && swim.is_none()
             && driving.is_none()
             && state.grounded
             && let Some(Goal::Chase(point)) = self.bots.brains[&bot].goal
-            && flat(point - feet).length() > 1.5
             && self.bots.brains[&bot].search.is_none()
             && super::admin_players::world_ray(
                 &self.simulation,
@@ -2732,8 +2734,17 @@ impl Session {
             )
             .is_none()
         {
-            wanted = Some(Waypoint::walk(point));
-            self.bots.brains.get_mut(&bot).unwrap().settled = false;
+            let to = if flat(point - feet).length() > 1.5 {
+                Some(point)
+            } else if point.y < feet.y - body.step - 0.5 {
+                self.bot_step_off(bot, feet, &body, point)
+            } else {
+                None
+            };
+            if let Some(to) = to {
+                wanted = Some(Waypoint::walk(to));
+                self.bots.brains.get_mut(&bot).unwrap().settled = false;
+            }
         }
         let pushing = if behaviour == Behaviour::Interact {
             self.act_bot_interaction(bot, interaction_enemy.map(|k| k.at), tick)?
