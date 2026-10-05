@@ -406,19 +406,19 @@ unsupported: a goal to defend, passing.
 ## Extras
 
 Five small options round out what a bot does, each through ordinary player
-controls and each weighed by one number in the kind's `extras` (1 by
-default; 0 turns one off; where a chance applies, 1 takes it about half
-the time and 2 or more always). They live in
+controls, all weighed by one dial, the kind's `extras.strength` (0 to 1,
+default 1; 0 turns them off; where a chance applies, 1 takes it about half
+the time). They live in
 `crates/sim/src/session/bots/extras.rs`, with a hook in `step_bot` and the
 Interact opportunity; their random stream is their own, so the brain's
 other choices draw as before. Nothing reads a content name.
 
 | Option | When | Does |
 |---|---|---|
-| `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2 x weight, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
+| `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2 x strength, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
 | `crouch` | hurt from more than 5 units while fighting or holding its ground | crouches for 1.5 s after the last such hit (damage already scales with crouching) |
 | `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
-| `activate` | a brick a click does something to (a catalog swap, an enabled `onActivate` row) within 2.5 units on the straight way to its goal, while not fighting; now and then (about every 2 s at a natural pause, at a quarter of the chance) one within 8 units in sight | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
+| `activate` | a door within 2.5 units on the straight way to its goal, while not fighting; now and then (about every 2 s at a natural pause, at a quarter of the chance) one within 8 units in sight. A door is a brick whose catalog swap the next click swaps back: the click only opens or closes the brick itself. A brick with only event rows (a reset, win, teleport or blast button) is never clicked, in the way or for fun | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
 | `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
 
 Route clicks are what an activation is worth: a door in the way is clicked
@@ -452,8 +452,8 @@ its kind and team label. See `bots/looks.rs`.
   - `surprise`: every tunable of the chooser and the interrupts (above),
     each commented in the Blockhead's `bots.json`; `bots.json` takes `//`
     comments outside strings.
-  - `extras` (`idle_play`, `crouch`, `dodge`, `activate`, `hand_weapon`):
-    one weight each, 0 to 10, every one 1 when left out (above).
+  - `extras` (`strength`): 0 to 1, how much of the extra options applies,
+    1 when left out (above). The tuning tools find it by itself.
   - `fighting` (`band_slack`, `min_band_slack`, `dwell_seconds`,
     `strafe_seconds`, `fly_rise`, `fly_drop`, `fly_give_up_seconds`): the
     leeway around its band, how long a choice is held, strafe legs, and

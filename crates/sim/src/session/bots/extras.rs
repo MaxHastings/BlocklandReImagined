@@ -1,5 +1,6 @@
 //! Small extra options, each an ordinary player control the brain already
-//! has, weighed by the kind's `extras` (`bot_kind::EXTRAS`, 1 by default):
+//! has, all weighed by the kind's one `extras.strength` dial (1 by
+//! default, 0 off):
 //!
 //! - `idle_play`: with no enemy about, pushing a loose body toward a player
 //!   in sight and riding along in a teammate's vehicle. The Interact
@@ -10,10 +11,12 @@
 //! - `dodge`: a projectile whose predicted path (its velocity, its fall and
 //!   its splash radius) meets the bot's body makes it jump, jetting if it
 //!   can.
-//! - `activate`: a brick a click does something to (a catalog swap, an
-//!   enabled `onActivate` row) standing in its way to its goal is clicked
-//!   with the empty hand; now and then, at a natural pause, it walks to one
-//!   in sight and clicks it for the fun of it.
+//! - `activate`: a door (a brick whose catalog swap a click reverses: the
+//!   brick opening and closing itself) standing in its way to its goal is
+//!   clicked with the empty hand; now and then, at a natural pause, it
+//!   walks to one in sight and clicks it for the fun of it. Nothing else a
+//!   click might do (an event row's reset, win, teleport or blast) is ever
+//!   pressed: those are a builder's buttons, not a bot's toy.
 //! - `hand_weapon`: with a spare attack and an unarmed teammate in sight,
 //!   it walks up, faces them and drops the spare their way; the ordinary
 //!   contact pickup (or their arming) takes it up.
@@ -161,25 +164,31 @@ pub(super) fn predicted_hit(
 }
 
 impl Session {
-    /// A brick a click does something to: one its catalog swaps (a door),
-    /// or one with an enabled `onActivate` row.
+    /// A door: a brick whose click swaps it for another the next click
+    /// swaps back (the catalog's swaps), so the click only opens or closes
+    /// the brick itself and can be undone. Event rows are never clicked:
+    /// what they do (reset, win, teleport, blast) is not the bot's to try.
     pub(super) fn bot_activatable(&self, brick: BrickId) -> bool {
         let Some(placed) = self.simulation.state().bricks.get(&brick) else {
             return false;
         };
-        let swaps = matches!(&placed.definition,
-            bri_world::ContentRef::Resolved(id) if self.tool_catalog.swaps.contains_key(id));
-        swaps
-            || self.events.world.as_ref().is_some_and(|w| {
-                w.program(super::super::events::id(brick))
-                    .is_some_and(|p| p.rows.iter().any(|r| r.enabled && r.input == "onActivate"))
+        let bri_world::ContentRef::Resolved(id) = &placed.definition else {
+            return false;
+        };
+        let swaps = &self.tool_catalog.swaps;
+        swaps.get(id).is_some_and(|swap| {
+            [&swap.front, &swap.back].into_iter().all(|to| {
+                swaps
+                    .get(to)
+                    .is_some_and(|back| &back.front == id || &back.back == id)
             })
+        })
     }
 
     /// The player idle play aims toward: the nearest other player it sees.
     pub(super) fn bot_idle_mark(&mut self, bot: OwnerId, tick: u64) -> Option<(OwnerId, Vec3)> {
         let brain = self.bots.brains.get(&bot)?;
-        if brain.kind.extra("idle_play") <= 0.0 {
+        if brain.kind.extras.strength <= 0.0 {
             return None;
         }
         let cached = brain.extras.mark.filter(|(_, until)| tick < *until);
@@ -287,12 +296,8 @@ impl Session {
             return Ok(extra);
         };
         let kind = &brain.kind;
-        let weights = [
-            kind.extra("crouch"),
-            kind.extra("dodge"),
-            kind.extra("activate"),
-            kind.extra("hand_weapon"),
-        ];
+        // One dial (`extras.strength`) weighs every extra option.
+        let weights = [kind.extras.strength; 4];
         let swimming = kind.moves == Moves::Swim
             && self
                 .simulation
