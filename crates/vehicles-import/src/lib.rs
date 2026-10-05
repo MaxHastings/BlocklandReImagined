@@ -625,7 +625,9 @@ pub fn lower(
         },
         look_limits: [number(b, "lookDownLimit", 0.), number(b, "lookUpLimit", 1.)],
         runover_speed: number(b, "minRunOverSpeed", f32::MAX),
-        runover_damage: number(b, "runOverDamageScale", 0.),
+        // Absent: the engine default (`World` reads f32::MAX as unset); an
+        // authored 0 runs nobody over.
+        runover_damage: number(b, "runOverDamageScale", f32::MAX),
         runover_push: number(b, "runOverPushScale", 0.),
         protect_direct: truth(b, "protectPassengersDirect"),
         protect_radius: truth(b, "protectPassengersRadius"),

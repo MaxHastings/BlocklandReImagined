@@ -1464,8 +1464,15 @@ impl VehiclesWorld {
             vehicle: id,
             owner: driver.map_or(v.spawn.owner, |o| o.owner),
             target,
+            // An authored scale of 0 is harmless; only an unset one (out of
+            // range) takes Torque's default.
             damage: if speed > minimum {
-                speed * authored(d.runover_damage, 5.)
+                speed
+                    * if (0. ..1e30).contains(&d.runover_damage) {
+                        d.runover_damage
+                    } else {
+                        5.
+                    }
             } else {
                 0.
             },
