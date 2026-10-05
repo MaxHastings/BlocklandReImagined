@@ -21,6 +21,18 @@ test = "world_checkpoint_wire_cost"
 reason = "Benchmark; needs BRI_BENCH_WORLD."
 
 [[skip]]
+test = "off_switches"
+reason = "Bot tuning tool (ablation), many minutes; opt-in only. docs/architecture/bots.md, Tuning."
+
+[[skip]]
+test = "dial_sweep"
+reason = "Bot tuning tool (sweep), many minutes; opt-in only. docs/architecture/bots.md, Tuning."
+
+[[skip]]
+test = "fair_by_dial"
+reason = "Bot tuning tool (fair metric against the alertness dial); opt-in only. docs/architecture/bots.md, Tuning."
+
+[[skip]]
 test = "a_new_player_plays_the_tutorial_through_target_practice"
 reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run it by hand with cargo test -p bri-client --test tutorial_walkthrough -- --ignored."
 
@@ -37,3 +49,11 @@ reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run 
 
 [[port_bound]]
 target = "bri-client/night_qa"
+
+# The all-on bot gauntlet (every dial at its ON value) fails on its first
+# run, 2026-10-05: with surprise.strength 0.6 zombie_survival changes
+# behaviour 12.2 times a bot-minute against its bound of 12.
+[[failure]]
+test = "all_dials_on"
+owner = "fix/bot-surprise"
+reason = "Surprise on (0.6) pushes zombie_survival's behaviour switches to 12.2/min (bound 12). The surprise lane tunes strength or the hold rule; remove this entry when all_dials_on passes."

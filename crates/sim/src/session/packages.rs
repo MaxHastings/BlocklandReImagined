@@ -2325,6 +2325,9 @@ impl Session {
         from_image: bool,
     ) -> Result<Reply> {
         if request.package.is_empty() && !from_image {
+            if self.bot_tuning_command(owner, &request.command, &request.args) {
+                return Ok(Reply::Accepted);
+            }
             if request.command.eq_ignore_ascii_case("rulelab") {
                 let mode = match request.args.first() {
                     Some(PackageArg::String(s)) => s.as_str(),

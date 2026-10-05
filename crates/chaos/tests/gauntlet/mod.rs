@@ -8,6 +8,9 @@
 //! ordinary ticks; nothing here steers a bot.
 #![allow(dead_code)]
 
+pub mod shares;
+pub mod tuning;
+
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::player::MoveInput;
@@ -32,6 +35,8 @@ pub fn rounds() -> usize {
 pub struct Arena {
     pub s: Session,
     pub humans: Vec<OwnerId>,
+    /// What a scripted player presses; the rest stand still.
+    pub moves: BTreeMap<OwnerId, MoveInput>,
     seq: u64,
     cmd: u64,
 }
@@ -90,10 +95,21 @@ impl Arena {
         let mut arena = Self {
             s,
             humans: Vec::new(),
+            moves: BTreeMap::new(),
             seq: 1 << 40,
             cmd: 1000,
         };
         arena.catalog(&[], vehicle_kinds);
+        // A tuning seed other than 0 plays the same scenario on other
+        // random streams: bots' generators follow their ids and the tick.
+        let seed = tuning::seed();
+        for i in 0..seed {
+            arena.join(
+                &format!("Seed {i}"),
+                Vec3::new(90.0 - 2.0 * i as f32, 0.05, 92.0),
+            );
+        }
+        arena.step(seed as usize * 7);
         arena
     }
 
@@ -237,14 +253,13 @@ impl Arena {
         self.step(2);
     }
 
-    /// Step the world, the builders standing still.
+    /// Step the world, the builders standing still (or as `moves` says).
     pub fn step(&mut self, ticks: usize) {
         for _ in 0..ticks {
             self.seq += 1;
             for human in &self.humans {
-                self.s
-                    .movement(*human, self.seq, MoveInput::default())
-                    .unwrap();
+                let input = self.moves.get(human).cloned().unwrap_or_default();
+                self.s.movement(*human, self.seq, input).unwrap();
             }
             self.s.step().unwrap();
         }
@@ -284,12 +299,16 @@ impl Arena {
     }
 }
 
+/// The shipped `bots.json`, as text: the tuning tools read its dials.
+pub const BOTS_JSON: &[u8] = include_bytes!("../../../../packages/blockhead_bot/assets/bots.json");
+
+/// The shipped kinds, with this thread's tuning dials applied
+/// ([`tuning::with_dials`]; none outside the tuning tools).
 pub fn blockhead_kinds() -> Vec<bri_sim::bot_kind::BotKind> {
-    bri_sim::bot_kind::BotPack::from_json(include_bytes!(
-        "../../../../packages/blockhead_bot/assets/bots.json"
-    ))
-    .unwrap()
-    .bots
+    let kinds = bri_sim::bot_kind::BotPack::from_json(BOTS_JSON)
+        .unwrap()
+        .bots;
+    tuning::apply_dials(kinds)
 }
 
 /// A body attack (`BotKind::melee`).
@@ -421,6 +440,21 @@ pub struct Report {
     pub longest_goof: u64,
     /// Switches to an option other than the plain pick.
     pub surprised: u64,
+    /// Behaviour share report (`shares`): ticks each living bot spent in
+    /// each kind of activity (a behaviour, `goof`, `vehicle`), mounted
+    /// bots included, and the total.
+    pub kinds: BTreeMap<String, u64>,
+    pub kind_ticks: u64,
+    /// Kinds the chooser scored above zero at least once (offered).
+    pub offered: BTreeSet<String>,
+    /// Ticks each other choice point's option was in effect
+    /// (`aim:feet`), and each choice point's total.
+    pub options: BTreeMap<String, u64>,
+    pub domain_ticks: BTreeMap<String, u64>,
+    /// Goof ticks and bot ticks in each ten-second window.
+    pub goof_windows: Vec<(u64, u64)>,
+    /// Wall time stepping the session, for the frame cost per bot.
+    pub step_nanos: u64,
 }
 
 impl Report {
@@ -431,6 +465,9 @@ impl Report {
         count as f32 / (self.bot_ticks.max(1) as f32 / (60.0 * TICKS_PER_SECOND as f32))
     }
     pub fn print(&self) {
+        if tuning::quiet() {
+            return;
+        }
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
@@ -492,6 +529,24 @@ impl Report {
     }
 }
 
+/// A scenario's report is done: print it and its behaviour shares, hand
+/// it to a tuning tool running the scenario, and fail on an enforced
+/// share band (`shares`).
+pub fn finish(report: &Report) {
+    report.print();
+    tuning::hand_over(report);
+    if !tuning::quiet() {
+        shares::check(report);
+    }
+}
+
+/// Steps `arena` one tick, adding the time to `report`'s frame cost.
+pub fn timed_step(arena: &mut Arena, report: &mut Report) {
+    let started = std::time::Instant::now();
+    arena.step(1);
+    report.step_nanos += started.elapsed().as_nanos() as u64;
+}
+
 /// Samples a session every tick into a [`Report`].
 pub struct Scorer {
     pub report: Report,
@@ -506,6 +561,8 @@ pub struct Scorer {
     picks: BTreeSet<(OwnerId, u64, String)>,
     /// The option last in effect, by bot and choice point.
     decided: BTreeMap<(OwnerId, &'static str), String>,
+    /// The first tick sampled: goof windows count from it.
+    first_tick: Option<u64>,
 }
 
 impl Scorer {
@@ -523,6 +580,7 @@ impl Scorer {
             seen: BTreeSet::new(),
             picks: BTreeSet::new(),
             decided: BTreeMap::new(),
+            first_tick: None,
         }
     }
 
@@ -576,6 +634,16 @@ impl Scorer {
             let Some(state) = states.get(bot) else {
                 continue;
             };
+            if alive(bot) {
+                let first = *self.first_tick.get_or_insert(tick);
+                shares::sample(
+                    &mut self.report,
+                    thought,
+                    vitals[bot].mounted.is_some(),
+                    tick,
+                    first,
+                );
+            }
             let track = self.tracks.entry(*bot).or_default();
             if !alive(bot) || vitals[bot].mounted.is_some() {
                 track.window.clear();

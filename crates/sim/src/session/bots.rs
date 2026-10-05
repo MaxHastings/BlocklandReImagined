@@ -52,6 +52,9 @@ mod search_memory;
 mod surprise;
 pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
 mod tactics;
+mod tuning;
+pub use tuning::{BotReload, BotTuning};
+mod why;
 
 /// Read-only brain evidence for headless diagnostics and playtest logs. This
 /// is derived state, never an input that assigns decisions to a bot.
@@ -176,6 +179,10 @@ pub(super) struct Bots {
     objective_cursor: Option<OwnerId>,
     objective_candidate: Option<OwnerId>,
     combat_budget: hand_combat::Budget,
+    /// Live dials (`/botset`) and where overrides are kept.
+    tuning: tuning::Tuning,
+    /// Wall time spent in `step_bots`, for the bot performance bar.
+    pub(super) think_nanos: u64,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
 struct Alert {

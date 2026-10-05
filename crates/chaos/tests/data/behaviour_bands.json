@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "note": "Bands on the share of bot time each kind of activity gets in a gauntlet scenario (docs/architecture/bots.md, Tuning). Nothing dormant, nothing dominant: under min while offered is DORMANT, over max is DOMINANT. Behaviours, goof and vehicle share bot time; an option (aim:feet) shares its choice point's time. Only an enforced edge (floor, ceiling or both) fails a test; the rest report. Tighten a band with the measured value in its note.",
+  "kinds": {
+    "fight": { "min": 0.03, "max": 0.85, "enforced": "floor", "note": "Enforced floor: a bot offered a fight takes it. Measured 7% (jeep, of all time) to 94% (deathmatch). The ceiling flags one-note deathmatches." },
+    "objective": { "min": 0.2, "max": 1.0, "enforced": "floor", "note": "Enforced floor: a bot offered an objective plays it. Measured 76% (CTF) to 100% (race)." },
+    "chase": { "min": 0.01, "max": 0.6, "note": "Measured 0-52%." },
+    "search": { "min": 0.01, "max": 0.4 },
+    "interact": { "min": 0.01, "max": 0.5, "note": "Boarding and pushing." },
+    "vehicle": { "min": 0.05, "max": 0.9, "offered_by": ["interact"], "note": "Mounted time; offered where a seat is (interact). Measured 78% (jeep)." },
+    "arm": { "min": 0.01, "max": 0.5, "note": "Walking to a weapon. Measured 37%." },
+    "fly": { "min": 0.0, "max": 0.25, "note": "Measured 21% (zombie survival)." },
+    "carry": { "min": 0.0, "max": 0.5 },
+    "return": { "min": 0.0, "max": 0.2 },
+    "wander": { "min": 0.0, "max": 0.3, "note": "Strolling. Idle scenarios change the ceiling." },
+    "goof": { "min": 0.01, "max": 0.15, "offered_by": ["wander"], "note": "Flavour interrupts; offered at a pause (wander). DORMANT while surprise.strength is 0." },
+    "aim:torso": { "min": 0.0, "max": 1.0 },
+    "aim:feet": { "min": 0.02, "max": 0.5, "note": "Splash aims, of aiming time, where offered." },
+    "aim:surface": { "min": 0.02, "max": 0.5 },
+    "route:direct": { "min": 0.0, "max": 1.0 },
+    "route:left": { "min": 0.02, "max": 0.5, "note": "Flanking chases, of chase-route time, where offered." },
+    "route:right": { "min": 0.02, "max": 0.5 }
+  },
+  "scenarios": {
+    "surprise_idle_*": {
+      "wander": { "max": 1.0, "note": "Nobody to fight: a long pause by design." }
+    }
+  }
+}
