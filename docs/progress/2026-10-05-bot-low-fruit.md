@@ -82,7 +82,21 @@ with the option off or its cause absent:
 Unit tests: `extras::tests` (path prediction, splash and fall, chance),
 `looks::tests` (varied, paired, deterministic looks).
 
-RESULTS
+All with every extra on (the shipped defaults), on Linux, debug build:
+
+- `cargo test -p bri-sim --lib`: 232 passed, 2 ignored.
+- `bot_extras` 7/7; `bot_soccer_match` 5/5; `bot_soccer_teams` 5/5;
+  `bot_gauntlet` 13/13; `bot_brain` 18, `bot_interactions` 18,
+  `bot_physics_interactions` 11, `bot_physical_objectives` 14,
+  `bot_objectives` 11, `bot_tactics` 13, `bot_knowledge` 8,
+  `bot_navigation_spike` 8, `bot_creator_acceptance` 8,
+  `bot_creator_adversarial` 5, `bot_carryable_objectives` 7,
+  `bot_search_objectives` 4, `bot_objective_rest` 2,
+  `bot_creator_heldout` 1, `shark_policy` 16, `turret_seats` 3,
+  `gun_seat_fire` 1, `spawn_blocked` 1: all pass. The perf and firefight
+  tests are `#[ignore]` and were only compiled.
+- `cargo clippy -p bri-sim -p bri-chaos --all-targets -- -D warnings`:
+  clean. `cargo fmt --all`: clean.
 
 ## Left out
 
