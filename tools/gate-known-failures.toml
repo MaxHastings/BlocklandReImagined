@@ -188,11 +188,6 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "the_fixed_save_corpus_hosts_like_the_game"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Duplications/bed.bls now keeps 16 bricks (8 placed, 8 set aside) against the corpus's 8 after the v0.2.4 merge; decide which is right and update save-corpus.json or the loader."
-
-[[failure]]
 test = "a_tap_inside_one_frame_still_fires::content"
 owner = "v0.2.5 bot/test cleanup"
 reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."

@@ -53,3 +53,16 @@ edge of Display Settings.
 ## Next
 
 Maxwell to try Dynamic at 70% or 85% Render Scale on the M1 Pro.
+
+## Roof shadow test
+
+The gate's only new failure, `shadow_render.rs::a_player_on_a_roof_shades_the_roof_not_the_floor_below::content`,
+failed the same way on main's code. It was not a rendering bug: Unified
+draws Classic until the Bedroom's bake arrives, then shades players from the
+sun with the room's ceiling (lamp shadows instead), and the captures landed
+on either side of that switch (passing runs had sun shadows, failing runs
+none; the log shows it flaking since 2026-10-02). The test now pins Classic,
+the mode where players and vehicles cast sun shadows everywhere, which is
+what it checks: 6 of 6 runs passed with 512-525 roof pixels shaded (needs
+50) and none leaked. `the_fixed_save_corpus_hosts_like_the_game` passes, so
+its known-failure entry is removed.
