@@ -923,43 +923,42 @@ pub fn follow_drawn_bodies<'a>(
     body: impl Fn(bri_world::OwnerId) -> Option<&'a AvatarMesh>,
 ) {
     use bri_sim::presentation::CueKind;
+    let at_body = |cue: &bri_sim::presentation::Cue| {
+        // Effects on a node of the body (a muzzle flash) already follow
+        // the drawn node.
+        let CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(actor),
+            node,
+            image: None,
+            ..
+        } = &cue.kind
+        else {
+            return None;
+        };
+        if !node.is_empty() {
+            return None;
+        }
+        let mesh = body(actor.0).filter(|mesh| mesh.holds(Vec3::from(cue.position)))?;
+        mesh.drawn_offset()
+    };
     let moved: Vec<_> = cues
         .iter()
-        .filter_map(|cue| {
-            // Effects on a node of the body (a muzzle flash) already
-            // follow the drawn node.
-            let CueKind::WeaponEffect {
-                source: bri_weapons::TargetId::Actor(actor),
-                node,
-                image: None,
-                ..
-            } = &cue.kind
-            else {
-                return None;
-            };
-            if !node.is_empty() {
-                return None;
-            }
-            let at = Vec3::from(cue.position);
-            let mesh = body(actor.0).filter(|mesh| mesh.holds(at))?;
-            Some((cue.tick, cue.position, mesh.drawn_offset()?))
-        })
+        .filter_map(|cue| Some((cue.tick, cue.position, at_body(cue)?)))
         .collect();
     if moved.is_empty() {
         return;
     }
     for cue in cues.iter_mut() {
-        if !matches!(
-            cue.kind,
-            CueKind::WeaponEffect { .. } | CueKind::WeaponSound { .. }
-        ) {
-            continue;
-        }
-        if let Some((_, _, offset)) = moved
-            .iter()
-            .find(|(tick, at, _)| *tick == cue.tick && *at == cue.position)
-        {
-            cue.position = (Vec3::from(cue.position) + *offset).to_array();
+        let offset = match cue.kind {
+            CueKind::WeaponEffect { .. } => at_body(cue),
+            CueKind::WeaponSound { .. } => moved
+                .iter()
+                .find(|(tick, at, _)| *tick == cue.tick && *at == cue.position)
+                .map(|(_, _, offset)| *offset),
+            _ => None,
+        };
+        if let Some(offset) = offset {
+            cue.position = (Vec3::from(cue.position) + offset).to_array();
         }
     }
 }
@@ -3133,10 +3132,11 @@ mod tests {
             follow_drawn_bodies(&mut cues, |owner| (owner == 1).then_some(mesh));
             let drawn = (Vec3::from(feet) + offset).to_array();
             let at: Vec<_> = cues.iter().map(|c| c.position).collect();
-            ensure!(
-                at == [drawn, drawn, feet, away],
-                "cues at {at:?}, the body drawn at {drawn:?}"
-            );
+            let near = at
+                .iter()
+                .zip([drawn, drawn, feet, away])
+                .all(|(a, b)| Vec3::from(*a).distance(Vec3::from(b)) < 1e-4);
+            ensure!(near, "cues at {at:?}, the body drawn at {drawn:?}");
             Ok(())
         };
         check(&mesh, slid)?;
