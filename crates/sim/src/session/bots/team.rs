@@ -16,9 +16,9 @@ use crate::bot_kind::BotTeam;
 const CROWD: f32 = 4.0;
 /// At most one callout this often, in seconds, as a person would.
 const CALLOUT_SECONDS: f32 = 30.0;
-/// About how often, in ticks, a bot at a pause looks round for the mood:
-/// half a second, on its own staggered beat (`cadence`).
-const MOOD_TICKS: u64 = 60;
+/// About how often, in ticks, a bot looks round for the mood: a second,
+/// on its own staggered beat (`cadence`).
+const MOOD_TICKS: u64 = 120;
 
 /// What one of a bot's options would do.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -53,7 +53,9 @@ impl Terms {
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
     pub terms: [Terms; 10],
-    /// The mood as last looked at (`Session::team_mood`).
+    /// The mood as last looked at (`Session::team_mood_now`): the pull
+    /// toward any idle flavour and toward each one. Whatever scores a
+    /// flavour reads it from here.
     pub mood: Option<(f32, [f32; 11])>,
     pub allies: usize,
     pub next_callout: u64,
@@ -377,29 +379,27 @@ impl Session {
         .then_some(vehicle)
     }
 
-    /// The mood pull on `bot`, only while it can matter: at a natural
-    /// pause (when an idle flavour may start) or during one (whose end it
-    /// shortens), with the surprise and the mood on. It is looked at afresh
-    /// on the bot's own beat, about every `MOOD_TICKS`, and kept between,
-    /// so a crowd costs a few rays a bot each half second, not each tick.
+    /// The mood pull on `bot`, with the surprise and the mood on: looked at
+    /// afresh on the bot's own beat, about every `MOOD_TICKS`, while nothing
+    /// threatens it, and kept between (and while it is under threat), so a
+    /// crowd costs a few rays a bot each second, not each tick, and a match
+    /// keeps a mood for a flavour to be scored by.
     pub(super) fn team_mood_now(
         &mut self,
         bot: OwnerId,
         (at, eye): (Vec3, Vec3),
-        natural: bool,
+        threatened: bool,
         tick: u64,
     ) -> (f32, [f32; 11]) {
         let Some(brain) = self.bots.brains.get(&bot) else {
             return (0.0, [0.0; 11]);
         };
-        let s = &brain.kind.surprise;
-        let matters = brain.kind.team.mood > 0.0
-            && s.strength > 0.0
-            && s.interrupts_per_minute > 0.0
-            && (natural || brain.surprise.interrupting());
-        if !matters {
+        if brain.kind.team.mood <= 0.0 || brain.kind.surprise.strength <= 0.0 {
             self.bots.brains.get_mut(&bot).unwrap().team.mood = None;
             return (0.0, [0.0; 11]);
+        }
+        if threatened {
+            return brain.team.mood.unwrap_or_default();
         }
         if let Some(mood) = brain.team.mood
             && !cadence::beat(bot, cadence::salt::MOOD, tick, MOOD_TICKS)
