@@ -2552,13 +2552,15 @@ impl Session {
             committed: objective.is_some_and(|view| view.committed),
             gunning: can_gun,
             arm: arm.map_or(0.0, |(_, score)| score),
-            // A swimmer reaches any depth: only how far counts.
-            enemy: enemy
-                .filter(|_| !objective_without_attack)
-                .map(|seen| match swim {
-                    Some(_) => (seen.feet.distance(feet), 0.0),
-                    None => (flat(seen.feet - feet).length(), seen.feet.y - feet.y),
-                }),
+            // A swimmer reaches any depth, and a swing reaches round it
+            // alike: only how far counts.
+            enemy: enemy.filter(|_| !objective_without_attack).map(|seen| {
+                if swim.is_some() || weapon.is_none_or(|w| w.melee) {
+                    (seen.feet.distance(feet), 0.0)
+                } else {
+                    (flat(seen.feet - feet).length(), seen.feet.y - feet.y)
+                }
+            }),
             far,
             step: body.step,
             remembers: brain.memory.is_some(),
@@ -2588,7 +2590,11 @@ impl Session {
             .choice_was
             .target
             .is_some_and(|t| target.is_some_and(|now| now != t));
-        let interrupt = hurt_now
+        // Hurt by the one it already went after tells it nothing new: only
+        // a hit from someone else re-opens the choice at once.
+        let hurt_anew =
+            hurt_now && hurt_by.is_some_and(|k| brain.choice_was.target != Some(k.subject));
+        let interrupt = hurt_anew
             || situation.objective && !brain.choice_was.objective
             || situation.committed != brain.choice_was.committed
             || situation.holding != brain.choice_was.holding
