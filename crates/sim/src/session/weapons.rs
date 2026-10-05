@@ -853,13 +853,10 @@ impl Session {
                 // Ski nodes follow the ski vehicle the avatar rides.
                 WeaponEvent::SkiNodes { .. } => {}
                 WeaponEvent::Blast {
-                    position,
-                    radius,
-                    damage,
-                    ..
+                    position, radius, ..
                 } => self
                     .bots
-                    .notice(super::bots::Stimulus::blast(position, radius, damage)),
+                    .notice(super::bots::Stimulus::blast(position, radius)),
                 WeaponEvent::Tumble {
                     actor, velocity, ..
                 } => self.tumble_player(actor.0, velocity)?,

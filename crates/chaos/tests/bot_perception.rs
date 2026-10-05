@@ -194,8 +194,6 @@ fn off_human(g: &Game) -> f32 {
 fn watched(gaze: f32) -> Option<(BotThought, f32)> {
     let mut kind = blockhead();
     kind.perception.gaze = gaze;
-    kind.perception.gaze_degrees = 25.0;
-    kind.perception.gaze_range = 40.0;
     let mut g = Game::new(kind, false);
     for _ in 0..120 * 8 {
         g.steps(1, true);
@@ -216,7 +214,7 @@ fn watched(gaze: f32) -> Option<(BotThought, f32)> {
 
 #[test]
 fn a_long_stare_turns_an_idle_bots_head() {
-    let (thought, off) = watched(10.0).expect("a long stare draws a glance");
+    let (thought, off) = watched(40.0).expect("a long stare draws a glance");
     assert_eq!(thought.behaviour, "wander", "{thought:?}");
     assert!(
         off < 12.0,

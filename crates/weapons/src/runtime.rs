@@ -515,13 +515,12 @@ pub enum Event {
         text: String,
         seconds: f32,
     },
-    /// A projectile exploded with a blast reaching `radius` and doing up to
-    /// `damage`: what a bystander notices, whoever it hurts.
+    /// A projectile exploded with a blast reaching `radius`: what a
+    /// bystander notices, whoever it hurts.
     Blast {
         source: ActorId,
         position: Vec3,
         radius: f32,
-        damage: f32,
     },
     Diagnostic {
         actor: Option<ActorId>,
@@ -4489,7 +4488,6 @@ impl WeaponsWorld {
             source: p.source,
             position: p.position,
             radius,
-            damage: d.explosion.damage * p.scale,
         });
         let targets = q.radius(p.position, radius, MAX_QUERY_TARGETS);
         if targets.len() > MAX_QUERY_TARGETS {

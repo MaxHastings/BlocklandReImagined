@@ -1986,6 +1986,9 @@ impl Session {
             self.bots.brains.get_mut(&bot).unwrap().arming.clear();
             None
         };
+        // A spawn-protected target is watched; its reaction waits until it
+        // can be hurt.
+        let damageable = sight.target.is_none_or(|s| !self.spawn_protected(s.owner));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         // The grounded objective owns its hold controls, including ordinary
@@ -2016,11 +2019,12 @@ impl Session {
         let mut warn = None;
         match sight.target {
             Some(seen) => {
-                if brain.target != Some(seen.owner) {
+                let fresh = brain.target != Some(seen.owner);
+                if fresh {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
-                    brain.react_to(seen.owner, seen.real, feet, tick);
                 }
+                brain.perceive(seen.owner, seen.real, feet, tick, fresh, damageable);
                 let knowledge = Knowledge {
                     subject: seen.owner,
                     at: seen.real,
@@ -2044,8 +2048,8 @@ impl Session {
             }
         }
         // A hit still interrupts at once; return fire waits its reaction.
-        if let Some(k) = hurt_by.filter(|k| brain.target != Some(k.subject)) {
-            brain.react_to(k.subject, k.at, feet, tick);
+        if let Some(k) = hurt_by {
+            brain.hurt_by(&k, feet, tick);
         }
         if kind.alerts_allies
             && let Some(knowledge) = warn
@@ -2504,7 +2508,7 @@ impl Session {
                 let tracked = (tick - brain.seen_since) as f32 * TICK;
                 let size = kind.aim_error_degrees.to_radians()
                     * (1.0 - (tracked / 2.0).min(1.0) * 2.0 / 3.0)
-                    * brain.perception.wobble(&kind.perception, seen.owner, tick);
+                    * brain.perception.aim_scale(seen.owner, tracked);
                 brain.error = (
                     (brain.random() * 2.0 - 1.0) * size,
                     (brain.random() * 2.0 - 1.0) * size * 0.5,
@@ -2548,6 +2552,9 @@ impl Session {
         } else if hold {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
+        }
+        if let Some(seen) = sight.target {
+            step *= brain.perception.turn_scale(seen.owner, tick);
         }
         brain.yaw = turn(brain.yaw, aim_yaw, step);
         brain.pitch += (aim_pitch - brain.pitch).clamp(-step, step);
