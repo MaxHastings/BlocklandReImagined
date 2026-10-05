@@ -3156,22 +3156,17 @@ impl Session {
                             .is_none()
                         })
                     };
-                    // A leg carries on round the enemy or turns back, as
-                    // a coin falls, unless only one way is open (an arc
-                    // round them goes somewhere; a shuttle back and forth
-                    // does not); one past halfway to the end of its leash
-                    // and leading on away turns back, so the arcs keep it
-                    // in reach of its post. One that reaches an edge stands
+                    // Each leg turns back the other way, unless only this
+                    // way is open (a coin-flip carry-on round the enemy
+                    // drifted the fighter out of its band: the fair
+                    // metric's gun range rose from 12 to 23 and its hit
+                    // rate fell to 12%). One that reaches an edge stands
                     // there until the leg is up; one that meets an ally
                     // turns away from it at once.
                     let (mut side, mut until) = brain.strafe;
                     let parted = ally(side) && ground(-side);
                     if tick >= until || parted {
-                        let out = flat(leash - feet);
-                        let outward =
-                            out.length() > chase_radius * 0.5 && (right * side).dot(out) < 0.0;
-                        let turn = outward || brain.random() < 0.5;
-                        if parted || !ground(side) || turn && ground(-side) {
+                        if parted || ground(-side) || !ground(side) {
                             side = -side;
                         }
                         let seconds = kind.fighting.strafe_seconds * (0.75 + 0.5 * brain.random());
@@ -3780,7 +3775,7 @@ fn team_choices(
         c[at(Behaviour::Objective)] = team::Choice {
             // Only a team's step crowds a teammate's: one's own progress
             // is not given way to an ally making the same.
-            place: v.shared.then_some(v.point),
+            place: (v.shared).then_some(v.point),
             target: v
                 .resource
                 .map(|r| Target::Object(r.vehicle()))
