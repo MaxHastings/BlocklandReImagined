@@ -1781,7 +1781,14 @@ impl Player {
             physics.colliders[self.collider].set_shape(shape);
         }
         let pose = self.body_pose(Vec3::from(self.state.feet), self.state.crouched);
-        physics.bodies[self.body].set_next_kinematic_position(pose);
+        if passed.is_some() {
+            // Through an opening the body jumps to the partner, as a
+            // teleport does: driven there as its next pose, the step would
+            // sweep it across the gap and throw what it touched.
+            physics.bodies[self.body].set_position(pose, true);
+        } else {
+            physics.bodies[self.body].set_next_kinematic_position(pose);
+        }
         let touched = contacts.difference(&self.contacts).copied().collect();
         self.contacts = contacts;
         Ok(MotionEvents {
