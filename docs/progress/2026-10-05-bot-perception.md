@@ -154,8 +154,11 @@ Still failing, not loosened:
 - `water_between_the_sides`: 21.6 behaviour switches a bot-minute (bar
   20, kept; the release has 10.8). The bots lane is fixing that metric at
   its cause.
-- `all_dials_on` (in `gate-known-failures`), `bot_think_time_16` (the
-  release also fails it on this loaded machine: 36979 us vs 42485 here).
+- `all_dials_on` (in `gate-known-failures`).
+- `bot_think_time_16` fails only under load (42485 us a tick in the full
+  gauntlet run; the release 36979 there). Run alone on a quieter machine
+  (load 3.7) it passes: 13302 us a tick of bot think (831 us a bot),
+  15589 us the whole step, debug build.
 - Content-dependent tests (no generated content here) fail at
   `crates/package/src/testing.rs:9` on both trees; `showcase
   a_bot_carries_its_catch_out` fails on the base as well.
