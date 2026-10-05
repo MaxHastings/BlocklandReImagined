@@ -17,6 +17,15 @@
       "objective_radius": 24,
       "contest": { "lead_seconds": 0.6, "max_lead": 4, "engage": 4, "cover_distance": 6, "cover_side": 3, "clear_degrees": 60 },
       "fighting": { "band_slack": 0.15, "min_band_slack": 1.5, "dwell_seconds": 0.5, "strafe_seconds": 3.5, "fly_rise": 2.5, "fly_drop": 3.0, "fly_give_up_seconds": 4.0 },
+      "perception": {
+        "salience": 1,
+        "glance_seconds": 0.8,
+        "cooldown_seconds": 6,
+        "strength": 1,
+        "relaxed_scale": 1.8,
+        "away_scale": 1.5,
+        "view_degrees": 180
+      },
       "mounted": {
         "anchor": "mount",
         "chase_radius": 96,

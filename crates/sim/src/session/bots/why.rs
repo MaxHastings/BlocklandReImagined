@@ -64,7 +64,7 @@ impl BotThought {
         if !parts.is_empty() {
             out.push(format!("Terms: {}", parts.join(", ")));
         }
-        let noticed = match (self.visible, &self.remembered) {
+        let mut noticed = match (self.visible, &self.remembered) {
             (Some(seen), _) => format!("Sees player {seen}"),
             (None, Some(e)) => format!(
                 "Remembers player {} {:.1} s ago at ({:.0}, {:.0}, {:.0})",
@@ -76,6 +76,10 @@ impl BotThought {
             ),
             (None, None) => "Noticed nothing".to_string(),
         };
+        // A glance or reaction still under way (`perception`).
+        if let Some(n) = self.noticed.filter(|n| tick < n.until) {
+            noticed.push_str(&format!("; {}", n.why));
+        }
         out.push(noticed);
         out.truncate(WHY_LINES);
         out
@@ -139,6 +143,7 @@ mod tests {
             objective_detail: None,
             objective_searches: 0,
             objective_reused: 0,
+            noticed: None,
             team: Default::default(),
             surprise: BotSurpriseView {
                 strength: 0.6,
@@ -171,6 +176,11 @@ mod tests {
             ]
         );
         t.visible = Some(3);
+        t.noticed = Some(super::super::BotNotice {
+            why: "reacting: relaxed",
+            since: 1200,
+            until: 1300,
+        });
         t.surprise.strength = 0.0;
         t.surprise.interrupt = Some("hop");
         t.surprise.decisions.clear();
@@ -179,8 +189,10 @@ mod tests {
             [
                 "Doing chase, goofing (hop)",
                 "Terms: surprise off",
-                "Sees player 3"
+                "Sees player 3; reacting: relaxed"
             ]
         );
+        // Once over, it is not shown.
+        assert_eq!(t.why(1300).last().unwrap(), "Sees player 3");
     }
 }

@@ -490,6 +490,9 @@ impl Session {
                 WeaponEvent::Sound {
                     profile, position, ..
                 } => {
+                    let volume = self.weapons.pack.sound(&profile).map_or(0.0, |s| s.volume);
+                    self.bots
+                        .notice(super::bots::Stimulus::sound(position, volume));
                     self.cues.emit(
                         tick,
                         crate::presentation::CueKind::WeaponSound { profile },
@@ -849,6 +852,11 @@ impl Session {
                 ),
                 // Ski nodes follow the ski vehicle the avatar rides.
                 WeaponEvent::SkiNodes { .. } => {}
+                WeaponEvent::Blast {
+                    position, radius, ..
+                } => self
+                    .bots
+                    .notice(super::bots::Stimulus::blast(position, radius)),
                 WeaponEvent::Tumble {
                     actor, velocity, ..
                 } => self.tumble_player(actor.0, velocity)?,
