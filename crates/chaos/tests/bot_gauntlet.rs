@@ -214,7 +214,9 @@ fn deathmatch_open_field() {
     );
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
-    assert!(r.kills >= 50 * rounds() as u64, "a real fight: {}", r.kills);
+    // With human aim (`perception`) and dodge hops (`extras`) 41 kills
+    // where nearly every shot landing gave 69; 40 is still a fight.
+    assert!(r.kills >= 40 * rounds() as u64, "a real fight: {}", r.kills);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
     // Measured at the merge: circling 18% (strafing in its band), 55
     // changes a bot-minute (a respawned bot chased for a tick before it
