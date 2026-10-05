@@ -28,7 +28,7 @@ bot does through the same code.
    |---|---|---|
    | Carry | its tool holds something | carries it to open space, swings and lets go |
    | Interact | a useful, permitted environmental opportunity | reserves a seat or loose hazard, approaches and executes through ordinary controls |
-   | Fight | an enemy in sight within its weapon's band | stands, strafes, backs off when too close |
+   | Fight | an enemy in sight within its weapon's band (level with it, or, for a ranged weapon, up to its band above) | stands, strafes, backs off when too close |
    | Chase | an enemy in sight out of its band | paths to them |
    | Search | an enemy remembered | goes where they were, looks around |
    | Return | strayed from its brick | walks home |
@@ -93,7 +93,7 @@ Edges are the ways the bot's body can actually move between them now:
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
 | jet | the body can jet (`can_jet`, energy, the kind's `fly` weight above 0), the column up from the launch cell, the crossing at the apex and the descent are clear, and the climb is within the energy | the flight time from the jet's thrust, lift and gravity, plus takeoff |
-| board, drive, leave | a free, permitted wheeled vehicle a short walk away whose drive beats the walk | walk to the seat + boarding + chassis distance / cruise speed + leaving |
+| board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
 
 Edge costs come from the body's and vehicle's own numbers (`PlayerTuning`
 speeds, jet acceleration and lift, gravity, energy drain; a vehicle's
@@ -103,9 +103,10 @@ content names. Kinds keep one data knob per mode: the `fly` weight in
 jet, and `interact` (0: never) whether it may take a vehicle.
 
 **The plan.** A search returns one list of waypoints, each tagged with the
-leg it belongs to (`nav::Mode`: walk, swim or jet), and, when a vehicle is
-worth it, the route wraps that in board / drive / leave legs
-(`route::Leg`). Behaviours ask for a goal and get back that one mixed plan.
+leg it belongs to (`nav::Mode`: walk, swim or jet). A vehicle worth taking
+is a seat opportunity costed the same way (walk to it, board, drive), and
+once seated the same search plans the chassis's path. Behaviours ask for a
+goal and get back that plan.
 The search stays bounded: the same per-tick sample and expansion budgets,
 at most a few jet tests per search, one landing sample per goal.
 
@@ -122,21 +123,36 @@ person presses:
   brake onto it. A takeoff under a roof cannot happen: the planner only
   launches where the column up is clear, so a bot under a platform walks
   out from under it first.
-- drive: pure pursuit along the chassis path. The chassis's turning radius
-  is its wheelbase over `tan(max_steering)`, widened with speed. A target
-  inside either turning circle is not chased round in circles: the driver
-  backs up, steering the nose toward it, until it is outside, then drives
-  on. It slows to the speed it can still brake from by the target and
-  stops there.
-- board / leave: the ordinary seat approach and mount; leave dismounts
-  where the drive ends and the rest is walked.
+- drive (`route::gear`, `route::pace`): pure pursuit along the chassis
+  path. The chassis's tightest turn is its wheelbase over the tangents of
+  its front and rear lock (`route::Chassis`). A point deeper than half the
+  chassis's width inside either turning circle is not chased round in
+  circles: the driver backs away from it (nose swinging toward it) or
+  pulls ahead of it, until it is out of the circle. A point behind is
+  backed onto when that is sooner, at the definition's cruise speeds, than
+  turning round. Speed is no more than the tyres hold on the arc pure
+  pursuit takes, manoeuvring speed while backing or pulling out, and what
+  it can still brake from by the point. A chassis is at a waypoint, or a
+  search probe, within half its footprint.
+- board: the ordinary seat approach, claim and mount. The seat claim's
+  progress is measured afresh once the bot is seated (the drive's own
+  distance), so a long drive is not judged by the walk to the seat.
+- leave: a chassis that cannot hurt the enemy it chases (no gun, and no
+  runover for someone not on foot) stops and gets out once its side is
+  about as close as the bot fights from on foot. A wreck, or a wheeled
+  hull on its side or roof, ends the drive at once.
 
 **Replanning from outcomes.** Each leg watches what really happened: a walk
 leg that stops moving hops, then plans again (as before); a jet leg that
 runs out of time or lands below where it took off plans again from where
 the bot came down, and the cells that failed are forgotten; a drive leg
 that makes no headway backs up, plans again and finally gives up the seat.
-A plan is never trusted past what the world shows.
+A plan is never trusted past what the world shows. When the best route to
+an enemy ends where the bot cannot hurt them (farther across than its
+band, or higher than a jump brings within it), chasing them, or searching
+where they stand, is worth nothing until they move. A bot standing on
+something the grid leaves out (a vehicle's roof) plans from the floor
+beneath.
 
 Portals stay inside the same mechanism: an opening is a walk edge of the
 grid, so a route that crosses one is a walk leg like any other. Shark-like
