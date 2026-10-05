@@ -361,6 +361,8 @@ pub(super) fn choose(
     let velocity = Vec3::from(peer.player.state().velocity);
     let target_velocity = Vec3::from(target.player.state().velocity);
     let target_point = seen.eye - Vec3::Y * 0.5;
+    // Gathered when a candidate first needs them.
+    let bodies = std::cell::LazyCell::new(|| Bodies::of(session, bot));
     let scale = peer.player.state().scale;
     let selected = actor.selected;
     let mut supported = false;
@@ -497,8 +499,7 @@ pub(super) fn choose(
             surface: false,
         };
         if curved && !turn {
-            if Some(slot) == selected && image.charges() && safe_blast(session, bot, choice, origin)
-            {
+            if Some(slot) == selected && image.charges() && safe_blast(&bodies, choice, origin) {
                 state.intent = Some(Intent {
                     choice,
                     seen,
@@ -522,10 +523,12 @@ pub(super) fn choose(
                 direction: aim.map_or(direction, |a| a.direction),
                 ..choice
             };
-            if !safe_blast(session, bot, choice, origin) {
+            if !safe_blast(&bodies, choice, origin) {
                 continue;
             }
-            match clear_path(session, bot, seen.owner, choice, origin, budget, false) {
+            match clear_path(
+                session, bot, seen.owner, choice, origin, &bodies, budget, false,
+            ) {
                 None => {
                     pending = true;
                     break;
@@ -534,12 +537,8 @@ pub(super) fn choose(
                 Some(true) => {}
             }
             let impact = aim.map_or(target_point, |a| a.impact);
-            let (self_clearance, ally_clearance) = clearances(
-                session,
-                bot,
-                impact,
-                aim.map_or(0.0, |a| a.time_seconds as f32),
-            );
+            let (self_clearance, ally_clearance) =
+                clearances(&bodies, impact, aim.map_or(0.0, |a| a.time_seconds as f32));
             let context = Context {
                 distance,
                 target_health: target.combat.health.max(1.0),
@@ -587,9 +586,9 @@ pub(super) fn choose(
                         moving,
                         surface: aim == super::surprise::AIM_SURFACE,
                     };
-                    if let Some((c, score)) =
-                        variant(session, bot, seen.owner, cap, solve, context, budget)
-                    {
+                    if let Some((c, score)) = variant(
+                        session, bot, seen.owner, cap, solve, context, &bodies, budget,
+                    ) {
                         variants.push((slot, aim, c, score));
                     }
                 }
@@ -713,6 +712,7 @@ fn variant(
     cap: Capability,
     solve: Solve,
     context: Context,
+    bodies: &Bodies,
     budget: &mut Budget,
 ) -> Option<(Choice, f32)> {
     let Delivery::Projectile(f) = cap.delivery else {
@@ -755,13 +755,21 @@ fn variant(
         aim: Some(aim),
         surface: solve.surface,
     };
-    if !safe_blast(session, bot, choice, solve.origin)
-        || clear_path(session, bot, enemy, choice, solve.origin, budget, false) != Some(true)
+    if !safe_blast(bodies, choice, solve.origin)
+        || clear_path(
+            session,
+            bot,
+            enemy,
+            choice,
+            solve.origin,
+            bodies,
+            budget,
+            false,
+        ) != Some(true)
     {
         return None;
     }
-    let (self_clearance, ally_clearance) =
-        clearances(session, bot, aim.impact, aim.time_seconds as f32);
+    let (self_clearance, ally_clearance) = clearances(bodies, aim.impact, aim.time_seconds as f32);
     let splash = Capability {
         direct_damage: 0.0,
         ..cap
@@ -779,35 +787,67 @@ fn variant(
     Some((choice, score))
 }
 
-fn clearances(session: &Session, bot: OwnerId, impact: Vec3, seconds: f32) -> (f32, Option<f32>) {
-    let mut own = 0.0;
-    let mut ally: Option<f32> = None;
-    for (owner, peer) in &session.peers {
-        if !peer.combat.alive || (*owner != bot && !session.bot_allies(bot, *owner)) {
-            continue;
+/// A body a shot must spare, as one decision sees it ([`Bodies`]).
+#[derive(Clone, Copy)]
+struct Spared {
+    centre: Vec3,
+    /// Half the standing height.
+    half: f32,
+    velocity: Vec3,
+    /// It rides the vehicle the shooter rides.
+    shares_mount: bool,
+}
+/// The shooter's living body and its living allies'. Nothing moves while a
+/// bot decides, so its side is looked up once a decision, not again for
+/// every candidate and path segment (`bot_allies` is the dear part).
+struct Bodies {
+    own: Option<Spared>,
+    allies: Vec<Spared>,
+}
+impl Bodies {
+    fn of(session: &Session, bot: OwnerId) -> Self {
+        let mount = session.mounted(bot).map(|(v, _)| v);
+        let mut own = None;
+        let mut allies = Vec::new();
+        for (owner, peer) in &session.peers {
+            if !peer.combat.alive || (*owner != bot && !session.bot_allies(bot, *owner)) {
+                continue;
+            }
+            let half = peer.player.tuning().stand_height * 0.5;
+            let spared = Spared {
+                centre: Vec3::from(peer.player.state().feet) + Vec3::Y * half,
+                half,
+                velocity: Vec3::from(peer.player.state().velocity),
+                shares_mount: mount.is_some() && mount == session.mounted(*owner).map(|(v, _)| v),
+            };
+            if *owner == bot {
+                own = Some(spared);
+            } else {
+                allies.push(spared);
+            }
         }
-        let centre = Vec3::from(peer.player.state().feet)
-            + Vec3::Y * peer.player.tuning().stand_height * 0.5;
-        let velocity = Vec3::from(peer.player.state().velocity);
-        let distance = (impact.distance(centre + velocity * seconds)
-            - peer.player.tuning().stand_height * 0.5)
-            .max(0.0);
-        if *owner == bot {
-            own = distance;
-        } else {
-            ally = Some(ally.map_or(distance, |d| d.min(distance)));
-        }
+        Self { own, allies }
     }
+}
+fn clearances(bodies: &Bodies, impact: Vec3, seconds: f32) -> (f32, Option<f32>) {
+    let distance =
+        |b: &Spared| (impact.distance(b.centre + b.velocity * seconds) - b.half).max(0.0);
+    let own = bodies.own.as_ref().map_or(0.0, distance);
+    let ally = bodies
+        .allies
+        .iter()
+        .map(distance)
+        .reduce(|a: f32, b: f32| a.min(b));
     (own, ally)
 }
-fn safe_blast(session: &Session, bot: OwnerId, choice: Choice, origin: Vec3) -> bool {
+fn safe_blast(bodies: &Bodies, choice: Choice, origin: Vec3) -> bool {
     if choice.capability.splash_radius == 0.0 {
         return true;
     }
     let Some(aim) = choice.aim else {
         return false;
     };
-    let (own, ally) = clearances(session, bot, aim.impact, aim.time_seconds as f32);
+    let (own, ally) = clearances(bodies, aim.impact, aim.time_seconds as f32);
     let safe = choice.capability.splash_radius + 1.0;
     origin.distance(aim.impact) > safe && own > safe && ally.is_none_or(|d| d > safe)
 }
@@ -815,12 +855,14 @@ fn safe_blast(session: &Session, bot: OwnerId, choice: Choice, origin: Vec3) -> 
 /// Exact free-flight segments match the native semi-implicit projectile step.
 /// Allies get a swept motion envelope; intended-target collisions are followed
 /// by a world probe so their present body cannot hide an obstacle on that chord.
+#[allow(clippy::too_many_arguments)]
 fn clear_path(
     session: &Session,
     bot: OwnerId,
     enemy: OwnerId,
     choice: Choice,
     origin: Vec3,
+    bodies: &Bodies,
     budget: &mut Budget,
     critical: bool,
 ) -> Option<bool> {
@@ -886,19 +928,15 @@ fn clear_path(
         if q.passage(start, end).is_some() {
             return Some(false);
         }
-        if !session.bot_fire_clear(bot, start, end, 0.0, 0.0, 0.0) {
+        let unmounted = bodies.allies.iter().filter(|a| !a.shares_mount);
+        let spared = unmounted.map(|a| (a.centre, a.half));
+        if !super::interactions::fire_clear_of(start, end, 0.0, 0.0, 0.0, spared) {
             return Some(false);
         }
         // Future ally movement is conservatively enclosed about today's body.
-        for (owner, peer) in &session.peers {
-            if *owner == bot || !peer.combat.alive || !session.bot_allies(bot, *owner) {
-                continue;
-            }
-            let centre = Vec3::from(peer.player.state().feet)
-                + Vec3::Y * peer.player.tuning().stand_height * 0.5;
-            let radius = peer.player.tuning().stand_height * 0.5
-                + Vec3::from(peer.player.state().velocity).length() * time as f32
-                + 0.1;
+        for ally in &bodies.allies {
+            let centre = ally.centre;
+            let radius = ally.half + ally.velocity.length() * time as f32 + 0.1;
             let delta = end - start;
             let t =
                 ((centre - start).dot(delta) / delta.length_squared().max(1e-9)).clamp(0.0, 1.0);
@@ -986,7 +1024,8 @@ pub(super) fn validate_fire(
         aim.impact = impact.as_vec3();
         choice.aim = Some(aim);
     }
-    if !safe_blast(session, bot, choice, origin) {
+    let bodies = Bodies::of(session, bot);
+    if !safe_blast(&bodies, choice, origin) {
         return false;
     }
     // The planned endpoint must still intersect the observed target's motion
@@ -1009,7 +1048,9 @@ pub(super) fn validate_fire(
             return false;
         }
     }
-    clear_path(session, bot, seen.owner, choice, origin, budget, true) == Some(true)
+    clear_path(
+        session, bot, seen.owner, choice, origin, &bodies, budget, true,
+    ) == Some(true)
 }
 
 /// Called after player movement, collision synchronization and frame update.

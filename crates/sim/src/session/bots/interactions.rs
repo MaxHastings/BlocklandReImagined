@@ -97,6 +97,31 @@ pub(super) struct Opportunity {
     pub utility: f32,
 }
 
+/// No body of `spared` (centre, half-size) stands in a shot from `origin`
+/// at `target` and `past` beyond, `splash` wide, widening by `spread`
+/// radians (`Session::bot_fire_clear`).
+pub(super) fn fire_clear_of(
+    origin: Vec3,
+    target: Vec3,
+    splash: f32,
+    past: f32,
+    spread: f32,
+    mut spared: impl Iterator<Item = (Vec3, f32)>,
+) -> bool {
+    let delta = target - origin;
+    let length = delta.length();
+    if length < 0.01 {
+        return false;
+    }
+    let space = super::claims::Space {
+        from: origin,
+        to: origin + delta / length * (length + past),
+        radius: splash,
+        spread: spread.tan(),
+    };
+    !spared.any(|(centre, half)| space.holds(centre, half))
+}
+
 impl Session {
     /// A passenger may have boarded the reachable lower seat of a tall vehicle.
     /// Fill its useful empty role through the same seat keys players use.
@@ -954,29 +979,19 @@ impl Session {
         past: f32,
         spread: f32,
     ) -> bool {
-        let delta = target - origin;
-        let length = delta.length();
-        if length < 0.01 {
-            return false;
-        }
-        let space = super::claims::Space {
-            from: origin,
-            to: origin + delta / length * (length + past),
-            radius: splash,
-            spread: spread.tan(),
-        };
-        !self.peers.iter().any(|(o, p)| {
+        let allies = self.peers.iter().filter_map(|(o, p)| {
             if *o == bot || !p.combat.alive || !self.bot_allies(bot, *o) {
-                return false;
+                return None;
             }
             if self.mounted(bot).is_some()
                 && self.mounted(bot).map(|(v, _)| v) == self.mounted(*o).map(|(v, _)| v)
             {
-                return false;
+                return None;
             }
             let half = p.player.tuning().stand_height * 0.5;
-            space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
-        })
+            Some((Vec3::from(p.player.state().feet) + Vec3::Y * half, half))
+        });
+        fire_clear_of(origin, target, splash, past, spread, allies)
     }
 
     pub(super) fn bot_vehicle_body(&self, bot: OwnerId) -> Option<(Vec3, Body)> {
