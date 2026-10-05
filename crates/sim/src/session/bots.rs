@@ -477,8 +477,17 @@ impl Brain {
                 // The chase heads for where it really stands, and the path
                 // finds the way there.
                 let to = seen.real + self.chase_offset;
+                // A goal is kept while the enemy stays near it, unless the
+                // search to it came back empty well short of it: then the
+                // goal follows the enemy wherever it now stands, so the bot
+                // searches again rather than stand settled out of reach.
                 let moved_on = match self.goal {
-                    Some(Goal::Chase(p)) => p.distance(to) > 2.5,
+                    Some(Goal::Chase(p)) => {
+                        p.distance(to) > 2.5
+                            || self.settled
+                                && self.plan.is_empty()
+                                && flat(p - feet).length() > near
+                    }
                     _ => true,
                 };
                 if moved_on {
@@ -2259,14 +2268,14 @@ impl Session {
                     .seen(&kind.surprise, surprise::Domain::Behaviour, b as u32, tick);
         }
         let plain_before = behaviour::best(&scores) as usize;
-        let (current, current_since) = (brain.behaviour as usize, brain.behaviour_since);
+        let claims = &self.bots.claims;
         brain.team.terms = if gate.carrying || gate.urgent {
             Default::default()
         } else {
             team::adjust(
                 &kind.team,
                 bot,
-                |b| if b == current { current_since } else { tick },
+                |b| claims.held_since(bot, b as u8, choices[b].target, tick),
                 &mut scores,
                 &choices,
                 &intents,
@@ -2338,7 +2347,10 @@ impl Session {
             bot,
             claims::Intent {
                 option: behaviour as u8,
-                since: brain.behaviour_since,
+                since: self
+                    .bots
+                    .claims
+                    .held_since(bot, behaviour as u8, chosen.target, tick),
                 place: chosen.place,
                 target: chosen.target,
                 seats,

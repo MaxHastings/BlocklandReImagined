@@ -270,13 +270,22 @@ impl Session {
             .collect()
     }
 
-    /// How many of `bot`'s allies, crew of its vehicle aside, are after
-    /// `enemy` now.
+    /// How many of `bot`'s allies, crew of its vehicle aside, went after
+    /// `enemy` before it did. As with every overlap the first keeps it:
+    /// counting later ones too made two bots on one enemy both give way,
+    /// then both come back.
     pub(super) fn team_crowd(&self, bot: OwnerId, enemy: OwnerId) -> f32 {
         let tick = self.simulation.state().tick;
+        let target = Some(Target::Player(enemy));
+        let mine = self
+            .bots
+            .claims
+            .intents(tick)
+            .find(|(o, i)| *o == bot && i.target == target)
+            .map_or(tick, |(_, i)| i.since);
         self.team_intents(bot, tick)
             .into_iter()
-            .filter(|(_, i)| i.target == Some(Target::Player(enemy)))
+            .filter(|(o, i)| i.target == target && (i.since, *o) < (mine, bot))
             .count() as f32
     }
 
@@ -289,11 +298,7 @@ impl Session {
         let Some(brain) = self.bots.brains.get(&bot) else {
             return 0.0;
         };
-        let since = if brain.behaviour == option {
-            brain.behaviour_since
-        } else {
-            tick
-        };
+        let since = self.bots.claims.held_since(bot, option as u8, None, tick);
         let choice = Choice {
             place: Some(at),
             ..Default::default()
