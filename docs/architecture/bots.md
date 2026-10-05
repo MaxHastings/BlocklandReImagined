@@ -166,12 +166,14 @@ the plain linear turn and the old fire gate.
   scale multiplies its starting aim error, which narrows over the usual
   two seconds of tracking. On top, however long it tracks, its aim trails
   a target moving across its line of sight (its own motion included) by up
-  to 0.5 seconds of that motion times `strength`, so a strafing target is
-  missed by about the same distance at any range and a still one is hit as
-  before. The native fire gate judges a shot by where the bot believes it
+  to 0.5 seconds of that motion times `strength` (at most 0.3 rad either
+  way, so a shot never leaves far off a close strafer), so a strafing
+  target is missed by about the same distance at any range and a still one
+  is hit as before. The native fire gate judges a shot by where the bot believes it
   aims (its look without its error), so the error misses for real instead
   of holding the shot back. With the fair metric the Blockhead's steady hit
-  rate falls as `strength` rises and sits inside the 15-60% band at 1. A spawn-protected target is watched but not
+  rate falls as `strength` rises and sits inside the 15-60% band at 1.
+  A spawn-protected target is watched but not
   reacted to: the clock starts when it can be hurt. Damage still
   interrupts at once (the chooser sees it as before); only the return fire
   waits. `perception::delay_ticks` and `Brain::switch_delay` give the same
@@ -405,11 +407,11 @@ class against a scripted player who strafes in legs of 0.4 to 1.2 s and
 hops every 1.5 to 3 s, at each range in `bot_tuning.json` `fair`. It
 reports the bot's hit rate (health drops per trigger tick) in the first
 seconds of an engagement and in steady state, against a band: never near
-perfect, never hopeless. Reported, not enforced yet. `fair_by_dial`
-(opt-in) runs it with the alertness dial (the first of `fair.dials` that
-`bots.json` has: `perception.alertness` once that lane lands,
-`aim_error_degrees` today) at half, shipped and double, and says whether
-the rate moves the dial's way.
+perfect, never hopeless. Enforced: the steady rate of all classes
+together, and of the gun and the bow each, sits in the band. `fair_by_dial`
+(opt-in) runs it with the perception dial (the first of `fair.dials` that
+`bots.json` has: `perception.strength`) at half, shipped and double, and
+asserts the rate moves the dial's way.
 
 **All-on run** (`all_dials_on`): every scenario with every dial at its ON
 value together (dials shipped at 0 take their `on` value), with the share
@@ -470,7 +472,7 @@ targets prefers an uncrowded one; following an ally through a gap too narrow to 
 pace rather than walking round it is the same rule) and **interaction**
 (a seat an ally offers, or a driving place from which a seated ally's
 mount sees its target, pays; a fight's stance in an ally's line of fire
-costs, so it steps out). Crew of one vehicle neither crowd nor endanger
+costs, so it steps out, where there is floor to step to). Crew of one vehicle neither crowd nor endanger
 each other; a seat stays the claim's to arbitrate. Socially, an objective
 is worth more as the team trails; idle flavours grow likelier with the
 share of the players a bot sees goofing, less those it sees playing, a

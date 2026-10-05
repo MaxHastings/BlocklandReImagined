@@ -235,7 +235,9 @@ fn deathmatch_mixed_arsenal() {
     );
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
-    assert!(r.kills >= 50 * rounds() as u64, "a real fight: {}", r.kills);
+    // With human aim (`perception`: the steady hit rate in the fair band,
+    // not every shot landing) 48 kills where 67 were; 40 is still a fight.
+    assert!(r.kills >= 40 * rounds() as u64, "a real fight: {}", r.kills);
     // Measured at the merge: circling 24% (strafing), 44 changes a
     // bot-minute, 69 kills, no suicide by splash. Now: circling 4.5%, 21
     // changes, reversals 66 -> 11, 67 kills.

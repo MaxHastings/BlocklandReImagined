@@ -3126,11 +3126,20 @@ impl Session {
                 input.crouch = to.y < feet.y - 0.4;
             }
         }
-        // A fight stands out of where a teammate's weapon will hit (`team`).
+        // A fight stands out of where a teammate's weapon will hit (`team`),
+        // where there is floor to stand on (as the strafe checks): on a
+        // deck the way out can be off its edge.
         if behaviour == Behaviour::Fight
             && let Some(out) = choices[Behaviour::Fight as usize]
                 .place
                 .filter(|out| *out != feet)
+            && super::admin_players::world_ray(
+                &self.simulation,
+                out + Vec3::Y * 0.5,
+                Vec3::NEG_Y,
+                0.5 + body.step + body.drop,
+            )
+            .is_some()
         {
             direction = flat(out - feet).normalize_or_zero();
         }

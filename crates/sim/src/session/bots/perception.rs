@@ -80,6 +80,11 @@ const FAST: f32 = 2.0;
 /// 28% with the bow and 18% with the rocket (1 s: 19/21/14%), inside the
 /// 15-60% band; a still target is hit as before.
 const STEADY_LAG: f32 = 0.5;
+/// The most, in radians either way, that lag adds: a person tracking a
+/// target crossing close by still keeps it near the crosshair. Above about
+/// 0.3 a close strafer drew shots more than 25 degrees off it (the
+/// gauntlet's off-target bar).
+const STEADY_MOST: f32 = 0.3;
 /// Seconds the starting aim error takes to narrow (`bots.rs`' tracking).
 const SETTLE_SECONDS: f32 = 2.0;
 /// A reaction delay varies by up to this share either way.
@@ -552,7 +557,7 @@ impl State {
 /// tracks a target `distance` away moving `across` units a second across
 /// its line of sight (`STEADY_LAG`); 0 at `strength` 0.
 pub(super) fn steady_error(p: &BotPerception, across: f32, distance: f32) -> f32 {
-    (STEADY_LAG * p.strength * across.max(0.0) / distance.max(1.0)).min(0.6)
+    (STEADY_LAG * p.strength * across.max(0.0) / distance.max(1.0)).min(STEADY_MOST)
 }
 /// Where a bot shooting along `direction` believes it aims: without its
 /// aim `error` (yaw, pitch). The fire gate judges a shot by this, so the

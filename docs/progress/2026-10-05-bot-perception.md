@@ -26,8 +26,11 @@ notices" layer. Base `claude/project-thread-pt64ji`, merged up to
     still interrupts at once; only the return fire waits.
   - **Fair aim.** However long it tracks, the aim trails a target moving
     across its line of sight (relative to the bot) by up to 0.5 s of that
-    motion times `strength` (`steady_error`): a strafing target is missed by
-    the same distance at any range, a still one is hit as before. The
+    motion times `strength` (`steady_error`), at most 0.3 rad either way:
+    a strafing target is missed by the same distance at any range, a still
+    one is hit as before. (Uncapped to 0.6 rad, a close strafer drew 18 of
+    331 CTF shots more than 25 degrees off it, over the gauntlet's 1 in
+    20.) The
     native fire gate (`bot_hand_fire_gate`) now judges a shot by where the
     bot believes it aims (`perception::believed`: its look without its
     error), so the error is a real miss instead of a withheld shot; before,
@@ -68,6 +71,11 @@ notices" layer. Base `claude/project-thread-pt64ji`, merged up to
   `perception.strength` with sign -1 (more human, fewer hits).
 - `fair_hit_rate` now enforces the band (all classes together, and the gun
   and the bow each); `fair_by_dial` asserts monotone.
+- `bots.rs`, the teamwork lane's "stand out of a teammate's fire" step:
+  taken only where there is floor at the spot (the strafe's own probe).
+  On the rooftop deck its spot was off the edge; a bot walked off, wandered
+  below for the rest of the round, and the six-unit deck read idle 9.8%
+  (bar 1%). With the probe: idle 0.0%, no falls, 57 kills.
 - Weapons runtime `Blast` event; weapon sounds and blasts feed
   `Bots::notice`. `BotThought::noticed`, also shown in `why()` while under
   way.
