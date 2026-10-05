@@ -119,6 +119,7 @@ impl Sightlines {
         if ok {
             self.ordinary += rays;
         }
+        debug_assert!(self.cast() <= SIGHT_RAYS);
         ok
     }
     /// Rays cast so far this tick.

@@ -1580,10 +1580,12 @@ impl Session {
                         .saturating_add((brain.kind.memory_seconds * 120.0) as u64),
                 );
                 if tick < expires {
-                    brain.memory = Some(Knowledge {
+                    // Acted on after a short, seeded reaction (`perception`).
+                    let k = Knowledge {
                         expires,
                         ..alert.knowledge
-                    });
+                    };
+                    brain.hear(k, bot, tick);
                 }
             }
         }
@@ -1830,8 +1832,23 @@ impl Session {
             fall: 0.0,
             splash: 0.0,
         }));
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if let Some(k) = brain.perception.heard(tick)
+            && brain.target.is_none()
+            && brain.memory.is_none_or(|old| old.observed < k.observed)
+        {
+            brain.memory = Some(k);
+        }
         let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
             tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+        });
+        // Out of sight, a hit gives only a rough idea where from.
+        let hurt_by = hurt_by.map(|k| match sight.target {
+            Some(seen) if seen.owner == k.subject => k,
+            _ => Knowledge {
+                at: perception::guess(feet, k.at, &mut self.bots.brains.get_mut(&bot).unwrap().rng),
+                ..k
+            },
         });
         if self.bots.brains[&bot].memory.is_some_and(|k| {
             tick >= k.expires || !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
@@ -2565,6 +2582,8 @@ impl Session {
         }
         if let Some(seen) = sight.target {
             step *= brain.perception.turn_scale(seen.owner, tick);
+        } else if brain.perception.startled(tick) {
+            step = 0.0;
         }
         brain.yaw = turn(brain.yaw, aim_yaw, step);
         brain.pitch += (aim_pitch - brain.pitch).clamp(-step, step);

@@ -36,6 +36,8 @@ use crate::bot_kind::BotPerception;
 const POLL_TICKS: u64 = 12;
 // Cadence names (`cadence::salt`) for perception's own timers.
 const POLL_SALT: u64 = 101;
+const HEAR_SALT: u64 = 102;
+const HEAR_OFFSET_SALT: u64 = 103;
 /// Most stimuli one tick keeps for bots to notice.
 const MAX_STIMULI: usize = 32;
 // Fixed by how perception works, not per kind (the kind's `salience`
@@ -61,6 +63,19 @@ const FAST: f32 = 2.0;
 const SETTLE_SECONDS: f32 = 2.0;
 /// A reaction delay varies by up to this share either way.
 const JITTER: f32 = 0.3;
+/// An ally's warning is acted on this many seconds after it is heard
+/// (seeded per ally and warning, scaled like a reaction)...
+const HEAR_SECONDS: (f32, f32) = (0.25, 1.0);
+/// ...at a spot up to this many units off where it was told.
+const HEAR_OFFSET: f32 = 1.5;
+/// Hurt by someone it cannot see, it knows the way the hit came from to
+/// within this many degrees...
+const HURT_DEGREES: f32 = 25.0;
+/// ...and how far to within this share either way...
+const HURT_BAND: f32 = 0.4;
+/// ...but never nearer the truth than this many units: the exact spot
+/// comes only from seeing them.
+const HURT_MISS: f32 = 1.0;
 
 /// The bots' seeded generator: the next value in [0, 1).
 pub(super) fn draw(rng: &mut u64) -> f32 {
@@ -68,6 +83,32 @@ pub(super) fn draw(rng: &mut u64) -> f32 {
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
     (*rng >> 40) as f32 / (1u64 << 24) as f32
+}
+/// Where a bot at `from`, hurt by someone at `at` it cannot see, thinks
+/// they are: the incoming direction turned by up to `HURT_DEGREES`, the
+/// distance off by up to `HURT_BAND`, and at least `HURT_MISS` from `at`.
+pub(super) fn guess(from: Vec3, at: Vec3, rng: &mut u64) -> Vec3 {
+    let to = at - from;
+    let distance = to.length();
+    if distance < 0.01 {
+        return at;
+    }
+    let angle = (draw(rng) * 2.0 - 1.0) * HURT_DEGREES.to_radians();
+    let length = distance * (1.0 + HURT_BAND * (draw(rng) * 2.0 - 1.0));
+    let (sin, cos) = angle.sin_cos();
+    let way = to / distance;
+    let way = Vec3::new(way.x * cos - way.z * sin, way.y, way.x * sin + way.z * cos);
+    let guess = from + way * length;
+    let miss = guess - at;
+    if miss.length() >= HURT_MISS {
+        return guess;
+    }
+    let off = if miss.length() > 1e-3 {
+        miss.normalize()
+    } else {
+        way
+    };
+    at + off * HURT_MISS
 }
 fn ticks(seconds: f32) -> u64 {
     (seconds.max(0.0) * 120.0) as u64
@@ -236,6 +277,9 @@ struct Reaction {
     scale: f32,
     /// Its turn rate's multiplier until `ready`.
     turn: f32,
+    /// Started by a hit from someone out of sight: it holds its look
+    /// until `ready`, then turns.
+    unseen: bool,
 }
 /// A brain's noticing.
 #[derive(Clone, Debug, Default)]
@@ -245,6 +289,8 @@ pub(super) struct State {
     /// Who has been looking straight at it, since when.
     watcher: Option<(OwnerId, u64)>,
     reaction: Option<Reaction>,
+    /// An ally's warning, acted on from its tick.
+    heard: Option<(u64, Knowledge)>,
     pub(super) why: Option<BotNotice>,
 }
 impl State {
@@ -345,6 +391,7 @@ impl State {
             } else {
                 1.0
             },
+            unseen: false,
         });
         if p.alertness > 0.0 {
             self.why = Some(BotNotice {
@@ -377,6 +424,52 @@ impl State {
             .map_or(1.0, |r| {
                 1.0 + (r.scale - 1.0) * (1.0 - tracked / SETTLE_SECONDS).max(0.0)
             })
+    }
+    /// Hit by someone out of sight and not yet reacted: its look holds.
+    pub(super) fn startled(&self, tick: u64) -> bool {
+        self.reaction.is_some_and(|r| r.unseen && tick < r.ready)
+    }
+    /// An ally's warning `k` reaches `bot`: it acts on it a seeded
+    /// `HEAR_SECONDS` later, scaled like a reaction, at a spot up to
+    /// `HEAR_OFFSET` off. A newer warning replaces a pending older one.
+    /// With the kind's `alertness` 0, at once and exactly.
+    fn hear(
+        &mut self,
+        p: &BotPerception,
+        k: Knowledge,
+        alertness: Alertness,
+        bot: OwnerId,
+        tick: u64,
+    ) {
+        if self
+            .heard
+            .is_some_and(|(_, old)| old.observed >= k.observed)
+        {
+            return;
+        }
+        let (lo, hi) = HEAR_SECONDS;
+        let seconds =
+            cadence::spread(bot, HEAR_SALT, k.observed, lo, hi) * scale(p, alertness, false);
+        let angle = cadence::spread(
+            bot,
+            HEAR_OFFSET_SALT,
+            k.observed,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        let off = cadence::spread(bot, HEAR_OFFSET_SALT ^ 1, k.observed, 0.0, HEAR_OFFSET);
+        let k = Knowledge {
+            at: k.at + Vec3::new(angle.cos(), 0.0, angle.sin()) * off * p.alertness,
+            ..k
+        };
+        let due = tick + ticks(seconds * p.alertness);
+        self.heard = Some((due, k));
+    }
+    /// The warning it acts on now, if one is due.
+    pub(super) fn heard(&mut self, tick: u64) -> Option<Knowledge> {
+        let (_, k) = self.heard.filter(|(due, _)| tick >= *due)?;
+        self.heard = None;
+        Some(k)
     }
     /// What its turn rate toward `subject` is multiplied by now: slower
     /// toward one from outside its view cone, until it has reacted.
@@ -438,7 +531,16 @@ impl Brain {
     pub(super) fn hurt_by(&mut self, k: &Knowledge, feet: Vec3, tick: u64) {
         if self.kind.perception.alertness > 0.0 && self.target != Some(k.subject) {
             self.perceive(k.subject, k.at, feet, tick, true, true);
+            if let Some(r) = self.perception.reaction.as_mut().filter(|r| r.ready > tick) {
+                r.unseen = true;
+            }
         }
+    }
+    /// An ally's warning reached it (`State::hear`).
+    pub(super) fn hear(&mut self, k: Knowledge, bot: OwnerId, tick: u64) {
+        let alertness = Alertness::of(self.behaviour);
+        self.perception
+            .hear(&self.kind.perception, k, alertness, bot, tick);
     }
     /// Ticks to pause before acting on a change of mind (a chooser's tell):
     /// the same reaction delay, by how alert it is now.
@@ -837,5 +939,88 @@ mod tests {
         assert_eq!(Alertness::of(Behaviour::Wander), Alertness::Relaxed);
         assert_eq!(Alertness::of(Behaviour::Interact), Alertness::Relaxed);
         assert_eq!(Alertness::of(Behaviour::Objective), Alertness::Ordinary);
+    }
+
+    #[test]
+    fn an_unseen_attacker_is_placed_roughly_and_never_exactly() {
+        let from = Vec3::new(0.0, 0.0, 0.0);
+        let at = Vec3::new(0.0, 0.0, -30.0);
+        let mut rng = 5;
+        let mut spread = 0.0f32;
+        for _ in 0..200 {
+            let g = guess(from, at, &mut rng);
+            assert!(g.distance(at) >= HURT_MISS - 1e-4, "{g}");
+            // Roughly the way the hit came from, roughly as far.
+            let angle = flat(g - from).angle_between(flat(at - from)).to_degrees();
+            assert!(angle <= HURT_DEGREES + 2.5, "{angle}");
+            let d = g.distance(from) / 30.0;
+            assert!(
+                (1.0 - HURT_BAND - 0.05..=1.0 + HURT_BAND + 0.05).contains(&d),
+                "{d}"
+            );
+            spread = spread.max(g.distance(at));
+        }
+        assert!(spread > 5.0, "the guesses vary: {spread}");
+        // Point blank, it is still not the exact spot.
+        assert!(
+            guess(from, from + Vec3::X * 0.5, &mut rng).distance(from + Vec3::X * 0.5)
+                >= HURT_MISS - 1e-4
+        );
+    }
+
+    #[test]
+    fn allies_hearing_one_warning_act_on_different_ticks() {
+        let p = on();
+        let k = Knowledge {
+            subject: 9,
+            at: Vec3::new(10.0, 0.0, 0.0),
+            observed: 500,
+            expires: 5000,
+        };
+        let mut dues = Vec::new();
+        for bot in 1..=8u64 {
+            let mut s = State::default();
+            s.hear(&p, k, Alertness::Combat, bot, 500);
+            let due = (500..700).find(|t| s.clone().heard(*t).is_some()).unwrap();
+            assert!((530..=620).contains(&due), "bot {bot}: {due}");
+            let heard = s.heard(due).unwrap();
+            assert!(heard.at.distance(k.at) <= HEAR_OFFSET + 1e-4);
+            assert_eq!((heard.subject, heard.observed), (9, 500));
+            dues.push(due);
+        }
+        let mut unique = dues.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert!(unique.len() >= 6, "{dues:?}");
+        // With alertness 0: at once, exactly.
+        let plain = BotPerception {
+            alertness: 0.0,
+            ..on()
+        };
+        let mut s = State::default();
+        s.hear(&plain, k, Alertness::Relaxed, 3, 500);
+        assert_eq!(s.heard(500).unwrap().at, k.at);
+        // A newer warning replaces an older pending one, not the reverse.
+        let mut s = State::default();
+        s.hear(&p, k, Alertness::Combat, 3, 500);
+        s.hear(
+            &p,
+            Knowledge { observed: 400, ..k },
+            Alertness::Combat,
+            3,
+            500,
+        );
+        assert_eq!(s.heard(10_000).unwrap().observed, 500);
+    }
+
+    #[test]
+    fn a_hit_from_out_of_sight_holds_the_look_until_it_reacts() {
+        let mut s = State::default();
+        let p = on();
+        let mut rng = 3;
+        let ready = s.react(&p, 0.5, 4, 100, Alertness::Ordinary, true, &mut rng);
+        s.reaction.as_mut().unwrap().unseen = true;
+        assert!(s.startled(100) && s.startled(ready - 1));
+        assert!(!s.startled(ready));
     }
 }

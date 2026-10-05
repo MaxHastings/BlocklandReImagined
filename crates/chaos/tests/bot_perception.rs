@@ -46,6 +46,11 @@ impl Game {
     /// A bot of `kind` on its brick and a human 14 units away; in a
     /// mini-game with a hitscan gun when `armed`.
     fn new(kind: BotKind, armed: bool) -> Self {
+        Self::with_bots(kind, armed, &[HOME])
+    }
+    /// As [`Self::new`], with a bot's brick at each of `homes`; `bot` is
+    /// the first.
+    fn with_bots(kind: BotKind, armed: bool, homes: &[Vec3]) -> Self {
         let mut s = fixture::synthetic().unwrap().session;
         let mut pack = bri_weapons::testing::pack();
         let image = pack
@@ -72,19 +77,21 @@ impl Game {
         .unwrap();
         s.set_spawn_points(vec![SEEN]).unwrap();
         let human = s.join("Watcher".into(), SEEN, true).unwrap();
-        let mut brick = Brick::new(
-            ContentRef::Resolved(fixture::PLATE.into()),
-            (HOME + Vec3::new(0.25, 0.0, 0.25)).to_array(),
-            human,
-        );
-        brick.vehicle = Some(Box::new(VehicleSpawn {
-            vehicle: ContentRef::Resolved(fixture::BOT.into()),
-            recolor: false,
-            team: None,
-        }));
         let mut world = World::new("Perception".into(), "chaos/map".into(), vec![[1.0; 4]]);
-        world.bricks.insert(1, brick);
-        world.next_brick_id = 2;
+        for (id, home) in homes.iter().enumerate() {
+            let mut brick = Brick::new(
+                ContentRef::Resolved(fixture::PLATE.into()),
+                (*home + Vec3::new(0.25, 0.0, 0.25)).to_array(),
+                human,
+            );
+            brick.vehicle = Some(Box::new(VehicleSpawn {
+                vehicle: ContentRef::Resolved(fixture::BOT.into()),
+                recolor: false,
+                team: None,
+            }));
+            world.bricks.insert(id as u64 + 1, brick);
+        }
+        world.next_brick_id = homes.len() as u64 + 1;
         s.command(
             human,
             1,
@@ -122,8 +129,21 @@ impl Game {
             )
             .unwrap();
         }
-        g.bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).unwrap();
+        g.bot = g.bots()[0];
         g
+    }
+    /// The bots, the one nearest the first home first.
+    fn bots(&self) -> Vec<OwnerId> {
+        let mut bots: Vec<OwnerId> = self
+            .s
+            .names()
+            .keys()
+            .copied()
+            .filter(|o| self.s.is_bot(*o))
+            .collect();
+        let d = |o: &OwnerId| Vec3::from(self.player(*o).feet).distance(HOME);
+        bots.sort_by(|a, b| d(a).total_cmp(&d(b)));
+        bots
     }
     fn player(&self, owner: OwnerId) -> bri_sim::player::PlayerState {
         self.s
@@ -134,10 +154,13 @@ impl Game {
             .unwrap()
     }
     fn thought(&self) -> BotThought {
+        self.thought_of(self.bot)
+    }
+    fn thought_of(&self, bot: OwnerId) -> BotThought {
         self.s
             .bot_thoughts()
             .into_iter()
-            .find(|b| b.bot == self.bot)
+            .find(|b| b.bot == bot)
             .unwrap()
     }
     /// Steps, the human looking straight at the bot's head when `stare`.
@@ -285,4 +308,92 @@ fn a_relaxed_bot_returns_fire_after_its_longer_reaction() {
         relaxed >= plain + 60,
         "relaxed {relaxed} ticks vs plain {plain}"
     );
+}
+
+/// The human, armed, shoots the bot once from `at`: the bot's remembered
+/// position for the human just after the hit, the human's feet, the
+/// ally's remembered position once it acted on the bot's warning, and
+/// whether the bot saw the human then.
+fn shot_from(at: Vec3) -> (Vec3, Vec3, Option<Vec3>, bool) {
+    let mut kind = blockhead();
+    kind.chase_radius = 128.0;
+    kind.alerts_allies = true;
+    // It neither fires back nor goes looking here: only what it knows is
+    // checked.
+    kind.reaction_seconds = 5.0;
+    kind.behaviours.insert("search".into(), 0.0);
+    let mut g = Game::with_bots(kind, true, &[HOME, HOME + Vec3::new(5.0, 0.0, 0.0)]);
+    let ally = g.bots()[1];
+    g.drop_at(at);
+    // Past the bots' spawn protection (300 ticks) and the human's weapon
+    // lock after a teleport (3 s).
+    g.steps(400, false);
+    g.sequence += 1;
+    g.s.command(g.human, g.sequence, Command::EquipTool { slot: Some(0) })
+        .unwrap();
+    g.steps(16, false);
+    // Looking straight at it, it clicks the trigger until a shot lands.
+    let mut hit = None;
+    for n in 0..240 {
+        if n % 30 == 2 || n % 30 == 10 {
+            g.sequence += 1;
+            g.s.command(
+                g.human,
+                g.sequence,
+                Command::WeaponTrigger { down: n % 30 == 2 },
+            )
+            .unwrap();
+        }
+        g.steps(1, true);
+        if g.s.vitals()[&g.bot].health < 100.0 {
+            hit = Some(g.tick());
+            break;
+        }
+    }
+    let hit = hit.unwrap_or_else(|| panic!("the shots missed the bot: {:?}", g.thought()));
+    g.sequence += 1;
+    g.s.command(g.human, g.sequence, Command::WeaponTrigger { down: false })
+        .unwrap();
+    g.steps(1, false);
+    let thought = g.thought();
+    let seen = thought.visible == Some(g.human);
+    let known = Vec3::from(thought.remembered.expect("it knows it was hurt").position);
+    let human = Vec3::from(g.player(g.human).feet);
+    let mut warned = None;
+    for _ in 0..240 {
+        g.steps(1, false);
+        if let Some(r) = g.thought_of(ally).remembered
+            && r.observed + 2 >= hit
+        {
+            warned = Some(Vec3::from(r.position));
+            break;
+        }
+    }
+    (known, human, warned, seen)
+}
+
+fn flat_distance(a: Vec3, b: Vec3) -> f32 {
+    Vec3::new(a.x - b.x, 0.0, a.z - b.z).length()
+}
+
+#[test]
+fn a_hit_from_out_of_sight_gives_a_rough_place_and_the_ally_no_exact_one() {
+    // 40 units off: in the gun's 48-unit range, beyond the bot's 32 sight.
+    let (known, human, warned, seen) = shot_from(HOME + Vec3::new(0.0, 0.0, 40.0));
+    assert!(!seen);
+    let miss = flat_distance(known, human);
+    assert!(miss >= 1.0, "it knows only roughly: {miss} units off");
+    assert!(miss < 25.0, "but about the right way: {miss} units off");
+    let warned = warned.expect("the ally heard the warning");
+    assert!(
+        flat_distance(warned, human) >= 0.5,
+        "the ally gets the rough guess, not the spot"
+    );
+}
+
+#[test]
+fn a_hit_from_someone_in_sight_is_placed_exactly() {
+    let (known, human, _, seen) = shot_from(SEEN);
+    assert!(seen);
+    assert!(flat_distance(known, human) < 0.05, "{known} vs {human}");
 }
