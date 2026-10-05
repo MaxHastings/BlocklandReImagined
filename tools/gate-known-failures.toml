@@ -68,27 +68,12 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "a_jeep_on_each_side"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "a_teams_preferred_player_count_fills_it_with_bots"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "authored_tool_loss_releases_the_method_and_accepts_only_real_native_outcomes"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "deathmatch_mixed_arsenal"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
@@ -103,17 +88,7 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 
 [[failure]]
-test = "stairs_to_a_deck"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
 test = "team_fill_bots_play_slayer_soccer_with_or_without_weapons"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
-
-[[failure]]
-test = "water_between_the_sides"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Expected old bot behaviour after the v0.2.4 bot merge; Max shipped on playtest."
 

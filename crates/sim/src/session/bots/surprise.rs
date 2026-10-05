@@ -34,6 +34,7 @@
 use super::behaviour::{Ask, Hold};
 use super::*;
 use crate::bot_kind::{BotHold, BotSurprise, FLAVOURS};
+use rapier3d::prelude::{Ball, Collider, ColliderHandle, Pose, QueryFilter};
 
 /// The share either way drift and boredom move a score, at strength 1.
 const BAND: f32 = 0.15;
@@ -77,6 +78,8 @@ const GOOF_SECONDS: f32 = 2.0;
 /// How much of the mood's pull (`team::mood`, up to its cap) lifts a
 /// goof's score: at the cap of 10, by half again.
 const MOOD_LIFT: f32 = 0.05;
+/// How far round a bot a loose body rules out an aimless walk.
+const BODY_ROOM: f32 = 4.0;
 /// The [`Domain::Flavour`] options.
 const PLAY: u32 = 0;
 const GOOF: u32 = 1;
@@ -291,6 +294,8 @@ pub(super) struct Pause {
     pub natural: bool,
     /// Nothing to do at all (no objective either): playing bores faster.
     pub idle: bool,
+    /// A loose body (a vehicle, a ball) within [`BODY_ROOM`].
+    pub bodies_near: bool,
     pub gate: Gate,
     /// A player in sight it might look or spray toward.
     pub player: Option<OwnerId>,
@@ -617,8 +622,10 @@ impl Mind {
             Flavour::Tool => pause.other_tool,
             Flavour::Drop => pause.spare_weapon,
             // A walk round or off somewhere only with nothing to do: in
-            // the middle of a match it reads as a bot gone aimless.
-            Flavour::Circle | Flavour::Detour => pause.idle,
+            // the middle of a match it reads as a bot gone aimless. Never
+            // with a loose body close by: an aimless walk under or into it
+            // gets the bot crushed.
+            Flavour::Circle | Flavour::Detour => pause.idle && !pause.bodies_near,
             _ => true,
         };
         let weights: Vec<(Flavour, f32)> = Flavour::ALL
@@ -1075,9 +1082,28 @@ impl Session {
                         && a.inventory.iter().filter(|i| attacks(i)).count() >= 2;
                     (other, spare)
                 });
+        // Only asked when an aimless walk is possible at all.
+        let bodies_near = idle && {
+            let predicate = |_: ColliderHandle, c: &Collider| c.user_data >> 64 == 2;
+            let centre = eye - Vec3::Y * 0.5;
+            self.simulation
+                .physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .predicate(&predicate),
+                )
+                .intersect_shape(
+                    Pose::translation(centre.x, centre.y, centre.z),
+                    &Ball::new(BODY_ROOM),
+                )
+                .next()
+                .is_some()
+        };
         Pause {
             natural,
             idle,
+            bodies_near,
             gate,
             player,
             other_tool,
