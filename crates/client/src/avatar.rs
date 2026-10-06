@@ -697,6 +697,7 @@ impl AvatarAssets {
             crouch: CrouchThread::default(),
             body: None,
             dead: false,
+            drawn_offset: None,
             hidden_nodes: Vec::new(),
             posed_nodes: Vec::new(),
             animated_nodes: Vec::new(),
@@ -780,6 +781,9 @@ pub struct AvatarMesh {
     body: Option<u64>,
     /// Whether the drawn body lies dead (`drawn_life`), for Add-On code.
     dead: bool,
+    /// How far from where the game has it this body was last drawn
+    /// ([`Self::drawn_offset`]), kept once the body is gone.
+    drawn_offset: Option<Vec3>,
     /// Body nodes the held images hide (`bri_weapons::Image::hide_nodes`),
     /// lower case; the outfit keeps them for when the image goes.
     hidden_nodes: Vec<String>,
@@ -909,6 +913,56 @@ pub fn drawn_life(vitals: &bri_sim::session::Vitals, tick: u64, spawned: Option<
     }
 }
 
+/// Effects a player's body makes at itself (the puff a corpse vanishes in,
+/// `Player::RemoveBody`) play where this client draws that body, which
+/// Add-On code may have moved (a ragdoll that slid away), not where the
+/// game has it. Sounds at the same tick and place go with them. Anything
+/// else, a shot landing elsewhere included, stays put.
+pub fn follow_drawn_bodies<'a>(
+    cues: &mut [bri_sim::presentation::Cue],
+    body: impl Fn(bri_world::OwnerId) -> Option<&'a AvatarMesh>,
+) {
+    use bri_sim::presentation::CueKind;
+    let at_body = |cue: &bri_sim::presentation::Cue| {
+        // Effects on a node of the body (a muzzle flash) already follow
+        // the drawn node.
+        let CueKind::WeaponEffect {
+            source: bri_weapons::TargetId::Actor(actor),
+            node,
+            image: None,
+            ..
+        } = &cue.kind
+        else {
+            return None;
+        };
+        if !node.is_empty() {
+            return None;
+        }
+        let mesh = body(actor.0).filter(|mesh| mesh.holds(Vec3::from(cue.position)))?;
+        mesh.drawn_offset()
+    };
+    let moved: Vec<_> = cues
+        .iter()
+        .filter_map(|cue| Some((cue.tick, cue.position, at_body(cue)?)))
+        .collect();
+    if moved.is_empty() {
+        return;
+    }
+    for cue in cues.iter_mut() {
+        let offset = match cue.kind {
+            CueKind::WeaponEffect { .. } => at_body(cue),
+            CueKind::WeaponSound { .. } => moved
+                .iter()
+                .find(|(tick, at, _)| *tick == cue.tick && *at == cue.position)
+                .map(|(_, _, offset)| *offset),
+            _ => None,
+        };
+        if let Some(offset) = offset {
+            cue.position = (Vec3::from(cue.position) + offset).to_array();
+        }
+    }
+}
+
 /// `sAnimationTransitionTime`, and the shorter jump transition.
 const TRANSITION_TIME: f64 = 0.25;
 const JUMP_TRANSITION_TIME: f64 = 0.15;
@@ -1031,11 +1085,31 @@ impl AvatarMesh {
     pub fn posed_externally(&self) -> bool {
         !self.animated_nodes.is_empty()
     }
-    /// How far Add-On code moved the body from where the game animates it
-    /// (a ragdoll sliding away from where its player died): the middle of
-    /// the drawn nodes less the middle of the animated ones. `None` while
-    /// the game animates it.
+    /// How far from where the game has it this body is drawn: Add-On code
+    /// moved it (a ragdoll sliding away from where its player died). Once
+    /// the body is gone (`remember_drawn_offset`) it is where it was last
+    /// seen, until a new body spawns. `None` while the game animates it.
     pub fn drawn_offset(&self) -> Option<Vec3> {
+        self.drawn_offset
+    }
+    /// Note this frame's [`Self::drawn_offset`]. A `gone` body (a corpse
+    /// past its timeout, no longer drawn) keeps the last one: its camera
+    /// and the puff it vanishes in stay where it was seen.
+    pub fn remember_drawn_offset(&mut self, gone: bool) {
+        if !gone {
+            self.drawn_offset = self.posed_offset();
+        }
+    }
+    /// Whether `point` is on or round this body where the game has it (the
+    /// sphere [`Self::bounding_sphere`] draws round a body it animates).
+    pub fn holds(&self, point: Vec3) -> bool {
+        let scale = self.model_transform.x_axis.truncate().length();
+        let feet = self.model_transform.w_axis.truncate();
+        point.distance(feet + Vec3::Y * (1.4 * scale)) <= 3.0 * scale
+    }
+    /// The middle of the drawn nodes less the middle of the animated ones,
+    /// while Add-On code poses the body.
+    fn posed_offset(&self) -> Option<Vec3> {
         if !self.posed_externally() {
             return None;
         }
@@ -1614,6 +1688,7 @@ impl AvatarMesh {
             self.channels = None;
             self.transition = None;
             self.crouch = CrouchThread::default();
+            self.drawn_offset = None;
         }
         renewed
     }
@@ -2114,6 +2189,7 @@ mod tests {
         original_outfits_materials_and_customization_rules,
         ragdoll_on_the_real_blockhead,
         ragdoll_keeps_accessories_on,
+        a_corpse_vanishes_where_its_body_is_drawn,
     );
 
     #[test]
@@ -2983,6 +3059,103 @@ mod tests {
                 package.textures.len()
             ),
             (27, 28, 63)
+        );
+        Ok(())
+    }
+
+    /// Max, v0.2.4: with the Ragdoll on, the puff of smoke a corpse
+    /// vanishes in came out where the corpse died, not where the ragdoll
+    /// lay. The puff (and its sound) is placed on the body as drawn, also
+    /// once the body is gone, and only until a new body spawns.
+    fn a_corpse_vanishes_where_its_body_is_drawn(fx: &Avatar) -> Result<()> {
+        use bri_sim::presentation::{Cue, CueKind};
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.defer_mesh = true;
+        mesh.set_body(10);
+        let mut p = player();
+        p.feet = [3.0, 0.0, -2.0];
+        mesh.pose(assets, &p, 0.0)?;
+        ensure!(mesh.drawn_offset().is_none(), "the game draws it");
+        // Add-On code draws the whole body four units away.
+        let slid = Vec3::new(4.0, 0.0, 1.0);
+        let skeleton = mesh.skeleton(assets);
+        let nodes: Vec<bri_client_sandbox::bodies::PosedNode> = skeleton
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| {
+                let (_, rotation, position) =
+                    Mat4::from_cols_array(node).to_scale_rotation_translation();
+                (i as u32, (position + slid).to_array(), rotation.to_array())
+            })
+            .collect();
+        mesh.override_nodes(assets, &nodes);
+        mesh.remember_drawn_offset(false);
+        let offset = mesh.drawn_offset().context("drawn elsewhere")?;
+        ensure!(offset.distance(slid) < 1e-3, "drawn {offset}, not {slid}");
+
+        let feet = p.feet;
+        let effect = |actor: u64, at: [f32; 3]| Cue {
+            id: 1,
+            tick: 600,
+            position: at,
+            kind: CueKind::WeaponEffect {
+                source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(actor)),
+                definition: "deathExplosion".into(),
+                node: String::new(),
+                seconds: 0.0,
+                image: None,
+                hand: None,
+                direction: None,
+                scale: 1.0,
+            },
+        };
+        let sound = |at: [f32; 3]| Cue {
+            id: 2,
+            tick: 600,
+            position: at,
+            kind: CueKind::WeaponSound {
+                profile: "deathExplosionSound".into(),
+            },
+        };
+        let away = [40.0, 0.0, 40.0];
+        let check = |mesh: &AvatarMesh, offset: Vec3| -> Result<()> {
+            // The corpse's puff and sound, another player's blast where it
+            // died and the dead player's own shot landing far off.
+            let mut cues = vec![
+                sound(feet),
+                effect(1, feet),
+                effect(2, feet),
+                effect(1, away),
+            ];
+            follow_drawn_bodies(&mut cues, |owner| (owner == 1).then_some(mesh));
+            let drawn = (Vec3::from(feet) + offset).to_array();
+            let at: Vec<_> = cues.iter().map(|c| c.position).collect();
+            let near = at
+                .iter()
+                .zip([drawn, drawn, feet, away])
+                .all(|(a, b)| Vec3::from(*a).distance(Vec3::from(b)) < 1e-4);
+            ensure!(near, "cues at {at:?}, the body drawn at {drawn:?}");
+            Ok(())
+        };
+        check(&mesh, slid)?;
+        // The body vanishes: the game poses it again, unseen, and the puff
+        // can come after.
+        mesh.pose(assets, &p, 0.1)?;
+        mesh.remember_drawn_offset(true);
+        check(&mesh, slid)?;
+        // Drawn again where the game has it (a ragdoll gave up): no offset.
+        mesh.remember_drawn_offset(false);
+        check(&mesh, Vec3::ZERO)?;
+        // A new body forgets where the old one was drawn.
+        mesh.override_nodes(assets, &nodes);
+        mesh.remember_drawn_offset(false);
+        ensure!(mesh.drawn_offset().is_some());
+        mesh.set_body(20);
+        ensure!(
+            mesh.drawn_offset().is_none(),
+            "a new body starts where it is"
         );
         Ok(())
     }

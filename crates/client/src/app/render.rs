@@ -738,10 +738,14 @@ impl App {
         if self.addons.client_code.is_started() {
             let world = if self.addons.client_code.reads_world() {
                 let image_meshes = self.world_items.held_image_meshes();
+                // A corpse past its timeout has no body left to pose: a
+                // ragdoll goes with it instead of lingering unseen.
+                let gone = self.combat.hidden_bodies(&view.vitals);
                 let skeletons = if self.addons.client_code.poses_bodies() {
                     self.avatar
                         .avatars
                         .iter_mut()
+                        .filter(|(owner, _)| !gone.contains(owner))
                         .map(|(owner, avatar)| {
                             (*owner, avatar.skeleton(&self.avatar.avatar_assets))
                         })
