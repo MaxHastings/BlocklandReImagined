@@ -179,6 +179,8 @@ const LOOK_DOWN: f32 = -0.3;
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
 const WEAVE_SECONDS: f32 = 0.75;
+/// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
+const GOAL_SLACK: f32 = 0.2;
 /// A ranged fighter strafes one way about this long before turning back.
 /// It stands at a ledge or a wall until then, and turns away from an ally
 /// at once. A melee fighter does not strafe: it closes to its band.
@@ -577,6 +579,18 @@ impl Brain {
             self.progress.reset();
             self.settled = false;
             self.partial_route = false;
+        }
+    }
+    /// Head for `goal`, unless it already heads for the same kind of goal
+    /// within `GOAL_SLACK` of it: a point that drifts a little (an item, an
+    /// objective's stand) does not restart its route every tick.
+    fn set_goal_near(&mut self, goal: Goal) {
+        let same = self.goal.is_some_and(|now| {
+            std::mem::discriminant(&now) == std::mem::discriminant(&goal)
+                && now.point(Vec3::ZERO).distance(goal.point(Vec3::ZERO)) < GOAL_SLACK
+        });
+        if !same {
+            self.set_goal(Some(goal));
         }
     }
     /// The goal of going after an enemy: standing its ground in its band
@@ -2255,18 +2269,14 @@ impl Session {
         brain.chase_offset = Vec3::ZERO;
         let (hold, back_off) = match behaviour {
             Behaviour::Arm => {
-                if let Some((at, _)) = arm
-                    && !matches!(brain.goal, Some(Goal::Arm(p)) if p.distance(at) < 0.2)
-                {
-                    brain.set_goal(Some(Goal::Arm(at)));
+                if let Some((at, _)) = arm {
+                    brain.set_goal_near(Goal::Arm(at));
                 }
                 (false, false)
             }
             Behaviour::Interact => {
-                if let Some(o) = opportunity
-                    && !matches!(brain.goal, Some(Goal::Interact(p)) if p.distance(o.point) < 0.2)
-                {
-                    brain.set_goal(Some(Goal::Interact(o.point)));
+                if let Some(o) = opportunity {
+                    brain.set_goal_near(Goal::Interact(o.point));
                 }
                 (false, false)
             }
@@ -2295,9 +2305,8 @@ impl Session {
                     } else {
                         if step.waiting && !step.move_while_waiting {
                             brain.set_goal(None);
-                        } else if !matches!(brain.goal, Some(Goal::Objective(p)) if p.distance(step.point) < 0.2)
-                        {
-                            brain.set_goal(Some(Goal::Objective(step.point)));
+                        } else {
+                            brain.set_goal_near(Goal::Objective(step.point));
                         }
                         (false, false)
                     }
