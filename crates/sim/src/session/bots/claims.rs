@@ -8,7 +8,7 @@ const MAX_FAILURES: usize = 64;
 const LEASE: u64 = 360;
 const MAX_AGE: u64 = 1800;
 /// Ticks a bot leaves alone what it gave up on: a claim, a vehicle.
-pub(super) const RETRY: u64 = 240;
+pub(super) const GIVE_UP_TICKS: u64 = 240;
 const PROGRESS: f32 = 0.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -313,7 +313,7 @@ impl Claims {
             self.release_owner(owner);
         }
         self.failures
-            .give_up((owner, resource), tick.saturating_add(RETRY));
+            .give_up((owner, resource), tick.saturating_add(GIVE_UP_TICKS));
     }
 
     /// Preemption/success releases without punishing an otherwise useful task.
@@ -338,7 +338,7 @@ impl Claims {
         self.intents.retain(|_, i| tick < i.until);
         self.failures.prune(tick, |_| true);
         for c in expired {
-            let until = c.deadline.saturating_add(RETRY);
+            let until = c.deadline.saturating_add(GIVE_UP_TICKS);
             if tick < until {
                 self.failures.give_up((c.owner, c.resource), until);
             }
@@ -444,7 +444,7 @@ mod tests {
         assert!(!c.progress(1, 0.0, true, 200 + LEASE));
         assert!(c.owner_claim(1, 200 + LEASE).is_none());
         assert!(!c.acquire(1, 9, seat(10), 0.0, 200 + LEASE, |_| true));
-        assert!(c.acquire(1, 9, seat(10), 0.0, 200 + LEASE + RETRY, |_| true));
+        assert!(c.acquire(1, 9, seat(10), 0.0, 200 + LEASE + GIVE_UP_TICKS, |_| true));
     }
 
     #[test]
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(c.owner_claim(1, 102).unwrap().resource, seat(11));
         c.release_owner(1);
         c.release_owner(2);
-        assert!(c.acquire(1, 9, seat(10), 8.0, 100 + RETRY, |_| true));
+        assert!(c.acquire(1, 9, seat(10), 8.0, 100 + GIVE_UP_TICKS, |_| true));
     }
 
     #[test]
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(c.failures.len(), MAX_FAILURES);
         assert!(!c.cooling_down(1, seat(0), 400));
         assert!(c.cooling_down(1, seat(1), 400));
-        c.prune(400 + RETRY);
+        c.prune(400 + GIVE_UP_TICKS);
         assert!(c.failures.is_empty());
         c.prune(LEASE * 2);
         assert!(c.active.is_empty());

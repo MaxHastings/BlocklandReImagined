@@ -1750,9 +1750,6 @@ impl Session {
                 .as_ref()
                 .is_some_and(|melee| melee.damage > 0.0)
             || hand_combat::has_possible_attack(self, bot);
-        let retaliating =
-            threat.is_some() && can_retaliate && leash.holds(feet);
-        let mut pausing_delivery = false;
         let ranged_in_hand = held.is_some_and(|w| !w.melee);
         let objective = self.bot_objective(bot, tick).filter(|view| {
             // A carrier keeps delivering (it shoots back on the way); one
@@ -1764,14 +1761,6 @@ impl Session {
                     && threat.is_some_and(|k| sight.target.is_some_and(|s| s.owner == k.subject))
             {
                 return true;
-            }
-            // Keep the selected action and its completion baseline, but let
-            // ordinary chase/search resolve a dated real injury even outside
-            // the weapon band. Objective's utility otherwise beats pursuit.
-            // account_control suspends its approach clock during this pause.
-            if view.enemy.is_none() && retaliating {
-                pausing_delivery = true;
-                return false;
             }
             // A different visible hostile is an ordinary combat interruption,
             // not execution of the retained intended-participant action.
@@ -1803,8 +1792,7 @@ impl Session {
         if unplanned {
             self.bots.claims.release_owner(bot);
         }
-        let opportunity = if pausing_delivery
-            || unplanned
+        let opportunity = if unplanned
             || objective.is_some_and(|view| view.resource.is_some())
         {
             None
@@ -1834,20 +1822,18 @@ impl Session {
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
-        // How much the enemy in sight threatens it or its play (`menace`):
-        // with nothing at stake every enemy is worth fighting; at play, one
-        // that hurt it, contests the body it works or stands at it, or that
-        // the play names, is; one armed is worth less than the play, and
-        // one unarmed less still, so a passer-by does not stop a delivery.
+        // How much going after the enemy in sight is worth (`bot_menace`):
+        // nothing when it cannot hurt them; with nothing at stake, all of
+        // it; more for one that hurt it; at play, all of it for one that
+        // contests the body it works or that the play names, less for one
+        // armed elsewhere and less still for one unarmed.
         let menace = self.bot_menace(
             objective.as_ref(),
             sight.target,
             threat,
             contest_engaged,
+            can_retaliate,
         );
-        let peaceful_objective = objective.is_some() && menace < 1.0;
-        let objective_without_attack =
-            objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
         let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
         let allies = self.claim_allies(bot, tick);
         // A teammate has the body it works: it covers it (`contest::cover`).
@@ -1865,8 +1851,10 @@ impl Session {
             .map(|seen| seen.feet)
             .or(self.bots.brains[&bot].memory.map(|k| k.at))
             .map(|at| flat(at - feet).length());
+        // It arms with nothing to fight with and an enemy about, or
+        // upgrades in a game with nothing else at stake.
         let wants_arm = driving.is_none()
-            && !peaceful_objective
+            && (!can_retaliate || objective.is_none())
             && self.bots.brains[&bot]
                 .kind
                 .weight("arm") > 0.0
@@ -2039,7 +2027,6 @@ impl Session {
             // alike: only how far counts.
             spared: 1.0 - menace,
             enemy: enemy
-                .filter(|_| !objective_without_attack)
                 // Where it was out of reach, not across from there: one
                 // that came down off a jump or a roof is in reach again.
                 .filter(|seen| {
@@ -2806,40 +2793,13 @@ impl Session {
                         })
                     };
                     let ground = |side: f32| floor(side) && !ally(side);
-                    // In the air (a hop, a jump off a body) its momentum
-                    // carries it on: where it lands is where it is going
-                    // as it falls, so with no floor there it steers back
-                    // and does not strafe on.
-                    let overshoots = !state.grounded && {
-                        let velocity = Vec3::from(state.velocity);
-                        let gravity = self.peers[&bot].player.tuning().gravity;
-                        let below = super::admin_players::world_ray(
-                            &self.simulation,
-                            feet + Vec3::Y * 0.05,
-                            Vec3::NEG_Y,
-                            0.05 + body.drop,
-                        )
-                        .map(|d| (d - 0.05).max(0.0));
-                        below.is_some_and(|h| {
-                            let at = crate::route::landing(feet, velocity, gravity, h);
-                            super::admin_players::world_ray(
-                                &self.simulation,
-                                at + Vec3::Y * 0.5,
-                                Vec3::NEG_Y,
-                                0.5 + body.step,
-                            )
-                            .is_none()
-                        })
-                    };
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
                     // until the leg is up; one that meets an ally turns
                     // away from it at once.
                     let parted = ally(brain.strafe.0) && ground(-brain.strafe.0);
                     let side = brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
-                    if overshoots {
-                        walk = -flat(Vec3::from(state.velocity)).normalize_or_zero();
-                    } else if ground(side) {
+                    if ground(side) {
                         walk = right * side * 0.7;
                     }
                     // Now and then it presses in a little as it strafes (a

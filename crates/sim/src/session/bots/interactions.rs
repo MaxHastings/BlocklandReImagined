@@ -9,7 +9,7 @@ use rapier3d::prelude::*;
 const DISCOVER: f32 = 24.0;
 /// What each unit of the walk to an opportunity takes off its utility.
 const TRAVEL_COST: f32 = 0.002;
-use super::claims::RETRY;
+use super::claims::GIVE_UP_TICKS;
 /// A driver reaches a goal at least this many degrees off the hull's
 /// heading in reverse, but a pursued target only within `REVERSE_DISTANCE`;
 /// a farther one is turned toward.
@@ -1300,7 +1300,7 @@ impl Session {
                 && !crate::route::upright(v.transform.rotation)
         {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
-            brain.next_interaction = tick + RETRY;
+            brain.next_interaction = tick + GIVE_UP_TICKS;
             brain.plan.clear();
             brain.search = None;
             let _ = self.dismount_vehicle(bot);
@@ -1549,7 +1549,7 @@ impl Session {
                 brain.settled = false;
             }
             if stuck >= VEHICLE_GIVE_UP {
-                brain.next_interaction = tick + RETRY;
+                brain.next_interaction = tick + GIVE_UP_TICKS;
                 brain.vehicle_headway.restart(tick);
                 let _ = self.dismount_vehicle(bot);
                 input = MoveInput {
@@ -1559,7 +1559,7 @@ impl Session {
             }
             if leave && speed < 3.0 {
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
-                brain.next_interaction = tick + RETRY;
+                brain.next_interaction = tick + GIVE_UP_TICKS;
                 brain.plan.clear();
                 brain.search = None;
                 let _ = self.dismount_vehicle(bot);
@@ -1581,7 +1581,7 @@ impl Session {
             input.right = 0.0;
             input.jump = false;
             if unusable_gun || needs_travel && !has_driver && tick >= since + CREW_WAIT {
-                self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + RETRY;
+                self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + GIVE_UP_TICKS;
                 let _ = self.dismount_vehicle(bot);
                 return Ok(MoveInput {
                     yaw: self.bots.brains[&bot].yaw,
@@ -1607,7 +1607,7 @@ impl Session {
         {
             if carried_only && behaviour == Behaviour::Fight {
                 // Not straight back on board for the fight it got off for.
-                self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + RETRY;
+                self.bots.brains.get_mut(&bot).unwrap().next_interaction = tick + GIVE_UP_TICKS;
             }
             let _ = self.dismount_vehicle(bot);
         }

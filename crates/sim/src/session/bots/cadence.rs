@@ -103,6 +103,8 @@ pub(crate) mod salt {
     pub(crate) const LEAN: u64 = 11;
     /// Looking round for the mood (`team`).
     pub(crate) const MOOD: u64 = 21;
+    /// A reflex's drift (`surprise::Domain::reflex`).
+    pub(crate) const REFLEX: u64 = 22;
 }
 
 #[cfg(test)]

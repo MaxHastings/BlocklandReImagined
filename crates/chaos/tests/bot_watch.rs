@@ -165,11 +165,15 @@ fn secs(t: u64, t0: u64) -> f32 {
 #[test]
 #[ignore = "watching tool: needs generated content and a real save"]
 fn watch_bots_play_a_real_save() -> Result<()> {
+    let Some(save) = env("BRI_WATCH_SAVE") else {
+        eprintln!("skipped: needs BRI_WATCH_SAVE");
+        return Ok(());
+    };
+    let save = PathBuf::from(save);
     let root = content_root();
     let out = PathBuf::from(env("BRI_WATCH_OUT").unwrap_or_else(|| "target/bot-watch".into()));
     std::fs::create_dir_all(&out)?;
     let seconds: u64 = env("BRI_WATCH_SECONDS").map_or(180, |s| s.parse().unwrap());
-    let save = PathBuf::from(env("BRI_WATCH_SAVE").context("BRI_WATCH_SAVE")?);
     let mut build = bri_world::build::decode(&std::fs::read(&save)?)?;
     // A save without a mini-game borrows another save's (Slayer config,
     // teams), as if the host had loaded that one first; Save & Reset then
@@ -219,7 +223,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     let host = s.join("Host".into(), spawn, true)?;
     let mut seq = 0u64;
     let mut cmd = 0u64;
-    let mut step = |s: &mut Session, n: u64, seq: &mut u64| -> Result<()> {
+    let step = |s: &mut Session, n: u64, seq: &mut u64| -> Result<()> {
         for _ in 0..n {
             *seq += 1;
             s.movement(host, *seq, MoveInput::default())?;
@@ -280,8 +284,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             )?;
             step(&mut s, 4, &mut seq)?;
         }
-        let view = s
-            .minigame_views()
+        s.minigame_views()
             .into_iter()
             .find(|g| g.owner == host)
             .context("host's game")?;
@@ -384,7 +387,6 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             .collect::<Vec<_>>()
     );
 
-    let names = s.names();
     let t0 = s.simulation().state().tick;
     let mut tracks: BTreeMap<OwnerId, Track> = BTreeMap::new();
     let mut moments: Vec<Moment> = vec![];
@@ -440,7 +442,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             let Some(st) = states.get(bot) else { continue };
             let feet = Vec3::from(st.feet);
             let item = held(&view.images, *bot);
-            if tick % 30 == 0 {
+            if tick.is_multiple_of(30) {
                 let line = json!({
                     "t": secs(tick, t0), "bot": bot, "name": name(bot), "team": team(bot),
                     "alive": alive(bot), "hp": vitals.get(bot).map(|v| v.health),
@@ -455,7 +457,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                 writeln!(trace, "{line}")?;
             }
             let tr = tracks.entry(*bot).or_default();
-            let mut close = |tr: &mut Track, moments: &mut Vec<Moment>| {
+            let close = |tr: &mut Track, moments: &mut Vec<Moment>| {
                 for (kind, since, min) in [
                     ("stuck", tr.stuck_since.take().map(|(t, a, b, n)| (t, a, format!("{b}, next waypoint {n:?}"))), 3.0),
                     ("circling", tr.circling_since.take().map(|(t, a, b)| (t, a, b.to_string())), 6.0),

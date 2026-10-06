@@ -29,32 +29,38 @@ const CLEAR_DEGREES: f32 = 60.0;
 const MOVING: f32 = 0.25;
 
 impl Session {
-    /// How much the enemy it sees threatens the bot or its play, 0 to 1
-    /// (`behaviour::Situation::spared`). With no play at stake, all of it.
-    /// At play: all of it for one that hurt it, that the play names, that
-    /// contests the body it works or stands at it; `ARMED` for one holding
-    /// an attack; `UNARMED` for one that holds none.
+    /// How much going after the enemy it sees is worth, against a fight's
+    /// or a chase's full score (`behaviour::Situation::spared`). With no
+    /// play at stake, all of it (an unarmed bot closes in, and may find a
+    /// body or a vehicle to use). At play: nothing when it cannot hurt them
+    /// (`can_hurt`: it has no attack); `HURT`, more than the play, for one
+    /// that hurt it; all of it for one the
+    /// play names or that contests the body it works or stands at it;
+    /// `ARMED` for one holding an attack; `UNARMED` for one that holds none.
     pub(super) fn bot_menace(
         &self,
         play: Option<&super::objectives::View>,
         seen: Option<super::Seen>,
         threat: Option<super::Knowledge>,
         contested: bool,
+        can_hurt: bool,
     ) -> f32 {
         let (Some(play), Some(seen)) = (play, seen) else {
             return 1.0;
         };
+        if !can_hurt {
+            return 0.0;
+        }
+        if threat.is_some_and(|k| k.subject == seen.owner) {
+            return HURT;
+        }
         let at_the_body = match play.resource {
             Some(Resource::Body { vehicle }) => self
                 .object_centre(ObjectRef::Vehicle(vehicle))
                 .is_some_and(|centre| flat(seen.real - centre).length() <= ENGAGE),
             _ => false,
         };
-        if contested
-            || at_the_body
-            || play.enemy == Some(seen.owner)
-            || threat.is_some_and(|k| k.subject == seen.owner)
-        {
+        if contested || at_the_body || play.enemy == Some(seen.owner) {
             return 1.0;
         }
         let scale = self.peers.get(&seen.owner).map_or(1.0, |p| p.player.state().scale);
@@ -72,6 +78,9 @@ impl Session {
         if armed { ARMED } else { UNARMED }
     }
 }
+/// What an enemy that hurt it is worth going after: more than any play
+/// (a chase at this share beats an objective's 0.65).
+const HURT: f32 = 1.25;
 /// What an armed enemy away from the play is worth going after, against a
 /// fight's or a chase's full score: less than the play (an objective's
 /// 0.65 against a fight's 0.8).

@@ -837,7 +837,10 @@ impl Scorer {
                 // body, feet to head (up close a swing at the head is on
                 // target, though well off a fixed point at the middle).
                 let feet = Vec3::from(t.feet);
-                let nearest = feet + Vec3::Y * (origin.y - feet.y).clamp(0.0, 2.4);
+                // The point of its body (feet to head, 2.4 up) level with
+                // the shooter, or the nearer end.
+                let head = feet + Vec3::Y * 2.4;
+                let nearest = Vec3::new(feet.x, origin.y, feet.z).max(feet).min(head);
                 let off = |at: Vec3| {
                     (at - origin).normalize_or_zero().dot(direction) < 25f32.to_radians().cos()
                 };

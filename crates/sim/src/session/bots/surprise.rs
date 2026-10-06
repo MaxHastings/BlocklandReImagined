@@ -393,10 +393,10 @@ pub(super) enum Moment {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Mind {
     rng: u64,
-    /// The reflexes' stream (`Domain::reflex`): how a bot moves under fire
-    /// draws from it alone, so a fight's dodges never shift its other
-    /// choices.
-    reflex_rng: u64,
+    /// Whose mind: a reflex (`Domain::reflex`) draws from the bot's own
+    /// cadence seed instead of the stream, so a fight's dodges never shift
+    /// its other choices.
+    bot: OwnerId,
     drives: Vec<Drive>,
     holds: [Hold; Domain::ALL.len()],
     decisions: [Option<Decision>; Domain::ALL.len()],
@@ -411,7 +411,7 @@ impl Mind {
     pub(super) fn new(bot: OwnerId) -> Self {
         Self {
             rng: 0x5851_F42D_4C95_7F2D ^ bot.wrapping_mul(0xD1B5_4A32_D192_ED03),
-            reflex_rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0xD1B5_4A32_D192_ED03),
+            bot,
             ..Default::default()
         }
     }
@@ -425,10 +425,12 @@ impl Mind {
     fn random(&mut self) -> f32 {
         super::perception::draw(&mut self.rng)
     }
-    /// A draw for a choice in `domain`, from its stream.
-    fn random_in(&mut self, domain: Domain) -> f32 {
+    /// A draw for `option` in `domain` at `step`: a reflex's from the
+    /// bot's seed, anything else's from the stream.
+    fn random_in(&mut self, domain: Domain, option: u32, step: u64) -> f32 {
         if domain.reflex() {
-            super::perception::draw(&mut self.reflex_rng)
+            let at = (domain as u64) << 56 ^ (option as u64) << 32 ^ step;
+            cadence::unit(cadence::seed(self.bot, cadence::salt::REFLEX) ^ cadence::mix(at))
         } else {
             self.random()
         }
@@ -446,7 +448,8 @@ impl Mind {
                 // A new drive starts anywhere its walk would have taken it
                 // (about half its limit either way), so bots differ from
                 // their first choice on.
-                let drift = (self.random_in(domain) * 2.0 - 1.0) * DRIFT * strength * 0.5;
+                let draw = self.random_in(domain, option, tick / 120);
+                let drift = (draw * 2.0 - 1.0) * DRIFT * strength * 0.5;
                 self.drives.push(Drive {
                     domain,
                     option,
@@ -471,8 +474,8 @@ impl Mind {
         let limit = DRIFT * strength;
         let steps = (tick / 120).saturating_sub(d.updated / 120).min(120);
         let sigma = limit * 0.5 * (2.0 / DRIFT_SECONDS).sqrt() * 3f32.sqrt();
-        for _ in 0..steps {
-            let noise = self.random_in(d.domain) * 2.0 - 1.0;
+        for step in 0..steps {
+            let noise = self.random_in(d.domain, d.option, d.updated / 120 + step + 1) * 2.0 - 1.0;
             drive.drift =
                 (drive.drift * (1.0 - 1.0 / DRIFT_SECONDS) + noise * sigma).clamp(-limit, limit);
         }
@@ -1596,12 +1599,10 @@ impl Session {
             .is_some_and(|(image, _)| image.id == super::super::tools::SPRAY_CAN_IMAGE);
         // A can is held down; anything else clicks.
         let beat = tick.saturating_sub(i.since) % CLICK_TICKS;
-        if item.is_none() {
-            if clear && beat == 0 {
-                let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
-                let _ = self.command(bot, sequence, Command::Activate);
-                let _ = self.command(bot, sequence + 1, Command::ActivateRelease);
-            }
+        if item.is_none() && clear && beat == 0 {
+            let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
+            let _ = self.command(bot, sequence, Command::Activate);
+            let _ = self.command(bot, sequence + 1, Command::ActivateRelease);
         }
         Act {
             aim: Some(aim),

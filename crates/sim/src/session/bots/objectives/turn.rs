@@ -116,7 +116,7 @@ impl Session {
                 let replaced = step.object_gone(self);
                 state.step = None;
                 state.desired = None;
-                state.next = if replaced { tick } else { tick + RETRY };
+                state.next = if replaced { tick } else { tick + REPLAN_TICKS };
                 state.paused = replaced;
                 state.diagnostic = Some(diagnostic);
             } else if tick > step.deadline {
@@ -172,7 +172,7 @@ impl Session {
         {
             self.bots.objective_budget_used = true;
             self.bots.objective_cursor = Some(bot);
-            state.next = tick + RETRY;
+            state.next = tick + REPLAN_TICKS;
             state.unplanned = false;
             let mut budget = GroundingBudget::default();
             // Another offered objective not yet found wanting: one that
@@ -286,7 +286,7 @@ impl Session {
                 Err(f) => {
                     let was_paused = std::mem::take(&mut state.paused);
                     if let Some(desired) = state.desired.take() {
-                        state.failed_desired.give_up(desired, tick + RETRY * 3);
+                        state.failed_desired.give_up(desired, tick + UNREACHED_TICKS);
                         if untried {
                             state.next = tick;
                             state.paused = was_paused;

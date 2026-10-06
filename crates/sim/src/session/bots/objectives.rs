@@ -17,7 +17,10 @@ use ev::rules::{Condition, Datum, Property, RuleOp, Subject};
 const SOURCES: usize = 64;
 const ROWS: usize = 256;
 const ACTIONS: usize = 32;
-const RETRY: u64 = 120;
+/// Ticks before it plans again after a plan ends or fails.
+const REPLAN_TICKS: u64 = 120;
+/// Ticks it leaves a goal alone that no plan reached.
+const UNREACHED_TICKS: u64 = 3 * REPLAN_TICKS;
 /// Goals it remembers no plan reaching: the native rule goal plus the most
 /// a discovery offers (eight).
 const FAILED_GOALS: usize = 9;
@@ -739,7 +742,7 @@ impl State {
             });
         }
         self.route.clear();
-        self.next = tick.saturating_add(RETRY * 3);
+        self.next = tick.saturating_add(UNREACHED_TICKS);
         self.diagnostic = Some(reason);
     }
 }
