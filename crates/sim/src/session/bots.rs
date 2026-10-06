@@ -439,12 +439,16 @@ impl Goal {
 }
 impl Brain {
     /// Where its chase leash is measured from, and how long it is. A driver
-    /// follows its kind's mounted pursuit policy; on foot, its brick's.
+    /// follows its kind's mounted pursuit policy; on foot, its brick's. A
+    /// rules bot on foot has no brick to keep near: it plays the whole map,
+    /// as a player does (a leash to where it spawned had it drop a chase
+    /// at the edge and wander back, then see them and chase again).
     fn pursuit(&self, driving: bool) -> (Vec3, f32) {
         let mounted = &self.kind.mounted;
         match (driving, mounted.anchor, self.mount_anchor) {
             (true, MountAnchor::Mount, Some((_, at))) => (at, mounted.chase_radius),
             (true, _, _) => (self.leash, mounted.chase_radius),
+            (false, _, _) if self.brick.is_none() => (self.leash, f32::INFINITY),
             (false, _, _) => (self.leash, self.kind.chase_radius),
         }
     }
