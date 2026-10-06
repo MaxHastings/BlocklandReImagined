@@ -127,7 +127,8 @@ impl App {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Save picture"),
             });
-        let drawn = self.render_scene(&mut RenderContext {
+        // Every pixel, whatever the Render Scale.
+        let drawn = self.render_frame(&mut RenderContext {
             device: frame.device,
             queue: frame.queue,
             encoder: &mut encoder,

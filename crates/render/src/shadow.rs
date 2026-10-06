@@ -125,6 +125,10 @@ pub struct ShadowSettings {
     /// Map surfaces and objects both read it; no legacy visibility channel.
     /// Cached faces are rebuilt when map geometry or light parameters change.
     pub light_cubes: bool,
+    /// Dynamic: the lights nearest the eye whose cube shadows keep their
+    /// soft 3x3-texel edge; the rest take one 2x2 comparison, a harder edge
+    /// that only shows far away. Every light stays shadowed at any quality.
+    pub soft_cubes: u32,
 }
 impl ShadowSettings {
     pub const BEST: Self = Self {
@@ -134,6 +138,7 @@ impl ShadowSettings {
         lamps: 4,
         lamp_resolution: 1024,
         light_cubes: false,
+        soft_cubes: 24,
     };
     pub const HIGH: Self = Self {
         cascades: 3,
@@ -142,6 +147,7 @@ impl ShadowSettings {
         lamps: 2,
         lamp_resolution: 512,
         light_cubes: false,
+        soft_cubes: 12,
     };
     pub const MEDIUM: Self = Self {
         cascades: 3,
@@ -150,6 +156,7 @@ impl ShadowSettings {
         lamps: 1,
         lamp_resolution: 512,
         light_cubes: false,
+        soft_cubes: 6,
     };
     pub const LOW: Self = Self {
         cascades: 2,
@@ -158,6 +165,7 @@ impl ShadowSettings {
         lamps: 0,
         lamp_resolution: 256,
         light_cubes: false,
+        soft_cubes: 3,
     };
     /// Faces of moving casters (players, vehicles, items): half the
     /// resolution of the kept brick faces.
@@ -507,6 +515,27 @@ pub(crate) fn pick_lamps(
     scored.into_iter().take(budget).map(|(_, i)| i).collect()
 }
 
+/// Dynamic: the lights whose cube shadows keep their soft edge this frame,
+/// one bit per light in uniform order. The `soft` lights whose reach comes
+/// nearest `eye` (any that reach it first, then the nearest centre) keep
+/// it; with `soft` at or above the count, every light does.
+pub fn soft_cube_mask(eye: Vec3, lights: &[Option<(Vec3, f32)>], soft: u32) -> u32 {
+    let lights = &lights[..lights.len().min(MAX_LIGHTS)];
+    let mut order: Vec<(f32, f32, usize)> = lights
+        .iter()
+        .enumerate()
+        .filter_map(|(i, light)| {
+            let (position, reach) = (*light)?;
+            let distance = position.distance(eye);
+            Some(((distance - reach).max(0.0), distance, i))
+        })
+        .collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    order
+        .iter()
+        .take(soft as usize)
+        .fold(0, |mask, &(_, _, i)| mask | 1 << i)
+}
 /// Six perspective faces around `position` out to `outer`, each a little
 /// wider than 90 degrees (see `LAMP_MARGIN_TEXELS`).
 pub(crate) fn lamp_faces(position: Vec3, outer: f32, resolution: u32) -> [Mat4; FACES] {
@@ -1274,6 +1303,33 @@ mod tests {
     fn camera(eye: Vec3, target: Vec3) -> Mat4 {
         crate::scene::perspective(1.5, 16.0 / 9.0, 0.05, 4000.0)
             * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y)
+    }
+
+    #[test]
+    fn soft_cube_mask_keeps_the_nearest_lights_soft() {
+        let at = |x: f32, reach: f32| Some((Vec3::new(x, 0.0, 0.0), reach));
+        // The eye stands inside light 2's reach; 0 is near, 1 far, 3 off.
+        let lights = [at(10.0, 4.0), at(100.0, 4.0), at(30.0, 40.0), None];
+        assert_eq!(soft_cube_mask(Vec3::ZERO, &lights, 0), 0);
+        assert_eq!(soft_cube_mask(Vec3::ZERO, &lights, 1), 0b100);
+        assert_eq!(soft_cube_mask(Vec3::ZERO, &lights, 2), 0b101);
+        assert_eq!(soft_cube_mask(Vec3::ZERO, &lights, 24), 0b111);
+        // Best keeps every one of the most lights a map can have soft.
+        let full = vec![at(5.0, 1.0); MAX_LIGHTS];
+        let best = ShadowSettings::BEST.soft_cubes;
+        assert_eq!(
+            soft_cube_mask(Vec3::ZERO, &full, best),
+            (1 << MAX_LIGHTS) - 1
+        );
+        // Lower qualities keep fewer.
+        let counts = [
+            ShadowSettings::BEST,
+            ShadowSettings::HIGH,
+            ShadowSettings::MEDIUM,
+            ShadowSettings::LOW,
+        ]
+        .map(|s| soft_cube_mask(Vec3::ZERO, &full, s.soft_cubes).count_ones());
+        assert_eq!(counts, [24, 12, 6, 3]);
     }
 
     #[test]

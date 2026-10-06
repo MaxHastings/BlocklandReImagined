@@ -893,7 +893,11 @@ impl App {
             glam::Mat4::from_cols_array(&camera.view_projection),
             eye,
             (fog_start.max(0.), fog_end.max(1.)),
-            (frame.size.0 as f32, frame.size.1 as f32),
+            // The interface's window, not the world's smaller Render Scale.
+            (
+                self.gpu.display_size.0 as f32,
+                self.gpu.display_size.1 as f32,
+            ),
             self.ui.scale(),
             controls.observer().is_none(),
             &passages,

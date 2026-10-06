@@ -9,7 +9,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Native pref: bricks cast sun shadows too (default off). v20's projected
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
-pub use bri_ui::screens::options::{LIGHTING, REFLECTIONS};
+pub use bri_ui::screens::options::{LIGHTING, REFLECTIONS, RENDER_SCALE};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Graphics {
@@ -30,6 +30,10 @@ pub struct Graphics {
     /// geometry, with no legacy lightmap/visibility/residual shading).
     /// A saved 1 (Unified without highlights) reads as 2.
     pub lighting: u8,
+    /// Native `$pref::Video::RenderScale`: the world draws at this percent
+    /// of the window's width and height (100: every pixel), stretched over
+    /// it; the interface always draws at full size.
+    pub render_scale: u32,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
     match level {
@@ -91,6 +95,7 @@ impl Graphics {
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
             lighting,
+            render_scale: bri_ui::screens::options::render_scale(&prefs),
         }
     }
 }
@@ -131,6 +136,11 @@ mod tests {
         );
         // The old Unified without highlights is Unified.
         assert_eq!(graphics(&[(LIGHTING, "1")]).lighting, 2);
+        // Render Scale: every pixel unless chosen, never below a quarter.
+        assert_eq!(graphics(&[]).render_scale, 100);
+        assert_eq!(graphics(&[(RENDER_SCALE, "70")]).render_scale, 70);
+        assert_eq!(graphics(&[(RENDER_SCALE, "5")]).render_scale, 25);
+        assert_eq!(graphics(&[(RENDER_SCALE, "400")]).render_scale, 100);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);

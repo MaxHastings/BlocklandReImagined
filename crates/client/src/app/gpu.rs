@@ -56,4 +56,10 @@ pub(super) struct GpuState {
     /// `time_gpu_passes` asks.
     pub(super) gpu_passes: Vec<(&'static str, f32)>,
     pub(super) time_passes: bool,
+    /// Render Scale below 100%: the smaller texture the world draws into
+    /// and the pass that stretches it over the window.
+    pub(super) upscale: Option<bri_render::upscale::Upscale>,
+    /// The window's size this frame, which the interface (name tags) is
+    /// laid out in, even while the world draws smaller.
+    pub(super) display_size: (u32, u32),
 }
