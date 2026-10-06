@@ -28,6 +28,57 @@ const CLEAR_DEGREES: f32 = 60.0;
 /// Below this horizontal speed the body is treated as at rest.
 const MOVING: f32 = 0.25;
 
+impl Session {
+    /// How much the enemy it sees threatens the bot or its play, 0 to 1
+    /// (`behaviour::Situation::spared`). With no play at stake, all of it.
+    /// At play: all of it for one that hurt it, that the play names, that
+    /// contests the body it works or stands at it; `ARMED` for one holding
+    /// an attack; `UNARMED` for one that holds none.
+    pub(super) fn bot_menace(
+        &self,
+        play: Option<&super::objectives::View>,
+        seen: Option<super::Seen>,
+        threat: Option<super::Knowledge>,
+        contested: bool,
+    ) -> f32 {
+        let (Some(play), Some(seen)) = (play, seen) else {
+            return 1.0;
+        };
+        let at_the_body = match play.resource {
+            Some(Resource::Body { vehicle }) => self
+                .object_centre(ObjectRef::Vehicle(vehicle))
+                .is_some_and(|centre| flat(seen.real - centre).length() <= ENGAGE),
+            _ => false,
+        };
+        if contested
+            || at_the_body
+            || play.enemy == Some(seen.owner)
+            || threat.is_some_and(|k| k.subject == seen.owner)
+        {
+            return 1.0;
+        }
+        let scale = self.peers.get(&seen.owner).map_or(1.0, |p| p.player.state().scale);
+        let armed = self
+            .weapons
+            .actor(ActorId(seen.owner))
+            .and_then(|a| a.selected.and_then(|s| a.inventory.get(s).cloned().flatten()))
+            .is_some_and(|item| super::hand_combat::item_attacks(self, &item, scale))
+            || self
+                .bots
+                .brains
+                .get(&seen.owner)
+                .and_then(|b| b.kind.melee.as_ref())
+                .is_some_and(|m| m.damage > 0.0);
+        if armed { ARMED } else { UNARMED }
+    }
+}
+/// What an armed enemy away from the play is worth going after, against a
+/// fight's or a chase's full score: less than the play (an objective's
+/// 0.65 against a fight's 0.8).
+const ARMED: f32 = 0.75;
+/// The same for an enemy that holds no attack.
+const UNARMED: f32 = 0.25;
+
 /// An opponent (bot or player) intends to move, or last moved, this body.
 pub(super) fn contested(session: &Session, bot: OwnerId, object: ObjectRef) -> bool {
     let ObjectRef::Vehicle(vehicle) = object else {

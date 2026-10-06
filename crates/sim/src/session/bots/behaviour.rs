@@ -62,6 +62,10 @@ pub(crate) struct Situation {
     /// The enemy in sight within its chase radius: how far across, and how
     /// much higher.
     pub enemy: Option<(f32, f32)>,
+    /// How much of a fight or a chase after that enemy the play at stake
+    /// spares it, 0 (none) to 1: one that threatens neither the bot nor its
+    /// play is worth less than the play (`Session::bot_menace`).
+    pub spared: f32,
     /// The far edge of its weapon's band.
     pub far: f32,
     /// How high it steps.
@@ -137,7 +141,8 @@ impl Behaviour {
             // Full in its band, fading past the far edge and with height.
             Behaviour::Fight => s.enemy.map_or(0.0, |(distance, rise)| {
                 let width = (s.far * FIGHT_FADE_SHARE).max(FIGHT_FADE);
-                0.8 * fade(distance, s.far, width)
+                0.8 * (1.0 - s.spared)
+                    * fade(distance, s.far, width)
                     * fade(
                         rise.abs(),
                         (s.step + RISE_SLACK).max(s.far * RISE_SHARE) + s.reach_up,
@@ -147,7 +152,7 @@ impl Behaviour {
             // Empty-handed, before going after an enemy or an objective
             // that wants one beaten; armed, an upgrade by its worth.
             Behaviour::Arm => s.arm,
-            Behaviour::Chase => fits(s.enemy.is_some(), 0.6),
+            Behaviour::Chase => fits(s.enemy.is_some(), 0.6 * (1.0 - s.spared)),
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
             Behaviour::Return => fits(!s.pursuing, 0.3 * s.strayed.clamp(0.0, 1.0)),

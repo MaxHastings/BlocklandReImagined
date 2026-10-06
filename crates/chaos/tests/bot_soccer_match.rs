@@ -398,6 +398,8 @@ enum Kit {
     Spear,
     /// A push broom: a swing that shoves, and hurts nobody.
     Broom,
+    /// A sword, in a game whose weapons hurt (Max's Soccer Field Goo kit).
+    Sword,
 }
 
 struct Match {
@@ -493,8 +495,17 @@ impl Match {
                         None,
                         None,
                     ],
+                    Kit::Sword => [
+                        Some(bri_weapons::testing::SWORD_ITEM.into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
                 },
-                weapon_damage: false,
+                // Weapons hurt only in the sword match, as on Max's save;
+                // elsewhere a weapon only moves the ball.
+                weapon_damage: kit == Kit::Sword,
                 // Moving the ball is vehicle damage policy: on, or nobody may push it.
                 vehicle_damage: true,
                 brick_damage: false,
@@ -1070,7 +1081,11 @@ fn never(label: &str, setup: &Setup, r: &Report) -> Vec<String> {
             r.ball_lost == 0.0,
             format!("ball lost {:.1} s", r.ball_lost),
         ),
-        (r.combat == 0.0, format!("fought {:.1} bot-s", r.combat)),
+        // No fight where weapons cannot hurt: nothing to win by it.
+        (
+            r.combat == 0.0 || setup.kit == Kit::Sword,
+            format!("fought {:.1} bot-s", r.combat),
+        ),
         (
             r.longest_untouched <= 6.0,
             format!("ball unattended {:.1} s", r.longest_untouched),
@@ -1451,6 +1466,35 @@ fn the_shipped_field_survives_load_bricks_whatever_the_pads_size() {
 /// Short runs with a rocket launcher, a spear, and jeeps parked at the
 /// touchlines: the match keeps going. Nobody's brain sticks or circles,
 /// the ball is never lost or left alone for long, and goals are scored.
+/// Max's Soccer Field Goo with its slot-1 kit: swords that hurt. The bots
+/// still play the ball and score, and they fight for it as well: an
+/// opponent at the ball is fought, one away from it left to the play.
+#[test]
+fn sword_soccer_plays_the_ball_and_fights_for_it() {
+    let seconds: usize = env("BRI_SOCCER_SHORT", 90);
+    let (mut goals, mut combat, mut ball_time) = (0u32, 0.0f32, 0.0f32);
+    for seed in 1..=2 {
+        let setup = Setup::new(Kit::Sword, 2, 2).seeded(seed);
+        let r = play(&setup, seconds);
+        println!("sword seed {seed}: {r:?}");
+        goals += r.goals.values().sum::<u32>();
+        combat += r.combat;
+        ball_time += r.near;
+        assert!(r.ball_lost == 0.0, "ball lost {:.1} s", r.ball_lost);
+    }
+    let bot_time = 4.0 * 2.0 * seconds as f32;
+    assert!(goals >= 2, "the ball is still played to goal: {goals} goals");
+    assert!(combat > 0.0, "with swords that hurt, bots fight for the ball");
+    assert!(
+        combat < 0.5 * bot_time,
+        "fighting does not take over the match: {combat:.1} of {bot_time:.0} bot-s"
+    );
+    assert!(
+        ball_time > 0.25 * bot_time,
+        "most bots stay at the play: {ball_time:.1} of {bot_time:.0} bot-s near the ball"
+    );
+}
+
 #[test]
 fn rockets_spears_and_jeeps_keep_the_match_going() {
     let seconds: usize = env("BRI_SOCCER_SHORT", 60);

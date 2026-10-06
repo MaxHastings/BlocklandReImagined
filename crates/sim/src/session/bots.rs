@@ -1826,28 +1826,20 @@ impl Session {
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
-        // An objective that needs no enemy beaten is not stopped for an
-        // enemy that leaves it alone, but one at the same body is fought
-        // for it, as a player shoulders an opponent off the ball: the
-        // contest is on (`contest::engaged`), or the enemy it sees stands
-        // at the body it works.
-        let at_the_body = objective
-            .and_then(|view| match view.resource? {
-                claims::Resource::Body { vehicle } => {
-                    self.object_centre(ObjectRef::Vehicle(vehicle))
-                }
-                claims::Resource::Seat { .. } => None,
-            })
-            .zip(sight.target)
-            .is_some_and(|(centre, seen)| {
-                flat(seen.real - centre).length() <= contest::ENGAGE
-            });
-        let peaceful_objective = objective.is_some_and(|view| view.enemy.is_none())
-            && threat.is_none()
-            && !contest_engaged
-            && !at_the_body;
-        let objective_without_attack = peaceful_objective
-            || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
+        // How much the enemy in sight threatens it or its play (`menace`):
+        // with nothing at stake every enemy is worth fighting; at play, one
+        // that hurt it, contests the body it works or stands at it, or that
+        // the play names, is; one armed is worth less than the play, and
+        // one unarmed less still, so a passer-by does not stop a delivery.
+        let menace = self.bot_menace(
+            objective.as_ref(),
+            sight.target,
+            threat,
+            contest_engaged,
+        );
+        let peaceful_objective = objective.is_some() && menace < 1.0;
+        let objective_without_attack =
+            objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
         let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
         let allies = self.claim_allies(bot, tick);
         // Clearing an opponent off a body a teammate holds, with something
@@ -2022,6 +2014,7 @@ impl Session {
             arm: arm.map_or(0.0, |(_, score)| score),
             // A swimmer reaches any depth, and a swing reaches round it
             // alike: only how far counts.
+            spared: 1.0 - menace,
             enemy: enemy
                 .filter(|_| !objective_without_attack)
                 // Where it was out of reach, not across from there: one
