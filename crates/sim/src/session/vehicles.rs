@@ -591,9 +591,11 @@ impl Session {
         let v = world
             .vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle))
             .context("No vehicle")?;
+        ensure!(!v.destroyed, "Cannot use vehicle");
         ensure!(
-            !v.destroyed && self.can_ride(owner, v.owner.0),
-            "Cannot use vehicle"
+            self.can_ride(owner, v.owner.0),
+            "{}",
+            self.ride_refusal(owner, v.owner.0)
         );
         let d = world
             .definition(&v.definition)
@@ -1035,24 +1037,52 @@ impl Session {
         self.minigames.player(player).ok()?.game
     }
     /// `miniGameCanUse` for riding: owners, trusted sandbox players and
-    /// same-minigame players may ride; different minigames may not.
+    /// same-minigame players may ride; different minigames may not. Outside
+    /// minigames a vehicle whose owner is not on the server is anyone's
+    /// (`WheeledVehicleData::onCollision` asks trust only of a present
+    /// `findClientByBL_ID`).
     pub(super) fn can_ride(&self, owner: OwnerId, vehicle_owner: OwnerId) -> bool {
-        let Some(peer) = self.peers.get(&owner) else {
-            return false;
-        };
+        self.ride_decision(owner, vehicle_owner)
+            .is_some_and(|d| d == Decision::Allow)
+    }
+    fn ride_decision(&self, owner: OwnerId, vehicle_owner: OwnerId) -> Option<Decision> {
+        let peer = self.peers.get(&owner)?;
         let target = mg::Target::Object {
             kind: mg::ObjectKind::Vehicle,
             owner: Some(mg::AccountId(vehicle_owner)),
             membership: mg::Membership::Owner,
             spawn_brick: true,
         };
-        match self.minigames.can_use(peer.combat.player, target) {
-            Decision::Allow => true,
+        Some(match self.minigames.can_use(peer.combat.player, target) {
             // `$TrustLevel::RideVehicle` outside minigames.
-            Decision::OutsideMinigames => peer
-                .actor
-                .trusted(vehicle_owner, bri_world::authority::trust::BUILD),
-            _ => false,
+            Decision::OutsideMinigames
+                if !self.peers.contains_key(&vehicle_owner)
+                    || peer
+                        .actor
+                        .trusted(vehicle_owner, bri_world::authority::trust::BUILD) =>
+            {
+                Decision::Allow
+            }
+            decision => decision,
+        })
+    }
+    /// What `WheeledVehicleData::onCollision` centre-prints to a player it
+    /// will not seat, by `$lastError`.
+    pub(super) fn ride_refusal(&self, owner: OwnerId, vehicle_owner: OwnerId) -> String {
+        let name = self.brick_group_name(vehicle_owner);
+        match self.ride_decision(owner, vehicle_owner) {
+            Some(Decision::OutsideMinigames) => format!("{name} does not trust you enough to ride."),
+            Some(Decision::Deny(mg::Denial::DifferentGame)) if self.owner_game(owner).is_some() => {
+                "This vehicle is not part of the mini-game.".into()
+            }
+            Some(Decision::Deny(mg::Denial::DifferentGame)) => {
+                "This vehicle is part of a mini-game.".into()
+            }
+            Some(Decision::Deny(mg::Denial::NotYours)) => "You do not own this vehicle.".into(),
+            Some(Decision::Deny(mg::Denial::NotInGame)) => {
+                "This vehicle is not part of the mini-game.".into()
+            }
+            _ => format!("{name} does not trust you enough to do that"),
         }
     }
     /// `miniGameCanDamage` for a vehicle: the minigame's answer, or `None`
@@ -1369,6 +1399,7 @@ impl Session {
             .collect();
         let mut boarding = Vec::new();
         let mut touching = BTreeSet::new();
+        let mut refused = Vec::new();
         for (owner, peer) in &self.peers {
             if !peer.combat.alive || self.seated(*owner) {
                 continue;
@@ -1408,11 +1439,17 @@ impl Session {
                 }
                 let above = feet.y > v.transform.position[1] + MOUNT_ABOVE * v.scale;
                 let free = v.seats.iter().any(|s| s.occupant.is_none());
-                if above && !v.seats.is_empty() && may_board && self.can_ride(*owner, v.owner.0) {
+                let boards = above && !v.seats.is_empty() && may_board;
+                if boards && self.can_ride(*owner, v.owner.0) {
                     if free {
                         boarding.push((*owner, v.id));
                     }
                 } else {
+                    // Refused riders hear why once per landing; v20 says
+                    // nothing for a vehicle no spawn brick made.
+                    if boards && self.vehicles.brick_of.contains_key(&v.id) {
+                        refused.push((*owner, v.id, v.owner.0));
+                    }
                     touching.insert((*owner, v.id));
                 }
             }
@@ -1422,6 +1459,12 @@ impl Session {
             .copied()
             .collect();
         self.vehicles.touching = touching;
+        for (owner, vehicle, vehicle_owner) in refused {
+            if begun.contains(&(owner, vehicle)) {
+                let message = self.ride_refusal(owner, vehicle_owner);
+                self.center_print(owner, message);
+            }
+        }
         let mut allowed = Vec::with_capacity(boarding.len());
         for (owner, vehicle) in boarding {
             if self.package_ride(owner, vehicle.0) {
