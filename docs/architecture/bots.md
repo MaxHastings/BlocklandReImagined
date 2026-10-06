@@ -100,7 +100,36 @@ bot does through the same code.
    is behind, and while pursuing (Fight, Chase, Search) it is backed onto
    only within 16 units; a farther target behind is
    turned toward, so a chase is not driven as a long retreat.
-5. **Move and act.** The behaviour's movement, then getting unstuck (hop,
+5. **Move and act.** How the bot moves this tick is decided in one place,
+   the act stage (`bots/act.rs`). Every mover *proposes* a walk and buttons
+   (`act::Proposal`) and none writes the controls. The movers, lowest
+   priority first (`act::Mover`):
+
+   | Mover | Proposes |
+   |---|---|
+   | Route | along the planned route, or through the opening it leads through; its jump and crawl |
+   | Push | into the body an interaction works |
+   | Stance | where it fights or works: a weave, melee footwork, a ranged strafe and lean, giving ground |
+   | Jet | a jet leg flying itself (its jets, jump and no crouch) |
+   | Swim | rising and diving in water, or rising afloat |
+   | Team | out of where a teammate's weapon will hit |
+   | Goof | a goof's walk |
+   | Dodge | a dodge's step aside |
+   | Stand | standing still on purpose (a hop straight up, a hand-off) |
+
+   `act::resolve` takes the walk of the highest mover that has one, sets
+   each button in that order, and adds presses (a goof's or dodge's hop,
+   a crouch, a jet) on top. Then safety, which only takes away
+   (`Session::bot_safe_walk`): no step into a portal off the route, round
+   a vehicle in the way, and never off an edge whose fall would hurt (see
+   Routes). A new mover goes in at its place in that order; nothing runs
+   "after" another to win. The aim is one chain in `step_bot` (carry,
+   objective, enemy, glance, route, sweep; a goof's or an extra's look
+   over it), and the trigger is still decided in several places
+   (`bot_act`, `fire.rs`, the goof spray): folding those into the stage is
+   the next step.
+
+   Then getting unstuck (hop,
    plan again, give up the goal) on foot; drivers instead brake, replan and
    relinquish an unproductive seat. Shared claims are exclusive advisory
    intentions, released on success, preemption or invalidation. A claim never
