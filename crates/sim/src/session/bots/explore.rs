@@ -37,6 +37,12 @@ const FAR: f32 = 0.6;
 const AHEAD: f32 = 0.4;
 /// Within this of its place it has arrived.
 const ARRIVED: f32 = 3.0;
+/// A look round that found nowhere to go is not looked again until it has
+/// moved this far or this long has passed.
+const RESCAN_MOVE: f32 = 4.0;
+const RESCAN_SECONDS: f32 = 2.0;
+/// Rays a look round casts: one out each way, one down at each place.
+const SCAN_RAYS: usize = 2 * DIRECTIONS;
 
 /// What a bot keeps for exploring.
 #[derive(Clone, Debug, Default)]
@@ -47,6 +53,8 @@ pub(super) struct Explore {
     leads: Vec<(Vec3, u64)>,
     /// The place it is going to, while it explores.
     pub to: Option<Vec3>,
+    /// Where and when a look round last found nowhere to go.
+    boxed_in: Option<(Vec3, u64)>,
 }
 
 fn cell(at: Vec3) -> (i32, i32) {
@@ -112,7 +120,9 @@ impl Session {
     /// The place to explore toward: of a point some way off in each
     /// direction, short of the first wall and on floor, the one most worth
     /// looking at (`Explore::worth`), less where a teammate already goes.
-    /// The one it is going to, while it is still on its way.
+    /// The one it is going to, while it is still on its way. A look round
+    /// spends its rays from the shared budget, and one that found nowhere
+    /// is not repeated until it has moved or a while has passed.
     pub(super) fn bot_explore_target(
         &mut self,
         bot: OwnerId,
@@ -126,6 +136,14 @@ impl Session {
         if let Some(to) = brain.explore.to {
             return Some(to);
         }
+        if brain.explore.boxed_in.is_some_and(|(at, when)| {
+            flat(at - feet).length() < RESCAN_MOVE
+                && tick < when + (RESCAN_SECONDS * 120.0) as u64
+        }) || !self.bot_spend_rays(bot, SCAN_RAYS)
+        {
+            return None;
+        }
+        let brain = &self.bots.brains[&bot];
         let reach = brain.kind.sight * REACH_SHARE;
         // The way it faces: a person looking about keeps on more often than
         // they turn back the way they came.
@@ -164,7 +182,9 @@ impl Session {
             }
         }
         let to = best.map(|(_, at)| at);
-        self.bots.brains.get_mut(&bot)?.explore.to = to;
+        let explore = &mut self.bots.brains.get_mut(&bot)?.explore;
+        explore.to = to;
+        explore.boxed_in = to.is_none().then_some((feet, tick));
         to
     }
 }

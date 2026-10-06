@@ -5,7 +5,7 @@
 use super::*;
 
 /// Lines in a readout.
-pub const WHY_LINES: usize = 4;
+pub const WHY_LINES: usize = 5;
 
 impl BotThought {
     /// The readout at `tick`, at most [`WHY_LINES`] lines.
@@ -79,6 +79,7 @@ impl BotThought {
             noticed.push_str(&format!("; {}", n.why));
         }
         out.push(noticed);
+        out.push(self.acted.clone());
         out.truncate(WHY_LINES);
         out
     }
@@ -155,6 +156,7 @@ impl Session {
                 noticed: b.perception.why,
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
+                acted: b.acted.line(),
             })
             .collect()
     }
@@ -215,6 +217,7 @@ mod tests {
             objective_reused: 0,
             noticed: None,
             team: Default::default(),
+            acted: "Acts: walk route, look route, trigger none".into(),
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,
@@ -243,6 +246,7 @@ mod tests {
                 "Top: fight 0.80, chase 0.75, search 0.20",
                 "Terms: boredom 0.40 chase, drift -0.30 fight, drift +0.10 chase, hold: committed",
                 "Remembers player 3 2.0 s ago at (10, 0, -4)",
+                "Acts: walk route, look route, trigger none",
             ]
         );
         t.visible = Some(3);
@@ -259,10 +263,11 @@ mod tests {
             [
                 "Doing chase, goofing (hop)",
                 "Terms: surprise off",
-                "Sees player 3; reacting: relaxed"
+                "Sees player 3; reacting: relaxed",
+                "Acts: walk route, look route, trigger none",
             ]
         );
         // Once over, it is not shown.
-        assert_eq!(t.why(1300).last().unwrap(), "Sees player 3");
+        assert_eq!(t.why(1300)[2], "Sees player 3");
     }
 }

@@ -151,6 +151,19 @@ pub(super) fn eye_or_chest(
 }
 
 impl Session {
+    /// Take `rays` from the tick's ordinary share for a scan of `viewer`'s
+    /// own (a look round for a place to go, open sky): false when the share
+    /// is spent, and the scan waits for a later tick.
+    pub(in crate::session) fn bot_spend_rays(&self, viewer: OwnerId, rays: usize) -> bool {
+        let tick = self.simulation.state().tick;
+        let mut lines = self
+            .bots
+            .sightlines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        lines.begin(tick);
+        lines.spend(viewer, Urgency::Ordinary, rays)
+    }
     /// Whether `viewer` at `from` sees `to` within `reach`, through the
     /// shared budget (module doc). `subject` names it for the cache; `None`
     /// is never cached. The other lanes' sight checks call this.

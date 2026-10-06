@@ -13,6 +13,11 @@
 //!
 //! So a mover added later goes in at its place in [`Mover`], not after
 //! whatever happened to run last.
+//!
+//! The look is decided the same way: each that wants the bot's eyes
+//! proposes a [`Look`], and the highest [`Looker`] has them. What the stage
+//! did (who walked, who looked, who has the trigger, an edge held back,
+//! stalls and replans) is kept as [`Acted`] for the readout (F3).
 use super::*;
 
 /// Who proposes, lowest priority first: a later mover's walk replaces an
@@ -39,6 +44,129 @@ pub(super) enum Mover {
     /// Standing still on purpose: a hop straight up, a hand-off, a goof that
     /// stands.
     Stand,
+}
+
+impl Mover {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Mover::Route => "route",
+            Mover::Push => "push",
+            Mover::Stance => "stance",
+            Mover::Jet => "jet",
+            Mover::Swim => "swim",
+            Mover::Team => "team",
+            Mover::Goof => "goof",
+            Mover::Dodge => "dodge",
+            Mover::Stand => "stand",
+        }
+    }
+}
+
+/// Who has its eyes, lowest priority first: a later looker's look replaces
+/// an earlier one's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Looker {
+    /// Where it already looks.
+    #[default]
+    Hold,
+    /// Sweeping the spot it searches.
+    Sweep,
+    /// The way it walks.
+    Route,
+    /// Someone it just noticed.
+    Glance,
+    /// The enemy it fights.
+    Target,
+    /// What its objective works.
+    Objective,
+    /// The way it carries something, and the swing that flings it.
+    Carry,
+    /// Down at its feet (a goof).
+    Down,
+    /// A goof's or an extra's gesture.
+    Gesture,
+}
+impl Looker {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Looker::Hold => "hold",
+            Looker::Sweep => "sweep",
+            Looker::Route => "route",
+            Looker::Glance => "glance",
+            Looker::Target => "target",
+            Looker::Objective => "objective",
+            Looker::Carry => "carry",
+            Looker::Down => "down",
+            Looker::Gesture => "gesture",
+        }
+    }
+}
+
+/// Where one looker wants its eyes: a yaw and a pitch.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Look {
+    pub by: Looker,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// The look of the highest looker.
+pub(super) fn look(looks: &[Look]) -> Look {
+    looks.iter().copied().max_by_key(|l| l.by).unwrap_or(Look {
+        by: Looker::Hold,
+        yaw: 0.0,
+        pitch: 0.0,
+    })
+}
+
+/// Who has the trigger this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Trigger {
+    Fight,
+    Objective,
+    Goof,
+}
+impl Trigger {
+    fn name(self) -> &'static str {
+        match self {
+            Trigger::Fight => "fight",
+            Trigger::Objective => "objective",
+            Trigger::Goof => "goof",
+        }
+    }
+}
+
+/// What the act stage did last tick, for the readout.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Acted {
+    /// Who set the walk (none: it stood).
+    pub walk: Option<Mover>,
+    pub look: Looker,
+    pub trigger: Option<Trigger>,
+    /// Safety held its walk back at an edge.
+    pub held_back: bool,
+    /// Windows gone nowhere in a row, and plans made again.
+    pub stalls: u32,
+    pub replans: u32,
+}
+impl Acted {
+    /// One readout line: `Acts: walk route, look target, trigger fight;
+    /// held at an edge; stalled 1, replanned 2`.
+    pub(super) fn line(&self) -> String {
+        let mut line = format!(
+            "Acts: walk {}, look {}, trigger {}",
+            self.walk.map_or("none", Mover::name),
+            self.look.name(),
+            self.trigger.map_or("none", Trigger::name)
+        );
+        if self.held_back {
+            line.push_str("; held at an edge");
+        }
+        if self.stalls > 0 || self.replans > 0 {
+            line.push_str(&format!("; stalled {}, replanned {}", self.stalls, self.replans));
+        }
+        line
+    }
 }
 
 /// What one mover wants this tick. `walk` is a flat direction (zero:
@@ -73,8 +201,9 @@ impl Proposal {
 }
 
 /// Buttons pressed on top of whatever the movers set: a crouch, the jets,
-/// and a hop (a goof's, a dodge's, one into a body), which safety lets
-/// through only where it comes down on floor along the walk it takes.
+/// and a hop (a goof's, a dodge's, one into a body, the stall judge's),
+/// which safety lets through only where it comes down on floor along the
+/// walk it takes.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Press {
     pub hop: bool,
@@ -86,6 +215,8 @@ pub(super) struct Press {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct Controls {
     pub walk: Vec3,
+    /// Who set the walk.
+    pub by: Option<Mover>,
     /// Where its route alone would take it: a walk elsewhere is off it.
     pub routed: Vec3,
     pub jump: bool,
@@ -103,6 +234,7 @@ pub(super) fn resolve(proposals: &mut [Proposal], press: Press) -> Controls {
     for p in proposals.iter() {
         if let Some(walk) = p.walk {
             out.walk = walk;
+            out.by = Some(p.mover);
             if p.mover == Mover::Route {
                 out.routed = walk;
             }

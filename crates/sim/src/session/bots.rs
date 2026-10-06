@@ -106,6 +106,8 @@ pub struct BotThought {
     pub surprise: BotSurpriseView,
     /// How teammates' intents moved its last choice (`team`).
     pub team: BotTeamView,
+    /// What the act stage did (`act::Acted::line`).
+    pub acted: String,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {
@@ -322,6 +324,8 @@ struct Brain {
     /// whether it is stuck.
     progress: crate::route::Progress,
     replans: u32,
+    /// What the act stage did last tick (`act::Acted`), for the readout.
+    acted: act::Acted,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
     pitch: f32,
@@ -500,6 +504,7 @@ impl Brain {
             next_wander: 0,
             progress: crate::route::Progress::default(),
             replans: 0,
+            acted: Default::default(),
             yaw: 0.0,
             pitch: 0.0,
             target: None,
@@ -1276,6 +1281,13 @@ impl Session {
         if let Some(down) = goof_trigger {
             desired_down = down;
         }
+        brain.acted.trigger = if goof_trigger.is_some() {
+            Some(act::Trigger::Goof)
+        } else if objective_tool {
+            Some(act::Trigger::Objective)
+        } else {
+            (fire || desired_down).then_some(act::Trigger::Fight)
+        };
         // Releasing a ready mounted charge is the firing control itself.
         // Preserve that intent before `fire` becomes the requested button
         // state; cancellation would otherwise erase the native charge before
@@ -2555,9 +2567,14 @@ impl Session {
                 let to = flat(seen.feet - feet).normalize_or_zero();
                 way == Vec3::ZERO || way.dot(to) > GUN_BEHIND_COS
             });
-        // Aim: at the enemy, or where it walks.
-        let mut aim_yaw = brain.yaw;
-        let mut aim_pitch = 0.0;
+        // Aim: each that wants its eyes proposes a look; the highest has
+        // them (`act::look`).
+        let mut looks = vec![act::Look {
+            by: act::Looker::Hold,
+            yaw: brain.yaw,
+            pitch: 0.0,
+        }];
+        let pitch_to = |delta: Vec3| delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
         let mut fire = false;
         let mut step = kind.turn_degrees.to_radians() * TICK;
         if behaviour == Behaviour::Carry
@@ -2568,8 +2585,11 @@ impl Session {
             fire = true;
             match carry.swing {
                 Some(start) => {
-                    aim_yaw = wrap(brain.yaw + 1.0);
-                    aim_pitch = 0.6;
+                    looks.push(act::Look {
+                        by: act::Looker::Carry,
+                        yaw: wrap(brain.yaw + 1.0),
+                        pitch: 0.6,
+                    });
                     step *= 2.0;
                     fire = tick < start + SWING_TICKS;
                     if !fire {
@@ -2577,24 +2597,26 @@ impl Session {
                     }
                 }
                 None => {
-                    if let Some(next) = wanted {
-                        let d = flat(next.through.unwrap_or(next.feet) - feet);
-                        if d.length() > 0.05 {
-                            aim_yaw = yaw_to(d);
-                        }
-                    }
-                    aim_pitch = carry_pitch.unwrap_or(0.15);
+                    let d = wanted.map_or(Vec3::ZERO, |next| {
+                        flat(next.through.unwrap_or(next.feet) - feet)
+                    });
+                    looks.push(act::Look {
+                        by: act::Looker::Carry,
+                        yaw: if d.length() > 0.05 { yaw_to(d) } else { brain.yaw },
+                        pitch: carry_pitch.unwrap_or(0.15),
+                    });
                 }
             }
         } else if behaviour == Behaviour::Objective
             && !gunning
             && selected_objective.is_none_or(|view| view.enemy.is_none())
         {
-            if let Some(objective) = selected_objective.as_ref() {
-                let delta = objective.aim - eye;
-                aim_yaw = yaw_to(delta);
-                aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
-            }
+            let delta = selected_objective.as_ref().map(|objective| objective.aim - eye);
+            looks.push(act::Look {
+                by: act::Looker::Objective,
+                yaw: delta.map_or(brain.yaw, yaw_to),
+                pitch: delta.map_or(0.0, pitch_to),
+            });
         } else if let Some(seen) = sight.target {
             // A blast hurts all around where it lands: a splash weapon
             // aims at the feet, so a near miss still lands within it.
@@ -2620,8 +2642,13 @@ impl Session {
                 * brain.perception.aim_scale(seen.owner, tracked)
                 + perception::steady_error(&kind.perception, across, at.distance(eye));
             brain.error = aim_error(bot, tick, size);
-            aim_yaw = wrap(yaw_to(delta) + brain.error.0);
-            aim_pitch = (delta.y.atan2(flat(delta).length()) + brain.error.1).clamp(-1.5, 1.5);
+            let aim_yaw = wrap(yaw_to(delta) + brain.error.0);
+            let aim_pitch = (delta.y.atan2(flat(delta).length()) + brain.error.1).clamp(-1.5, 1.5);
+            looks.push(act::Look {
+                by: act::Looker::Target,
+                yaw: aim_yaw,
+                pitch: aim_pitch,
+            });
             let reaction = ticks(kind.reaction_seconds);
             let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
             fire = enemy.is_some()
@@ -2651,29 +2678,50 @@ impl Session {
         } else if let Some(at) = glance {
             // A glance turns the ordinary aim; the walk goes on.
             let delta = at - eye;
-            aim_yaw = yaw_to(delta);
-            aim_pitch = delta.y.atan2(flat(delta).length()).clamp(-1.5, 1.5);
+            looks.push(act::Look {
+                by: act::Looker::Glance,
+                yaw: yaw_to(delta),
+                pitch: pitch_to(delta),
+            });
         } else if let Some(next) = wanted {
             let d = flat(next.through.unwrap_or(next.feet) - feet);
-            if d.length() > 0.05 {
-                aim_yaw = yaw_to(d);
-            }
+            let mut yaw = if d.length() > 0.05 { yaw_to(d) } else { brain.yaw };
             // Strolling, the look drifts a little off the way.
             if idle {
-                aim_yaw = wrap(aim_yaw + perception::drift(&kind.perception, bot, tick));
+                yaw = wrap(yaw + perception::drift(&kind.perception, bot, tick));
             }
+            looks.push(act::Look {
+                by: act::Looker::Route,
+                yaw,
+                pitch: 0.0,
+            });
         } else if hold {
             // Searching the spot: sweep the view.
-            aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
+            looks.push(act::Look {
+                by: act::Looker::Sweep,
+                yaw: wrap(brain.yaw + 0.8 * TICK * 2.0),
+                pitch: 0.0,
+            });
         }
         // A goof's gesture (waving a tool, looking about) does not keep its
         // eyes off someone it just noticed: the glance has the look.
-        let gesture = act.aim.filter(|_| glance.is_none());
-        if let Some((yaw, pitch)) = gesture.or(extra.aim) {
-            (aim_yaw, aim_pitch) = (yaw, pitch);
-        } else if act.look_down && glance.is_none() {
-            (aim_yaw, aim_pitch) = (brain.yaw, LOOK_DOWN);
+        if let Some((yaw, pitch)) = act.aim.filter(|_| glance.is_none()).or(extra.aim) {
+            looks.push(act::Look {
+                by: act::Looker::Gesture,
+                yaw,
+                pitch,
+            });
         }
+        if act.look_down && glance.is_none() {
+            looks.push(act::Look {
+                by: act::Looker::Down,
+                yaw: brain.yaw,
+                pitch: LOOK_DOWN,
+            });
+        }
+        let look = act::look(&looks);
+        let (aim_yaw, aim_pitch) = (look.yaw, look.pitch);
+        brain.acted.look = look.by;
         // Handling things (a carry's swing, an objective's or interaction's
         // controls) keeps the plain turn its controllers are built on, and
         // a startle does not stop it.
@@ -2909,14 +2957,47 @@ impl Session {
         if extra.stand {
             proposals.push(act::Proposal::walk(act::Mover::Stand, Vec3::ZERO));
         }
+        // Walking into something: hop, then plan again, then give up. One
+        // judge says whether it is getting anywhere; held back at an edge
+        // it is not (safety only takes a walk away, so a walk proposed is
+        // one it tries). Getting somewhere is net progress across a window
+        // (`route`), not moving at an instant: wobbling on a roof's edge or
+        // between two spots is as stuck as standing against a wall. (Not
+        // pressing against what it came to work: an item to pick up, a
+        // brick or a body to use, at the goal itself.)
+        let trying = proposals
+            .iter()
+            .max_by_key(|p| p.walk.is_some().then_some(p.mover))
+            .and_then(|p| p.walk)
+            .is_some_and(|walk| walk != Vec3::ZERO);
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        let at_work = matches!(
+            brain.goal,
+            Some(Goal::Objective(p) | Goal::Interact(p) | Goal::Arm(p))
+                if flat(p - feet).length() < body.width + 1.0
+        );
+        let walking = driving.is_none()
+            && trying
+            && pushing.is_none()
+            && !at_work
+            && wanted.is_some_and(|w| matches!(w.mode, Mode::Walk | Mode::Swim));
+        let stalled = walking
+            && brain
+                .progress
+                .stalled(feet, self.peers[&bot].player.tuning().forward, 120.0, tick);
+        if !walking {
+            brain.progress.reset();
+        }
         // A goof's, an extra's, an objective's (into a body) or the stall
         // judge's hop, which safety lets through where it comes down on
-        // floor.
+        // floor. The first window gone nowhere hops (off a body it stands
+        // on, over what its shins catch); the next plans again.
         let into_body = selected_objective.is_some_and(|v| v.jump);
+        let stall_hop = stalled && brain.progress.stalls() == 1;
         let controls = act::resolve(
             &mut proposals,
             act::Press {
-                hop: act.jump || extra.jump || into_body,
+                hop: act.jump || extra.jump || into_body || stall_hop,
                 crouch: act.crouch || extra.crouch,
                 jet: extra.jet,
             },
@@ -2940,36 +3021,7 @@ impl Session {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
-        // Walking into something: hop, then plan again, then give up. One
-        // judge says whether it is getting anywhere; held back at an edge
-        // it is not.
-        let trying = input.forward != 0.0 || input.right != 0.0 || vetoed;
-        // Getting somewhere is net progress across a window (`route`), not
-        // moving at an instant: wobbling on a roof's edge or between two
-        // spots is as stuck as standing against a wall.
-        // (Not pressing against what it came to work: an item to pick up, a
-        // brick or a body to use, at the goal itself.)
-        let at_work = matches!(
-            brain.goal,
-            Some(Goal::Objective(p) | Goal::Interact(p) | Goal::Arm(p))
-                if flat(p - feet).length() < body.width + 1.0
-        );
-        let walking = driving.is_none()
-            && trying
-            && pushing.is_none()
-            && !at_work
-            && wanted.is_some_and(|w| matches!(w.mode, Mode::Walk | Mode::Swim));
-        let stalled = walking
-            && brain
-                .progress
-                .stalled(feet, self.peers[&bot].player.tuning().forward, 120.0, tick);
-        if !walking {
-            brain.progress.reset();
-        }
-        // The first window gone nowhere hops (off a body it stands on,
-        // over what its shins catch: a jump in place, its walk already
-        // checked); the next plans again. The stage's last word on the jump.
-        input.jump = jump || stalled && brain.progress.stalls() == 1;
+        input.jump = jump;
         let mut forget = false;
         if stalled && brain.progress.stalls() > 1 && wanted.is_some() {
             brain.replans += 1;
@@ -3010,6 +3062,10 @@ impl Session {
                 }
             }
         }
+        brain.acted.walk = controls.by.filter(|_| direction != Vec3::ZERO);
+        brain.acted.held_back = vetoed;
+        brain.acted.stalls = brain.progress.stalls();
+        brain.acted.replans = brain.replans;
         brain.sequence += 1;
         let sequence = brain.sequence;
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
