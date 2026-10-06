@@ -115,14 +115,17 @@ pub(super) enum Domain {
     Route,
     /// Playing, or goofing.
     Flavour,
+    /// How it moves this moment, under threat or at play (`MOVES`).
+    Move,
 }
 impl Domain {
-    const ALL: [Domain; 5] = [
+    const ALL: [Domain; 6] = [
         Self::Behaviour,
         Self::Weapon,
         Self::Aim,
         Self::Route,
         Self::Flavour,
+        Self::Move,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -131,6 +134,7 @@ impl Domain {
             Self::Aim => "aim",
             Self::Route => "route",
             Self::Flavour => "flavour",
+            Self::Move => "move",
         }
     }
     fn label(self, option: u32) -> String {
@@ -147,6 +151,7 @@ impl Domain {
                 .copied()
                 .unwrap_or("?")
                 .into(),
+            Self::Move => MOVES.get(option as usize).copied().unwrap_or("?").into(),
         }
     }
 }
@@ -158,6 +163,12 @@ pub(super) const AIM_FEET: u32 = 1;
 pub(super) const AIM_SURFACE: u32 = 2;
 /// Which way round a chase goes: straight at them, or wide to a side.
 pub(super) const ROUTES: [&str; 3] = ["direct", "left", "right"];
+/// How it moves this moment (`extras`): as its footwork has it, crouched
+/// under fire, or a hop off a shot's path.
+pub(super) const MOVES: [&str; 3] = ["keep", "crouch", "hop"];
+pub(super) const MOVE_KEEP: u32 = 0;
+pub(super) const MOVE_CROUCH: u32 = 1;
+pub(super) const MOVE_HOP: u32 = 2;
 /// Behaviours whose scores vary. The rest (carrying a catch, arming,
 /// walking home) keep their plain scores.
 const VARIED: [Behaviour; 6] = [
@@ -273,9 +284,11 @@ pub(super) enum Flavour {
     Tool,
     Drop,
     Light,
+    /// Walk up to a door in sight and click it (`extras`).
+    Door,
 }
 impl Flavour {
-    const ALL: [Flavour; 11] = [
+    const ALL: [Flavour; FLAVOURS.len()] = [
         Self::Stare,
         Self::Emote,
         Self::Hop,
@@ -287,6 +300,7 @@ impl Flavour {
         Self::Tool,
         Self::Drop,
         Self::Light,
+        Self::Door,
     ];
     pub(super) fn name(self) -> &'static str {
         FLAVOURS[self as usize]
@@ -335,10 +349,12 @@ pub(super) struct Pause {
     pub player: Option<OwnerId>,
     /// It has a second attack, so it can drop the one in hand.
     pub spare_weapon: bool,
+    /// A door in sight it might walk up to and click (`extras`).
+    pub door: bool,
     /// Mood (`team::mood`): how much likelier any flavour is, and each one,
     /// from bots nearby doing one.
     pub pull: f32,
-    pub copy: [f32; 11],
+    pub copy: [f32; FLAVOURS.len()],
     /// What playing is worth now, 0 to 1 (1: the action is right here),
     /// against a goof's small worth: low in a lull.
     pub play: f32,
@@ -361,9 +377,9 @@ pub(super) enum Moment {
 pub(super) struct Mind {
     rng: u64,
     drives: Vec<Drive>,
-    holds: [Hold; 5],
-    decisions: [Option<Decision>; 5],
-    last_pick: [u64; 5],
+    holds: [Hold; Domain::ALL.len()],
+    decisions: [Option<Decision>; Domain::ALL.len()],
+    last_pick: [u64; Domain::ALL.len()],
     /// This tick's guard (the weapon choice, made earlier in the tick,
     /// uses the last one).
     pub gate: Gate,
@@ -657,6 +673,7 @@ impl Mind {
             // Another tool, or none: the bare hand clicks too.
             Flavour::Tool => true,
             Flavour::Drop => pause.spare_weapon,
+            Flavour::Door => pause.door,
             // A walk round or off somewhere only with nothing to do: in
             // the middle of a match it reads as a bot gone aimless. Never
             // with a loose body close by: an aimless walk under or into it
@@ -756,7 +773,12 @@ impl Mind {
     /// lasts the bot wants to go nowhere.
     pub(super) fn standing(&self) -> bool {
         self.flavour()
-            .is_some_and(|f| !matches!(f, Flavour::Circle | Flavour::Detour | Flavour::Light))
+            .is_some_and(|f| {
+                !matches!(
+                    f,
+                    Flavour::Circle | Flavour::Detour | Flavour::Light | Flavour::Door
+                )
+            })
     }
     pub(super) fn view(&self, cfg: &BotSurprise) -> BotSurpriseView {
         BotSurpriseView {
@@ -1209,6 +1231,7 @@ impl Session {
             gate,
             player,
             spare_weapon,
+            door: self.bot_fun_door(bot).is_some(),
             ..Default::default()
         }
     }
@@ -1232,9 +1255,9 @@ impl Session {
         let i = match moment {
             Moment::None => return Ok(Act::default()),
             Moment::Begin(i) => {
-                // It stops strolling for the moment (a detour sets its own
-                // goal below; the light leaves the walk alone).
-                if !matches!(i.flavour, Flavour::Detour | Flavour::Light)
+                // It stops strolling for the moment (a detour or a door sets
+                // its own goal below; the light leaves the walk alone).
+                if !matches!(i.flavour, Flavour::Detour | Flavour::Light | Flavour::Door)
                     && let Some(b) = self.bots.brains.get_mut(&bot)
                 {
                     b.set_goal(None);
@@ -1285,6 +1308,13 @@ impl Session {
                         }
                     }
                     Flavour::Light => command(self, Command::ToggleLight),
+                    Flavour::Door => {
+                        if let Some(walk) = self.bot_click_for_fun(bot, feet, tick)
+                            && let Some(b) = self.bots.brains.get_mut(&bot)
+                        {
+                            b.surprise.extend(walk);
+                        }
+                    }
                     Flavour::Detour => {
                         if let Some(b) = self.bots.brains.get_mut(&bot) {
                             let a = i.roll * std::f32::consts::TAU;
@@ -1426,7 +1456,7 @@ impl Session {
                     ..Default::default()
                 }
             }
-            (Flavour::Detour, _) | (Flavour::Light, _) => Act::default(),
+            (Flavour::Detour | Flavour::Light | Flavour::Door, _) => Act::default(),
         })
     }
 }

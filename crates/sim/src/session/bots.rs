@@ -1510,7 +1510,7 @@ impl Session {
             // A door it may open stands across the way on from where the
             // route ends: the enemy is in reach once it is clicked open.
             if let Some((end, at)) = gave_up
-                && self.bot_opens_way(bot, end, at)
+                && self.bot_opens_way(end, at)
             {
                 self.bots.brains.get_mut(&bot).unwrap().out_of_reach = None;
             }

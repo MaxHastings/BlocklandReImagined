@@ -3,8 +3,8 @@
 //! weapon) and their looks and names (`looks`), through the authoritative
 //! session with invented content. No test moves a bot or presses its
 //! controls: the ordinary brain chooses, and each property is compared
-//! against the same scene with the one `extras.strength` dial at 0 or its
-//! cause absent.
+//! against the same scene with the dial that weighs it at 0 (the
+//! `interact` weight, surprise, teamwork) or its cause absent.
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::bot_kind::{BotKind, BotPack};
@@ -132,8 +132,9 @@ fn flat(v: Vec3) -> f32 {
     Vec3::new(v.x, 0.0, v.z).length()
 }
 
-/// How far a loose ball near two allied bots moves, with no enemy about.
-fn idle_push(strength: Option<f32>) -> f32 {
+/// How far a loose ball near two allied bots moves, with no enemy about;
+/// `play` off: Interact weighs nothing.
+fn idle_push(play: bool) -> f32 {
     let mut s = session(|_| {});
     let (mut pack, _) = fixture::synthetic_vehicles().unwrap();
     for d in &mut pack.definitions {
@@ -145,8 +146,8 @@ fn idle_push(strength: Option<f32>) -> f32 {
         pack,
         blockhead(|k| {
             k.wander_radius = 2.0;
-            if let Some(w) = strength {
-                k.extras.strength = w;
+            if !play {
+                k.behaviours.insert("interact".into(), 0.0);
             }
         }),
     )
@@ -210,8 +211,8 @@ fn idle_push(strength: Option<f32>) -> f32 {
 
 #[test]
 fn an_idle_bot_near_a_loose_ball_pushes_it() {
-    let played = idle_push(None);
-    let off = idle_push(Some(0.0));
+    let played = idle_push(true);
+    let off = idle_push(false);
     assert!(off < 0.3, "without idle play it stays put: {off}");
     assert!(
         played > off + 1.0,
@@ -295,14 +296,15 @@ fn a_bot_under_ranged_fire_crouches_more_than_one_not_under_fire() {
     let weak = |p: &mut bri_weapons::ProjectileDef| p.damage = 1.0;
     let (under_fire, _) = duel(|_| {}, weak, true, 0.0);
     let (quiet, _) = duel(|_| {}, weak, false, 0.0);
-    let (off, _) = duel(|k| k.extras.strength = 0.0, weak, true, 0.0);
+    // The plain brain (surprise 0) keeps on as its footwork has it.
+    let (off, _) = duel(|k| k.surprise.strength = 0.0, weak, true, 0.0);
     assert!(
         under_fire > quiet + 120,
         "crouched {under_fire} ticks under fire, {quiet} without"
     );
     assert!(
         under_fire > off + 120,
-        "crouched {under_fire} ticks under fire, {off} with crouching off"
+        "crouched {under_fire} ticks under fire, {off} for the plain brain"
     );
 }
 
@@ -315,14 +317,15 @@ fn a_predicted_hit_triggers_a_hop_more_often_than_a_shot_that_misses() {
     };
     let (_, at_it) = duel(|_| {}, slow, true, 0.0);
     let (_, wide) = duel(|_| {}, slow, true, 0.6);
-    let (_, off) = duel(|k| k.extras.strength = 0.0, slow, true, 0.0);
+    // The plain brain never hops off a shot that would hardly hurt.
+    let (_, off) = duel(|k| k.surprise.strength = 0.0, slow, true, 0.0);
     assert!(
         at_it > wide + 60,
         "off the ground {at_it} ticks when shot at, {wide} when shots go wide"
     );
     assert!(
         at_it > off + 60,
-        "off the ground {at_it} ticks when shot at, {off} with dodging off"
+        "off the ground {at_it} ticks when shot at, {off} for the plain brain"
     );
 }
 
@@ -370,7 +373,7 @@ fn is_open(s: &Session, door: u64) -> bool {
 /// A glass room round a bot, its one way out a door a click opens; the
 /// builder stands outside in sight. Returns whether the door opened and
 /// whether the bot got out.
-fn door_room(strength: Option<f32>) -> (bool, bool) {
+fn door_room() -> (bool, bool) {
     use bri_sim::testing as t;
     let definitions = door_definitions();
     let world = World::new("Door".into(), "chaos/map".into(), vec![[1.0; 4]]);
@@ -384,15 +387,7 @@ fn door_room(strength: Option<f32>) -> (bool, bool) {
     let (weapons, _) = fixture::synthetic_weapons().unwrap();
     s.set_weapon_pack(weapons).unwrap();
     let (vehicles, _) = fixture::synthetic_vehicles().unwrap();
-    s.set_vehicle_pack(
-        vehicles,
-        blockhead(|k| {
-            if let Some(w) = strength {
-                k.extras.strength = w;
-            }
-        }),
-    )
-    .unwrap();
+    s.set_vehicle_pack(vehicles, blockhead(|_| {})).unwrap();
     s.set_tool_catalog(door_catalog()).unwrap();
     let human = s
         .join("Builder".into(), Vec3::new(8.0, 0.05, 0.0), true)
@@ -438,11 +433,9 @@ fn door_room(strength: Option<f32>) -> (bool, bool) {
 
 #[test]
 fn an_activatable_door_on_the_route_gets_activated() {
-    let (opened, out) = door_room(None);
+    let (opened, out) = door_room();
     assert!(opened, "the bot clicked the door in its way open");
     assert!(out, "and went through after its enemy");
-    let (opened, out) = door_room(Some(0.0));
-    assert!(!opened && !out, "with activation off it stays shut in");
 }
 
 /// A bot alone beside a door or else a button, no enemy about, for a
@@ -450,7 +443,7 @@ fn an_activatable_door_on_the_route_gets_activated() {
 /// kill whoever presses it and mark the button (its colour effect) so a
 /// press shows. Returns how often the door changed or the button was
 /// pressed.
-fn fun_clicks(door: bool, strength: Option<f32>) -> usize {
+fn fun_clicks(door: bool, goofs: bool) -> usize {
     use bri_events::{Row, Slot, Target, Value};
     use bri_sim::testing as t;
     let world = World::new("Fun".into(), "chaos/map".into(), vec![[1.0; 4]]);
@@ -470,8 +463,8 @@ fn fun_clicks(door: bool, strength: Option<f32>) -> usize {
         vehicles,
         blockhead(|k| {
             k.wander_radius = 2.0;
-            if let Some(w) = strength {
-                k.extras.strength = w;
+            if !goofs {
+                k.surprise.strength = 0.0;
             }
         }),
     )
@@ -531,30 +524,30 @@ fn fun_clicks(door: bool, strength: Option<f32>) -> usize {
 #[test]
 fn a_bot_opens_a_door_for_fun_but_never_presses_an_event_button() {
     assert!(
-        fun_clicks(true, None) > 0,
+        fun_clicks(true, true) > 0,
         "the door nearby was opened or shut for fun"
     );
     assert_eq!(
-        fun_clicks(false, None),
+        fun_clicks(false, true),
         0,
         "the button's rows are not the bot's to try"
     );
     assert_eq!(
-        fun_clicks(true, Some(0.0)),
+        fun_clicks(true, false),
         0,
-        "with the extras off nothing is clicked"
+        "the plain brain (no goofs) clicks nothing for fun"
     );
 }
 
 /// Two bots of one builder on one side, no enemy about: one with a gun
 /// and a launcher, the other empty-handed. Whether the second ends up
 /// armed.
-fn hand_over(strength: Option<f32>) -> bool {
+fn hand_over(teamwork: bool) -> bool {
     let mut s = session(|_| {});
     s.set_bot_kinds(blockhead(|k| {
         k.wander_radius = 3.0;
-        if let Some(w) = strength {
-            k.extras.strength = w;
+        if !teamwork {
+            k.team.teamwork = 0.0;
         }
     }))
     .unwrap();
@@ -606,11 +599,8 @@ fn hand_over(strength: Option<f32>) -> bool {
 
 #[test]
 fn a_spare_weapon_ends_up_with_an_unarmed_teammate() {
-    assert!(hand_over(None), "the teammate was handed a weapon");
-    assert!(
-        !hand_over(Some(0.0)),
-        "nobody hands one with the option off"
-    );
+    assert!(hand_over(true), "the teammate was handed a weapon");
+    assert!(!hand_over(false), "nobody hands one without teamwork");
 }
 
 fn avatar_pack() -> bri_content::avatar::Package {

@@ -9,13 +9,15 @@ use std::collections::BTreeMap;
 /// Goofs a kind may weigh, each an ordinary player action: look at a
 /// player, strike an emote, hop, run a small circle, walk a short detour,
 /// look round, crouch, spray paint toward a player, take out another tool
-/// for a moment, drop the weapon in hand, or flick the light.
-pub const FLAVOURS: [&str; 11] = [
+/// for a moment, drop the weapon in hand, flick the light, or walk up to a
+/// door in sight and click it.
+pub const FLAVOURS: [&str; 12] = [
     "stare", "emote", "hop", "circle", "detour", "look", "crouch", "spray", "tool", "drop", "light",
+    "door",
 ];
 /// How often each goof in [`FLAVOURS`] is picked when a kind names no
 /// weight for it: looking and emoting most, the props least.
-const FLAVOUR_WEIGHTS: [f32; 11] = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0, 1.0, 0.5, 0.5, 0.2, 0.5];
+const FLAVOUR_WEIGHTS: [f32; 12] = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0, 1.0, 0.5, 0.5, 0.2, 0.5, 1.0];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

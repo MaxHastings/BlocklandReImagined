@@ -10,7 +10,7 @@
 //! chooser, with its surprise and commitments, still picks.
 use super::claims::{Intent, Sightline, Space, Target};
 use super::*;
-use crate::bot_kind::BotTeam;
+use crate::bot_kind::{BotTeam, FLAVOURS};
 
 /// Two places this close (a few body widths) are one spot to crowd.
 const CROWD: f32 = 4.0;
@@ -56,7 +56,7 @@ pub(super) struct State {
     /// The mood as last looked at (`Session::team_mood_now`): the pull
     /// toward any idle flavour and toward each one. Whatever scores a
     /// flavour reads it from here.
-    pub mood: Option<(f32, [f32; 11])>,
+    pub mood: Option<(f32, [f32; FLAVOURS.len()])>,
     pub allies: usize,
     pub next_callout: u64,
     pub said: Option<String>,
@@ -244,21 +244,21 @@ pub(super) fn mood(
     at: Vec3,
     radius: f32,
     others: impl Iterator<Item = (OwnerId, Vec3, Doing, f32, bool)>,
-) -> (f32, [f32; 11]) {
+) -> (f32, [f32; FLAVOURS.len()]) {
     let (mut near, mut play) = (0.0f32, 0.0f32);
-    let mut doing = [0.0f32; 11];
+    let mut doing = [0.0f32; FLAVOURS.len()];
     for (who, feet, what, weight, seen) in others {
         if who != me && seen && feet.distance(at) < radius {
             near += weight;
             match what {
-                Doing::Goof(f) if usize::from(f) < 11 => doing[usize::from(f)] += weight,
+                Doing::Goof(f) if usize::from(f) < FLAVOURS.len() => doing[usize::from(f)] += weight,
                 Doing::Play => play += weight,
                 _ => {}
             }
         }
     }
     if near <= 0.0 {
-        return (0.0, [0.0; 11]);
+        return (0.0, [0.0; FLAVOURS.len()]);
     }
     let pull = |n: f32| (cfg.mood * n.max(0.0) / near).min(cfg.mood_cap);
     (pull(doing.iter().sum::<f32>() - play), doing.map(pull))
@@ -431,13 +431,13 @@ impl Session {
         (at, eye): (Vec3, Vec3),
         threatened: bool,
         tick: u64,
-    ) -> (f32, [f32; 11]) {
+    ) -> (f32, [f32; FLAVOURS.len()]) {
         let Some(brain) = self.bots.brains.get(&bot) else {
-            return (0.0, [0.0; 11]);
+            return (0.0, [0.0; FLAVOURS.len()]);
         };
         if brain.kind.team.mood <= 0.0 || brain.kind.surprise.strength <= 0.0 {
             self.bots.brains.get_mut(&bot).unwrap().team.mood = None;
-            return (0.0, [0.0; 11]);
+            return (0.0, [0.0; FLAVOURS.len()]);
         }
         if threatened {
             return brain.team.mood.unwrap_or_default();
@@ -460,9 +460,9 @@ impl Session {
         at: Vec3,
         eye: Vec3,
         tick: u64,
-    ) -> (f32, [f32; 11]) {
+    ) -> (f32, [f32; FLAVOURS.len()]) {
         let Some(brain) = self.bots.brains.get(&bot) else {
-            return (0.0, [0.0; 11]);
+            return (0.0, [0.0; FLAVOURS.len()]);
         };
         let cfg = &brain.kind.team;
         let radius = brain.kind.sight;

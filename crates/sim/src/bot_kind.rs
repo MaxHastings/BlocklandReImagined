@@ -37,23 +37,6 @@ pub const BEHAVIOURS: [&str; 9] = [
 /// costs them (`docs/architecture/bots.md`, Routes).
 pub const LEG_WEIGHTS: [&str; 1] = ["fly"];
 
-/// The small extra options (`session::bots::extras`): idle play with
-/// bodies and seats, crouching under ranged fire, a jet hop out of a
-/// projectile's path, opening doors, and handing a spare weapon to an
-/// unarmed teammate. One dial weighs them all.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BotExtras {
-    /// 0 to 1: how much of the extra options applies. 0 turns them off;
-    /// at 1 a chance one is taken about half the time.
-    pub strength: f32,
-}
-impl Default for BotExtras {
-    fn default() -> Self {
-        Self { strength: 1.0 }
-    }
-}
-
 /// One bot kind: its spawn list entry and how its brain plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -125,8 +108,6 @@ pub struct BotKind {
     /// What it notices: brief glances and how long it takes to react
     /// (`session::bots::perception`).
     pub perception: BotPerception,
-    /// How much of its extra options applies ([`BotExtras`]).
-    pub extras: BotExtras,
     /// Seconds a choice is held before another may take over (`BotHold`).
     pub hold_seconds: f32,
 }
@@ -278,7 +259,6 @@ impl Default for BotKind {
             perception: BotPerception::default(),
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
-            extras: Default::default(),
             hold_seconds: BotHold::default().seconds,
         }
     }
@@ -398,11 +378,6 @@ impl BotKind {
             self.id,
             BEHAVIOURS.join(", "),
             LEG_WEIGHTS.join(", ")
-        );
-        ensure!(
-            self.extras.strength.is_finite() && (0.0..=1.0).contains(&self.extras.strength),
-            "Bot `{}`: extras.strength is 0 to 1",
-            self.id
         );
         let ranges = [
             ("sight", self.sight, 1.0, 400.0),
@@ -606,7 +581,7 @@ mod tests {
     #[test]
     fn a_kind_sets_only_what_it_is_and_the_main_dials() {
         let pack = BotPack::from_json(
-            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","sight":40,"behaviours":{"chase":0.5},"surprise":{"strength":0.2,"flavours":{"spray":0}},"team":{"teamwork":1,"mood":0.5,"pressure":0.2},"perception":{"strength":2},"hold_seconds":1,"extras":{"strength":0}}]}"#,
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","sight":40,"behaviours":{"chase":0.5},"surprise":{"strength":0.2,"flavours":{"spray":0}},"team":{"teamwork":1,"mood":0.5,"pressure":0.2},"perception":{"strength":2},"hold_seconds":1}]}"#,
         )
         .unwrap();
         let read = &pack.bots[0];

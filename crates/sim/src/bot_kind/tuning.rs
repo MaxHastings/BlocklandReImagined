@@ -80,7 +80,7 @@ pub fn with_dial(kind: &BotKind, path: &str, value: f64) -> Result<BotKind> {
 /// and pressure. Every other number is fixed in code (`BotKind::default`),
 /// so tuning a kind means turning a main dial. A path ending in `.` covers
 /// every entry under it.
-pub const SETTABLE: [&str; 15] = [
+pub const SETTABLE: [&str; 14] = [
     "sight",
     "wander_radius",
     "chase_radius",
@@ -95,7 +95,6 @@ pub const SETTABLE: [&str; 15] = [
     "perception.strength",
     "hold_seconds",
     "team.pressure",
-    "extras.strength",
 ];
 
 /// Whether a kind may set the number at `path` ([`SETTABLE`]).

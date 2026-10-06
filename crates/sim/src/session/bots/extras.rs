@@ -1,16 +1,15 @@
 //! Small extra options, each an ordinary player control the brain already
-//! has, all weighed by the kind's one `extras.strength` dial (1 by
-//! default, 0 off):
+//! has:
 //!
 //! - `idle_play`: with no enemy about, pushing a loose body toward a player
 //!   in sight and riding along in a teammate's vehicle. The Interact
 //!   opportunity scores it as flavour (`interactions.rs`), so anything
 //!   with a purpose outranks it.
-//! - `crouch`: hurt from range while it holds its ground, it crouches a
-//!   moment (damage already scales with crouching).
-//! - `dodge`: a projectile whose predicted path (its velocity, its fall and
-//!   its splash radius) meets the bot's body makes it jump, jetting if it
-//!   can.
+//! - `crouch` and `dodge`, how it moves this moment, weighed by the chooser
+//!   (`Domain::Move`): hurt from range while it holds its ground, a crouch
+//!   (damage already scales with crouching); a projectile whose predicted
+//!   path (its velocity, its fall and its splash radius) meets the bot's
+//!   body, a hop off it, jetting if it can.
 //! - `activate`: a door (a brick whose catalog swap a click reverses: the
 //!   brick opening and closing itself) standing in its way to its goal is
 //!   clicked with the empty hand; now and then, at a natural pause, it
@@ -46,6 +45,8 @@ const ROUTE_LOOK: f32 = 2.5;
 const CLICK_REST: u64 = 240;
 const ROUTE_CLICK_TICKS: u64 = 180;
 const FLAVOUR_CLICK_TICKS: u64 = 960;
+/// How often, at a natural pause, it looks for a door in sight.
+const DOOR_LOOK: u64 = 60;
 /// How far off it notices a brick to click for fun.
 const FLAVOUR_REACH: f32 = 8.0;
 /// How near an unarmed teammate it walks before handing a weapon.
@@ -65,20 +66,22 @@ const ROUTE_LOOK_SALT: u64 = 0x4558_0001;
 const FLAVOUR_CLICK_SALT: u64 = 0x4558_0002;
 const HAND_SALT: u64 = 0x4558_0003;
 
-/// The extra options' own memory. Its random stream is separate from the
-/// brain's, so the brain's choices draw exactly as without extras.
+/// The extra options' own memory.
 #[derive(Clone, Debug, Default)]
 pub(super) struct State {
-    rng: u64,
-    crouch_until: u64,
+    /// Until when it is under ranged fire: hit from range just now.
+    fired_on_until: u64,
     hop_until: u64,
     next_hop: u64,
-    /// The last projectile judged, and whether it is dodged.
-    judged: Option<(u64, bool)>,
+    /// The last projectile judged.
+    judged: Option<u64>,
     click: Option<Click>,
     next_click: u64,
     /// The tool to take out again after an empty-hand click.
     restore: Option<Option<usize>>,
+    /// A door in sight it saw at a natural pause, where to aim at it, and
+    /// until when it counts as seen (`Flavour::Door`).
+    door: Option<(BrickId, Vec3, u64)>,
     /// The teammate it is handing a weapon to, and since when.
     hand: Option<(OwnerId, u64)>,
     next_hand: u64,
@@ -93,21 +96,6 @@ struct Click {
     brick: BrickId,
     aim: Vec3,
     until: u64,
-}
-
-impl State {
-    fn roll(&mut self, bot: OwnerId) -> f32 {
-        if self.rng == 0 {
-            self.rng = 0x9E37_79B9_7F4A_7C15 ^ bot.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1;
-        }
-        super::perception::draw(&mut self.rng)
-    }
-}
-
-/// How often an option is taken when it is open: a weight of 1 half the
-/// time, 2 or more always.
-fn chance(weight: f32) -> f32 {
-    (0.5 * weight).clamp(0.0, 1.0)
 }
 
 /// What the step knows that the extras need.
@@ -133,6 +121,16 @@ pub(super) struct Extra {
     pub aim: Option<(f32, f32)>,
     pub stand: bool,
 }
+
+/// What keeping on as its footwork has it is worth against a crouch or a
+/// hop (`Domain::Move`). A crouch under ranged fire is worth as much: the
+/// chooser's drift and boredom take it about half the time. A hop off a
+/// shot's path is worth `HOP` and the share of the health it has left the
+/// shot would take, so it nearly always clears a rocket and seldom a
+/// single bullet while it is well.
+const KEEP: f32 = 1.0;
+const CROUCH: f32 = 1.0;
+const HOP: f32 = 0.95;
 
 /// The earliest time, within `horizon` seconds, a point starting at
 /// `from` with `velocity`, falling at `fall` units/s², comes within
@@ -181,17 +179,12 @@ impl Session {
         })
     }
 
-    /// Whether a door it may click open (`activate`, with the kind's
-    /// extras on) stands across the way from `end` toward `to` within
-    /// reach: a route ending there is not the end of the way.
-    pub(super) fn bot_opens_way(&self, bot: OwnerId, end: Vec3, to: Vec3) -> bool {
-        let on = self
-            .bots
-            .brains
-            .get(&bot)
-            .is_some_and(|b| b.kind.extras.strength > 0.0);
+    /// Whether a door it may click open (`activate`) stands across the way
+    /// from `end` toward `to` within reach: a route ending there is not the
+    /// end of the way.
+    pub(super) fn bot_opens_way(&self, end: Vec3, to: Vec3) -> bool {
         let way = flat(to - end).normalize_or_zero();
-        on && way != Vec3::ZERO
+        way != Vec3::ZERO
             && self
                 .simulation
                 .brick_ray(end + Vec3::Y, way, CLICK_REACH, |_, b| b.colliding)
@@ -204,9 +197,6 @@ impl Session {
     /// The player idle play aims toward: the nearest other player it sees.
     pub(super) fn bot_idle_mark(&mut self, bot: OwnerId, tick: u64) -> Option<(OwnerId, Vec3)> {
         let brain = self.bots.brains.get(&bot)?;
-        if brain.kind.extras.strength <= 0.0 {
-            return None;
-        }
         let cached = brain.extras.mark.filter(|(_, until)| tick < *until);
         let mark = match cached {
             Some((mark, _)) => mark,
@@ -256,11 +246,14 @@ impl Session {
     }
 
     /// The soonest projectile, not its own or an ally's, whose path is
-    /// predicted to meet the bot's body (or put it inside its splash).
-    fn bot_incoming(&self, bot: OwnerId, feet: Vec3) -> Option<u64> {
+    /// predicted to meet the bot's body (or put it inside its splash), and
+    /// the share of its health that would take.
+    fn bot_incoming(&self, bot: OwnerId, feet: Vec3) -> Option<(u64, f32)> {
         let scale = self.peers.get(&bot)?.player.state().scale;
         let centre = feet + Vec3::Y * scale;
-        let mut soonest: Option<(f32, u64)> = None;
+        // Of what it has left: a hurt bot clears what a fresh one would not.
+        let health = self.peers.get(&bot)?.combat.health.max(1.0);
+        let mut soonest: Option<(f32, u64, f32)> = None;
         for p in self.weapons.projectiles() {
             let source = p.source.0;
             if p.stuck
@@ -290,12 +283,13 @@ impl Session {
                 centre,
                 0.9 * scale + splash,
                 LOOKAHEAD,
-            ) && soonest.is_none_or(|(old, _)| t < old)
+            ) && soonest.is_none_or(|(old, _, _)| t < old)
             {
-                soonest = Some((t, p.id));
+                let harm = (d.damage.max(d.explosion.damage) / health).clamp(0.0, 1.0);
+                soonest = Some((t, p.id, harm));
             }
         }
-        soonest.map(|(_, id)| id)
+        soonest.map(|(_, id, harm)| (id, harm))
     }
 
     /// The extra options for this tick: controls to add, and the commands
@@ -312,8 +306,6 @@ impl Session {
             return Ok(extra);
         };
         let kind = &brain.kind;
-        // One dial (`extras.strength`) weighs every extra option.
-        let weights = [kind.extras.strength; 4];
         let swimming = kind.moves == Moves::Swim
             && self
                 .simulation
@@ -321,7 +313,6 @@ impl Session {
                 .is_some();
         let on_foot = !self.seated(bot) && !swimming;
         let goal = brain.goal.map(|g| g.point(brain.home));
-        let [crouch_w, dodge_w, activate_w, hand_w] = weights;
         let feet = scene.feet;
         let look = |at: Vec3| {
             let d = at - eye;
@@ -332,42 +323,59 @@ impl Session {
             state.forward().dot(to) > 0.985
         };
 
-        // Crouch under ranged fire while holding its ground.
-        let ranged_hit = scene
+        // How it moves this moment (`Domain::Move`): crouched under
+        // ranged fire while it holds its ground, a hop off a shot predicted
+        // to meet it (each shot judged once), or as its footwork has it.
+        // It chooses only while a crouch or a hop is open.
+        if scene
             .hurt_by
-            .is_some_and(|k| flat(k.at - feet).length() > RANGED);
-        // Dodge a projectile predicted to meet it.
-        let incoming = (dodge_w > 0.0 && on_foot && tick >= brain.extras.next_hop)
-            .then(|| self.bot_incoming(bot, feet))
-            .flatten();
-        let incoming = incoming
-            .filter(|_| super::hop_lands(&self.simulation, feet, Vec3::from(state.velocity)));
-        let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let st = &mut brain.extras;
-        if crouch_w > 0.0
-            && ranged_hit
-            && (tick < st.crouch_until || st.roll(bot) < chance(crouch_w))
+            .is_some_and(|k| flat(k.at - feet).length() > RANGED)
         {
-            st.crouch_until = tick + CROUCH_TICKS;
+            self.bots.brains.get_mut(&bot).unwrap().extras.fired_on_until = tick + CROUCH_TICKS;
         }
-        extra.crouch = tick < st.crouch_until
+        let brain = &self.bots.brains[&bot];
+        let incoming = (on_foot && state.grounded && tick >= brain.extras.next_hop)
+            .then(|| self.bot_incoming(bot, feet))
+            .flatten()
+            .filter(|(id, _)| brain.extras.judged != Some(*id))
+            .filter(|_| super::hop_lands(&self.simulation, feet, Vec3::from(state.velocity)));
+        let crouch = tick < brain.extras.fired_on_until
             && on_foot
             && state.grounded
             && (scene.holding || scene.behaviour == Behaviour::Fight);
-        if let Some(id) = incoming {
-            let dodge = match st.judged {
-                Some((judged, dodge)) if judged == id => dodge,
-                _ => {
-                    let dodge = st.roll(bot) < chance(dodge_w);
-                    st.judged = Some((id, dodge));
-                    dodge
-                }
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if crouch || incoming.is_some() {
+            use super::surprise::{Choice, Domain, MOVE_CROUCH, MOVE_HOP, MOVE_KEEP};
+            let options = [
+                (MOVE_KEEP, KEEP),
+                (MOVE_CROUCH, if crouch { CROUCH } else { 0.0 }),
+                (MOVE_HOP, incoming.map_or(0.0, |(_, harm)| HOP + harm)),
+            ];
+            let choice = Choice {
+                domain: Domain::Move,
+                options: &options,
+                // A shot on its way is answered at once.
+                interrupt: incoming.is_some(),
+                paused: false,
+                must: &[],
+                fixed: &[],
             };
-            if dodge && state.grounded {
-                st.hop_until = tick + HOP_TICKS;
-                st.next_hop = tick + HOP_REST;
+            // A reflex: hurt or carrying, it still varies how it moves.
+            let rule = brain.kind.hold();
+            let moved = brain
+                .surprise
+                .pick(&brain.kind.surprise, rule, choice, Default::default(), tick);
+            let st = &mut brain.extras;
+            if let Some((id, _)) = incoming {
+                st.judged = Some(id);
+                if moved == MOVE_HOP {
+                    st.hop_until = tick + HOP_TICKS;
+                    st.next_hop = tick + HOP_REST;
+                }
             }
+            extra.crouch = moved == MOVE_CROUCH;
         }
+        let st = &mut self.bots.brains.get_mut(&bot).unwrap().extras;
         if tick < st.hop_until {
             extra.jump = state.grounded;
             extra.jet = tuning.can_jet;
@@ -423,8 +431,7 @@ impl Session {
         {
             let _ = self.equip_tool(bot, restore);
         }
-        let ready = activate_w > 0.0
-            && on_foot
+        let ready = on_foot
             && !scene.enemy_seen
             && self.bots.brains[&bot].extras.click.is_none()
             && tick >= self.bots.brains[&bot].extras.next_click;
@@ -450,13 +457,13 @@ impl Session {
                 });
             }
         }
-        // Now and then at a natural pause: one in sight, for the fun of it.
-        let ready = ready && self.bots.brains[&bot].extras.click.is_none();
-        if ready
+        // At a natural pause it looks now and then for a door in sight: the
+        // goof chooser may walk it up to one and click it (`Flavour::Door`).
+        let looking = ready
+            && self.bots.brains[&bot].extras.click.is_none()
             && scene.natural
-            && cadence::beat(bot, FLAVOUR_CLICK_SALT, tick, 240)
-            && self.bots.brains.get_mut(&bot).unwrap().extras.roll(bot) < chance(activate_w) * 0.5
-        {
+            && cadence::beat(bot, FLAVOUR_CLICK_SALT, tick, DOOR_LOOK);
+        if looking {
             let reach = Vec3::new(FLAVOUR_REACH, 3.0, FLAVOUR_REACH);
             let mut found: Option<(f32, BrickId, Vec3)> = None;
             for brick in self.simulation.bricks_in_box(feet - reach, feet + reach) {
@@ -479,23 +486,13 @@ impl Session {
                     found = Some((far, brick, hit.position));
                 }
             }
-            if let Some((_, brick, aim)) = found {
-                let toward = flat(feet - aim).normalize_or_zero();
-                let stand = Vec3::new(aim.x, feet.y, aim.z) + toward * 1.5;
-                let brain = self.bots.brains.get_mut(&bot).unwrap();
-                brain.set_goal(Some(Goal::Wander(stand)));
-                brain.next_wander = brain.next_wander.max(tick + FLAVOUR_CLICK_TICKS);
-                brain.extras.click = Some(Click {
-                    brick,
-                    aim,
-                    until: tick + FLAVOUR_CLICK_TICKS,
-                });
-            }
+            self.bots.brains.get_mut(&bot).unwrap().extras.door =
+                found.map(|(_, brick, aim)| (brick, aim, tick + DOOR_LOOK * 2));
         }
 
         // Hand a spare weapon to an unarmed teammate.
-        if hand_w > 0.0 && !extra.stand {
-            self.bot_hand_weapon(bot, &scene, on_foot, hand_w, eye, &mut extra, tick)?;
+        if !extra.stand {
+            self.bot_hand_weapon(bot, &scene, on_foot, eye, &mut extra, tick)?;
             if extra.stand
                 && let Some(at) = self.bots.brains[&bot].extras.hand
             {
@@ -516,6 +513,36 @@ impl Session {
             }
         }
         Ok(extra)
+    }
+
+    /// The door in sight it last saw at a natural pause, while it stands
+    /// and still opens and closes itself.
+    pub(super) fn bot_fun_door(&self, bot: OwnerId) -> Option<(BrickId, Vec3)> {
+        let brain = self.bots.brains.get(&bot)?;
+        let (brick, aim, until) = brain.extras.door?;
+        (brain.extras.click.is_none()
+            && self.simulation.state().tick < until
+            && self.bot_activatable(brick))
+        .then_some((brick, aim))
+    }
+
+    /// The door goof: walk up to the door in sight and click it, for the
+    /// fun of it. The ticks the walk there takes.
+    pub(super) fn bot_click_for_fun(&mut self, bot: OwnerId, feet: Vec3, tick: u64) -> Option<u64> {
+        let (brick, aim) = self.bot_fun_door(bot)?;
+        let walk = self.peers.get(&bot)?.player.tuning().forward.max(1.0);
+        let toward = flat(feet - aim).normalize_or_zero();
+        let stand = Vec3::new(aim.x, feet.y, aim.z) + toward * 1.5;
+        let brain = self.bots.brains.get_mut(&bot)?;
+        brain.set_goal(Some(Goal::Wander(stand)));
+        brain.next_wander = brain.next_wander.max(tick + FLAVOUR_CLICK_TICKS);
+        brain.extras.door = None;
+        brain.extras.click = Some(Click {
+            brick,
+            aim,
+            until: tick + FLAVOUR_CLICK_TICKS,
+        });
+        Some((flat(stand - feet).length() / walk * 120.0) as u64)
     }
 
     /// An attack it can spare: one of two or more, not the one in hand.
@@ -563,12 +590,13 @@ impl Session {
         bot: OwnerId,
         scene: &Scene,
         on_foot: bool,
-        weight: f32,
         eye: Vec3,
         extra: &mut Extra,
         tick: u64,
     ) -> Result<()> {
+        // A teammate's spare weapon is teamwork (`team.teamwork`).
         let open = on_foot
+            && self.bots.brains[&bot].kind.team.teamwork > 0.0
             && scene.calm
             && !scene.enemy_seen
             && scene.behaviour == Behaviour::Wander
@@ -630,10 +658,8 @@ impl Session {
                 .sight(eye, self.peers[o].player.eye(), HAND_SIGHT)
                 .is_some()
         });
-        let st = &mut self.bots.brains.get_mut(&bot).unwrap().extras;
-        match mate {
-            Some(mate) if st.roll(bot) < chance(weight) => st.hand = Some((mate, tick)),
-            _ => {}
+        if let Some(mate) = mate {
+            self.bots.brains.get_mut(&bot).unwrap().extras.hand = Some((mate, tick));
         }
         Ok(())
     }
@@ -668,14 +694,5 @@ mod tests {
         // ...unless its blast reaches that far, or it drops onto it.
         assert!(predicted_hit(from, level, 0.0, centre, 0.9 + 3.0, 0.75).is_some());
         assert!(predicted_hit(from, level, 9.81 * 2.5, centre, 0.9, 0.75).is_some());
-    }
-
-    #[test]
-    fn a_weight_of_one_is_taken_about_half_the_time_and_zero_never() {
-        let mut st = State::default();
-        let taken = (0..2000).filter(|_| st.roll(7) < chance(1.0)).count();
-        assert!((800..1200).contains(&taken), "{taken}");
-        assert!((0..100).all(|_| st.roll(7) >= chance(0.0)));
-        assert!((0..100).all(|_| st.roll(7) < chance(2.0)));
     }
 }

@@ -22,8 +22,7 @@ const LOOKAHEAD_POINTS: usize = 24;
 /// an enemy stops and gets out: about where the bot fights from on foot.
 const LEAVE_REACH: f32 = 3.0;
 /// Idle play (`extras`, no enemy about) scores between wandering and
-/// walking home, times the kind's `extras.strength`, so any purpose
-/// outranks it.
+/// walking home, so any purpose outranks it.
 const IDLE: f32 = 0.2;
 /// An idle push stops this far short of the player it plays toward.
 const IDLE_SHORT: f32 = 3.5;
@@ -379,7 +378,7 @@ impl Session {
                     if role.controls || role.weapon || !driven {
                         return None;
                     }
-                    IDLE * self.bots.brains.get(&bot)?.kind.extras.strength
+                    IDLE
                 } else if role.controls {
                     0.84
                 } else if crew && role.weapon && d.weapon.is_some() {
@@ -486,7 +485,7 @@ impl Session {
                 // A heavy body remains useful on a slope, but costs more commitment.
                 let effort = (d.mass / combat::PLAYER_MASS).sqrt().min(5.0) * 0.008;
                 let base = if idle {
-                    IDLE * self.bots.brains.get(&bot)?.kind.extras.strength
+                    IDLE
                 } else {
                     0.85
                 };
@@ -1315,11 +1314,6 @@ impl Session {
         // Idle play: a passenger rides along while a teammate drives.
         let riding_along = !role.controls
             && !role.weapon
-            && self
-                .bots
-                .brains
-                .get(&bot)
-                .is_some_and(|b| b.kind.extras.strength > 0.0)
             && d.control_seat()
                 .and_then(|s| w.seat_occupant(v.id, s))
                 .is_some_and(|o| self.bot_allies(bot, o.owner.0));

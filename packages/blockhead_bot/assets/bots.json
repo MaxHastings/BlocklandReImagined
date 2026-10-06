@@ -23,10 +23,6 @@
       // Perception, 0 to 4: how human its noticing, reactions and aim are
       // (more is slower to notice, fewer hits).
       "perception": { "strength": 1 },
-      // Extras, 0 to 1: idle play with a loose body or a teammate's vehicle,
-      // crouching under fire, hopping out of a projectile's path, opening
-      // doors, handing a spare weapon to an unarmed teammate.
-      "extras": { "strength": 1 },
       "first_names": [
         "Alex",
         "Ben",
