@@ -2248,13 +2248,14 @@ impl Session {
             Command::BrickHand(mut hand) => {
                 // Taking bricks in hand is equipping (an Add-On's packaged
                 // `serverCmdUseInventory`): refused, the client puts them
-                // back.
+                // back and the player is told why, as a refused tool is.
                 if hand.equipped
                     && !self.brick_equipped(owner)
-                    && self.package_policy("equip", owner).is_err()
+                    && let Err(reason) = self.package_policy("equip", owner)
                 {
                     hand.equipped = false;
                     self.notify(owner, Notice::PutAway);
+                    self.center_print(owner, reason.to_string());
                 }
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
