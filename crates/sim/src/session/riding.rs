@@ -158,6 +158,49 @@ impl Session {
     pub(super) fn seated(&self, owner: OwnerId) -> bool {
         self.vehicles.is_mounted(owner) || self.riding.is_riding(owner)
     }
+    /// Held in the `sit` pose: `/sit`, or a vehicle seat or mount point
+    /// whose pose is `sit` (`mountThread`). Its eye is the sit's.
+    pub(super) fn sit_posed(&self, owner: OwnerId) -> bool {
+        let Some(peer) = self.peers.get(&owner) else {
+            return false;
+        };
+        if !peer.combat.alive {
+            return false;
+        }
+        if peer.sitting {
+            return true;
+        }
+        if let Some((vehicle, seat)) = self.mounted(owner) {
+            return self
+                .vehicles
+                .world
+                .as_ref()
+                .and_then(|w| w.definition_of(bri_vehicles::VehicleId(vehicle)))
+                .and_then(|d| d.seats.get(usize::from(seat)))
+                .is_some_and(|s| s.pose == "sit");
+        }
+        if let Some((mount, seat)) = self.riding_seat(owner) {
+            return self.peers.get(&mount).is_some_and(|m| {
+                self.archetypes
+                    .resolve(m.player.state().archetype)
+                    .mount_points
+                    .get(usize::from(seat))
+                    .is_some_and(|p| p.pose == "sit")
+            });
+        }
+        false
+    }
+    /// Give every body the eye of its pose, so every ray a seated player
+    /// casts (shots, clicks, the hammer, carrying) starts at its drawn head.
+    pub(super) fn sync_seated(&mut self) {
+        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
+        for owner in owners {
+            let seated = self.sit_posed(owner);
+            if let Some(peer) = self.peers.get_mut(&owner) {
+                peer.player.set_seated(seated);
+            }
+        }
+    }
     /// `Armor::onCollision`'s use check. A bot on a spawn brick asks the
     /// brick owner's trust and minigame, as its vehicles do. A player has no
     /// spawn brick, so only `miniGameCanUse` counts: anyone may ride outside

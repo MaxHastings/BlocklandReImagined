@@ -2115,12 +2115,13 @@ impl Session {
                 }
                 if name == "sit" {
                     peer.sitting = true;
+                    peer.player.set_seated(true);
                 } else if !peer.combat.emote_allowed(self.simulation.state().tick) {
                     // The others are `Player::emote`, with its spam check.
                     return Ok(Reply::Accepted);
                 }
                 let feet = peer.player.state().feet;
-                let eye = if peer.player.state().crouched {
+                let eye = if peer.player.state().crouched || peer.player.seated() {
                     peer.player.eye()
                 } else {
                     Vec3::from(feet) + Vec3::Y * V20_EYE_NODE
@@ -2796,6 +2797,7 @@ impl Session {
                 }
             }
         }
+        self.sync_seated();
         let smashers = match self.smash_breakables(glass_hits) {
             Ok(smashers) => smashers,
             Err(error) => {
@@ -2843,6 +2845,7 @@ impl Session {
         contain("physics", self.simulation.step());
         contain("vehicles", self.vehicle_post_step());
         self.player_mount_contacts();
+        self.sync_seated();
         contain("weapons", self.step_weapons());
         self.step_temp_colors();
         contain("items", self.step_items());

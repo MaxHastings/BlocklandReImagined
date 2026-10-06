@@ -1851,6 +1851,40 @@ fn sitting_is_replicated_state_that_moving_ends() {
     assert!(!s.vitals()[&owner].sitting);
 }
 
+/// The host sees from a sitting body's drawn head, the `Eye` node at the
+/// end of m.dts's `sit` sequence, not a standing eye above the seat: every
+/// ray (shots, clicks, the hammer, carrying, the F8 camera) starts there.
+#[test]
+fn a_sitting_player_sees_from_the_sit_pose_eye() {
+    use bri_admin::{Action, Request};
+    let mut s = session();
+    let owner = s
+        .join("Sitter".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    s.command(owner, 1, Command::Emote("sit".into())).unwrap();
+    s.step().unwrap();
+    assert!(s.vitals()[&owner].sitting);
+    let sat = body(&s, owner);
+    let tuning = bri_sim::player::PlayerTuning::default();
+    s.command(
+        owner,
+        2,
+        Command::Admin(Request::new(Action::DropCameraAtPlayer)),
+    )
+    .unwrap();
+    let eye = Vec3::from(s.camera_orbs()[0].1);
+    let expected = sat.posed_eye(&tuning, true);
+    assert!(
+        eye.distance(expected) < 1e-4,
+        "camera {eye} is not the sit eye {expected} (standing {})",
+        sat.eye(&tuning)
+    );
+    assert!((eye.y - sat.feet[1] - 1.635).abs() < 1e-3, "{eye}");
+}
+
 #[test]
 fn drop_player_at_camera_lands_at_the_camera_like_v20() {
     use bri_admin::{Action, Request};

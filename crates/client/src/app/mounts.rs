@@ -24,6 +24,37 @@ pub(super) struct Mounts {
     pub(super) tumble: Option<u64>,
 }
 
+/// Whether `owner` is held in the `sit` pose: `/sit`, or a vehicle seat or
+/// a body's mount point whose pose is `sit` (`mountThread`). The host gives
+/// such a body the sit's eye, so its rays and name tag start at the drawn head.
+pub(super) fn sit_posed(
+    view: &network::View,
+    vehicle_assets: &crate::vehicles::VehicleAssets,
+    presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    owner: bri_world::OwnerId,
+) -> bool {
+    let Some(vitals) = view.vitals.get(&owner) else {
+        return false;
+    };
+    vitals.sitting
+        || vitals
+            .mounted
+            .and_then(|(vehicle, seat)| {
+                let info = view.vehicles.get(&vehicle)?;
+                let d = vehicle_assets.definition(&info.definition)?;
+                Some(d.seats.get(usize::from(seat))?.pose == "sit")
+            })
+            .unwrap_or(false)
+        || vitals
+            .ride
+            .and_then(|ride| {
+                let mount = presented.get(&ride.mount)?;
+                let kind = view.archetypes.resolve(mount.archetype);
+                Some(kind.mount_points.get(usize::from(ride.seat))?.pose == "sit")
+            })
+            .unwrap_or(false)
+}
+
 impl App {
     /// Predict the vehicle this client drives, as Torque runs the moves of
     /// the object a client controls on that client: the host's own vehicle

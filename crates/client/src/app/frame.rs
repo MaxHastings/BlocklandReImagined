@@ -1138,28 +1138,7 @@ impl App {
                     body: [threads[0].clone(), threads[1].clone()],
                     dead,
                     sitting: !dead
-                        && (view.vitals.get(owner).is_some_and(|v| v.sitting)
-                            || view
-                                .vitals
-                                .get(owner)
-                                .and_then(|v| v.mounted)
-                                .and_then(|(vehicle, seat)| {
-                                    let info = view.vehicles.get(&vehicle)?;
-                                    let d = self.vehicle_assets.definition(&info.definition)?;
-                                    Some(d.seats.get(usize::from(seat))?.pose == "sit")
-                                })
-                                .unwrap_or(false)
-                            // A mount point's `mountThread`.
-                            || view
-                                .vitals
-                                .get(owner)
-                                .and_then(|v| v.ride)
-                                .and_then(|ride| {
-                                    let mount = presented.get(&ride.mount)?;
-                                    let kind = view.archetypes.resolve(mount.archetype);
-                                    Some(kind.mount_points.get(usize::from(ride.seat))?.pose == "sit")
-                                })
-                                .unwrap_or(false)),
+                        && sit_posed(view, &self.vehicle_assets, presented, *owner),
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.

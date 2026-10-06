@@ -704,6 +704,7 @@ pub fn name_opacity(
 fn name_tags(
     view: &network::View,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    vehicle_assets: &crate::vehicles::VehicleAssets,
     pack: &bri_weapons::Pack,
     building: Option<&crate::building::Building>,
     view_projection: glam::Mat4,
@@ -767,7 +768,9 @@ fn name_tags(
         let name_distance = game
             .and_then(|m| m.name_distance)
             .map_or(8192.0, |d| d as f32);
-        let Some((x, y, opacity)) = place(view.archetypes.eye(state), name_distance) else {
+        let seated = sit_posed(view, vehicle_assets, presented, *owner);
+        let Some((x, y, opacity)) = place(view.archetypes.posed_eye(state, seated), name_distance)
+        else {
             continue;
         };
         // A team member's name is in their team's paint colour.

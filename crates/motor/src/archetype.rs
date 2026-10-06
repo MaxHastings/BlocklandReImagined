@@ -220,6 +220,10 @@ impl Archetypes {
     pub fn eye(&self, state: &crate::player::PlayerState) -> glam::Vec3 {
         state.eye(&self.tuning(state.archetype, state.scale))
     }
+    /// [`Self::eye`], or the `sit` pose's when `seated`.
+    pub fn posed_eye(&self, state: &crate::player::PlayerState, seated: bool) -> glam::Vec3 {
+        state.posed_eye(&self.tuning(state.archetype, state.scale), seated)
+    }
     /// Give every archetype drawn with `model` that declares no mount
     /// points that model's (its `mount<N>` nodes): a body need not be
     /// rideable for a rule to seat someone on it (`mountObject`).

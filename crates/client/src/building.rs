@@ -124,6 +124,8 @@ pub struct Building {
     definitions: Definitions,
     /// The host's player archetypes, for the local player's eye.
     archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
+    /// The local player is held in the `sit` pose, which lowers the eye.
+    seated: bool,
     /// Stock selectable IDs and authored orientation corrections, not every
     /// hidden state variant that happens to have a native definition.
     catalog: BTreeMap<String, u8>,
@@ -203,6 +205,7 @@ impl Building {
         bri_physics::detect_collisions(&mut map);
         Ok(Self {
             archetypes: Default::default(),
+            seated: false,
             definitions,
             catalog: BTreeMap::new(),
             default_prints: BTreeMap::new(),
@@ -1106,7 +1109,7 @@ impl Building {
     /// keys move and turn it as it is seen.
     fn facing_toward(&self, player: &PlayerState, at: Vec3) -> Result<Vec3> {
         let body = body_forward(player)?;
-        let eye = self.archetypes.eye(player);
+        let eye = self.archetypes.posed_eye(player, self.seated);
         Ok(match self.passages.shortest(eye, at).1 {
             Some(carry) => carry.transform_vector3(body),
             None => body,
@@ -1473,6 +1476,10 @@ impl Building {
     pub fn set_archetypes(&mut self, archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>) {
         self.archetypes = archetypes;
     }
+    /// Whether the local player is held in the `sit` pose (the host's eye).
+    pub fn set_seated(&mut self, seated: bool) {
+        self.seated = seated;
+    }
     /// Local updates acknowledge equipment choices only. Commands require the
     /// transport's authoritative reply; no planting/removal is predicted here.
     /// Player yaw/pitch must be current body aim, not a free-look camera vector.
@@ -1776,7 +1783,7 @@ impl Building {
                     self.weapon_fire_down = true;
                     out.commands.push(Command::WeaponTrigger { down: true });
                 }
-                let eye = self.archetypes.eye(player);
+                let eye = self.archetypes.posed_eye(player, self.seated);
                 // Through a portal, the brick lands where it is seen and
                 // faces the way the player does as seen from there.
                 let Some((hit, leg)) = self.aim(eye, player.forward(), DEPLOY_REACH)? else {

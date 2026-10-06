@@ -213,6 +213,9 @@ impl PlayerType {
                 stand_eye: 2.4,
                 crouch_eye: 2.4,
                 eye_forward: 0.0,
+                // horse.dts has no `sit` sequence.
+                sit_eye: 2.4,
+                sit_eye_forward: 0.0,
                 acceleration: 28.0,
                 forward: 12.0,
                 backward: 6.0,
