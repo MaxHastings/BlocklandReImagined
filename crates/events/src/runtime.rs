@@ -372,6 +372,21 @@ impl EventWorld {
             _ => None,
         }
     }
+    /// Whether the row steps or sets its targets' print count, and if so
+    /// whether a step can wrap past 9 or 0 and fire the target's
+    /// `onPrintCountOverFlow`/`onPrintCountUnderFlow` (a set never does).
+    /// `None` when the row does something else.
+    pub fn row_print_may_wrap(&self, source: Id, row: u16) -> Option<bool> {
+        let compiled = self
+            .compiled
+            .get(&source)?
+            .get(usize::from(row))?
+            .as_ref()?;
+        match compiled.action.as_ref() {
+            Action::Print { set, .. } => Some(set.is_none()),
+            _ => None,
+        }
+    }
     /// Resolve exactly the targets the installed row uses, without admission,
     /// scheduling or execution. Context validation matches normal dispatch.
     pub fn row_targets(&self, source: Id, context: &Trigger, row: u16) -> Result<Vec<Entity>> {

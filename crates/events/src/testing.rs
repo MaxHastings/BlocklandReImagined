@@ -129,8 +129,8 @@ pub fn catalog() -> Catalog {
 
 /// [`catalog`] plus the brick outputs that spawn, push, reset and cancel
 /// (`spawnExplosion`, `spawnItem`, `radiusImpulse`, `setRayCasting`,
-/// `setEmitter`, `cancelEvents`, `incrementPrintCount`, the mini-game's
-/// `Reset`) and the bot input `onBotTouch` with its Bot and
+/// `setEmitter`, `cancelEvents`, `incrementPrintCount`, `playSound`, the
+/// mini-game's `Reset`, `RespawnAll` and `ChatMsgAll`) and the bot input `onBotTouch` with its Bot and
 /// Driver targets. Kept apart so the fuzzers' catalog stays as it is.
 /// Parameter ranges are made up.
 pub fn catalog_extended() -> Catalog {
@@ -224,7 +224,23 @@ pub fn catalog_extended() -> Catalog {
                 default: 1,
             }],
         ),
+        output(
+            "fxDTSBrick",
+            "playSound",
+            vec![Param::Datablock {
+                class_name: "AudioProfile".into(),
+            }],
+        ),
         output("MiniGame", "Reset", vec![]),
+        output("MiniGame", "RespawnAll", vec![]),
+        output(
+            "MiniGame",
+            "ChatMsgAll",
+            vec![Param::String {
+                max_length: 200,
+                width: 200,
+            }],
+        ),
     ]);
     c
 }

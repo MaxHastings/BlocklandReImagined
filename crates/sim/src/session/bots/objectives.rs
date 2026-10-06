@@ -46,6 +46,19 @@ pub(super) enum Completion {
     },
 }
 
+/// Outputs that change nothing a plan reads: effects, sounds, messages,
+/// explanations and putting everyone back at a spawn. A row of these
+/// neither hides a goal nor counts toward one.
+fn changes_nothing_planned(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::Brick(ev::BrickOp::ColorFx(_) | ev::BrickOp::ShapeFx(_) | ev::BrickOp::PlaySound(_))
+            | Intent::Client(ev::ClientOp::Message { .. } | ev::ClientOp::PlaySound(_))
+            | Intent::MiniGame(ev::MiniGameOp::Message { .. } | ev::MiniGameOp::RespawnAll)
+            | Intent::Rule(RuleOp::Explain)
+    )
+}
+
 impl DesiredState {
     fn observed_completion(
         &self,
@@ -1130,6 +1143,27 @@ impl Session {
             // Resolve at most the event world's bounded fanout vector, then
             // reject before any per-target guards, facts or context clones.
             budget.reserve(targets.len(), 0, 0)?;
+            // A print count is a display, like a sound: nothing a plan
+            // reads, unless a step can wrap into a target's own overflow
+            // rows, which a plan would then have to follow.
+            if let Some(may_wrap) = world.row_print_may_wrap(cx.source, index as u16) {
+                let wraps_into_rows = may_wrap
+                    && targets.iter().any(|t| {
+                        world.program(t.id).is_some_and(|p| {
+                            p.rows.iter().any(|r| {
+                                r.enabled
+                                    && matches!(
+                                        r.input.as_str(),
+                                        "onPrintCountOverFlow" | "onPrintCountUnderFlow"
+                                    )
+                            })
+                        })
+                    });
+                if wraps_into_rows {
+                    return Err(F::Unsupported);
+                }
+                continue;
+            }
             let intent = world
                 .row_intent(cx.source, index as u16)
                 .ok_or(F::Unsupported)?;
@@ -1160,6 +1194,7 @@ impl Session {
                     );
                 }
                 let (effects, subject, property, key, value) = match intent {
+                    intent if changes_nothing_planned(intent) => continue,
                     // Resetting the captured object is a known authored effect:
                     // its spawner replaces it with a new incarnation once this
                     // row is due. It never counts as delivery or success; the
@@ -1290,11 +1325,6 @@ impl Session {
                             Datum::Number(0),
                         )
                     }
-                    Intent::Brick(
-                        ev::BrickOp::ColorFx(_)
-                        | ev::BrickOp::ShapeFx(_)
-                        | ev::BrickOp::PlaySound(_),
-                    ) => continue,
                     _ => return Err(F::Unsupported),
                 };
                 let condition = Condition {
@@ -1427,14 +1457,12 @@ impl Session {
                 budget.reserve(targets.len(), 1, row.input.len())?;
                 for target in targets {
                     match world.row_intent(cx.source, index as u16) {
-                        Some(Intent::Brick(ev::BrickOp::PlaySound(_)))
-                        | Some(Intent::Rule(RuleOp::Explain)) => {}
+                        Some(intent) if changes_nothing_planned(intent) => {}
                         Some(Intent::Brick(ev::BrickOp::Color(_))) => {
                             if facts.contains_key(&format!("brick/color/{}", target.id.index)) {
                                 return Err(F::Unsupported);
                             }
                         }
-                        Some(Intent::Brick(ev::BrickOp::ColorFx(_) | ev::BrickOp::ShapeFx(_))) => {}
                         Some(Intent::Rule(RuleOp::Variable { scope, key, .. })) => {
                             let Some(key) = self.rule_key(&cx, target, *scope, key) else {
                                 continue;

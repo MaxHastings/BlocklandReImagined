@@ -2840,7 +2840,7 @@ impl Session {
             } else if let Some((c, view)) = shove {
                 // A teammate has the body and an opponent stands at it:
                 // knock the opponent off it with what shoves.
-                if was_clearing.is_none() {
+                if was_clearing.is_none() && tick >= brain.team.next_callout {
                     clear_callout = kind.team.callouts.get("clear").cloned();
                 }
                 brain.clearing = Some(c.opponent);

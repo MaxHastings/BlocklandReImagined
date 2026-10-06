@@ -107,6 +107,10 @@ struct Scene {
     object_mass: Option<f32>,
     wide_rearm: bool,
     ranged_attacker: bool,
+    /// The goal also announces the score as a played map's goal does:
+    /// a chat line, a sound, a scoreboard digit stepped on another brick
+    /// and everyone sent back to a spawn.
+    fanfare: bool,
 }
 
 impl Game {
@@ -141,6 +145,7 @@ impl Game {
             object_mass,
             wide_rearm,
             ranged_attacker,
+            fanfare,
         } = scene;
         let mut s = fixture::synthetic().unwrap().session;
         if bodies > 0 {
@@ -219,7 +224,7 @@ impl Game {
             .bots,
         )
         .unwrap();
-        s.set_event_catalog(bri_events::testing::catalog(), Vec::<String>::new())
+        s.set_event_catalog(bri_events::testing::catalog_extended(), Vec::<String>::new())
             .unwrap();
         s.set_tool_catalog(ToolCatalog {
             items: if ranged_attacker {
@@ -352,6 +357,45 @@ impl Game {
                 value: Datum::Number(2),
             });
         }
+        if fanfare {
+            let guards = goal.events[0].conditions.clone();
+            let row = |output: &str, target: Target, params: Vec<Value>| Row {
+                enabled: true,
+                input: "onObjectEnter".into(),
+                output: output.into(),
+                target,
+                params,
+                conditions: guards.clone(),
+                delay_ms: 0,
+                preserved: None,
+            };
+            let board = format!("{namespace}_scoreboard");
+            goal.events.extend([
+                row(
+                    "ChatMsgAll",
+                    Target::Slot(Slot::MiniGame),
+                    vec![Value::Text("GOAL".into())],
+                ),
+                row(
+                    "playSound",
+                    Target::Slot(Slot::SelfBrick),
+                    vec![Value::Datablock(None)],
+                ),
+                row(
+                    "incrementPrintCount",
+                    Target::Named(board.clone()),
+                    vec![Value::Int(1)],
+                ),
+                row("RespawnAll", Target::Slot(Slot::MiniGame), vec![]),
+            ]);
+            let mut scoreboard = Brick::new(
+                ContentRef::Resolved(fixture::PLATE.into()),
+                [offset + 4.25, 0.1, 60.25],
+                human,
+            );
+            scoreboard.name = Some(board);
+            world.bricks.insert(1000, scoreboard);
+        }
         world.bricks.insert(3, goal);
         for i in 0..bodies {
             let x = offset - 9.75 + (i % 5) as f32 * 4.0;
@@ -379,7 +423,7 @@ impl Game {
             };
             world.bricks.insert(4 + bodies as u64, supply);
         }
-        world.next_brick_id = 4 + bodies as u64 + u64::from(ranged_attacker);
+        world.next_brick_id = 1001;
         s.command(
             human,
             100,
@@ -598,6 +642,27 @@ fn contact_delivery_uses_actual_motion_and_credited_round_outcome_across_renamed
         )
         .delivery("native physical contact");
     }
+}
+
+/// A goal that also announces itself (chat, sound, a scoreboard digit on
+/// another brick, everyone respawned) is still a goal: none of that
+/// changes what the plan reads, so it neither hides the goal nor counts
+/// as winning.
+#[test]
+fn a_goal_that_announces_itself_is_still_delivered_to() {
+    Game::configured(
+        "loud-pitch",
+        0.0,
+        false,
+        false,
+        0.1,
+        Scene {
+            object_mass: Some(900.0),
+            fanfare: true,
+            ..Default::default()
+        },
+    )
+    .delivery("native physical contact");
 }
 
 #[test]
