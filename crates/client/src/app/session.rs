@@ -1053,6 +1053,7 @@ impl App {
         request: RequestId,
         result: std::result::Result<Reply, bri_sim::session::Rejection>,
         revision: u64,
+        tick: u64,
     ) {
         let Some(pending) = self.net.pending_actions.remove(&request) else {
             return;
@@ -1116,7 +1117,9 @@ impl App {
         if let Some(command) = &pending.command
             && let Some(building) = &mut self.build.building
         {
-            for update in building.command_finished(request, command, result.is_ok()) {
+            for update in
+                building.command_finished(request, command, result.is_ok().then_some(tick))
+            {
                 self.ui.apply_session(attempt.id, update);
             }
         }

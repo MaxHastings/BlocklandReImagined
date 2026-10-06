@@ -134,6 +134,11 @@ pub struct Building {
     tool_catalog: BTreeMap<String, ToolInfo>,
     tools: ToolInventory,
     pending_equipment: BTreeMap<u64, (Option<usize>, Equipment)>,
+    /// The newest equip the host accepted, with the replica tick its reply
+    /// came at. The host answers at once but sends the inventory with its
+    /// next update, so until an inventory from a later tick arrives the
+    /// replicated selection is the one from before the switch.
+    accepted_equipment: Option<(u64, Option<usize>, Equipment)>,
     active_tool: Option<usize>,
     weapon_fire_down: bool,
     /// Fire pressed with empty hands (`Activate`) and not yet let go: its
@@ -214,6 +219,7 @@ impl Building {
             .collect(),
             tools: ToolInventory::default(),
             pending_equipment: BTreeMap::new(),
+            accepted_equipment: None,
             active_tool: None,
             weapon_fire_down: false,
             activate_down: false,
@@ -922,8 +928,10 @@ impl Building {
         })
     }
     /// Replicated slots are authoritative. Pending request IDs only retain newer
-    /// local selection intentions until their replies, never grant items.
-    pub fn sync_tools(&mut self, tools: &ToolInventory) -> Result<Vec<UiUpdate>> {
+    /// local selection intentions until their replies (an accepted one until
+    /// an inventory from after its reply), never grant items.
+    /// `tick` is the replica tick the inventory is from.
+    pub fn sync_tools(&mut self, tools: &ToolInventory, tick: u64) -> Result<Vec<UiUpdate>> {
         tools.validate()?;
         ensure!(
             tools
@@ -937,6 +945,13 @@ impl Building {
         let selected_changed = self.tools.selected != tools.selected;
         let previous_active = self.active_tool;
         self.tools = tools.clone();
+        if self
+            .accepted_equipment
+            .as_ref()
+            .is_some_and(|(at, ..)| tick > *at)
+        {
+            self.accepted_equipment = None;
+        }
         if slots_changed {
             self.pending_equipment.retain(|_, (slot, equipment)| {
                 slot.is_none_or(|s| {
@@ -985,7 +1000,13 @@ impl Building {
     /// keeps a can or brick chosen since it was sent: it only empties the
     /// tool slot, so replaying its snapshot must not drop the can.
     fn pending_intent(&self) -> Option<(Option<usize>, Equipment)> {
-        let (slot, equipment) = self.pending_equipment.last_key_value()?.1;
+        let (slot, equipment) = match self.pending_equipment.last_key_value() {
+            Some((_, (slot, equipment))) => (slot, equipment),
+            None => {
+                let (_, slot, equipment) = self.accepted_equipment.as_ref()?;
+                (slot, equipment)
+            }
+        };
         let equipment = if slot.is_none() && !tool_equipment(&self.equipment) {
             self.equipment.clone()
         } else {
@@ -1008,24 +1029,29 @@ impl Building {
         }
         Ok(())
     }
+    /// `accepted` is the replica tick when the host's acceptance came, or
+    /// `None` when it refused (or the request never went).
     pub fn command_finished(
         &mut self,
         request: u64,
         command: &Command,
-        accepted: bool,
+        accepted: Option<u64>,
     ) -> Vec<UiUpdate> {
-        if matches!(command, Command::EquipTool { .. }) {
-            self.pending_equipment.remove(&request);
+        if let Command::EquipTool { slot } = command {
+            let asked = self.pending_equipment.remove(&request);
             if request < self.latest_equipment_request {
                 return vec![];
             }
             self.pending_equipment.retain(|id, _| *id > request);
+            self.accepted_equipment = accepted
+                .zip(asked)
+                .map(|(tick, (_, equipment))| (tick, *slot, equipment));
             // The host's trigger is the held button and survives the
             // switch (v20's move trigger), so its release must still go.
             if let Some((slot, equipment)) = self.pending_intent() {
                 self.active_tool = slot;
                 self.equipment = equipment;
-            } else if !accepted {
+            } else if accepted.is_none() {
                 self.active_tool = self.tools.selected;
                 self.equipment = self
                     .active_tool
@@ -1034,7 +1060,7 @@ impl Building {
             }
             return vec![UiUpdate::SetActiveTool(self.active_tool)];
         }
-        if !accepted
+        if accepted.is_none()
             && request == self.fire_request
             && matches!(command, Command::WeaponTrigger { down: true })
         {
@@ -2546,7 +2572,7 @@ mod tests {
             slots: vec![Some(TOOL.into()), None, None, None, None],
             selected: Some(0),
         };
-        b.sync_tools(&inventory).unwrap();
+        b.sync_tools(&inventory, 1).unwrap();
         // It starts over the original, standing on the floor.
         assert_eq!(b.copy_pose(), Some((copy.origin, 0)));
         assert_eq!(b.copy_ghost().unwrap()[1].position, [1.0, 0.3, 0.25]);
@@ -2679,11 +2705,11 @@ mod tests {
         ));
         // Another tool in hand: the keys go back to the brick ghost.
         inventory.selected = None;
-        b.sync_tools(&inventory).unwrap();
+        b.sync_tools(&inventory, 1).unwrap();
         assert!(b.copy_ghost().is_none());
         assert!(b.outline().is_none());
         inventory.selected = Some(0);
-        b.sync_tools(&inventory).unwrap();
+        b.sync_tools(&inventory, 1).unwrap();
         assert!(b.copy_ghost().is_some(), "and it comes back where it was");
         // Cancel puts the copy away.
         b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
@@ -2718,10 +2744,13 @@ mod tests {
         let copy =
             Blueprint::capture(TOOL, &[plate(0.5, 0.1), plate(1.0, 0.3)], &b.definitions).unwrap();
         b.set_blueprint(Some(copy)).unwrap();
-        b.sync_tools(&ToolInventory {
-            slots: vec![Some(TOOL.into()), None, None, None, None],
-            selected: Some(0),
-        })
+        b.sync_tools(
+            &ToolInventory {
+                slots: vec![Some(TOOL.into()), None, None, None, None],
+                selected: Some(0),
+            },
+            1,
+        )
         .unwrap();
         // The copy's box, 3 studs by 2 plates by 1 stud.
         let span = |b: &Building| {
@@ -3184,7 +3213,7 @@ mod tests {
     fn replicated_pickup_drop_and_reused_slot_update_hud_and_stable_routes() {
         let mut b = weapon_controller();
         let mut inventory = weapon_inventory();
-        let updates = b.sync_tools(&inventory).unwrap();
+        let updates = b.sync_tools(&inventory, 1).unwrap();
         assert!(
             matches!(&updates[0],UiUpdate::Tools(tools) if tools[0].as_ref().unwrap().name=="Gun")
         );
@@ -3202,7 +3231,7 @@ mod tests {
         assert_eq!(b.tools, inventory); // Dropping is not locally predicted.
         inventory.slots[0] = None;
         inventory.selected = None;
-        b.sync_tools(&inventory).unwrap();
+        b.sync_tools(&inventory, 1).unwrap();
         assert_eq!(b.equipment(), &Equipment::None);
         // With tools put away the key still goes to the host, for Add-Ons.
         assert!(matches!(
@@ -3213,7 +3242,7 @@ mod tests {
             [Command::DropKey]
         ));
         inventory.slots[0] = Some("v20.weapon.wanditem".into());
-        let updates = b.sync_tools(&inventory).unwrap();
+        let updates = b.sync_tools(&inventory, 1).unwrap();
         assert!(
             matches!(&updates[0],UiUpdate::Tools(tools) if tools[0].as_ref().unwrap().name=="Wand")
         );
@@ -3232,43 +3261,70 @@ mod tests {
         );
         let old = b.tools.clone();
         inventory.slots[4] = Some("v20.weapon.unknown".into());
-        assert!(b.sync_tools(&inventory).is_err());
+        assert!(b.sync_tools(&inventory, 1).is_err());
         assert_eq!(b.tools, old);
     }
     #[test]
     fn request_ids_preserve_newer_switches_and_rejections_restore_authority() {
         let mut b = weapon_controller();
-        b.sync_tools(&weapon_inventory()).unwrap();
+        b.sync_tools(&weapon_inventory(), 1).unwrap();
         let older = choose(&mut b, 10, 1);
         let newer = choose(&mut b, 11, 2);
-        b.command_finished(10, &older, false);
+        b.command_finished(10, &older, None);
         assert_eq!(
             b.equipment(),
             &Equipment::Weapon("v20.weapon.bowitem".into())
         );
-        b.command_finished(11, &newer, false);
+        b.command_finished(11, &newer, None);
         assert_eq!(
             b.equipment(),
             &Equipment::Weapon("v20.weapon.gunitem".into())
         );
         let older = choose(&mut b, 12, 1);
         let newer = choose(&mut b, 13, 2);
-        b.command_finished(13, &newer, true);
-        b.command_finished(12, &older, false);
+        b.command_finished(13, &newer, Some(0));
+        b.command_finished(12, &older, None);
         assert_eq!(
             b.equipment(),
             &Equipment::Weapon("v20.weapon.bowitem".into())
         );
         let mut confirmed = weapon_inventory();
         confirmed.selected = Some(2);
-        b.sync_tools(&confirmed).unwrap();
+        b.sync_tools(&confirmed, 1).unwrap();
         assert_eq!(b.active_tool, Some(2));
         assert!(b.pending_equipment.is_empty());
+    }
+    /// The host answers an equip at once but sends the new selection with
+    /// its next update. Views from before that update put the old tool back
+    /// for a moment, so a wheel notch then started from the old slot and
+    /// scrolling skipped or bounced. v20's HUD never bounces.
+    #[test]
+    fn an_accepted_switch_holds_until_an_inventory_from_after_it() {
+        let mut b = weapon_controller();
+        b.sync_tools(&weapon_inventory(), 5).unwrap();
+        let switch = choose(&mut b, 1, 2);
+        b.command_finished(1, &switch, Some(5));
+        let updates = b.sync_tools(&weapon_inventory(), 5).unwrap();
+        assert!(updates.is_empty(), "{updates:?}");
+        assert_eq!(b.active_tool, Some(2));
+        assert_eq!(
+            b.equipment(),
+            &Equipment::Weapon("v20.weapon.bowitem".into())
+        );
+        let mut after = weapon_inventory();
+        after.selected = Some(2);
+        b.sync_tools(&after, 6).unwrap();
+        assert_eq!(b.active_tool, Some(2));
+        // From then on the host's selection is the authority again.
+        after.selected = Some(1);
+        b.sync_tools(&after, 7).unwrap();
+        assert_eq!(b.active_tool, Some(1));
+        assert_eq!(b.equipment(), &Equipment::Hammer);
     }
     #[test]
     fn fire_release_survives_equip_reply_and_rejected_switch_without_repeats() {
         let mut b = weapon_controller();
-        b.sync_tools(&weapon_inventory()).unwrap();
+        b.sync_tools(&weapon_inventory(), 1).unwrap();
         let equip = choose(&mut b, 1, 0);
         let down = b
             .ui_action(&fire(), &player())
@@ -3277,7 +3333,7 @@ mod tests {
             .commands
             .remove(0);
         b.command_sent(2, &down).unwrap();
-        b.command_finished(1, &equip, true); // Earlier equip ACK must not clear later press.
+        b.command_finished(1, &equip, Some(0)); // Earlier equip ACK must not clear later press.
         assert!(
             b.ui_action(&fire(), &player())
                 .unwrap()
@@ -3307,7 +3363,7 @@ mod tests {
             .remove(0);
         b.command_sent(3, &down).unwrap();
         let switch = choose(&mut b, 4, 1);
-        b.command_finished(4, &switch, false);
+        b.command_finished(4, &switch, None);
         assert!(matches!(
             &b.ui_action(&release(), &player())
                 .unwrap()
@@ -3323,7 +3379,7 @@ mod tests {
         // so the host keeps firing the new tool or can; the client must not
         // forget the press, or the release never reaches the host.
         let mut b = weapon_controller();
-        b.sync_tools(&weapon_inventory()).unwrap();
+        b.sync_tools(&weapon_inventory(), 1).unwrap();
         let down = b
             .ui_action(&fire(), &player())
             .unwrap()
@@ -3332,7 +3388,7 @@ mod tests {
             .remove(0);
         b.command_sent(1, &down).unwrap();
         let switch = choose(&mut b, 2, 2);
-        b.command_finished(2, &switch, true);
+        b.command_finished(2, &switch, Some(0));
         let can = b
             .ui_action(&UiAction::UseSprayCan { color: 1 }, &player())
             .unwrap()
@@ -3352,7 +3408,7 @@ mod tests {
     #[test]
     fn click_after_switching_tools_fires_the_new_image_before_the_ack() {
         let mut b = weapon_controller();
-        b.sync_tools(&weapon_inventory()).unwrap();
+        b.sync_tools(&weapon_inventory(), 1).unwrap();
         choose(&mut b, 1, 1);
         let down = b
             .ui_action(&fire(), &player())
@@ -3381,14 +3437,14 @@ mod tests {
     fn queue_failure_and_slot_replacement_cannot_leave_a_pending_tool_grant() {
         let mut b = weapon_controller();
         let mut inventory = weapon_inventory();
-        b.sync_tools(&inventory).unwrap();
+        b.sync_tools(&inventory, 1).unwrap();
         let equip = choose(&mut b, 10, 2);
-        b.command_finished(10, &equip, false);
+        b.command_finished(10, &equip, None);
         assert_eq!(b.active_tool, Some(0));
         choose(&mut b, 11, 2);
         inventory.slots[2] = Some("v20.weapon.wanditem".into());
         inventory.selected = None;
-        b.sync_tools(&inventory).unwrap();
+        b.sync_tools(&inventory, 1).unwrap();
         assert!(b.pending_equipment.is_empty());
         assert_eq!(b.equipment(), &Equipment::None);
         assert!(b.set_tool_catalog(b.tool_catalog.clone()).is_err());

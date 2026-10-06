@@ -152,6 +152,10 @@ pub enum Event {
         /// The world's revision ([`View::world_revision`]) when the answer
         /// came: a Save Bricks answer's snapshot holds the world up to here.
         revision: u64,
+        /// The replica's tick when the answer came. The host answers before
+        /// its next update, so what the request changed shows in a view
+        /// from a later tick.
+        tick: u64,
     },
     Failed(String),
     /// The host changed to this map.
@@ -494,7 +498,7 @@ async fn run(
                 for request in pending.expire(std::time::Instant::now()) {
                     bri_console::warn(format!("The server never answered request {request}; giving up on it"));
                     let result=Err(bri_sim::session::Rejection{plant:None,message:"The server did not answer in time.".into()});
-                    events.try_send(Event::Reply{request,result,revision:world.revision}).context("UI reply queue is full or closed")?;
+                    events.try_send(Event::Reply{request,result,revision:world.revision,tick:client.replica.tick}).context("UI reply queue is full or closed")?;
                 }
             }
             batch=movement.recv()=>{
@@ -522,7 +526,7 @@ async fn run(
                     // Refuse this one; the connection and the answers on
                     // their way are fine.
                     let result=Err(bri_sim::session::Rejection{plant:None,message:"Too many requests are waiting on the server; try again in a moment.".into()});
-                    events.try_send(Event::Reply{request:request.id,result,revision:world.revision}).context("UI reply queue is full or closed")?;
+                    events.try_send(Event::Reply{request:request.id,result,revision:world.revision,tick:client.replica.tick}).context("UI reply queue is full or closed")?;
                     continue;
                 }
                 let sequence=tokio::time::timeout(Duration::from_secs(10),client.request_with_aim(request.command,request.aim)).await.context("Server request write timed out")??;
@@ -538,7 +542,7 @@ async fn run(
                             continue;
                         };
                         if std::mem::take(&mut stale) { publish(client,&host_key,&world,checkpoint_cue_cursor,view); }
-                        events.try_send(Event::Reply{request,result,revision:world.revision}).context("UI reply queue is full or closed")?;
+                        events.try_send(Event::Reply{request,result,revision:world.revision,tick:client.replica.tick}).context("UI reply queue is full or closed")?;
                     }
                     ClientEvent::Updated {world_changed,changed_bricks,palette_changed}=>{
                         let cues=client.replica.take_cues();
