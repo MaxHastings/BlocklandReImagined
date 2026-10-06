@@ -41,6 +41,37 @@ fn main() -> Result<()> {
     result
 }
 
+/// The packages the player's game runs: the release defaults, then their
+/// saved Add-On choices (`add-on-choices.json`) on top, with each Add-On's
+/// companions following it. Nothing is written.
+fn packages(root: &Path, state: &Path) -> Result<bri_package::packages::PackageSet> {
+    let mut set = bri_package::packages::PackageSet::load_root(root)?;
+    let path = state.join("add-on-choices.json");
+    if !path.exists() {
+        eprintln!("No {}: the release's default Add-Ons", path.display());
+        return Ok(set);
+    }
+    let choices: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let library = bri_package::library::Library::scan(root)?;
+    for (id, wanted) in choices["packages"]
+        .as_object()
+        .context("Add-On choices without packages")?
+    {
+        let wanted = wanted.as_bool().unwrap_or(false);
+        let present = set.packages.iter().any(|p| &p.id == id);
+        if wanted && !present {
+            match library.entries.iter().find(|e| e.id() == id) {
+                Some(e) => set.packages.push(e.package.clone()),
+                None => eprintln!("Add-On choice {id} is not installed here"),
+            }
+        } else if !wanted && present {
+            set.packages.retain(|p| &p.id != id);
+        }
+    }
+    bri_package::library::follow_companions(root, &mut set);
+    Ok(set)
+}
+
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -81,7 +112,7 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
             format!("No save called {name:?}; saves: {names:?}")
         })?;
     let build = Store::read(entry)?;
-    let packages = bri_package::packages::PackageSet::load_root(root)?;
+    let packages = packages(root, state)?;
     let schema = bri_world::World::new(
         "Probe".into(),
         entry.map_id.clone(),
@@ -235,6 +266,14 @@ fn run(root: &Path, state: &Path, name: &str, slot: u8, seconds: u64, temp: &Pat
     let start = team_scores(&s);
     for tick in 0..seconds * TICKS {
         step(&mut s)?;
+        // What the first bot's objective planner sees, a few seconds in
+        // and again later: why it does or does not go for the ball.
+        if (tick == 5 * TICKS || tick == 60 * TICKS)
+            && let Some(bot) = bots.first()
+        {
+            eprintln!("--- objective planner of {bot:?} at {}s ---", tick / TICKS);
+            eprintln!("{}", s.bot_objective_report(*bot));
+        }
         let vitals = s.vitals();
         let feet: BTreeMap<OwnerId, (Vec3, bool)> = s
             .motion_states()

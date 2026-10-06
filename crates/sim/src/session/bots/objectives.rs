@@ -1626,6 +1626,81 @@ impl Session {
         }
     }
 
+    /// What `bot`'s objective planner sees now, for headless diagnostics
+    /// (`soccer_probe`): the goals offered, the event sources it reads and
+    /// their rows, the actions it grounds and how the plan comes out.
+    #[doc(hidden)]
+    pub fn bot_objective_report(&mut self, bot: OwnerId) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let Some(game) = self.game_of(bot) else {
+            return "not in a mini-game".into();
+        };
+        let Ok(owner) = self.minigames.game(game).map(|g| g.owner.account.0) else {
+            return "no game".into();
+        };
+        let indexed: Vec<_> = self
+            .events
+            .objective_sources
+            .iter()
+            .map(|(o, ids)| format!("{o:?}: {}", ids.len()))
+            .collect();
+        let _ = writeln!(out, "game owner {owner:?}; indexed sources by owner {indexed:?}");
+        let sources = self.objective_candidates(bot, owner);
+        let _ = writeln!(out, "{} candidate sources", sources.len());
+        if let Some(world) = self.events.world.as_ref() {
+            for id in sources.iter().take(12) {
+                let Some(program) = world.program(super::super::events::id(*id)) else {
+                    continue;
+                };
+                let _ = writeln!(out, "  brick {id:?} {:?}", program.name);
+                for (row, r) in program.rows.iter().enumerate().take(8) {
+                    let intent = u16::try_from(row)
+                        .ok()
+                        .and_then(|row| world.row_intent(super::super::events::id(*id), row));
+                    let _ = writeln!(
+                        out,
+                        "    {} -> {:?}.{} {:?} intent {:?}",
+                        r.input, r.target, r.output, r.params, intent
+                    );
+                }
+            }
+        }
+        let mut budget = GroundingBudget::default();
+        let discovery = match self.discover_desired_states(bot, &mut budget) {
+            Ok(d) => d,
+            Err(f) => {
+                let _ = writeln!(out, "no goal offered: {f:?}");
+                return out;
+            }
+        };
+        let _ = writeln!(out, "goals offered (unsupported {}):", discovery.unsupported);
+        for d in &discovery.candidates {
+            let _ = writeln!(out, "  {d:?}");
+        }
+        let Some(desired) = discovery.candidates.first().cloned() else {
+            return out;
+        };
+        let tick = self.simulation.state().tick;
+        match self.objective_snapshot_with_budget(bot, tick, &[], desired, &discovery, &mut budget) {
+            Ok((facts, desired, actions, _)) => {
+                let _ = writeln!(out, "facts {facts:?}");
+                for a in &actions {
+                    let _ = writeln!(out, "  action {} cost {} effects {:?}", a.id, a.cost, a.effect_groups);
+                }
+                let _ = writeln!(
+                    out,
+                    "plan: {:?}",
+                    planning::plan(&facts, &actions, &desired.predicates, limits())
+                );
+            }
+            Err(f) => {
+                let _ = writeln!(out, "no actions grounded: {f:?}");
+            }
+        }
+        out
+    }
+
     fn discover_desired_states(
         &mut self,
         bot: OwnerId,
