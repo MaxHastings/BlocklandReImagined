@@ -155,7 +155,6 @@ impl Session {
                 noticed: b.perception.why,
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
-                clearing: b.clearing,
             })
             .collect()
     }
@@ -216,7 +215,6 @@ mod tests {
             objective_reused: 0,
             noticed: None,
             team: Default::default(),
-            clearing: None,
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,

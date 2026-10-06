@@ -182,6 +182,7 @@ fn capability(
             arm_ticks: 0,
             cadence_ticks: cadence(image),
             rounds_per_attack: 1,
+            push: 0.0,
         });
     }
     if !charge_release_only(image) {
@@ -203,10 +204,8 @@ fn capability(
     // geometry correction is exactly one. Reject unresolved non-damage tools.
     let mut native = image.clone();
     native.melee = false;
-    let mut cap = tactics::native_capability(&native, projectile, scale, cadence(image)).ok()?;
-    if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 {
-        return None;
-    }
+    let cap = tactics::native_capability(&native, projectile, scale, cadence(image)).ok()?;
+    let mut cap = cap;
     cap.family = Family::Melee;
     cap.near = image.bot.and_then(|b| b.near).unwrap_or(0.0);
     Some(cap)
@@ -278,7 +277,7 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
     capability(image, projectile, scale)
-        .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
+        .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.push > 0.0)
 }
 
 /// An item that attacks from a distance (not a swing or a stab): one a
@@ -295,47 +294,6 @@ pub(super) fn item_attacks_from_afar(session: &Session, item: &str, scale: f32) 
     capability(image, projectile, scale).is_some_and(|cap| {
         cap.family != Family::Melee && (cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
     })
-}
-
-/// The farthest an item may reach and still count as a shove: a swing or
-/// a short poke, not a shot.
-const SHOVE_REACH: f32 = 8.0;
-
-/// How far an item reaches to shove a player, from its data: a short swing
-/// or poke whose hit pushes (its projectile's impulse), whatever it does to
-/// health (a push broom, a sword). None for one that does not push, fires
-/// by a script, or reaches farther than `SHOVE_REACH`.
-pub(super) fn item_shove(session: &Session, item: &str, scale: f32) -> Option<f32> {
-    let pack = &session.weapons.pack;
-    let image = pack
-        .items
-        .get(item)
-        .and_then(|i| pack.images.get(&i.image))?;
-    let projectile = image
-        .projectile
-        .as_ref()
-        .and_then(|id| pack.projectiles.get(id))?;
-    if projectile.impulse <= 0.0 && projectile.vertical <= 0.0
-        || !projectile.collide_players
-        || image.command.is_some()
-        || !image.commands.is_empty()
-        || !image.scripts.is_empty()
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
-        return None;
-    }
-    // Its reach as the native attack would have it (a shove need not hurt,
-    // so the attack capability, which wants damage, is not asked).
-    let ray = image.shot.as_ref().and_then(|s| s.hitscan.as_ref());
-    let reach = image.bot.and_then(|b| b.reach).unwrap_or_else(|| {
-        ray.map_or(
-            projectile.speed * scale * projectile.lifetime_ticks as f32
-                / bri_weapons::TICK_HZ as f32,
-            |r| r.range * scale,
-        )
-    });
-    (reach > 0.0 && reach <= SHOVE_REACH * scale).then_some(reach)
 }
 
 /// How much splash damage counts for, against direct damage, in an item's

@@ -685,9 +685,6 @@ struct Report {
     goof_far: f32,
     near: f32,
     goof_near: f32,
-    /// Bot-seconds knocking an opponent off the ball a teammate works
-    /// (`clearing`).
-    clearing: f32,
     /// Rounds won (five goals); the host resets the game after each, as
     /// the Mini-Game window's Reset does.
     rounds: u32,
@@ -795,9 +792,6 @@ fn play_match(mut m: Match, setup: &Setup, seconds: usize) -> Report {
             }
             if t.surprise.interrupt.is_some() {
                 r.goof += dt;
-            }
-            if t.clearing.is_some() {
-                r.clearing += dt;
             }
             let Some(&(f, yaw)) = feet.get(&t.bot) else {
                 continue;
@@ -1234,7 +1228,6 @@ fn two_against_two_play_a_clean_match_across_seeds() {
     let mut failures = Vec::new();
     let mut totals = Totals::default();
     let (mut goof, mut bot_time) = (0.0, 0.0);
-    let mut clearing = 0.0f32;
     let mut lull = [0.0f32; 4];
     let first: u64 = env("BRI_SOCCER_FIRST", 1);
     for kit in kits {
@@ -1243,9 +1236,6 @@ fn two_against_two_play_a_clean_match_across_seeds() {
             let r = play(&setup, seconds);
             println!("{kit:?} seed {seed}: {r:?}");
             totals.add(&setup, &r);
-            if kit == Kit::Broom {
-                clearing += r.clearing;
-            }
             goof += r.goof;
             bot_time += 4.0 * r.seconds;
             for (sum, v) in lull
@@ -1259,11 +1249,6 @@ fn two_against_two_play_a_clean_match_across_seeds() {
     }
     println!("{totals:?}");
     failures.extend(totals.problems());
-    // With brooms, a cover knocks an opponent off the ball now and then.
-    println!("clearing with brooms {clearing:.1} bot-s");
-    if clearing <= 0.0 && std::env::var("BRI_SOCCER_KIT").is_err() {
-        failures.push("no bot ever cleared an opponent off the ball with a broom".into());
-    }
     // Goofing is one of the bot's options mid-match too (a look, an emote
     // between plays), not only with nothing to do: a little, never a lot
     // (Max 2026-10-05 wants more goofing: up to about one moment in seven).
