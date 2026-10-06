@@ -122,6 +122,10 @@ pub(super) enum Domain {
     Dodge,
 }
 impl Domain {
+    /// A reflex: how it moves this moment under fire.
+    fn reflex(self) -> bool {
+        matches!(self, Self::Move | Self::Dodge)
+    }
     const ALL: [Domain; 7] = [
         Self::Behaviour,
         Self::Weapon,
@@ -383,11 +387,15 @@ pub(super) enum Moment {
     End(Interrupt),
 }
 
-/// A bot's surprise state: its own random stream, its drives, what each
+/// A bot's surprise state: its own random streams, its drives, what each
 /// choice point holds, and its last decision at each.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Mind {
     rng: u64,
+    /// The reflexes' stream (`Domain::reflex`): how a bot moves under fire
+    /// draws from it alone, so a fight's dodges never shift its other
+    /// choices.
+    reflex_rng: u64,
     drives: Vec<Drive>,
     holds: [Hold; Domain::ALL.len()],
     decisions: [Option<Decision>; Domain::ALL.len()],
@@ -402,6 +410,7 @@ impl Mind {
     pub(super) fn new(bot: OwnerId) -> Self {
         Self {
             rng: 0x5851_F42D_4C95_7F2D ^ bot.wrapping_mul(0xD1B5_4A32_D192_ED03),
+            reflex_rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0xD1B5_4A32_D192_ED03),
             ..Default::default()
         }
     }
@@ -414,6 +423,14 @@ impl Mind {
     }
     fn random(&mut self) -> f32 {
         super::perception::draw(&mut self.rng)
+    }
+    /// A draw for a choice in `domain`, from its stream.
+    fn random_in(&mut self, domain: Domain) -> f32 {
+        if domain.reflex() {
+            super::perception::draw(&mut self.reflex_rng)
+        } else {
+            self.random()
+        }
     }
     /// The drive of `option`, brought up to `tick`: boredom and lost
     /// effectiveness fade, and the drift takes a step each second.
@@ -428,7 +445,7 @@ impl Mind {
                 // A new drive starts anywhere its walk would have taken it
                 // (about half its limit either way), so bots differ from
                 // their first choice on.
-                let drift = (self.random() * 2.0 - 1.0) * DRIFT * strength * 0.5;
+                let drift = (self.random_in(domain) * 2.0 - 1.0) * DRIFT * strength * 0.5;
                 self.drives.push(Drive {
                     domain,
                     option,
@@ -454,7 +471,7 @@ impl Mind {
         let steps = (tick / 120).saturating_sub(d.updated / 120).min(120);
         let sigma = limit * 0.5 * (2.0 / DRIFT_SECONDS).sqrt() * 3f32.sqrt();
         for _ in 0..steps {
-            let noise = self.random() * 2.0 - 1.0;
+            let noise = self.random_in(d.domain) * 2.0 - 1.0;
             drive.drift =
                 (drive.drift * (1.0 - 1.0 / DRIFT_SECONDS) + noise * sigma).clamp(-limit, limit);
         }

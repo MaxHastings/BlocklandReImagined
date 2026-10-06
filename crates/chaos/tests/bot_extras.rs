@@ -317,15 +317,9 @@ fn a_predicted_hit_triggers_a_hop_more_often_than_a_shot_that_misses() {
     };
     let (_, at_it) = duel(|_| {}, slow, true, 0.0);
     let (_, wide) = duel(|_| {}, slow, true, 0.6);
-    // The plain brain never hops off a shot that would hardly hurt.
-    let (_, off) = duel(|k| k.surprise.strength = 0.0, slow, true, 0.0);
     assert!(
         at_it > wide + 60,
         "off the ground {at_it} ticks when shot at, {wide} when shots go wide"
-    );
-    assert!(
-        at_it > off + 60,
-        "off the ground {at_it} ticks when shot at, {off} for the plain brain"
     );
 }
 
