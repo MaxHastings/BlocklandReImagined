@@ -942,6 +942,11 @@ pub fn pack() -> Pack {
         rest_speed: 1.0,
         sport_image: Some(image.into()),
         bounce_effect: "testBallBounceExplosion".into(),
+        collision_sound: Some(CollisionSound {
+            profile: "testBallBounceSound".into(),
+            min_speed: 3.0,
+            gap_ticks: 6,
+        }),
         ..projectile(id, name)
     };
     add_item(Item {
