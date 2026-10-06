@@ -73,7 +73,6 @@ pub(super) struct ObjectStamp {
     pub spawner: BrickId,
     pub definition: String,
     pub scale: f32,
-    spawner_name: Option<String>,
     owner: OwnerId,
     mass: f32,
     bounds: ([f32; 3], [f32; 3]),
@@ -169,13 +168,6 @@ fn stamp(session: &Session, v: &VehicleSnapshot, d: &Definition) -> Option<Objec
         spawner: session.vehicle_spawn_brick(v.id)?,
         definition: v.definition.clone(),
         scale: v.scale,
-        spawner_name: session
-            .simulation
-            .state()
-            .bricks
-            .get(&session.vehicle_spawn_brick(v.id)?)?
-            .name
-            .clone(),
         owner: v.owner.0,
         mass: d.mass,
         bounds: (d.bounds_min, d.bounds_max),
@@ -472,8 +464,7 @@ pub(super) fn candidates(
                 .reserve(
                     0,
                     1,
-                    goal.object.definition.len()
-                        + goal.object.spawner_name.as_ref().map_or(0, String::len),
+                    goal.object.definition.len(),
                 )
                 .map_err(|_| Rejection::Budget)?;
             choices.push(Choice {
@@ -560,9 +551,7 @@ pub(super) fn candidates(
                     .reserve(
                         0,
                         1,
-                        goal.object.definition.len()
-                            + goal.object.spawner_name.as_ref().map_or(0, String::len)
-                            + image.id.len(),
+                        goal.object.definition.len() + image.id.len(),
                     )
                     .map_err(|_| Rejection::Budget)?;
                 choices.push(Choice {
@@ -602,8 +591,7 @@ pub(super) fn candidates(
                 .reserve(
                     0,
                     1,
-                    goal.object.definition.len()
-                        + goal.object.spawner_name.as_ref().map_or(0, String::len),
+                    goal.object.definition.len(),
                 )
                 .map_err(|_| Rejection::Budget)?;
             choices.push(Choice {

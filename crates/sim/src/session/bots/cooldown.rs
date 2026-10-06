@@ -43,11 +43,14 @@ impl<K: PartialEq, const N: usize> Cooldowns<K, N> {
     pub(super) fn clear(&mut self) {
         self.entries.clear();
     }
+    /// What it has given up on, lapsed or not.
+    pub(super) fn iter(&self) -> impl Iterator<Item = &K> {
+        self.entries.iter().map(|(k, _)| k)
+    }
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
     }
-    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

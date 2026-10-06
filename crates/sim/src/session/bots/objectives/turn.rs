@@ -37,9 +37,8 @@ impl Session {
             state.unplanned = context.is_some();
         }
         if tick >= state.next {
-            state.failed.retain(|f| {
-                tick < f.until
-                    && f.executor.validate(self, bot)
+            state.failed.prune(tick, |f| {
+                f.executor.validate(self, bot)
                     && f.cause.validate(self, bot, true)
                     && self.game_of(bot) == Some(f.game)
                     && self

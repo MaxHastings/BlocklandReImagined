@@ -238,7 +238,7 @@ use crate::bot_kind::BotHold;
 /// The one rule for holding a choice, whatever is chosen (a behaviour, a
 /// weapon, an aim, a route, a goof): what is chosen is held at least
 /// [`BotHold::seconds`]; after that another takes over only by scoring
-/// more than [`BotHold::margin`] above it. An interrupt takes over at
+/// more than [`crate::bot_kind::HOLD_MARGIN`] above it. An interrupt takes over at
 /// once: one the caller names (urgent damage, an objective picked up or
 /// dropped, the target lost or dead), a [`Ask::must`] option winning, or
 /// the held option no longer possible (scoring nothing). A held option
@@ -351,7 +351,7 @@ impl Hold {
             Held::Impossible
         } else if tick < self.since + commit {
             return (current, Held::Committed);
-        } else if challenge > held * (1.0 + rule.margin) {
+        } else if challenge > held * (1.0 + crate::bot_kind::HOLD_MARGIN) {
             Held::Beaten
         } else {
             return (current, Held::Margin);
@@ -636,10 +636,7 @@ mod tests {
         assert_eq!(choose(Wander, &far, |_| 0.0), Wander);
     }
 
-    const RULE: BotHold = BotHold {
-        seconds: 0.5,
-        margin: 0.1,
-    };
+    const RULE: BotHold = BotHold { seconds: 0.5 };
     fn held(option: u32, since: u64) -> Hold {
         Hold {
             option: Some(option),

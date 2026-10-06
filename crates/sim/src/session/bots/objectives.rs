@@ -534,7 +534,11 @@ impl GroundingBudget {
         self.targets = self.targets.saturating_add(targets);
         self.terms = self.terms.saturating_add(terms);
         self.bytes = self.bytes.saturating_add(bytes);
-        if self.targets > 128 || self.terms > 4096 || self.bytes > 65536 {
+        let limits = limits();
+        if self.targets > limits.max_facts
+            || self.terms > limits.max_model_terms
+            || self.bytes > limits.max_model_bytes
+        {
             return Err(planning::Failure::ModelBudgetExceeded);
         }
         Ok(())
@@ -571,6 +575,9 @@ impl GroundingBudget {
     }
 }
 
+/// A step that failed, with the game, round and team it was tried in: one
+/// entry a step (`PartialEq` is by its action), forgotten when it lapses
+/// or its context goes.
 #[derive(Clone, Debug)]
 struct FailedAction {
     action_id: String,
@@ -579,8 +586,15 @@ struct FailedAction {
     game: bri_minigames::GameId,
     round: u64,
     team: Option<bri_minigames::TeamId>,
-    until: u64,
 }
+impl PartialEq for FailedAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.action_id == other.action_id
+    }
+}
+/// Steps it remembers failing, at most.
+const FAILED_STEPS: usize = 8;
+type Failed = super::cooldown::Cooldowns<FailedAction, FAILED_STEPS>;
 
 /// One bounded negative result, checked against freshly grounded facts/actions.
 /// A complete NoPlan/depth proof is independent of positive action costs;
@@ -622,7 +636,7 @@ impl FailedSearch {
 pub(super) struct State {
     pub step: Option<Step>,
     next: u64,
-    failed: Vec<FailedAction>,
+    failed: Failed,
     failed_search: Option<FailedSearch>,
     pub route: Vec<String>,
     desired: Option<DesiredState>,
@@ -727,19 +741,17 @@ impl State {
     pub(super) fn fail(&mut self, tick: u64, reason: &'static str) {
         self.paused = false;
         if let Some(step) = self.step.take() {
-            self.failed.retain(|f| f.action_id != step.action_id);
-            if self.failed.len() == 8 {
-                self.failed.remove(0);
-            }
-            self.failed.push(FailedAction {
-                action_id: step.action_id,
-                cause: step.cause,
-                executor: step.executor,
-                game: step.game,
-                round: step.round,
-                team: step.team,
-                until: tick.saturating_add(APPROACH_TIMEOUT * 2),
-            });
+            self.failed.give_up(
+                FailedAction {
+                    action_id: step.action_id,
+                    cause: step.cause,
+                    executor: step.executor,
+                    game: step.game,
+                    round: step.round,
+                    team: step.team,
+                },
+                tick.saturating_add(APPROACH_TIMEOUT * 2),
+            );
         }
         self.route.clear();
         self.next = tick.saturating_add(UNREACHED_TICKS);
@@ -1323,7 +1335,7 @@ mod tests {
             .unwrap();
         s.sync_event_programs(&BTreeSet::from([source, foreign]));
         let (_, _, actions, _) = s
-            .objective_snapshot(bot, 0, &[], s.rule_desired_state(bot).unwrap())
+            .objective_snapshot(bot, 0, &Failed::default(), s.rule_desired_state(bot).unwrap())
             .unwrap();
         assert_eq!(
             actions.len(),

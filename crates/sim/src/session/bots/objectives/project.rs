@@ -552,7 +552,7 @@ impl Session {
                 let before = self
                     .rule_query(cx, target, &condition)
                     .ok_or(F::Unsupported)?;
-                if facts.len() > 128 {
+                if facts.len() > limits().max_facts {
                     return Err(F::FactBudgetExceeded);
                 }
                 let bytes = guards.iter().map(|g| g.key.len()).sum::<usize>()

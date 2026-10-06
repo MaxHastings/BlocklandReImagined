@@ -130,7 +130,14 @@ impl Session {
             return out;
         };
         let tick = self.simulation.state().tick;
-        match self.objective_snapshot_with_budget(bot, tick, &[], desired, &discovery, &mut budget) {
+        match self.objective_snapshot_with_budget(
+            bot,
+            tick,
+            &Failed::default(),
+            desired,
+            &discovery,
+            &mut budget,
+        ) {
             Ok((facts, desired, actions, _)) => {
                 let _ = writeln!(out, "facts {facts:?}");
                 for a in &actions {
@@ -168,7 +175,7 @@ impl Session {
         &self,
         bot: OwnerId,
         tick: u64,
-        failed: &[FailedAction],
+        failed: &Failed,
         desired: DesiredState,
     ) -> Result<Model, planning::Failure> {
         let candidates = DesiredDiscovery {
@@ -342,7 +349,7 @@ impl Session {
         &self,
         bot: OwnerId,
         tick: u64,
-        failed: &[FailedAction],
+        failed: &Failed,
         desired: DesiredState,
         discovery: &DesiredDiscovery,
         budget: &mut GroundingBudget,

@@ -159,25 +159,21 @@ impl Default for BotPerception {
 /// How a bot holds a choice (which behaviour, weapon, aim, route): the
 /// one rule against flip-flopping (`docs/architecture/bots.md`, "Holding
 /// a choice"). A choice is held at least `seconds`, and after that another
-/// takes over only by scoring more than `margin` (a share) above it. An
+/// takes over only by scoring more than [`HOLD_MARGIN`] (a share) above it. An
 /// interrupt (urgent damage, an objective picked up or dropped, the target
 /// lost or dead, a choice no longer possible, a must-do behaviour) takes
 /// over at once.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BotHold {
     pub seconds: f32,
-    pub margin: f32,
 }
 impl Default for BotHold {
     fn default() -> Self {
-        Self {
-            seconds: 0.5,
-            margin: HOLD_MARGIN,
-        }
+        Self { seconds: 0.5 }
     }
 }
 /// The share over a held choice's score another needs to take over.
-const HOLD_MARGIN: f32 = 0.1;
+pub const HOLD_MARGIN: f32 = 0.1;
 
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
@@ -269,7 +265,6 @@ impl BotKind {
     pub fn hold(&self) -> BotHold {
         BotHold {
             seconds: self.hold_seconds,
-            margin: HOLD_MARGIN,
         }
     }
     /// Its weight on behaviour or leg `name` (`behaviours`): 1 unless it
