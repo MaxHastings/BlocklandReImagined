@@ -2216,3 +2216,39 @@ fn a_click_reaches_bricks_five_units_times_the_players_scale(f: &Fixture) {
     assert_eq!(s.simulation().state().bricks[&button].color, 1);
 }
 }
+
+on_both! {
+/// The wrench, events and printer dialogs guard only what they show: a
+/// brick its own events recolour while the dialog is open (a flashing relay
+/// loop) still takes the edit.
+fn a_brick_recoloured_while_its_dialog_is_open_still_takes_the_edit(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
+    inspect(&mut s, owner, 2, InspectMode::Wrench);
+    s.edit_brick(owner, id, Edit::Color(1)).unwrap();
+    tool(
+        &mut s,
+        owner,
+        3,
+        ToolAction::SetWrench {
+            brick: id,
+            properties: properties(),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.simulation().state().bricks[&id].name.as_deref(), Some("lamp"));
+    inspect(&mut s, owner, 4, InspectMode::Wrench);
+    inspect(&mut s, owner, 5, InspectMode::Events);
+    s.edit_brick(owner, id, Edit::Color(0)).unwrap();
+    tool(
+        &mut s,
+        owner,
+        6,
+        ToolAction::SetEvents {
+            brick: id,
+            events: vec![],
+        },
+    )
+    .unwrap();
+    assert_eq!(s.simulation().state().bricks[&id].color, 0);
+}
+}
