@@ -548,16 +548,38 @@ impl Session {
                         // would strand others (`willCauseChainKill`), before
                         // it checks trust. Tutorial `noBreak` bricks survive.
                         // `indestructable` spawn bricks do not: that flag
-                        // only stops explosions.
-                        if !self.simulation.will_cause_chain_kill(id)?
-                            && self.trusted_brick_edit(owner, id, level::FULL)
+                        // only stops explosions. Without full trust it may
+                        // still break what others built on the swinger's
+                        // own stack (`stackBL_ID`).
+                        if self.simulation.will_cause_chain_kill(id)? {
+                            return Ok(());
+                        }
+                        let on_own_stack = owner != 0
+                            && self.simulation.stack_owner(id) == Some(owner);
+                        if (on_own_stack || self.trusted_brick_edit(owner, id, level::FULL))
                             && !self.tutorial_protects(id)
                         {
                             // `fxDTSBrick::onToolBreak` runs its rows before
                             // `killBrick` removes the brick and its program.
                             self.fire_input(id, "onToolBreak", Some(owner));
                             self.step_events(&BTreeSet::new())?;
-                            self.tool_kill_brick(owner, id)?;
+                            if !self.simulation.state().bricks.contains_key(&id) {
+                                return Ok(());
+                            }
+                            if on_own_stack {
+                                // The stack rule, not the builder's trust,
+                                // let this swing through.
+                                let engine = Actor {
+                                    administrator: true,
+                                    ..copy_actor(
+                                        &self.peers.get(&owner).context("Unknown connection")?.actor,
+                                    )
+                                };
+                                self.kill_brick(&engine, id)?;
+                                self.close_inspections(id);
+                            } else {
+                                self.tool_kill_brick(owner, id)?;
+                            }
                         }
                     }
                     TargetId::Actor(target) => {

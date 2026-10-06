@@ -1868,6 +1868,39 @@ fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused(f: &Fixture) {
 }
 
 on_both! {
+/// `hammerImage::onHitObject` lets a swing through without trust when the
+/// brick stands in the swinger's own stack (`stackBL_ID`): you may clear
+/// what others built on your bricks, though not their own stacks.
+fn the_hammer_breaks_others_bricks_built_on_your_stack(f: &Fixture) {
+    let mut s = session(f, vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    // An administrator may build on anyone's bricks.
+    let guest = s
+        .join("Guest".into(), Vec3::new(3.0, 0.05, 1.0), true)
+        .unwrap();
+    let low = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let high = plant(&mut s, guest, 1, [0.5, 0.3, -3.25]);
+    let theirs = plant(&mut s, guest, 2, [2.5, 0.1, -3.25]);
+    assert_eq!(s.simulation().stack_owner(high), Some(owner));
+    center_prints(&mut s, owner);
+    aim(&mut s, owner, 3, [0.5, 0.3, -3.01]);
+    swing(&mut s, owner, 4, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low, theirs]);
+    assert!(center_prints(&mut s, owner).is_empty());
+    // The guest's own stack still needs their trust.
+    aim(&mut s, owner, 5, [2.5, 0.1, -3.01]);
+    swing(&mut s, owner, 6, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low, theirs]);
+    assert_eq!(
+        center_prints(&mut s, owner),
+        vec!["Guest does not trust you enough to do that.".to_string()]
+    );
+}
+}
+
+on_both! {
 /// v20's `indestructable` (spawn points, vehicle spawns) only keeps
 /// explosions off a brick: a builder who is not an administrator hammers or
 /// undoes their own like any other (playtest a20).
