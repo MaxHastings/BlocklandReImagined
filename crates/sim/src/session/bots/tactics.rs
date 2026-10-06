@@ -293,9 +293,7 @@ pub enum Family {
 pub enum Delivery {
     Ray,
     Projectile(Flight),
-    // Explicit non-projectile contact providers are pure tested; no generic
-    // fallback manufactures one for an unknown runtime tool.
-    #[allow(dead_code)]
+    /// Reaches by touch: a melee swing.
     Contact,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -498,14 +496,6 @@ pub fn native_capability(
     Ok(result)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Geometry {
-    #[allow(dead_code)] // Admission remains useful to pure/external providers.
-    Unvalidated,
-    Clear,
-    #[allow(dead_code)] // Live adapter discards blocked paths before scoring.
-    Blocked,
-}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Context {
     pub distance: f32,
@@ -515,7 +505,6 @@ pub struct Context {
     pub self_clearance: f32,
     pub ally_clearance: Option<f32>,
     pub blast_margin: f32,
-    pub geometry: Geometry,
     pub aim: Option<Aim>,
     /// None means unlimited ammo. Some counts currently fireable rounds only.
     pub ready_rounds: Option<u32>,
@@ -528,10 +517,6 @@ pub enum Unsuited {
     Invalid,
     Range,
     Ammo,
-    #[allow(dead_code)] // Admission remains useful to pure/external providers.
-    Unvalidated,
-    #[allow(dead_code)] // Live adapter discards blocked paths before scoring.
-    Blocked,
     NoIntercept,
     Unarmed,
     UnsafeBlast,
@@ -573,11 +558,6 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
         .is_some_and(|n| n < weapon.rounds_per_attack)
     {
         return Err(Unsuited::Ammo);
-    }
-    match context.geometry {
-        Geometry::Unvalidated => return Err(Unsuited::Unvalidated),
-        Geometry::Blocked => return Err(Unsuited::Blocked),
-        Geometry::Clear => {}
     }
     let flight_seconds = if let Delivery::Projectile(flight) = weapon.delivery {
         let aim = context.aim.ok_or(Unsuited::NoIntercept)?;
@@ -954,7 +934,6 @@ mod tests {
             self_clearance: 20.0,
             ally_clearance: None,
             blast_margin: 1.0,
-            geometry: Geometry::Clear,
             aim: None,
             ready_rounds: None,
             opportunity_cost: 0.0,
@@ -990,26 +969,6 @@ mod tests {
                 }
             ),
             Err(Unsuited::Ammo)
-        );
-        assert_eq!(
-            suitability(
-                ray(),
-                Context {
-                    geometry: Geometry::Unvalidated,
-                    ..context()
-                }
-            ),
-            Err(Unsuited::Unvalidated)
-        );
-        assert_eq!(
-            suitability(
-                ray(),
-                Context {
-                    geometry: Geometry::Blocked,
-                    ..context()
-                }
-            ),
-            Err(Unsuited::Blocked)
         );
         let splash = Capability {
             family: Family::Splash,
@@ -1151,17 +1110,6 @@ mod tests {
             ),
             Err(Unsuited::NoIntercept)
         );
-        assert_eq!(
-            suitability(
-                weapon,
-                Context {
-                    geometry: Geometry::Blocked,
-                    aim: Some(aim),
-                    ..context()
-                }
-            ),
-            Err(Unsuited::Blocked)
-        );
     }
 
     #[test]
@@ -1178,15 +1126,6 @@ mod tests {
         // Holding a weapon against a slightly better one is the hold
         // rule's job (`behaviour::Hold`), not this pick's.
         assert_eq!(select(&[a, b]).unwrap().unwrap().slot, 1);
-        let blocked = candidate(
-            0,
-            ray(),
-            Context {
-                geometry: Geometry::Blocked,
-                ..context()
-            },
-        );
-        assert_eq!(select(&[blocked, b]).unwrap().unwrap().slot, 1);
         assert_eq!(
             select(&[
                 candidate(4, ray(), context()),

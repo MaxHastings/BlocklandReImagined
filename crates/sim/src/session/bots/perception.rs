@@ -17,8 +17,7 @@
 //! starting aim error, which narrows as before while it tracks. The clock
 //! starts when the target can be hurt: a spawn-protected one is watched,
 //! not reacted to. Damage still interrupts at once (the chooser sees it);
-//! only the return fire waits. Any other pause before acting on a change
-//! (a chooser's tell) takes its length from [`Brain::switch_delay`].
+//! only the return fire waits.
 //!
 //! A hit from someone out of sight gives only a rough idea where from
 //! ([`guess`]); the look holds until the reaction, and the exact spot comes
@@ -669,19 +668,6 @@ impl Brain {
         } else {
             Alertness::of(self.behaviour)
         }
-    }
-    /// Ticks to pause before acting on a change of mind (a chooser's tell):
-    /// the same reaction delay, by how alert it is now.
-    #[allow(dead_code)]
-    pub(super) fn switch_delay(&mut self) -> u64 {
-        let alertness = self.alertness();
-        delay_ticks(
-            &self.kind.perception,
-            self.kind.reaction_seconds,
-            alertness,
-            false,
-            &mut self.rng,
-        )
     }
 }
 impl Session {

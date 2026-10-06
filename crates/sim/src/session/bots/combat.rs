@@ -1,7 +1,7 @@
 //! Inventory tactics through ordinary weapon controls and native collision queries.
 //! No item names decide abilities. Unknown scripts, portals and mounted firing
 //! keep their existing executor until a truthful typed provider exists.
-use super::tactics::{self, Aim, Capability, Context, Delivery, Family, Geometry, Intercept};
+use super::tactics::{self, Aim, Capability, Context, Delivery, Family, Intercept};
 use super::*;
 use bri_weapons::{Filter, Image, Query, State as ImageState, TargetId};
 
@@ -673,7 +673,6 @@ pub(super) fn choose(
                 self_clearance,
                 ally_clearance,
                 blast_margin: 1.0,
-                geometry: Geometry::Clear,
                 aim,
                 ready_rounds,
                 opportunity_cost: 0.0,
@@ -730,7 +729,7 @@ pub(super) fn choose(
         if candidates.iter().any(|c| usize::from(c.slot) == held) {
             state.usable = tick;
         } else if charge_continuation.is_none()
-            && keep_held(state.usable, tick, session.bots.brains[&bot].kind.hold)
+            && keep_held(state.usable, tick, crate::bot_kind::HOLD)
         {
             return Decision::Pending;
         }
@@ -739,7 +738,7 @@ pub(super) fn choose(
         Ok(Some(selection)) => {
             use super::surprise::{AIM_TORSO, Choice, Domain};
             let kind = &session.bots.brains[&bot].kind;
-            let (cfg, rule) = (&kind.surprise, kind.hold);
+            let (cfg, rule) = (&kind.surprise, crate::bot_kind::HOLD);
             let scores: Vec<(u32, f32)> = candidates
                 .iter()
                 .filter_map(|c| {

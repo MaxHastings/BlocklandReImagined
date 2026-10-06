@@ -27,7 +27,7 @@
 //! follows an enemy it watched go in. Its leash to its brick stretches the
 //! way it walked, through openings included.
 use super::*;
-use crate::bot_kind::{BotKind, MountAnchor, Moves};
+use crate::bot_kind::{BotKind, Moves};
 use crate::nav::{Body, Found, Ground, Mode, Nav, Search, Waypoint};
 use behaviour::{Behaviour, Situation};
 use bri_content::passage::{Way, carried_yaw};
@@ -170,6 +170,12 @@ const LOOK_DOWN: f32 = -0.3;
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
 const WEAVE_SECONDS: f32 = 0.75;
+/// A ranged fighter strafes one way about this long before turning back.
+/// It stands at a ledge or a wall until then, and turns away from an ally
+/// at once. A melee fighter does not strafe: it closes to its band.
+const STRAFE_SECONDS: f32 = 3.5;
+/// How far a driver follows a fight from where it took the controls.
+const DRIVE_CHASE_RADIUS: f32 = 96.0;
 /// How often a strafe leg turns back rather than keeps on.
 const TURN_BACK: f32 = 0.7;
 /// Ticks between the aim error's seeded points; it eases between them.
@@ -379,7 +385,7 @@ struct Brain {
     /// The gear its driving is in (`route::gear`).
     drive_gear: crate::route::Gear,
     /// Where it took a mount's controls (the vehicle and its feet then):
-    /// the anchor of a driver's leash under `BotMounted::anchor`.
+    /// the anchor of a driver's leash.
     mount_anchor: Option<(u64, Vec3)>,
     /// The spawn brick's Team choice last put into effect, with the game
     /// it was applied in; a new life starts without one, so it is applied
@@ -439,17 +445,17 @@ impl Goal {
 }
 impl Brain {
     /// Where its chase leash is measured from, and how long it is. A driver
-    /// follows its kind's mounted pursuit policy; on foot, its brick's. A
+    /// keeps within `DRIVE_CHASE_RADIUS` of where it took the controls (a
+    /// mount covers ground a walker does not); on foot, near its brick. A
     /// rules bot on foot has no brick to keep near: it plays the whole map,
     /// as a player does (a leash to where it spawned had it drop a chase
     /// at the edge and wander back, then see them and chase again).
     fn pursuit(&self, driving: bool) -> (Vec3, f32) {
-        let mounted = &self.kind.mounted;
-        match (driving, mounted.anchor, self.mount_anchor) {
-            (true, MountAnchor::Mount, Some((_, at))) => (at, mounted.chase_radius),
-            (true, _, _) => (self.leash, mounted.chase_radius),
-            (false, _, _) if self.brick.is_none() => (self.leash, f32::INFINITY),
-            (false, _, _) => (self.leash, self.kind.chase_radius),
+        match (driving, self.mount_anchor) {
+            (true, Some((_, at))) => (at, DRIVE_CHASE_RADIUS),
+            (true, None) => (self.leash, DRIVE_CHASE_RADIUS),
+            (false, _) if self.brick.is_none() => (self.leash, f32::INFINITY),
+            (false, _) => (self.leash, self.kind.chase_radius),
         }
     }
     fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId, crossed: u64) -> Self {
@@ -2724,7 +2730,7 @@ impl Session {
         let behaviour = surprise::behaviour(
             &mut brain.surprise,
             &kind.surprise,
-            kind.hold,
+            crate::bot_kind::HOLD,
             &scores,
             interrupt,
             // Between steps, or the objective gone a moment as one step
@@ -2940,7 +2946,7 @@ impl Session {
                     brain.chase_offset = surprise::route(
                         &mut brain.surprise,
                         &kind.surprise,
-                        kind.hold,
+                        crate::bot_kind::HOLD,
                         seen.real,
                         flanks,
                         gate,
@@ -3345,7 +3351,7 @@ impl Session {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain
             .surprise
-            .goof(&brain.kind.surprise, brain.kind.hold, &pause, tick);
+            .goof(&brain.kind.surprise, crate::bot_kind::HOLD, &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
         let extra = self.bot_extras(
             bot,
@@ -3644,7 +3650,7 @@ impl Session {
                     // away from it at once.
                     let parted = ally(brain.strafe.0) && ground(-brain.strafe.0);
                     let side =
-                        brain.strafe_leg(tick, kind.fighting.strafe_seconds, &ground, parted);
+                        brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
                     if overshoots {
                         direction = -flat(Vec3::from(state.velocity)).normalize_or_zero();
                     } else if ground(side) {

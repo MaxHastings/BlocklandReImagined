@@ -4,14 +4,27 @@
 //! (claims coordinate allies only, `claims::Resource::contends`), and the
 //! ordinary push/hammer executor still decides how to move it. This piece
 //! only answers whether an opponent is contesting the body and, when one
-//! is, where to meet it: ahead along its actual velocity, by the kind's
-//! `contest` tuning. Physics, credit and the authored rules decide who
+//! is, where to meet it: ahead along its actual velocity. Physics, credit and the authored rules decide who
 //! scores; nothing here names a game or its content.
 use super::claims::Resource;
 use super::*;
 
 /// Walking speed used to estimate how soon the bot reaches the body.
 const WALK: f32 = 4.0;
+/// Within this many world units of a contested body a bot is engaged: its
+/// intention stays live while it works the body against an opponent.
+const ENGAGE: f32 = 4.0;
+/// A contesting bot leads its approach by at most this many seconds of the
+/// body's own velocity, and by at most `MAX_LEAD` world units.
+const LEAD_SECONDS: f32 = 0.6;
+const MAX_LEAD: f32 = 4.0;
+/// A cover stands this far behind a body a teammate delivers, and
+/// `COVER_SIDE` to the side of that line.
+const COVER_DISTANCE: f32 = 6.0;
+const COVER_SIDE: f32 = 3.0;
+/// Degrees a bot turns its push off a body an opponent drives straight
+/// back at it, to knock it aside rather than meet it head on.
+const CLEAR_DEGREES: f32 = 60.0;
 /// Below this horizontal speed the body is treated as at rest.
 const MOVING: f32 = 0.25;
 
@@ -30,8 +43,8 @@ pub(super) fn contested(session: &Session, bot: OwnerId, object: ObjectRef) -> b
             .any(opponent)
 }
 
-/// Physically at a body an opponent contests: within the kind's
-/// `contest.engage` of its centre. Engagement renews this side's claim the
+/// Physically at a body an opponent contests: within [`ENGAGE`] of its
+/// centre. Engagement renews this side's claim the
 /// way its own credited progress would; the objective's approach deadline
 /// still needs real delivery progress, so a lost contest stays bounded.
 pub(super) fn engaged(session: &Session, bot: OwnerId, resource: Resource, feet: Vec3) -> bool {
@@ -39,18 +52,15 @@ pub(super) fn engaged(session: &Session, bot: OwnerId, resource: Resource, feet:
         return false;
     };
     let object = ObjectRef::Vehicle(vehicle);
-    let Some(reach) = session.bots.brains.get(&bot).map(|b| b.kind.contest.engage) else {
-        return false;
-    };
     session
         .object_centre(object)
-        .is_some_and(|centre| flat(centre - feet).length() <= reach)
+        .is_some_and(|centre| flat(centre - feet).length() <= ENGAGE)
         && contested(session, bot, object)
 }
 
 /// How far ahead of the body's current centre a contesting bot approaches:
-/// its actual horizontal velocity over the time to reach it, bounded by the
-/// kind's `contest.lead_seconds` and `contest.max_lead`. Zero when the body
+/// its actual horizontal velocity over the time to reach it, bounded by
+/// [`LEAD_SECONDS`] and [`MAX_LEAD`]. Zero when the body
 /// is not contested or at rest.
 pub(super) fn lead(
     session: &Session,
@@ -60,16 +70,12 @@ pub(super) fn lead(
     centre: Vec3,
     velocity: Vec3,
 ) -> Vec3 {
-    let Some(brain) = session.bots.brains.get(&bot) else {
-        return Vec3::ZERO;
-    };
-    let tuning = &brain.kind.contest;
     let moving = flat(velocity);
     if !moving.is_finite() || moving.length() < MOVING || !contested(session, bot, object) {
         return Vec3::ZERO;
     }
-    let seconds = (flat(centre - feet).length() / WALK).min(tuning.lead_seconds);
-    lead_offset(moving, seconds, tuning.max_lead)
+    let seconds = (flat(centre - feet).length() / WALK).min(LEAD_SECONDS);
+    lead_offset(moving, seconds, MAX_LEAD)
 }
 
 fn lead_offset(moving: Vec3, seconds: f32, max_lead: f32) -> Vec3 {
@@ -83,8 +89,7 @@ fn lead_offset(moving: Vec3, seconds: f32, max_lead: f32) -> Vec3 {
 
 /// The way to push a contested body an opponent is driving back against
 /// `toward` (its horizontal velocity within 60 degrees of straight back,
-/// faster than walking pace's half): turned by the kind's
-/// `contest.clear_degrees` to the side whose rear is nearer the bot, so
+/// faster than walking pace's half): turned by [`CLEAR_DEGREES`] to the side whose rear is nearer the bot, so
 /// the body is knocked out of its line instead of being met head on (which
 /// leaves the defender carried back with it). Otherwise `toward`.
 pub(super) fn clearing(
@@ -96,14 +101,10 @@ pub(super) fn clearing(
     velocity: Vec3,
     toward: Vec3,
 ) -> Vec3 {
-    let Some(brain) = session.bots.brains.get(&bot) else {
-        return toward;
-    };
-    let degrees = brain.kind.contest.clear_degrees;
-    if degrees <= 0.0 || !contested(session, bot, object) {
+    if !contested(session, bot, object) {
         return toward;
     }
-    clear_heading(feet, centre, velocity, toward, degrees)
+    clear_heading(feet, centre, velocity, toward, CLEAR_DEGREES)
 }
 
 fn clear_heading(feet: Vec3, centre: Vec3, velocity: Vec3, toward: Vec3, degrees: f32) -> Vec3 {
@@ -123,14 +124,13 @@ fn clear_heading(feet: Vec3, centre: Vec3, velocity: Vec3, toward: Vec3, degrees
     }
 }
 
-/// Where a bot covers a loose body a teammate is delivering: the kind's
-/// `contest.cover_distance` behind the body against `heading` (so between
-/// the body and where an opponent would send it), and `contest.cover_side`
-/// to the side of that line it is already on. Several teammates covering
-/// one body take slots in id order, alternating sides and each pair a
-/// `cover_distance` further back, so they do not stand on each other.
-/// None when the kind does not cover, the resource is not a loose body, or
-/// there is no heading.
+/// Where a bot covers a loose body a teammate is delivering:
+/// [`COVER_DISTANCE`] behind the body against `heading` (so between the
+/// body and where an opponent would send it), and [`COVER_SIDE`] to the
+/// side of that line it is already on. Several teammates covering one body
+/// take slots in id order, alternating sides and each pair a
+/// `COVER_DISTANCE` further back, so they do not stand on each other.
+/// None when the resource is not a loose body or there is no heading.
 pub(super) fn cover(
     session: &Session,
     bot: OwnerId,
@@ -142,7 +142,6 @@ pub(super) fn cover(
         return None;
     };
     let brain = session.bots.brains.get(&bot)?;
-    let tuning = &brain.kind.contest;
     let centre = session.object_centre(ObjectRef::Vehicle(vehicle))?;
     let tick = session.simulation.state().tick;
     let claimants: Vec<OwnerId> = session.bots.claims.claimants_on(vehicle, tick).collect();
@@ -183,12 +182,12 @@ pub(super) fn cover(
         feet,
         centre,
         heading,
-        tuning.cover_distance,
-        tuning.cover_side,
+        COVER_DISTANCE,
+        COVER_SIDE,
         (slot, covers.len().max(1)),
         worker,
     )?;
-    let point = out_of_the_way(point, centre, velocity, heading, tuning.cover_side);
+    let point = out_of_the_way(point, centre, velocity, heading, COVER_SIDE);
     // Short of any wall between the body and that point (behind a goal
     // line, a pitch wall, a build), rather than pressed against it.
     let offset = flat(point - centre);
@@ -225,9 +224,9 @@ pub(super) struct Clear {
 /// the body's way instead of standing back: from the body's side, so its
 /// hit knocks the opponent out of the way while the teammate keeps the
 /// body moving. The one is the opponent nearest the body within the
-/// kind's `contest.engage` of it and ahead of it along `heading`, the way
-/// the team delivers it. None when no teammate works it, nobody stands in
-/// its way, it has nothing that shoves, or the kind does not cover.
+/// [`ENGAGE`] of it and ahead of it along `heading`, the way the team
+/// delivers it. None when no teammate works it, nobody stands in its way
+/// or it has nothing that shoves.
 pub(super) fn clear(
     session: &Session,
     bot: OwnerId,
@@ -239,11 +238,7 @@ pub(super) fn clear(
     let Resource::Body { vehicle } = resource else {
         return None;
     };
-    let brain = session.bots.brains.get(&bot)?;
-    let tuning = &brain.kind.contest;
-    if tuning.cover_distance <= 0.0 {
-        return None;
-    }
+    session.bots.brains.get(&bot)?;
     let tick = session.simulation.state().tick;
     let mut claimants = session.bots.claims.claimants_on(vehicle, tick);
     if !claimants.any(|o| o != bot && session.bot_allies(bot, o)) {
@@ -276,7 +271,7 @@ pub(super) fn clear(
         .map(|(o, p)| (*o, Vec3::from(p.player.state().feet)))
         .filter(|(_, at)| {
             let off = flat(*at - centre);
-            off.length() <= tuning.engage && off.dot(flat(heading)) > 0.0
+            off.length() <= ENGAGE && off.dot(flat(heading)) > 0.0
         })
         .min_by(|a, b| {
             flat(a.1 - centre)

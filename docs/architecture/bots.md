@@ -71,10 +71,9 @@ bot does through the same code.
    feet it shoots an enemy ahead or to the side as it goes (run and gun);
    an enemy behind is left, as walking backwards is slow.
 
-   An on-foot bot's leash is its brick and `chase_radius`. A driver's leash
-   follows the kind's `mounted` policy instead: with `anchor: "mount"` it is
-   measured from where the bot took the controls, with `mounted.chase_radius`;
-   with `"home"` from its brick. So a bot that boards a vehicle 40 m out keeps
+   An on-foot bot's leash is its brick and `chase_radius`; a rules bot on
+   foot has none and plays the whole map. A driver's leash is measured from
+   where it took the controls, 96 units long. So a bot that boards a vehicle 40 m out keeps
    pursuing a target 60 m out rather than turning back at its walking leash.
 3. **Goal and path.** The behaviour sets the goal; the route planner (see
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
@@ -97,9 +96,9 @@ bot does through the same code.
    chassis independently of the gunner's world aim; an armed passenger's world
    aim is preserved when its seat converts the look to a relative angle.
    How a chassis reverses is one rule, the drive leg's `route::gear`
-   (Routes, below): a goal more than `mounted.reverse_degrees` off its hull
+   (Routes, below): a goal more than 103 degrees off its hull
    is behind, and while pursuing (Fight, Chase, Search) it is backed onto
-   only within `mounted.reverse_distance`; a farther target behind is
+   only within 16 units; a farther target behind is
    turned toward, so a chase is not driven as a long retreat.
 5. **Move and act.** The behaviour's movement, then getting unstuck (hop,
    plan again, give up the goal) on foot; drivers instead brake, replan and
@@ -109,18 +108,17 @@ bot does through the same code.
    Claims on a loose body (a ball, a crate) conflict only between allies:
    an opponent may pursue the same body and push it toward its own goal.
    Seats stay exclusive for everyone. That contest is its own piece
-   (`bots/contest.rs`; its `contest.*` numbers are fixed in code): when an opponent is the body's mover or holds a live
-   claim on it, the approach leads the body along its velocity
-   (`contest.lead_seconds`, at most `contest.max_lead`), and being within
-   `contest.engage` of it counts as progress, so the claim's lease does not
+   (`bots/contest.rs`): when an opponent is the body's mover or holds a live
+   claim on it, the approach leads the body along its velocity (up to
+   0.6 s of it, at most 4 units), and being within 4 units of it counts as progress, so the claim's lease does not
    lapse while the two sides fight over it. A step waiting on an admitted
    delivery holds no lease at all.
 
    The contest piece also covers the other cases of a shared body:
    - **Cover.** A bot whose claim is refused because a teammate holds the
      body keeps its objective. It does not stand down into Wander: it holds
-     a cover point `contest.cover_distance` behind the body, against the
-     team's delivery heading, and `contest.cover_side` to the side. A lone
+     a cover point 6 units behind the body, against the
+     team's delivery heading, and 3 to the side. A lone
      cover takes the side the working teammate is not on. Several covers
      take id-ordered slots on both sides, each further pair further back and
      wider. A cover point stops short of any wall between it and the body.
@@ -128,7 +126,7 @@ bot does through the same code.
      beside the body's path instead, so the drive is not deflected off it.
      When the claim frees, the cover takes the body up at once.
    - **Clear.** A push or hammer on a body an opponent drives straight back
-     at it turns by `contest.clear_degrees` to the bot's side, knocking the
+     at it turns by 60 degrees to the bot's side, knocking the
      body out of its line rather than being carried back with it.
    - **Walls.** When solid world geometry stands where a pusher would stand
      (a wall or a corner behind the body), the push turns by the smallest of
@@ -212,9 +210,9 @@ person presses:
   chassis's width inside either turning circle is not chased round in
   circles: the driver backs away from it (nose swinging toward it) or
   pulls ahead of it, until it is out of the circle. A point behind (past
-  the kind's `mounted.reverse_degrees`) is backed onto when that is
+  103 degrees) is backed onto when that is
   sooner, at the definition's cruise speeds, than turning round, and, for
-  a pursued target, only within `mounted.reverse_distance`. Speed is no more than the tyres hold on the arc pure
+  a pursued target, only within 16 units. Speed is no more than the tyres hold on the arc pure
   pursuit takes, manoeuvring speed while backing or pulling out, and what
   it can still brake from by the point. A chassis is at a waypoint, or a
   search probe, within half its footprint.
@@ -500,7 +498,7 @@ state and no random draws.
   pause of 0.15 to 0.5 s (a charge being wound up is let go when ready
   instead).
 - *Strafe and weave* are one pattern (`Brain::strafe_leg`): each leg lasts
-  0.5 to 1.5 times its mean (`fighting.strafe_seconds` in a fight, 0.75 s
+  0.5 to 1.5 times its mean (3.5 s in a fight, 0.75 s
   weaving at an objective or in water) from the bot's seeded generator,
   and turns back seven times in ten; it turns at once from a way with no
   floor or a wall, or toward open ground from an ally.
@@ -727,10 +725,10 @@ its kind and team label. See `bots/looks.rs`.
 
 - `bots.json` (a kind) sets only what the kind is and the four main dials
   (`bot_kind::tuning::SETTABLE`); any other number there is an error.
-  Everything else (reaction, turn rate, aim error, memory, `contest`,
-  `hold`, `fighting`, `mounted` distances, the rest of `perception` and
-  `team`) is fixed in code at `BotKind::default`, so tuning means turning
-  a main dial. What a kind sets:
+  Everything else (reaction, turn rate, aim error, memory, the rest of
+  `perception` and `team`) is fixed in code at `BotKind::default`, and
+  the contest, hold, strafe and driving numbers are constants, so tuning
+  means turning a main dial. What a kind sets:
   - sight, wander and chase radii, whether it fights other builders' bots,
     whether it warns its side (`alerts_allies`) and its `behaviours`
     weights.
@@ -744,8 +742,6 @@ its kind and team label. See `bots/looks.rs`.
     `SETTABLE` paths below.
   - `surprise.flavours`: a goof's weight, to turn one off for a kind (each
     has its usual weight in code). `team.callouts`: its team chat lines.
-  - `mounted.anchor`: where it sits while it drives. Its pursuit is the
-    same for every vehicle; nothing checks a vehicle's name.
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is

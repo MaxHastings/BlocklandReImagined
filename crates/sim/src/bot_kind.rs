@@ -116,15 +116,6 @@ pub struct BotKind {
     /// How far from itself, in world units, it looks for loose bodies an
     /// authored object-entry objective can use.
     pub objective_radius: f32,
-    /// How it plays an object an opponent is also moving.
-    pub contest: BotContest,
-    /// How it pursues while it drives a mount.
-    pub mounted: BotMounted,
-    /// How it moves while it fights.
-    pub fighting: BotFighting,
-    /// How long a choice it made is held and how much better another must
-    /// be to take over (`hold`): one rule for every choice it makes.
-    pub hold: BotHold,
     /// How its choices vary and change over time (`surprise`); its
     /// `strength` 0 is the plain brain.
     pub surprise: BotSurprise,
@@ -188,112 +179,22 @@ impl Default for BotPerception {
 /// interrupt (urgent damage, an objective picked up or dropped, the target
 /// lost or dead, a choice no longer possible, a must-do behaviour) takes
 /// over at once.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BotHold {
     pub seconds: f32,
     pub margin: f32,
 }
+/// The hold every bot's choices follow.
+pub const HOLD: BotHold = BotHold {
+    seconds: 0.5,
+    margin: 0.1,
+};
 impl Default for BotHold {
     fn default() -> Self {
-        Self {
-            seconds: 0.5,
-            margin: 0.1,
-        }
+        HOLD
     }
 }
 
-/// How a bot moves in a fight: how a ranged fighter strafes, and when it
-/// flies.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BotFighting {
-    /// A ranged fighter strafes one way about this long before turning
-    /// back. It stands at a ledge or a wall until then, and turns away from
-    /// an ally at once. A melee fighter does not strafe: it closes to its
-    /// band.
-    pub strafe_seconds: f32,
-}
-impl Default for BotFighting {
-    fn default() -> Self {
-        Self {
-            strafe_seconds: 3.5,
-        }
-    }
-}
-/// Contesting one body with opponents (each pushing it toward its own
-/// goal): both sides keep their intentions and the physics decides. While
-/// an opponent claims or last moved the body, it aims for where the body is
-/// heading rather than where it was.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BotContest {
-    /// Seconds of the body's own velocity it leads its approach by.
-    pub lead_seconds: f32,
-    /// The most, in world units, that lead moves the approach.
-    pub max_lead: f32,
-    /// Within this many world units of a contested body it is engaged: its
-    /// intention stays live while it works the body against an opponent.
-    pub engage: f32,
-    /// While a teammate holds the body, it covers instead of standing down:
-    /// this many world units behind the body, against the way the team
-    /// delivers it. 0 stands down as before.
-    pub cover_distance: f32,
-    /// And this many to the side of that line, on the side it already is.
-    pub cover_side: f32,
-    /// Degrees it turns its push off a body an opponent drives straight
-    /// back at it, to knock it aside rather than meet it head on. 0 meets
-    /// it head on.
-    pub clear_degrees: f32,
-}
-impl Default for BotContest {
-    fn default() -> Self {
-        Self {
-            lead_seconds: 0.6,
-            max_lead: 4.0,
-            engage: 4.0,
-            cover_distance: 6.0,
-            cover_side: 3.0,
-            clear_degrees: 60.0,
-        }
-    }
-}
-/// Where a driving bot's chase leash is measured from.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MountAnchor {
-    /// Where it took the controls.
-    #[default]
-    Mount,
-    /// Its brick, as on foot.
-    Home,
-}
-/// Pursuit while driving: a mount covers ground a walker does not, so its
-/// leash has its own anchor and length, and a chassis turns toward a goal
-/// behind it unless the goal is close enough to back onto.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BotMounted {
-    pub anchor: MountAnchor,
-    /// How far from the anchor it follows a fight before giving up.
-    pub chase_radius: f32,
-    /// A goal at least this many degrees off the hull's heading is reached
-    /// in reverse...
-    pub reverse_degrees: f32,
-    /// ...but a pursued target only when it is no farther than this; a
-    /// farther one is turned toward.
-    pub reverse_distance: f32,
-}
-impl Default for BotMounted {
-    fn default() -> Self {
-        Self {
-            anchor: MountAnchor::Mount,
-            chase_radius: 96.0,
-            reverse_degrees: 103.0,
-            reverse_distance: 16.0,
-        }
-    }
-}
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -372,10 +273,6 @@ impl Default for BotKind {
             alerts_allies: false,
             behaviours: Default::default(),
             objective_radius: 24.0,
-            contest: BotContest::default(),
-            mounted: BotMounted::default(),
-            fighting: BotFighting::default(),
-            hold: BotHold::default(),
             perception: BotPerception::default(),
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
@@ -498,48 +395,6 @@ impl BotKind {
             ("aim_error_degrees", self.aim_error_degrees, 0.0, 45.0),
             ("memory_seconds", self.memory_seconds, 0.0, 60.0),
             ("objective_radius", self.objective_radius, 1.0, 128.0),
-            ("contest.lead_seconds", self.contest.lead_seconds, 0.0, 5.0),
-            ("contest.max_lead", self.contest.max_lead, 0.0, 32.0),
-            ("contest.engage", self.contest.engage, 0.0, 32.0),
-            (
-                "contest.cover_distance",
-                self.contest.cover_distance,
-                0.0,
-                32.0,
-            ),
-            ("contest.cover_side", self.contest.cover_side, 0.0, 32.0),
-            (
-                "contest.clear_degrees",
-                self.contest.clear_degrees,
-                0.0,
-                90.0,
-            ),
-            ("hold.seconds", self.hold.seconds, 0.0, 10.0),
-            ("hold.margin", self.hold.margin, 0.0, 1.0),
-            (
-                "fighting.strafe_seconds",
-                self.fighting.strafe_seconds,
-                0.1,
-                30.0,
-            ),
-            (
-                "mounted.chase_radius",
-                self.mounted.chase_radius,
-                0.0,
-                400.0,
-            ),
-            (
-                "mounted.reverse_degrees",
-                self.mounted.reverse_degrees,
-                90.0,
-                180.0,
-            ),
-            (
-                "mounted.reverse_distance",
-                self.mounted.reverse_distance,
-                0.0,
-                64.0,
-            ),
             ("perception.salience", self.perception.salience, 0.0, 8.0),
             (
                 "perception.glance_seconds",
@@ -739,7 +594,6 @@ mod tests {
         assert_eq!(read.perception.strength, 2.0);
         assert_eq!(read.surprise.flavour_weight("spray"), 0.0);
         // Everything else keeps its fixed value.
-        assert_eq!(read.hold, BotKind::default().hold);
         for fixed in [
             r#""hold":{"seconds":1}"#,
             r#""fighting":{"strafe_seconds":2}"#,
@@ -769,7 +623,6 @@ mod tests {
         .unwrap();
         let shipped = &pack.bots[0];
         let fixed = BotKind::default();
-        assert_eq!(shipped.hold, fixed.hold);
         assert_eq!(shipped.perception, fixed.perception);
         assert_eq!(shipped.surprise.strength, fixed.surprise.strength);
         assert_eq!(shipped.team.teamwork, fixed.team.teamwork);

@@ -8,6 +8,11 @@ use rapier3d::prelude::*;
 
 const DISCOVER: f32 = 24.0;
 const RETRY: u64 = 240;
+/// A driver reaches a goal at least this many degrees off the hull's
+/// heading in reverse, but a pursued target only within `REVERSE_DISTANCE`;
+/// a farther one is turned toward.
+const REVERSE_DEGREES: f32 = 103.0;
+const REVERSE_DISTANCE: f32 = 16.0;
 pub(super) const CREW_WAIT: u64 = 360;
 const OBJECTS_PER_BOT: usize = 8;
 const LOOKAHEAD_POINTS: usize = 24;
@@ -1405,9 +1410,9 @@ impl Session {
                 // It arrives once its side passes the point.
                 reach: (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5,
                 cruise,
-                behind: brain.kind.mounted.reverse_degrees.to_radians(),
+                behind: REVERSE_DEGREES.to_radians(),
                 reverse_limit: if pursuing {
-                    brain.kind.mounted.reverse_distance
+                    REVERSE_DISTANCE
                 } else {
                     f32::INFINITY
                 },

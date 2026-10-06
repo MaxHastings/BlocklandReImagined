@@ -402,7 +402,7 @@ impl Gear {
 }
 
 /// What a driver steers by: its chassis's turn and speeds, and its kind's
-/// reversing policy (`BotMounted::reverse_degrees`, `reverse_distance`).
+/// reversing policy (`REVERSE_DEGREES`, `REVERSE_DISTANCE` in the bots' drive).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Driving {
     /// Its tightest turn at manoeuvring speed.
