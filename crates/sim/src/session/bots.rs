@@ -34,6 +34,7 @@ use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
 
+mod act;
 mod arming;
 mod behaviour;
 pub(crate) mod cadence;
@@ -2685,24 +2686,33 @@ impl Session {
         };
         let forward = Vec3::new(brain.yaw.sin(), 0.0, -brain.yaw.cos());
         let right = Vec3::new(brain.yaw.cos(), 0.0, brain.yaw.sin());
-        let mut direction = Vec3::ZERO;
+        // How it moves (`act`): each mover proposes, one order decides,
+        // safety has the last word.
+        let mut proposals: Vec<act::Proposal> = Vec::new();
+        // Along its route, or through the opening it leads through.
         if let Some(next) = wanted {
-            direction = if let Some(through) = next.through {
-                flat(through - feet).normalize_or_zero()
-            } else {
-                walk_direction.unwrap_or(Vec3::ZERO)
-            };
-            input.jump = next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded;
-            // Into a crawlspace: crouch on the way in (the body stays down
-            // until it has room to stand).
-            input.crouch = next.crouch && flat(next.feet - feet).length() < 1.6;
+            proposals.push(act::Proposal {
+                jump: Some(next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded),
+                // Into a crawlspace: crouch on the way in (the body stays
+                // down until it has room to stand).
+                crouch: Some(next.crouch && flat(next.feet - feet).length() < 1.6),
+                ..act::Proposal::walk(
+                    act::Mover::Route,
+                    if let Some(through) = next.through {
+                        flat(through - feet).normalize_or_zero()
+                    } else {
+                        walk_direction.unwrap_or(Vec3::ZERO)
+                    },
+                )
+            });
         }
-        // Where its route alone would take it this tick.
-        let routed = direction;
+        let routed = proposals.first().and_then(|p| p.walk).unwrap_or(Vec3::ZERO);
         if let Some(push) = pushing {
-            direction = push;
+            proposals.push(act::Proposal::walk(act::Mover::Push, push));
         }
-        match behaviour {
+        // Its stance, from the walk the route or the push gives it.
+        let given = pushing.unwrap_or(routed);
+        let stance = match behaviour {
             // In its band at an objective, or a swimmer fighting (no floor
             // to probe, its water all round): weave so it is not a still
             // target, and give ground if too close.
@@ -2712,12 +2722,14 @@ impl Session {
                     && (behaviour == Behaviour::Objective || kind.moves == Moves::Swim) =>
             {
                 let side = brain.strafe_leg(tick, WEAVE_SECONDS, &|_| true, false) * 0.7;
-                direction = right * side;
+                let mut walk = right * side;
                 if back_off {
-                    direction -= forward;
+                    walk -= forward;
                 }
+                Some(walk)
             }
             Behaviour::Fight if wanted.is_none() && hold => {
+                let mut walk = given;
                 let melee = weapon.is_none_or(|w| w.melee);
                 let gap = enemy.map(|seen| flat(seen.feet - feet).length());
                 if melee {
@@ -2730,17 +2742,17 @@ impl Session {
                             && (seen.feet.y - feet.y).abs() > body.step
                     });
                     if stacked {
-                        direction = right;
+                        walk = right;
                     } else if gap.is_some_and(|gap| gap > near.max(1.0) + 0.5) {
                         // Straight at it: not along its facing, which its
                         // aim error turns off the line (off a stair's edge).
-                        direction = enemy
+                        walk = enemy
                             .map_or(forward, |seen| flat(seen.feet - feet).normalize_or(forward));
                     } else if let Some(gap) = gap {
                         // In its band it keeps its feet moving: in, back
                         // out and aside, on its own seeded beat.
                         let room = gap + FOOTWORK_BACK <= near.max(1.0);
-                        direction = footwork(bot, tick, forward, right, room);
+                        walk = footwork(bot, tick, forward, right, room);
                     }
                 } else {
                     // A ranged fighter strafes one way for a while, but
@@ -2794,12 +2806,11 @@ impl Session {
                     // until the leg is up; one that meets an ally turns
                     // away from it at once.
                     let parted = ally(brain.strafe.0) && ground(-brain.strafe.0);
-                    let side =
-                        brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
+                    let side = brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
                     if overshoots {
-                        direction = -flat(Vec3::from(state.velocity)).normalize_or_zero();
+                        walk = -flat(Vec3::from(state.velocity)).normalize_or_zero();
                     } else if ground(side) {
-                        direction = right * side * 0.7;
+                        walk = right * side * 0.7;
                     }
                     // Now and then it presses in a little as it strafes (a
                     // slow seeded lean, never back toward an edge), so a
@@ -2810,17 +2821,20 @@ impl Session {
                         * LEAN;
                     if lean > 0.0
                         && gap.is_some_and(|gap| gap > near + LEAN_ROOM)
-                        && floor_below(&self.simulation, feet + forward * 0.9, &body)
-                        .is_some()
+                        && floor_below(&self.simulation, feet + forward * 0.9, &body).is_some()
                     {
-                        direction += forward * lean;
+                        walk += forward * lean;
                     }
                 }
                 if back_off {
-                    direction -= forward;
+                    walk -= forward;
                 }
+                Some(walk)
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(walk) = stance {
+            proposals.push(act::Proposal::walk(act::Mover::Stance, walk));
         }
         // A jet leg flies itself: climb in the open, cross, land.
         match wanted.map(|w| (w.feet, w.mode)) {
@@ -2847,10 +2861,12 @@ impl Session {
                     brain.settled = false;
                     brain.replans += 1;
                 } else {
-                    direction = control.direction;
-                    input.jet = control.jet;
-                    input.jump = control.jump;
-                    input.crouch = false;
+                    proposals.push(act::Proposal {
+                        jet: Some(control.jet),
+                        jump: Some(control.jump),
+                        crouch: Some(false),
+                        ..act::Proposal::walk(act::Mover::Jet, control.direction)
+                    });
                 }
             }
             Some((to, Mode::Swim | Mode::Walk)) if swim.is_none() && wet && !state.grounded => {
@@ -2858,7 +2874,10 @@ impl Session {
                 // onto a higher bank) is higher.
                 brain.jet_leg = None;
                 if to.y > feet.y - 0.2 {
-                    input.jump = true;
+                    proposals.push(act::Proposal {
+                        jump: Some(true),
+                        ..act::Proposal::buttons(act::Mover::Swim)
+                    });
                 }
             }
             _ => brain.jet_leg = None,
@@ -2870,8 +2889,11 @@ impl Session {
                 _ => wanted.map(|w| w.feet),
             };
             if let Some(to) = to {
-                input.jump = to.y > feet.y + 0.4;
-                input.crouch = to.y < feet.y - 0.4;
+                proposals.push(act::Proposal {
+                    jump: Some(to.y > feet.y + 0.4),
+                    crouch: Some(to.y < feet.y - 0.4),
+                    ..act::Proposal::buttons(act::Mover::Swim)
+                });
             }
         }
         // A fight stands out of where a teammate's weapon will hit (`team`),
@@ -2881,61 +2903,50 @@ impl Session {
             && let Some(out) = choices[Behaviour::Fight as usize]
                 .place
                 .filter(|out| *out != feet)
-            && floor_below(&self.simulation, out, &body)
-            .is_some()
+            && floor_below(&self.simulation, out, &body).is_some()
         {
-            direction = flat(out - feet).normalize_or_zero();
+            proposals.push(act::Proposal::walk(
+                act::Mover::Team,
+                flat(out - feet).normalize_or_zero(),
+            ));
         }
-        // A dodge's step aside wins over a goof's walk.
-        if let Some(to) = extra.direction.or(act.direction) {
-            direction = to;
+        if let Some(walk) = act.direction {
+            proposals.push(act::Proposal::walk(act::Mover::Goof, walk));
+        }
+        if let Some(walk) = extra.direction {
+            proposals.push(act::Proposal::walk(act::Mover::Dodge, walk));
+        }
+        if extra.stand {
+            proposals.push(act::Proposal::walk(act::Mover::Stand, Vec3::ZERO));
         }
         // A goof's, an extra's or an objective's hop (into the ball) only
         // where it comes down on floor.
         let into_body = selected_objective.is_some_and(|v| v.jump);
-        input.jump |= (act.jump || extra.jump || into_body)
-            && hop_lands(&self.simulation, feet, Vec3::from(state.velocity));
-        input.crouch |= act.crouch || extra.crouch;
-        input.jet |= extra.jet;
-        if extra.stand {
-            direction = Vec3::ZERO;
-        }
-        // It steps through a portal (`passage`) only where its route leads
-        // through one; footwork, a goof or a push never stumbles in.
-        if direction != routed && driving.is_none() && direction != Vec3::ZERO {
-            let from = feet + Vec3::Y * 0.9;
-            let to = from + flat(direction).normalize_or_zero() * PORTAL_REACH;
-            if self.simulation.passages().first(from, to).is_some() {
-                direction = Vec3::ZERO;
-            }
-        }
-        if driving.is_none() && pushing.is_none() {
-            direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);
-        }
-        // The last word on where it walks: never off an edge whose fall
-        // would hurt it. What it wants beyond is not worth the fall: it
-        // stands at the edge and gets nowhere, so it plans again. Off its
-        // route on its feet it does not step down where it could not walk
-        // back up; in the air (footwork, a goof, a hop) it does not steer
-        // out over a fall that hurts. Its route's own way through the air,
-        // and its jets, it keeps.
-        let off_route = direction != routed;
-        let vetoed = driving.is_none()
-            && swim.is_none()
-            && !wet
-            && (state.grounded || off_route && !input.jet && !state.jetting)
-            && direction != Vec3::ZERO
-            && !wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. }))
-            && self.bot_fall_ahead(
-                bot,
-                feet,
-                &body,
-                flat(direction).normalize_or_zero(),
-                off_route && state.grounded,
-            );
-        if vetoed {
-            direction = Vec3::ZERO;
-        }
+        let controls = act::resolve(
+            &mut proposals,
+            act::Press {
+                jump: (act.jump || extra.jump || into_body)
+                    && hop_lands(&self.simulation, feet, Vec3::from(state.velocity)),
+                crouch: act.crouch || extra.crouch,
+                jet: extra.jet,
+            },
+        );
+        (input.jump, input.crouch, input.jet) = (controls.jump, controls.crouch, controls.jet);
+        let (direction, vetoed) = self.bot_safe_walk(
+            bot,
+            &body,
+            feet,
+            &state,
+            controls,
+            act::Ground {
+                driving: driving.is_some(),
+                swimming: swim.is_some() || wet,
+                jet_leg: wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. })),
+                vehicle_detour: driving.is_none() && pushing.is_none(),
+            },
+            quarry,
+            goal_at,
+        );
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
