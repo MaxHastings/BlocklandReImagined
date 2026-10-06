@@ -468,11 +468,17 @@ impl Session {
         }
 
         // Clicks: one under way, then a tool taken out again.
+        let carrying = scene.carrying || scene.behaviour == Behaviour::Carry;
         let selected = self.weapons.actor(ActorId(bot)).and_then(|a| a.selected);
         let click = self.bots.brains[&bot].extras.click;
         if let Some(c) = click {
-            let gone =
-                tick > c.until || !self.bot_activatable(c.brick) || !on_foot || scene.enemy_seen;
+            // Never with something carried: the empty-hand click would put
+            // down what it carries.
+            let gone = tick > c.until
+                || !self.bot_activatable(c.brick)
+                || !on_foot
+                || scene.enemy_seen
+                || carrying;
             if gone {
                 self.bots.brains.get_mut(&bot).unwrap().extras.click = None;
             } else if eye.distance(c.aim) <= CLICK_REACH {
@@ -514,6 +520,7 @@ impl Session {
             let _ = self.equip_tool(bot, restore);
         }
         let ready = on_foot
+            && !carrying
             && !scene.enemy_seen
             && self.bots.brains[&bot].extras.click.is_none()
             && tick >= self.bots.brains[&bot].extras.next_click;

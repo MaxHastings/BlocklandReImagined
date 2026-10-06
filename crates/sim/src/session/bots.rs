@@ -2873,7 +2873,8 @@ impl Session {
         {
             direction = flat(out - feet).normalize_or_zero();
         }
-        if let Some(to) = act.direction.or(extra.direction) {
+        // A dodge's step aside wins over a goof's walk.
+        if let Some(to) = extra.direction.or(act.direction) {
             direction = to;
         }
         // A goof's, an extra's or an objective's hop (into the ball) only

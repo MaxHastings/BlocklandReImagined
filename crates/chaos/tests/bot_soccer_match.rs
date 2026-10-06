@@ -1072,11 +1072,11 @@ fn never(label: &str, setup: &Setup, r: &Report) -> Vec<String> {
         ),
         (r.combat == 0.0, format!("fought {:.1} bot-s", r.combat)),
         (
-            r.longest_untouched <= 15.0,
+            r.longest_untouched <= 6.0,
             format!("ball unattended {:.1} s", r.longest_untouched),
         ),
         (
-            r.slowest_kickoff <= 15.0,
+            r.slowest_kickoff <= 6.0,
             format!("slow kickoff {:.1} s", r.slowest_kickoff),
         ),
         (
@@ -1156,23 +1156,23 @@ impl Totals {
                 format!("{} own goals of {}", self.even_own_goals, self.even_goals),
             ),
             (
-                share(self.stuck, bot_time) <= 0.08,
+                share(self.stuck, bot_time) <= 0.05,
                 format!("stuck {:.3}", share(self.stuck, bot_time)),
             ),
             (
-                share(self.circling, bot_time) <= 0.03,
+                share(self.circling, bot_time) <= 0.01,
                 format!("circling {:.3}", share(self.circling, bot_time)),
             ),
             (
-                share(self.idle, bot_time) <= 0.06,
+                share(self.idle, bot_time) <= 0.03,
                 format!("idle {:.3}", share(self.idle, bot_time)),
             ),
             (
-                share(self.ignoring, bot_time) <= 0.15,
+                share(self.ignoring, bot_time) <= 0.10,
                 format!("ignoring the ball {:.3}", share(self.ignoring, bot_time)),
             ),
             (
-                share(self.clumped, seconds) <= 0.2,
+                share(self.clumped, seconds) <= 0.15,
                 format!("clumped {:.3}", share(self.clumped, seconds)),
             ),
             (
@@ -1180,15 +1180,15 @@ impl Totals {
                 format!("ball on a wall {:.3}", share(self.ball_walled, seconds)),
             ),
             (
-                self.facing_away / runs <= 0.12,
+                self.facing_away / runs <= 0.05,
                 format!("facing away {:.3}", self.facing_away / runs),
             ),
             (
-                self.wrong_way / runs <= 0.2,
+                self.wrong_way / runs <= 0.10,
                 format!("wrong way {:.3}", self.wrong_way / runs),
             ),
             (
-                self.jitter / runs <= 6.0,
+                self.jitter / runs <= 3.0,
                 format!("jitter {:.1}/bot-min", self.jitter / runs),
             ),
         ]
