@@ -1130,15 +1130,19 @@ impl Session {
                     && inspection.wrench_original.is_some()),
             "Inspection does not match this edit"
         );
+        let original = if mode == InspectMode::Wrench {
+            inspection
+                .wrench_original
+                .as_ref()
+                .unwrap_or(&inspection.original)
+        } else {
+            &inspection.original
+        };
+        // Only what this dialog shows and sends guards the edit: a brick
+        // whose own events recolour it while the dialog is open (a flashing
+        // relay loop) still takes it.
         ensure!(
-            (if mode == InspectMode::Wrench {
-                inspection
-                    .wrench_original
-                    .as_ref()
-                    .unwrap_or(&inspection.original)
-            } else {
-                &inspection.original
-            }) == brick,
+            dialog_fields_match(mode, original, brick),
             "Brick changed since inspection; inspect it again"
         );
         self.tool_catalog.validate_edit(brick, &edit)?;
@@ -1194,5 +1198,20 @@ impl Session {
             self.color_vehicle_brick(id);
         }
         Ok(Reply::Accepted)
+    }
+}
+
+/// Whether `brick` still has the fields `mode`'s dialog read from
+/// `original`, so sending it overwrites nobody else's edit.
+fn dialog_fields_match(mode: InspectMode, original: &Brick, brick: &Brick) -> bool {
+    match mode {
+        InspectMode::Wrench => {
+            super::copy_edits::wrench_properties(original)
+                == super::copy_edits::wrench_properties(brick)
+                && original.sound == brick.sound
+                && original.vehicle == brick.vehicle
+        }
+        InspectMode::Events => original.events == brick.events,
+        InspectMode::Printer => original.print == brick.print,
     }
 }

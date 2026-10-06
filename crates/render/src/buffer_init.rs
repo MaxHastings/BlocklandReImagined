@@ -69,6 +69,7 @@ mod tests {
         // wgpu's own helper is what crashed a joining player's game.
         let wgpu_helper = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             use wgpu::util::DeviceExt;
+            #[allow(clippy::disallowed_methods)]
             device.create_buffer_init(&descriptor)
         }));
         assert!(wgpu_helper.is_err());

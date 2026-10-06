@@ -2478,19 +2478,25 @@ impl Session {
                     "activate"
                 };
                 let eye = peer.player.eye();
+                let scale = peer.player.state().scale;
                 self.play_thread(tick, owner, 3, swing);
                 if self.teleport_lockout(owner, admin_players::TELEPORT_PICKUP_LOCK_MS, true) {
                     return Ok(Reply::Activated(None));
                 }
-                // The click reaches through portals as the player sees.
+                // `Player::ActivateStuff`: one 10-unit ray, through portals as
+                // the player sees. A brick on it stops the click, but only
+                // activates within `$Game::BrickActivateRange` (5) times the
+                // player's scale.
                 let hit = self
                     .simulation
-                    .target_through(eye, direction, 5.0)?
+                    .target_through(eye, direction, 10.0)?
                     .and_then(|(hit, _)| Some((hit.brick?, hit.distance)));
                 if self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d)) {
                     return Ok(Reply::Activated(None));
                 }
-                let hit = hit.map(|(brick, _)| brick);
+                let hit = hit
+                    .filter(|(_, distance)| *distance <= 5.0 * scale)
+                    .map(|(brick, _)| brick);
                 if let Some(brick) = hit
                     && self.special_activate(owner, brick)?
                 {
