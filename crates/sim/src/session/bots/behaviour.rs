@@ -282,6 +282,15 @@ impl Held {
         }
     }
 }
+/// How long a choice is held.
+fn commit_ticks(rule: BotHold) -> u64 {
+    (rule.seconds.max(0.0) * 120.0).round() as u64
+}
+/// Whether an option last able to act at `scored` is still held through a
+/// pause at `tick` (between steps, or a weapon that cannot fire a moment).
+pub(crate) fn paused_hold(scored: u64, tick: u64, rule: BotHold) -> bool {
+    tick < scored + commit_ticks(rule)
+}
 impl Hold {
     /// Choose among `ask`'s options at `tick`, holding the last choice by
     /// `rule`.
@@ -300,7 +309,7 @@ impl Hold {
                 best = Some((*option, s));
             }
         }
-        let commit = (rule.seconds.max(0.0) * 120.0).round() as u64;
+        let commit = commit_ticks(rule);
         let Some(current) = self.option else {
             let first = best.map_or(ask.options.first().map_or(0, |o| o.0), |b| b.0);
             *self = Hold {
@@ -320,7 +329,7 @@ impl Hold {
         let why = if ask.interrupt || ask.must.contains(&challenger) {
             Held::Interrupt
         } else if held <= 0.0 {
-            if ask.paused && tick < self.scored + commit {
+            if ask.paused && paused_hold(self.scored, tick, rule) {
                 return (current, Held::Paused);
             }
             Held::Impossible
@@ -344,6 +353,20 @@ impl Hold {
 mod tests {
     use super::Behaviour::*;
     use super::*;
+
+    #[test]
+    fn a_paused_choice_is_held_for_the_hold_time() {
+        // A choice (a behaviour between steps, a weapon that cannot attack
+        // a moment) last able to act at tick 1000 is held, doing nothing,
+        // for the hold time: no swap to another and back within it.
+        let rule = BotHold::default();
+        let commit = commit_ticks(rule);
+        assert!(commit > 0);
+        for t in 1000..1000 + commit {
+            assert!(paused_hold(1000, t, rule), "{t}");
+        }
+        assert!(!paused_hold(1000, 1000 + commit, rule));
+    }
 
     fn pick(current: Behaviour, s: &Situation) -> Behaviour {
         choose(current, s, |_| 1.0)

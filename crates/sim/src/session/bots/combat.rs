@@ -155,11 +155,6 @@ fn charge_release_only(image: &Image) -> bool {
     super::charged_control::release_only(image)
 }
 
-/// Whether a weapon last usable at `usable` is still held at `tick`: for
-/// the hold time after it last could attack.
-fn keep_held(usable: u64, tick: u64, rule: crate::bot_kind::BotHold) -> bool {
-    usable > 0 && tick < usable + ticks(rule.seconds)
-}
 
 /// How much a splash aim (feet, or a surface beside the target) is
 /// preferred over the body: a blast at the feet still lands when a dodging
@@ -729,7 +724,8 @@ pub(super) fn choose(
         if candidates.iter().any(|c| usize::from(c.slot) == held) {
             state.usable = tick;
         } else if charge_continuation.is_none()
-            && keep_held(state.usable, tick, crate::bot_kind::HOLD)
+            && state.usable > 0
+            && super::behaviour::paused_hold(state.usable, tick, crate::bot_kind::HOLD)
         {
             return Decision::Pending;
         }
@@ -1324,20 +1320,6 @@ pub(super) fn trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn a_weapon_is_held_through_a_brief_spell_it_cannot_attack() {
-        // A weapon last usable at tick 1000 is held, firing nothing, for
-        // the hold time: no swap to another and back within it.
-        let rule = crate::bot_kind::BotHold::default();
-        let commit = ticks(rule.seconds);
-        assert!(commit > 0);
-        for t in 1000..1000 + commit {
-            assert!(keep_held(1000, t, rule), "{t}");
-        }
-        assert!(!keep_held(1000, 1000 + commit, rule));
-        // Never usable: nothing to hold.
-        assert!(!keep_held(0, 10, rule));
-    }
     #[test]
     fn shared_budget_rotates_colliding_owner_residues_without_starvation() {
         let owners = [
