@@ -493,6 +493,116 @@ fn beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed() -> Re
     Ok(())
 }
 
+/// Two-sided cards: one facing z and one facing x, centred at `c` with
+/// half sizes `h`.
+fn cross(data: &mut SceneData, c: [f32; 3], h: [f32; 3], color: [f32; 4]) {
+    let [x, y, z] = c;
+    quad(
+        data,
+        [
+            [x - h[0], y - h[1], z],
+            [x + h[0], y - h[1], z],
+            [x + h[0], y + h[1], z],
+            [x - h[0], y + h[1], z],
+        ],
+        color,
+        true,
+    );
+    quad(
+        data,
+        [
+            [x, y - h[1], z + h[2]],
+            [x, y - h[1], z - h[2]],
+            [x, y + h[1], z - h[2]],
+            [x, y + h[1], z + h[2]],
+        ],
+        color,
+        true,
+    );
+}
+/// A 6 by 6 room walled with four mirrors, a checked floor and three
+/// coloured posts.
+fn mirror_room() -> (SceneData, Vec<Mirror>) {
+    let mut data = SceneData::default();
+    let s = 3.0;
+    let n = 6;
+    for i in 0..n {
+        for j in 0..n {
+            let (x0, z0) = (
+                -s + 2.0 * s * i as f32 / n as f32,
+                -s + 2.0 * s * j as f32 / n as f32,
+            );
+            let d = 2.0 * s / n as f32;
+            let c = if (i + j) % 2 == 0 {
+                [0.85, 0.85, 0.8, 1.0]
+            } else {
+                [0.2, 0.3, 0.6, 1.0]
+            };
+            quad(
+                &mut data,
+                [
+                    [x0, -1.0, z0 + d],
+                    [x0 + d, -1.0, z0 + d],
+                    [x0 + d, -1.0, z0],
+                    [x0, -1.0, z0],
+                ],
+                c,
+                true,
+            );
+        }
+    }
+    cross(
+        &mut data,
+        [1.5, -0.4, -1.5],
+        [0.3, 0.6, 0.3],
+        [0.9, 0.1, 0.1, 1.0],
+    );
+    cross(
+        &mut data,
+        [-1.8, -0.5, 1.2],
+        [0.25, 0.5, 0.25],
+        [0.1, 0.8, 0.2, 1.0],
+    );
+    cross(
+        &mut data,
+        [-1.0, 0.0, -2.2],
+        [0.2, 1.0, 0.2],
+        [0.95, 0.75, 0.1, 1.0],
+    );
+    let m = |corners: [[f32; 3]; 4]| Mirror {
+        corners: corners.map(Vec3::from),
+        ..mirror()
+    };
+    let (b, t) = (-1.0, 2.0);
+    let mirrors = vec![
+        m([[-s, b, -s], [s, b, -s], [s, t, -s], [-s, t, -s]]),
+        m([[s, b, s], [-s, b, s], [-s, t, s], [s, t, s]]),
+        m([[-s, b, s], [-s, b, -s], [-s, t, -s], [-s, t, s]]),
+        m([[s, b, -s], [s, b, s], [s, t, s], [s, t, -s]]),
+    ];
+    (data, mirrors)
+}
+#[test]
+fn in_a_mirror_room_a_side_wall_past_the_passes_never_shows_another_view() -> Result<()> {
+    // Looking into a corner of a square mirror room, each wall shows the
+    // other a bounce deeper than the passes reach. Its echo (the picture
+    // drawn for the player's own view of that wall) shows another part of
+    // the room there, torn into black wedges and streaks; it fades to
+    // silver instead. Several frames, as echoes show the frame before.
+    let gpu = Gpu::turn()?;
+    let (data, mirrors) = mirror_room();
+    let camera = Camera::perspective([0.3, 0.3, 0.6], [-3.0, 0.1, -3.0], 1.0, 1.0, 0.05, 100.0);
+    let (pixels, stats) =
+        gpu.frame_with(&camera, 1, ReflectionSettings::MEDIUM, &data, &mirrors, 3)?;
+    assert_eq!(stats.reflection_passes, 2 * 3);
+    let black = pixels
+        .chunks_exact(4)
+        .filter(|p| p[..3].iter().all(|c| *c < 25))
+        .count();
+    assert_eq!(black, 0, "black pixels from echoes of the wrong view");
+    Ok(())
+}
+
 /// Two windows linked as portals are: going in through `a` (the plane
 /// z = 0, front +z) comes out of `b` (the plane z = 0 at x = 10, front -z)
 /// moving on the same way. Past `b` stand a red card and a grey wall; a
