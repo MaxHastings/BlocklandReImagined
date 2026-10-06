@@ -49,6 +49,19 @@ impl Session {
         self.bots.brains.get_mut(&bot).unwrap().objective_threat = threat;
         (hurt_by, threat)
     }
+    /// Where a bot stands if it would take in news of `subject` seen at
+    /// `observed`: alive, awake, nothing in sight, nothing it remembers as
+    /// fresh, and `subject` its enemy. The one test of who listens, to an
+    /// ally's alert and to fighting heard across the map alike.
+    fn listener(&self, bot: OwnerId, b: &Brain, subject: OwnerId, observed: u64) -> Option<Vec3> {
+        let p = self.peers.get(&bot).filter(|p| p.combat.alive)?;
+        (bot != subject
+            && !b.resting
+            && b.target.is_none()
+            && b.memory.is_none_or(|old| old.observed < observed)
+            && self.bot_enemy(bot, &b.kind, subject))
+        .then(|| Vec3::from(p.player.state().feet))
+    }
     /// Bots of a warner's side within its reach that have nothing better
     /// to go on remember where the enemy was, and go and look (Bot_Hole's
     /// `hAlertOtherBots`).
@@ -61,49 +74,38 @@ impl Session {
             else {
                 continue;
             };
+            if tick >= alert.knowledge.expires {
+                continue;
+            }
+            let k = alert.knowledge;
             let heard: Vec<OwnerId> = self
                 .bots
                 .brains
                 .iter()
+                .filter(|(o, _)| **o != alert.from && self.bot_allies(**o, alert.from))
                 .filter(|(o, b)| {
-                    **o != alert.from
-                        && !b.resting
-                        && b.target.is_none()
-                        && b.memory
-                            .is_none_or(|old| old.observed < alert.knowledge.observed)
-                        && tick < alert.knowledge.expires
-                        && self.bot_enemy(**o, &b.kind, alert.knowledge.subject)
-                        && self.bot_allies(**o, alert.from)
-                        && self.peers.get(o).is_some_and(|p| {
-                            p.combat.alive
-                                && Vec3::from(p.player.state().feet).distance(from) <= alert.reach
-                        })
+                    self.listener(**o, b, k.subject, k.observed)
+                        .is_some_and(|feet| feet.distance(from) <= alert.reach)
                 })
                 .map(|(o, _)| *o)
                 .collect();
             for bot in heard {
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
-                let expires = alert.knowledge.expires.min(
-                    alert
-                        .knowledge
-                        .observed
-                        .saturating_add(ticks(brain.kind.memory_seconds)),
-                );
+                let expires = k
+                    .expires
+                    .min(k.observed.saturating_add(ticks(brain.kind.memory_seconds)));
                 if tick < expires {
                     // Acted on after a short, seeded reaction (`perception`).
-                    let k = Knowledge {
-                        expires,
-                        ..alert.knowledge
-                    };
-                    brain.hear(k, bot, tick);
+                    brain.hear(Knowledge { expires, ..k }, bot, tick);
                 }
             }
         }
     }
-    /// An untethered bot (`Brain::tethered`) with nothing to go on that hears an enemy's weapon
-    /// across the map goes to look where the fighting is, as a player
-    /// follows the gunfire: it knows the spot only roughly, the farther the
-    /// rougher, and acts on it after a moment (`perception`).
+    /// An untethered bot (`Brain::tethered`) with nothing to go on that
+    /// hears an enemy's weapon across the map goes to look where the
+    /// fighting is, as a player follows the gunfire: it knows the spot only
+    /// roughly, the farther the rougher, and acts on it after a moment
+    /// (`perception`).
     pub(super) fn hear_fighting(&mut self, tick: u64) {
         for (from, at, volume) in std::mem::take(&mut self.bots.noises) {
             let hearing = FIGHT_HEARING * volume.clamp(0.0, 1.0);
@@ -114,17 +116,9 @@ impl Session {
                 .bots
                 .brains
                 .iter()
-                .filter(|(o, b)| {
-                    **o != from
-                        && !b.tethered()
-                        && !b.resting
-                        && b.target.is_none()
-                        && b.memory.is_none()
-                        && self.bot_enemy(**o, &b.kind, from)
-                })
-                .filter_map(|(o, _)| {
-                    let p = self.peers.get(o).filter(|p| p.combat.alive)?;
-                    let d = Vec3::from(p.player.state().feet).distance(at);
+                .filter(|(_, b)| !b.tethered() && b.memory.is_none())
+                .filter_map(|(o, b)| {
+                    let d = self.listener(*o, b, from, tick)?.distance(at);
                     (d <= hearing).then_some((*o, d))
                 })
                 .collect();

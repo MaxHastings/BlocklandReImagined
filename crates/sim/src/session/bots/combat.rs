@@ -365,10 +365,7 @@ pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
     let (damage, reach) = match capability(image, projectile, scale) {
-        Some(cap) => (
-            cap.direct_damage + cap.splash_damage * SPLASH_WORTH,
-            cap.reach,
-        ),
+        Some(cap) => (cap.damage(SPLASH_WORTH), cap.reach),
         None => {
             if known_noncombat_manipulation(image) {
                 return 0.0;

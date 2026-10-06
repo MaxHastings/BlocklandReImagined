@@ -317,6 +317,13 @@ pub struct Capability {
     pub rounds_per_attack: u32,
 }
 impl Capability {
+    /// What one attack deals: its direct hit and its splash, the splash
+    /// counted at `splash_share`. The one damage reading both a weapon's
+    /// worth to hold (`hand_combat::item_worth`) and its suitability against
+    /// a target now come from.
+    pub fn damage(self, splash_share: f32) -> f32 {
+        self.direct_damage + self.splash_damage * splash_share
+    }
     pub fn validate(self) -> Result<(), Invalid> {
         finite(&[
             self.reach,
@@ -584,8 +591,7 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
             return Err(Unsuited::UnsafeBlast);
         }
     }
-    let damage = (weapon.direct_damage + weapon.splash_damage).min(context.target_health)
-        * context.hit_probability;
+    let damage = weapon.damage(1.0).min(context.target_health) * context.hit_probability;
     if damage <= 0.0 {
         return Err(Unsuited::NoDamage);
     }
