@@ -181,11 +181,16 @@ impl PlannedPlane {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
     pub planes: Vec<PlannedPlane>,
+    /// Each live plane's identity from frame to frame: the keys of the
+    /// groups from the player's view down to it.
+    pub paths: Vec<Vec<GroupKey>>,
     /// Coplanar mirrors (a wall of mirror bricks) showing one view, by
     /// index into the mirrors given; every drawn mirror is in exactly one.
     pub groups: Vec<Vec<usize>>,
     /// Each group's plane.
     pub group_planes: Vec<Vec4>,
+    /// Whether each group is mirrors (rather than windows).
+    pub group_reflects: Vec<bool>,
     /// The mirrors drawn at all (the nearest `MAX_MIRRORS`), in order.
     pub drawn: Vec<usize>,
     /// Each group's identity from frame to frame: its plane, rounded, and
@@ -432,6 +437,12 @@ fn seen(
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
 }
 
+/// How much more screen a plane that was live last frame counts for when
+/// planes compete for the passes. Without it, two planes filling about the
+/// same screen trade the live pass back and forth as the view wobbles, and
+/// each swap flips a surface between its live picture and its fallback.
+const KEEP_LIVE: f32 = 1.5;
+
 /// Choose this frame's live planes. `target` is the reflection textures'
 /// size, a `settings.scale` share of the screen. Planes the player sees
 /// and planes seen in their reflections (two mirrors facing each other)
@@ -444,6 +455,19 @@ pub fn plan(
     eye: Vec3,
     settings: &ReflectionSettings,
     target: (u32, u32),
+) -> Plan {
+    plan_after(mirrors, view_projection, eye, settings, target, &[])
+}
+
+/// [`plan`], favouring the planes live in the frame before (its
+/// [`Plan::paths`]) by [`KEEP_LIVE`].
+pub fn plan_after(
+    mirrors: &[Mirror],
+    view_projection: Mat4,
+    eye: Vec3,
+    settings: &ReflectionSettings,
+    target: (u32, u32),
+    before: &[Vec<GroupKey>],
 ) -> Plan {
     let mut out = Plan::default();
     // The nearest mirrors, each by its nearest corner.
@@ -490,6 +514,7 @@ pub fn plan(
             .entry((key.to_array(), looks.clone()))
             .or_insert_with(|| {
                 out.group_keys.push((key.to_array(), looks));
+                out.group_reflects.push(mirror.looks == Looks::Reflect);
                 planes.push(plane);
                 transfers.push(mirror.transfer(plane));
                 out.groups.push(Vec::new());
@@ -519,11 +544,24 @@ pub fn plan(
         }
     };
     look(0, &views, &mut candidates);
+    // A view's path: the groups from the player's view down to it.
+    let path = |paths: &[Vec<GroupKey>], view: usize, group: usize| {
+        let mut path = view.checked_sub(1).map_or(Vec::new(), |p| paths[p].clone());
+        path.push(out.group_keys[group].clone());
+        path
+    };
     while out.planes.len() < settings.planes {
-        let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+        let score = |&(view, group, r): &(usize, usize, [f32; 4])| {
+            let area = (r[2] - r[0]) * (r[3] - r[1]);
+            if before.is_empty() || !before.contains(&path(&out.paths, view, group)) {
+                area
+            } else {
+                area * KEEP_LIVE
+            }
+        };
         let Some(best) = (0..candidates.len()).max_by(|&a, &b| {
-            area(&candidates[a].2)
-                .total_cmp(&area(&candidates[b].2))
+            score(&candidates[a])
+                .total_cmp(&score(&candidates[b]))
                 .then(b.cmp(&a))
         }) else {
             break;
@@ -565,6 +603,7 @@ pub fn plan(
             w,
         ]);
         let unreflect = back * seen_from.unreflect;
+        out.paths.push(path(&out.paths, parent, group));
         out.planes.push(PlannedPlane {
             plane,
             clip,
@@ -663,6 +702,13 @@ struct SlotUniform {
     viewport: [f32; 4],
     /// Target width and height in pixels.
     target: [f32; 4],
+    /// Echo of a mirror: the eye of the view the plane was seen in (w 1),
+    /// and the plane. A view whose eye sits off that eye's line along the
+    /// plane's normal looks at the mirror from another side than the
+    /// picture was drawn for, so the echo fades to the fallback colour
+    /// there (see `ECHO_TRUE` in mirror.wgsl). Windows (w 0) always echo.
+    source: [f32; 4],
+    plane: [f32; 4],
 }
 impl SlotUniform {
     fn silver() -> Self {
@@ -922,12 +968,13 @@ impl Reflections {
             })
             .collect();
         let eye = Vec4::from(camera.eye).truncate();
-        self.plan = plan(
+        self.plan = plan_after(
             mirrors,
             Mat4::from_cols_array(&camera.view_projection),
             eye,
             &settings,
             self.size,
+            &self.plan.paths,
         );
         self.camera = *camera;
         self.plan.last = self
@@ -970,12 +1017,21 @@ impl Reflections {
                         }
                     };
                     let flip = if plane.flipped { 1.0 } else { 0.0 };
+                    let seen_from = match plane.parent.checked_sub(1) {
+                        None => eye,
+                        Some(p) => self.plan.planes[p].eye,
+                    };
+                    let reflects = self.plan.group_reflects[plane.group];
                     let uniform = |mode: f32| SlotUniform {
                         reproject: reproject.to_cols_array(),
                         sample: [plane.mirror_u, mode, flip, 0.0],
                         parent,
                         viewport: plane.viewport,
                         target,
+                        source: seen_from
+                            .extend(if reflects { 1.0 } else { 0.0 })
+                            .to_array(),
+                        plane: plane.plane.to_array(),
                     };
                     (uniform(1.0), uniform(2.0))
                 }
@@ -1575,6 +1631,43 @@ mod tests {
             assert!(a.z <= 0.0 && b.z <= 0.0 && c.z <= 0.0);
         }
         assert_eq!(surface_triangles(&wall(0.0)).len(), 2);
+    }
+
+    #[test]
+    fn a_live_plane_keeps_its_pass_until_another_clearly_fills_more_screen() {
+        // Two mirrors on separate planes, the right one a little nearer,
+        // compete for one pass.
+        let left = wall(-2.2);
+        let mut right = wall(2.2);
+        for corner in &mut right.corners {
+            corner.z = 0.5;
+        }
+        let mirrors = [left, right];
+        let one = ReflectionSettings {
+            planes: 1,
+            ..ReflectionSettings::MEDIUM
+        };
+        let at = |eye: Vec3, before: &[Vec<GroupKey>]| {
+            let p = plan_after(
+                &mirrors,
+                camera(eye, Vec3::ZERO),
+                eye,
+                &one,
+                (960, 540),
+                before,
+            );
+            (p.groups[p.planes[0].group].clone(), p.paths.clone())
+        };
+        let eye = Vec3::new(0.0, 0.0, 6.0);
+        let (fresh, _) = at(eye, &[]);
+        assert_eq!(fresh, vec![1], "the larger plane goes live");
+        let (_, left_live) = at(Vec3::new(-3.0, 0.0, 6.0), &[]);
+        let (kept, paths) = at(eye, &left_live);
+        assert_eq!(kept, vec![0], "a little smaller, the live plane stays live");
+        assert_eq!(paths, left_live);
+        // Clearly larger, the other plane takes the pass.
+        let (taken, _) = at(Vec3::new(3.0, 0.0, 6.0), &left_live);
+        assert_eq!(taken, vec![1]);
     }
 
     #[test]
