@@ -62,8 +62,7 @@ const URGENT_SECONDS: f32 = 1.5;
 const FLANK_DISTANCE: f32 = 5.0;
 const FLANK_SCORE: f32 = 0.95;
 /// Playing's boredom a second at strength 1 (twice that with nothing to
-/// do), what a goof scores against playing's 1, and how long one lasts
-/// (up to half again).
+/// do), and what a goof scores against playing's 1.
 const PLAY_BOREDOM: f32 = 0.12;
 const IDLE_BOREDOM: f32 = 0.24;
 const GOOF_SCORE: f32 = 0.5;
@@ -86,6 +85,9 @@ const GOOF_FLOOR: f32 = 0.05;
 /// brake on goofing that the mood's pull pushes against. A dodge's way
 /// grows stale as fast.
 const GOOF_BOREDOM: f32 = 0.3;
+/// How long the hold rule keeps a goof against playing (up to half again,
+/// and the walk up to someone on top); after that it goes on only while
+/// it still wins the choice.
 const GOOF_SECONDS: f32 = 2.0;
 /// How near someone must be for a goof to go right up to them.
 const CLOSE_RANGE: f32 = 10.0;
@@ -331,6 +333,7 @@ pub(super) const EMOTES: [&str; 4] = ["love", "hate", "confusion", "alarm"];
 pub(super) struct Interrupt {
     pub flavour: Flavour,
     pub since: u64,
+    /// Until when the hold rule keeps it against playing.
     pub until: u64,
     /// A player it looks or sprays toward.
     pub target: Option<OwnerId>,
@@ -368,6 +371,9 @@ pub(super) struct Pause {
     pub spare_weapon: bool,
     /// A door in sight it might walk up to and click (`extras`).
     pub door: bool,
+    /// A goof's errand is under way (a door click not yet landed): the
+    /// goof holds until it lands or is given up.
+    pub busy: bool,
     /// Mood (`team::mood`): how much likelier any flavour is, and each one,
     /// from bots nearby doing one.
     pub pull: f32,
@@ -671,9 +677,11 @@ impl Mind {
         self.shots = later;
         due
     }
-    /// The goof this tick: one under way goes on until its time is up or
-    /// it may no longer goof; a new one starts when goofing wins the
-    /// choice against playing.
+    /// The goof this tick, from the choice between playing and goofing: a
+    /// new one starts when goofing wins it; one under way goes on while
+    /// the hold rule keeps it or it still wins (its own boredom grows all
+    /// the while), and ends when it may no longer goof. An errand under way
+    /// (`Pause::busy`) holds it.
     pub(super) fn goof(
         &mut self,
         cfg: &BotSurprise,
@@ -681,14 +689,40 @@ impl Mind {
         pause: &Pause,
         tick: u64,
     ) -> Moment {
-        if let Some(i) = self.interrupt {
-            if !pause.natural || pause.gate.closed().is_some() || tick >= i.until {
-                self.interrupt = None;
-                return Moment::End(i);
-            }
-            return Moment::Continue(i);
-        }
         let strength = cfg.strength.clamp(0.0, 1.0);
+        // Worth most in a lull (playing worth little), little with the
+        // action right here; others about goofing make it likelier
+        // (`team::mood`).
+        let lull = ((1.0 - pause.play) / (1.0 - LULL)).clamp(0.0, 1.0);
+        let worth =
+            GOOF_SCORE * (GOOF_FLOOR + (1.0 - GOOF_FLOOR) * lull) * (1.0 + MOOD_LIFT * pause.pull);
+        let play = pause.play.clamp(0.05, 1.0);
+        if let Some(i) = self.interrupt {
+            let goes_on = pause.natural
+                && pause.gate.closed().is_none()
+                && (pause.busy && i.flavour == Flavour::Door || {
+                    let held = BotHold {
+                        seconds: i.until.saturating_sub(i.since) as f32 / TICKS,
+                    };
+                    let choice = Choice {
+                        domain: Domain::Flavour,
+                        options: &[(PLAY, play), (GOOF, worth)],
+                        interrupt: false,
+                        paused: false,
+                        must: &[],
+                        fixed: &[],
+                    };
+                    self.pick(cfg, held, choice, pause.gate, tick) == GOOF
+                });
+            if goes_on {
+                return Moment::Continue(i);
+            }
+            self.interrupt = None;
+            // A goof relieves playing's boredom.
+            let at = self.drive(strength, Domain::Flavour, PLAY, tick);
+            self.drives[at].boredom = 0.0;
+            return Moment::End(i);
+        }
         if strength <= 0.0 || pause.gate.closed().is_some() {
             return Moment::None;
         }
@@ -726,15 +760,7 @@ impl Mind {
             .filter(|(_, w)| *w > 0.0)
             .collect();
         let total: f32 = weights.iter().map(|(_, w)| w).sum();
-        // Others about goofing make it likelier (`team::mood`).
-        let goof = if total > 0.0 {
-            // Worth most in a lull (playing worth little), little with
-            // the action right here.
-            let lull = ((1.0 - pause.play) / (1.0 - LULL)).clamp(0.0, 1.0);
-            GOOF_SCORE * (GOOF_FLOOR + (1.0 - GOOF_FLOOR) * lull) * (1.0 + MOOD_LIFT * pause.pull)
-        } else {
-            0.0
-        };
+        let goof = if total > 0.0 { worth } else { 0.0 };
         // With nothing to do, playing (strolling) bores twice as fast.
         if pause.idle {
             let at = self.drive(strength, Domain::Flavour, PLAY, tick);
@@ -746,7 +772,7 @@ impl Mind {
         }
         let choice = Choice {
             domain: Domain::Flavour,
-            options: &[(PLAY, pause.play.clamp(0.05, 1.0)), (GOOF, goof)],
+            options: &[(PLAY, play), (GOOF, goof)],
             interrupt: false,
             paused: false,
             must: &[],
@@ -764,9 +790,6 @@ impl Mind {
             }
             roll -= w;
         }
-        // A goof relieves playing's boredom.
-        let at = self.drive(strength, Domain::Flavour, PLAY, tick);
-        self.drives[at].boredom = 0.0;
         let seconds = GOOF_SECONDS * (1.0 + 0.5 * self.random());
         let i = Interrupt {
             flavour,
@@ -787,7 +810,7 @@ impl Mind {
         self.interrupt = Some(i);
         Moment::Begin(i)
     }
-    /// Give a goof under way `ticks` more (the walk up to its target).
+    /// Hold a goof under way `ticks` longer (the walk up to its target).
     pub(super) fn extend(&mut self, ticks: u64) {
         if let Some(i) = self.interrupt.as_mut() {
             i.until += ticks;
@@ -1268,6 +1291,7 @@ impl Session {
             player,
             spare_weapon,
             door: self.bot_fun_door(bot).is_some(),
+            busy: self.bot_clicking(bot),
             ..Default::default()
         }
     }
@@ -1351,13 +1375,17 @@ impl Session {
                             b.surprise.extend(walk);
                         }
                     }
+                    // Off somewhere it has not been lately (`explore`).
                     Flavour::Detour => {
-                        if let Some(b) = self.bots.brains.get_mut(&bot) {
-                            let a = i.roll * std::f32::consts::TAU;
-                            let far = 4.0 + 4.0 * i.roll;
-                            b.set_goal(Some(Goal::Wander(
-                                feet + Vec3::new(a.sin(), 0.0, a.cos()) * far,
-                            )));
+                        let body = self
+                            .peers
+                            .get(&bot)
+                            .map(|p| Body::of(p.player.tuning(), 1.0));
+                        let to = body
+                            .filter(|_| self.bot_spend_rays(bot, super::explore::SCAN_RAYS))
+                            .and_then(|body| self.bot_explore_spot(bot, feet, eye, &body, &[], tick));
+                        if let (Some(to), Some(b)) = (to, self.bots.brains.get_mut(&bot)) {
+                            b.set_goal(Some(Goal::Wander(to)));
                         }
                     }
                     _ => {}

@@ -42,7 +42,7 @@ const ARRIVED: f32 = 3.0;
 const RESCAN_MOVE: f32 = 4.0;
 const RESCAN_SECONDS: f32 = 2.0;
 /// Rays a look round casts: one out each way, one down at each place.
-const SCAN_RAYS: usize = 2 * DIRECTIONS;
+pub(super) const SCAN_RAYS: usize = 2 * DIRECTIONS;
 
 /// What a bot keeps for exploring.
 #[derive(Clone, Debug, Default)]
@@ -143,7 +143,25 @@ impl Session {
         {
             return None;
         }
-        let brain = &self.bots.brains[&bot];
+        let to = self.bot_explore_spot(bot, feet, eye, body, intents, tick);
+        let explore = &mut self.bots.brains.get_mut(&bot)?.explore;
+        explore.to = to;
+        explore.boxed_in = to.is_none().then_some((feet, tick));
+        to
+    }
+
+    /// One look round for the place most worth going to
+    /// (`bot_explore_target`), its rays already spent.
+    pub(super) fn bot_explore_spot(
+        &mut self,
+        bot: OwnerId,
+        feet: Vec3,
+        eye: Vec3,
+        body: &Body,
+        intents: &[(OwnerId, claims::Intent)],
+        tick: u64,
+    ) -> Option<Vec3> {
+        let brain = self.bots.brains.get(&bot)?;
         let reach = brain.kind.sight * REACH_SHARE;
         // The way it faces: a person looking about keeps on more often than
         // they turn back the way they came.
@@ -181,11 +199,7 @@ impl Session {
                 best = Some((worth, at));
             }
         }
-        let to = best.map(|(_, at)| at);
-        let explore = &mut self.bots.brains.get_mut(&bot)?.explore;
-        explore.to = to;
-        explore.boxed_in = to.is_none().then_some((feet, tick));
-        to
+        best.map(|(_, at)| at)
     }
 }
 

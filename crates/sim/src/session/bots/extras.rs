@@ -615,6 +615,11 @@ impl Session {
         .then_some((brick, aim))
     }
 
+    /// A click it walks up to is still to land.
+    pub(super) fn bot_clicking(&self, bot: OwnerId) -> bool {
+        self.bots.brains.get(&bot).is_some_and(|b| b.extras.click.is_some())
+    }
+
     /// The door goof: walk up to the door in sight and click it, for the
     /// fun of it. The ticks the walk there takes.
     pub(super) fn bot_click_for_fun(&mut self, bot: OwnerId, feet: Vec3, tick: u64) -> Option<u64> {
