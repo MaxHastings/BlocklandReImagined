@@ -261,6 +261,14 @@ impl Session {
 
                     Ok(step)
                 });
+            // No plan among a model cut down to its bounds: say so, rather
+            // than that there is none.
+            let result = match result {
+                Err(planning::Failure::NoPlan) if budget.truncated => {
+                    Err(planning::Failure::ActionBudgetExceeded)
+                }
+                result => result,
+            };
             match result {
                 Ok(step) => {
                     state.step = Some(step);

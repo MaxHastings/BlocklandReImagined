@@ -94,7 +94,7 @@ impl Session {
             .map(|(o, ids)| format!("{o:?}: {}", ids.len()))
             .collect();
         let _ = writeln!(out, "game owner {owner:?}; indexed sources by owner {indexed:?}");
-        let sources = self.objective_candidates(bot, owner);
+        let (sources, _) = self.objective_candidates(bot, owner);
         let _ = writeln!(out, "{} candidate sources", sources.len());
         if let Some(world) = self.events.world.as_ref() {
             for id in sources.iter().take(12) {
@@ -284,12 +284,19 @@ impl Session {
     /// output (a goal's `IncScore`) first, then the rest nearest the bot.
     /// A big build (doors, lights and music bricks by the hundred) keeps the
     /// model to what is near and what scores, instead of giving up on it.
-    pub(super) fn objective_candidates(&self, bot: OwnerId, owner: OwnerId) -> Vec<BrickId> {
+    /// The sources an objective plan considers, scoring rows first and
+    /// then the nearest, within the model's source and row bounds; and
+    /// whether any were left out.
+    pub(super) fn objective_candidates(
+        &self,
+        bot: OwnerId,
+        owner: OwnerId,
+    ) -> (Vec<BrickId>, bool) {
         let Some(indexed) = self.events.objective_sources.get(&owner) else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let Some(world) = self.events.world.as_ref() else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let feet = self
             .peers
@@ -315,6 +322,7 @@ impl Session {
             })
             .collect();
         ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let total = ranked.len();
         let mut rows = 0usize;
         let mut out = Vec::new();
         for (_, _, id, count) in ranked {
@@ -327,7 +335,8 @@ impl Session {
             rows += count;
             out.push(id);
         }
-        out
+        let truncated = out.len() < total;
+        (out, truncated)
     }
     pub(super) fn objective_snapshot_with_budget(
         &self,
@@ -344,7 +353,8 @@ impl Session {
         if g.round_over {
             return Err(F::NoPlan);
         }
-        let sources = self.objective_candidates(bot, g.owner.account.0);
+        let (sources, truncated) = self.objective_candidates(bot, g.owner.account.0);
+        budget.truncated |= truncated;
         let peer = self.peers.get(&bot).ok_or(F::NoPlan)?;
         let team = self
             .minigames
@@ -369,6 +379,7 @@ impl Session {
                 continue;
             }
             if grounded_actions.len() >= ACTIONS {
+                budget.truncated = true;
                 break;
             }
             let model = Action {
@@ -401,6 +412,7 @@ impl Session {
                     continue;
                 }
                 if grounded_actions.len() >= ACTIONS {
+                    budget.truncated = true;
                     break;
                 }
                 grounded_actions.push(grounded);
@@ -416,6 +428,7 @@ impl Session {
                         continue;
                     }
                     if grounded_actions.len() >= ACTIONS {
+                        budget.truncated = true;
                         break;
                     }
                     grounded_actions.push(grounded);
@@ -432,6 +445,7 @@ impl Session {
                     continue;
                 }
                 if grounded_actions.len() >= ACTIONS {
+                    budget.truncated = true;
                     break;
                 }
                 grounded_actions.push(grounded);

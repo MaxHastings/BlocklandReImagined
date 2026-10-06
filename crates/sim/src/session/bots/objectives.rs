@@ -510,6 +510,10 @@ pub(super) struct GroundingBudget {
     targets: usize,
     terms: usize,
     bytes: usize,
+    /// Sources or actions were left out to stay within the model's bounds:
+    /// a plan not found among the rest is told as that bound, not as no
+    /// plan at all.
+    pub(super) truncated: bool,
 }
 impl GroundingBudget {
     pub(super) fn reserve(

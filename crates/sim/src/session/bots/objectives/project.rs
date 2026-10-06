@@ -765,6 +765,7 @@ impl Session {
                     continue;
                 }
                 if causes.len() >= ACTIONS / 2 {
+                    budget.truncated = true;
                     break 'sources;
                 }
                 let previous = facts.clone();
