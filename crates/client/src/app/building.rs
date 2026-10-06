@@ -148,7 +148,7 @@ impl App {
                     .building
                     .as_mut()
                     .unwrap()
-                    .command_finished(id, &command, false)
+                    .command_finished(id, &command, None)
                 {
                     self.ui.apply_session(session, update);
                 }
@@ -160,7 +160,7 @@ impl App {
                     .building
                     .as_mut()
                     .unwrap()
-                    .command_finished(id, &command, false);
+                    .command_finished(id, &command, None);
                 for update in updates {
                     self.ui.apply_session(session, update);
                 }
