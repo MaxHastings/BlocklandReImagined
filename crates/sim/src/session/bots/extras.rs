@@ -39,8 +39,6 @@ const INCOMING: f32 = 40.0;
 /// A dodge hop's jets, and the rest after one.
 const HOP_TICKS: u64 = 30;
 const HOP_REST: u64 = 72;
-/// About how long a dodge hop is in the air, seconds.
-const HOP_FLIGHT: f32 = 0.8;
 /// Activation reach (`Command::Activate` reaches five units).
 const CLICK_REACH: f32 = 4.5;
 /// How far ahead on its way it looks for a brick in the way.
@@ -342,19 +340,8 @@ impl Session {
         let incoming = (dodge_w > 0.0 && on_foot && tick >= brain.extras.next_hop)
             .then(|| self.bot_incoming(bot, feet))
             .flatten();
-        // A hop keeps the way it was moving: only where it comes down on
-        // floor (a strafing bot at a deck's edge hopped off it).
-        let lands = incoming.is_some() && {
-            let drift = flat(Vec3::from(state.velocity)) * HOP_FLIGHT;
-            super::admin_players::world_ray(
-                &self.simulation,
-                feet + drift + Vec3::Y * 0.5,
-                Vec3::NEG_Y,
-                1.5,
-            )
-            .is_some()
-        };
-        let incoming = incoming.filter(|_| lands);
+        let incoming = incoming
+            .filter(|_| super::hop_lands(&self.simulation, feet, Vec3::from(state.velocity)));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let st = &mut brain.extras;
         if crouch_w > 0.0

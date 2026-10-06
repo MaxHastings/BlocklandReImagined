@@ -918,6 +918,7 @@ impl Session {
         feet: Vec3,
         body: &crate::nav::Body,
         toward: Vec3,
+        off_route: bool,
     ) -> bool {
         let Some(peer) = self.peers.get(&bot) else {
             return false;
@@ -929,11 +930,18 @@ impl Session {
             .min_impact_speed()
             * state.scale.max(1.0);
         let hurts = impact * impact / (2.0 * gravity);
+        // Off its route (footwork, a strafe, a goof's walk) it keeps to
+        // floor it can walk back up from; a route plans its own drops.
+        let depth = if off_route {
+            body.step + body.drop
+        } else {
+            hurts
+        };
         let across = Vec3::new(-toward.z, 0.0, toward.x) * (body.width * 0.4);
         [0.6, 1.2].into_iter().any(|ahead| {
             [Vec3::ZERO, across, -across].into_iter().all(|side| {
                 let at = feet + toward * ahead + side + Vec3::Y * 0.5;
-                self.world_ray(at, Vec3::NEG_Y, 0.5 + hurts).is_none()
+                self.world_ray(at, Vec3::NEG_Y, 0.5 + depth).is_none()
             })
         })
     }

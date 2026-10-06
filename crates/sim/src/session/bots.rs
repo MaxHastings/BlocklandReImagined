@@ -865,6 +865,15 @@ fn floor_below(
         0.5 + body.step + body.drop,
     )
 }
+/// About how long a hop is in the air, in seconds.
+const HOP_FLIGHT: f32 = 0.8;
+/// A hop keeps the way it was moving: whether it comes down on floor
+/// (a bot hopping at a deck's edge went off it).
+fn hop_lands(simulation: &crate::simulation::Simulation, feet: Vec3, velocity: Vec3) -> bool {
+    let drift = flat(velocity) * HOP_FLIGHT;
+    super::admin_players::world_ray(simulation, feet + drift + Vec3::Y * 0.5, Vec3::NEG_Y, 1.5)
+        .is_some()
+}
 fn wrap(a: f32) -> f32 {
     (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
@@ -2904,7 +2913,9 @@ impl Session {
         if let Some(to) = act.direction {
             direction = to;
         }
-        input.jump |= act.jump || extra.jump;
+        // A goof's or an extra's hop only where it comes down on floor.
+        input.jump |= (act.jump || extra.jump)
+            && hop_lands(&self.simulation, feet, Vec3::from(state.velocity));
         input.crouch |= act.crouch || extra.crouch;
         input.jet |= extra.jet;
         if extra.stand {
@@ -2921,14 +2932,21 @@ impl Session {
         }
         // Nor does it ever walk off an edge whose fall would hurt it: what
         // it wants beyond is not worth the fall (it stands at the edge, and
-        // gets nowhere, so it plans again). A jet leg flies its own way.
+        // gets nowhere, so it plans again). Off its route it does not step
+        // down where it could not walk back up. A jet leg flies its own way.
         if driving.is_none()
             && swim.is_none()
             && !wet
             && state.grounded
             && direction != Vec3::ZERO
             && !wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. }))
-            && self.bot_fall_ahead(bot, feet, &body, flat(direction).normalize_or_zero())
+            && self.bot_fall_ahead(
+                bot,
+                feet,
+                &body,
+                flat(direction).normalize_or_zero(),
+                direction != routed,
+            )
         {
             direction = Vec3::ZERO;
         }
