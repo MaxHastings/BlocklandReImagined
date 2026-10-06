@@ -163,6 +163,8 @@ const SEARCH_BOUND: f32 = 72.0;
 const PORTAL_REACH: f32 = 0.8;
 /// The pitch of a bot looking at what it handles (an emote, a tool).
 const LOOK_DOWN: f32 = -0.3;
+/// How long the grid avoids a place a bot got nowhere walking into.
+const AVOID_TICKS: u64 = 120 * 30;
 /// Plans in a row that got stuck before a bot drops its goal.
 const MAX_REPLANS: u32 = 3;
 /// The mean seconds of one weave leg at an objective or in water.
@@ -947,11 +949,13 @@ impl Session {
         }
         self.simulation.track_collision_changes(true);
         let changes = self.simulation.take_collision_changes();
+        let tick = self.simulation.state().tick;
         for (body, nav) in &mut self.bots.navs {
             for (min, max) in &changes {
                 nav.invalidate(*min, *max, body);
             }
             nav.begin_tick();
+            nav.set_now(tick);
         }
         self.observe_bot_objects();
         for brick in self.bot_bricks_pending() {
@@ -2429,12 +2433,28 @@ impl Session {
             let to = match self.bots.brains[&bot].goal.map(|g| g.point(home)) {
                 Some(point) if flat(point - feet).length() > 1.5 => Some(point),
                 Some(point) if point.y >= feet.y - body.step - 0.5 => None,
-                point => self.bot_step_off(bot, feet, &body, point.unwrap_or(feet)),
+                point => self.bot_step_off(bot, feet, &body, point.unwrap_or(feet), f32::INFINITY),
             };
             if let Some(to) = to {
                 wanted = Some(Waypoint::walk(to));
                 self.bots.brains.get_mut(&bot).unwrap().settled = false;
             }
+        }
+        // The same when its route starts well below its feet, right by it:
+        // it stands on something the walk grid does not see (a narrow wall
+        // top, a ledge between cell centres), so it steps off to the
+        // nearest free floor toward the route first.
+        if let Some(next) = wanted
+            && next.mode == Mode::Walk
+            && next.through.is_none()
+            && feet.y - next.feet.y > body.step + 0.5
+            && flat(next.feet - feet).length() < body.width + 1.0
+            && driving.is_none()
+            && swim.is_none()
+            && let Some(to) =
+                self.bot_step_off(bot, feet, &body, next.feet, feet.y - body.step - 0.5)
+        {
+            wanted = Some(Waypoint::walk(to));
         }
         let pushing = if behaviour == Behaviour::Interact {
             self.act_bot_interaction(bot, interaction_enemy.map(|k| k.at), tick)?
@@ -3060,6 +3080,11 @@ impl Session {
         let sequence = brain.sequence;
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
+            // What it walked toward and got nowhere: the grid avoids it a
+            // while, for every body of this size (`Nav::avoid`).
+            if let Some(next) = wanted.filter(|w| w.through.is_none()) {
+                nav.avoid(next.feet, tick + AVOID_TICKS);
+            }
         }
         self.bot_act(
             bot,

@@ -943,7 +943,7 @@ impl Session {
         let depth = if off_route {
             body.step + body.drop
         } else {
-            hurts.max(body.drop)
+            hurts.max(body.drop + ROUTE_DROP_SLACK)
         };
         let across = Vec3::new(-toward.z, 0.0, toward.x) * (body.width * 0.4);
         [0.6, 1.2].into_iter().any(|ahead| {
@@ -965,6 +965,7 @@ impl Session {
         feet: Vec3,
         body: &crate::nav::Body,
         toward: Vec3,
+        no_higher: f32,
     ) -> Option<Vec3> {
         const SIDES: usize = 16;
         let want = flat(toward - feet).normalize_or_zero();
@@ -1006,6 +1007,9 @@ impl Session {
                     continue;
                 };
                 let floor = at + Vec3::Y * (0.5 - down);
+                if floor.y > no_higher {
+                    continue;
+                }
                 let crowded = others.iter().any(|(p, width)| {
                     flat(*p - floor).length() < (body.width + width) * 0.5
                         && (p.y - floor.y).abs() < body.height
@@ -1611,6 +1615,11 @@ impl Session {
     }
 }
 
+/// How much deeper than a body's planned drop (`nav::Body::drop`) the edge
+/// check still finds floor on its route: the route planner samples floors
+/// at cell centres, so a drop it plans can measure a little deeper from
+/// where the body stands at the edge.
+const ROUTE_DROP_SLACK: f32 = 0.5;
 /// How far a driven chassis must get from where it last made headway for
 /// that to count as headway again.
 const VEHICLE_PROGRESS: f32 = 3.0;

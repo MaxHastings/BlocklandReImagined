@@ -31,6 +31,10 @@ const REACH_SHARE: f32 = 0.6;
 const LEAD_PULL: f32 = 1.0;
 const CROWD: f32 = 0.8;
 const VARIETY: f32 = 0.3;
+/// What a place as far off as it looks adds, against staleness's 1, and
+/// what one straight ahead adds (one behind it takes as much off).
+const FAR: f32 = 0.6;
+const AHEAD: f32 = 0.4;
 /// Within this of its place it has arrived.
 const ARRIVED: f32 = 3.0;
 
@@ -123,6 +127,9 @@ impl Session {
             return Some(to);
         }
         let reach = brain.kind.sight * REACH_SHARE;
+        // The way it faces: a person looking about keeps on more often than
+        // they turn back the way they came.
+        let facing = Vec3::new(brain.yaw.sin(), 0.0, -brain.yaw.cos());
         let turn = self.bots.brains.get_mut(&bot)?.random() * std::f32::consts::TAU;
         let mut best: Option<(f32, Vec3)> = None;
         for i in 0..DIRECTIONS {
@@ -145,7 +152,13 @@ impl Session {
                 .filter(|(_, i)| i.option == Behaviour::Explore as u8)
                 .filter_map(|(_, i)| i.place)
                 .any(|p| flat(p - at).length() < CELL * 2.0);
-            let worth = brain.explore.worth(at, tick) - if crowd { CROWD } else { 0.0 } + variety;
+            // Farther is more ground opened up, and a walk with a purpose
+            // rather than a turn about in the same room.
+            let worth = brain.explore.worth(at, tick)
+                + FAR * open / reach
+                + AHEAD * way.dot(facing)
+                - if crowd { CROWD } else { 0.0 }
+                + variety;
             if best.is_none_or(|(b, _)| worth > b) {
                 best = Some((worth, at));
             }

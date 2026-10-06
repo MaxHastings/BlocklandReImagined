@@ -39,6 +39,11 @@ use std::collections::BinaryHeap;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
+/// Cells either side of a place a body got nowhere walking into that the
+/// grid avoids with it (`Nav::avoid`), and how many it keeps at most
+/// before forgetting the lapsed ones.
+const AVOID_REACH: i32 = 1;
+const MAX_AVOIDED: usize = 4096;
 /// Farthest (cells) a jet leg's landing moves off a goal someone stands on.
 const LANDING_RING: i32 = 4;
 /// Horizontal distance within which a grid node completes its search.
@@ -443,12 +448,39 @@ pub struct Nav {
     expansions: u32,
     /// Samples taken so far, for tests and probes.
     pub sampled: u64,
+    /// Cells a body was seen to get nowhere walking into, with the tick
+    /// until which no step goes into them (`Nav::avoid`): what the samples
+    /// miss (a rail between cell centres, a lip the motor catches on), the
+    /// grid learns from what really happened.
+    avoid: FxHashMap<(i32, i32), u64>,
+    /// The tick, for what it avoids.
+    now: u64,
 }
 impl Nav {
     /// Start a tick's sampling budget.
     pub fn begin_tick(&mut self) {
         self.budget = SAMPLES_PER_TICK;
         self.expansions = EXPANSIONS_PER_TICK;
+    }
+    /// The tick it is: what it avoids lapses by it.
+    pub fn set_now(&mut self, tick: u64) {
+        self.now = tick;
+        if self.avoid.len() > MAX_AVOIDED {
+            self.avoid.retain(|_, until| tick < *until);
+        }
+    }
+    /// A body got nowhere walking toward `at`: no step goes into the cells
+    /// round it until `until`, so routes find another way, or none.
+    pub fn avoid(&mut self, at: Vec3, until: u64) {
+        let (x, z) = cell_of(at);
+        for dx in -AVOID_REACH..=AVOID_REACH {
+            for dz in -AVOID_REACH..=AVOID_REACH {
+                self.avoid.insert((x + dx, z + dz), until);
+            }
+        }
+    }
+    fn avoided(&self, x: i32, z: i32) -> bool {
+        self.avoid.get(&(x, z)).is_some_and(|until| self.now < *until)
     }
     pub fn clear(&mut self) {
         self.floors.clear();
@@ -565,6 +597,9 @@ impl Nav {
                 continue;
             }
             let (x, z) = (node.x + dx, node.z + dz);
+            if self.avoided(x, z) {
+                continue;
+            }
             let floor = self.floor(ground, body, x, z, from)?;
             let mut step = floor.and_then(|f| Some((f, link(body, swims, from, afloat, f)?)));
             // Afloat, a bank too high to be found from the bottom is looked
@@ -575,9 +610,19 @@ impl Nav {
                 let floor = self.floor(ground, body, x, z, level)?;
                 step = floor.and_then(|f| Some((f, link(body, swims, from, afloat, f)?)));
             }
-            // A crawlspace is walked into, never jumped into.
+            // A crawlspace is walked into, never jumped into. A drop is
+            // stepped off only where the body clears the way out over the
+            // edge at the height it stands at: a rail or a lip between the
+            // two cells' centres, which neither cell's own sample sees,
+            // holds it back.
             if let Some((f, jump)) = step
                 && !(jump && f.low)
+                && (f.y >= from - body.step
+                    || ground.sweep(
+                        body,
+                        node.feet(),
+                        Vec3::new(x as f32 * CELL, from, z as f32 * CELL),
+                    ))
             {
                 let next = Node::at(x, z, f.y);
                 straight[i] = Some((next, jump, f));
@@ -592,7 +637,7 @@ impl Nav {
             };
             let (dx, dz) = (AXES[a].0, AXES[b].1);
             // Corners are never cut through an opening.
-            if goes_in(dx, dz).is_some() {
+            if goes_in(dx, dz).is_some() || self.avoided(node.x + dx, node.z + dz) {
                 continue;
             }
             let floor = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
