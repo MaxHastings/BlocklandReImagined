@@ -72,11 +72,12 @@ impl Proposal {
     }
 }
 
-/// Buttons pressed on top of whatever the movers set: a goof's or a
-/// dodge's hop, a crouch, the jets.
+/// Buttons pressed on top of whatever the movers set: a crouch, the jets,
+/// and a hop (a goof's, a dodge's, one into a body), which safety lets
+/// through only where it comes down on floor along the walk it takes.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Press {
-    pub jump: bool,
+    pub hop: bool,
     pub crouch: bool,
     pub jet: bool,
 }
@@ -88,6 +89,8 @@ pub(super) struct Controls {
     /// Where its route alone would take it: a walk elsewhere is off it.
     pub routed: Vec3,
     pub jump: bool,
+    /// A hop pressed, not yet judged by safety.
+    pub hop: bool,
     pub crouch: bool,
     pub jet: bool,
 }
@@ -108,7 +111,7 @@ pub(super) fn resolve(proposals: &mut [Proposal], press: Press) -> Controls {
         out.crouch = p.crouch.unwrap_or(out.crouch);
         out.jet = p.jet.unwrap_or(out.jet);
     }
-    out.jump |= press.jump;
+    out.hop = press.hop;
     out.crouch |= press.crouch;
     out.jet |= press.jet;
     out
@@ -136,8 +139,9 @@ impl Session {
     /// nowhere, so it plans again. Off its route on its feet it does not
     /// step down where it could not walk back up; in the air (footwork, a
     /// goof, a hop) it does not steer out over a fall that hurts. Its
-    /// route's own way through the air, and its jets, it keeps. The walk,
-    /// and whether an edge held it back.
+    /// route's own way through the air, and its jets, it keeps. A hop
+    /// pressed goes only where it comes down on floor along the walk it
+    /// takes. The walk, whether an edge held it back, and the jump.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn bot_safe_walk(
         &self,
@@ -149,7 +153,7 @@ impl Session {
         ground: Ground,
         quarry: Option<OwnerId>,
         goal: Option<Vec3>,
-    ) -> (Vec3, bool) {
+    ) -> (Vec3, bool, bool) {
         let mut walk = controls.walk;
         if walk != controls.routed && !ground.driving && walk != Vec3::ZERO {
             let from = feet + Vec3::Y * 0.9;
@@ -177,7 +181,13 @@ impl Session {
         if held_back {
             walk = Vec3::ZERO;
         }
-        (walk, held_back)
+        let drift = if walk == Vec3::ZERO {
+            Vec3::from(state.velocity)
+        } else {
+            walk * self.peers[&bot].player.tuning().forward
+        };
+        let hop = controls.hop && super::hop_lands(&self.simulation, feet, drift);
+        (walk, held_back, controls.jump || hop)
     }
 }
 
@@ -218,10 +228,12 @@ mod tests {
             &mut ps,
             Press {
                 crouch: true,
+                hop: true,
                 ..Default::default()
             },
         );
         assert!(c.crouch, "a press adds to what the movers set");
+        assert!(c.hop && !c.jump, "a hop waits for safety's say");
         assert_eq!(c.walk, Vec3::Z, "a mover with no walk leaves it");
     }
 }

@@ -923,6 +923,9 @@ struct Act {
     charged_ready: bool,
     mounted_charging: bool,
     objective: Option<objectives::View>,
+    /// A goof's trigger (a spray can held, a tool clicked), which takes the
+    /// trigger as an objective's tool does.
+    goof_trigger: Option<bool>,
     callout: Option<String>,
 }
 /// What one bot sees this tick.
@@ -1205,6 +1208,7 @@ impl Session {
             charged_ready,
             mounted_charging,
             objective,
+            goof_trigger,
             callout,
         } = act;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -1271,6 +1275,9 @@ impl Session {
         } else if previous_objective_tool {
             desired_down = false;
             cancel_hand_charge |= charging && last_down;
+        }
+        if let Some(down) = goof_trigger {
+            desired_down = down;
         }
         // Releasing a ready mounted charge is the firing control itself.
         // Preserve that intent before `fire` becomes the requested button
@@ -2948,20 +2955,20 @@ impl Session {
         if extra.stand {
             proposals.push(act::Proposal::walk(act::Mover::Stand, Vec3::ZERO));
         }
-        // A goof's, an extra's or an objective's hop (into a body) only
-        // where it comes down on floor.
+        // A goof's, an extra's, an objective's (into a body) or the stall
+        // judge's hop, which safety lets through where it comes down on
+        // floor.
         let into_body = selected_objective.is_some_and(|v| v.jump);
         let controls = act::resolve(
             &mut proposals,
             act::Press {
-                jump: (act.jump || extra.jump || into_body)
-                    && hop_lands(&self.simulation, feet, Vec3::from(state.velocity)),
+                hop: act.jump || extra.jump || into_body,
                 crouch: act.crouch || extra.crouch,
                 jet: extra.jet,
             },
         );
-        (input.jump, input.crouch, input.jet) = (controls.jump, controls.crouch, controls.jet);
-        let (direction, vetoed) = self.bot_safe_walk(
+        (input.crouch, input.jet) = (controls.crouch, controls.jet);
+        let (direction, vetoed, jump) = self.bot_safe_walk(
             bot,
             &body,
             feet,
@@ -3005,11 +3012,10 @@ impl Session {
         if !walking {
             brain.progress.reset();
         }
-        if stalled && brain.progress.stalls() == 1 {
-            // The first window gone nowhere hops (off a body it stands on,
-            // over what its shins catch); the next plans again.
-            input.jump = true;
-        }
+        // The first window gone nowhere hops (off a body it stands on,
+        // over what its shins catch: a jump in place, its walk already
+        // checked); the next plans again. The stage's last word on the jump.
+        input.jump = jump || stalled && brain.progress.stalls() == 1;
         let mut forget = false;
         if stalled && brain.progress.stalls() > 1 && wanted.is_some() {
             brain.replans += 1;
@@ -3075,6 +3081,7 @@ impl Session {
                 charged_ready,
                 mounted_charging,
                 objective: selected_objective,
+                goof_trigger: act.trigger,
                 callout: callout.or(clear_callout),
             },
         )

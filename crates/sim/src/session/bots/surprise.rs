@@ -932,6 +932,9 @@ pub(super) struct Act {
     pub direction: Option<Vec3>,
     pub jump: bool,
     pub crouch: bool,
+    /// The trigger a goof holds or clicks (a spray can, a tool), through the
+    /// bot's one trigger (`bot_act`).
+    pub trigger: Option<bool>,
 }
 
 impl Session {
@@ -1384,6 +1387,10 @@ impl Session {
                                 .map_or((0.0, 0.0), |b| (b.yaw, b.pitch));
                             let look = Vec3::new(y.sin() * p.cos(), p.sin(), -y.cos() * p.cos());
                             let _ = self.weapon_trigger(bot, false, look, false);
+                            // The bot's one record of its trigger (`bot_act`).
+                            if let Some(b) = self.bots.brains.get_mut(&bot) {
+                                b.fire_down = false;
+                            }
                         }
                         if let Some(restore) = i.restore {
                             let _ = self.equip_tool(bot, restore);
@@ -1595,20 +1602,12 @@ impl Session {
                 let _ = self.command(bot, sequence, Command::Activate);
                 let _ = self.command(bot, sequence + 1, Command::ActivateRelease);
             }
-        } else {
-            let down = clear && (spray || beat < 4);
-            let held = self
-                .weapons
-                .actor(ActorId(bot))
-                .is_some_and(|a| a.trigger_held());
-            if down != held {
-                let _ = self.weapon_trigger(bot, down, facing, false);
-            }
         }
         Act {
             aim: Some(aim),
             direction: Some(direction),
             crouch: i.gait == Gait::Crawl && on.is_none(),
+            trigger: item.is_some().then_some(clear && (spray || beat < 4)),
             ..Default::default()
         }
     }
