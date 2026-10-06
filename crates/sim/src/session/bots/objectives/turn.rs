@@ -6,10 +6,7 @@ impl Session {
     pub(in crate::session::bots) fn bot_objective(&mut self, bot: OwnerId, tick: u64) -> Option<View> {
         if self.bots.brains[&bot]
             .kind
-            .behaviours
-            .get("objective")
-            .copied()
-            .unwrap_or(0.0)
+            .weight("objective")
             <= 0.0
         {
             return None;

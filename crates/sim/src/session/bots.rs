@@ -956,10 +956,7 @@ impl Session {
                         && brain.objective.ready(tick)
                         && brain
                             .kind
-                            .behaviours
-                            .get("objective")
-                            .copied()
-                            .unwrap_or(0.0)
+                            .weight("objective")
                             > 0.0
                         && self.peers.get(bot).is_some_and(|p| p.combat.alive)
                 })
@@ -1641,10 +1638,7 @@ impl Session {
         // when it can lift itself and its kind flies at all.
         let fly_weight = self.bots.brains[&bot]
             .kind
-            .behaviours
-            .get("fly")
-            .copied()
-            .unwrap_or(1.0);
+            .weight("fly");
         // A kind that keeps to its water (`moves: swim`) swims there by
         // itself and takes no swim or jet legs.
         let walker = self.bots.brains[&bot].kind.moves != Moves::Swim;
@@ -1850,9 +1844,7 @@ impl Session {
             && !peaceful_objective
             && self.bots.brains[&bot]
                 .kind
-                .behaviours
-                .get("arm")
-                .is_none_or(|w| *w > 0.0)
+                .weight("arm") > 0.0
             && if can_retaliate {
                 self.game_of(bot).is_some()
             } else {
@@ -2039,13 +2031,7 @@ impl Session {
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
         brain.chase_feet = enemy.map(|seen| seen.feet);
         let mut scores = behaviour::scores(&situation, |b| {
-            kind.behaviours.get(b.name()).copied().unwrap_or(
-                if matches!(b, Behaviour::Interact | Behaviour::Objective) {
-                    0.0
-                } else {
-                    1.0
-                },
-            )
+            kind.weight(b.name())
         });
         // What the choice must answer at once (`behaviour::Hold`): urgent
         // damage, an objective offered (one gone a moment is held, `paused`),

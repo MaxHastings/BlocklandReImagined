@@ -281,6 +281,14 @@ impl Default for BotKind {
     }
 }
 impl BotKind {
+    /// Its weight on behaviour or leg `name` (`behaviours`): 1 unless it
+    /// says otherwise, but 0 for the opt-in ones (interact, objective).
+    pub fn weight(&self, name: &str) -> f32 {
+        self.behaviours
+            .get(name)
+            .copied()
+            .unwrap_or(if matches!(name, "interact" | "objective") { 0.0 } else { 1.0 })
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.id.trim().is_empty()

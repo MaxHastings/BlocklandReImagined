@@ -131,7 +131,7 @@ impl Session {
     pub(super) fn promote_bot_seat(&mut self, bot: OwnerId) -> Result<()> {
         if !self.is_alive(bot)
             || self.bots.brains.get(&bot).is_none_or(|b| {
-                b.resting || b.kind.behaviours.get("interact").copied().unwrap_or(0.0) <= 0.0
+                b.resting || b.kind.weight("interact") <= 0.0
             })
         {
             return Ok(());
@@ -511,10 +511,7 @@ impl Session {
             || tick < brain.next_interaction
             || brain
                 .kind
-                .behaviours
-                .get("interact")
-                .copied()
-                .unwrap_or(0.0)
+                .weight("interact")
                 == 0.0
         {
             self.bots.claims.release_owner(bot);
@@ -600,7 +597,7 @@ impl Session {
                 if let Some(mut o) =
                     self.bot_opportunity(bot, v, resource, (subject, toward), idle, tick)
                 {
-                    if brain.kind.behaviours.get("chase").copied().unwrap_or(1.0) == 0.0
+                    if brain.kind.weight("chase") == 0.0
                         && feet.distance(o.point) > 2.0
                     {
                         continue;
