@@ -123,14 +123,15 @@ pub(super) struct Extra {
 }
 
 /// What keeping on as its footwork has it is worth against a crouch or a
-/// hop (`Domain::Move`). A crouch under ranged fire is worth as much: the
-/// chooser's drift and boredom take it about half the time. A hop off a
-/// shot's path is worth `HOP` and the share of the health it has left the
-/// shot would take, so it nearly always clears a rocket and seldom a
-/// single bullet while it is well.
+/// hop (`Domain::Move`). A crouch under ranged fire, or a hop off a shot's
+/// path, is worth as much: the chooser's drift and boredom take it about
+/// half the time. A shot that would take more than `GRAVE` of the health
+/// it has left makes the hop worth that much more, so it clears a rocket,
+/// or a bullet once it is badly hurt, nearly every time.
 const KEEP: f32 = 1.0;
 const CROUCH: f32 = 1.0;
-const HOP: f32 = 0.95;
+const HOP: f32 = 1.0;
+const GRAVE: f32 = 0.5;
 
 /// The earliest time, within `horizon` seconds, a point starting at
 /// `from` with `velocity`, falling at `fall` units/s², comes within
@@ -349,7 +350,10 @@ impl Session {
             let options = [
                 (MOVE_KEEP, KEEP),
                 (MOVE_CROUCH, if crouch { CROUCH } else { 0.0 }),
-                (MOVE_HOP, incoming.map_or(0.0, |(_, harm)| HOP + harm)),
+                (
+                    MOVE_HOP,
+                    incoming.map_or(0.0, |(_, harm)| HOP + (harm - GRAVE).max(0.0)),
+                ),
             ];
             let choice = Choice {
                 domain: Domain::Move,

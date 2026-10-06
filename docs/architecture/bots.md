@@ -692,20 +692,22 @@ unsupported: a goal to defend, passing.
 ## Extras
 
 Five small options round out what a bot does, each through ordinary player
-controls, all weighed by one dial, the kind's `extras.strength` (0 to 1,
-default 1; 0 turns them off; where a chance applies, 1 takes it about half
-the time). They live in
+controls and each weighed where the brain weighs everything else: how it
+moves this moment is a choice of the surprise chooser (`Domain::Move`:
+keep on, crouch, hop), clicking a door for fun is a goof (`door`),
+handing a weapon over is teamwork (`team.teamwork` 0 turns it off), idle
+play is an Interact opportunity (the `interact` weight), and a door in
+the way is always clicked. They live in
 `crates/sim/src/session/bots/extras.rs`, with a hook in `step_bot` and the
-Interact opportunity; their random stream is their own, so the brain's
-other choices draw as before. Nothing reads a content name.
+Interact opportunity. Nothing reads a content name.
 
 | Option | When | Does |
 |---|---|---|
-| `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2 x strength, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
-| `crouch` | hurt from more than 5 units while fighting or holding its ground | crouches for 1.5 s after the last such hit (damage already scales with crouching) |
-| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius, where floor lies under the spot 0.8 s of its current drift reaches | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second; each projectile is judged once |
-| `activate` | a door within 2.5 units on the straight way to its goal, while not fighting; now and then (about every 2 s at a natural pause, at a quarter of the chance) one within 8 units in sight. A door is a brick whose catalog swap the next click swaps back: the click only opens or closes the brick itself. A brick with only event rows (a reset, win, teleport or blast button) is never clicked, in the way or for fun | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
-| `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
+| `idle_play` | no enemy seen or remembered | Interact offers a push on a loose body toward the nearest player in sight (stopping 3.5 short of them), and a passenger seat in a vehicle a teammate drives; a rider stays while the teammate drives. Scored 0.2, between Wander and Return, so every purpose outranks it. Off while any bot in the same game works an objective and until 10 s after the last one (the start of a round is not calm), and never on a body another bot claims, so play cannot spoil a match. |
+| `crouch` | for 1.5 s after a hit from more than 5 units, while fighting or holding its ground: the move choice weighs a crouch as much as keeping on | crouches (damage already scales with crouching) |
+| `dodge` | a projectile, not its own or an ally's, that can hurt (damage or splash damage) and whose path over the next 0.75 s (velocity, ballistic fall) comes within the body plus its splash radius, where floor lies under the spot 0.8 s of its current drift reaches; each projectile is judged once by the move choice, a hop worth as much as keeping on, more by however much of the health it has left past half the shot would take | jumps straight up (no run, no weapon hand-off), jetting if the body can, for a quarter second |
+| `activate` | a door within 2.5 units on the straight way to its goal, while not fighting; and the `door` goof: at a natural pause, a door within 8 units in sight (looked for about every half second). A door is a brick whose catalog swap the next click swaps back: the click only opens or closes the brick itself. A brick with only event rows (a reset, win, teleport or blast button) is never clicked, in the way or for fun | aims at it and clicks with the empty hand (`Command::Activate`), putting a tool away first and taking it out again after |
+| `hand_weapon` | wandering, calm, no enemy seen, with two or more attacks and a teammate in sight with none and a free slot, its teamwork above 0 | walks within 2.6 units, faces them and drops a spare (not the one in hand) their way (`Command::DropTool`); the ordinary contact pickup, or their arming, takes it |
 
 Route clicks are what an activation is worth: a door in the way is clicked
 whenever the option is on. Activations an objective needs stay with the
@@ -739,8 +741,7 @@ its kind and team label. See `bots/looks.rs`.
     `team.teamwork` (0 to 1), `team.mood` (the pull of others goofing),
     `perception.strength` (0 to 4, how human its noticing and aim are),
     `hold_seconds` (0 to 5, how long a choice is held, 0.5 shipped) and
-    `team.pressure` (objective worth as its side trails), plus
-    `extras.strength` (0 to 1) until the extras join the chooser. Each is commented
+    `team.pressure` (objective worth as its side trails). Each is commented
     in the Blockhead's `bots.json`; `bots.json` takes `//` comments outside
     strings. `/botset` and the tuning tools turn these and the other
     `SETTABLE` paths below.
