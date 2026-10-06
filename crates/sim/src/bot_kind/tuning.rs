@@ -76,10 +76,11 @@ pub fn with_dial(kind: &BotKind, path: &str, value: f64) -> Result<BotKind> {
 
 /// The numbers a kind may set, in `bots.json` and as a dial: what the kind
 /// is (its sight and ranges, behaviour and goof weights, its melee hit) and
-/// the four main dials. Every other number is fixed in code
-/// (`BotKind::default`), so tuning a kind means turning a main dial. A path
-/// ending in `.` covers every entry under it.
-pub const SETTABLE: [&str; 12] = [
+/// the six main dials: surprise, teamwork, mood pull, alertness, hold time
+/// and pressure. Every other number is fixed in code (`BotKind::default`),
+/// so tuning a kind means turning a main dial. A path ending in `.` covers
+/// every entry under it.
+pub const SETTABLE: [&str; 15] = [
     "sight",
     "wander_radius",
     "chase_radius",
@@ -90,7 +91,10 @@ pub const SETTABLE: [&str; 12] = [
     "surprise.flavours.",
     "surprise.strength",
     "team.teamwork",
+    "team.mood",
     "perception.strength",
+    "hold_seconds",
+    "team.pressure",
     "extras.strength",
 ];
 
@@ -246,7 +250,8 @@ mod tests {
         let k = with_dial(&k, "behaviours.chase", 0.0).unwrap();
         assert_eq!(k.behaviours["chase"], 0.0);
         assert!(dials(&k).iter().any(|(p, _)| p == "team.teamwork"));
-        assert!(!dials(&k).iter().any(|(p, _)| p == "hold.seconds"));
+        assert!(dials(&k).iter().any(|(p, _)| p == "hold_seconds"));
+        assert!(!dials(&k).iter().any(|(p, _)| p == "team.mood_cap"));
     }
 
     #[test]

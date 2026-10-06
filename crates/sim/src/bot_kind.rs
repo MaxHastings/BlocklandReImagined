@@ -127,6 +127,8 @@ pub struct BotKind {
     pub perception: BotPerception,
     /// How much of its extra options applies ([`BotExtras`]).
     pub extras: BotExtras,
+    /// Seconds a choice is held before another may take over (`BotHold`).
+    pub hold_seconds: f32,
 }
 /// What a bot notices, from engine data only: a blast's radius, a sound's
 /// volume, someone staring at it, something moving fast; and how its
@@ -184,16 +186,16 @@ pub struct BotHold {
     pub seconds: f32,
     pub margin: f32,
 }
-/// The hold every bot's choices follow.
-pub const HOLD: BotHold = BotHold {
-    seconds: 0.5,
-    margin: 0.1,
-};
 impl Default for BotHold {
     fn default() -> Self {
-        HOLD
+        Self {
+            seconds: 0.5,
+            margin: HOLD_MARGIN,
+        }
     }
 }
+/// The share over a held choice's score another needs to take over.
+const HOLD_MARGIN: f32 = 0.1;
 
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
@@ -277,10 +279,18 @@ impl Default for BotKind {
             surprise: BotSurprise::default(),
             team: BotTeam::default(),
             extras: Default::default(),
+            hold_seconds: BotHold::default().seconds,
         }
     }
 }
 impl BotKind {
+    /// The hold its choices follow.
+    pub fn hold(&self) -> BotHold {
+        BotHold {
+            seconds: self.hold_seconds,
+            margin: HOLD_MARGIN,
+        }
+    }
     /// Its weight on behaviour or leg `name` (`behaviours`): 1 unless it
     /// says otherwise, but 0 for the opt-in ones (interact, objective).
     pub fn weight(&self, name: &str) -> f32 {
@@ -403,6 +413,7 @@ impl BotKind {
             ("aim_error_degrees", self.aim_error_degrees, 0.0, 45.0),
             ("memory_seconds", self.memory_seconds, 0.0, 60.0),
             ("objective_radius", self.objective_radius, 1.0, 128.0),
+            ("hold_seconds", self.hold_seconds, 0.0, 5.0),
             ("perception.salience", self.perception.salience, 0.0, 8.0),
             (
                 "perception.glance_seconds",
@@ -595,11 +606,13 @@ mod tests {
     #[test]
     fn a_kind_sets_only_what_it_is_and_the_main_dials() {
         let pack = BotPack::from_json(
-            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","sight":40,"behaviours":{"chase":0.5},"surprise":{"strength":0.2,"flavours":{"spray":0}},"team":{"teamwork":1},"perception":{"strength":2},"extras":{"strength":0}}]}"#,
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X","sight":40,"behaviours":{"chase":0.5},"surprise":{"strength":0.2,"flavours":{"spray":0}},"team":{"teamwork":1,"mood":0.5,"pressure":0.2},"perception":{"strength":2},"hold_seconds":1,"extras":{"strength":0}}]}"#,
         )
         .unwrap();
         let read = &pack.bots[0];
         assert_eq!(read.perception.strength, 2.0);
+        assert_eq!(read.hold().seconds, 1.0);
+        assert_eq!(read.team.mood, 0.5);
         assert_eq!(read.surprise.flavour_weight("spray"), 0.0);
         // Everything else keeps its fixed value.
         for fixed in [
@@ -607,14 +620,14 @@ mod tests {
             r#""fighting":{"strafe_seconds":2}"#,
             r#""reaction_seconds":0.1"#,
             r#""perception":{"glance_seconds":1}"#,
-            r#""team":{"mood":4}"#,
+            r#""team":{"mood_cap":4}"#,
             r#""mounted":{"chase_radius":10}"#,
         ] {
             let json =
                 format!(r#"{{"schema_version":1,"bots":[{{"id":"x","name":"X",{fixed}}}]}}"#);
             assert!(BotPack::from_json(json.as_bytes()).is_err(), "{fixed}");
         }
-        assert!(tuning::with_dial(read, "hold.seconds", 1.0).is_err());
+        assert!(tuning::with_dial(read, "team.mood_cap", 1.0).is_err());
         assert!(
             tuning::dials(read)
                 .iter()

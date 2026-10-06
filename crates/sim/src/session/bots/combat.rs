@@ -725,7 +725,11 @@ pub(super) fn choose(
             state.usable = tick;
         } else if charge_continuation.is_none()
             && state.usable > 0
-            && super::behaviour::paused_hold(state.usable, tick, crate::bot_kind::HOLD)
+            && super::behaviour::paused_hold(
+                state.usable,
+                tick,
+                session.bots.brains[&bot].kind.hold(),
+            )
         {
             return Decision::Pending;
         }
@@ -734,7 +738,7 @@ pub(super) fn choose(
         Ok(Some(selection)) => {
             use super::surprise::{AIM_TORSO, Choice, Domain};
             let kind = &session.bots.brains[&bot].kind;
-            let (cfg, rule) = (&kind.surprise, crate::bot_kind::HOLD);
+            let (cfg, rule) = (&kind.surprise, kind.hold());
             let scores: Vec<(u32, f32)> = candidates
                 .iter()
                 .filter_map(|c| {

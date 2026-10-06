@@ -625,7 +625,7 @@ think time per tick (`Session::bot_think_nanos`, wall time in
 - `/botset surprise.strength`: shows the dial on every bot kind that has it.
 - `/botset surprise.strength 0.6`: sets it on every kind that has it
   (`/botset sight 40 bot.blockhead` on one kind). The settable paths are
-  `bot_kind::tuning::SETTABLE` (the four main dials plus what a kind is:
+  `bot_kind::tuning::SETTABLE` (the six main dials plus what a kind is:
   radii, `behaviours`, `melee`, goof weights); the kind's own validation applies,
   so an out-of-range value is refused and changes nothing. Bots take it up
   at their next decision.
@@ -683,9 +683,10 @@ the terms changed may be said in team chat, keyed by the term that moved
 it (`callouts`). `BotThought::team` shows what it read and each option's
 terms.
 
-A kind sets only `team.teamwork` (0-1, scales overlap and interaction
-together). `mood`, `mood_cap`, `mood_human`, `pressure` and `copy` are
-fixed in code and do not follow `teamwork`; radii come from its sight. Still
+A kind sets `team.teamwork` (0-1, scales overlap and interaction
+together), `team.mood` (the mood's pull) and `team.pressure` (how much
+more its objective is worth as its side trails). `mood_cap`, `mood_human`
+and `copy` are fixed in code; radii come from its sight. Still
 unsupported: a goal to defend, passing.
 
 ## Extras
@@ -723,11 +724,11 @@ its kind and team label. See `bots/looks.rs`.
 
 ## Data
 
-- `bots.json` (a kind) sets only what the kind is and the four main dials
+- `bots.json` (a kind) sets only what the kind is and the six main dials
   (`bot_kind::tuning::SETTABLE`); any other number there is an error.
   Everything else (reaction, turn rate, aim error, memory, the rest of
   `perception` and `team`) is fixed in code at `BotKind::default`, and
-  the contest, hold, strafe and driving numbers are constants, so tuning
+  the contest, hold margin, strafe and driving numbers are constants, so tuning
   means turning a main dial. What a kind sets:
   - sight, wander and chase radii, whether it fights other builders' bots,
     whether it warns its side (`alerts_allies`) and its `behaviours`
@@ -735,8 +736,11 @@ its kind and team label. See `bots/looks.rs`.
   - `objective_radius`: how far around itself it looks for loose objects
     an objective can use (24 for the Blockhead).
   - The main dials: `surprise.strength` (0 to 1, variation and goofing),
-    `team.teamwork` (0 to 1), `perception.strength` (0 to 4, how human its
-    noticing and aim are) and `extras.strength` (0 to 1). Each is commented
+    `team.teamwork` (0 to 1), `team.mood` (the pull of others goofing),
+    `perception.strength` (0 to 4, how human its noticing and aim are),
+    `hold_seconds` (0 to 5, how long a choice is held, 0.5 shipped) and
+    `team.pressure` (objective worth as its side trails), plus
+    `extras.strength` (0 to 1) until the extras join the chooser. Each is commented
     in the Blockhead's `bots.json`; `bots.json` takes `//` comments outside
     strings. `/botset` and the tuning tools turn these and the other
     `SETTABLE` paths below.

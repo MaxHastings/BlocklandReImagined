@@ -2107,7 +2107,7 @@ impl Session {
         let behaviour = surprise::behaviour(
             &mut brain.surprise,
             &kind.surprise,
-            crate::bot_kind::HOLD,
+            kind.hold(),
             &scores,
             interrupt,
             // Between steps, or the objective gone a moment as one step
@@ -2318,7 +2318,7 @@ impl Session {
                     brain.chase_offset = surprise::route(
                         &mut brain.surprise,
                         &kind.surprise,
-                        crate::bot_kind::HOLD,
+                        kind.hold(),
                         seen.real,
                         flanks,
                         gate,
@@ -2479,7 +2479,7 @@ impl Session {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let moment = brain
             .surprise
-            .goof(&brain.kind.surprise, crate::bot_kind::HOLD, &pause, tick);
+            .goof(&brain.kind.surprise, brain.kind.hold(), &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
         let extra = self.bot_extras(
             bot,
