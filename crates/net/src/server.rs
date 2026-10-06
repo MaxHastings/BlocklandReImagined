@@ -1564,7 +1564,7 @@ async fn run(
             }
             if tick.is_multiple_of(POSE_INTERVAL) {
                 let viewers:Vec<_>=peers.keys().map(|owner|(*owner,session.viewpoint(*owner))).collect();
-                send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers));
+                send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers,session.simulation().passages()));
             }
             if tick.is_multiple_of(UPDATE_INTERVAL) {
                 let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
