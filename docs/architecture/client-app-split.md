@@ -116,7 +116,7 @@ then fixed in its own commit with a test that drives the real path.
 - Render reads the live `controls` for the Add-On frame instead of the
   snapshot.
 - `disconnect` did not reset `seated_on`, `mount_heading`, `tumble`,
-  `rider_eye`, `rider_rotations`, `observer_eye`, `liquid_cache` or
+  `posed_eye`, `rider_rotations`, `observer_eye`, `liquid_cache` or
   `drawn_controls`. This is fixed on main: `disconnect` clears them
   (`9360b544`). `crosshair_hidden` and `tool_wheel` are
   mirrors of what the UI was told, and `update_held_weapon` settles them

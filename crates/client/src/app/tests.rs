@@ -1534,7 +1534,7 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     app.mounts.seated_on = Some((7, 1));
     app.mounts.mount_heading = Some(1.0);
     app.mounts.takes_turret = true;
-    app.mounts.rider_eye = Some(Vec3::ONE);
+    app.mounts.posed_eye = Some(Vec3::ONE);
     app.mounts.tumble = Some(9);
     app.mounts
         .rider_rotations
@@ -1554,7 +1554,7 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     assert_eq!(app.mounts.seated_on, None);
     assert_eq!(app.mounts.mount_heading, None);
     assert!(!app.mounts.takes_turret);
-    assert_eq!(app.mounts.rider_eye, None);
+    assert_eq!(app.mounts.posed_eye, None);
     assert_eq!(app.mounts.tumble, None);
     assert!(app.mounts.rider_rotations.is_empty());
     assert_eq!(app.mounts.seat_report, None);

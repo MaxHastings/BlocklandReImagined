@@ -345,7 +345,7 @@ impl App {
                 takes_turret: false,
                 seat_report: None,
                 rider_rotations: BTreeMap::new(),
-                rider_eye: None,
+                posed_eye: None,
                 tumble: None,
             },
             music_world: None,

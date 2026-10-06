@@ -558,7 +558,7 @@ impl App {
         }
         let first_person_eye = self
             .mounts
-            .rider_eye
+            .posed_eye
             .or(self.motion.local_eye())
             .unwrap_or_else(|| view.archetypes.eye(local));
         let (eye, yaw, pitch, roll) = Self::view_camera(

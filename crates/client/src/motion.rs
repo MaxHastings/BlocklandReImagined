@@ -443,7 +443,7 @@ impl Motion {
         }
         if local {
             // A stand-in until the rider's body is posed; the app then sees
-            // from its `eye` node (`App::rider_eye`).
+            // from its `eye` node (`App::posed_eye`).
             let up = if up.is_finite() && up.length_squared() > 0.5 {
                 up.normalize()
             } else {
