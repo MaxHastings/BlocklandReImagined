@@ -833,8 +833,15 @@ impl Scorer {
             if let Some(target) = thought.visible
                 && let Some(t) = states.get(&target)
             {
-                let to = (Vec3::from(t.feet) + Vec3::Y * 1.2 - origin).normalize_or_zero();
-                if to.dot(direction) < 25f32.to_radians().cos() {
+                // Off target: more than 25 degrees off every point of its
+                // body, feet to head (up close a swing at the head is on
+                // target, though well off a fixed point at the middle).
+                let feet = Vec3::from(t.feet);
+                let nearest = feet + Vec3::Y * (origin.y - feet.y).clamp(0.0, 2.4);
+                let off = |at: Vec3| {
+                    (at - origin).normalize_or_zero().dot(direction) < 25f32.to_radians().cos()
+                };
+                if off(nearest) && off(feet + Vec3::Y * 1.2) {
                     self.report.off_target += 1;
                 }
             }
