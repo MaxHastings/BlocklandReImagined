@@ -34,6 +34,9 @@ pub(crate) enum Behaviour {
     Return,
     /// A grounded authored objective, interrupted by immediate combat.
     Objective,
+    /// No fight known and enemies in its game: go and find them
+    /// (`explore`).
+    Explore,
     /// Nothing to do: stroll about.
     #[default]
     Wander,
@@ -81,8 +84,13 @@ pub(crate) struct Situation {
     /// A step of an objective the game still offers failed and is cooling
     /// down: it does not walk home meanwhile.
     pub pursuing: bool,
+    /// It knows of no fight, enemies play in its game, and it has a place
+    /// to look (`explore`).
+    pub explore: bool,
 }
 
+/// Going to find the game, against strolling's 0.1 and a search's 0.4.
+const EXPLORE: f32 = 0.2;
 /// An objective it can run and gun on the way to, against Fight's 0.8.
 const GUNNING: f32 = 0.65;
 /// Height an enemy may stand above or below it, beyond a step, and still
@@ -112,7 +120,7 @@ fn fade(value: f32, edge: f32, width: f32) -> f32 {
 impl Behaviour {
     /// Every behaviour, most urgent first.
     /// How many there are.
-    pub(crate) const COUNT: usize = 9;
+    pub(crate) const COUNT: usize = 10;
     pub(crate) const ALL: [Behaviour; Self::COUNT] = [
         Behaviour::Carry,
         Behaviour::Interact,
@@ -122,6 +130,7 @@ impl Behaviour {
         Behaviour::Search,
         Behaviour::Return,
         Behaviour::Objective,
+        Behaviour::Explore,
         Behaviour::Wander,
     ];
 
@@ -166,6 +175,8 @@ impl Behaviour {
                     0.65
                 },
             ),
+            // Above strolling, below every purpose.
+            Behaviour::Explore => fits(s.explore, EXPLORE),
             Behaviour::Wander => 0.1,
         }
     }

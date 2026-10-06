@@ -44,6 +44,7 @@ mod claims;
 mod combat_objectives;
 mod contest;
 mod cooldown;
+mod explore;
 mod extras;
 mod fire;
 use fire::{Hand, Shot};
@@ -402,6 +403,8 @@ struct Brain {
     perception: perception::State,
     /// The small extra options' memory ([`extras`]).
     extras: extras::State,
+    /// Where it has been and what it knows of enemies, for exploring.
+    explore: explore::Explore,
 }
 /// A bot holding something with a tool that holds (the Gravity Gun, or
 /// any tool whose trigger reaches and holds: `reach`, `hold`) carries it
@@ -543,6 +546,7 @@ impl Brain {
             chase_offset: Vec3::ZERO,
             team: team::State::default(),
             extras: Default::default(),
+            explore: Default::default(),
         }
     }
     fn random(&mut self) -> f32 {
@@ -1905,6 +1909,25 @@ impl Session {
             None
         };
         let carries = driving.and_then(|_| self.team_carries(bot, feet));
+        // Going to find the game (`explore`): a place to look, when it
+        // knows of no fight, has no objective, and enemies play.
+        let memory = self.bots.brains[&bot].memory;
+        self.bots
+            .brains
+            .get_mut(&bot)
+            .unwrap()
+            .explore
+            .note(feet, memory, tick);
+        let explore_to = (!self.bots.brains[&bot].tethered()
+            && sight.target.is_none()
+            && memory.is_none()
+            && threat.is_none()
+            && objective.is_none()
+            && driving.is_none()
+            && swim.is_none()
+            && self.bot_enemies_about(bot, &self.bots.brains[&bot].kind))
+        .then(|| self.bot_explore_target(bot, feet, eye, &body, &intents, tick))
+        .flatten();
         let simulation = &self.simulation;
         let clear = move |a: Vec3, b: Vec3| {
             let d = b - a;
@@ -2048,6 +2071,7 @@ impl Session {
                 0.0
             },
             pursuing: brain.objective.pursuing(),
+            explore: explore_to.is_some(),
         };
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
@@ -2099,6 +2123,7 @@ impl Session {
                 .is_some()
             }),
             carries,
+            explore_to,
         );
         let plain_before = team::pressed(&kind.team, deficit, &mut scores);
         let claims = &self.bots.claims;
@@ -2341,6 +2366,17 @@ impl Session {
             }
             Behaviour::Return => {
                 brain.set_goal(Some(Goal::Home));
+                (false, false)
+            }
+            Behaviour::Explore => {
+                // A route that ends short of the place is as far as it goes
+                // that way: it looks elsewhere next.
+                if brain.settled && matches!(brain.goal, Some(Goal::Wander(_))) {
+                    brain.explore.to = None;
+                    brain.set_goal(None);
+                } else if let Some(to) = explore_to {
+                    brain.set_goal_near(Goal::Wander(to));
+                }
                 (false, false)
             }
             Behaviour::Wander => {
@@ -2912,7 +2948,7 @@ impl Session {
         if extra.stand {
             proposals.push(act::Proposal::walk(act::Mover::Stand, Vec3::ZERO));
         }
-        // A goof's, an extra's or an objective's hop (into the ball) only
+        // A goof's, an extra's or an objective's hop (into a body) only
         // where it comes down on floor.
         let into_body = selected_objective.is_some_and(|v| v.jump);
         let controls = act::resolve(
@@ -2999,6 +3035,7 @@ impl Session {
             forget = true;
             if brain.replans > MAX_REPLANS {
                 brain.goal = None;
+                brain.explore.to = None;
                 if behaviour == Behaviour::Arm {
                     // No way to the item: pass it over.
                     brain.arming.pass_over(tick);
@@ -3129,10 +3166,13 @@ fn team_choices(
     home: Vec3,
     exit: Option<Vec3>,
     carries: Option<(u64, Vec3)>,
+    explore: Option<Vec3>,
 ) -> [team::Choice; Behaviour::COUNT] {
     use claims::{Resource, Target};
     let mut c = [team::Choice::default(); Behaviour::COUNT];
     let at = |b: Behaviour| b as usize;
+    // Where it would go looking: teammates look elsewhere (`explore`).
+    c[at(Behaviour::Explore)].place = explore;
     if let Some(o) = opportunity {
         c[at(Behaviour::Interact)] = team::Choice {
             place: Some(o.point),

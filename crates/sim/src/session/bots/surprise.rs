@@ -187,12 +187,13 @@ pub(super) const DODGE_STRAFE: u32 = 1;
 pub(super) const DODGE_JET: u32 = 2;
 /// Behaviours whose scores vary. The rest (carrying a catch, arming,
 /// walking home) keep their plain scores.
-const VARIED: [Behaviour; 6] = [
+const VARIED: [Behaviour; 7] = [
     Behaviour::Interact,
     Behaviour::Fight,
     Behaviour::Chase,
     Behaviour::Search,
     Behaviour::Objective,
+    Behaviour::Explore,
     Behaviour::Wander,
 ];
 const TICKS: f32 = 120.0;

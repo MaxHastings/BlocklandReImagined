@@ -152,7 +152,7 @@ pub(super) struct Directive {
     pub equip: Option<usize>,
     pub trigger: bool,
     /// Jump into the body: it is up off the ground in front of the bot,
-    /// higher than its legs reach (a bounce, a ball in the air).
+    /// higher than its legs reach (a bounce, a body in the air).
     pub jump: bool,
     pub board: Option<(u64, u8)>,
     pub held: Option<ObjectRef>,
@@ -848,7 +848,7 @@ impl Choice {
                 out.point = approach.point;
                 // Up off the ground and higher than its legs reach, in
                 // front of it on the way it delivers: it jumps into it, as
-                // a player heads a bounce or chests a ball in the air.
+                // a player meets a bounce with its head or chest.
                 let tuning = peer.player.tuning();
                 let scale = peer.player.state().scale;
                 let up = centre.y - extents.y - feet.y;
