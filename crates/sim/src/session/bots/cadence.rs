@@ -105,6 +105,8 @@ pub(crate) mod salt {
     pub(crate) const MOOD: u64 = 21;
     /// A reflex's drift (`surprise::Domain::reflex`).
     pub(crate) const REFLEX: u64 = 22;
+    /// Where a search's sweep looks.
+    pub(crate) const SWEEP: u64 = 23;
 }
 
 #[cfg(test)]

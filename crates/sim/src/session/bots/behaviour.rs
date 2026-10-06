@@ -37,6 +37,9 @@ pub(crate) enum Behaviour {
     /// No fight known and enemies in its game: go and find them
     /// (`explore`).
     Explore,
+    /// Trapped (bricks round it, no way out it can find): respawn itself,
+    /// as a player does (Ctrl+K).
+    Respawn,
     /// Nothing to do: stroll about.
     #[default]
     Wander,
@@ -54,10 +57,6 @@ pub(crate) struct Situation {
     /// It carries what that objective delivers: it keeps going (shooting
     /// back on the way) rather than stopping to fight.
     pub committed: bool,
-    /// It can shoot an enemy in sight on the way there (a ranged weapon,
-    /// an objective that needs only its feet): it goes on, shooting,
-    /// rather than standing to fight.
-    pub gunning: bool,
     /// How much it wants an item it sees lying in reach: [`arming::ARM`]
     /// with no attack, else an upgrade's score (`arming::upgrade_score`);
     /// 0 for none.
@@ -69,6 +68,11 @@ pub(crate) struct Situation {
     /// spares it, 0 (none) to 1: one that threatens neither the bot nor its
     /// play is worth less than the play (`Session::bot_menace`).
     pub spared: f32,
+    /// How long it has tried to get somewhere and got nowhere, past
+    /// what its own unsticking (a hop, a new plan, a new goal) can mend,
+    /// 0 to 1 (`Session::bot_trapped`); 0 with an enemy in sight, hurt, or
+    /// carrying.
+    pub trapped: f32,
     /// The far edge of its weapon's band.
     pub far: f32,
     /// How high it steps.
@@ -91,8 +95,9 @@ pub(crate) struct Situation {
 
 /// Going to find the game, against strolling's 0.1 and a search's 0.4.
 const EXPLORE: f32 = 0.2;
-/// An objective it can run and gun on the way to, against Fight's 0.8.
-const GUNNING: f32 = 0.65;
+/// Respawning itself once sure it is trapped, against a committed play's
+/// 0.92.
+const TRAPPED: f32 = 0.95;
 /// Height an enemy may stand above or below it, beyond a step, and still
 /// be fought at full score.
 const RISE_SLACK: f32 = 1.0;
@@ -120,7 +125,7 @@ fn fade(value: f32, edge: f32, width: f32) -> f32 {
 impl Behaviour {
     /// Every behaviour, most urgent first.
     /// How many there are.
-    pub(crate) const COUNT: usize = 10;
+    pub(crate) const COUNT: usize = 11;
     pub(crate) const ALL: [Behaviour; Self::COUNT] = [
         Behaviour::Carry,
         Behaviour::Interact,
@@ -131,6 +136,7 @@ impl Behaviour {
         Behaviour::Return,
         Behaviour::Objective,
         Behaviour::Explore,
+        Behaviour::Respawn,
         Behaviour::Wander,
     ];
 
@@ -167,16 +173,13 @@ impl Behaviour {
             Behaviour::Return => fits(!s.pursuing, 0.3 * s.strayed.clamp(0.0, 1.0)),
             Behaviour::Objective => fits(
                 s.objective,
-                if s.committed {
-                    0.92
-                } else if s.gunning {
-                    GUNNING
-                } else {
-                    0.65
-                },
+                if s.committed { 0.92 } else { 0.65 },
             ),
             // Above strolling, below every purpose.
             Behaviour::Explore => fits(s.explore, EXPLORE),
+            // The last resort, rising the longer it stays trapped: above
+            // any play once it is sure.
+            Behaviour::Respawn => TRAPPED * s.trapped,
             Behaviour::Wander => 0.1,
         }
     }

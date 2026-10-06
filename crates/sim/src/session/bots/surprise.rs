@@ -89,6 +89,8 @@ const GOOF_BOREDOM: f32 = 0.3;
 /// and the walk up to someone on top); after that it goes on only while
 /// it still wins the choice.
 const GOOF_SECONDS: f32 = 2.0;
+/// How far off a detour goes at most.
+const DETOUR: f32 = 8.0;
 /// How near someone must be for a goof to go right up to them.
 const CLOSE_RANGE: f32 = 10.0;
 /// How fast it walks up to them, for the time a goof is given for it.
@@ -1382,7 +1384,9 @@ impl Session {
                             .map(|p| Body::of(p.player.tuning(), 1.0));
                         let to = body
                             .filter(|_| self.bot_spend_rays(bot, super::explore::SCAN_RAYS))
-                            .and_then(|body| self.bot_explore_spot(bot, feet, eye, &body, &[], tick));
+                            .and_then(|body| {
+                                self.bot_explore_spot(bot, (feet, eye), &body, DETOUR, &[], tick)
+                            });
                         if let (Some(to), Some(b)) = (to, self.bots.brains.get_mut(&bot)) {
                             b.set_goal(Some(Goal::Wander(to)));
                         }

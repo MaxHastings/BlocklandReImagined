@@ -1097,3 +1097,83 @@ fn a_bot_that_fails_to_think_leaves_the_others_thinking() {
         .count();
     assert!(told <= 1, "told {told} times in three seconds");
 }
+
+/// Bricks planted round a bot that has walked off from its spawn brick,
+/// walls and a roof, as a brick respawning on it would: its unsticking
+/// gets it nowhere, so in the end it respawns itself, as a player would
+/// (Ctrl+K), back at its brick.
+#[test]
+fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
+    let mut s = session();
+    only_kind(&mut s, |k| k.wander_radius = 6.0);
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 22.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(&mut s, human, vec![bot_brick([0.0, 0.1, 30.0], human)]);
+    steps(&mut s, &[human], 60, &mut sequence);
+    let bot = bots(&s)[0];
+    let brick = Vec3::new(0.25, 0.0, 30.25);
+    // Wait for it to stroll off its brick, standing.
+    for _ in 0..120 * 60 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let at = feet(&s, bot);
+        let p = s.snapshot().players.into_iter().find(|p| p.owner == bot).unwrap();
+        if flat_distance(at, brick) > 3.5 && p.grounded && Vec3::from(p.velocity).length() < 0.1 {
+            break;
+        }
+    }
+    let at = feet(&s, bot);
+    assert!(flat_distance(at, brick) > 3.5, "it strolled off its brick: {at}");
+    // Walls of 3-unit columns 1.5 off each way, and a plate over them.
+    let (cx, cz) = ((at.x * 2.0).round() / 2.0, (at.z * 2.0).round() / 2.0);
+    let mut cells = Vec::new();
+    for i in -3..=3 {
+        let o = i as f32 * 0.5;
+        cells.extend([(cx + o, cz - 1.5), (cx + o, cz + 1.5), (cx - 1.5, cz + o), (cx + 1.5, cz + o)]);
+    }
+    cells.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    cells.dedup();
+    for (x, z) in cells {
+        sequence += 1;
+        s.command(
+            human,
+            sequence,
+            Command::Plant {
+                definition: fixture::TALL.into(),
+                position: [x + 0.25, 1.5, z + 0.25],
+                quarter_turns: 0,
+                color: 0,
+            },
+        )
+        .unwrap();
+        steps(&mut s, &[human], 1, &mut sequence);
+    }
+    sequence += 1;
+    s.command(
+        human,
+        sequence,
+        Command::Plant {
+            definition: fixture::BASEPLATE.into(),
+            position: [cx, 3.1, cz],
+            quarter_turns: 0,
+            color: 0,
+        },
+    )
+    .unwrap();
+    let mut out = None;
+    for tick in 0..120 * 90 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        if flat_distance(feet(&s, bot), Vec3::new(cx, 0.0, cz)) > 2.5 {
+            out = Some(tick);
+            break;
+        }
+    }
+    let out = out.expect("the sealed-in bot got out");
+    eprintln!("out after {out} ticks, at {}", feet(&s, bot));
+}
+
+fn flat_distance(a: Vec3, b: Vec3) -> f32 {
+    Vec3::new(a.x - b.x, 0.0, a.z - b.z).length()
+}

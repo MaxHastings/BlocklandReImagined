@@ -186,6 +186,27 @@ const ERROR_FLOOR: f32 = 1.0 / 3.0;
 const LEAD_STRAY: f32 = 0.15;
 /// Ticks between the lead's seeded points.
 const LEAD_TICKS: u64 = 120;
+/// Within this of where it began trying to get away, a bot has got
+/// nowhere (`trapped`).
+const PINNED: f32 = 2.0;
+/// Seconds of trying and getting nowhere before it thinks of respawning
+/// itself, and how many more before it is sure: its own unsticking (a
+/// hop, plans again, a new goal) has had its turn by then.
+const TRAPPED_AFTER: f32 = 10.0;
+const TRAPPED_RAMP: f32 = 10.0;
+/// Ticks without a try to get away after which it is not trapped.
+const TRY_GAP: u64 = 120 * 10;
+/// How sure it is that it is trapped, 0 to 1, from how long it has kept
+/// trying to get away from one spot (`Brain::pinned`).
+fn trapped(pinned: Option<(Vec3, u64, u64)>) -> f32 {
+    pinned.map_or(0.0, |(_, since, last)| {
+        ((last.saturating_sub(since) as f32 / 120.0 - TRAPPED_AFTER) / TRAPPED_RAMP).clamp(0.0, 1.0)
+    })
+}
+/// How far either way a search sweeps its view (all round), and the
+/// ticks between the points it looks to.
+const SWEEP: f32 = std::f32::consts::PI;
+const SWEEP_TICKS: u64 = 120;
 /// Shortest hold before the throw: it holds its catch up a moment.
 const LIFT_TICKS: u64 = 90;
 /// A roof closer than this over its eyes is one a carried catch must clear.
@@ -323,6 +344,11 @@ struct Brain {
     replans: u32,
     /// What the act stage did last tick (`act::Acted`), for the readout.
     acted: act::Acted,
+    /// The way it faced as it began sweeping the spot it searches.
+    sweep_from: Option<f32>,
+    /// Where it has been trying to get away from, since when, and when it
+    /// last tried (`trapped`).
+    pinned: Option<(Vec3, u64, u64)>,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
     pitch: f32,
@@ -518,6 +544,8 @@ impl Brain {
             progress: crate::route::Progress::default(),
             replans: 0,
             acted: Default::default(),
+            sweep_from: None,
+            pinned: None,
             yaw: 0.0,
             pitch: 0.0,
             target: None,
@@ -686,9 +714,9 @@ impl Brain {
             self.home = feet;
         }
         if self.goal.is_none() && tick >= self.next_wander {
+            let around = if self.tethered() { self.home } else { feet };
             let angle = self.random() * std::f32::consts::TAU;
             let radius = self.random() * self.kind.wander_radius;
-            let around = if self.tethered() { self.home } else { feet };
             // A swimmer roams up and down too (the water bounds it).
             let rise = if swimming {
                 (self.random() * 2.0 - 1.0) * self.kind.wander_radius * 0.5
@@ -1122,6 +1150,7 @@ impl Session {
             brain.objective_tool = false;
             brain.surprise.new_life();
             brain.chase_offset = Vec3::ZERO;
+            brain.pinned = None;
         }
         Ok(())
     }
@@ -2053,7 +2082,6 @@ impl Session {
             interaction: opportunity.map_or(0.0, |o| o.utility),
             objective: objective.is_some(),
             committed: objective.is_some_and(|view| view.committed),
-            gunning: can_gun,
             arm: arm.map_or(0.0, |(_, score)| score),
             // A swimmer reaches any depth, and a swing reaches round it
             // alike: only how far counts.
@@ -2091,6 +2119,15 @@ impl Session {
             },
             pursuing: brain.objective.pursuing(),
             explore: explore_to.is_some(),
+            // Never a way out of a fight: not with an enemy in sight or
+            // one that hurt it, nor while it carries something.
+            trapped: if sight.target.is_none() && threat.is_none() && hurt_by.is_none() && !holding
+                && !objective.is_some_and(|view| view.committed)
+            {
+                trapped(brain.pinned)
+            } else {
+                0.0
+            },
         };
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
@@ -2372,6 +2409,10 @@ impl Session {
                 brain.set_goal(Some(Goal::Home));
                 (false, false)
             }
+            Behaviour::Respawn => {
+                brain.set_goal(None);
+                (false, false)
+            }
             Behaviour::Explore => {
                 // A route that ends short of the place is as far as it goes
                 // that way: it looks elsewhere next.
@@ -2388,6 +2429,13 @@ impl Session {
                 (false, false)
             }
         };
+        // Respawning: the command a player gives (Ctrl+K), with what it
+        // costs them in this game.
+        if behaviour == Behaviour::Respawn {
+            let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
+            let _ = self.command(bot, sequence, Command::Suicide);
+            return Ok(());
+        }
 
         // Path.
         let home = brain.home;
@@ -2719,12 +2767,18 @@ impl Session {
                 pitch: 0.0,
             });
         } else if hold {
-            // Searching the spot: sweep the view.
+            // Searching the spot: it looks one way and back, all round the
+            // way it came facing, pausing unevenly (a seeded drift eases in
+            // and out of each point), not a turret's steady spin.
+            let from = *brain.sweep_from.get_or_insert(brain.yaw);
             looks.push(act::Look {
                 by: act::Looker::Sweep,
-                yaw: wrap(brain.yaw + 0.8 * TICK * 2.0),
+                yaw: wrap(from + SWEEP * cadence::drift(bot, cadence::salt::SWEEP, 0, tick, SWEEP_TICKS)),
                 pitch: 0.0,
             });
+        }
+        if !hold || sight.target.is_some() || glance.is_some() {
+            brain.sweep_from = None;
         }
         // A goof's gesture (waving a tool, looking about) does not keep its
         // eyes off someone it just noticed: the glance has the look.
@@ -3010,6 +3064,24 @@ impl Session {
                 .stalled(feet, self.peers[&bot].player.tuning().forward, 120.0, tick);
         if !walking {
             brain.progress.reset();
+        }
+        // Trapped: trying to get somewhere (walking at it, or wanting a
+        // goal it has no route to) again and again, and still within
+        // `PINNED` of where it began trying. Leaving that spot, or no try
+        // for `TRY_GAP`, clears it.
+        let no_way = driving.is_none()
+            && wanted.is_none()
+            && pushing.is_none()
+            && !at_work
+            && brain
+                .goal
+                .is_some_and(|g| flat(g.point(brain.home) - feet).length() > PINNED);
+        brain.pinned = brain.pinned.filter(|(at, _, last)| {
+            flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP
+        });
+        if walking || no_way {
+            let (at, since, _) = brain.pinned.unwrap_or((feet, tick, tick));
+            brain.pinned = Some((at, since, tick));
         }
         // A goof's, an extra's, an objective's (into a body) or the stall
         // judge's hop, which safety lets through where it comes down on

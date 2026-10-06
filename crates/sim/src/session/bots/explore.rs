@@ -89,12 +89,17 @@ impl Explore {
             self.to = None;
         }
     }
+    /// How long since it was at a place, 0 (just now) to 1 (a while, or
+    /// never).
+    fn stale(&self, at: Vec3, tick: u64) -> f32 {
+        self.visited.get(&cell(at)).map_or(1.0, |seen| {
+            (tick.saturating_sub(*seen) as f32 / (STALE_SECONDS * 120.0)).min(1.0)
+        })
+    }
     /// How worth looking at a place is: how long since it was there (a
     /// place never visited is new), and how near a recent lead.
     fn worth(&self, at: Vec3, tick: u64) -> f32 {
-        let stale = self.visited.get(&cell(at)).map_or(1.0, |seen| {
-            (tick.saturating_sub(*seen) as f32 / (STALE_SECONDS * 120.0)).min(1.0)
-        });
+        let stale = self.stale(at, tick);
         let lead = self
             .leads
             .iter()
@@ -143,7 +148,8 @@ impl Session {
         {
             return None;
         }
-        let to = self.bot_explore_spot(bot, feet, eye, body, intents, tick);
+        let reach = brain.kind.sight * REACH_SHARE;
+        let to = self.bot_explore_spot(bot, (feet, eye), body, reach, intents, tick);
         let explore = &mut self.bots.brains.get_mut(&bot)?.explore;
         explore.to = to;
         explore.boxed_in = to.is_none().then_some((feet, tick));
@@ -155,14 +161,13 @@ impl Session {
     pub(super) fn bot_explore_spot(
         &mut self,
         bot: OwnerId,
-        feet: Vec3,
-        eye: Vec3,
+        (feet, eye): (Vec3, Vec3),
         body: &Body,
+        reach: f32,
         intents: &[(OwnerId, claims::Intent)],
         tick: u64,
     ) -> Option<Vec3> {
         let brain = self.bots.brains.get(&bot)?;
-        let reach = brain.kind.sight * REACH_SHARE;
         // The way it faces: a person looking about keeps on more often than
         // they turn back the way they came.
         let facing = Vec3::new(brain.yaw.sin(), 0.0, -brain.yaw.cos());
@@ -173,7 +178,7 @@ impl Session {
             let way = Vec3::new(angle.sin(), 0.0, angle.cos());
             let open = super::super::admin_players::world_ray(&self.simulation, eye, way, reach)
                 .map_or(reach, |hit| (hit - 1.0).max(0.0));
-            if open < CELL * 0.5 {
+            if open < reach.min(CELL) * 0.5 {
                 continue;
             }
             let at = feet + way * open;
