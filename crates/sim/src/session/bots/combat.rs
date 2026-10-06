@@ -161,7 +161,7 @@ fn charge_release_only(image: &Image) -> bool {
 /// body would have made the shot miss, so players aim rockets low.
 const SPLASH_AIM: f32 = 1.5;
 
-fn capability(
+pub(super) fn capability(
     image: &Image,
     projectile: Option<&bri_weapons::ProjectileDef>,
     scale: f32,
@@ -379,7 +379,10 @@ fn available_rounds(a: &bri_weapons::runtime::AmmoView) -> u32 {
     }
 }
 
-fn movement_weapon(cap: Capability) -> Weapon {
+/// How a bot handles a weapon it fights with natively (`capability`):
+/// its band, flight and blast, and `spread` (`fire::image_spread`). The one
+/// reader of a natively modelled image (`Session::bot_weapon` uses it too).
+pub(super) fn weapon_of(cap: Capability, spread: f32) -> Weapon {
     let (speed, fall) = match cap.delivery {
         Delivery::Projectile(f) => (f.speed, f.fall_per_tick * bri_weapons::TICK_HZ as f32),
         _ => (0.0, 0.0),
@@ -400,7 +403,7 @@ fn movement_weapon(cap: Capability) -> Weapon {
         speed,
         fall,
         splash: cap.splash_radius,
-        spread: 0.0,
+        spread,
     }
 }
 
@@ -492,7 +495,7 @@ pub(super) fn choose(
         }
         supported = true;
         if state.movement.is_none() {
-            state.movement = Some(movement_weapon(cap));
+            state.movement = Some(weapon_of(cap, super::fire::image_spread(image)));
         }
         let distance = origin.distance(target_point);
         let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
@@ -518,7 +521,7 @@ pub(super) fn choose(
             // native wind-up while tracking; this intent cannot release.
             charge_continuation = Some(Choice {
                 slot,
-                weapon: movement_weapon(cap),
+                weapon: weapon_of(cap, super::fire::image_spread(image)),
                 capability: cap,
                 direction: (target_point - origin).normalize_or_zero(),
                 aim: None,
@@ -569,7 +572,7 @@ pub(super) fn choose(
             solutions[0].map_or((target_point - origin).normalize_or_zero(), |a| a.direction);
         let choice = Choice {
             slot,
-            weapon: movement_weapon(cap),
+            weapon: weapon_of(cap, super::fire::image_spread(image)),
             direction,
             capability: cap,
             aim: solutions[0],
@@ -657,6 +660,7 @@ pub(super) fn choose(
                         point,
                         moving,
                         surface: aim == super::surprise::AIM_SURFACE,
+                        spread: super::fire::image_spread(image),
                     };
                     if let Some((c, score)) = variant(
                         session, bot, seen.owner, cap, solve, context, &bodies, budget,
@@ -800,6 +804,8 @@ struct Solve {
     point: Vec3,
     moving: Vec3,
     surface: bool,
+    /// The weapon's spread (`fire::image_spread`).
+    spread: f32,
 }
 /// A splash aim at `solve.point` instead of the body: a solved intercept
 /// whose blast still reaches the body where it will be, safe and clear
@@ -849,7 +855,7 @@ fn variant(
     }
     let choice = Choice {
         slot: solve.slot,
-        weapon: movement_weapon(cap),
+        weapon: weapon_of(cap, solve.spread),
         direction: aim.direction,
         capability: cap,
         aim: Some(aim),
@@ -1393,7 +1399,7 @@ mod tests {
         cap.delivery = Delivery::Ray;
         let choice = Choice {
             slot: 0,
-            weapon: movement_weapon(cap),
+            weapon: weapon_of(cap, 0.0),
             capability: cap,
             direction: (target - origin).normalize(),
             aim: None,

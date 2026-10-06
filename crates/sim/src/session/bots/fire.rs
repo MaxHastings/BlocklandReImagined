@@ -211,6 +211,11 @@ impl Session {
         }
         None
     }
+    /// How it handles what it holds: a natively modelled weapon as the
+    /// fight reads it (`hand_combat::weapon_of`), else by its shot or projectile,
+    /// a melee image by its reach, with its data's `BotUse` over either. An
+    /// image with none of those is not a weapon to it (an unknown scripted
+    /// item stays unsupported, never guessed at).
     pub(super) fn bot_weapon(&self, bot: OwnerId) -> Option<Weapon> {
         if let Some(gun) = self.bot_vehicle_weapon(bot) {
             return Some(gun);
@@ -218,13 +223,21 @@ impl Session {
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
         let using = image.bot.unwrap_or_default();
         let hold = using.fire == bri_weapons::BotFire::Hold;
-        // v20's `%spread`: each projectile turns by up to 5π·spread about
-        // each axis.
-        let spread = image
-            .shot
+        let spread = image_spread(image);
+        let projectile = image
+            .projectile
             .as_ref()
-            .filter(|s| s.spread > 0.0)
-            .map_or(0.0, |s| (5.0 * std::f32::consts::PI * s.spread).min(1.4));
+            .and_then(|p| self.weapons.pack.projectiles.get(p));
+        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+        if let Some(cap) = hand_combat::capability(image, projectile, scale) {
+            let w = hand_combat::weapon_of(cap, spread);
+            return Some(Weapon {
+                hold: w.hold || hold,
+                near: using.near.or(w.near),
+                reach: using.reach.unwrap_or(w.reach),
+                ..w
+            });
+        }
         if let Some(ray) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
             return Some(Weapon {
                 melee: false,
@@ -238,11 +251,10 @@ impl Session {
                 spread,
             });
         }
-        let projectile = image
-            .projectile
-            .as_ref()
-            .and_then(|p| self.weapons.pack.projectiles.get(p));
         let Some(p) = projectile else {
+            if !image.melee && using.reach.is_none() {
+                return None;
+            }
             let reach = using.reach.unwrap_or(3.0);
             return Some(Weapon {
                 melee: reach < 6.0,
@@ -440,4 +452,14 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// v20's `%spread`: each projectile turns by up to 5π·spread about each
+/// axis, in radians.
+pub(super) fn image_spread(image: &bri_weapons::Image) -> f32 {
+    image
+        .shot
+        .as_ref()
+        .filter(|s| s.spread > 0.0)
+        .map_or(0.0, |s| (5.0 * std::f32::consts::PI * s.spread).min(1.4))
 }
