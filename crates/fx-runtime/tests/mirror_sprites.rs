@@ -155,7 +155,15 @@ fn frame(mirrored: bool) -> Result<Vec<u8>> {
     };
     let mut encoder = device.create_command_encoder(&Default::default());
     let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| sprites.render_view(pass, view);
-    reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &late);
+    reflections.render(
+        &renderer,
+        &mut encoder,
+        &[&scene],
+        &[],
+        clear,
+        &late,
+        &|_, _| {},
+    );
     let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
     let own = |pass: &mut wgpu::RenderPass<'_>| sprites.render(pass);
     renderer.render_world(

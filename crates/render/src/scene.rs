@@ -1700,6 +1700,7 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 fn camera_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
+    view: usize,
     camera: &wgpu::Buffer,
     lights: &wgpu::Buffer,
     light_grid: &wgpu::Buffer,
@@ -1752,7 +1753,7 @@ fn camera_group(
         },
         wgpu::BindGroupEntry {
             binding: 8,
-            resource: shadows.receiver.as_entire_binding(),
+            resource: shadows.receiver_binding(view),
         },
         wgpu::BindGroupEntry {
             binding: 9,
@@ -2650,10 +2651,16 @@ impl SceneRenderer {
         renderer.set_view_count(device, 1);
         renderer
     }
-    fn view_group(&self, device: &wgpu::Device, camera: &wgpu::Buffer) -> wgpu::BindGroup {
+    fn view_group(
+        &self,
+        device: &wgpu::Device,
+        view: usize,
+        camera: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
         camera_group(
             device,
             &self.camera_layout,
+            view,
             camera,
             &self.light_buffer,
             &self.light_grid,
@@ -2676,7 +2683,7 @@ impl SceneRenderer {
                 contents: bytemuck::bytes_of(&Camera::default()),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
-            let group = self.view_group(device, &camera);
+            let group = self.view_group(device, self.views.len(), &camera);
             self.views.push(View {
                 camera,
                 group,
@@ -2700,7 +2707,7 @@ impl SceneRenderer {
     }
     fn rebuild_view_groups(&mut self, device: &wgpu::Device) {
         for i in 0..self.views.len() {
-            self.views[i].group = self.view_group(device, &self.views[i].camera);
+            self.views[i].group = self.view_group(device, i, &self.views[i].camera);
         }
     }
     /// Before uploading many chunks at once (a load): room for all of them
@@ -3280,8 +3287,9 @@ impl SceneRenderer {
         );
     }
     /// Another view's camera for this frame (after `update_camera`, which
-    /// fits the shadows every view shares to the player's view). Views past
-    /// `view_count` are ignored.
+    /// fits the shadows every view reads to the player's view, unless
+    /// `fit_view_shadows` gives it its own). Views past `view_count` are
+    /// ignored.
     pub fn update_view(&mut self, queue: &wgpu::Queue, view: usize, camera: &Camera) {
         let Some(v) = self.views.get_mut(view) else {
             return;
@@ -3291,6 +3299,25 @@ impl SceneRenderer {
             &camera.view_projection,
         )));
         queue.write_buffer(&v.camera, 0, bytemuck::bytes_of(camera));
+    }
+    /// Whether the player's sun shadows (after `update_camera`) reach
+    /// `point`: a view whose eye is there can read them.
+    pub fn shadows_reach(&self, point: Vec3) -> bool {
+        self.shadows.reach(point)
+    }
+    /// Fit sun shadows of `view`'s own to `camera`, drawn by
+    /// `render_view_shadows(view)` before its pass: a view whose eye lies
+    /// past the player's shadows (a window onto a far place) would show
+    /// none. Only mirror and window planes' views (1 to
+    /// `ReflectionSettings::MAX_PLANES`) can; false when it cannot, and it
+    /// reads the player's.
+    pub fn fit_view_shadows(&mut self, queue: &wgpu::Queue, view: usize, camera: &Camera) -> bool {
+        self.shadows.fit_view(
+            queue,
+            view,
+            Mat4::from_cols_array(&camera.view_projection),
+            Vec4::from(camera.eye).truncate(),
+        )
     }
     /// Validate before writing, including an empty update to clear the previous frame.
     pub fn update_lights(&self, queue: &wgpu::Queue, lights: &[PointLight]) -> Result<()> {
@@ -3427,10 +3454,30 @@ impl SceneRenderer {
         occluders: ShadowCasters<'_>,
         map: ShadowCasters<'_>,
     ) {
-        let cascades = &self.shadows.cascades;
+        self.render_view_shadows(encoder, 0, casters, occluders, map);
+    }
+    /// The shadows `view` reads, drawn before its pass. View 0 draws the
+    /// player's (sun cascades, lamps and map light cubes), which every view
+    /// without its own reads. A view that fitted its own
+    /// (`fit_view_shadows`) draws only its sun cascades, into the same
+    /// layers as the player's, so it draws (and its pass records) before
+    /// the player's do; the lamps stay the player's. Any other view draws
+    /// nothing.
+    pub fn render_view_shadows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: usize,
+        casters: ShadowCasters<'_>,
+        occluders: ShadowCasters<'_>,
+        map: ShadowCasters<'_>,
+    ) {
+        let Some(cascades) = self.shadows.view_cascades(view) else {
+            return;
+        };
+        let player = view == 0;
         let map_drawn =
             (!map.scenes.is_empty() || !map.instances.is_empty()) && !cascades.is_empty();
-        if let Some(queue) = self.queue.borrow().as_ref() {
+        if player && let Some(queue) = self.queue.borrow().as_ref() {
             self.shadows.set_map_drawn(queue, map_drawn);
         }
         // Every map this frame draws: its layer, view, casters, bind group
@@ -3469,18 +3516,21 @@ impl SceneRenderer {
         // occluder layer), the texels it may change, and the kept brick
         // layer it starts from (see `TargetExtra`).
         let mut extras: Vec<TargetExtra> = Vec::new();
-        // Bricks casting (Brick Shadows on) keep their depth per cascade:
-        // what each cascade does with its kept layer this frame.
-        if static_scenes.is_empty() || cascades.is_empty() || !self.keep_brick_shadows.get() {
-            *self.kept.borrow_mut() = None;
-        } else if self.kept.borrow().is_none()
-            && let Some(settings) = self.shadows.settings
-        {
-            *self.kept.borrow_mut() = crate::kept_shadows::KeptShadows::new(
-                &self.device,
-                settings.cascades,
-                settings.resolution,
-            );
+        // Bricks casting (Brick Shadows on) keep their depth per cascade
+        // around the player: what each cascade does with its kept layer
+        // this frame. A view's own cascades draw them directly.
+        if player {
+            if static_scenes.is_empty() || cascades.is_empty() || !self.keep_brick_shadows.get() {
+                *self.kept.borrow_mut() = None;
+            } else if self.kept.borrow().is_none()
+                && let Some(settings) = self.shadows.settings
+            {
+                *self.kept.borrow_mut() = crate::kept_shadows::KeptShadows::new(
+                    &self.device,
+                    settings.cascades,
+                    settings.resolution,
+                );
+            }
         }
         let kept = self.kept.borrow();
         if let Some(kept) = kept.as_ref() {
@@ -3488,7 +3538,7 @@ impl SceneRenderer {
         }
         let uses: Vec<crate::kept_shadows::Use<'_>> =
             match (kept.as_ref(), self.queue.borrow().as_ref()) {
-                (Some(kept), Some(queue)) if !static_scenes.is_empty() => kept.plan(
+                (Some(kept), Some(queue)) if player && !static_scenes.is_empty() => kept.plan(
                     queue,
                     cascades,
                     self.shadows.sun,
@@ -3572,7 +3622,7 @@ impl SceneRenderer {
                     *casters,
                     bind_group,
                     pipelines,
-                    crate::shadow::ShadowMaps::caster_offset(index),
+                    crate::shadow::ShadowMaps::caster_offset(view, index),
                     false,
                     false,
                 ));
@@ -3587,7 +3637,7 @@ impl SceneRenderer {
                     map,
                     &self.shadows.caster_group,
                     &self.shadows.pipelines,
-                    crate::shadow::ShadowMaps::map_offset(index),
+                    crate::shadow::ShadowMaps::map_offset(view, index),
                     false,
                     true,
                 ));
@@ -3596,72 +3646,13 @@ impl SceneRenderer {
         // Everything before is the sun's (casters, occluders, map layer).
         let sun_targets = targets.len();
         let mut total_targets = 0;
-        // The lamps' map faces: drawn once per lamp slot while the map
-        // stays, with only its surfaces (as the map layer), so they tell
-        // whether a lamp's light reaches a point past the map's own walls.
-        let map_key: Vec<usize> = if map_drawn {
-            map.scenes
-                .iter()
-                .flat_map(|s| {
-                    use std::hash::{Hash, Hasher};
-                    let mut hash = std::collections::hash_map::DefaultHasher::new();
-                    for batch in &s.batches {
-                        batch.indices.hash(&mut hash);
-                    }
-                    [
-                        std::ptr::from_ref::<GpuScene>(*s) as usize,
-                        hash.finish() as usize,
-                    ]
-                })
-                .chain(map.instances.iter().map(|(scene, instances)| {
-                    use std::hash::{Hash, Hasher};
-                    let mut hash = std::collections::hash_map::DefaultHasher::new();
-                    (std::ptr::from_ref(*scene) as usize).hash(&mut hash);
-                    for transform in &instances.transforms {
-                        for v in transform.transform.to_cols_array() {
-                            v.to_bits().hash(&mut hash);
-                        }
-                    }
-                    hash.finish() as usize
-                }))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let stale_map = self.shadows.stale_map_faces(&map_key);
-        // The Dynamic mode's light cubes: the view of the map's surfaces from
-        // every recovered map light. Same-projector geometry refreshes keep
-        // their previous runtime results available until replacement faces draw.
-        let cube_lights: Vec<Option<(Vec3, f32)>> = self
-            .map_lights
-            .lamps
-            .iter()
-            .map(|l| Some((l.position, l.outer)))
-            .collect();
-        let (stale_cubes, cubes_ready) =
-            self.shadows
-                .stale_cube_faces(&map_key, &cube_lights, CUBE_FACES_PER_FRAME);
-        if let Some(queue) = self.queue.borrow().as_ref() {
-            for &(light, face, matrix) in &stale_cubes {
-                self.shadows.set_cube_matrix(queue, light, face, matrix);
-            }
-            let soft = self.shadows.settings.map_or(0, |s| {
-                crate::shadow::soft_cube_mask(self.views[0].eye, &cube_lights, s.soft_cubes)
-            });
-            self.map_lights.set_cubes(
-                queue,
-                self.shadows.settings,
-                cubes_ready,
-                &stale_cubes,
-                soft,
-            );
-        }
         // Per lamp slot, the static chunks within its reach: what its kept
         // faces draw, and how they tell a build changed there.
         let near_lamps: Vec<Vec<&GpuScene>> = self
             .shadows
             .lamps
             .iter()
+            .filter(|_| player)
             .map(|lamp| {
                 let Some(lamp) = lamp else { return Vec::new() };
                 static_scenes
@@ -3676,83 +3667,146 @@ impl SceneRenderer {
                     .collect()
             })
             .collect();
-        if let Some(settings) = self.shadows.settings {
-            for &(light, face, matrix) in &stale_cubes {
-                let (layer, tile) = settings.cube_tile(light * 6 + face);
-                targets.push((
-                    &self.shadows.layer_views[layer as usize],
-                    Some(tile),
-                    matrix,
-                    map,
-                    &self.shadows.caster_group,
-                    &self.shadows.pipelines,
-                    crate::shadow::ShadowMaps::cube_offset(light, face),
-                    true,
-                    true,
-                ));
+        // Lamps and map light cubes are the player's alone.
+        if player {
+            // The lamps' map faces: drawn once per lamp slot while the map
+            // stays, with only its surfaces (as the map layer), so they tell
+            // whether a lamp's light reaches a point past the map's own walls.
+            let map_key: Vec<usize> = if map_drawn {
+                map.scenes
+                    .iter()
+                    .flat_map(|s| {
+                        use std::hash::{Hash, Hasher};
+                        let mut hash = std::collections::hash_map::DefaultHasher::new();
+                        for batch in &s.batches {
+                            batch.indices.hash(&mut hash);
+                        }
+                        [
+                            std::ptr::from_ref::<GpuScene>(*s) as usize,
+                            hash.finish() as usize,
+                        ]
+                    })
+                    .chain(map.instances.iter().map(|(scene, instances)| {
+                        use std::hash::{Hash, Hasher};
+                        let mut hash = std::collections::hash_map::DefaultHasher::new();
+                        (std::ptr::from_ref(*scene) as usize).hash(&mut hash);
+                        for transform in &instances.transforms {
+                            for v in transform.transform.to_cols_array() {
+                                v.to_bits().hash(&mut hash);
+                            }
+                        }
+                        hash.finish() as usize
+                    }))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let stale_map = self.shadows.stale_map_faces(&map_key);
+            // The Dynamic mode's light cubes: the view of the map's surfaces from
+            // every recovered map light. Same-projector geometry refreshes keep
+            // their previous runtime results available until replacement faces draw.
+            let cube_lights: Vec<Option<(Vec3, f32)>> = self
+                .map_lights
+                .lamps
+                .iter()
+                .map(|l| Some((l.position, l.outer)))
+                .collect();
+            let (stale_cubes, cubes_ready) =
+                self.shadows
+                    .stale_cube_faces(&map_key, &cube_lights, CUBE_FACES_PER_FRAME);
+            if let Some(queue) = self.queue.borrow().as_ref() {
+                for &(light, face, matrix) in &stale_cubes {
+                    self.shadows.set_cube_matrix(queue, light, face, matrix);
+                }
+                let soft = self.shadows.settings.map_or(0, |s| {
+                    crate::shadow::soft_cube_mask(self.views[0].eye, &cube_lights, s.soft_cubes)
+                });
+                self.map_lights.set_cubes(
+                    queue,
+                    self.shadows.settings,
+                    cubes_ready,
+                    &stale_cubes,
+                    soft,
+                );
             }
-            for &index in &stale_map {
-                let (slot, face) = (index / 6, index % 6);
-                let Some(lamp) = &self.shadows.lamps[slot] else {
-                    continue;
-                };
-                let (layer, tile) = settings.lamp_map_tile(index);
-                targets.push((
-                    &self.shadows.layer_views[layer as usize],
-                    Some(tile),
-                    lamp.faces[face],
-                    map,
-                    &self.shadows.caster_group,
-                    &self.shadows.pipelines,
-                    crate::shadow::ShadowMaps::lamp_offset(slot, face),
-                    true,
-                    true,
-                ));
-            }
-            for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
-                let Some(lamp) = lamp else { continue };
-                let near = &near_lamps[slot];
-                for (face, matrix) in lamp.faces.iter().enumerate() {
-                    let index = slot * 6 + face;
-                    let offset = crate::shadow::ShadowMaps::lamp_offset(slot, face);
-                    let planes = frustum_planes(*matrix);
-                    let inside = kept_casters_key(
-                        near.iter()
-                            .copied()
-                            .filter(|s| s.bounds.is_some_and(|b| aabb_visible(&planes, b))),
-                    );
-                    if self.shadows.kept_face_due(index, inside) {
-                        let (layer, tile) = settings.lamp_tile(index);
+            if let Some(settings) = self.shadows.settings {
+                for &(light, face, matrix) in &stale_cubes {
+                    let (layer, tile) = settings.cube_tile(light * 6 + face);
+                    targets.push((
+                        &self.shadows.layer_views[layer as usize],
+                        Some(tile),
+                        matrix,
+                        map,
+                        &self.shadows.caster_group,
+                        &self.shadows.pipelines,
+                        crate::shadow::ShadowMaps::cube_offset(light, face),
+                        true,
+                        true,
+                    ));
+                }
+                for &index in &stale_map {
+                    let (slot, face) = (index / 6, index % 6);
+                    let Some(lamp) = &self.shadows.lamps[slot] else {
+                        continue;
+                    };
+                    let (layer, tile) = settings.lamp_map_tile(index);
+                    targets.push((
+                        &self.shadows.layer_views[layer as usize],
+                        Some(tile),
+                        lamp.faces[face],
+                        map,
+                        &self.shadows.caster_group,
+                        &self.shadows.pipelines,
+                        crate::shadow::ShadowMaps::lamp_offset(slot, face),
+                        true,
+                        true,
+                    ));
+                }
+                for (slot, lamp) in self.shadows.lamps.iter().enumerate() {
+                    let Some(lamp) = lamp else { continue };
+                    let near = &near_lamps[slot];
+                    for (face, matrix) in lamp.faces.iter().enumerate() {
+                        let index = slot * 6 + face;
+                        let offset = crate::shadow::ShadowMaps::lamp_offset(slot, face);
+                        let planes = frustum_planes(*matrix);
+                        let inside = kept_casters_key(
+                            near.iter()
+                                .copied()
+                                .filter(|s| s.bounds.is_some_and(|b| aabb_visible(&planes, b))),
+                        );
+                        if self.shadows.kept_face_due(index, inside) {
+                            let (layer, tile) = settings.lamp_tile(index);
+                            targets.push((
+                                &self.shadows.layer_views[layer as usize],
+                                Some(tile),
+                                *matrix,
+                                ShadowCasters {
+                                    scenes: near,
+                                    instances: &[],
+                                },
+                                &self.shadows.caster_group,
+                                &self.shadows.pipelines,
+                                offset,
+                                true,
+                                false,
+                            ));
+                        }
+                        let (layer, tile) = settings.lamp_dynamic_tile(index);
                         targets.push((
                             &self.shadows.layer_views[layer as usize],
                             Some(tile),
                             *matrix,
                             ShadowCasters {
-                                scenes: near,
-                                instances: &[],
+                                scenes: &moving_scenes,
+                                instances: casters.instances,
                             },
                             &self.shadows.caster_group,
                             &self.shadows.pipelines,
                             offset,
-                            true,
+                            false,
                             false,
                         ));
                     }
-                    let (layer, tile) = settings.lamp_dynamic_tile(index);
-                    targets.push((
-                        &self.shadows.layer_views[layer as usize],
-                        Some(tile),
-                        *matrix,
-                        ShadowCasters {
-                            scenes: &moving_scenes,
-                            instances: casters.instances,
-                        },
-                        &self.shadows.caster_group,
-                        &self.shadows.pipelines,
-                        offset,
-                        false,
-                        false,
-                    ));
                 }
             }
         }
@@ -3765,7 +3819,7 @@ impl SceneRenderer {
             ) in targets.into_iter().enumerate()
             {
                 total_targets = target + 1;
-                if target == sun_targets {
+                if player && target == sun_targets {
                     self.mark(encoder, "sun shadows");
                 }
                 let sun = target < sun_targets;
@@ -4015,10 +4069,13 @@ impl SceneRenderer {
         stats.kept_cascades += kept_cascades;
         stats.kept_redraws += kept_redraws;
         self.stats.set(stats);
-        if total_targets <= sun_targets {
-            self.mark(encoder, "sun shadows");
-        } else {
-            self.mark(encoder, "lamp shadows");
+        if player {
+            let label = if total_targets <= sun_targets {
+                "sun shadows"
+            } else {
+                "lamp shadows"
+            };
+            self.mark(encoder, label);
         }
     }
     /// Clear starts a world frame; None loads existing color/depth for another

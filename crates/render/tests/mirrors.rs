@@ -4,6 +4,7 @@ use anyhow::Result;
 use bri_render::{
     reflection::{Mirror, ReflectionSettings, Reflections},
     scene::*,
+    shadow::ShadowSettings,
 };
 use glam::Vec3;
 
@@ -165,7 +166,9 @@ impl Gpu {
         mirrors: &[Mirror],
         frames: usize,
     ) -> Result<(Vec<u8>, RenderStats)> {
-        self.frame_with_model_visibility(camera, samples, settings, data, mirrors, frames, true)
+        self.frame_with_model_visibility(
+            camera, samples, settings, data, mirrors, frames, true, None,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn frame_with_model_visibility(
@@ -177,10 +180,20 @@ impl Gpu {
         mirrors: &[Mirror],
         frames: usize,
         visible: bool,
+        shadows: Option<(ShadowSettings, &SceneData)>,
     ) -> Result<(Vec<u8>, RenderStats)> {
         let device = &self.device;
-        let mut renderer = SceneRenderer::with_samples(device, FORMAT, samples);
+        let mut renderer =
+            SceneRenderer::with_settings(device, FORMAT, samples, shadows.map(|(s, _)| s));
         let scene = renderer.upload(device, &self.queue, data)?;
+        // What casts sun shadows, drawn in every view too.
+        let casters = match shadows {
+            Some((_, casters)) => vec![renderer.upload(device, &self.queue, casters)?],
+            None => Vec::new(),
+        };
+        let casters: Vec<&GpuScene> = casters.iter().collect();
+        let mut scenes = casters.clone();
+        scenes.push(&scene);
         let mut instance = GpuInstances::new(device, 1)?;
         instance.update(&self.queue, &[SceneTransform::default()])?;
         let models = [(&scene, &instance)];
@@ -241,16 +254,27 @@ impl Gpu {
                     mirrors,
                 )?;
             }
+            let none = ShadowCasters {
+                scenes: &[],
+                instances: &[],
+            };
             reflections.render_views(
                 &renderer,
                 &mut encoder,
-                &[],
+                &casters,
                 &|view| {
                     assert!(view > 0);
                     if visible { &models } else { &[] }
                 },
                 clear,
                 &|_, _| {},
+                &|encoder, view| {
+                    let casters = ShadowCasters {
+                        scenes: &casters,
+                        instances: &[],
+                    };
+                    renderer.render_view_shadows(encoder, view, casters, none, none);
+                },
             );
             let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
             renderer.render_world(
@@ -265,7 +289,7 @@ impl Gpu {
                     after_opaque: Some(&surfaces),
                     after_all: None,
                 },
-                &[&scene],
+                &scenes,
                 &[],
             );
         }
@@ -336,6 +360,7 @@ fn each_virtual_view_can_omit_a_first_person_body_without_changing_other_views()
             &[mirror()],
             1,
             true,
+            None,
         )?;
         let (hidden, _) = gpu.frame_with_model_visibility(
             &camera,
@@ -345,6 +370,7 @@ fn each_virtual_view_can_omit_a_first_person_body_without_changing_other_views()
             &[mirror()],
             1,
             false,
+            None,
         )?;
         assert!(
             halves(&shown, 0)[1] > 50,
@@ -707,5 +733,125 @@ fn a_portal_the_eye_is_about_to_go_through_shows_what_the_far_side_will() -> Res
         );
         assert_eq!(halves(&before, 1), [0, 0], "at {distance}");
     }
+    Ok(())
+}
+
+/// A vertex-lit box (bricks and players are lit this way).
+fn lit_box(data: &mut SceneData, min: Vec3, max: Vec3) {
+    let material = data.materials.len();
+    data.materials.push(Material::vertex_lit("lit", 0));
+    let start = data.indices.len() as u32;
+    let faces = [
+        (Vec3::Y, [(0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)]),
+        (Vec3::NEG_Y, [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)]),
+        (Vec3::X, [(1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)]),
+        (Vec3::NEG_X, [(0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)]),
+        (Vec3::Z, [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]),
+        (Vec3::NEG_Z, [(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 0)]),
+    ];
+    for (normal, corners) in faces {
+        let first = data.vertices.len() as u32;
+        data.vertices.extend(corners.map(|(x, y, z)| SceneVertex {
+            position: Vec3::select(glam::BVec3::new(x == 1, y == 1, z == 1), max, min).to_array(),
+            normal: normal.to_array(),
+            uv: [0.0; 2],
+            lightmap_uv: [0.0; 2],
+            color: [1.0; 4],
+            fx: [0.0; 4],
+        }));
+        data.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+    }
+    data.batches.push(MeshBatch {
+        indices: start..data.indices.len() as u32,
+        material,
+        center: ((min + max) * 0.5).to_array(),
+    });
+}
+
+#[test]
+fn a_window_onto_a_far_place_shows_the_shadows_standing_there_would() -> Result<()> {
+    // Max's report: through a portal whose partner stands far away, brick
+    // shadows on the far side showed only once he went through. The sun's
+    // shadows were fitted around the player alone; a view from far away
+    // fits its own.
+    let gpu = Gpu::turn()?;
+    let far = Vec3::new(1000.0, 0.0, 0.0);
+    let carry = glam::Affine3A::from_translation(far);
+    let window = |corners: [Vec3; 4], carry: glam::Affine3A| Mirror {
+        corners,
+        looks: bri_render::reflection::Looks::Through(glam::Mat4::from(carry.inverse())),
+        ..mirror()
+    };
+    let a = mirror().corners;
+    let b = [a[1], a[0], a[3], a[2]].map(|c| carry.transform_point3(c));
+    let windows = [window(a, carry), window(b, carry.inverse())];
+    // Past `b`: a lit floor, and a block over it whose shadow falls on it.
+    let mut floor = SceneData::default();
+    lit_box(
+        &mut floor,
+        far + Vec3::new(-8.0, -2.0, -12.0),
+        far + Vec3::new(8.0, -1.5, -0.5),
+    );
+    let mut block = SceneData::default();
+    lit_box(
+        &mut block,
+        far + Vec3::new(-0.6, 0.0, -5.0),
+        far + Vec3::new(0.6, 1.0, -4.0),
+    );
+    let camera = |eye: Vec3| {
+        let mut camera = Camera::perspective(
+            eye.to_array(),
+            (eye + Vec3::new(0.0, -0.4, -1.0)).to_array(),
+            1.0,
+            1.0,
+            0.05,
+            100.0,
+        );
+        camera.sun_direction = [0.0, -1.0, 0.0, 0.0];
+        camera
+    };
+    let frame = |eye: Vec3| {
+        gpu.frame_with_model_visibility(
+            &camera(eye),
+            1,
+            ReflectionSettings::MEDIUM,
+            &floor,
+            &windows,
+            1,
+            true,
+            Some((ShadowSettings::LOW, &block)),
+        )
+    };
+    let eye = Vec3::new(0.1, 0.05, 0.6);
+    let (through, _) = frame(eye)?;
+    let (there, _) = frame(carry.transform_point3(eye))?;
+    // Standing there, the block's shadow darkens part of the floor, and
+    // the window shows it as much.
+    let shaded = |pixels: &[u8]| {
+        let lit = pixels.chunks_exact(4).map(|p| u32::from(p[1])).max();
+        let lit = lit.unwrap_or(0);
+        pixels
+            .chunks_exact(4)
+            .filter(|p| p[1] > 20 && u32::from(p[1]) < lit * 3 / 4)
+            .count()
+    };
+    assert!(shaded(&there) > 100, "no shadow where the eye stands");
+    assert!(
+        shaded(&through) * 10 >= shaded(&there) * 9,
+        "the window shows {} shaded pixels of {}",
+        shaded(&through),
+        shaded(&there)
+    );
+    let differ = through
+        .chunks_exact(4)
+        .zip(there.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 24))
+        .count();
+    let share = differ as f32 / (SIZE * SIZE) as f32;
+    assert!(
+        share < 0.02,
+        "{:.1}% differ through the window",
+        share * 100.0
+    );
     Ok(())
 }
