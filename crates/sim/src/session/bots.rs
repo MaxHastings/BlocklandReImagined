@@ -2895,14 +2895,21 @@ impl Session {
                 direction = Vec3::ZERO;
             }
         }
-        // Nor does it ever walk off an edge whose fall would hurt it: what
-        // it wants beyond is not worth the fall (it stands at the edge, and
-        // gets nowhere, so it plans again). Off its route it does not step
-        // down where it could not walk back up. A jet leg flies its own way.
-        if driving.is_none()
+        if driving.is_none() && pushing.is_none() {
+            direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);
+        }
+        // The last word on where it walks: never off an edge whose fall
+        // would hurt it. What it wants beyond is not worth the fall: it
+        // stands at the edge and gets nowhere, so it plans again. Off its
+        // route on its feet it does not step down where it could not walk
+        // back up; in the air (footwork, a goof, a hop) it does not steer
+        // out over a fall that hurts. Its route's own way through the air,
+        // and its jets, it keeps.
+        let off_route = direction != routed;
+        let vetoed = driving.is_none()
             && swim.is_none()
             && !wet
-            && state.grounded
+            && (state.grounded || off_route && !input.jet && !state.jetting)
             && direction != Vec3::ZERO
             && !wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. }))
             && self.bot_fall_ahead(
@@ -2910,20 +2917,18 @@ impl Session {
                 feet,
                 &body,
                 flat(direction).normalize_or_zero(),
-                direction != routed,
-            )
-        {
+                off_route && state.grounded,
+            );
+        if vetoed {
             direction = Vec3::ZERO;
-        }
-        if driving.is_none() && pushing.is_none() {
-            direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);
         }
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
         // Walking into something: hop, then plan again, then give up. One
-        // judge says whether it is getting anywhere.
-        let trying = input.forward != 0.0 || input.right != 0.0;
+        // judge says whether it is getting anywhere; held back at an edge
+        // it is not.
+        let trying = input.forward != 0.0 || input.right != 0.0 || vetoed;
         // Getting somewhere is net progress across a window (`route`), not
         // moving at an instant: wobbling on a roof's edge or between two
         // spots is as stuck as standing against a wall.

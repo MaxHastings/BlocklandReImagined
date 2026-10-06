@@ -913,6 +913,18 @@ impl Session {
     /// Whether walking `toward` takes the bot off an edge with no floor
     /// within a fall that hurts (its type's least hurting impact): no floor
     /// under its whole footprint a step or two ahead.
+    /// The deepest fall that does not hurt the bot's body: from its player
+    /// type's fall-damage data (the slowest impact that hurts) and gravity.
+    fn bot_safe_drop(&self, bot: OwnerId) -> Option<f32> {
+        let peer = self.peers.get(&bot)?;
+        let state = peer.player.state();
+        let gravity = peer.player.tuning().gravity.max(1.0);
+        let impact = crate::player_types::PlayerType::from_archetype(state.archetype)
+            .unwrap_or_default()
+            .min_impact_speed()
+            * state.scale.max(1.0);
+        Some(impact * impact / (2.0 * gravity))
+    }
     pub(super) fn bot_fall_ahead(
         &self,
         bot: OwnerId,
@@ -921,22 +933,17 @@ impl Session {
         toward: Vec3,
         off_route: bool,
     ) -> bool {
-        let Some(peer) = self.peers.get(&bot) else {
+        let Some(hurts) = self.bot_safe_drop(bot) else {
             return false;
         };
-        let state = peer.player.state();
-        let gravity = peer.player.tuning().gravity.max(1.0);
-        let impact = crate::player_types::PlayerType::from_archetype(state.archetype)
-            .unwrap_or_default()
-            .min_impact_speed()
-            * state.scale.max(1.0);
-        let hurts = impact * impact / (2.0 * gravity);
         // Off its route (footwork, a strafe, a goof's walk) it keeps to
-        // floor it can walk back up from; a route plans its own drops.
+        // floor it can walk back up from; a route plans its own drops, so
+        // on it no drop the route may take is refused, nor one that does
+        // not hurt.
         let depth = if off_route {
             body.step + body.drop
         } else {
-            hurts
+            hurts.max(body.drop)
         };
         let across = Vec3::new(-toward.z, 0.0, toward.x) * (body.width * 0.4);
         [0.6, 1.2].into_iter().any(|ahead| {
