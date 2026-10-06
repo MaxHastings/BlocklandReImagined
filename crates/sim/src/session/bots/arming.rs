@@ -17,6 +17,8 @@ const REACH: f32 = 24.0;
 const AT_ITEM: u64 = 120;
 /// How long an item it passed over stays passed over.
 const SKIP: u64 = 30 * 120;
+/// Items it remembers passing over at once.
+const PASSED_OVER: usize = 32;
 /// An empty hand's arming score: before going after an enemy or an
 /// objective that wants one beaten.
 pub(super) const ARM: f32 = 0.95;
@@ -48,7 +50,7 @@ pub(super) struct Arming {
     /// The item, and since when it stood at it.
     going: Option<(Source, Option<u64>)>,
     /// Items passed over, until when.
-    skipped: Vec<(Source, u64)>,
+    skipped: super::cooldown::Cooldowns<Source, PASSED_OVER>,
 }
 
 impl Arming {
@@ -59,7 +61,7 @@ impl Arming {
     /// Pass over the item it was going for: it found no way there.
     pub(super) fn pass_over(&mut self, tick: u64) {
         if let Some((source, _)) = self.going.take() {
-            self.skipped.push((source, tick + SKIP));
+            self.skipped.give_up(source, tick + SKIP);
         }
     }
 }
@@ -121,11 +123,7 @@ fn best_item(
     }
     let best = if armed { best } else { 0.0 };
     let skipped = &session.bots.brains.get(&bot)?.arming.skipped;
-    let passed = |source: Source| {
-        skipped
-            .iter()
-            .any(|(s, until)| *s == source && tick < *until)
-    };
+    let passed = |source: Source| skipped.cooling(&source, tick);
     let statics = session
         .item_spawners
         .items
@@ -189,7 +187,7 @@ pub(super) fn arm_point(
     let found = best_item(session, bot, feet, enemy, armed, tick);
     let brain = session.bots.brains.get_mut(&bot)?;
     let arming = &mut brain.arming;
-    arming.skipped.retain(|(_, until)| tick < *until);
+    arming.skipped.prune(tick, |_| true);
     let Some((source, at, score)) = found else {
         arming.going = None;
         return None;
@@ -206,7 +204,7 @@ pub(super) fn arm_point(
     // It reached it and did not get it: the pickup is not its to make.
     if standing.is_some_and(|at| tick >= at + AT_ITEM) {
         arming.going = None;
-        arming.skipped.push((source, tick + SKIP));
+        arming.skipped.give_up(source, tick + SKIP);
         return None;
     }
     arming.going = Some((source, standing));

@@ -68,8 +68,10 @@ impl Session {
                 && let Some(peer) = self.peers.get(&bot)
             {
                 let gap = point.distance(Vec3::from(peer.player.state().feet));
-                if state.best.is_none_or(|best| gap < best - APPROACH_PROGRESS) {
-                    state.best = Some(gap);
+                if state
+                    .approach
+                    .note(gap, tick, |best, gap| gap < best - APPROACH_PROGRESS)
+                {
                     step.deadline = step.deadline.max(tick.saturating_add(APPROACH_TIMEOUT));
                 }
             }
@@ -180,9 +182,9 @@ impl Session {
                 .discover_desired_states(bot, &mut budget)
                 .and_then(|discovery| {
                     let desireds = &discovery.candidates;
-                    state.failed_desired.retain(|(d, until)| {
-                        tick < *until && desireds.iter().any(|offered| offered == d)
-                    });
+                    state
+                        .failed_desired
+                        .prune(tick, |d| desireds.iter().any(|offered| offered == d));
                     if state.desired.as_ref().is_some_and(|d| match &d.completion {
                         Completion::PackageCounter(stamp) => !stamp.validate(self, bot),
                         Completion::RoundWin { .. } | Completion::ScoreRise { .. } => {
@@ -199,13 +201,13 @@ impl Session {
                                 .iter()
                                 .find(|d| {
                                     desireds.len() == 1
-                                        || !state.failed_desired.iter().any(|(f, _)| f == *d)
+                                        || !state.failed_desired.holds(d)
                                 })
                                 .cloned()
                         })
                         .ok_or(planning::Failure::NoPlan)?;
                     untried = desireds.iter().any(|d| {
-                        *d != desired && !state.failed_desired.iter().any(|(f, _)| f == d)
+                        *d != desired && !state.failed_desired.holds(d)
                     });
                     state.desired = Some(desired.clone());
                     self.objective_snapshot_with_budget(
@@ -284,12 +286,7 @@ impl Session {
                 Err(f) => {
                     let was_paused = std::mem::take(&mut state.paused);
                     if let Some(desired) = state.desired.take() {
-                        state.failed_desired.retain(|(old, _)| old != &desired);
-                        // Native rule goal plus the existing maximum eight offers.
-                        if state.failed_desired.len() == 9 {
-                            state.failed_desired.remove(0);
-                        }
-                        state.failed_desired.push((desired, tick + RETRY * 3));
+                        state.failed_desired.give_up(desired, tick + RETRY * 3);
                         if untried {
                             state.next = tick;
                             state.paused = was_paused;
@@ -322,7 +319,7 @@ impl Session {
             state.paused = false;
         }
         if state.step.is_none() {
-            state.best = None;
+            state.approach.clear();
         }
         let result = state
             .step

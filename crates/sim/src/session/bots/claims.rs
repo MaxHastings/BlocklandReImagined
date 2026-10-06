@@ -7,7 +7,8 @@ const MAX_CLAIMS: usize = 16;
 const MAX_FAILURES: usize = 64;
 const LEASE: u64 = 360;
 const MAX_AGE: u64 = 1800;
-const RETRY: u64 = 240;
+/// Ticks a bot leaves alone what it gave up on: a claim, a vehicle.
+pub(super) const RETRY: u64 = 240;
 const PROGRESS: f32 = 0.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -116,7 +117,7 @@ impl Space {
 #[derive(Default)]
 pub(super) struct Claims {
     active: BTreeMap<OwnerId, Claim>,
-    failures: BTreeMap<(OwnerId, Resource), u64>,
+    failures: super::cooldown::Cooldowns<(OwnerId, Resource), MAX_FAILURES>,
     intents: BTreeMap<OwnerId, Intent>,
 }
 
@@ -204,9 +205,7 @@ impl Claims {
     }
 
     pub(super) fn cooling_down(&self, owner: OwnerId, resource: Resource, tick: u64) -> bool {
-        self.failures
-            .get(&(owner, resource))
-            .is_some_and(|until| tick < *until)
+        self.failures.cooling(&(owner, resource), tick)
     }
 
     /// First eligible caller wins; the session chooses deterministic caller
@@ -313,21 +312,8 @@ impl Claims {
         {
             self.release_owner(owner);
         }
-        self.remember_failure(owner, resource, tick.saturating_add(RETRY));
-    }
-
-    fn remember_failure(&mut self, owner: OwnerId, resource: Resource, until: u64) {
-        let key = (owner, resource);
-        if !self.failures.contains_key(&key) && self.failures.len() >= MAX_FAILURES {
-            let oldest = self
-                .failures
-                .iter()
-                .min_by_key(|(key, until)| (**until, **key))
-                .map(|(key, _)| *key)
-                .unwrap();
-            self.failures.remove(&oldest);
-        }
-        self.failures.insert(key, until);
+        self.failures
+            .give_up((owner, resource), tick.saturating_add(RETRY));
     }
 
     /// Preemption/success releases without punishing an otherwise useful task.
@@ -350,11 +336,11 @@ impl Claims {
             .collect();
         self.active.retain(|_, c| tick < c.deadline);
         self.intents.retain(|_, i| tick < i.until);
-        self.failures.retain(|_, until| tick < *until);
+        self.failures.prune(tick, |_| true);
         for c in expired {
             let until = c.deadline.saturating_add(RETRY);
             if tick < until {
-                self.remember_failure(c.owner, c.resource, until);
+                self.failures.give_up((c.owner, c.resource), until);
             }
         }
     }

@@ -42,6 +42,7 @@ pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
 mod contest;
+mod cooldown;
 mod extras;
 mod fire;
 use fire::{Hand, Shot};
@@ -388,8 +389,8 @@ struct Brain {
     object_cursor: usize,
     push_contact: Option<(u64, u64)>,
     push_anchor: Option<(u64, Vec3)>,
-    vehicle_stuck: u32,
-    vehicle_anchor: Option<Vec3>,
+    /// Headway of the chassis it drives: where it last got somewhere.
+    vehicle_headway: crate::route::Headway<Vec3>,
     vehicle_since: Option<(u64, u64)>,
     /// The jet leg of its route it is flying, if any.
     jet_leg: Option<crate::route::JetLeg>,
@@ -522,8 +523,7 @@ impl Brain {
             object_cursor: 0,
             push_contact: None,
             push_anchor: None,
-            vehicle_stuck: 0,
-            vehicle_anchor: None,
+            vehicle_headway: Default::default(),
             vehicle_since: None,
             jet_leg: None,
             drive_gear: crate::route::Gear::Forward,
@@ -1091,8 +1091,7 @@ impl Session {
             self.bots.claims.release_owner(bot);
             self.bots.claims.forget(bot);
             brain.vehicle_since = None;
-            brain.vehicle_stuck = 0;
-            brain.vehicle_anchor = None;
+            brain.vehicle_headway.clear();
             brain.fire_down = false;
             brain.objective_tool = false;
             brain.surprise.new_life();
@@ -1633,8 +1632,7 @@ impl Session {
         if !self.seated(bot) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.vehicle_since = None;
-            brain.vehicle_anchor = None;
-            brain.vehicle_stuck = 0;
+            brain.vehicle_headway.clear();
             brain.mount_anchor = None;
         }
         let peer = &self.peers[&bot];

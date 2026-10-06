@@ -18,6 +18,9 @@ const SOURCES: usize = 64;
 const ROWS: usize = 256;
 const ACTIONS: usize = 32;
 const RETRY: u64 = 120;
+/// Goals it remembers no plan reaching: the native rule goal plus the most
+/// a discovery offers (eight).
+const FAILED_GOALS: usize = 9;
 /// Ticks after an objective completes before it looks for the next one:
 /// the completing event's own effects (a flag put back) land first.
 const COMPLETION_SETTLE: u64 = 12;
@@ -618,7 +621,7 @@ pub(super) struct State {
     pub route: Vec<String>,
     desired: Option<DesiredState>,
     desired_context: Option<(bri_minigames::GameId, u64, Option<bri_minigames::TeamId>)>,
-    failed_desired: Vec<(DesiredState, u64)>,
+    failed_desired: super::cooldown::Cooldowns<DesiredState, FAILED_GOALS>,
     last_tick: Option<u64>,
     pub(super) searches: u64,
     pub(super) reused: u64,
@@ -628,7 +631,7 @@ pub(super) struct State {
     /// holds the objective through this (`behaviour::Ask::paused`).
     paused: bool,
     /// The nearest the current step's approach has come to its point.
-    best: Option<f32>,
+    approach: crate::route::Headway<f32>,
     /// In a game, round or team it has not had a planning turn for yet:
     /// it does not know yet what that game asks of it.
     unplanned: bool,

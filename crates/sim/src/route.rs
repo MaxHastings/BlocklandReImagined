@@ -193,6 +193,52 @@ impl Progress {
     }
 }
 
+/// Headway on a pursuit: its best reading so far (a height climbed, a spot
+/// it stood at, a distance to its point) and the tick it last beat it by
+/// enough to count. Every give-up judge that asks "has this got anywhere
+/// lately" (a jet climb, a driven chassis, an objective approach, a claim's
+/// lease) reads one of these; what counts as beating the mark is the
+/// caller's (`note`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Headway<T> {
+    mark: Option<(T, u64)>,
+}
+impl<T: Copy> Headway<T> {
+    /// Headway marked at `reading` from `tick`.
+    pub fn from(reading: T, tick: u64) -> Self {
+        Self {
+            mark: Some((reading, tick)),
+        }
+    }
+    /// A reading at `tick`: marked, and true, when there is no mark yet or
+    /// `beats(mark, reading)`.
+    pub fn note(&mut self, reading: T, tick: u64, beats: impl FnOnce(T, T) -> bool) -> bool {
+        let ahead = self.mark.is_none_or(|(mark, _)| beats(mark, reading));
+        if ahead {
+            self.mark = Some((reading, tick));
+        }
+        ahead
+    }
+    /// Marks `reading` at `tick` whatever it is: a fresh start.
+    pub fn mark(&mut self, reading: T, tick: u64) {
+        self.mark = Some((reading, tick));
+    }
+    /// Keeps the mark's reading and starts its clock again at `tick`.
+    pub fn restart(&mut self, tick: u64) {
+        if let Some((_, since)) = self.mark.as_mut() {
+            *since = tick;
+        }
+    }
+    /// No mark: the next reading starts one.
+    pub fn clear(&mut self) {
+        self.mark = None;
+    }
+    /// Ticks since the mark (none without one).
+    pub fn idle(&self, tick: u64) -> u64 {
+        self.mark.map_or(0, |(_, since)| tick.saturating_sub(since))
+    }
+}
+
 /// Where a jet leg is: set when it starts, kept while its waypoint leads.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct JetLeg {
@@ -204,7 +250,7 @@ pub struct JetLeg {
     /// Where it took off.
     pub from: Vec3,
     /// The highest it has climbed so far, and when it got there.
-    pub risen: (f32, u64),
+    pub risen: Headway<f32>,
 }
 impl JetLeg {
     /// A leg to `to` starting from `feet` at `tick`.
@@ -214,7 +260,7 @@ impl JetLeg {
             since: tick,
             crossing: false,
             from: feet,
-            risen: (feet.y, tick),
+            risen: Headway::from(feet.y, tick),
         }
     }
     /// Whether what really happened says to give the leg up at `tick`: it
@@ -230,11 +276,9 @@ impl JetLeg {
         seconds: f32,
         tick: u64,
     ) -> bool {
-        if feet.y > self.risen.0 + 0.2 {
-            self.risen = (feet.y, tick);
-        }
+        self.risen.note(feet.y, tick, |high, y| y > high + 0.2);
         tick.saturating_sub(self.since) > jet_patience(seconds)
-            || !self.crossing && tick.saturating_sub(self.risen.1) > CLIMB_STALL
+            || !self.crossing && self.risen.idle(tick) > CLIMB_STALL
             || grounded && self.crossing && (feet.y - self.to.y).abs() > step + 0.5
     }
 }

@@ -7,7 +7,7 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 
 const DISCOVER: f32 = 24.0;
-const RETRY: u64 = 240;
+use super::claims::RETRY;
 /// A driver reaches a goal at least this many degrees off the hull's
 /// heading in reverse, but a pursued target only within `REVERSE_DISTANCE`;
 /// a farther one is turned toward.
@@ -714,7 +714,7 @@ impl Session {
             Ok(()) => {
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
                 brain.set_goal(None);
-                brain.vehicle_stuck = 0;
+                brain.vehicle_headway.restart(tick);
                 Ok(true)
             }
             Err(_) => {
@@ -1344,8 +1344,7 @@ impl Session {
             Some((id, since)) if id == vehicle => since,
             _ => {
                 brain.vehicle_since = Some((vehicle, tick));
-                brain.vehicle_anchor = None;
-                brain.vehicle_stuck = 0;
+                brain.vehicle_headway.clear();
                 tick
             }
         };
@@ -1423,7 +1422,8 @@ impl Session {
                 },
             };
             let gear = match toward {
-                _ if brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480 => {
+                // As of the tick before: this tick's headway is noted below.
+                _ if backing_up(brain.vehicle_headway.idle(tick).saturating_sub(1)) => {
                     crate::route::Gear::Reverse { nose: false }
                 }
                 Some(delta) => crate::route::gear(&drive, error, delta.length(), brain.drive_gear),
@@ -1520,31 +1520,30 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             let pursuing = brain.memory.is_some()
                 || matches!(behaviour, Behaviour::Return | Behaviour::Objective);
-            // Progress is getting somewhere: a chassis rocking back and
+            // Headway is getting somewhere: a chassis rocking back and
             // forth against what blocks it keeps moving but goes nowhere.
-            let progressed = brain
-                .vehicle_anchor
-                .is_none_or(|old| flat(at - old).length() >= VEHICLE_PROGRESS);
-            if progressed || waiting || !pursuing {
-                brain.vehicle_anchor = Some(at);
-                brain.vehicle_stuck = 0;
+            // Braking for an impassable route is also no headway; throttle
+            // and contact impulses alone cannot renew a task.
+            if waiting || !pursuing {
+                brain.vehicle_headway.mark(at, tick);
             } else {
-                // Braking for an impassable route is also a lack of progress.
-                // Throttle and contact impulses alone cannot renew a task.
-                brain.vehicle_stuck += 1;
+                brain.vehicle_headway.note(at, tick, |mark, at| {
+                    flat(at - mark).length() >= VEHICLE_PROGRESS
+                });
             }
-            if brain.vehicle_stuck > 360 && brain.vehicle_stuck < 480 && !hazard {
+            let stuck = brain.vehicle_headway.idle(tick);
+            if backing_up(stuck) && !hazard {
                 input.forward = -0.5;
                 input.jump = false;
             }
-            if brain.vehicle_stuck >= 360 && brain.vehicle_stuck.is_multiple_of(120) {
+            if stuck >= VEHICLE_STALLED && stuck.is_multiple_of(120) {
                 brain.plan.clear();
                 brain.search = None;
                 brain.settled = false;
             }
-            if brain.vehicle_stuck >= 720 {
+            if stuck >= VEHICLE_GIVE_UP {
                 brain.next_interaction = tick + RETRY;
-                brain.vehicle_stuck = 0;
+                brain.vehicle_headway.restart(tick);
                 let _ = self.dismount_vehicle(bot);
                 input = MoveInput {
                     yaw: self.bots.brains[&bot].yaw,
@@ -1609,6 +1608,14 @@ impl Session {
     }
 }
 
-/// How far a driven chassis must get from where it last made progress for
-/// that to count as progress again.
+/// How far a driven chassis must get from where it last made headway for
+/// that to count as headway again.
 const VEHICLE_PROGRESS: f32 = 3.0;
+/// Ticks without headway after which a driven chassis backs straight up for
+/// a second, and plans again every second.
+const VEHICLE_STALLED: u64 = 360;
+fn backing_up(stuck: u64) -> bool {
+    stuck > VEHICLE_STALLED && stuck < VEHICLE_STALLED + 120
+}
+/// Ticks without headway after which the driver gets out.
+const VEHICLE_GIVE_UP: u64 = 720;
