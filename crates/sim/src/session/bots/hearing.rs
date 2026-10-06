@@ -104,7 +104,8 @@ impl Session {
     /// An untethered bot (`Brain::tethered`) with nothing to go on that
     /// hears an enemy's weapon across the map goes to look where the
     /// fighting is, as a player follows the gunfire: it knows the spot only
-    /// roughly, the farther the rougher, and acts on it after a moment
+    /// roughly, the farther the rougher, keeps it in mind for as long as the
+    /// walk there takes and a look round, and acts on it after a moment
     /// (`perception`).
     pub(super) fn hear_fighting(&mut self, tick: u64) {
         for (from, at, volume) in std::mem::take(&mut self.bots.noises) {
@@ -123,6 +124,8 @@ impl Session {
                 })
                 .collect();
             for (bot, distance) in heard {
+                // Remembered long enough to walk there and look round.
+                let walk = self.peers[&bot].player.tuning().forward.max(1.0);
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
                 let angle = brain.random() * std::f32::consts::TAU;
                 let off = brain.random() * distance * FIGHT_HEARD_ROUGHLY;
@@ -130,7 +133,7 @@ impl Session {
                     subject: from,
                     at: at + Vec3::new(angle.sin(), 0.0, angle.cos()) * off,
                     observed: tick,
-                    expires: tick + ticks(brain.kind.memory_seconds),
+                    expires: tick + ticks(distance / walk + brain.kind.memory_seconds),
                 };
                 brain.hear(k, bot, tick);
             }
