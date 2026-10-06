@@ -718,3 +718,69 @@ fn ordinary_large_footprints_keep_floor_samples_independent_of_query_overhead() 
         assert_eq!(sim.state().bricks[&grounded].position, [0.0, 0.1, 0.0]);
     }
 }
+
+/// v20's `fxDTSBrick::plant` (0x53ec40) refuses a brick for the map only
+/// where an interior crosses its centre lines or stands more than 0.1 above
+/// its bottom, and never asks about players, bots or static shapes. Bricks
+/// that clip a corner, a tree or someone standing there plant; Max saw
+/// these refused as buried or stuck.
+#[test]
+fn only_what_v20_refuses_blocks_a_plant() {
+    use bri_sim::{map::MapSurface, simulation::PlantFailure};
+    let owner = actor(1);
+    let builder = Builder {
+        actor: &owner,
+        position: Vec3::Y,
+        reach: 50.0,
+    };
+    let plant = |extra: Vec<ColliderBuilder>, body: Option<u128>, at: f32| {
+        let mut map = vec![floor()];
+        map.extend(extra);
+        let mut sim = Simulation::new(world(), definitions(), map).unwrap();
+        if let Some(tag) = body {
+            // A standing player's box with its feet on the floor, half a
+            // unit into the plate's far end.
+            sim.physics.insert(
+                RigidBodyBuilder::kinematic_position_based()
+                    .translation(Vector::new(1.125, 1.325, 0.25)),
+                ColliderBuilder::cuboid(0.625, 1.325, 0.625).user_data(tag),
+            );
+            sim.physics.detect_collisions(&(), &());
+        }
+        sim.plant(&builder, brick(at))
+            .map(|_| ())
+            .map_err(|e| *e.downcast_ref::<PlantFailure>().unwrap())
+    };
+    // The plate spans x 0 to 1 and z 0 to 0.5 on the floor.
+    // A wall whose face, x + z = 1.4, cuts only the far corner.
+    let corner = ColliderBuilder::cuboid(1.0, 2.0, 5.0).position(Pose::from_parts(
+        Vector::new(
+            0.7 + std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            0.7 + std::f32::consts::FRAC_1_SQRT_2,
+        ),
+        glam::Quat::from_rotation_y(-std::f32::consts::FRAC_PI_4),
+    ));
+    assert_eq!(plant(vec![corner], None, 0.1), Ok(()), "a clipped corner");
+    // A tree trunk through the middle of the plate.
+    let trunk = ColliderBuilder::cuboid(0.05, 1.0, 0.05)
+        .translation(Vector::new(0.5, 0.5, 0.25))
+        .user_data(MapSurface::Static as u128);
+    assert_eq!(plant(vec![trunk], None, 0.1), Ok(()), "a static shape");
+    for (who, tag) in [
+        ("a player", (1_u128 << 64) | 7),
+        ("a bot", bri_sim::session::ENTITY_TAG | 7),
+    ] {
+        assert_eq!(plant(vec![], Some(tag), 0.1), Ok(()), "{who}");
+    }
+    // Still refused: an interior wall across the plate's centre line, a
+    // plate sunk more than 0.1 into the floor, and a vehicle.
+    let wall = ColliderBuilder::cuboid(0.5, 2.0, 5.0).translation(Vector::new(1.4, 0.0, 0.0));
+    assert_eq!(plant(vec![wall], None, 0.1), Err(PlantFailure::Buried));
+    assert_eq!(plant(vec![], None, -0.1), Err(PlantFailure::Buried));
+    assert_eq!(
+        // A vehicle's collider tag.
+        plant(vec![], Some((2_u128 << 64) | 7), 0.1),
+        Err(PlantFailure::Stuck)
+    );
+}
