@@ -302,6 +302,28 @@ impl Session {
         }
         Ok(())
     }
+    /// `serverCmdAddEvent` takes a brick's lines one at a time: a line it
+    /// cannot read is left out and the others still stand. Leaves out each
+    /// row [`Self::validate_event_rows`] refuses and says why, by line.
+    pub(super) fn drop_invalid_event_rows(&self, rows: &mut Vec<ev::Row>) -> Result<Vec<String>> {
+        ensure!(
+            self.events.world.is_some(),
+            "Events are not available on this server"
+        );
+        let mut refused = Vec::new();
+        let mut line = 0;
+        rows.retain(|row| {
+            line += 1;
+            match self.validate_event_rows(std::slice::from_ref(row)) {
+                Ok(()) => true,
+                Err(error) => {
+                    refused.push(format!("Event line {line} was left out: {}", error.root_cause()));
+                    false
+                }
+            }
+        });
+        Ok(refused)
+    }
     /// The world's colorset is the one rows are checked against. Loading a
     /// save appends its colours (Demo Pong's black becomes colour 49 on
     /// Bedroom's 36), so when the colorset changes the engine takes the new

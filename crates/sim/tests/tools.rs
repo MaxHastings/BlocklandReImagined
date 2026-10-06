@@ -1104,37 +1104,34 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved(f: &Fi
     inspect(&mut s, owner, 2, InspectMode::Events);
     let before = s.snapshot().world;
     assert!(
-        tool(
-            &mut s,
-            owner,
-            3,
-            ToolAction::SetEvents {
-                brick: 1,
-                events: vec![event.clone()]
-            }
-        )
-        .is_err()
-    );
-    assert!(
         s.edit_brick(owner, 1, Edit::Events(vec![event.clone()]))
             .is_err()
     );
     assert_eq!(s.snapshot().world, before);
+    let bad = event.clone();
     let event = EventRow {
         output: "setColor".into(),
         params: vec![EventValue::Color(1)],
         ..event
     };
+    // `serverCmdAddEvent` takes each line alone: the unreadable line is
+    // left out, with word why, and the good one still stands.
+    s.take_private_notices();
     tool(
         &mut s,
         owner,
         5,
         ToolAction::SetEvents {
             brick: 1,
-            events: vec![event.clone()],
+            events: vec![bad, event.clone()],
         },
     )
     .unwrap();
+    assert!(
+        s.take_private_notices().iter().any(|(o, n)| *o == owner
+            && matches!(n, bri_sim::session::Notice::Chat(text)
+                if text.starts_with("Event line 1 was left out"))),
+    );
     assert_eq!(s.simulation().state().bricks[&1].source_records, source);
     assert_eq!(s.simulation().state().bricks[&1].events, vec![event]);
     s.command(owner, 6, Command::Activate).unwrap();

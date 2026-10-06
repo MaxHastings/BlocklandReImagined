@@ -1922,13 +1922,15 @@ impl Session {
                 "Brick exceeds the native {}-event admission limit",
                 bri_world::MAX_EVENTS_PER_BRICK
             );
-            self.validate_event_rows(rows)?;
         }
         if let Command::Tool(ToolAction::SetEvents {
             brick,
             events: rows,
         }) = &mut command
         {
+            for reason in self.drop_invalid_event_rows(rows)? {
+                self.notify(owner, Notice::Chat(reason));
+            }
             let refused = self.review_event_rows(owner, *brick, rows);
             for reason in refused {
                 self.notify(owner, Notice::Chat(reason));
