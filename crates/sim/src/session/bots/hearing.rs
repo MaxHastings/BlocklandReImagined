@@ -1,7 +1,54 @@
-//! What a bot hears: an ally's alert and distant fighting.
+//! What a bot knows beyond its eyes: an ally's alert, distant fighting,
+//! and who just hurt it.
 use super::*;
 
 impl Session {
+    /// What it knows of enemies beyond its eyes this tick: what it heard
+    /// becomes its memory when it has nothing fresher, a hit this tick names
+    /// who hurt it (only roughly where from, out of sight), stale or no
+    /// longer hostile memory is dropped, and the threat it answers is the
+    /// hurt or the one its objective already faces. The hurt, and the
+    /// threat.
+    pub(super) fn bot_evidence(
+        &mut self,
+        bot: OwnerId,
+        target: Option<Seen>,
+        feet: Vec3,
+        tick: u64,
+    ) -> (Option<Knowledge>, Option<Knowledge>) {
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if let Some(k) = brain.perception.heard(tick)
+            && brain.target.is_none()
+            && brain.memory.is_none_or(|old| old.observed < k.observed)
+        {
+            brain.memory = Some(k);
+        }
+        let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
+            tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+        });
+        // Out of sight, a hit gives only a rough idea where from.
+        let hurt_by = hurt_by.map(|k| match target {
+            Some(seen) if seen.owner == k.subject => k,
+            _ => Knowledge {
+                at: perception::guess(feet, k.at, &mut self.bots.brains.get_mut(&bot).unwrap().rng),
+                ..k
+            },
+        });
+        if self.bots.brains[&bot].memory.is_some_and(|k| {
+            tick >= k.expires || !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+        }) {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.memory = None;
+            brain.evidence_search.clear();
+        }
+        let threat = hurt_by
+            .or(self.bots.brains[&bot].objective_threat)
+            .filter(|k| {
+                tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
+            });
+        self.bots.brains.get_mut(&bot).unwrap().objective_threat = threat;
+        (hurt_by, threat)
+    }
     /// Bots of a warner's side within its reach that have nothing better
     /// to go on remember where the enemy was, and go and look (Bot_Hole's
     /// `hAlertOtherBots`).

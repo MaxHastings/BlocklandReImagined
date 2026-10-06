@@ -2,7 +2,189 @@
 //! the hand's fire gates and charge, arming and a body's bite.
 use super::*;
 
+/// A shot at the bot's target as it stands now ([`Session::bot_shot`]).
+pub(super) struct Shot {
+    pub crew_ready: bool,
+    /// No ally in the line (a miss's spread included).
+    pub attack_clear: bool,
+    /// Where it will hit, for its side to keep out of (`team`).
+    pub harm: Option<claims::Space>,
+    pub mounted_charging: bool,
+    pub charged_ready: bool,
+    pub target_velocity: Vec3,
+}
+/// What a bot fights with this tick ([`Session::bot_hand`]).
+pub(super) struct Hand {
+    pub native: hand_combat::Decision,
+    pub native_choice: Option<hand_combat::Choice>,
+    /// The weapon in its hand, by the native pick or its data.
+    pub held: Option<Weapon>,
+    /// Its kind's bite, when its hands are empty.
+    pub bite: Option<crate::bot_kind::BotMelee>,
+    /// What it attacks with: the held weapon, or the bite.
+    pub weapon: Option<Weapon>,
+}
+
 impl Session {
+    /// What a shot at `target` would be now: whether the crew is ready,
+    /// whether it is clear of its own side (a miss included), where it
+    /// would hit for its side to keep out of, a mount's charge, and how
+    /// fast the target moves across its line.
+    pub(super) fn bot_shot(
+        &self,
+        bot: OwnerId,
+        weapon: Option<Weapon>,
+        target: Option<Seen>,
+        eye: Vec3,
+        tick: u64,
+    ) -> Shot {
+        let crew_ready = self.bot_crew_ready(bot, tick);
+        // A ranged shot that misses carries on to its reach, and goes as
+        // far off as its aim errs now.
+        let ranged = weapon.is_some_and(|w| !w.melee);
+        let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
+        // A scattering weapon's shot also fans out by its spread: allies
+        // inside most of that cone are in the line of fire too.
+        let aim_off =
+            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| w.spread * SPREAD_CLEAR);
+        let attack_clear = target.is_none_or(|seen| {
+            self.bot_fire_clear(
+                bot,
+                eye,
+                seen.eye - Vec3::Y * 0.5,
+                weapon.map_or(0.0, |w| w.splash),
+                weapon
+                    .filter(|_| ranged)
+                    .map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0)),
+                if ranged { aim_off } else { 0.0 },
+            )
+        });
+        // Where its weapon will hit, for its side to keep out of (`team`):
+        // the line the clear-fire check above holds fire for.
+        let harm = target.filter(|_| ranged).map(|seen| {
+            let to = seen.eye - Vec3::Y * 0.5;
+            let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
+            claims::Space {
+                from: eye,
+                to: to + (to - eye).normalize_or_zero() * past,
+                radius: weapon.map_or(0.0, |w| w.splash).max(0.3),
+                spread: aim_off.tan(),
+            }
+        });
+        let mounted_charging = self
+            .mounted(bot)
+            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
+            .is_some_and(|v| v.charge > 0);
+        let charged_ready = self
+            .mounted(bot)
+            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
+            .is_some_and(|v| {
+                self.vehicles
+                    .world
+                    .as_ref()
+                    .and_then(|w| w.definition(&v.definition))
+                    .and_then(|d| d.weapon.as_ref())
+                    .is_some_and(|g| g.charge_ticks > 0 && v.charge >= g.charge_steps)
+            });
+        let target_velocity = target.map_or(Vec3::ZERO, |seen| {
+            self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
+                seen.way.seen_vector(Vec3::from(p.player.state().velocity))
+            })
+        });
+        Shot {
+            crew_ready,
+            attack_clear,
+            harm,
+            mounted_charging,
+            charged_ready,
+            target_velocity,
+        }
+    }
+    /// What it fights with this tick: the native chooser's pick of its hand
+    /// weapons against `target` (or why none), the weapon it holds, and its
+    /// kind's bite when its hands are empty.
+    pub(super) fn bot_hand(
+        &mut self,
+        bot: OwnerId,
+        target: Option<Seen>,
+        tick: u64,
+    ) -> Result<Hand> {
+        // Inventory capabilities are grounded only in current sight. The
+        // desired path uses a shared budget; actual firing is checked after
+        // movement against the live launch frame in step_weapons.
+        // An observed native grip is an ordinary held-tool sequence.
+        // Finish its carry/release before considering another hand weapon;
+        // switching would make the package drop the actual held participant.
+        let hold_sequence =
+            self.bot_weapon(bot).is_some_and(|w| w.hold) && self.held_by(bot).is_some();
+        let native = if hold_sequence {
+            hand_combat::Decision::Unsupported
+        } else if let Some(seen) = target {
+            let mut combat = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().combat);
+            let mut budget = std::mem::take(&mut self.bots.combat_budget);
+            budget.begin_tick(tick);
+            let mut mind = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().surprise);
+            let decision =
+                hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget, &mut mind);
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.combat = combat;
+            brain.surprise = mind;
+            self.bots.combat_budget = budget;
+            decision
+        } else {
+            hand_combat::Decision::Unsupported
+        };
+        let native_choice = match &native {
+            hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c) => Some(*c),
+            _ => None,
+        };
+        let native_gate = !hold_sequence
+            && (!matches!(native, hand_combat::Decision::Unsupported)
+                || (target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some()));
+        self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);
+        // Fighting empty-handed with an enemy in sight (just respawned
+        // mid-fight, say), it takes out its weapon now, so it keeps the band
+        // of that weapon and does not drop into a chase for a tick.
+        if matches!(native, hand_combat::Decision::Unsupported)
+            && target.is_some()
+            && self.bots.brains[&bot].behaviour == Behaviour::Fight
+            && !self.vehicles.weapon_seat(bot)
+            && self.bot_weapon(bot).is_none()
+        {
+            self.bot_arm(bot)?;
+        }
+        // Empty-handed, a kind that hits with its body fights with that.
+        let held = native_choice
+            .map(|c| c.weapon)
+            .or_else(|| {
+                (!matches!(native, hand_combat::Decision::Unsupported))
+                    .then(|| self.bots.brains[&bot].combat.movement_hint())
+                    .flatten()
+            })
+            .or_else(|| self.bot_weapon(bot));
+        let bite = held
+            .is_none()
+            .then(|| self.bots.brains[&bot].kind.melee.clone())
+            .flatten();
+        let weapon = held.or(bite.as_ref().map(|m| Weapon {
+            melee: true,
+            hold: false,
+            charge: false,
+            near: None,
+            reach: m.reach,
+            speed: 0.0,
+            fall: 0.0,
+            splash: 0.0,
+            spread: 0.0,
+        }));
+        Ok(Hand {
+            native,
+            native_choice,
+            held,
+            bite,
+            weapon,
+        })
+    }
     /// The held weapon's reach and flight.
     pub(super) fn bot_vehicle_weapon(&self, bot: OwnerId) -> Option<Weapon> {
         if let Some((vehicle, seat)) = self.mounted(bot)

@@ -44,6 +44,7 @@ mod combat_objectives;
 mod contest;
 mod extras;
 mod fire;
+use fire::{Hand, Shot};
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod hearing;
@@ -855,6 +856,26 @@ struct Seen {
     real: Vec3,
     way: Way,
 }
+/// What a bot has decided this tick, for [`Session::bot_act`] to carry out.
+struct Act {
+    input: MoveInput,
+    wanted: Option<Waypoint>,
+    behaviour: Behaviour,
+    weapon: Option<Weapon>,
+    bite: Option<crate::bot_kind::BotMelee>,
+    native: hand_combat::Decision,
+    native_choice: Option<hand_combat::Choice>,
+    target: Option<Seen>,
+    /// It means to attack now.
+    fire: bool,
+    grabbing: bool,
+    gunning: bool,
+    vehicle_weapon: bool,
+    charged_ready: bool,
+    mounted_charging: bool,
+    objective: Option<objectives::View>,
+    callout: Option<String>,
+}
 /// What one bot sees this tick.
 struct Sight {
     target: Option<Seen>,
@@ -971,13 +992,8 @@ impl Session {
     pub fn fail_bot_steps(&mut self, bot: Option<OwnerId>) {
         self.bots.failing = bot;
     }
-    fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
-        if self.bots.failing == Some(bot) {
-            anyhow::bail!("this bot's steps were made to fail");
-        }
-        if self.bots.brains[&bot].objective.drive(self, bot).is_none() {
-            self.promote_bot_seat(bot)?;
-        }
+    /// A new game, round or team: what the bot knew of its old one goes.
+    fn bot_note_context(&mut self, bot: OwnerId) {
         let context = self.game_of(bot).and_then(|game| {
             Some((
                 game,
@@ -998,59 +1014,58 @@ impl Session {
             brain.target = None;
             brain.evidence_search.clear();
         }
-        let Some(peer) = self.peers.get(&bot) else {
-            return Ok(());
+    }
+    /// A dead bot asks to come back once its wait is up, and starts its
+    /// next life knowing nothing of this one.
+    fn step_dead_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
+        let respawn_tick = self.peers[&bot].combat.respawn_tick;
+        // A brick's bot comes back about a second after it may; a rules
+        // bot soon after its game lets it (Slayer's bot respawn time).
+        // Each death adds its own seeded delay, so bots one blast killed
+        // do not all come back on the same tick.
+        let (lo, hi) = if self.bots.by_rules.contains_key(&bot) {
+            RULES_RESPAWN
+        } else {
+            BRICK_RESPAWN
         };
-        if !peer.combat.alive {
-            // A brick's bot comes back about a second after it may; a rules
-            // bot soon after its game lets it (Slayer's bot respawn time).
-            // Each death adds its own seeded delay, so bots one blast killed
-            // do not all come back on the same tick.
-            let (lo, hi) = if self.bots.by_rules.contains_key(&bot) {
-                RULES_RESPAWN
-            } else {
-                BRICK_RESPAWN
-            };
-            let delay = cadence::spread(
-                bot,
-                cadence::salt::RESPAWN,
-                peer.combat.respawn_tick,
-                lo,
-                hi,
-            );
-            let wait = (delay * 120.0) as u64;
-            if tick >= peer.combat.respawn_tick + wait {
-                // A bot a bite turned comes back as its own kind.
-                if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
-                    self.bots.brains.get_mut(&bot).unwrap().kind = born.clone();
-                    self.embody_bot(bot, &born)?;
-                }
-                let _ = self.request_respawn(bot);
+        let delay = cadence::spread(bot, cadence::salt::RESPAWN, respawn_tick, lo, hi);
+        let wait = (delay * 120.0) as u64;
+        if tick >= respawn_tick + wait {
+            // A bot a bite turned comes back as its own kind.
+            if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
+                self.bots.brains.get_mut(&bot).unwrap().kind = born.clone();
+                self.embody_bot(bot, &born)?;
             }
-            if let Some(brain) = self.bots.brains.get_mut(&bot) {
-                brain.set_goal(None);
-                brain.target = None;
-                brain.memory = None;
-                brain.evidence_search.clear();
-                brain.posed = false;
-                brain.objective = objectives::State::default();
-                brain.objective_threat = None;
-                self.bots.hurt.remove(&bot);
-                brain.dry = 0;
-                brain.rehome = brain.brick.is_none();
-                brain.leash = brain.home;
-                self.bots.claims.release_owner(bot);
-                self.bots.claims.forget(bot);
-                brain.vehicle_since = None;
-                brain.vehicle_stuck = 0;
-                brain.vehicle_anchor = None;
-                brain.fire_down = false;
-                brain.objective_tool = false;
-                brain.surprise.new_life();
-                brain.chase_offset = Vec3::ZERO;
-            }
-            return Ok(());
+            let _ = self.request_respawn(bot);
         }
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.set_goal(None);
+            brain.target = None;
+            brain.memory = None;
+            brain.evidence_search.clear();
+            brain.posed = false;
+            brain.objective = objectives::State::default();
+            brain.objective_threat = None;
+            self.bots.hurt.remove(&bot);
+            brain.dry = 0;
+            brain.rehome = brain.brick.is_none();
+            brain.leash = brain.home;
+            self.bots.claims.release_owner(bot);
+            self.bots.claims.forget(bot);
+            brain.vehicle_since = None;
+            brain.vehicle_stuck = 0;
+            brain.vehicle_anchor = None;
+            brain.fire_down = false;
+            brain.objective_tool = false;
+            brain.surprise.new_life();
+            brain.chase_offset = Vec3::ZERO;
+        }
+        Ok(())
+    }
+    /// A bot the rules hold still, or one a player rides or carries: it
+    /// stands (or is moved), holding its fire, and thinks no further.
+    /// Whether it was held.
+    fn step_held_bot(&mut self, bot: OwnerId, tick: u64) -> Result<bool> {
         // Held still by the rules: it stands, holding its fire.
         if self.bots.brains.get(&bot).is_some_and(|b| b.resting) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -1071,7 +1086,7 @@ impl Session {
             if release && !self.abort_bot_hand_charge(bot)? {
                 let _ = self.weapon_trigger(bot, false, Vec3::ZERO, false);
             }
-            return Ok(());
+            return Ok(true);
         }
         // Ridden by a player who steers it, or carried by one
         // (`mountObject`): its brain rests.
@@ -1085,6 +1100,269 @@ impl Session {
             if release && !self.abort_bot_hand_charge(bot)? {
                 self.weapon_trigger(bot, false, Vec3::ZERO, false)?;
             }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    /// Its kind's own rules each tick: a swimmer out of water in a
+    /// mini-game lasts only so long (the Shark's `hFishOutOfWater`), and its
+    /// emote plays once each life (a zombie's arms out ahead). Whether it
+    /// died of them.
+    fn bot_kind_rules(
+        &mut self,
+        bot: OwnerId,
+        wet: bool,
+        feet: [f32; 3],
+        tick: u64,
+    ) -> Result<bool> {
+        let gasping = self.bots.brains[&bot]
+            .kind
+            .out_of_water_seconds
+            .filter(|_| !wet && self.game_of(bot).is_some());
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        brain.dry = if gasping.is_some() { brain.dry + 1 } else { 0 };
+        if gasping.is_some_and(|seconds| brain.dry as f32 >= seconds * 120.0) {
+            brain.dry = 0;
+            self.kill(bot, None, combat::DamageKind::Suicide)?;
+            return Ok(true);
+        }
+        // Its kind's emote, once each life (a zombie's arms out ahead).
+        if !brain.posed {
+            brain.posed = true;
+            if let Some(name) = brain.kind.emote.clone() {
+                self.emote_cue(
+                    tick,
+                    crate::presentation::CueKind::Emote { actor: bot, name },
+                    feet,
+                );
+            }
+        }
+        Ok(false)
+    }
+    /// What it does with its hands and feet this tick, once its mind is
+    /// made up: the trigger (tapped, held or let go to fire a charge), the
+    /// move, a callout, a bite, an objective's tool and seat, and the
+    /// weapon it takes out for the fight.
+    fn bot_act(&mut self, bot: OwnerId, tick: u64, sequence: u64, act: Act) -> Result<()> {
+        let Act {
+            input,
+            wanted,
+            behaviour,
+            weapon,
+            bite,
+            native,
+            native_choice,
+            target,
+            fire,
+            grabbing,
+            gunning,
+            vehicle_weapon,
+            charged_ready,
+            mounted_charging,
+            objective,
+            callout,
+        } = act;
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        // Tap the trigger so semi-automatic weapons keep firing; a tool
+        // that holds (as its data says, or reaching or holding now) keeps
+        // it down.
+        let charging = weapon.is_some_and(|w| w.charge);
+        let held_down = grabbing || charging || weapon.is_some_and(|w| w.hold);
+        // Each bot taps on its own beat, so gunners do not fire in unison.
+        let beat = cadence::beat(bot, cadence::salt::FIRE, tick, 40);
+        let pulse = fire && !held_down && beat && bite.is_none();
+        // A charged weapon is held until letting go fires it, then let go.
+        let pulse = pulse
+            || fire
+                && charging
+                && (if vehicle_weapon {
+                    charged_ready || !mounted_charging && beat
+                } else {
+                    self.weapons
+                        .image_state(ActorId(bot), 0)
+                        .is_some_and(|(image, state)| image.fires_on_release(state))
+                });
+        let bites = bite.as_ref().filter(|_| fire && tick >= brain.next_bite);
+        if let Some(m) = bites {
+            brain.next_bite = tick + (m.seconds * 120.0).round() as u64;
+        }
+        // A body's hit pulls no trigger. Native hand charge releases are
+        // authorized only on its fair Ready turn and then validated postmove.
+        let mut fire = fire && bite.is_none();
+        let mut desired_down = fire && !pulse;
+        let last_down = brain.fire_down;
+        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down;
+        if !matches!(native, hand_combat::Decision::Unsupported) {
+            if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
+                let tracking_charge = last_down
+                    && native_choice.is_some()
+                    && image.charges()
+                    && charged_control::release_only(image);
+                // The unchanged participant/equipment intent owns this live
+                // wind-up even if range temporarily selected Return/Wander.
+                // Objective tool controls below still cancel/preempt it.
+                let decision = hand_combat::trigger(
+                    image,
+                    image_state,
+                    last_down,
+                    fire && native_choice.is_some() || tracking_charge,
+                    fire && matches!(native, hand_combat::Decision::Ready(_)),
+                );
+                desired_down = decision.down;
+                cancel_hand_charge = decision.abort_charge;
+            } else {
+                desired_down = false;
+            }
+        }
+        let objective_tool = objective.is_some_and(|view| view.trigger.is_some());
+        let previous_objective_tool = brain.objective_tool;
+        brain.objective_tool = objective_tool;
+        if objective_tool {
+            // Do not validate a manipulation trigger against yesterday's
+            // hostile weapon intent at the post-movement launch gate.
+            brain.native_combat_tick = None;
+            desired_down = objective.unwrap().trigger.unwrap();
+            cancel_hand_charge |= charging && last_down && !previous_objective_tool;
+        } else if previous_objective_tool {
+            desired_down = false;
+            cancel_hand_charge |= charging && last_down;
+        }
+        // Releasing a ready mounted charge is the firing control itself.
+        // Preserve that intent before `fire` becomes the requested button
+        // state; cancellation would otherwise erase the native charge before
+        // the ordinary trigger-release executor could consume it.
+        let mounted_release = fire
+            && vehicle_weapon
+            && charging
+            && charged_ready
+            && pulse
+            && last_down
+            && !objective_tool
+            && !previous_objective_tool;
+        let mut fire_changed = desired_down != last_down;
+        fire = desired_down;
+
+        brain.fire_down = desired_down;
+        if cancel_hand_charge {
+            self.abort_bot_hand_charge(bot)?;
+        }
+        if !fire && vehicle_weapon {
+            self.vehicles.set_fire(bot, false);
+            if !mounted_release && let Some(w) = &mut self.vehicles.world {
+                w.cancel_weapon_charge(bri_vehicles::OccupantId(bot));
+            }
+        }
+        // Preserve the brain's world aim before a seat converts look into
+        // steering or a relative passenger angle.
+        let direction = Vec3::new(
+            input.yaw.sin() * input.pitch.cos(),
+            input.pitch.sin(),
+            -input.yaw.cos() * input.pitch.cos(),
+        );
+        let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
+        self.movement(bot, sequence, input)?;
+        if let Some(line) = callout {
+            self.team_say(bot, line, tick)?;
+        }
+        if let (Some(m), Some(seen)) = (bites, target) {
+            self.bot_bite(bot, seen.owner, m, tick)?;
+        }
+        if behaviour == Behaviour::Objective {
+            if let Some(view) = objective {
+                // The step's tool slot as planned; one emptied since (the
+                // item dropped, thrown or taken by the rules) fails the step,
+                // which plans again, rather than the bot's whole turn.
+                let filled = |slot: usize| {
+                    self.weapons
+                        .actor(ActorId(bot))
+                        .is_some_and(|a| a.inventory.get(slot).is_some_and(Option::is_some))
+                };
+                if let Some(slot) = view.equip
+                    && !filled(slot)
+                {
+                    self.bots
+                        .brains
+                        .get_mut(&bot)
+                        .unwrap()
+                        .objective
+                        .fail(tick, "objective tool slot emptied");
+                } else if let Some(slot) = view.equip
+                    && self
+                        .weapons
+                        .actor(ActorId(bot))
+                        .is_some_and(|a| a.selected != Some(slot))
+                {
+                    self.abort_bot_hand_charge(bot)?;
+                    self.equip_tool(bot, Some(slot))?;
+                    // The newly selected image has its own trigger state.
+                    fire_changed = true;
+                }
+                if let Some((vehicle, seat)) = view.board {
+                    self.try_bot_board(bot, vehicle, seat, tick)?;
+                }
+            }
+            self.bot_objective_act(bot, tick)?;
+        }
+        if (behaviour != Behaviour::Objective
+            || gunning
+            || objective.is_some_and(|view| view.enemy.is_some()))
+            && target.is_some()
+            && !self.vehicles.weapon_seat(bot)
+        {
+            if let Some(choice) = native_choice {
+                if self
+                    .weapons
+                    .actor(ActorId(bot))
+                    .is_some_and(|a| a.selected != Some(choice.slot))
+                {
+                    self.abort_bot_hand_charge(bot)?;
+                    self.equip_tool(bot, Some(choice.slot))?;
+                    self.bots.brains.get_mut(&bot).unwrap().fire_down = false;
+                    return Ok(());
+                }
+            } else if matches!(native, hand_combat::Decision::Unsupported) {
+                self.bot_arm(bot)?;
+            }
+        }
+        if fire_changed || (pulse && matches!(native, hand_combat::Decision::Unsupported)) {
+            if self.vehicles.weapon_seat(bot) {
+                let _ = self.command(
+                    bot,
+                    sequence,
+                    Command::WeaponTrigger {
+                        down: fire && !pulse,
+                    },
+                );
+                return Ok(());
+            }
+            let down = desired_down;
+            if self.weapons.image_state(ActorId(bot), 0).is_some() || !down {
+                // A bot's look reaches the host with its trigger.
+                let _ = self.weapon_trigger(bot, down, direction, false);
+                if down {
+                    self.note_shot(bot);
+                    let target = target.map(|s| s.owner);
+                    self.surprise_fired(bot, native_choice, target, tick);
+                }
+            }
+        }
+        Ok(())
+    }
+    fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
+        if self.bots.failing == Some(bot) {
+            anyhow::bail!("this bot's steps were made to fail");
+        }
+        if self.bots.brains[&bot].objective.drive(self, bot).is_none() {
+            self.promote_bot_seat(bot)?;
+        }
+        self.bot_note_context(bot);
+        let Some(peer) = self.peers.get(&bot) else {
+            return Ok(());
+        };
+        if !peer.combat.alive {
+            return self.step_dead_bot(bot, tick);
+        }
+        if self.step_held_bot(bot, tick)? {
             return Ok(());
         }
         if !self.seated(bot) {
@@ -1094,6 +1372,7 @@ impl Session {
             brain.vehicle_stuck = 0;
             brain.mount_anchor = None;
         }
+        let peer = &self.peers[&bot];
         let state = peer.player.state().clone();
         let own_feet = Vec3::from(state.feet);
         let eye = self
@@ -1139,30 +1418,10 @@ impl Session {
                     .liquid_at(state.feet, *height)
                     .is_some_and(|(_, covered)| covered >= SWIM_COVERAGE)
             });
-        // A swimmer out of water in a mini-game lasts only so long (the
-        // Shark's `hFishOutOfWater`).
         let height = crate::water::body_height(&state, peer.player.tuning()) * state.scale;
         let wet = self.simulation.liquid_at(state.feet, height).is_some();
-        let gasping = self.bots.brains[&bot]
-            .kind
-            .out_of_water_seconds
-            .filter(|_| !wet && self.game_of(bot).is_some());
-        let brain = self.bots.brains.get_mut(&bot).unwrap();
-        brain.dry = if gasping.is_some() { brain.dry + 1 } else { 0 };
-        if gasping.is_some_and(|seconds| brain.dry as f32 >= seconds * 120.0) {
-            brain.dry = 0;
-            return self.kill(bot, None, combat::DamageKind::Suicide);
-        }
-        // Its kind's emote, once each life (a zombie's arms out ahead).
-        if !brain.posed {
-            brain.posed = true;
-            if let Some(name) = brain.kind.emote.clone() {
-                self.emote_cue(
-                    tick,
-                    crate::presentation::CueKind::Emote { actor: bot, name },
-                    state.feet,
-                );
-            }
+        if self.bot_kind_rules(bot, wet, state.feet, tick)? {
+            return Ok(());
         }
         self.bot_crossed(bot);
         self.surprise_settle(bot, tick);
@@ -1187,105 +1446,14 @@ impl Session {
                         ..k
                     })
             });
-        // Inventory capabilities are grounded only in current sight. The
-        // desired path uses a shared budget; actual firing is checked after
-        // movement against the live launch frame in step_weapons.
-        // An observed native grip is an ordinary held-tool sequence.
-        // Finish its carry/release before considering another hand weapon;
-        // switching would make the package drop the actual held participant.
-        let hold_sequence =
-            self.bot_weapon(bot).is_some_and(|w| w.hold) && self.held_by(bot).is_some();
-        let native = if hold_sequence {
-            hand_combat::Decision::Unsupported
-        } else if let Some(seen) = sight.target {
-            let mut combat = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().combat);
-            let mut budget = std::mem::take(&mut self.bots.combat_budget);
-            budget.begin_tick(tick);
-            let mut mind = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().surprise);
-            let decision =
-                hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget, &mut mind);
-            let brain = self.bots.brains.get_mut(&bot).unwrap();
-            brain.combat = combat;
-            brain.surprise = mind;
-            self.bots.combat_budget = budget;
-            decision
-        } else {
-            hand_combat::Decision::Unsupported
-        };
-        let native_choice = match &native {
-            hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c) => Some(*c),
-            _ => None,
-        };
-        let native_gate = !hold_sequence
-            && (!matches!(native, hand_combat::Decision::Unsupported)
-                || (sight.target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some()));
-        self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);
-        // Fighting empty-handed with an enemy in sight (just respawned
-        // mid-fight, say), it takes out its weapon now, so it keeps the band
-        // of that weapon and does not drop into a chase for a tick.
-        if matches!(native, hand_combat::Decision::Unsupported)
-            && sight.target.is_some()
-            && self.bots.brains[&bot].behaviour == Behaviour::Fight
-            && !self.vehicles.weapon_seat(bot)
-            && self.bot_weapon(bot).is_none()
-        {
-            self.bot_arm(bot)?;
-        }
-        // Empty-handed, a kind that hits with its body fights with that.
-        let held = native_choice
-            .map(|c| c.weapon)
-            .or_else(|| {
-                (!matches!(native, hand_combat::Decision::Unsupported))
-                    .then(|| self.bots.brains[&bot].combat.movement_hint())
-                    .flatten()
-            })
-            .or_else(|| self.bot_weapon(bot));
-        let bite = held
-            .is_none()
-            .then(|| self.bots.brains[&bot].kind.melee.clone())
-            .flatten();
-        let weapon = held.or(bite.as_ref().map(|m| Weapon {
-            melee: true,
-            hold: false,
-            charge: false,
-            near: None,
-            reach: m.reach,
-            speed: 0.0,
-            fall: 0.0,
-            splash: 0.0,
-            spread: 0.0,
-        }));
-        let brain = self.bots.brains.get_mut(&bot).unwrap();
-        if let Some(k) = brain.perception.heard(tick)
-            && brain.target.is_none()
-            && brain.memory.is_none_or(|old| old.observed < k.observed)
-        {
-            brain.memory = Some(k);
-        }
-        let hurt_by = self.bots.hurt.remove(&bot).filter(|k| {
-            tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
-        });
-        // Out of sight, a hit gives only a rough idea where from.
-        let hurt_by = hurt_by.map(|k| match sight.target {
-            Some(seen) if seen.owner == k.subject => k,
-            _ => Knowledge {
-                at: perception::guess(feet, k.at, &mut self.bots.brains.get_mut(&bot).unwrap().rng),
-                ..k
-            },
-        });
-        if self.bots.brains[&bot].memory.is_some_and(|k| {
-            tick >= k.expires || !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
-        }) {
-            let brain = self.bots.brains.get_mut(&bot).unwrap();
-            brain.memory = None;
-            brain.evidence_search.clear();
-        }
-        let threat = hurt_by
-            .or(self.bots.brains[&bot].objective_threat)
-            .filter(|k| {
-                tick < k.expires && self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
-            });
-        self.bots.brains.get_mut(&bot).unwrap().objective_threat = threat;
+        let Hand {
+            native,
+            native_choice,
+            held,
+            bite,
+            weapon,
+        } = self.bot_hand(bot, sight.target, tick)?;
+        let (hurt_by, threat) = self.bot_evidence(bot, sight.target, feet, tick);
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
@@ -1377,59 +1545,14 @@ impl Session {
         let objective_hold_control = objective.is_some_and(|view| {
             view.trigger.is_some() && matches!(view.resource, Some(claims::Resource::Body { .. }))
         });
-        let crew_ready = self.bot_crew_ready(bot, tick);
-        // A ranged shot that misses carries on to its reach, and goes as
-        // far off as its aim errs now.
-        let ranged = weapon.is_some_and(|w| !w.melee);
-        let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
-        // A scattering weapon's shot also fans out by its spread: allies
-        // inside most of that cone are in the line of fire too.
-        let aim_off =
-            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| w.spread * SPREAD_CLEAR);
-        let attack_clear = sight.target.is_none_or(|seen| {
-            self.bot_fire_clear(
-                bot,
-                eye,
-                seen.eye - Vec3::Y * 0.5,
-                weapon.map_or(0.0, |w| w.splash),
-                weapon
-                    .filter(|_| ranged)
-                    .map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0)),
-                if ranged { aim_off } else { 0.0 },
-            )
-        });
-        // Where its weapon will hit, for its side to keep out of (`team`):
-        // the line the clear-fire check above holds fire for.
-        let harm = sight.target.filter(|_| ranged).map(|seen| {
-            let to = seen.eye - Vec3::Y * 0.5;
-            let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
-            claims::Space {
-                from: eye,
-                to: to + (to - eye).normalize_or_zero() * past,
-                radius: weapon.map_or(0.0, |w| w.splash).max(0.3),
-                spread: aim_off.tan(),
-            }
-        });
-        let mounted_charging = self
-            .mounted(bot)
-            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
-            .is_some_and(|v| v.charge > 0);
-        let charged_ready = self
-            .mounted(bot)
-            .and_then(|(id, _)| self.bots.objects.iter().find(|v| v.id.0 == id))
-            .is_some_and(|v| {
-                self.vehicles
-                    .world
-                    .as_ref()
-                    .and_then(|w| w.definition(&v.definition))
-                    .and_then(|d| d.weapon.as_ref())
-                    .is_some_and(|g| g.charge_ticks > 0 && v.charge >= g.charge_steps)
-            });
-        let target_velocity = sight.target.map_or(Vec3::ZERO, |seen| {
-            self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
-                seen.way.seen_vector(Vec3::from(p.player.state().velocity))
-            })
-        });
+        let Shot {
+            crew_ready,
+            attack_clear,
+            harm,
+            mounted_charging,
+            charged_ready,
+            target_velocity,
+        } = self.bot_shot(bot, weapon, sight.target, eye, tick);
 
         // A known noncombat body/tool cannot resolve a threat by staring at
         // it. Keep its useful objective; unknown scripted attacks retain their
@@ -2872,190 +2995,29 @@ impl Session {
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
         }
-        // Tap the trigger so semi-automatic weapons keep firing; a tool
-        // that holds (as its data says, or reaching or holding now) keeps
-        // it down.
-        let charging = weapon.is_some_and(|w| w.charge);
-        let held_down = grabbing || charging || weapon.is_some_and(|w| w.hold);
-        // Each bot taps on its own beat, so gunners do not fire in unison.
-        let beat = cadence::beat(bot, cadence::salt::FIRE, tick, 40);
-        let pulse = fire && !held_down && beat && bite.is_none();
-        // A charged weapon is held until letting go fires it, then let go.
-        let pulse = pulse
-            || fire
-                && charging
-                && (if vehicle_weapon {
-                    charged_ready || !mounted_charging && beat
-                } else {
-                    self.weapons
-                        .image_state(ActorId(bot), 0)
-                        .is_some_and(|(image, state)| image.fires_on_release(state))
-                });
-        let bites = bite.as_ref().filter(|_| fire && tick >= brain.next_bite);
-        if let Some(m) = bites {
-            brain.next_bite = tick + (m.seconds * 120.0).round() as u64;
-        }
-        // A body's hit pulls no trigger. Native hand charge releases are
-        // authorized only on its fair Ready turn and then validated postmove.
-        let mut fire = fire && bite.is_none();
-        let mut desired_down = fire && !pulse;
-        let last_down = brain.fire_down;
-        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down;
-        if !matches!(native, hand_combat::Decision::Unsupported) {
-            if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
-                let tracking_charge = last_down
-                    && native_choice.is_some()
-                    && image.charges()
-                    && charged_control::release_only(image);
-                // The unchanged participant/equipment intent owns this live
-                // wind-up even if range temporarily selected Return/Wander.
-                // Objective tool controls below still cancel/preempt it.
-                let decision = hand_combat::trigger(
-                    image,
-                    image_state,
-                    last_down,
-                    fire && native_choice.is_some() || tracking_charge,
-                    fire && matches!(native, hand_combat::Decision::Ready(_)),
-                );
-                desired_down = decision.down;
-                cancel_hand_charge = decision.abort_charge;
-            } else {
-                desired_down = false;
-            }
-        }
-        let objective_tool = selected_objective.is_some_and(|view| view.trigger.is_some());
-        let previous_objective_tool = brain.objective_tool;
-        brain.objective_tool = objective_tool;
-        if objective_tool {
-            // Do not validate a manipulation trigger against yesterday's
-            // hostile weapon intent at the post-movement launch gate.
-            brain.native_combat_tick = None;
-            desired_down = selected_objective.unwrap().trigger.unwrap();
-            cancel_hand_charge |= charging && last_down && !previous_objective_tool;
-        } else if previous_objective_tool {
-            desired_down = false;
-            cancel_hand_charge |= charging && last_down;
-        }
-        // Releasing a ready mounted charge is the firing control itself.
-        // Preserve that intent before `fire` becomes the requested button
-        // state; cancellation would otherwise erase the native charge before
-        // the ordinary trigger-release executor could consume it.
-        let mounted_release = fire
-            && vehicle_weapon
-            && charging
-            && charged_ready
-            && pulse
-            && last_down
-            && !objective_tool
-            && !previous_objective_tool;
-        let mut fire_changed = desired_down != last_down;
-        fire = desired_down;
-
-        brain.fire_down = desired_down;
-        if cancel_hand_charge {
-            self.abort_bot_hand_charge(bot)?;
-        }
-        if !fire && vehicle_weapon {
-            self.vehicles.set_fire(bot, false);
-            if !mounted_release && let Some(w) = &mut self.vehicles.world {
-                w.cancel_weapon_charge(bri_vehicles::OccupantId(bot));
-            }
-        }
-        // Preserve the brain's world aim before a seat converts look into
-        // steering or a relative passenger angle.
-        let direction = Vec3::new(
-            input.yaw.sin() * input.pitch.cos(),
-            input.pitch.sin(),
-            -input.yaw.cos() * input.pitch.cos(),
-        );
-        let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
-        self.movement(bot, sequence, input)?;
-        if let Some(line) = callout.or(clear_callout) {
-            self.team_say(bot, line, tick)?;
-        }
-        if let (Some(m), Some(seen)) = (bites, sight.target) {
-            self.bot_bite(bot, seen.owner, m, tick)?;
-        }
-        if behaviour == Behaviour::Objective {
-            if let Some(view) = selected_objective {
-                // The step's tool slot as planned; one emptied since (the
-                // item dropped, thrown or taken by the rules) fails the step,
-                // which plans again, rather than the bot's whole turn.
-                let filled = |slot: usize| {
-                    self.weapons
-                        .actor(ActorId(bot))
-                        .is_some_and(|a| a.inventory.get(slot).is_some_and(Option::is_some))
-                };
-                if let Some(slot) = view.equip
-                    && !filled(slot)
-                {
-                    self.bots
-                        .brains
-                        .get_mut(&bot)
-                        .unwrap()
-                        .objective
-                        .fail(tick, "objective tool slot emptied");
-                } else if let Some(slot) = view.equip
-                    && self
-                        .weapons
-                        .actor(ActorId(bot))
-                        .is_some_and(|a| a.selected != Some(slot))
-                {
-                    self.abort_bot_hand_charge(bot)?;
-                    self.equip_tool(bot, Some(slot))?;
-                    // The newly selected image has its own trigger state.
-                    fire_changed = true;
-                }
-                if let Some((vehicle, seat)) = view.board {
-                    self.try_bot_board(bot, vehicle, seat, tick)?;
-                }
-            }
-            self.bot_objective_act(bot, tick)?;
-        }
-        if (behaviour != Behaviour::Objective
-            || gunning
-            || selected_objective.is_some_and(|view| view.enemy.is_some()))
-            && sight.target.is_some()
-            && !self.vehicles.weapon_seat(bot)
-        {
-            if let Some(choice) = native_choice {
-                if self
-                    .weapons
-                    .actor(ActorId(bot))
-                    .is_some_and(|a| a.selected != Some(choice.slot))
-                {
-                    self.abort_bot_hand_charge(bot)?;
-                    self.equip_tool(bot, Some(choice.slot))?;
-                    self.bots.brains.get_mut(&bot).unwrap().fire_down = false;
-                    return Ok(());
-                }
-            } else if matches!(native, hand_combat::Decision::Unsupported) {
-                self.bot_arm(bot)?;
-            }
-        }
-        if fire_changed || (pulse && matches!(native, hand_combat::Decision::Unsupported)) {
-            if self.vehicles.weapon_seat(bot) {
-                let _ = self.command(
-                    bot,
-                    sequence,
-                    Command::WeaponTrigger {
-                        down: fire && !pulse,
-                    },
-                );
-                return Ok(());
-            }
-            let down = desired_down;
-            if self.weapons.image_state(ActorId(bot), 0).is_some() || !down {
-                // A bot's look reaches the host with its trigger.
-                let _ = self.weapon_trigger(bot, down, direction, false);
-                if down {
-                    self.note_shot(bot);
-                    let target = sight.target.map(|s| s.owner);
-                    self.surprise_fired(bot, native_choice, target, tick);
-                }
-            }
-        }
-        Ok(())
+        self.bot_act(
+            bot,
+            tick,
+            sequence,
+            Act {
+                input,
+                wanted,
+                behaviour,
+                weapon,
+                bite,
+                native,
+                native_choice,
+                target: sight.target,
+                fire,
+                grabbing,
+                gunning,
+                vehicle_weapon,
+                charged_ready,
+                mounted_charging,
+                objective: selected_objective,
+                callout: callout.or(clear_callout),
+            },
+        )
     }
 
 }
