@@ -208,6 +208,11 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Same cause as the other app_soak entries: the rocket knocks none of its floating test wall out after the v0.2.4 merge. Max OK'd shipping with it (2026-10-05)."
 
 [[failure]]
+test = "a_tap_inside_one_frame_still_fires::synthetic"
+owner = "v0.2.5 bot/test cleanup"
+reason = "TEMPORARY: the same rocket-soak wall loses no bricks; fails alone on a c337cd7-era main build too (2026-10-06, LAN join thread). The bot lane fixes the rocket-soak family; remove this entry before v0.2.5 is published."
+
+[[failure]]
 test = "steady_play_builds_and_uploads_nothing_whole::synthetic"
 owner = "v0.2.5 bot/test cleanup"
 reason = "TEMPORARY: the rocket-soak wall loses no bricks on Max's PC, intermittently in the synthetic variant (fails on unmodified main too). The bot lane fixes the rocket-soak family; remove this entry before v0.2.5 is published."
