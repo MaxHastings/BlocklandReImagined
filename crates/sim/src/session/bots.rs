@@ -140,6 +140,11 @@ const BOT_FAILURE_EVERY: u64 = 60 * 120;
 const RULES_RESPAWN: (f32, f32) = (0.3, 1.5);
 /// Seconds a brick bot waits past its respawn time, as a seeded range.
 const BRICK_RESPAWN: (f32, f32) = (0.75, 1.75);
+/// How far off a weapon at full volume is heard as fighting to go and
+/// look for (`Session::hear_fighting`)...
+const FIGHT_HEARING: f32 = 128.0;
+/// ...and within what share of its distance the spot is known.
+const FIGHT_HEARD_ROUGHLY: f32 = 0.15;
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
 /// Within this of the point its objective takes it to, a bot is at its
@@ -245,6 +250,9 @@ pub(super) struct Bots {
     combat_budget: hand_combat::Budget,
     /// Blasts and sounds since bots last stepped (`perception`).
     stimuli: Vec<Stimulus>,
+    /// Sounds players' weapons made since bots last stepped: who, where
+    /// and how loud (`Session::hear_fighting`).
+    noises: Vec<(OwnerId, Vec3, f32)>,
     /// The tick's shared sight-ray budget (`sightlines`).
     sightlines: std::sync::Mutex<sightlines::Sightlines>,
     /// Live dials (`/botset`) and where overrides are kept.
@@ -593,10 +601,12 @@ impl Brain {
                 (false, false)
             }
             (None, Some(knowledge)) => {
+                // Settled short of the spot (no route, or one that ends
+                // short of it walked to its end) is as near as it gets: on
+                // to the next spot, not standing there.
                 let failed = matches!(self.goal, Some(Goal::Search(_)))
                     && self.settled
-                    && self.plan.is_empty()
-                    && !self.partial_route;
+                    && self.plan.is_empty();
                 let next = self
                     .evidence_search
                     .next(knowledge, feet, tick, failed, reach);
@@ -1810,6 +1820,7 @@ impl Session {
             .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
+        self.hear_fighting(tick);
         Ok(())
     }
     /// Tell that `bot`'s step failed: to the log and the host's admins as
@@ -1895,6 +1906,48 @@ impl Session {
                     };
                     brain.hear(k, bot, tick);
                 }
+            }
+        }
+    }
+    /// A rules bot with nothing to go on that hears an enemy's weapon
+    /// across the map goes to look where the fighting is, as a player
+    /// follows the gunfire: it knows the spot only roughly, the farther the
+    /// rougher, and acts on it after a moment (`perception`).
+    fn hear_fighting(&mut self, tick: u64) {
+        for (from, at, volume) in std::mem::take(&mut self.bots.noises) {
+            let hearing = FIGHT_HEARING * volume.clamp(0.0, 1.0);
+            if hearing <= 0.0 {
+                continue;
+            }
+            let heard: Vec<(OwnerId, f32)> = self
+                .bots
+                .brains
+                .iter()
+                .filter(|(o, b)| {
+                    **o != from
+                        && b.brick.is_none()
+                        && !b.resting
+                        && b.target.is_none()
+                        && b.memory.is_none()
+                        && self.bot_enemy(**o, &b.kind, from)
+                })
+                .filter_map(|(o, _)| {
+                    let p = self.peers.get(o).filter(|p| p.combat.alive)?;
+                    let d = Vec3::from(p.player.state().feet).distance(at);
+                    (d <= hearing).then_some((*o, d))
+                })
+                .collect();
+            for (bot, distance) in heard {
+                let brain = self.bots.brains.get_mut(&bot).unwrap();
+                let angle = brain.random() * std::f32::consts::TAU;
+                let off = brain.random() * distance * FIGHT_HEARD_ROUGHLY;
+                let k = Knowledge {
+                    subject: from,
+                    at: at + Vec3::new(angle.sin(), 0.0, angle.cos()) * off,
+                    observed: tick,
+                    expires: tick + (brain.kind.memory_seconds * 120.0) as u64,
+                };
+                brain.hear(k, bot, tick);
             }
         }
     }
@@ -3705,6 +3758,19 @@ impl Session {
             if self.simulation.passages().first(from, to).is_some() {
                 direction = Vec3::ZERO;
             }
+        }
+        // Nor does it ever walk off an edge whose fall would hurt it: what
+        // it wants beyond is not worth the fall (it stands at the edge, and
+        // gets nowhere, so it plans again). A jet leg flies its own way.
+        if driving.is_none()
+            && swim.is_none()
+            && !wet
+            && state.grounded
+            && direction != Vec3::ZERO
+            && !wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. }))
+            && self.bot_fall_ahead(bot, feet, &body, flat(direction).normalize_or_zero())
+        {
+            direction = Vec3::ZERO;
         }
         if driving.is_none() && pushing.is_none() {
             direction = self.bot_vehicle_detour(bot, direction, quarry, goal_at);

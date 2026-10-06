@@ -637,9 +637,28 @@ fn start<'a>(f: &'a ContentRoot, state: &std::path::Path) -> Result<(Run<'a>, us
                 .is_some_and(|t| t.slots[ROCKET_SLOT].is_some())
         })
     })?;
+    // Still on the same spot for half a second: a respawn's first frame
+    // reads grounded and at rest while it is still dropping to the floor.
+    let still = std::cell::Cell::new(None::<(u64, Vec3)>);
     run.until("standing still", Duration::from_secs(10), |a| {
-        a.local_motion()
-            .is_some_and(|(p, _)| p.grounded && Vec3::from(p.velocity).length() < 0.01)
+        let (Some((p, _)), Some(tick)) = (a.local_motion(), a.network_view().map(|v| v.tick))
+        else {
+            return false;
+        };
+        let feet = Vec3::from(p.feet);
+        if !p.grounded || Vec3::from(p.velocity).length() >= 0.01 {
+            still.set(None);
+            return false;
+        }
+        match still.get() {
+            Some((since, at)) if at.distance(feet) < 0.01 => {
+                tick.saturating_sub(since) >= wait::ticks(Duration::from_millis(500))
+            }
+            _ => {
+                still.set(Some((tick, feet)));
+                false
+            }
+        }
     })?;
     let bricks = load_wall(&mut run, "soak")?;
     // The map's lighting bake re-uploads its scene when it lands, on its

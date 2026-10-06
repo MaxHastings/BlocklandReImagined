@@ -907,6 +907,35 @@ impl Session {
         }
     }
 
+    /// Whether walking `toward` takes the bot off an edge with no floor
+    /// within a fall that hurts (its type's least hurting impact): no floor
+    /// under its whole footprint a step or two ahead.
+    pub(super) fn bot_fall_ahead(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        toward: Vec3,
+    ) -> bool {
+        let Some(peer) = self.peers.get(&bot) else {
+            return false;
+        };
+        let state = peer.player.state();
+        let gravity = peer.player.tuning().gravity.max(1.0);
+        let impact = crate::player_types::PlayerType::from_archetype(state.archetype)
+            .unwrap_or_default()
+            .min_impact_speed()
+            * state.scale.max(1.0);
+        let hurts = impact * impact / (2.0 * gravity);
+        let across = Vec3::new(-toward.z, 0.0, toward.x) * (body.width * 0.4);
+        [0.6, 1.2].into_iter().any(|ahead| {
+            [Vec3::ZERO, across, -across].into_iter().all(|side| {
+                let at = feet + toward * ahead + side + Vec3::Y * 0.5;
+                self.world_ray(at, Vec3::NEG_Y, 0.5 + hurts).is_none()
+            })
+        })
+    }
+
     /// Where a bot standing on a body (a vehicle's roof, another player's
     /// head) with its enemy close below steps down to: the nearest world
     /// floor round it, no higher than its feet, open to walk to (no wall on
@@ -1261,13 +1290,14 @@ impl Session {
         let role = &d.seats[usize::from(seat)];
         // A seat with neither controls nor a weapon carries a bot, but it
         // fights nothing from there.
-        // A passenger holding a weapon of its own fights from its seat.
+        // A passenger holding a weapon of its own that reaches from there
+        // (a gun, not a sword) fights from its seat.
         let armed = self.weapons.actor(ActorId(bot)).is_some_and(|a| {
             let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
             a.inventory
                 .iter()
                 .flatten()
-                .any(|i| hand_combat::item_attacks(self, i, scale))
+                .any(|i| hand_combat::item_attacks_from_afar(self, i, scale))
         });
         let carried_only = !role.controls && !role.weapon && !armed;
         // Idle play: a passenger rides along while a teammate drives.

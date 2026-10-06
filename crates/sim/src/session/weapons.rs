@@ -493,11 +493,16 @@ impl Session {
                     self.notify(actor.0, Notice::Sound(profile));
                 }
                 WeaponEvent::Sound {
-                    profile, position, ..
+                    profile,
+                    position,
+                    source,
                 } => {
                     let volume = self.weapons.pack.sound(&profile).map_or(0.0, |s| s.volume);
                     self.bots
                         .notice(super::bots::Stimulus::sound(position, volume));
+                    if let TargetId::Actor(actor) = source {
+                        self.bots.noise(actor.0, position, volume);
+                    }
                     self.cues.emit(
                         tick,
                         crate::presentation::CueKind::WeaponSound { profile },

@@ -286,6 +286,22 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
 }
 
+/// An item that attacks from a distance (not a swing or a stab): one a
+/// bot can fight with from where it sits.
+pub(super) fn item_attacks_from_afar(session: &Session, item: &str, scale: f32) -> bool {
+    let pack = &session.weapons.pack;
+    let Some(image) = pack.items.get(item).and_then(|i| pack.images.get(&i.image)) else {
+        return false;
+    };
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|id| pack.projectiles.get(id));
+    capability(image, projectile, scale).is_some_and(|cap| {
+        cap.family != Family::Melee && (cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
+    })
+}
+
 /// The farthest an item may reach and still count as a shove: a swing or
 /// a short poke, not a shot.
 const SHOVE_REACH: f32 = 8.0;
