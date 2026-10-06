@@ -13,7 +13,7 @@ use super::*;
 const WALK: f32 = 4.0;
 /// Within this many world units of a contested body a bot is engaged: its
 /// intention stays live while it works the body against an opponent.
-const ENGAGE: f32 = 4.0;
+pub(super) const ENGAGE: f32 = 4.0;
 /// A contesting bot leads its approach by at most this many seconds of the
 /// body's own velocity, and by at most `MAX_LEAD` world units.
 const LEAD_SECONDS: f32 = 0.6;

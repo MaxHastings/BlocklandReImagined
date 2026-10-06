@@ -1826,12 +1826,25 @@ impl Session {
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
         // An objective that needs no enemy beaten is not stopped for an
-        // enemy that leaves it alone, but one contesting the same body
-        // close by is fought for it, as a player shoulders an opponent off
-        // the ball.
+        // enemy that leaves it alone, but one at the same body is fought
+        // for it, as a player shoulders an opponent off the ball: the
+        // contest is on (`contest::engaged`), or the enemy it sees stands
+        // at the body it works.
+        let at_the_body = objective
+            .and_then(|view| match view.resource? {
+                claims::Resource::Body { vehicle } => {
+                    self.object_centre(ObjectRef::Vehicle(vehicle))
+                }
+                claims::Resource::Seat { .. } => None,
+            })
+            .zip(sight.target)
+            .is_some_and(|(centre, seen)| {
+                flat(seen.real - centre).length() <= contest::ENGAGE
+            });
         let peaceful_objective = objective.is_some_and(|view| view.enemy.is_none())
             && threat.is_none()
-            && !contest_engaged;
+            && !contest_engaged
+            && !at_the_body;
         let objective_without_attack = peaceful_objective
             || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
         let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
