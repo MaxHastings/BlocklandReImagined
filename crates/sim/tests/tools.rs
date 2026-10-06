@@ -615,7 +615,7 @@ fn aim(s: &mut Session, owner: u64, _seq: u64, target: [f32; 3]) {
         p.yaw
     };
     let facing = bri_sim::player::PlayerState { yaw, ..p.clone() };
-    let d = Vec3::from(target) - facing.eye(&PlayerTuning::default());
+    let d = Vec3::from(target) - facing.eye(&PlayerTuning::default().scaled(p.scale));
     let sequence = move_sequence(s);
     s.movement(
         owner,
@@ -2150,5 +2150,69 @@ fn a_joining_player_learns_the_music_the_host_offers(f: &Fixture) {
     next.set_tool_catalog(second).unwrap();
     next.adopt(s, owner).unwrap();
     assert_eq!(offered(&mut next), vec![["music/second".into()].into()]);
+}
+}
+
+on_both! {
+/// `Player::ActivateStuff` reaches bricks within `$Game::BrickActivateRange`
+/// (5) times the player's scale, along a 10-unit ray: a player made bigger
+/// clicks a button a normal one cannot reach.
+fn a_click_reaches_bricks_five_units_times_the_players_scale(f: &Fixture) {
+    let mut s = session(f, vec![], false);
+    s.set_event_catalog(f.events(), Vec::new()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
+        .unwrap();
+    let button = plant(&mut s, owner, 1, [0.5, 0.1, -6.25]);
+    let grow = plant(&mut s, owner, 2, [4.5, 0.1, 0.25]);
+    let row = |input: &str, target, output: &str, params| EventRow {
+        conditions: vec![],
+        preserved: None,
+        enabled: true,
+        input: input.into(),
+        delay_ms: 0,
+        target,
+        output: output.into(),
+        params,
+    };
+    s.edit_brick(
+        owner,
+        button,
+        Edit::Events(vec![row(
+            "onActivate",
+            EventTarget::Slot(bri_events::Slot::SelfBrick),
+            "setColor",
+            vec![EventValue::Color(1)],
+        )]),
+    )
+    .unwrap();
+    s.edit_brick(
+        owner,
+        grow,
+        Edit::Events(vec![row(
+            "onPlayerTouch",
+            EventTarget::Slot(bri_events::Slot::Player),
+            "setPlayerScale",
+            vec![EventValue::Float(2.0)],
+        )]),
+    )
+    .unwrap();
+    let activate = |s: &mut Session, seq| {
+        aim(s, owner, seq, [0.5, 0.1, -6.25]);
+        let reply = s.command(owner, seq, Command::Activate).unwrap();
+        for _ in 0..4 {
+            s.step().unwrap();
+        }
+        reply
+    };
+    // About 6.4 units from a standing eye: past 5, short of the ray's 10.
+    assert_eq!(activate(&mut s, 3), Reply::Activated(None));
+    assert_eq!(s.simulation().state().bricks[&button].color, 0);
+    s.fire_brick_input(grow, "onPlayerTouch", Some(owner));
+    s.step().unwrap();
+    let scale = s.snapshot().players.into_iter().find(|p| p.owner == owner).unwrap().scale;
+    assert_eq!(scale, 2.0, "{:?}", s.take_event_diagnostics());
+    assert_eq!(activate(&mut s, 4), Reply::Activated(Some(button)));
+    assert_eq!(s.simulation().state().bricks[&button].color, 1);
 }
 }
