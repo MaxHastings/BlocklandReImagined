@@ -334,6 +334,8 @@ pub(super) struct View {
     pub waiting: bool,
     pub equip: Option<usize>,
     pub trigger: Option<bool>,
+    /// Jump into what it works (`Directive::jump`).
+    pub jump: bool,
     pub resource: Option<claims::Resource>,
     pub board: Option<(u64, u8)>,
     pub held: Option<ObjectRef>,
@@ -371,6 +373,7 @@ impl View {
             waiting: false,
             equip: None,
             trigger: None,
+            jump: false,
             resource: None,
             board: None,
             held: None,
@@ -878,6 +881,7 @@ impl Executor {
                         | super::physical_objectives::Method::Hammer { .. }
                 )
                 .then_some(d.trigger),
+                jump: d.jump,
                 board: d.board,
                 held: d.held,
                 drive: d.drive,

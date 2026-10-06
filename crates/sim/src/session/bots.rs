@@ -2871,8 +2871,10 @@ impl Session {
         if let Some(to) = act.direction.or(extra.direction) {
             direction = to;
         }
-        // A goof's or an extra's hop only where it comes down on floor.
-        input.jump |= (act.jump || extra.jump)
+        // A goof's, an extra's or an objective's hop (into the ball) only
+        // where it comes down on floor.
+        let into_body = selected_objective.is_some_and(|v| v.jump);
+        input.jump |= (act.jump || extra.jump || into_body)
             && hop_lands(&self.simulation, feet, Vec3::from(state.velocity));
         input.crouch |= act.crouch || extra.crouch;
         input.jet |= extra.jet;
