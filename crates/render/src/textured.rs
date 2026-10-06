@@ -1,6 +1,6 @@
+use crate::BufferInit;
 use crate::Preview;
 use anyhow::{Result, ensure};
-use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TextureVertex {
@@ -63,7 +63,7 @@ async fn render(
             .into(),
         ),
     });
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("native triangles"),
         contents: bytemuck::cast_slice(vertices),
         usage: wgpu::BufferUsages::VERTEX,

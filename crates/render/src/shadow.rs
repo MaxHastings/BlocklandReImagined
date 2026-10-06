@@ -725,8 +725,8 @@ impl ShadowMaps {
             label: Some("sun shadow depth gather"),
             ..Default::default()
         });
-        use wgpu::util::DeviceExt;
-        let receiver = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        use crate::BufferInit;
+        let receiver = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("sun shadow receiver uniform"),
             contents: bytemuck::bytes_of(&ShadowUniform::zeroed_disabled()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,

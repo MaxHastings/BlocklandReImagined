@@ -1,11 +1,11 @@
 //! Persistent world-space rendering on the caller's device. The caller owns
 //! the swapchain/offscreen attachment, encoder and submission, so UI passes can
 //! follow this pass without another adapter/device or scene re-upload.
+use crate::BufferInit;
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use glam::{Mat4, Vec3, Vec4};
 use std::{ops::Range, sync::Arc};
-use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// The world's depth runs reversed: 1 at the near plane, 0 at the far one.
@@ -1316,7 +1316,7 @@ fn geometry_buffers(
         color: [0.; 4],
         fx: [0.; 4],
     }];
-    let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let vertices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
         contents: bytemuck::cast_slice(if data.vertices.is_empty() {
             &empty_vertex
@@ -1325,7 +1325,7 @@ fn geometry_buffers(
         }),
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     });
-    let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let indices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene indices"),
         contents: bytemuck::cast_slice(if data.indices.is_empty() {
             &[0u32]
@@ -1862,7 +1862,7 @@ impl VolumeBinding {
         }
         Self {
             view: texture.create_view(&Default::default()),
-            parameters: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            parameters: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("light volume placement"),
                 contents: bytemuck::cast_slice(&parameters),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -2046,7 +2046,7 @@ impl MapLightBinding {
         }
         Self {
             visibility: texture.create_view(&Default::default()),
-            lights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            lights: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("map lights"),
                 contents: &uniform,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -2595,7 +2595,7 @@ impl SceneRenderer {
                 }
             }
         }
-        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![
                 0u8;
@@ -2615,7 +2615,7 @@ impl SceneRenderer {
         let volume = VolumeBinding::new(device, None);
         let map_lights = MapLightBinding::new(device, None, None);
         let mut renderer = Self {
-            identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            identity_instance: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
                 contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL)),
                 usage: wgpu::BufferUsages::VERTEX,
@@ -2671,7 +2671,7 @@ impl SceneRenderer {
     pub fn set_view_count(&mut self, device: &wgpu::Device, count: usize) {
         let count = count.max(1);
         while self.views.len() < count {
-            let camera = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let camera = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("camera uniform"),
                 contents: bytemuck::bytes_of(&Camera::default()),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -2910,7 +2910,7 @@ impl SceneRenderer {
                     parameters[(i + 1) * 4..(i + 2) * 4].copy_from_slice(group);
                 }
             }
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),
                 contents: bytemuck::cast_slice(&parameters),
                 usage: wgpu::BufferUsages::UNIFORM,

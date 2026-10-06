@@ -1,3 +1,4 @@
+mod buffer_init;
 pub mod color;
 pub mod environment_probe;
 pub mod environment_scene;
@@ -23,7 +24,7 @@ pub mod vignette;
 pub mod water_scene;
 pub mod world_shapes;
 use anyhow::{Result, ensure};
-use wgpu::util::DeviceExt;
+pub use buffer_init::BufferInit;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PreviewVertex {
@@ -59,7 +60,7 @@ pub async fn render_geometry(
         label: Some("native brick geometry"),
         source: wgpu::ShaderSource::Wgsl(include_str!("brick_preview.wgsl").into()),
     });
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("native triangles"),
         contents: bytemuck::cast_slice(vertices),
         usage: wgpu::BufferUsages::VERTEX,

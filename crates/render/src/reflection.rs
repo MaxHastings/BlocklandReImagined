@@ -10,11 +10,11 @@
 //! mirror, show a plain silver. Each pass draws only what lies in front of
 //! its mirror (an oblique near plane) inside the part of the screen the
 //! mirror covers, so a small mirror costs a small pass.
+use crate::BufferInit;
 use crate::scene::{Camera, DEPTH_FORMAT, GpuInstances, GpuScene, SceneRenderer, WorldPass};
 use anyhow::{Result, ensure};
 use glam::{Mat4, Vec3, Vec4, Vec4Swizzles};
 use std::ops::Range;
-use wgpu::util::DeviceExt;
 
 /// What a surface shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1074,13 +1074,11 @@ impl Reflections {
                 .as_ref()
                 .is_none_or(|b| b.size() < bytes.len() as u64)
             {
-                self.vertices = Some(device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("mirror surfaces"),
-                        contents: &vec![0; bytes.len().next_power_of_two()],
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    },
-                ));
+                self.vertices = Some(device.buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mirror surfaces"),
+                    contents: &vec![0; bytes.len().next_power_of_two()],
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                }));
             }
             if let Some(buffer) = &self.vertices {
                 queue.write_buffer(buffer, 0, bytes);
@@ -1142,7 +1140,7 @@ impl Reflections {
         }
     }
     fn bound_slot(&self, device: &wgpu::Device, picture: &wgpu::TextureView) -> Bound {
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mirror reflection"),
             contents: bytemuck::bytes_of(&SlotUniform::silver()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,

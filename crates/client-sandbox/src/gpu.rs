@@ -22,7 +22,34 @@ use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
-use wgpu::util::DeviceExt;
+
+/// `create_buffer_init` that survives a lost device: wgpu then hands back
+/// an invalid buffer, which `create_buffer_init` panics mapping. Left
+/// unfilled, it is replaced when the renderer restarts after the loss.
+trait BufferInit {
+    fn buffer_init(&self, descriptor: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer;
+}
+impl BufferInit for wgpu::Device {
+    fn buffer_init(&self, descriptor: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer {
+        let unpadded = descriptor.contents.len() as wgpu::BufferAddress;
+        let align = wgpu::COPY_BUFFER_ALIGNMENT - 1;
+        let size = ((unpadded + align) & !align).max(wgpu::COPY_BUFFER_ALIGNMENT);
+        let buffer = self.create_buffer(&wgpu::BufferDescriptor {
+            label: descriptor.label,
+            size,
+            usage: descriptor.usage,
+            mapped_at_creation: true,
+        });
+        if let Ok(mut range) = buffer.get_mapped_range_mut(..) {
+            range
+                .slice(..unpadded as usize)
+                .copy_from_slice(descriptor.contents);
+            drop(range);
+            buffer.unmap();
+        }
+        buffer
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -515,12 +542,12 @@ impl LayerRenderer {
         }
         for mesh in &addon.layer().meshes[self.meshes.len()..] {
             self.meshes.push(GpuMesh {
-                vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                vertices: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("addon mesh"),
                     contents: bytemuck::cast_slice(&mesh.vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                indices: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("addon mesh indices"),
                     contents: bytemuck::cast_slice(&mesh.indices),
                     usage: wgpu::BufferUsages::INDEX,
@@ -926,12 +953,12 @@ pub fn calibrate(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<GpuSpeed>
     };
     let vertices = [corner(-1.0, -1.0), corner(3.0, -1.0), corner(-1.0, 3.0)];
     renderer.meshes.push(GpuMesh {
-        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        vertices: device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("addon calibration"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         }),
-        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        indices: device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("addon calibration"),
             contents: bytemuck::cast_slice(&[0u32, 1, 2]),
             usage: wgpu::BufferUsages::INDEX,

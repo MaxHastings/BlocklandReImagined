@@ -1,6 +1,6 @@
 use crate::{Camera, CullStats, FoliageField, FoliagePack, Image};
 use anyhow::{Result, ensure};
-use wgpu::util::DeviceExt;
+use bri_render::BufferInit;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuPlant {
@@ -140,7 +140,7 @@ impl FoliageRenderer {
         if data.is_empty() {
             data.push(bytemuck::Zeroable::zeroed());
         }
-        let plant_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let plant_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("immutable native foliage instances"),
             contents: bytemuck::cast_slice(&data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,

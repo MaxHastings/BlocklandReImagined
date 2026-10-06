@@ -173,14 +173,14 @@ impl ShapeRenderer {
     }
     /// Replace the drawn faces (triangles).
     pub fn set_faces(&mut self, device: &wgpu::Device, vertices: &[ShapeVertex]) -> Result<()> {
-        use wgpu::util::DeviceExt;
+        use crate::BufferInit;
         ensure!(
             vertices.len().is_multiple_of(3) && u32::try_from(vertices.len()).is_ok(),
             "Invalid world shape faces"
         );
         self.vertices = vertices.len() as u32;
         self.buffer = (!vertices.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("world shapes"),
                 contents: bytemuck::cast_slice(vertices),
                 usage: wgpu::BufferUsages::VERTEX,
