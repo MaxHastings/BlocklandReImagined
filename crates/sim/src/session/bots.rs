@@ -1348,6 +1348,233 @@ impl Session {
         }
         Ok(())
     }
+    /// The way to its goal: swum straight in water; otherwise a route the
+    /// planner searches toward it a slice at a time, waypoints taken as
+    /// reached, a chase given up where its best route cannot reach the
+    /// enemy (unless a door it may open stands across the way), and a near
+    /// interaction point finished by the ordinary motor. The next waypoint.
+    #[allow(clippy::too_many_arguments)]
+    fn bot_path(
+        &mut self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &Body,
+        costs: crate::route::Costs,
+        swim: Option<f32>,
+        state: &crate::player::PlayerState,
+        tick: u64,
+    ) -> Option<Waypoint> {
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        let home = brain.home;
+        let mut wanted = None;
+        if let Some(height) = swim {
+            // In water it swims straight there, keeping to the water.
+            brain.plan.clear();
+            brain.search = None;
+            if let Some(goal) = brain.goal
+                && let Some((water, _)) = self.simulation.liquid_at(state.feet, height)
+            {
+                let to = crate::water::swim_point(water, goal.point(home), height);
+                if to.distance(feet) < 0.8 {
+                    brain.settled = true;
+                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                        brain.goal = None;
+                    }
+                } else {
+                    wanted = Some(Waypoint::walk(to));
+                }
+            }
+        } else if let Some(goal) = brain.goal {
+            let point = goal.point(home);
+            if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
+                brain.search = Some(Search::with(feet, point, SEARCH_BOUND, costs));
+            }
+            // Where a chase's route ends short of its enemy, and the enemy.
+            let mut gave_up = None;
+            if brain.search.is_some() {
+                let physics = &self.simulation.physics;
+                let simulation = &self.simulation;
+                let terrain = |o: Vec3, d: Vec3, r: f32| simulation.terrain_ray(o, d, r);
+                let waters = simulation.liquids();
+                // Living bodies a takeoff must not climb into, nor a
+                // pulled straight walk cut through (`nav::pull`).
+                let (bodies, motions): (Vec<(Vec3, Vec3)>, Vec<Vec3>) = {
+                    self.peers
+                        .iter()
+                        .filter(|(o, p)| **o != bot && p.combat.alive)
+                        .map(|(_, p)| {
+                            let at = Vec3::from(p.player.state().feet);
+                            let half = p.player.tuning().width * 0.5;
+                            (
+                                (
+                                    at - Vec3::new(half, 0.0, half),
+                                    at + Vec3::new(half, p.player.tuning().stand_height, half),
+                                ),
+                                Vec3::from(p.player.state().velocity),
+                            )
+                        })
+                        .unzip()
+                };
+                let ground = Ground {
+                    physics,
+                    terrain: &terrain,
+                    passages: simulation.passages(),
+                    waters: &waters,
+                    bodies: &bodies,
+                    motions: &motions,
+                };
+                let at = match self.bots.navs.iter().position(|(b, _)| *b == *body) {
+                    Some(at) => at,
+                    None => {
+                        let mut nav = Nav::default();
+                        nav.begin_tick();
+                        self.bots.navs.push((*body, nav));
+                        self.bots.navs.len() - 1
+                    }
+                };
+                let (bots_navs, brains) = (&mut self.bots.navs, &mut self.bots.brains);
+                let nav = &mut bots_navs[at].1;
+                let brain = brains.get_mut(&bot).unwrap();
+                if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
+                    brain.search = None;
+                    match found {
+                        Found::Path(path) if !path.is_empty() => {
+                            brain.partial_route = false;
+                            if matches!(brain.goal, Some(Goal::Chase(_))) {
+                                brain.out_of_reach = None;
+                            }
+                            brain.plan = crate::nav::pull(&ground, body, feet, path);
+                        }
+                        Found::Partial(path) if !path.is_empty() => {
+                            // The best route to an enemy ends where it cannot
+                            // hurt them: chasing them there is worth nothing.
+                            if let (Some(Goal::Chase(p)), Some(end)) = (brain.goal, path.last()) {
+                                let (across, up) = brain.reach;
+                                if let Some(at) = brain.chase_feet.filter(|_| !body.conservative)
+                                    && (flat(at - end.feet).length() > across
+                                        || at.y - end.feet.y > up)
+                                {
+                                    brain.out_of_reach = Some(p);
+                                    gave_up = Some((end.feet, at));
+                                }
+                            }
+                            brain.partial_route = true;
+                            brain.segment_anchor = feet;
+                            brain.plan = crate::nav::pull(&ground, body, feet, path);
+                        }
+                        // Already as close as it gets, or nowhere to stand.
+                        _ => brain.plan.clear(),
+                    }
+                }
+            }
+            // A door it may open stands across the way on from where the
+            // route ends: the enemy is in reach once it is clicked open.
+            if let Some((end, at)) = gave_up
+                && self.bot_opens_way(bot, end, at)
+            {
+                self.bots.brains.get_mut(&bot).unwrap().out_of_reach = None;
+            }
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            while let Some(next) = brain.plan.first() {
+                let d = next.feet - feet;
+                // A chassis is at a point once its side is: half its
+                // footprint, never a pedestrian's tolerance.
+                let near = if body.conservative {
+                    (body.width * 0.5).max(1.2)
+                } else {
+                    0.4
+                };
+                // One it got nowhere toward, within a step of it (wedged
+                // on a door jamb), it takes as reached, if more of the
+                // route follows. (Not on the way to work a body or a brick:
+                // pressing against those is the work.)
+                let wedged = brain.progress.stalls() > 0
+                    && brain.plan.len() > 1
+                    && flat(d).length() < 1.0
+                    && !matches!(brain.goal, Some(Goal::Objective(_) | Goal::Interact(_)));
+                // One through an opening is reached by going through; one
+                // swum to by being over it, at whatever depth; one flown to
+                // by standing on it after the landing.
+                let reached = match next.mode {
+                    Mode::Walk => {
+                        next.through.is_none()
+                            && (flat(d).length() < near || wedged)
+                            && d.y.abs() < body.step + 0.5
+                    }
+                    Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
+                    Mode::Jet { .. } => {
+                        state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
+                    }
+                };
+                if reached {
+                    brain.plan.remove(0);
+                    // Reaching a waypoint is getting somewhere.
+                    brain.progress.reset();
+                } else {
+                    break;
+                }
+            }
+            if brain.plan.is_empty() && brain.search.is_none() {
+                // Walked the whole plan: arrived, or as near as it goes.
+                if matches!(brain.goal, Some(Goal::Objective(_))) && brain.partial_route {
+                    brain.partial_route = false;
+                    if feet.distance(brain.segment_anchor) > 0.5 {
+                        brain.settled = false; // Continue a bounded, advancing segment.
+                    } else {
+                        brain.settled = true;
+                        brain
+                            .objective
+                            .fail(tick, "objective navigation made no progress");
+                    }
+                } else {
+                    brain.settled = true;
+                }
+                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                    brain.goal = None;
+                }
+            }
+            wanted = brain.plan.first().copied();
+            // Standing over a drop's landing, at the very edge or on a body
+            // above it (a vehicle's roof, which a route from the floor
+            // beneath starts under): heading for the landing itself just
+            // wobbles there, so walk on toward the first of what comes
+            // after it that is not underfoot until the drop carries it down.
+            if let Some(next) = wanted.as_mut()
+                && next.through.is_none()
+                && state.grounded
+                && next.feet.y < feet.y - body.step - 0.05
+                && flat(next.feet - feet).length() < 0.6
+            {
+                let beyond = brain
+                    .plan
+                    .iter()
+                    .skip(1)
+                    .map(|w| w.feet)
+                    .find(|at| flat(*at - feet).length() > 0.6)
+                    .unwrap_or(point);
+                if flat(beyond - feet).length() > 0.6 {
+                    next.through = Some(beyond);
+                }
+            }
+            // A grid route ends at a cell, not necessarily at the authored
+            // interaction point. Finish a nearby approach with the ordinary
+            // motor; the action's physical reach decides when it succeeds.
+            // Include the search's arrival radius, consumed-waypoint tolerance
+            // and bounded target drift rather than stopping in the gap between
+            // those tolerances and an unrelated fixed one-unit cutoff.
+            if wanted.is_none()
+                && brain.search.is_none()
+                && matches!(goal, Goal::Interact(_) | Goal::Objective(_) | Goal::Arm(_))
+                && flat(point - feet).length()
+                    < crate::nav::ARRIVAL_RADIUS + if body.conservative { 1.2 } else { 0.4 } + 0.2
+                && flat(point - feet).length() > 0.1
+                && (point.y - feet.y).abs() < body.step + 0.5
+            {
+                wanted = Some(Waypoint::walk(point));
+            }
+        }
+        wanted
+    }
     fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
         if self.bots.failing == Some(bot) {
             anyhow::bail!("this bot's steps were made to fail");
@@ -2100,213 +2327,7 @@ impl Session {
 
         // Path.
         let home = brain.home;
-        let mut wanted = None;
-        if let Some(height) = swim {
-            // In water it swims straight there, keeping to the water.
-            brain.plan.clear();
-            brain.search = None;
-            if let Some(goal) = brain.goal
-                && let Some((water, _)) = self.simulation.liquid_at(state.feet, height)
-            {
-                let to = crate::water::swim_point(water, goal.point(home), height);
-                if to.distance(feet) < 0.8 {
-                    brain.settled = true;
-                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
-                        brain.goal = None;
-                    }
-                } else {
-                    wanted = Some(Waypoint::walk(to));
-                }
-            }
-        } else if let Some(goal) = brain.goal {
-            let point = goal.point(home);
-            if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
-                brain.search = Some(Search::with(feet, point, SEARCH_BOUND, costs));
-            }
-            // Where a chase's route ends short of its enemy, and the enemy.
-            let mut gave_up = None;
-            if brain.search.is_some() {
-                let physics = &self.simulation.physics;
-                let simulation = &self.simulation;
-                let terrain = |o: Vec3, d: Vec3, r: f32| simulation.terrain_ray(o, d, r);
-                let waters = simulation.liquids();
-                // Living bodies a takeoff must not climb into, nor a
-                // pulled straight walk cut through (`nav::pull`).
-                let (bodies, motions): (Vec<(Vec3, Vec3)>, Vec<Vec3>) = {
-                    self.peers
-                        .iter()
-                        .filter(|(o, p)| **o != bot && p.combat.alive)
-                        .map(|(_, p)| {
-                            let at = Vec3::from(p.player.state().feet);
-                            let half = p.player.tuning().width * 0.5;
-                            (
-                                (
-                                    at - Vec3::new(half, 0.0, half),
-                                    at + Vec3::new(half, p.player.tuning().stand_height, half),
-                                ),
-                                Vec3::from(p.player.state().velocity),
-                            )
-                        })
-                        .unzip()
-                };
-                let ground = Ground {
-                    physics,
-                    terrain: &terrain,
-                    passages: simulation.passages(),
-                    waters: &waters,
-                    bodies: &bodies,
-                    motions: &motions,
-                };
-                let at = match self.bots.navs.iter().position(|(b, _)| *b == body) {
-                    Some(at) => at,
-                    None => {
-                        let mut nav = Nav::default();
-                        nav.begin_tick();
-                        self.bots.navs.push((body, nav));
-                        self.bots.navs.len() - 1
-                    }
-                };
-                let (bots_navs, brains) = (&mut self.bots.navs, &mut self.bots.brains);
-                let nav = &mut bots_navs[at].1;
-                let brain = brains.get_mut(&bot).unwrap();
-                if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, &body) {
-                    brain.search = None;
-                    match found {
-                        Found::Path(path) if !path.is_empty() => {
-                            brain.partial_route = false;
-                            if matches!(brain.goal, Some(Goal::Chase(_))) {
-                                brain.out_of_reach = None;
-                            }
-                            brain.plan = crate::nav::pull(&ground, &body, feet, path);
-                        }
-                        Found::Partial(path) if !path.is_empty() => {
-                            // The best route to an enemy ends where it cannot
-                            // hurt them: chasing them there is worth nothing.
-                            if let (Some(Goal::Chase(p)), Some(end)) = (brain.goal, path.last()) {
-                                let (across, up) = brain.reach;
-                                if let Some(at) = brain.chase_feet.filter(|_| !body.conservative)
-                                    && (flat(at - end.feet).length() > across
-                                        || at.y - end.feet.y > up)
-                                {
-                                    brain.out_of_reach = Some(p);
-                                    gave_up = Some((end.feet, at));
-                                }
-                            }
-                            brain.partial_route = true;
-                            brain.segment_anchor = feet;
-                            brain.plan = crate::nav::pull(&ground, &body, feet, path);
-                        }
-                        // Already as close as it gets, or nowhere to stand.
-                        _ => brain.plan.clear(),
-                    }
-                }
-            }
-            // A door it may open stands across the way on from where the
-            // route ends: the enemy is in reach once it is clicked open.
-            if let Some((end, at)) = gave_up
-                && self.bot_opens_way(bot, end, at)
-            {
-                self.bots.brains.get_mut(&bot).unwrap().out_of_reach = None;
-            }
-            let brain = self.bots.brains.get_mut(&bot).unwrap();
-            while let Some(next) = brain.plan.first() {
-                let d = next.feet - feet;
-                // A chassis is at a point once its side is: half its
-                // footprint, never a pedestrian's tolerance.
-                let near = if body.conservative {
-                    (body.width * 0.5).max(1.2)
-                } else {
-                    0.4
-                };
-                // One it got nowhere toward, within a step of it (wedged
-                // on a door jamb), it takes as reached, if more of the
-                // route follows. (Not on the way to work a body or a brick:
-                // pressing against those is the work.)
-                let wedged = brain.progress.stalls() > 0
-                    && brain.plan.len() > 1
-                    && flat(d).length() < 1.0
-                    && !matches!(brain.goal, Some(Goal::Objective(_) | Goal::Interact(_)));
-                // One through an opening is reached by going through; one
-                // swum to by being over it, at whatever depth; one flown to
-                // by standing on it after the landing.
-                let reached = match next.mode {
-                    Mode::Walk => {
-                        next.through.is_none()
-                            && (flat(d).length() < near || wedged)
-                            && d.y.abs() < body.step + 0.5
-                    }
-                    Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
-                    Mode::Jet { .. } => {
-                        state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
-                    }
-                };
-                if reached {
-                    brain.plan.remove(0);
-                    // Reaching a waypoint is getting somewhere.
-                    brain.progress.reset();
-                } else {
-                    break;
-                }
-            }
-            if brain.plan.is_empty() && brain.search.is_none() {
-                // Walked the whole plan: arrived, or as near as it goes.
-                if matches!(brain.goal, Some(Goal::Objective(_))) && brain.partial_route {
-                    brain.partial_route = false;
-                    if feet.distance(brain.segment_anchor) > 0.5 {
-                        brain.settled = false; // Continue a bounded, advancing segment.
-                    } else {
-                        brain.settled = true;
-                        brain
-                            .objective
-                            .fail(tick, "objective navigation made no progress");
-                    }
-                } else {
-                    brain.settled = true;
-                }
-                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
-                    brain.goal = None;
-                }
-            }
-            wanted = brain.plan.first().copied();
-            // Standing over a drop's landing, at the very edge or on a body
-            // above it (a vehicle's roof, which a route from the floor
-            // beneath starts under): heading for the landing itself just
-            // wobbles there, so walk on toward the first of what comes
-            // after it that is not underfoot until the drop carries it down.
-            if let Some(next) = wanted.as_mut()
-                && next.through.is_none()
-                && state.grounded
-                && next.feet.y < feet.y - body.step - 0.05
-                && flat(next.feet - feet).length() < 0.6
-            {
-                let beyond = brain
-                    .plan
-                    .iter()
-                    .skip(1)
-                    .map(|w| w.feet)
-                    .find(|at| flat(*at - feet).length() > 0.6)
-                    .unwrap_or(point);
-                if flat(beyond - feet).length() > 0.6 {
-                    next.through = Some(beyond);
-                }
-            }
-            // A grid route ends at a cell, not necessarily at the authored
-            // interaction point. Finish a nearby approach with the ordinary
-            // motor; the action's physical reach decides when it succeeds.
-            // Include the search's arrival radius, consumed-waypoint tolerance
-            // and bounded target drift rather than stopping in the gap between
-            // those tolerances and an unrelated fixed one-unit cutoff.
-            if wanted.is_none()
-                && brain.search.is_none()
-                && matches!(goal, Goal::Interact(_) | Goal::Objective(_) | Goal::Arm(_))
-                && flat(point - feet).length()
-                    < crate::nav::ARRIVAL_RADIUS + if body.conservative { 1.2 } else { 0.4 } + 0.2
-                && flat(point - feet).length() > 0.1
-                && (point.y - feet.y).abs() < body.step + 0.5
-            {
-                wanted = Some(Waypoint::walk(point));
-            }
-        }
+        let mut wanted = self.bot_path(bot, feet, &body, costs, swim, &state, tick);
         // Standing on a body (a vehicle's roof, a crate, a head): the
         // world has no floor anywhere under its feet (its middle can stand
         // over a gap between bricks it stands on).
