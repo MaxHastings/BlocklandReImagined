@@ -2642,6 +2642,10 @@ impl Executor {
     }
 }
 
+/// What an Add-On output does to a plan's facts, and the team whose score
+/// it changes, if any.
+type PackageEffects = (Vec<Effect>, Option<bri_minigames::TeamId>);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3061,7 +3065,3 @@ mod tests {
         );
     }
 }
-
-/// What an Add-On output does to a plan's facts, and the team whose score
-/// it changes, if any.
-type PackageEffects = (Vec<Effect>, Option<bri_minigames::TeamId>);

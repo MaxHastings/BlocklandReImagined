@@ -85,6 +85,80 @@ impl BotThought {
 }
 
 impl Session {
+    pub fn bot_thoughts(&self) -> Vec<BotThought> {
+        let tick = self.simulation.state().tick;
+        self.bots
+            .brains
+            .iter()
+            .map(|(bot, b)| BotThought {
+                bot: *bot,
+                behaviour: b.behaviour.name(),
+                leg: if self.bot_vehicle_body(*bot).is_some() && !b.plan.is_empty() {
+                    "drive"
+                } else {
+                    b.plan
+                        .first()
+                        .map_or("none", |w| crate::route::leg_name(w.mode))
+                },
+                visible: b.target,
+                remembered: b.memory.map(|k| BotEvidence {
+                    subject: k.subject,
+                    position: k.at.to_array(),
+                    observed: k.observed,
+                    expires: k.expires,
+                }),
+                task: self
+                    .bots
+                    .claims
+                    .owner_claim(*bot, tick)
+                    .map(|c| match c.resource {
+                        claims::Resource::Seat { vehicle, seat } => BotTask::Seat {
+                            vehicle,
+                            seat,
+                            subject: c.subject,
+                            deadline: c.deadline,
+                        },
+                        claims::Resource::Body { vehicle } => BotTask::Push {
+                            vehicle,
+                            subject: c.subject,
+                            deadline: c.deadline,
+                        },
+                    }),
+                // Standing still for a goof it wants to go nowhere: its
+                // route waits for it.
+                goal: (!b.surprise.standing())
+                    .then(|| b.goal.map(|g| g.point(b.leash).to_array()))
+                    .flatten(),
+                next: (!b.surprise.standing())
+                    .then(|| b.plan.first().map(|p| p.feet.to_array()))
+                    .flatten(),
+                path_steps: b.plan.len(),
+                searching: b.search.is_some(),
+                search_phase: b.evidence_search.phase(),
+                objective: b.objective.source(),
+                objective_diagnostic: b.objective.diagnostic,
+                objective_detail: b.objective.detail().map(|detail| BotObjectiveDetail {
+                    desired: detail.desired.to_owned(),
+                    action: detail.action.to_owned(),
+                    provider: detail.provider,
+                    phase: if detail.phase == "waiting" {
+                        "waiting"
+                    } else if b.resting || b.behaviour != Behaviour::Objective {
+                        "paused"
+                    } else {
+                        detail.phase
+                    },
+                    route: detail.route.to_vec(),
+                }),
+                objective_searches: b.objective.searches,
+                objective_reused: b.objective.reused,
+                noticed: b.perception.why,
+                surprise: b.surprise.view(&b.kind.surprise),
+                team: b.team.view(),
+                clearing: b.clearing,
+            })
+            .collect()
+    }
     /// Wall time this session has spent thinking for its bots
     /// (`step_bots`), in nanoseconds: a diagnostic for the perf bar, never
     /// game state.
