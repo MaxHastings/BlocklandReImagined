@@ -186,9 +186,6 @@ const ERROR_FLOOR: f32 = 1.0 / 3.0;
 const LEAD_STRAY: f32 = 0.15;
 /// Ticks between the lead's seeded points.
 const LEAD_TICKS: u64 = 120;
-/// Longest a bot carries what it holds toward open space before it throws
-/// anyway.
-const CARRY_TICKS: u64 = 720;
 /// Shortest hold before the throw: it holds its catch up a moment.
 const LIFT_TICKS: u64 = 90;
 /// A roof closer than this over its eyes is one a carried catch must clear.
@@ -411,11 +408,27 @@ struct Brain {
 /// out into open space and flings it with a swing of its aim.
 #[derive(Clone, Copy, Debug)]
 struct Carry {
-    /// Where it is open; `None` when it is open here (or nowhere near).
-    to: Option<Vec3>,
+    /// Where it is open to throw from (`Session::bot_open_spot`).
+    to: Spot,
     since: u64,
     /// When the throwing swing began.
     swing: Option<u64>,
+}
+/// Where a carry goes to throw: still looking (from this candidate on, as
+/// the shared ray budget allows), or found: a place, or here (open here,
+/// nowhere near, or no way there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Spot {
+    Looking(usize),
+    Found(Option<Vec3>),
+}
+impl Spot {
+    fn place(self) -> Option<Vec3> {
+        match self {
+            Spot::Found(at) => at,
+            Spot::Looking(_) => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Goal {
@@ -1741,8 +1754,6 @@ impl Session {
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
-        let carry_to =
-            (holding && self.bots.brains[&bot].carry.is_none()).then(|| self.open_spot(feet));
         let interaction_enemy = sight
             .target
             .map(|s| Knowledge {
@@ -1948,13 +1959,22 @@ impl Session {
         // must not take over that recovery or start a combat swing.
         if !holding || objective_hold_control {
             brain.carry = None;
-        } else if let Some(to) = carry_to {
+        } else if brain.carry.is_none() {
             brain.carry = Some(Carry {
-                to,
+                to: Spot::Looking(0),
                 since: tick,
                 swing: None,
             });
         }
+        // Where to throw from, looked for over as many ticks as the shared
+        // ray budget takes.
+        if let Some(Spot::Looking(from)) = brain.carry.map(|c| c.to) {
+            let to = self.bot_open_spot(bot, feet, from);
+            if let Some(carry) = self.bots.brains.get_mut(&bot).unwrap().carry.as_mut() {
+                carry.to = to;
+            }
+        }
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
             brain.leash = feet;
@@ -2329,7 +2349,7 @@ impl Session {
                 }
             }
             Behaviour::Carry => {
-                brain.set_goal(brain.carry.and_then(|c| c.to).map(Goal::Carry));
+                brain.set_goal(brain.carry.and_then(|c| c.to.place()).map(Goal::Carry));
                 (false, false)
             }
             Behaviour::Fight => brain.pursue(enemy, true, near, feet, body.width * 0.5, tick),
@@ -2544,14 +2564,17 @@ impl Session {
             tick,
         )?;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        // Carried there (or as near as it gets, or long enough): swing,
-        // after holding it up a moment.
+        // Carried there (or as near as it gets: settled, or no way there):
+        // swing, after holding it up a moment.
         if let Some(carry) = brain.carry.as_mut()
             && carry.swing.is_none()
             && tick >= carry.since + LIFT_TICKS
-            && (carry.to.is_none_or(|to| flat(to - feet).length() < 0.6)
-                || brain.settled
-                || tick >= carry.since + CARRY_TICKS)
+            && match carry.to {
+                Spot::Looking(_) => false,
+                Spot::Found(to) => {
+                    to.is_none_or(|to| flat(to - feet).length() < 0.6) || brain.settled
+                }
+            }
         {
             carry.swing = Some(tick);
         }
@@ -3051,6 +3074,10 @@ impl Session {
                 if behaviour == Behaviour::Arm {
                     // No way to the item: pass it over.
                     brain.arming.pass_over(tick);
+                }
+                if let Some(carry) = brain.carry.as_mut() {
+                    // No way to open space: throw from here.
+                    carry.to = Spot::Found(None);
                 }
                 if behaviour == Behaviour::Objective {
                     brain.objective.fail(tick, "objective navigation blocked");

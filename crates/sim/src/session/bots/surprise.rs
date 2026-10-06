@@ -1249,10 +1249,9 @@ impl Session {
             .filter(|(o, p)| **o != bot && p.combat.alive)
             .map(|(o, p)| (*o, p.player.eye()))
             .filter(|(_, at)| at.distance(eye) < 24.0)
-            .filter(|(_, at)| {
-                let d = *at - eye;
-                self.world_ray(eye, d.normalize_or_zero(), d.length())
-                    .is_none()
+            .filter(|(o, _)| {
+                self.bot_sees_player(bot, *o, eye, 24.0, sightlines::Urgency::Ordinary)
+                    .is_some()
             })
             .min_by(|a, b| a.1.distance(eye).total_cmp(&b.1.distance(eye)))
             .map(|(o, _)| o);

@@ -1,6 +1,10 @@
 //! Who a bot counts as friend or foe, and whom it sees.
 use super::*;
 
+/// Rays one open-spot candidate may cast: the floor, the sky, and room
+/// and sky each way round.
+const OPEN_RAYS: usize = 18;
+
 impl Session {
     /// Whether `bot` treats `other` as an enemy: anyone it may hurt, except
     /// bots of the same builder, who are on its side. A rules bot plays
@@ -148,7 +152,8 @@ impl Session {
         }
     }
     /// Whether a body standing at `feet` has open sky above and room all
-    /// round, to fling something.
+    /// round, to fling something: at most `OPEN_RAYS` rays with the floor
+    /// looked for.
     pub(super) fn open_at(&self, feet: Vec3) -> bool {
         let clear = |from: Vec3, d: Vec3, length: f32| {
             matches!(self.simulation.target(from, d, length), Ok(None))
@@ -162,28 +167,37 @@ impl Session {
                 clear(chest, out, OPEN_ROOM) && clear(chest + out * OPEN_SWING, Vec3::Y, OPEN_SKY)
             })
     }
-    /// The nearest open place around `feet` to throw from: `None` when it
-    /// is open here, or nowhere near.
-    pub(super) fn open_spot(&self, feet: Vec3) -> Option<Vec3> {
-        if self.open_at(feet) {
-            return None;
-        }
-        for ring in [6.0, 12.0, 18.0, 24.0] {
-            for i in 0..12 {
-                let a = i as f32 * std::f32::consts::TAU / 12.0;
-                let p = feet + Vec3::new(a.sin(), 0.0, a.cos()) * ring;
-                // The floor there, looked for from waist height so a roof
-                // overhead is not taken for it.
-                let stand = match self.simulation.target(p + Vec3::Y * 2.0, -Vec3::Y, 8.0) {
-                    Ok(Some(hit)) if hit.normal.y > 0.7 => hit.position + Vec3::Y * 0.05,
-                    Ok(Some(_)) => continue,
-                    _ => p,
-                };
-                if self.open_at(stand) {
-                    return Some(stand);
+    /// The nearest open place around `feet` to throw from, looked for from
+    /// candidate `from` on (here first, then rings round it), each paid for
+    /// from the shared ray budget: still looking where the budget ran out;
+    /// found `None` when it is open here, or nowhere near.
+    pub(super) fn bot_open_spot(&self, bot: OwnerId, feet: Vec3, from: usize) -> super::Spot {
+        const RINGS: [f32; 4] = [6.0, 12.0, 18.0, 24.0];
+        const AROUND: usize = 12;
+        for at in from..1 + RINGS.len() * AROUND {
+            if !self.bot_spend_rays(bot, OPEN_RAYS) {
+                return super::Spot::Looking(at);
+            }
+            if at == 0 {
+                if self.open_at(feet) {
+                    return super::Spot::Found(None);
                 }
+                continue;
+            }
+            let (ring, i) = (RINGS[(at - 1) / AROUND], (at - 1) % AROUND);
+            let a = i as f32 * std::f32::consts::TAU / AROUND as f32;
+            let p = feet + Vec3::new(a.sin(), 0.0, a.cos()) * ring;
+            // The floor there, looked for from waist height so a roof
+            // overhead is not taken for it.
+            let stand = match self.simulation.target(p + Vec3::Y * 2.0, -Vec3::Y, 8.0) {
+                Ok(Some(hit)) if hit.normal.y > 0.7 => hit.position + Vec3::Y * 0.05,
+                Ok(Some(_)) => continue,
+                _ => p,
+            };
+            if self.open_at(stand) {
+                return super::Spot::Found(Some(stand));
             }
         }
-        None
+        super::Spot::Found(None)
     }
 }

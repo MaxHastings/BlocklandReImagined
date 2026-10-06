@@ -249,8 +249,7 @@ impl Session {
                     .map(|(_, o)| o)
                     .filter(|_| !at_stake)
                     .find(|o| {
-                        self.simulation
-                            .sight(eye, self.peers[o].player.eye(), MARK_SIGHT)
+                        self.bot_sees_player(bot, *o, eye, MARK_SIGHT, sightlines::Urgency::Ordinary)
                             .is_some()
                     });
                 self.bots.brains.get_mut(&bot)?.extras.mark = Some((mark, tick + MARK_TICKS));
