@@ -2663,7 +2663,10 @@ impl Session {
             // Searching the spot: sweep the view.
             aim_yaw = wrap(brain.yaw + 0.8 * TICK * 2.0);
         }
-        if let Some((yaw, pitch)) = act.aim.or(extra.aim) {
+        // A goof's gesture (waving a tool, looking about) does not keep its
+        // eyes off someone it just noticed: the glance has the look.
+        let gesture = act.aim.filter(|_| glance.is_none());
+        if let Some((yaw, pitch)) = gesture.or(extra.aim) {
             (aim_yaw, aim_pitch) = (yaw, pitch);
         } else if act.look_down && glance.is_none() {
             (aim_yaw, aim_pitch) = (brain.yaw, LOOK_DOWN);
