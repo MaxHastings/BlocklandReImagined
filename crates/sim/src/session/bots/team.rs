@@ -156,12 +156,28 @@ pub(super) fn exit(
     None
 }
 
-/// Adjust each live option's score by allies' intents. An option keeps a
-/// score above zero: what the brain could do stays an option.
+// The terms stage, between each option's own score and the chooser: what
+// the bot's side adds. Its objective is worth more as its side falls
+// behind (`pressed`), and allies' intents add to or take from each option
+// (`side_terms`). What it saw work for a teammate the chooser weighs itself
+// (`copy`, after its band).
+
+/// Its objective is worth more by `pressure` for each share of the round
+/// its side is behind (`deficit`). The pick the option scores make before
+/// the allies' terms, to tell a choice the terms changed.
+pub(super) fn pressed(cfg: &BotTeam, deficit: f32, scores: &mut [f32; Behaviour::COUNT]) -> usize {
+    scores[Behaviour::Objective as usize] *= 1.0 + cfg.pressure * deficit;
+    behaviour::best(scores) as usize
+}
+
+/// Adjust each live option's score by allies' intents, except while it
+/// carries an objective or is urgent (`gate`). An option keeps a score
+/// above zero: what the brain could do stays an option.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn adjust(
+pub(super) fn side_terms(
     cfg: &BotTeam,
     me: OwnerId,
+    gate: super::surprise::Gate,
     sinces: impl Fn(usize) -> u64,
     scores: &mut [f32; Behaviour::COUNT],
     choices: &[Choice; Behaviour::COUNT],
@@ -170,6 +186,9 @@ pub(super) fn adjust(
     clear: &dyn Fn(Vec3, Vec3) -> bool,
 ) -> [Terms; Behaviour::COUNT] {
     let mut all = [Terms::default(); Behaviour::COUNT];
+    if gate.carrying || gate.urgent {
+        return all;
+    }
     for (b, score) in scores.iter_mut().enumerate() {
         if *score > 0.0 {
             all[b] = terms(
@@ -767,7 +786,7 @@ mod tests {
             scores[Behaviour::Fight as usize] = fight;
             scores[Behaviour::Wander as usize] = 0.1;
             let all = [(1, shooter())];
-            adjust(&cfg, 2, |_| 0, &mut scores, &choices, &all, 2.0, &open);
+            side_terms(&cfg, 2, Default::default(), |_| 0, &mut scores, &choices, &all, 2.0, &open);
             (behaviour::best(&scores), scores)
         };
         assert_eq!(pick(1.0).0, Behaviour::Fight, "0.4 still beats 0.1");
@@ -801,7 +820,7 @@ mod tests {
             scores[Behaviour::Fight as usize] = 0.6 + team.overlap();
             scores[Behaviour::Chase as usize] = 0.6;
             let all = [(0, ally)];
-            adjust(&team, seed, |_| 10, &mut scores, &choices, &all, 2.0, &open);
+            side_terms(&team, seed, Default::default(), |_| 10, &mut scores, &choices, &all, 2.0, &open);
             let mut mind = surprise::Mind::new(seed);
             let gate = surprise::Gate::default();
             let hold = crate::bot_kind::BotHold::default();

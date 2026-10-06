@@ -69,7 +69,18 @@ const IDLE_BOREDOM: f32 = 0.24;
 const GOOF_SCORE: f32 = 0.5;
 /// Playing's worth (`Pause::play`) at which a goof is worth all of
 /// `GOOF_SCORE`, and the share it keeps with the action right here.
-pub(super) const LULL: f32 = 0.7;
+const LULL: f32 = 0.7;
+/// Within this of the point its objective takes it to, a bot is at its
+/// post, and playing is worth what it watches there (`View::aim`).
+const ON_OBJECTIVE: f32 = 6.0;
+/// The action (an enemy, what a post watches) within this is worth all of
+/// playing; past `ACTION_FAR` playing is worth `LULL`, in between it fades.
+const ACTION_NEAR: f32 = 10.0;
+const ACTION_FAR: f32 = 30.0;
+/// Playing's worth going back home, or with an enemy remembered or an
+/// objective that wants one beaten but none in sight.
+const RETURN_PLAY: f32 = 0.8;
+const PRESSED_PLAY: f32 = 0.85;
 const GOOF_FLOOR: f32 = 0.05;
 /// Goofing's own boredom a second (at strength 1): goofs grow stale, the
 /// brake on goofing that the mood's pull pushes against.
@@ -1069,6 +1080,67 @@ impl Session {
             health,
             due: tick + ((flight + 0.6) * TICKS) as u64,
         });
+    }
+    /// What playing is worth to the bot now, against which a goof weighs
+    /// its own small score: the action close by (an enemy near, the
+    /// objective's focus near once it is at its post, on its way to it)
+    /// is worth all of it; far from the action, waiting, or with nothing
+    /// to do, playing is worth little and a goof wins now and then. Only
+    /// what makes a goof impossible rules one out (`Gate`): a fight rules
+    /// it out only by being worth all of playing. `pressed`: its objective
+    /// wants an enemy beaten.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn play_worth(
+        &self,
+        bot: OwnerId,
+        behaviour: Behaviour,
+        objective: Option<&objectives::View>,
+        pressed: bool,
+        target: Option<Seen>,
+        feet: Vec3,
+        tick: u64,
+    ) -> f32 {
+        let idle = behaviour == Behaviour::Wander && objective.is_none();
+        let action = |d: f32| {
+            let t = ((d - ACTION_NEAR) / (ACTION_FAR - ACTION_NEAR)).clamp(0.0, 1.0);
+            1.0 + (LULL - 1.0) * t
+        };
+        let mut play: f32 = if idle { LULL } else { RETURN_PLAY };
+        if let Some(view) = objective {
+            play = play.max(if view.waiting {
+                LULL
+            } else if flat(view.point - feet).length() > ON_OBJECTIVE {
+                // On its way: on task.
+                1.0
+            } else {
+                // At its post: worth what it watches.
+                action(flat(view.aim - feet).length())
+            });
+        }
+        if pressed {
+            play = play.max(PRESSED_PLAY);
+        }
+        // An enemy in sight is the action as far as it plays along: one
+        // trading shots with it is the action itself; one goofing (an
+        // emote, a spray can) is still an enemy, but playing it is worth
+        // less, so over time a goof may answer in kind.
+        if let Some(seen) = target {
+            let intent = self
+                .bots
+                .claims
+                .intents(tick)
+                .find(|(o, _)| *o == seen.owner);
+            play = play.max(
+                match self.seen_doing(seen.owner, intent.as_ref().map(|(_, i)| i), tick) {
+                    Some(team::Doing::Goof(_)) => PRESSED_PLAY,
+                    _ if behaviour == Behaviour::Fight => 1.0,
+                    _ => action(flat(seen.feet - feet).length()),
+                },
+            );
+        } else if self.bots.brains[&bot].memory.is_some() {
+            play = play.max(PRESSED_PLAY);
+        }
+        play
     }
     /// What the bot could do idly now.
     pub(super) fn surprise_pause(

@@ -7,6 +7,8 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 
 const DISCOVER: f32 = 24.0;
+/// What each unit of the walk to an opportunity takes off its utility.
+const TRAVEL_COST: f32 = 0.002;
 use super::claims::RETRY;
 /// A driver reaches a goal at least this many degrees off the hull's
 /// heading in reverse, but a pursued target only within `REVERSE_DISTANCE`;
@@ -547,7 +549,7 @@ impl Session {
                 self.bots
                     .claims
                     .progress(bot, feet.distance(o.point), false, tick);
-                o.utility -= feet.distance(o.point) * 0.002;
+                o.utility -= feet.distance(o.point) * TRAVEL_COST;
                 return Some(o);
             }
             self.bots.claims.fail(bot, claim.resource, tick);
@@ -602,7 +604,7 @@ impl Session {
                     {
                         continue;
                     }
-                    o.utility -= feet.distance(o.point) * 0.002;
+                    o.utility -= feet.distance(o.point) * TRAVEL_COST;
                     if best.is_none_or(|old| o.utility > old.utility) {
                         best = Some(o);
                     }

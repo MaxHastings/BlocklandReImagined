@@ -157,21 +157,6 @@ const FIGHT_HEARING: f32 = 128.0;
 const FIGHT_HEARD_ROUGHLY: f32 = 0.15;
 /// Farthest from its start a path may lead, across.
 const SEARCH_BOUND: f32 = 72.0;
-/// Within this of the point its objective takes it to, a bot is at its
-/// post, and playing is worth what it watches there (`View::aim`).
-const ON_OBJECTIVE: f32 = 6.0;
-/// The action (an enemy, what a post watches) within this is worth all of
-/// playing; past `ACTION_FAR` playing is worth `LULL_PLAY`, in between it
-/// fades.
-const ACTION_NEAR: f32 = 10.0;
-const ACTION_FAR: f32 = 30.0;
-/// Playing's worth in a lull (far from the action, waiting, nothing to
-/// do): where a goof is worth all of its small score.
-const LULL_PLAY: f32 = surprise::LULL;
-/// Playing's worth going back home, or with an enemy remembered or an
-/// objective that wants one beaten but none in sight.
-const RETURN_PLAY: f32 = 0.8;
-const PRESSED_PLAY: f32 = 0.85;
 /// How far ahead a step looks for a portal it would go through.
 const PORTAL_REACH: f32 = 0.8;
 /// The pitch of a bot looking at what it handles (an emote, a tool).
@@ -2085,25 +2070,19 @@ impl Session {
             }),
             carries,
         );
-        // Its objective is worth more as its team falls behind. (What it saw
-        // work for a teammate the surprise chooser weighs: `team` copy.)
-        scores[Behaviour::Objective as usize] *= 1.0 + kind.team.pressure * deficit;
-        let plain_before = behaviour::best(&scores) as usize;
+        let plain_before = team::pressed(&kind.team, deficit, &mut scores);
         let claims = &self.bots.claims;
-        brain.team.terms = if gate.carrying || gate.urgent {
-            Default::default()
-        } else {
-            team::adjust(
-                &kind.team,
-                bot,
-                |b| claims.held_since(bot, b as u8, choices[b].target, tick),
-                &mut scores,
-                &choices,
-                &intents,
-                tall,
-                &clear,
-            )
-        };
+        brain.team.terms = team::side_terms(
+            &kind.team,
+            bot,
+            gate,
+            |b| claims.held_since(bot, b as u8, choices[b].target, tick),
+            &mut scores,
+            &choices,
+            &intents,
+            tall,
+            &clear,
+        );
         brain.team.allies = intents.len();
         // The plain pick, or a near one the surprise chooser takes.
         brain.surprise.gate = gate;
@@ -2429,55 +2408,17 @@ impl Session {
             behaviour == Behaviour::Wander,
         );
         // Now and then something idle (`surprise`): goofing is an option
-        // the chooser weighs against playing, with a small worth of its
-        // own. Playing is worth what the bot is doing now: the action
-        // close by (an enemy near, the objective's focus near once it is
-        // at its post, on its way to it) wins easily; far from the action,
-        // waiting, or with nothing to do, playing is worth little and a
-        // goof wins now and then. Only what makes a goof impossible rules
-        // it out: hurt just now (urgent), playing with or holding
-        // something, carrying the objective, or off its feet. A fight
-        // rules it out only by being worth all of playing.
+        // the chooser weighs against playing (`play_worth`).
         let idle = behaviour == Behaviour::Wander && objective.is_none();
-        let action = |d: f32| {
-            let t = ((d - ACTION_NEAR) / (ACTION_FAR - ACTION_NEAR)).clamp(0.0, 1.0);
-            1.0 + (LULL_PLAY - 1.0) * t
-        };
-        let mut play: f32 = if idle { LULL_PLAY } else { RETURN_PLAY };
-        if let Some(view) = objective.as_ref() {
-            play = play.max(if view.waiting {
-                LULL_PLAY
-            } else if flat(view.point - feet).length() > ON_OBJECTIVE {
-                // On its way: on task.
-                1.0
-            } else {
-                // At its post: worth what it watches.
-                action(flat(view.aim - feet).length())
-            });
-        }
-        if selected_objective.is_some_and(|v| v.enemy.is_some()) {
-            play = play.max(PRESSED_PLAY);
-        }
-        // An enemy in sight is the action as far as it plays along: one
-        // trading shots with it is the action itself; one goofing (an
-        // emote, a spray can) is still an enemy, but playing it is worth
-        // less, so over time a goof may answer in kind.
-        if let Some(seen) = sight.target {
-            let intent = self
-                .bots
-                .claims
-                .intents(tick)
-                .find(|(o, _)| *o == seen.owner);
-            play = play.max(
-                match self.seen_doing(seen.owner, intent.as_ref().map(|(_, i)| i), tick) {
-                    Some(team::Doing::Goof(_)) => PRESSED_PLAY,
-                    _ if behaviour == Behaviour::Fight => 1.0,
-                    _ => action(flat(seen.feet - feet).length()),
-                },
-            );
-        } else if self.bots.brains[&bot].memory.is_some() {
-            play = play.max(PRESSED_PLAY);
-        }
+        let play = self.play_worth(
+            bot,
+            behaviour,
+            objective.as_ref(),
+            selected_objective.is_some_and(|v| v.enemy.is_some()),
+            sight.target,
+            feet,
+            tick,
+        );
         // Idle play with a body (Interact) is already the bot's fun: a goof
         // would stand it still beside the ball it came to push.
         let natural = threat.is_none()
