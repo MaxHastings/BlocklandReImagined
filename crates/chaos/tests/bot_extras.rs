@@ -329,6 +329,78 @@ fn a_predicted_hit_triggers_a_hop_more_often_than_a_shot_that_misses() {
     );
 }
 
+/// Ticks a bot shot at with slow shots spends jetting, over a duel.
+fn jetting(change: impl FnOnce(&mut BotKind)) -> usize {
+    let slow = |p: &mut bri_weapons::ProjectileDef| {
+        p.damage = 1.0;
+        p.speed = 20.0;
+    };
+    let mut s = session(slow);
+    s.set_bot_kinds(blockhead(change)).unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(-20.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(
+        &mut s,
+        human,
+        vec![bot_brick([-20.0, 0.1, 16.0], human)],
+        &mut sequence,
+    );
+    minigame(
+        &mut s,
+        human,
+        [
+            Some(bri_weapons::testing::GUN_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
+        &mut sequence,
+    );
+    steps(&mut s, &[human], 120 * 4, &mut sequence);
+    let bot = bots(&s)[0];
+    sequence += 1;
+    s.command(human, sequence, Command::EquipTool { slot: Some(0) })
+        .unwrap();
+    let mut jets = 0;
+    for tick in 0..120 * 15 {
+        if tick % 60 == 0 {
+            let ray = (feet(&s, bot) + Vec3::Y - (feet(&s, human) + Vec3::Y * 2.1)).normalize();
+            sequence += 1;
+            s.command_with_aim(
+                human,
+                sequence,
+                Command::WeaponTrigger { down: true },
+                Some(ActionAim {
+                    yaw: ray.x.atan2(-ray.z),
+                    pitch: ray.y.asin(),
+                }),
+            )
+            .unwrap();
+        } else if tick % 60 == 2 {
+            sequence += 1;
+            s.command(human, sequence, Command::WeaponTrigger { down: false })
+                .unwrap();
+        }
+        steps(&mut s, &[human], 1, &mut sequence);
+        jets += usize::from(state(&s, bot).jetting);
+    }
+    jets
+}
+
+#[test]
+fn a_dodge_jets_up_only_for_a_kind_whose_jets_fly() {
+    let flies = jetting(|_| {});
+    let grounded = jetting(|k| {
+        k.behaviours.insert("fly".into(), 0.0);
+    });
+    assert!(flies > 0, "some dodges went up on the jets");
+    assert_eq!(grounded, 0, "a kind that never flies hops or strafes instead");
+}
+
 const DOOR: &str = "test/brick/door";
 const DOOR_OPEN: &str = "test/brick/door-open";
 

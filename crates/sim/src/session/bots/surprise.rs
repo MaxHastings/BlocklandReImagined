@@ -83,7 +83,8 @@ const RETURN_PLAY: f32 = 0.8;
 const PRESSED_PLAY: f32 = 0.85;
 const GOOF_FLOOR: f32 = 0.05;
 /// Goofing's own boredom a second (at strength 1): goofs grow stale, the
-/// brake on goofing that the mood's pull pushes against.
+/// brake on goofing that the mood's pull pushes against. A dodge's way
+/// grows stale as fast.
 const GOOF_BOREDOM: f32 = 0.3;
 const GOOF_SECONDS: f32 = 2.0;
 /// How near someone must be for a goof to go right up to them.
@@ -115,17 +116,20 @@ pub(super) enum Domain {
     Route,
     /// Playing, or goofing.
     Flavour,
-    /// How it moves this moment, under threat or at play (`MOVES`).
+    /// How it moves this moment, under threat (`MOVES`).
     Move,
+    /// Which way a dodge goes (`DODGES`).
+    Dodge,
 }
 impl Domain {
-    const ALL: [Domain; 6] = [
+    const ALL: [Domain; 7] = [
         Self::Behaviour,
         Self::Weapon,
         Self::Aim,
         Self::Route,
         Self::Flavour,
         Self::Move,
+        Self::Dodge,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -135,6 +139,7 @@ impl Domain {
             Self::Route => "route",
             Self::Flavour => "flavour",
             Self::Move => "move",
+            Self::Dodge => "dodge",
         }
     }
     fn label(self, option: u32) -> String {
@@ -152,6 +157,7 @@ impl Domain {
                 .unwrap_or("?")
                 .into(),
             Self::Move => MOVES.get(option as usize).copied().unwrap_or("?").into(),
+            Self::Dodge => DODGES.get(option as usize).copied().unwrap_or("?").into(),
         }
     }
 }
@@ -164,11 +170,17 @@ pub(super) const AIM_SURFACE: u32 = 2;
 /// Which way round a chase goes: straight at them, or wide to a side.
 pub(super) const ROUTES: [&str; 3] = ["direct", "left", "right"];
 /// How it moves this moment (`extras`): as its footwork has it, crouched
-/// under fire, or a hop off a shot's path.
-pub(super) const MOVES: [&str; 3] = ["keep", "crouch", "hop"];
+/// under fire, or a dodge off a shot's path.
+pub(super) const MOVES: [&str; 3] = ["keep", "crouch", "dodge"];
 pub(super) const MOVE_KEEP: u32 = 0;
 pub(super) const MOVE_CROUCH: u32 = 1;
-pub(super) const MOVE_HOP: u32 = 2;
+pub(super) const MOVE_DODGE: u32 = 2;
+/// Which way a dodge goes: a hop straight up, a step aside off the shot's
+/// line, or a jet up off a crouch.
+pub(super) const DODGES: [&str; 3] = ["hop", "strafe", "jet"];
+pub(super) const DODGE_HOP: u32 = 0;
+pub(super) const DODGE_STRAFE: u32 = 1;
+pub(super) const DODGE_JET: u32 = 2;
 /// Behaviours whose scores vary. The rest (carrying a catch, arming,
 /// walking home) keep their plain scores.
 const VARIED: [Behaviour; 6] = [
@@ -550,7 +562,7 @@ impl Mind {
     /// The option in use grows boring.
     fn accrue(&mut self, strength: f32, domain: Domain, option: u32, seconds: f32, tick: u64) {
         let rate = match (domain, option) {
-            (Domain::Flavour, GOOF) => GOOF_BOREDOM,
+            (Domain::Flavour, GOOF) | (Domain::Dodge, _) => GOOF_BOREDOM,
             (Domain::Flavour, _) => PLAY_BOREDOM,
             _ => BOREDOM,
         };

@@ -2490,6 +2490,7 @@ impl Session {
                 holding: wanted.is_none(),
                 natural,
                 calm: !gate.urgent && !gate.carrying,
+                carrying: gate.carrying,
                 feet,
             },
             tick,
@@ -2867,7 +2868,7 @@ impl Session {
         {
             direction = flat(out - feet).normalize_or_zero();
         }
-        if let Some(to) = act.direction {
+        if let Some(to) = act.direction.or(extra.direction) {
             direction = to;
         }
         // A goof's or an extra's hop only where it comes down on floor.

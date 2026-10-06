@@ -9,7 +9,9 @@
 //!   (`Domain::Move`): hurt from range while it holds its ground, a crouch
 //!   (damage already scales with crouching); a projectile whose predicted
 //!   path (its velocity, its fall and its splash radius) meets the bot's
-//!   body, a hop off it, jetting if it can.
+//!   body, a dodge, its way chosen too (`Domain::Dodge`): a hop straight
+//!   up, a strafe off the shot's line where there is floor, or a jet up
+//!   after a crouch's charge, only while its jets have the fuel.
 //! - `activate`: a door (a brick whose catalog swap a click reverses: the
 //!   brick opening and closing itself) standing in its way to its goal is
 //!   clicked with the empty hand; now and then, at a natural pause, it
@@ -35,9 +37,14 @@ const LOOKAHEAD: f32 = 0.75;
 const LOOKAHEAD_STEP: f32 = 1.0 / 60.0;
 /// Projectiles farther off than this are not looked at.
 const INCOMING: f32 = 40.0;
-/// A dodge hop's jets, and the rest after one.
+/// A dodge's hop or jets, the strafe's step aside, the crouch that charges
+/// a jet, and the rest after a dodge.
 const HOP_TICKS: u64 = 30;
-const HOP_REST: u64 = 72;
+const STRAFE_TICKS: u64 = 40;
+const CHARGE_TICKS: u64 = 10;
+const DODGE_REST: u64 = 72;
+/// Seconds of jetting a jet dodge takes (`route::Jets::seconds`).
+const JET_SECONDS: f32 = 0.5;
 /// Activation reach (`Command::Activate` reaches five units).
 const CLICK_REACH: f32 = 4.5;
 /// How far ahead on its way it looks for a brick in the way.
@@ -71,8 +78,10 @@ const HAND_SALT: u64 = 0x4558_0003;
 pub(super) struct State {
     /// Until when it is under ranged fire: hit from range just now.
     fired_on_until: u64,
-    hop_until: u64,
-    next_hop: u64,
+    /// The dodge under way: its way (`surprise::DODGES`), the side a strafe
+    /// steps to, and since when.
+    dodge: Option<(u32, Vec3, u64)>,
+    next_dodge: u64,
     /// The last projectile judged.
     judged: Option<u64>,
     click: Option<Click>,
@@ -109,6 +118,8 @@ pub(super) struct Scene {
     pub natural: bool,
     /// Not urgent, not carrying an objective.
     pub calm: bool,
+    /// Carrying an objective: it keeps to its way (no dodge holds it up).
+    pub carrying: bool,
     pub feet: Vec3,
 }
 
@@ -120,17 +131,21 @@ pub(super) struct Extra {
     pub jet: bool,
     pub aim: Option<(f32, f32)>,
     pub stand: bool,
+    /// Which way to step (a strafe off a shot's line).
+    pub direction: Option<Vec3>,
 }
 
 /// What keeping on as its footwork has it is worth against a crouch or a
-/// hop (`Domain::Move`). A crouch under ranged fire, or a hop off a shot's
-/// path, is worth as much: the chooser's drift and boredom take it about
-/// half the time. A shot that would take more than `GRAVE` of the health
-/// it has left makes the hop worth that much more, so it clears a rocket,
-/// or a bullet once it is badly hurt, nearly every time.
+/// dodge (`Domain::Move`). A crouch under ranged fire, or a dodge off a
+/// shot's path, is worth as much: the chooser's drift and boredom take it
+/// about half the time. A shot that would take more than `GRAVE` of the
+/// health it has left makes the dodge worth that much more, so it clears a
+/// rocket, or a bullet once it is badly hurt, nearly every time. Each way
+/// of dodging that is open is worth the same (`Domain::Dodge`): a way grows
+/// stale as fast as a goof, so the next dodge goes another way.
 const KEEP: f32 = 1.0;
 const CROUCH: f32 = 1.0;
-const HOP: f32 = 1.0;
+const DODGE: f32 = 1.0;
 const GRAVE: f32 = 0.5;
 
 /// The earliest time, within `horizon` seconds, a point starting at
@@ -247,14 +262,15 @@ impl Session {
     }
 
     /// The soonest projectile, not its own or an ally's, whose path is
-    /// predicted to meet the bot's body (or put it inside its splash), and
-    /// the share of its health that would take.
-    fn bot_incoming(&self, bot: OwnerId, feet: Vec3) -> Option<(u64, f32)> {
+    /// predicted to meet the bot's body (or put it inside its splash): its
+    /// id, the share of the bot's health it would take, and the flat way
+    /// off its line.
+    fn bot_incoming(&self, bot: OwnerId, feet: Vec3) -> Option<(u64, f32, Vec3)> {
         let scale = self.peers.get(&bot)?.player.state().scale;
         let centre = feet + Vec3::Y * scale;
         // Of what it has left: a hurt bot clears what a fresh one would not.
         let health = self.peers.get(&bot)?.combat.health.max(1.0);
-        let mut soonest: Option<(f32, u64, f32)> = None;
+        let mut soonest: Option<(f32, u64, f32, Vec3)> = None;
         for p in self.weapons.projectiles() {
             let source = p.source.0;
             if p.stuck
@@ -284,13 +300,21 @@ impl Session {
                 centre,
                 0.9 * scale + splash,
                 LOOKAHEAD,
-            ) && soonest.is_none_or(|(old, _, _)| t < old)
+            ) && soonest.is_none_or(|(old, _, _, _)| t < old)
             {
                 let harm = (d.damage.max(d.explosion.damage) / health).clamp(0.0, 1.0);
-                soonest = Some((t, p.id, harm));
+                // Square to its flight, toward the side the bot already
+                // stands to.
+                let across = Vec3::new(-p.velocity.z, 0.0, p.velocity.x).normalize_or_zero();
+                let side = if across.dot(centre - p.position) >= 0.0 {
+                    across
+                } else {
+                    -across
+                };
+                soonest = Some((t, p.id, harm, side));
             }
         }
-        soonest.map(|(_, id, harm)| (id, harm))
+        soonest.map(|(_, id, harm, side)| (id, harm, side))
     }
 
     /// The extra options for this tick: controls to add, and the commands
@@ -325,9 +349,9 @@ impl Session {
         };
 
         // How it moves this moment (`Domain::Move`): crouched under
-        // ranged fire while it holds its ground, a hop off a shot predicted
-        // to meet it (each shot judged once), or as its footwork has it.
-        // It chooses only while a crouch or a hop is open.
+        // ranged fire while it holds its ground, a dodge off a shot
+        // predicted to meet it (each shot judged once), or as its footwork
+        // has it. It chooses only while a crouch or a dodge is open.
         if scene
             .hurt_by
             .is_some_and(|k| flat(k.at - feet).length() > RANGED)
@@ -335,29 +359,56 @@ impl Session {
             self.bots.brains.get_mut(&bot).unwrap().extras.fired_on_until = tick + CROUCH_TICKS;
         }
         let brain = &self.bots.brains[&bot];
-        let incoming = (on_foot && state.grounded && tick >= brain.extras.next_hop)
+        // Carrying an objective it keeps to its way: no dodge holds it up.
+        let incoming = (on_foot
+            && !scene.carrying
+            && state.grounded
+            && brain.extras.dodge.is_none()
+            && tick >= brain.extras.next_dodge)
             .then(|| self.bot_incoming(bot, feet))
             .flatten()
-            .filter(|(id, _)| brain.extras.judged != Some(*id))
-            .filter(|_| super::hop_lands(&self.simulation, feet, Vec3::from(state.velocity)));
+            .filter(|(id, _, _)| brain.extras.judged != Some(*id));
         let crouch = tick < brain.extras.fired_on_until
             && on_foot
             && state.grounded
             && (scene.holding || scene.behaviour == Behaviour::Fight);
+        // The ways a dodge may go: up where it comes down on floor (a hop,
+        // or a jet while its fuel holds a jet's worth), or aside where
+        // floor lies under the step.
+        let velocity = Vec3::from(state.velocity);
+        let ways = incoming.map(|(_, _, side)| {
+            use super::surprise::{DODGE_HOP, DODGE_JET, DODGE_STRAFE};
+            let up = super::hop_lands(&self.simulation, feet, velocity);
+            let fuel = crate::route::Jets::of(&tuning, state.energy, brain.kind.weight("fly"))
+                .is_some_and(|j| j.seconds >= JET_SECONDS);
+            // Never aside into where an ally's weapon will hit (`team`).
+            let to = feet + side * tuning.forward * STRAFE_TICKS as f32 / 120.0;
+            let aside = super::hop_lands(&self.simulation, feet, side * tuning.forward)
+                && !self.bots.claims.intents(tick).any(|(o, i)| {
+                    o != bot
+                        && self.bot_allies(bot, o)
+                        && i.harm.is_some_and(|h| h.holds(to + Vec3::Y, tuning.width))
+                });
+            let open = |on: bool| if on { DODGE } else { 0.0 };
+            [
+                (DODGE_HOP, open(up)),
+                (DODGE_STRAFE, open(aside)),
+                (DODGE_JET, open(up && fuel)),
+            ]
+        });
+        let dodgeable = ways.is_some_and(|w| w.iter().any(|(_, s)| *s > 0.0));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        if crouch || incoming.is_some() {
-            use super::surprise::{Choice, Domain, MOVE_CROUCH, MOVE_HOP, MOVE_KEEP};
+        if crouch || dodgeable {
+            use super::surprise::{Choice, Domain, MOVE_CROUCH, MOVE_DODGE, MOVE_KEEP};
+            let grave = incoming.map_or(0.0, |(_, harm, _)| (harm - GRAVE).max(0.0));
             let options = [
                 (MOVE_KEEP, KEEP),
                 (MOVE_CROUCH, if crouch { CROUCH } else { 0.0 }),
-                (
-                    MOVE_HOP,
-                    incoming.map_or(0.0, |(_, harm)| HOP + (harm - GRAVE).max(0.0)),
-                ),
+                (MOVE_DODGE, if dodgeable { DODGE + grave } else { 0.0 }),
             ];
-            let choice = Choice {
-                domain: Domain::Move,
-                options: &options,
+            let choice = |domain, options| Choice {
+                domain,
+                options,
                 // A shot on its way is answered at once.
                 interrupt: incoming.is_some(),
                 paused: false,
@@ -366,27 +417,57 @@ impl Session {
             };
             // A reflex: hurt or carrying, it still varies how it moves.
             let rule = brain.kind.hold();
-            let moved = brain
-                .surprise
-                .pick(&brain.kind.surprise, rule, choice, Default::default(), tick);
-            let st = &mut brain.extras;
-            if let Some((id, _)) = incoming {
-                st.judged = Some(id);
-                if moved == MOVE_HOP {
-                    st.hop_until = tick + HOP_TICKS;
-                    st.next_hop = tick + HOP_REST;
+            let cfg = &brain.kind.surprise;
+            let moved = brain.surprise.pick(
+                cfg,
+                rule,
+                choice(Domain::Move, &options),
+                Default::default(),
+                tick,
+            );
+            if let Some(((id, _, side), ways)) = incoming.zip(ways) {
+                brain.extras.judged = Some(id);
+                if moved == MOVE_DODGE {
+                    let way = brain.surprise.pick(
+                        cfg,
+                        rule,
+                        choice(Domain::Dodge, &ways),
+                        Default::default(),
+                        tick,
+                    );
+                    brain.extras.dodge = Some((way, side, tick));
+                    brain.extras.next_dodge = tick + DODGE_REST;
                 }
             }
             extra.crouch = moved == MOVE_CROUCH;
         }
         let st = &mut self.bots.brains.get_mut(&bot).unwrap().extras;
-        if tick < st.hop_until {
-            extra.jump = state.grounded;
-            extra.jet = tuning.can_jet;
-            extra.crouch = false;
-            // Straight up: a hop that also carried it on could take it
-            // off a ledge it was holding back from.
-            extra.stand = true;
+        if let Some((way, side, since)) = st.dodge {
+            use super::surprise::{DODGE_JET, DODGE_STRAFE};
+            let t = tick.saturating_sub(since);
+            match way {
+                DODGE_STRAFE if t < STRAFE_TICKS => extra.direction = Some(side),
+                // Crouched a moment, the jump off it carries the jets higher.
+                DODGE_JET if t < CHARGE_TICKS => {
+                    extra.crouch = true;
+                    extra.stand = true;
+                }
+                DODGE_JET if t < CHARGE_TICKS + HOP_TICKS => {
+                    extra.jump = state.grounded;
+                    extra.jet = true;
+                    extra.crouch = false;
+                    extra.stand = true;
+                }
+                DODGE_STRAFE | DODGE_JET => st.dodge = None,
+                _ if t < HOP_TICKS => {
+                    extra.jump = state.grounded;
+                    extra.crouch = false;
+                    // Straight up: a hop that also carried it on could take
+                    // it off a ledge it was holding back from.
+                    extra.stand = true;
+                }
+                _ => st.dodge = None,
+            }
         }
 
         // Clicks: one under way, then a tool taken out again.
