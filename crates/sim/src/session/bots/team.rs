@@ -585,7 +585,7 @@ impl Session {
         let Some(brain) = self.bots.brains.get_mut(&bot) else {
             return Ok(());
         };
-        brain.team.next_callout = tick + (CALLOUT_SECONDS * 120.0) as u64;
+        brain.team.next_callout = tick + ticks(CALLOUT_SECONDS);
         brain.team.said = Some(line.clone());
         let sequence = brain.sequence;
         let _ = self.command(bot, sequence, Command::TeamChat(line));

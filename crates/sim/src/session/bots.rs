@@ -139,6 +139,10 @@ pub enum BotTask {
 }
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
 const TICK: f32 = 1.0 / 120.0;
+/// Whole ticks in `seconds` (none for less than one, or a negative time).
+fn ticks(seconds: f32) -> u64 {
+    (seconds * 120.0) as u64
+}
 /// Ticks before a bot's failing step is told again.
 const BOT_FAILURE_EVERY: u64 = 60 * 120;
 /// Seconds a rules bot waits past its game's respawn time, as a seeded range.
@@ -559,7 +563,7 @@ impl Brain {
                 side = -side;
             }
             let u = self.random();
-            until = tick + (leg(u, mean) * 120.0) as u64;
+            until = tick + ticks(leg(u, mean));
         }
         self.strafe = (side, until);
         side
@@ -756,7 +760,7 @@ impl Bots {
                     at: source.1,
                     observed: tick,
                     expires: tick
-                        .saturating_add((self.brains[&bot].kind.memory_seconds * 120.0) as u64),
+                        .saturating_add(ticks(self.brains[&bot].kind.memory_seconds)),
                 },
             );
         }
@@ -833,6 +837,20 @@ fn footwork(bot: OwnerId, tick: u64, forward: Vec3, right: Vec3, room: bool) -> 
     }
 }
 
+/// How far below `at` the floor is, within a step up and a drop `body`
+/// walks down: `None` where it would walk off into a fall.
+fn floor_below(
+    simulation: &crate::simulation::Simulation,
+    at: Vec3,
+    body: &Body,
+) -> Option<f32> {
+    super::admin_players::world_ray(
+        simulation,
+        at + Vec3::Y * 0.5,
+        Vec3::NEG_Y,
+        0.5 + body.step + body.drop,
+    )
+}
 fn wrap(a: f32) -> f32 {
     (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
@@ -1029,7 +1047,7 @@ impl Session {
             BRICK_RESPAWN
         };
         let delay = cadence::spread(bot, cadence::salt::RESPAWN, respawn_tick, lo, hi);
-        let wait = (delay * 120.0) as u64;
+        let wait = ticks(delay);
         if tick >= respawn_tick + wait {
             // A bot a bite turned comes back as its own kind.
             if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
@@ -1692,7 +1710,7 @@ impl Session {
                 subject: s.owner,
                 at: s.real,
                 observed: tick,
-                expires: tick + (self.bots.brains[&bot].kind.memory_seconds * 120.0) as u64,
+                expires: tick + ticks(self.bots.brains[&bot].kind.memory_seconds),
             })
             .or(self.bots.brains[&bot].memory)
             .or(hurt_by)
@@ -1896,7 +1914,7 @@ impl Session {
             brain.yaw = state.yaw;
         }
         // Remember enemies seen, and where a hit came from.
-        let memory_ticks = (kind.memory_seconds * 120.0) as u64;
+        let memory_ticks = ticks(kind.memory_seconds);
         let mut warn = None;
         match sight.target {
             Some(seen) => {
@@ -2055,12 +2073,7 @@ impl Session {
             feet,
             brain.home,
             team::exit(&intents, feet, tall, &|at| {
-                super::admin_players::world_ray(
-                    &self.simulation,
-                    at + Vec3::Y * 0.5,
-                    Vec3::NEG_Y,
-                    0.5 + body.step + body.drop,
-                )
+                floor_below(&self.simulation, at, &body)
                 .is_some()
             }),
             carries,
@@ -2611,7 +2624,7 @@ impl Session {
             brain.error = aim_error(bot, tick, size);
             aim_yaw = wrap(yaw_to(delta) + brain.error.0);
             aim_pitch = (delta.y.atan2(flat(delta).length()) + brain.error.1).clamp(-1.5, 1.5);
-            let reaction = (kind.reaction_seconds * 120.0) as u64;
+            let reaction = ticks(kind.reaction_seconds);
             let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
             fire = enemy.is_some()
                 && (driving.is_none() || vehicle_weapon)
@@ -2751,13 +2764,8 @@ impl Session {
                     // not where the floor ends or a wall or an ally stands
                     // that way.
                     let floor = |side: f32| {
-                        let probe = feet + right * side * 0.9 + Vec3::Y * 0.5;
-                        let under = super::admin_players::world_ray(
-                            &self.simulation,
-                            probe,
-                            Vec3::NEG_Y,
-                            0.5 + body.step + body.drop,
-                        );
+                        let under =
+                            floor_below(&self.simulation, feet + right * side * 0.9, &body);
                         let wall = super::admin_players::world_ray(
                             &self.simulation,
                             feet + Vec3::Y * 0.5,
@@ -2819,12 +2827,7 @@ impl Session {
                         * LEAN;
                     if lean > 0.0
                         && gap.is_some_and(|gap| gap > near + LEAN_ROOM)
-                        && super::admin_players::world_ray(
-                            &self.simulation,
-                            feet + forward * 0.9 + Vec3::Y * 0.5,
-                            Vec3::NEG_Y,
-                            0.5 + body.step + body.drop,
-                        )
+                        && floor_below(&self.simulation, feet + forward * 0.9, &body)
                         .is_some()
                     {
                         direction += forward * lean;
@@ -2895,12 +2898,7 @@ impl Session {
             && let Some(out) = choices[Behaviour::Fight as usize]
                 .place
                 .filter(|out| *out != feet)
-            && super::admin_players::world_ray(
-                &self.simulation,
-                out + Vec3::Y * 0.5,
-                Vec3::NEG_Y,
-                0.5 + body.step + body.drop,
-            )
+            && floor_below(&self.simulation, out, &body)
             .is_some()
         {
             direction = flat(out - feet).normalize_or_zero();

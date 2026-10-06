@@ -158,7 +158,7 @@ fn charge_release_only(image: &Image) -> bool {
 /// Whether a weapon last usable at `usable` is still held at `tick`: for
 /// the hold time after it last could attack.
 fn keep_held(usable: u64, tick: u64, rule: crate::bot_kind::BotHold) -> bool {
-    usable > 0 && tick < usable + (rule.seconds.max(0.0) * 120.0) as u64
+    usable > 0 && tick < usable + ticks(rule.seconds)
 }
 
 /// How much a splash aim (feet, or a surface beside the target) is
@@ -1329,7 +1329,7 @@ mod tests {
         // A weapon last usable at tick 1000 is held, firing nothing, for
         // the hold time: no swap to another and back within it.
         let rule = crate::bot_kind::BotHold::default();
-        let commit = (rule.seconds * 120.0) as u64;
+        let commit = ticks(rule.seconds);
         assert!(commit > 0);
         for t in 1000..1000 + commit {
             assert!(keep_held(1000, t, rule), "{t}");

@@ -157,9 +157,6 @@ pub(super) fn guess(from: Vec3, at: Vec3, rng: &mut u64) -> Vec3 {
     };
     at + off * HURT_MISS
 }
-fn ticks(seconds: f32) -> u64 {
-    (seconds.max(0.0) * 120.0) as u64
-}
 
 /// Something that happened where a bot may notice it.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -87,7 +87,7 @@ impl Session {
                     alert
                         .knowledge
                         .observed
-                        .saturating_add((brain.kind.memory_seconds * 120.0) as u64),
+                        .saturating_add(ticks(brain.kind.memory_seconds)),
                 );
                 if tick < expires {
                     // Acted on after a short, seeded reaction (`perception`).
@@ -136,7 +136,7 @@ impl Session {
                     subject: from,
                     at: at + Vec3::new(angle.sin(), 0.0, angle.cos()) * off,
                     observed: tick,
-                    expires: tick + (brain.kind.memory_seconds * 120.0) as u64,
+                    expires: tick + ticks(brain.kind.memory_seconds),
                 };
                 brain.hear(k, bot, tick);
             }
