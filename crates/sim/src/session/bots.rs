@@ -1820,17 +1820,22 @@ impl Session {
         // A known noncombat body/tool cannot resolve a threat by staring at
         // it. Keep its useful objective; unknown scripted attacks retain their
         // existing behavior rather than being silently classified as harmless.
-        let peaceful_objective =
-            objective.is_some_and(|view| view.enemy.is_none()) && threat.is_none();
-        let objective_without_attack = peaceful_objective
-            || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
-        let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
-        let allies = self.claim_allies(bot, tick);
         // At a body an opponent is also moving, staying engaged in the
         // contest keeps this side's intention live (`contest::engaged`).
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
+        // An objective that needs no enemy beaten is not stopped for an
+        // enemy that leaves it alone, but one contesting the same body
+        // close by is fought for it, as a player shoulders an opponent off
+        // the ball.
+        let peaceful_objective = objective.is_some_and(|view| view.enemy.is_none())
+            && threat.is_none()
+            && !contest_engaged;
+        let objective_without_attack = peaceful_objective
+            || objective.is_some_and(|view| view.enemy.is_none()) && !can_retaliate;
+        let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
+        let allies = self.claim_allies(bot, tick);
         // Clearing an opponent off a body a teammate holds, with something
         // that shoves (`contest::clear`), or else covering it (`contest::cover`).
         let shove = objective.and_then(|view| {
