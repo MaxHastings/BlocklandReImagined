@@ -440,20 +440,42 @@ impl Goal {
         }
     }
 }
+/// How far a bot follows an enemy from a spot: past `radius` from `at` it
+/// lets the chase and what it remembers go.
+#[derive(Clone, Copy, Debug)]
+struct Leash {
+    at: Vec3,
+    radius: f32,
+}
+impl Leash {
+    fn away(&self, feet: Vec3) -> f32 {
+        flat(feet - self.at).length()
+    }
+    fn holds(&self, feet: Vec3) -> bool {
+        self.away(feet) <= self.radius
+    }
+}
 impl Brain {
-    /// Where its chase leash is measured from, and how long it is. A driver
-    /// keeps within `DRIVE_CHASE_RADIUS` of where it took the controls (a
-    /// mount covers ground a walker does not); on foot, near its brick. A
-    /// rules bot on foot has no brick to keep near: it plays the whole map,
-    /// as a player does (a leash to where it spawned had it drop a chase
-    /// at the edge and wander back, then see them and chase again).
-    fn pursuit(&self, driving: bool) -> (Vec3, f32) {
-        match (driving, self.mount_anchor) {
+    /// Whether it is kept near a spot: a bot from a brick strolls round
+    /// its brick and goes back to it. A rules bot has no spot of its own:
+    /// it plays the whole map, as a player does, strolls from wherever it
+    /// is and follows gunfire it hears (`hear_fighting`).
+    fn tethered(&self) -> bool {
+        self.brick.is_some()
+    }
+    /// Its chase leash. A driver keeps within `DRIVE_CHASE_RADIUS` of where
+    /// it took the controls (a mount covers ground a walker does not); on
+    /// foot a tethered bot keeps near its brick, and an untethered one has
+    /// no bound (a leash to where it spawned had it drop a chase at the
+    /// edge and wander back, then see them and chase again).
+    fn leash(&self, driving: bool) -> Leash {
+        let (at, radius) = match (driving, self.mount_anchor) {
             (true, Some((_, at))) => (at, DRIVE_CHASE_RADIUS),
             (true, None) => (self.leash, DRIVE_CHASE_RADIUS),
-            (false, _) if self.brick.is_none() => (self.leash, f32::INFINITY),
+            (false, _) if !self.tethered() => (self.leash, f32::INFINITY),
             (false, _) => (self.leash, self.kind.chase_radius),
-        }
+        };
+        Leash { at, radius }
     }
     fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId, crossed: u64) -> Self {
         Self {
@@ -642,17 +664,13 @@ impl Brain {
             // A fight or a carry is over.
             self.set_goal(None);
         }
-        if self.brick.is_none() {
+        if !self.tethered() {
             self.home = feet;
         }
         if self.goal.is_none() && tick >= self.next_wander {
             let angle = self.random() * std::f32::consts::TAU;
             let radius = self.random() * self.kind.wander_radius;
-            let around = if self.brick.is_none() {
-                feet
-            } else {
-                self.home
-            };
+            let around = if self.tethered() { self.home } else { feet };
             // A swimmer roams up and down too (the water bounds it).
             let rise = if swimming {
                 (self.random() * 2.0 - 1.0) * self.kind.wander_radius * 0.5
@@ -731,7 +749,7 @@ impl Bots {
     pub(super) fn home(&self, owner: OwnerId) -> Option<Vec3> {
         self.brains
             .get(&owner)
-            .filter(|b| b.brick.is_some())
+            .filter(|b| b.tethered())
             .map(|b| b.home)
     }
     /// A bot a mini-game's rules added, and the package that added it: it
@@ -1071,7 +1089,7 @@ impl Session {
             brain.objective_threat = None;
             self.bots.hurt.remove(&bot);
             brain.dry = 0;
-            brain.rehome = brain.brick.is_none();
+            brain.rehome = !brain.tethered();
             brain.leash = brain.home;
             self.bots.claims.release_owner(bot);
             self.bots.claims.forget(bot);
@@ -1649,11 +1667,11 @@ impl Session {
                 brain.mount_anchor = mounted.map(|v| (v, feet));
             }
         }
-        let (mut leash, mut chase_radius) = self.bots.brains[&bot].pursuit(driving.is_some());
+        let mut leash = self.bots.brains[&bot].leash(driving.is_some());
         // A passenger goes where its driver takes it: however far that is
         // from its brick, it keeps its enemy (a gunner fights on).
         if driving.is_none() && self.seated(bot) {
-            leash = feet;
+            leash.at = feet;
         }
         // A swimmer in water: how tall it is, to keep it under.
         let swim = (self.bots.brains[&bot].kind.moves == Moves::Swim)
@@ -1714,7 +1732,7 @@ impl Session {
             })
             .or(self.bots.brains[&bot].memory)
             .or(hurt_by)
-            .filter(|_| flat(feet - leash).length() <= chase_radius);
+            .filter(|_| leash.holds(feet));
         let vehicle_weapon = self.bot_vehicle_weapon(bot).is_some();
         let can_retaliate = vehicle_weapon
             || self.bots.brains[&bot]
@@ -1724,7 +1742,7 @@ impl Session {
                 .is_some_and(|melee| melee.damage > 0.0)
             || hand_combat::has_possible_attack(self, bot);
         let retaliating =
-            threat.is_some() && can_retaliate && flat(feet - leash).length() <= chase_radius;
+            threat.is_some() && can_retaliate && leash.holds(feet);
         let mut pausing_delivery = false;
         let ranged_in_hand = held.is_some_and(|w| !w.melee);
         let objective = self.bot_objective(bot, tick).filter(|view| {
@@ -1906,7 +1924,7 @@ impl Session {
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
             brain.leash = feet;
-            (leash, chase_radius) = brain.pursuit(driving.is_some());
+            leash = brain.leash(driving.is_some());
         }
         if brain.sequence == 0 {
             brain.yaw = state.yaw;
@@ -1957,15 +1975,15 @@ impl Session {
                 reach: kind.sight,
             });
         }
-        let away = flat(feet - leash).length();
-        if away > chase_radius {
+        let away = leash.away(feet);
+        if away > leash.radius {
             brain.memory = None;
             brain.evidence_search.clear();
             brain.target = None;
         }
 
         // Behaviour: the most urgent that applies.
-        let enemy = sight.target.filter(|_| away <= chase_radius);
+        let enemy = sight.target.filter(|_| away <= leash.radius);
         // An enemy in sight it can shoot on the way to an objective that
         // needs only its feet (run and gun).
         let can_gun = enemy.is_some()
@@ -2012,7 +2030,7 @@ impl Session {
             remembers: brain
                 .memory
                 .is_some_and(|m| brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)),
-            strayed: if brain.brick.is_some() {
+            strayed: if brain.tethered() {
                 (away - kind.wander_radius) / STRAY
             } else {
                 0.0

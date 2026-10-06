@@ -100,7 +100,7 @@ impl Session {
             }
         }
     }
-    /// A rules bot with nothing to go on that hears an enemy's weapon
+    /// An untethered bot (`Brain::tethered`) with nothing to go on that hears an enemy's weapon
     /// across the map goes to look where the fighting is, as a player
     /// follows the gunfire: it knows the spot only roughly, the farther the
     /// rougher, and acts on it after a moment (`perception`).
@@ -116,7 +116,7 @@ impl Session {
                 .iter()
                 .filter(|(o, b)| {
                     **o != from
-                        && b.brick.is_none()
+                        && !b.tethered()
                         && !b.resting
                         && b.target.is_none()
                         && b.memory.is_none()
