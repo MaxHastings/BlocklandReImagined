@@ -134,6 +134,16 @@ pub fn lighting(p: &Prefs) -> i64 {
         _ => 3,
     }
 }
+/// Not a v20 setting: the share of the window's width and height the world
+/// draws at, in percent (100 unless chosen); the interface always draws at
+/// full size. The client's graphics settings read it.
+pub const RENDER_SCALE: &str = "$pref::Video::RenderScale";
+const RENDER_SCALE_MENU: &str = "OptGraphicsRenderScaleMenu";
+const RENDER_SCALE_CHOICES: [i64; 4] = [100, 85, 70, 50];
+/// The render scale `$pref::Video::RenderScale` asks for, 25 to 100.
+pub fn render_scale(p: &Prefs) -> u32 {
+    p.i64_or(RENDER_SCALE, 100).clamp(25, 100) as u32
+}
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
 /// Not a v20 setting: silence the game while another window has focus.
@@ -171,6 +181,9 @@ struct Preset {
     anisotropy: f32,
     precipitation: bool,
     reflections: i64,
+    /// The Lighting mode: Classic costs least, Dynamic most. High keeps the
+    /// default Unified, so a new player's world looks as it always has.
+    lighting: i64,
 }
 /// High is the renderer's defaults, so a new player sees High.
 const PRESETS: &[Preset] = &[
@@ -182,6 +195,7 @@ const PRESETS: &[Preset] = &[
         anisotropy: 0.0,
         precipitation: false,
         reflections: 0,
+        lighting: 0,
     },
     Preset {
         name: "Medium",
@@ -191,6 +205,7 @@ const PRESETS: &[Preset] = &[
         anisotropy: 3.0 / 15.0,
         precipitation: true,
         reflections: 1,
+        lighting: 2,
     },
     Preset {
         name: "High",
@@ -200,6 +215,7 @@ const PRESETS: &[Preset] = &[
         anisotropy: DEFAULT_ANISOTROPY,
         precipitation: true,
         reflections: 2,
+        lighting: 2,
     },
     Preset {
         name: "Ultra",
@@ -209,6 +225,7 @@ const PRESETS: &[Preset] = &[
         anisotropy: 1.0,
         precipitation: true,
         reflections: 3,
+        lighting: 3,
     },
 ];
 /// The Quality menu id for "Custom".
@@ -222,6 +239,7 @@ const PRESET_PREFS: &[&str] = &[
     ANISOTROPY,
     PRECIPITATION,
     REFLECTIONS,
+    LIGHTING,
 ];
 /// `$pref::Player::defaultFov`, the normal camera FOV in degrees (v20
 /// default 90). The B4v21 patch of the reference v20 install adds its slider.
@@ -915,7 +933,9 @@ fn widen_resolution_menu(v: &mut View) {
         let c = &mut v.nodes[k].ctrl;
         if c.position[0] >= right && c.position[1] > 3 {
             c.position[0] += grow;
-            if c.class == "GuiButtonCtrl" {
+            // Apply (by now the bitmap button native_layout gave it) gives
+            // up the width, so it still ends inside the section.
+            if c.class == "GuiButtonCtrl" || c.class == "GuiBitmapButtonCtrl" {
                 c.extent[0] -= grow;
             }
         }
@@ -1165,11 +1185,15 @@ impl Options {
             .collect();
         s.menu(UI_SCALE_MENU, scale_items, scale);
         s.set_reflections(reflections(&core.prefs));
-        let items = LIGHTING_CHOICES
+        s.set_lighting(lighting(&core.prefs));
+        let scale = i64::from(render_scale(&core.prefs));
+        let scale_items = RENDER_SCALE_CHOICES
             .iter()
-            .map(|&(t, mode)| (t.to_string(), mode))
+            .copied()
+            .chain((!RENDER_SCALE_CHOICES.contains(&scale)).then_some(scale))
+            .map(|p| (format!("{p}%"), p))
             .collect();
-        s.menu(LIGHTING_MENU, items, lighting(&core.prefs));
+        s.menu(RENDER_SCALE_MENU, scale_items, scale);
         s.menu(
             SCREENSHOT_FORMAT_MENU,
             vec![
@@ -1417,6 +1441,7 @@ impl Options {
                     (COLOR_VISION_MENU, "Colors:"),
                     (REFLECTIONS_MENU, "Mirrors:"),
                     (LIGHTING_MENU, "Lighting:"),
+                    (RENDER_SCALE_MENU, "Render Scale:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1434,6 +1459,12 @@ impl Options {
                     l.name = None;
                     l.text = Some(text.into());
                     l.position[1] = y + (menu.extent[1] - l.extent[1]) / 2;
+                    // The longest label starts further left so it ends
+                    // where the others do, short of its menu.
+                    if name == RENDER_SCALE_MENU {
+                        l.extent[0] = l.extent[0].max(74);
+                        l.position[0] = l.position[0].min(menu.position[0] - l.extent[0] - 2);
+                    }
                     v.add(parent, l);
                     v.add(parent, m);
                     y += menu.extent[1] + 6;
@@ -1578,11 +1609,17 @@ impl Options {
             .id(REFLECTIONS_MENU)
             .and_then(|n| self.view.selected(n))
             .unwrap_or_else(|| reflections(&self.draft));
+        let mode = self
+            .view
+            .id(LIGHTING_MENU)
+            .and_then(|n| self.view.selected(n))
+            .unwrap_or_else(|| lighting(&self.draft));
         PRESETS
             .iter()
             .position(|p| {
                 p.shadows == shadows
                     && p.reflections == mirrors
+                    && p.lighting == mode
                     && p.anti_aliasing == on(ANTI_ALIASING)
                     && p.brick_shadows == on(BRICK_SHADOWS)
                     && p.precipitation == on(PRECIPITATION)
@@ -1612,8 +1649,16 @@ impl Options {
         self.check(BRICK_SHADOWS, p.brick_shadows);
         self.check(PRECIPITATION, p.precipitation);
         self.set_reflections(p.reflections);
+        self.set_lighting(p.lighting);
         self.slider("SliderGraphicsAnisotropy", p.anisotropy);
         self.refresh_readouts();
+    }
+    fn set_lighting(&mut self, mode: i64) {
+        let items = LIGHTING_CHOICES
+            .iter()
+            .map(|&(t, mode)| (t.to_string(), mode))
+            .collect();
+        self.menu(LIGHTING_MENU, items, mode);
     }
     fn set_reflections(&mut self, level: i64) {
         let items = REFLECTIONS_CHOICES
@@ -1797,6 +1842,13 @@ impl Options {
                 .find(|&m| m == mode)
                 .unwrap_or(2);
             self.draft.set(LIGHTING, mode.to_string());
+        }
+        if let Some(scale) = self
+            .view
+            .id(RENDER_SCALE_MENU)
+            .and_then(|n| self.view.selected(n))
+        {
+            self.draft.set(RENDER_SCALE, scale.clamp(25, 100).to_string());
         }
         if let Some(scale) = self
             .view
@@ -2918,6 +2970,141 @@ mod tests {
         let s = Options::new(&ui.core);
         let menu = s.view.id(LIGHTING_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Dynamic"));
+    }
+
+    #[test]
+    fn render_scale_defaults_to_every_pixel_and_saves_a_choice() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let menu = s.view.id(RENDER_SCALE_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("100%"));
+        let items: Vec<&str> = s
+            .view
+            .node(menu)
+            .state
+            .items
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(items, ["100%", "85%", "70%", "50%"]);
+        // The row sits under Lighting, inside Display Settings, and its
+        // label ends before the menu starts.
+        let parent = s.view.node(menu).parent.unwrap();
+        let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
+        assert!(
+            row.position[1] + row.extent[1] <= section.extent[1],
+            "{row:?} in {section:?}"
+        );
+        let lighting = &s.view.node(s.view.id(LIGHTING_MENU).unwrap()).ctrl;
+        assert!(row.position[1] >= lighting.position[1] + lighting.extent[1]);
+        // Render Scale is not part of a Quality preset.
+        let quality = s.view.id(QUALITY_MENU).unwrap();
+        s.view.select(menu, Some(70));
+        change(&mut s, &mut ui, menu);
+        assert_eq!(s.view.selected_text(quality).as_deref(), Some("High"));
+        click(&mut s, "done", &mut ui);
+        let saved = saved_prefs(&mut ui);
+        assert_eq!(render_scale(&saved), 70);
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(RENDER_SCALE_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("70%"));
+        // A value set in the console is listed as itself.
+        ui.core.prefs.set(RENDER_SCALE, "60");
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(RENDER_SCALE_MENU).unwrap();
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("60%"));
+    }
+
+    #[test]
+    fn quality_presets_pick_the_lighting() {
+        let mut ui = fixture();
+        let mut s = Options::new(&ui.core);
+        let quality = s.view.id(QUALITY_MENU).unwrap();
+        let lighting = s.view.id(LIGHTING_MENU).unwrap();
+        for (preset, mode) in [(0, "Classic"), (1, "Unified"), (2, "Unified"), (3, "Dynamic")] {
+            s.view.select(quality, Some(preset));
+            change(&mut s, &mut ui, quality);
+            assert_eq!(
+                s.view.selected_text(lighting).as_deref(),
+                Some(mode),
+                "preset {preset}"
+            );
+            assert_ne!(s.view.selected_text(quality).as_deref(), Some("Custom"));
+        }
+        // Another Lighting under Ultra is Custom.
+        s.view.select(lighting, Some(0));
+        change(&mut s, &mut ui, lighting);
+        assert_eq!(s.view.selected_text(quality).as_deref(), Some("Custom"));
+        // Low, then Done, saves Classic.
+        s.view.select(quality, Some(0));
+        change(&mut s, &mut ui, quality);
+        click(&mut s, "done", &mut ui);
+        assert_eq!(super::lighting(&saved_prefs(&mut ui)), 0);
+    }
+
+    /// On the real Options layout, Apply sits beside Fullscreen and Disable
+    /// Vsync, inside Display Settings (widening the Resolution menu used to
+    /// push it past the section's right edge), and the Render Scale label
+    /// ends before its menu, inside the section.
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn apply_and_render_scale_fit_display_settings() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let content = std::env::var_os("BRI_CONTENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("content"));
+        let pack =
+            Rc::new(Pack::load(&bri_package::testing::pack_dir(&content, "ui_pack")).unwrap());
+        let ui = Ui::new(
+            pack,
+            UiConfig {
+                size: (1280, 720),
+                scale: None,
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(RENDER_SCALE_MENU).unwrap();
+        let parent = s.view.node(menu).parent.unwrap();
+        let row = &s.view.node(menu).ctrl;
+        let label = s
+            .view
+            .node(parent)
+            .children
+            .iter()
+            .map(|&k| &s.view.node(k).ctrl)
+            .find(|c| c.text.as_deref() == Some("Render Scale:"))
+            .unwrap();
+        assert!(label.position[0] >= 0, "{label:?}");
+        assert!(
+            label.position[0] + label.extent[0] <= row.position[0],
+            "{label:?}"
+        );
+        let section = &s.view.node(parent).ctrl;
+        assert!(
+            row.position[1] + row.extent[1] <= section.extent[1],
+            "{row:?} in {section:?}"
+        );
+        let apply = s
+            .view
+            .walk()
+            .find(|&n| {
+                s.view.node(n).state.visible
+                    && s.view.node(n).ctrl.command.as_deref() == Some("optionsDlg.applyGraphics();")
+            })
+            .unwrap();
+        let parent = s.view.node(apply).parent.unwrap();
+        let (button, section) = (&s.view.node(apply).ctrl, &s.view.node(parent).ctrl);
+        assert!(
+            button.position[0] + button.extent[0] <= section.extent[0],
+            "{button:?} in {section:?}"
+        );
+        let menu = &s.view.node(s.view.id("OptGraphicsResolutionMenu").unwrap()).ctrl;
+        assert!(button.position[0] >= menu.position[0] + menu.extent[0]);
     }
 
     /// Unified and Unified+Shine are one mode: a saved Unified (1) or

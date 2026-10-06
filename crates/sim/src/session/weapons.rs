@@ -525,7 +525,7 @@ impl Session {
                     catcher,
                     distance_feet,
                     was_thrown,
-                } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
+                } => self.football_catch(tick, source.0, catcher.0, distance_feet, was_thrown),
                 WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
                 WeaponEvent::Heard { actor, profile } => {
                     if self.peers.contains_key(&actor.0) {
@@ -913,8 +913,19 @@ impl Session {
         );
     }
     /// `CatchFootballMessage`: bottom prints for the passer and receiver, and
-    /// a server-wide announcement when a thrown pass sets the record.
-    fn football_catch(&mut self, source: OwnerId, catcher: OwnerId, feet: u32, thrown: bool) {
+    /// a server-wide announcement when a thrown pass sets the record, with
+    /// the reward sound at the receiver and at the passer, and the win star
+    /// over the passer. Every one stars the catcher.
+    fn football_catch(
+        &mut self,
+        tick: u64,
+        source: OwnerId,
+        catcher: OwnerId,
+        feet: u32,
+        thrown: bool,
+    ) {
+        // A clean catch stars the catcher (`%col.emote(winStarProjectile)`).
+        self.win_star(tick, catcher);
         let name = |owner: OwnerId| self.peers.get(&owner).map(|p| p.name.clone());
         let (Some(receiver), passer) = (name(catcher), name(source)) else {
             return;
@@ -929,6 +940,20 @@ impl Session {
                 "{color}{passer} {red}&{color} {receiver} {red}set a new football record, {white}{feet}ft!"
             ));
             base.push_str(&format!(" {red}<just:center>NEW RECORD!!!"));
+            for owner in [catcher, source] {
+                if let Some(a) = self.weapons.actor(ActorId(owner)) {
+                    let at = a.frame.position.to_array();
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::WeaponSound {
+                            profile: "rewardSound".into(),
+                        },
+                        at,
+                    );
+                }
+            }
+            // The passer's `emote(winStarProjectile)`.
+            self.win_star(tick, source);
         }
         let text = format!("{prefix} {red}To {color}{receiver} {base}");
         self.notify(
@@ -947,6 +972,28 @@ impl Session {
                 seconds: 5.0,
                 hide_bar: false,
             },
+        );
+    }
+    /// `Player::emote(winStarProjectile)`: a 10 ms projectile from the eye,
+    /// so its WinStarExplosion plays there, sized to the player.
+    fn win_star(&mut self, tick: u64, owner: OwnerId) {
+        let Some(a) = self.weapons.actor(ActorId(owner)) else {
+            return;
+        };
+        let (eye, scale) = (a.frame.eye.to_array(), a.frame.scale);
+        self.cues.emit(
+            tick,
+            crate::presentation::CueKind::WeaponEffect {
+                source: bri_weapons::TargetId::Actor(ActorId(owner)),
+                definition: "WinStarExplosion".into(),
+                node: String::new(),
+                seconds: 0.0,
+                image: None,
+                hand: None,
+                direction: None,
+                scale,
+            },
+            eye,
         );
     }
     /// `basketballShootImage::onMount`/`onUnMount`: a no-jet Blockhead lining

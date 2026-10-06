@@ -143,14 +143,14 @@ impl LineRenderer {
     }
     /// Replace the drawn lines (pairs of vertices).
     pub fn set_lines(&mut self, device: &wgpu::Device, vertices: &[LineVertex]) -> Result<()> {
-        use wgpu::util::DeviceExt;
+        use crate::BufferInit;
         ensure!(
             vertices.len().is_multiple_of(2) && u32::try_from(vertices.len()).is_ok(),
             "Invalid world line list"
         );
         self.vertices = vertices.len() as u32;
         self.buffer = (!vertices.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("world lines"),
                 contents: bytemuck::cast_slice(vertices),
                 usage: wgpu::BufferUsages::VERTEX,

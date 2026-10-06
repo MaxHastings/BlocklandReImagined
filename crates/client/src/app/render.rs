@@ -558,7 +558,7 @@ impl App {
         }
         let first_person_eye = self
             .mounts
-            .rider_eye
+            .posed_eye
             .or(self.motion.local_eye())
             .unwrap_or_else(|| view.archetypes.eye(local));
         let (eye, yaw, pitch, roll) = Self::view_camera(
@@ -738,10 +738,14 @@ impl App {
         if self.addons.client_code.is_started() {
             let world = if self.addons.client_code.reads_world() {
                 let image_meshes = self.world_items.held_image_meshes();
+                // A corpse past its timeout has no body left to pose: a
+                // ragdoll goes with it instead of lingering unseen.
+                let gone = self.combat.hidden_bodies(&view.vitals);
                 let skeletons = if self.addons.client_code.poses_bodies() {
                     self.avatar
                         .avatars
                         .iter_mut()
+                        .filter(|(owner, _)| !gone.contains(owner))
                         .map(|(owner, avatar)| {
                             (*owner, avatar.skeleton(&self.avatar.avatar_assets))
                         })
@@ -889,7 +893,11 @@ impl App {
             glam::Mat4::from_cols_array(&camera.view_projection),
             eye,
             (fog_start.max(0.), fog_end.max(1.)),
-            (frame.size.0 as f32, frame.size.1 as f32),
+            // The interface's window, not the world's smaller Render Scale.
+            (
+                self.gpu.display_size.0 as f32,
+                self.gpu.display_size.1 as f32,
+            ),
             self.ui.scale(),
             controls.observer().is_none(),
             &passages,

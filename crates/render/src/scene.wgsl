@@ -320,7 +320,13 @@ fn cube_seen(i:u32,position:vec3<f32>,n:vec3<f32>)->f32 {
     let p=position+n*texel*(2.0+2.0*(1.0-max(dot(n,toward),0.0)))+toward*texel;
     let index=i*6u+cube_face(p-center);
     let f=face_point(index,map_lights.cube_faces[index],p);
-    return lamp_taps(vec4<f32>(map_lights.cube_atlas.yzw,0.0),map_lights.cube_params.x,f.index,f.uv,f.depth);
+    let atlas=vec4<f32>(map_lights.cube_atlas.yzw,0.0);
+    // Lights past the Shadow Quality's soft count (cube_params.z, one bit
+    // per light) take a single 2x2 comparison: a harder edge, far away.
+    if ((bitcast<u32>(map_lights.cube_params.z)>>i)&1u)==0u {
+        return lamp_tap(atlas,f.index,f.uv,f.depth);
+    }
+    return lamp_taps(atlas,map_lights.cube_params.x,f.index,f.uv,f.depth);
 }
 // Where map light `i` (shadow slot `slot`, or -1) reaches past the map's
 // walls: its slot's map faces near the eye, else its visibility channel,
@@ -360,6 +366,15 @@ fn lamp_reach(slot:u32,position:vec3<f32>,n:vec3<f32>,volume:f32)->f32 {
     let f=lamp_face(slot,p);
     let atlas=vec4<f32>(shadows.map_params.y,shadows.lamp_dynamic.y,shadows.lamp_dynamic.z,0.0);
     return mix(volume,lamp_taps(atlas,shadows.lamp_dynamic.w,f.index,f.uv,f.depth),fade);
+}
+// One 2x2 bilinear comparison at `face_uv` in face `index`'s tile of an
+// atlas, as `lamp_taps` places its four.
+fn lamp_tap(atlas:vec4<f32>,index:u32,face_uv:vec2<f32>,depth:f32)->f32 {
+    let tiles=u32(atlas.y);
+    let tile=index%(tiles*tiles);
+    let layer=i32(atlas.x)+i32(index/(tiles*tiles));
+    let uv=(vec2<f32>(f32(tile%tiles),f32(tile/tiles))+face_uv)*atlas.z;
+    return textureSampleCompareLevel(shadow_map,shadow_sampler,uv,layer,depth);
 }
 // A 2x2 bilinear comparison per tap (so 3x3 texels) in face `index`'s tile
 // of an atlas (first layer, tiles per row, tile share of a layer).
@@ -669,7 +684,8 @@ fn light_tint(light:MapLight)->vec3<f32> {
 }
 // cube_atlas and cube_params: the Dynamic mode's light cubes (1 when drawn,
 // first layer, faces per row, face share of a layer; face resolution, world
-// texel per unit of distance); cube_faces each light's six face matrices.
+// texel per unit of distance, the soft lights' bits); cube_faces each light's
+// six face matrices.
 struct MapLights {
     origin_cell:vec4<f32>, dims:vec4<f32>, count:vec4<u32>, values:array<MapLight,24>,
     slots:array<vec4<f32>,6>, cube_atlas:vec4<f32>, cube_params:vec4<f32>, cube_faces:array<mat4x4<f32>,144>,

@@ -2003,6 +2003,26 @@ pub struct ProjectileDef {
     /// whose `damage` method dealt `directDamage` as it was.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub fixed_damage: bool,
+    /// A sound its script's `onCollision` played each time it hit
+    /// something (a sports ball's bounce).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collision_sound: Option<CollisionSound>,
+}
+/// A sound played where a projectile hits something, bounce or not, as
+/// `serverPlay3D(sound, ...)` in its `onCollision` (or a helper it calls)
+/// did, with that script's own guards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CollisionSound {
+    /// The sound profile, by name or package id.
+    pub profile: String,
+    /// Only when moving faster than this, in units per second, before
+    /// the hit; 0 to 1000.
+    #[serde(default)]
+    pub min_speed: f32,
+    /// At most once in this many ticks (120 a second); 0 to 1200.
+    #[serde(default)]
+    pub gap_ticks: u32,
 }
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
@@ -2196,6 +2216,7 @@ impl Default for ProjectileDef {
             aura: None,
             slow: None,
             fixed_damage: false,
+            collision_sound: None,
         }
     }
 }
@@ -2933,6 +2954,15 @@ impl Pack {
                 p.max_bounces <= 64,
                 "Invalid max_bounces of projectile {id}: 0 to 64"
             );
+            if let Some(c) = &p.collision_sound {
+                ensure!(
+                    !c.profile.is_empty()
+                        && c.min_speed.is_finite()
+                        && (0.0..=1000.0).contains(&c.min_speed)
+                        && c.gap_ticks <= 1200,
+                    "Invalid collision_sound of projectile {id}"
+                );
+            }
             ensure!(
                 p.children.len() <= 4,
                 "Projectile {id} has more than 4 sets of children"

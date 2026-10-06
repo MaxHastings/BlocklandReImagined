@@ -1603,6 +1603,8 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        // Made again on the new device by the next scaled frame.
+        self.gpu.upscale = None;
         self.gpu.region_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -1715,8 +1717,36 @@ impl PlatformApp for App {
         self.shapes_uploaded = None;
         self.gpu.depth = None;
     }
+    /// The world into the window. Below 100% Render Scale it draws into a
+    /// smaller texture that is then stretched over the window, which the
+    /// interface draws over at full size.
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
-        self.render_frame(frame)
+        self.gpu.display_size = frame.size;
+        let size = bri_render::upscale::scaled_size(frame.size, self.graphics.render_scale);
+        if size == frame.size {
+            self.gpu.upscale = None;
+            return self.render_frame(frame);
+        }
+        let mut upscale = self
+            .gpu
+            .upscale
+            .take()
+            .filter(|u| u.format() == frame.format)
+            .unwrap_or_else(|| bri_render::upscale::Upscale::new(frame.device, frame.format));
+        let drawn = self.render_frame(&mut RenderContext {
+            device: frame.device,
+            queue: frame.queue,
+            encoder: &mut *frame.encoder,
+            target: upscale.target(frame.device, size),
+            format: frame.format,
+            size,
+            ui_renderer: &mut *frame.ui_renderer,
+        });
+        if matches!(drawn, Ok(true)) {
+            upscale.draw(frame.encoder, frame.target);
+        }
+        self.gpu.upscale = Some(upscale);
+        drawn
     }
 }
 /// The map's own sun, light and fog, which the host's environment

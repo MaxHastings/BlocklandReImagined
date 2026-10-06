@@ -1534,7 +1534,7 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     app.mounts.seated_on = Some((7, 1));
     app.mounts.mount_heading = Some(1.0);
     app.mounts.takes_turret = true;
-    app.mounts.rider_eye = Some(Vec3::ONE);
+    app.mounts.posed_eye = Some(Vec3::ONE);
     app.mounts.tumble = Some(9);
     app.mounts
         .rider_rotations
@@ -1554,7 +1554,7 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     assert_eq!(app.mounts.seated_on, None);
     assert_eq!(app.mounts.mount_heading, None);
     assert!(!app.mounts.takes_turret);
-    assert_eq!(app.mounts.rider_eye, None);
+    assert_eq!(app.mounts.posed_eye, None);
     assert_eq!(app.mounts.tumble, None);
     assert!(app.mounts.rider_rotations.is_empty());
     assert_eq!(app.mounts.seat_report, None);
@@ -1731,6 +1731,163 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
         );
         app.tick(Duration::from_millis(16))?;
     }
+    Ok(())
+}
+
+/// Render Scale below 100% draws the world into a smaller texture and
+/// stretches it over the whole window: the frame still shows the same world,
+/// not a corner of it or a cleared screen, and 100% goes back to drawing
+/// every pixel directly.
+#[test]
+fn render_scale_draws_the_world_smaller_and_fills_the_window() -> anyhow::Result<()> {
+    use super::*;
+    const SIZE: (u32, u32) = (320, 240);
+    let f = ContentRoot::synthetic()?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
+    let gpu = bri_ui::gpu::Headless::new()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    app.gpu_ready(&gpu.device, &gpu.queue, format)?;
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("render scale test frame"),
+        size: wgpu::Extent3d {
+            width: SIZE.0,
+            height: SIZE.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let mut ui = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("render scale test readback"),
+        size: u64::from(SIZE.0 * SIZE.1 * 4),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    // A frame as the platform draws it, and its pixels when it drew.
+    let mut frame = |app: &mut App| -> anyhow::Result<Option<Vec<u8>>> {
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        let drew = app.render_scene(&mut RenderContext {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder: &mut encoder,
+            target: &view,
+            format,
+            size: SIZE,
+            ui_renderer: &mut ui,
+        })?;
+        if !drew {
+            gpu.queue.submit([encoder.finish()]);
+            return Ok(None);
+        }
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(SIZE.0 * 4),
+                    rows_per_image: Some(SIZE.1),
+                },
+            },
+            wgpu::Extent3d {
+                width: SIZE.0,
+                height: SIZE.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        gpu.queue.submit([encoder.finish()]);
+        let (send, receive) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| drop(send.send(r)));
+        gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(60)),
+        })?;
+        receive.recv_timeout(Duration::from_secs(60))??;
+        let pixels = readback.slice(..).get_mapped_range()?.to_vec();
+        readback.unmap();
+        Ok(Some(pixels))
+    };
+    app.ui.core.request(UiAction::HostGame {
+        map: f.map.0.clone(),
+        mode: ServerMode::SinglePlayer,
+        game_mode: None,
+        max_players: 1,
+        server_name: "Render scale test".into(),
+        password: String::new(),
+        admin_password: "render-scale-admin".into(),
+        super_admin_password: "render-scale-super".into(),
+    });
+    let start = std::time::Instant::now();
+    let mut previous = start;
+    loop {
+        let now = std::time::Instant::now();
+        app.tick(now.duration_since(previous))?;
+        app.ui
+            .update(now.duration_since(previous).as_millis() as u64);
+        previous = now;
+        ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+        if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+            anyhow::bail!("hosting failed: {reason}");
+        }
+        if frame(&mut app)?.is_some() && matches!(app.ui.core.conn, ConnectionState::InGame { .. })
+        {
+            break;
+        }
+        ensure!(
+            start.elapsed() < Duration::from_secs(300),
+            "never drew the game: {:?}",
+            app.ui.core.conn
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let full = frame(&mut app)?.context("the full frame drew no game")?;
+    ensure!(app.gpu.upscale.is_none(), "100% drew through a copy");
+    app.graphics.render_scale = 50;
+    let half = frame(&mut app)?.context("the half-scale frame drew no game")?;
+    ensure!(
+        app.gpu.upscale.as_ref().and_then(|u| u.size()) == Some((160, 120)),
+        "the world did not draw at half the window"
+    );
+    // The same world over the whole window: close to the full frame on
+    // average, the bottom-right corner included, and not one flat colour.
+    let difference = |a: &[u8], b: &[u8]| {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| f64::from(x.abs_diff(*y)))
+            .sum::<f64>()
+            / a.len() as f64
+    };
+    let whole = difference(&full, &half);
+    ensure!(whole < 12.0, "the scaled frame differs by {whole:.1} on average");
+    let corner = |p: &[u8]| -> Vec<u8> {
+        (SIZE.1 * 3 / 4..SIZE.1)
+            .flat_map(|y| {
+                let row = (y * SIZE.0 * 4) as usize;
+                p[row + (SIZE.0 * 3) as usize..row + (SIZE.0 * 4) as usize].to_vec()
+            })
+            .collect()
+    };
+    let corner_difference = difference(&corner(&full), &corner(&half));
+    ensure!(
+        corner_difference < 16.0,
+        "the bottom-right corner differs by {corner_difference:.1}"
+    );
+    ensure!(
+        half.chunks(4).any(|p| p != &half[..4]),
+        "the scaled frame is one flat colour"
+    );
+    app.graphics.render_scale = 100;
+    frame(&mut app)?.context("the frame back at 100% drew no game")?;
+    ensure!(app.gpu.upscale.is_none(), "100% kept drawing through a copy");
     Ok(())
 }
 

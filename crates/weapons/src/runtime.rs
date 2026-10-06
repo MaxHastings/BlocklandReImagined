@@ -925,6 +925,9 @@ pub struct WeaponsWorld {
     /// Projectiles that go off at this age, before their lifetime: a cooked
     /// grenade's fuse, a cluster's bomblets ([`crate::Children::fuse_ticks`]).
     fuses: BTreeMap<u64, u32>,
+    /// The tick each projectile last played its collision sound
+    /// ([`crate::CollisionSound::gap_ticks`]).
+    sounded: BTreeMap<u64, u64>,
     /// Projectiles a guard sent back ([`crate::Guard::reflect`]): the tick
     /// it did, and the special kill they make.
     reflected: BTreeMap<u64, (u64, Option<String>)>,
@@ -955,6 +958,7 @@ impl WeaponsWorld {
             events: vec![],
             explosions: vec![],
             fuses: BTreeMap::new(),
+            sounded: BTreeMap::new(),
             reflected: BTreeMap::new(),
             stopped: vec![],
         })
@@ -2682,6 +2686,10 @@ impl WeaponsWorld {
             let live = &self.projectiles;
             self.reflected.retain(|id, _| live.contains_key(id));
         }
+        if !self.sounded.is_empty() {
+            let live = &self.projectiles;
+            self.sounded.retain(|id, _| live.contains_key(id));
+        }
         self.stopped.clear();
         self.guard_hurt();
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
@@ -3491,6 +3499,7 @@ impl WeaponsWorld {
                     self.animation(id, arm);
                 }
                 if sport {
+                    self.ball_released(id, a.frame.eye);
                     a.ball_ready = self.tick + 36;
                     if let Some(slot) = a.selected
                         && let Some(item) = a.inventory[slot].take()
@@ -3505,6 +3514,24 @@ impl WeaponsWorld {
             _ => {}
         }
         true
+    }
+    /// [`crate::CollisionSound`]: at the projectile, when it is moving
+    /// fast enough and has not played it within the gap.
+    fn collision_sound(&mut self, p: &Projectile, sound: &crate::CollisionSound) {
+        if p.velocity.length() <= sound.min_speed
+            || self
+                .sounded
+                .get(&p.id)
+                .is_some_and(|last| self.tick < last + u64::from(sound.gap_ticks))
+        {
+            return;
+        }
+        self.sounded.insert(p.id, self.tick);
+        self.events.push(Event::Sound {
+            source: TargetId::Actor(p.source),
+            profile: sound.profile.clone(),
+            position: p.position,
+        });
     }
     /// `skiWeaponImage::onFire`: on foot, put the skis on (and lower the
     /// item, `false`); on skis, take them off. Whether the item stays held.
@@ -3657,6 +3684,9 @@ impl WeaponsWorld {
             self.events.push(Event::Contact {
                 impact: contact.clone(),
             });
+            if let Some(sound) = &d.collision_sound {
+                self.collision_sound(p, sound);
+            }
             match q.on_contact(&contact) {
                 ContactResponse::Continue => {}
                 ContactResponse::Delete => return false,
@@ -3704,18 +3734,7 @@ impl WeaponsWorld {
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
                     {
-                        if StockProjectile::of(&d) == Some(StockProjectile::Football) && !p.bounced
-                        {
-                            let catcher = self.actors[&target].frame.position;
-                            let delta = catcher - p.origin;
-                            self.events.push(Event::FootballCatch {
-                                source: p.source,
-                                catcher: target,
-                                distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length() * 1.875)
-                                    .round() as u32,
-                                was_thrown: p.was_thrown,
-                            });
-                        }
+                        self.football_catch(p, &d, target);
                         self.events.push(Event::BallCaught {
                             actor: target,
                             projectile: p.id,

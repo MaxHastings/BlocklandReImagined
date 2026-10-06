@@ -18,8 +18,8 @@ pub(super) struct Mounts {
     /// This frame's seat rotation for every mounted player.
     pub(super) rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
     /// This frame's first-person eye while the local player rides a vehicle
-    /// or another player, from their posed `eye` node.
-    pub(super) rider_eye: Option<Vec3>,
+    /// or another player, or sits, from their posed `eye` node.
+    pub(super) posed_eye: Option<Vec3>,
     /// The tumble vehicle the local player last started riding.
     pub(super) tumble: Option<u64>,
 }

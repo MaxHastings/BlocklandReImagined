@@ -1604,13 +1604,6 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
-                } else if let Some(brick) = &mut self.ghost {
-                    let mesh = &self.definitions.get(brick)?.mesh;
-                    ghost::shift(brick, mesh, body, *x, *y, *z, super_shift);
-                    Bounds::new(brick, mesh)?;
-                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
-                    out.commands
-                        .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
                 } else if let Some(command) = Self::image_key(
                     &self.image_keys.shift,
                     vec![
@@ -1620,7 +1613,17 @@ impl Building {
                         PackageArg::Bool(super_shift),
                     ],
                 ) {
+                    // The held image takes the key before a ghost left out
+                    // (v20 Add-Ons packaged `serverCmdShiftBrick`): its
+                    // selection moves, not the ghost.
                     out.commands.push(command);
+                } else if let Some(brick) = &mut self.ghost {
+                    let mesh = &self.definitions.get(brick)?.mesh;
+                    ghost::shift(brick, mesh, body, *x, *y, *z, super_shift);
+                    Bounds::new(brick, mesh)?;
+                    self.ghost_generation = self.ghost_generation.wrapping_add(1);
+                    out.commands
+                        .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
                 }
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
@@ -1634,6 +1637,11 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
+                } else if let Some(command) = Self::image_key(
+                    &self.image_keys.rotate,
+                    vec![PackageArg::Int(i64::from(dir.signum()))],
+                ) {
+                    out.commands.push(command);
                 } else if let Some(brick) = &mut self.ghost {
                     let mesh = &self.definitions.get(brick)?.mesh;
                     ghost::rotate(brick, mesh, body, *dir);
@@ -1641,11 +1649,6 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
-                } else if let Some(command) = Self::image_key(
-                    &self.image_keys.rotate,
-                    vec![PackageArg::Int(i64::from(dir.signum()))],
-                ) {
-                    out.commands.push(command);
                 }
             }
             UiAction::Game(GameAction::CancelBrick) => {
@@ -1669,9 +1672,7 @@ impl Building {
                     flipped: copy.flipped,
                 });
             }
-            UiAction::Game(GameAction::PlantBrick)
-                if self.ghost.is_none() && self.image_keys.plant.is_some() =>
-            {
+            UiAction::Game(GameAction::PlantBrick) if self.image_keys.plant.is_some() => {
                 out.commands
                     .extend(Self::image_key(&self.image_keys.plant, vec![]));
             }
@@ -2398,6 +2399,55 @@ mod tests {
             sent(key(&mut b, GameAction::PlantBrick)),
             ("plant".to_string(), vec![])
         );
+    }
+
+    /// Max, v0.2.4: with a ghost brick out, a New Duplicator selection's
+    /// brick keys moved the ghost instead. A held image that takes the
+    /// keys gets them first, as v20's packaged `serverCmdShiftBrick` did;
+    /// the ghost waits where it is until the image is put away.
+    #[test]
+    fn a_held_image_takes_the_brick_keys_before_a_ghost_left_out() {
+        let mut b = controller();
+        buy(&mut b);
+        b.ui_action(&UiAction::UseBrickSlot { slot: 3 }, &player())
+            .unwrap();
+        b.ui_action(&fire(), &player()).unwrap();
+        let ghost = b.ghost().unwrap().clone();
+        b.set_image_keys(ImageKeys {
+            shift: Some("dup:shift".into()),
+            rotate: Some("dup:turn".into()),
+            plant: Some("dup:plant".into()),
+            ..Default::default()
+        });
+        let key = |b: &mut Building, action: GameAction| match b
+            .ui_action(&UiAction::Game(action), &player())
+            .unwrap()
+            .unwrap()
+            .commands
+            .as_slice()
+        {
+            [Command::Package(p)] => p.command.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            key(&mut b, GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+            "shift"
+        );
+        assert_eq!(
+            key(&mut b, GameAction::SuperShiftBrick { x: 0, y: 0, z: 1 }),
+            "shift"
+        );
+        assert_eq!(key(&mut b, GameAction::RotateBrick { dir: 1 }), "turn");
+        assert_eq!(key(&mut b, GameAction::PlantBrick), "plant");
+        assert_eq!(b.ghost(), Some(&ghost), "the ghost stays put");
+        // Put away, the keys move the ghost again.
+        b.set_image_keys(ImageKeys::default());
+        b.ui_action(
+            &UiAction::Game(GameAction::ShiftBrick { x: 1, y: 0, z: 0 }),
+            &player(),
+        )
+        .unwrap();
+        assert_ne!(b.ghost(), Some(&ghost));
     }
 
     #[test]

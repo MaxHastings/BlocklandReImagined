@@ -2,6 +2,12 @@
 //! on a brick roof shades the roof only (the room's ceiling above once let
 //! the shadow fall through to the floor below as well), and a spawned horse
 //! casts like every other vehicle (see side-on-roof.png).
+//! It draws Classic lighting, where players and vehicles cast sun shadows
+//! everywhere as in v20. Unified shades them from the sun with the map's own
+//! walls, so under the Bedroom's ceiling they cast lamp shadows instead
+//! (bri-render's map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality);
+//! and Unified starts as Classic until the map's bake
+//! arrives, so a capture here once caught either mode.
 //! Runs on the made-up content root (its Bedroom a lit room); the ignored
 //! variant runs on the generated v20 content (`--release -- --ignored`,
 //! BRI_CONTENT or content/). Loopback QUIC and an offscreen GPU; never
@@ -224,6 +230,14 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below(f: &ContentRoot) -> Re
     let state = state_dir.path();
     let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
+    let mut settings = app.ui.settings();
+    settings
+        .prefs
+        .insert(bri_client::graphics::LIGHTING.into(), "0".into());
+    app.ui
+        .core
+        .request(UiAction::SaveSettings(Box::new(settings)));
+    pump(&mut app)?;
     app.ui.core.request(UiAction::HostGame {
         map: f.open_map.0.clone(),
         mode: ServerMode::SinglePlayer,

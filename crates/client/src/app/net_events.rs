@@ -447,6 +447,10 @@ impl App {
                     // where the local player hears from.
                     let view = a.view.as_ref().filter(|_| a.entered);
                     let heard_at = listener(&self.motion, view);
+                    let mut cues = cues;
+                    crate::avatar::follow_drawn_bodies(&mut cues, |owner| {
+                        self.avatar.avatars.get(&owner)
+                    });
                     for cue in cues {
                         self.queue_cue_heard_at(cue, heard_at);
                     }

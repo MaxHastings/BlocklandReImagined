@@ -1,11 +1,11 @@
 //! Persistent world-space rendering on the caller's device. The caller owns
 //! the swapchain/offscreen attachment, encoder and submission, so UI passes can
 //! follow this pass without another adapter/device or scene re-upload.
+use crate::BufferInit;
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use glam::{Mat4, Vec3, Vec4};
 use std::{ops::Range, sync::Arc};
-use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// The world's depth runs reversed: 1 at the near plane, 0 at the far one.
@@ -1316,7 +1316,7 @@ fn geometry_buffers(
         color: [0.; 4],
         fx: [0.; 4],
     }];
-    let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let vertices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
         contents: bytemuck::cast_slice(if data.vertices.is_empty() {
             &empty_vertex
@@ -1325,7 +1325,7 @@ fn geometry_buffers(
         }),
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     });
-    let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let indices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene indices"),
         contents: bytemuck::cast_slice(if data.indices.is_empty() {
             &[0u32]
@@ -1862,7 +1862,7 @@ impl VolumeBinding {
         }
         Self {
             view: texture.create_view(&Default::default()),
-            parameters: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            parameters: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("light volume placement"),
                 contents: bytemuck::cast_slice(&parameters),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -1902,8 +1902,9 @@ const CUBE_FACES_PER_FRAME: usize = 24;
 /// each `MapLighting::lights` index's place among them (-1 for none); then
 /// the Dynamic mode's light cubes: 1 when a valid runtime cohort exists (kept
 /// during geometry refresh), first layer, faces
-/// per row and a face's share of a layer; face resolution and world texel
-/// per unit of distance; and each light's six face matrices.
+/// per row and a face's share of a layer; face resolution, world texel per
+/// unit of distance and the soft lights' bits (`shadow::soft_cube_mask`);
+/// and each light's six face matrices.
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
 const MAP_LIGHT_CUBES: usize =
     48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
@@ -2045,7 +2046,7 @@ impl MapLightBinding {
         }
         Self {
             visibility: texture.create_view(&Default::default()),
-            lights: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            lights: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("map lights"),
                 contents: &uniform,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -2096,6 +2097,7 @@ impl MapLightBinding {
         settings: Option<crate::shadow::ShadowSettings>,
         ready: bool,
         drawn: &[(usize, usize, Mat4)],
+        soft: u32,
     ) {
         let mut header = [0.0f32; 8];
         if let Some(s) = settings.filter(|s| s.light_cubes) {
@@ -2109,7 +2111,7 @@ impl MapLightBinding {
                 size as f32 / s.resolution as f32,
                 size as f32,
                 2.0 * half / size as f32,
-                0.0,
+                f32::from_bits(soft),
                 0.0,
             ];
         }
@@ -2593,7 +2595,7 @@ impl SceneRenderer {
                 }
             }
         }
-        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![
                 0u8;
@@ -2613,7 +2615,7 @@ impl SceneRenderer {
         let volume = VolumeBinding::new(device, None);
         let map_lights = MapLightBinding::new(device, None, None);
         let mut renderer = Self {
-            identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            identity_instance: device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
                 contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL)),
                 usage: wgpu::BufferUsages::VERTEX,
@@ -2669,7 +2671,7 @@ impl SceneRenderer {
     pub fn set_view_count(&mut self, device: &wgpu::Device, count: usize) {
         let count = count.max(1);
         while self.views.len() < count {
-            let camera = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let camera = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("camera uniform"),
                 contents: bytemuck::bytes_of(&Camera::default()),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -2908,7 +2910,7 @@ impl SceneRenderer {
                     parameters[(i + 1) * 4..(i + 2) * 4].copy_from_slice(group);
                 }
             }
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&material.name),
                 contents: bytemuck::cast_slice(&parameters),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -3643,8 +3645,16 @@ impl SceneRenderer {
             for &(light, face, matrix) in &stale_cubes {
                 self.shadows.set_cube_matrix(queue, light, face, matrix);
             }
-            self.map_lights
-                .set_cubes(queue, self.shadows.settings, cubes_ready, &stale_cubes);
+            let soft = self.shadows.settings.map_or(0, |s| {
+                crate::shadow::soft_cube_mask(self.views[0].eye, &cube_lights, s.soft_cubes)
+            });
+            self.map_lights.set_cubes(
+                queue,
+                self.shadows.settings,
+                cubes_ready,
+                &stale_cubes,
+                soft,
+            );
         }
         // Per lamp slot, the static chunks within its reach: what its kept
         // faces draw, and how they tell a build changed there.

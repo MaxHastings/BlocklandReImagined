@@ -134,6 +134,7 @@ fn weapons() -> Arc<Pack> {
         aura: None,
         slow: None,
         fixed_damage: false,
+        collision_sound: None,
     };
     Arc::new(Pack {
         effects: Default::default(),

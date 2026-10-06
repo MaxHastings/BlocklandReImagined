@@ -156,10 +156,10 @@ impl App {
         let stand_height = archetypes.tuning(local.archetype, scale).stand_height;
         pivot_camera(stand_height, scale, (max_dist, offset, tilt), feet, pos)
     }
-    /// The local first-person eye: the rider's while mounted, else the
-    /// smoothed predicted eye.
+    /// The local first-person eye: the posed eye while mounted or sitting,
+    /// else the smoothed predicted eye.
     pub(super) fn local_eye(&self) -> Option<Vec3> {
-        self.mounts.rider_eye.or(self.motion.local_eye())
+        self.mounts.posed_eye.or(self.motion.local_eye())
     }
     /// Players and vehicles as drawn this frame, as boxes that shove
     /// client-only bodies (debris, Add-On bodies). Vehicle ids have the top
@@ -199,8 +199,10 @@ impl App {
     /// mount, 0x5ab856) sees from the seat's mount node plus the eye node in
     /// the mount's frame; every other rider, including a vehicle's driver,
     /// from the eye node through their seat (`getRenderEyeTransform`).
-    /// `None` on foot.
-    pub(super) fn rider_eye(
+    /// A player sitting on foot (`/sit`) sees from the eye node of the body
+    /// as drawn, so the view drops with the sit pose and any crouch on top
+    /// of it. `None` on foot otherwise.
+    pub(super) fn posed_eye(
         avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
         avatar_assets: &crate::avatar::AvatarAssets,
         vehicle_assets: &crate::vehicles::VehicleAssets,
@@ -209,7 +211,7 @@ impl App {
         local: &bri_sim::player::PlayerState,
     ) -> Option<Vec3> {
         let vitals = view.vitals.get(&view.owner)?;
-        if vitals.mounted.is_none() && vitals.ride.is_none() {
+        if vitals.mounted.is_none() && vitals.ride.is_none() && !vitals.sitting {
             return None;
         }
         let avatar = avatars.get(&view.owner)?;

@@ -2825,9 +2825,13 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
 }
 
 /// A door brick's click swap (`isDoor`, as Brick_Doors' script reads it): a
-/// closed door opens to `openCW` or `openCCW`, an open one closes to
-/// `closedCW` or `closedCCW`, by the side it is clicked from. The names are
-/// datablocks of the same Add-On, so their ids share this brick's prefix.
+/// closed door opens to `openCW` or `openCCW` by the side it is clicked
+/// from. An open one closes back the way it opened, whichever side it is
+/// clicked from: to `closedCCW` only when it is the `openCCW` datablock and
+/// not also `openCW`, else to `closedCW`. A door open both ways (the
+/// Halloween coffins) has no record of its side, so it closes to `closedCW`
+/// and its alternate `closedCCW` (a false back) is left to events. The names
+/// are datablocks of the same Add-On, so their ids share this brick's prefix.
 fn door_swap(b: &bri_content::brick::CatalogEntry) -> Option<bri_content::brick::Swap> {
     let field = |k: &str| {
         b.other_properties
@@ -2838,20 +2842,27 @@ fn door_swap(b: &bri_content::brick::CatalogEntry) -> Option<bri_content::brick:
     if !truthy("isdoor") {
         return None;
     }
-    let (cw, ccw) = if truthy("isopen") {
-        ("closedcw", "closedccw")
-    } else {
-        ("opencw", "openccw")
-    };
     let prefix = &b.id[..=b.id.rfind('/')?];
     let target = |k: &str| {
         field(k)
             .filter(|n| !n.is_empty())
             .map(|n| format!("{prefix}{n}"))
     };
+    if truthy("isopen") {
+        let me = |k: &str| target(k).is_some_and(|t| t.eq_ignore_ascii_case(&b.id));
+        let closed = if me("openccw") && !me("opencw") {
+            target("closedccw")?
+        } else {
+            target("closedcw")?
+        };
+        return Some(bri_content::brick::Swap {
+            front: closed.clone(),
+            back: closed,
+        });
+    }
     Some(bri_content::brick::Swap {
-        front: target(cw)?,
-        back: target(ccw)?,
+        front: target("opencw")?,
+        back: target("openccw")?,
     })
 }
 

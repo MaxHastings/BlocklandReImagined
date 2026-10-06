@@ -50,6 +50,16 @@ impl WeaponsWorld {
         });
         Some(image)
     }
+    /// `Player::spawnBall`'s sound: every ball a player throws, passes,
+    /// pops, fumbles or loses to a steal plays the catch sound half a unit
+    /// below its eye. (`dropBall` makes its projectile without it.)
+    pub(super) fn ball_released(&mut self, id: ActorId, eye: Vec3) {
+        self.events.push(Event::Sound {
+            source: TargetId::Actor(id),
+            profile: "weaponSwitchSound".into(),
+            position: eye - Vec3::Y * 0.5,
+        });
+    }
     /// The minigame's StartBall (`armor::onAdd`, `updatePlayerBalls`): mounted
     /// into empty hands without the catch timeout.
     pub fn start_ball(&mut self, id: ActorId, image: &str) -> Result<bool> {
@@ -74,7 +84,9 @@ impl WeaponsWorld {
         let Some(image) = self.mount_ball(id, &image) else {
             return Ok(false);
         };
-        self.projectiles.remove(&projectile);
+        let p = self.projectiles.remove(&projectile).unwrap();
+        let d = self.pack.projectiles[&p.definition].clone();
+        self.football_catch(&p, &d, id);
         self.events.push(Event::Removed { projectile });
         self.events.push(Event::BallCaught {
             actor: id,
@@ -82,6 +94,21 @@ impl WeaponsWorld {
             image,
         });
         Ok(true)
+    }
+    /// `footballProjectile::onCollision`'s `CatchFootballMessage`: a
+    /// football caught before it touched the ground, by whichever way the
+    /// catcher met it.
+    pub(super) fn football_catch(&mut self, p: &Projectile, d: &crate::ProjectileDef, catcher: ActorId) {
+        if StockProjectile::of(d) != Some(StockProjectile::Football) || p.bounced {
+            return;
+        }
+        let delta = self.actors[&catcher].frame.position - p.origin;
+        self.events.push(Event::FootballCatch {
+            source: p.source,
+            catcher,
+            distance_feet: (Vec3::new(delta.x, 0.0, delta.z).length() * 1.875).round() as u32,
+            was_thrown: p.was_thrown,
+        });
     }
     /// Touching a ball item mounts it instead of filling a tool slot.
     pub fn is_ball_drop(&self, drop: u64) -> bool {
@@ -164,6 +191,7 @@ impl WeaponsWorld {
             a.frame.scale,
         )?;
         let mut a = self.actors.remove(&id).unwrap();
+        self.ball_released(id, a.frame.eye);
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
         }
@@ -229,6 +257,7 @@ impl WeaponsWorld {
             a.frame.scale,
         )?;
         let mut a = self.actors.remove(&target).unwrap();
+        self.ball_released(target, a.frame.eye);
         if let Some(slot) = a.selected {
             a.inventory[slot] = None;
         }
@@ -290,6 +319,7 @@ impl WeaponsWorld {
         }
         let mut a = self.actors.remove(&victim).unwrap();
         if held {
+            self.ball_released(victim, a.frame.eye);
             if let Some(slot) = a.selected {
                 a.inventory[slot] = None;
             }

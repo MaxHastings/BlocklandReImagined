@@ -515,7 +515,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
-                self.mounts.rider_eye = None;
+                self.mounts.posed_eye = None;
                 for (owner, vitals) in &view.vitals {
                     let Some((vehicle, seat)) = vitals.mounted else {
                         continue;
@@ -978,6 +978,8 @@ impl App {
             self.avatar
                 .avatar_actions
                 .retain(|owner, _| view.poses.contains_key(owner));
+            // Corpses past their timeout are no longer drawn.
+            let gone = self.combat.hidden_bodies(&view.vitals);
             for (owner, player) in presented {
                 let appearance = view
                     .avatars
@@ -1200,9 +1202,10 @@ impl App {
                 {
                     avatar.override_nodes(&self.avatar.avatar_assets, nodes);
                 }
+                avatar.remember_drawn_offset(gone.contains(owner));
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
-            self.mounts.rider_eye = Self::rider_eye(
+            self.mounts.posed_eye = Self::posed_eye(
                 &self.avatar.avatars,
                 &self.avatar.avatar_assets,
                 &self.vehicle_assets,
