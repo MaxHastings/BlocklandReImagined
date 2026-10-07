@@ -630,6 +630,15 @@ mod tests {
                 .map_or(0, |d| d.candidates.len())
         };
         let (mut s, bot, seen) = fixture(None, bri_weapons::testing::GUN_ITEM, 8.0, 0);
+        // A gun that does not push: where a push sends someone is only
+        // known from each place, so a pushing weapon weighs them all.
+        let mut pack = s.weapons.pack.as_ref().clone();
+        let gun = pack
+            .projectiles
+            .get_mut(bri_weapons::testing::GUN_PROJECTILE)
+            .unwrap();
+        (gun.impulse, gun.vertical) = (0.0, 0.0);
+        s.weapons.retune(pack).unwrap();
         let brain = s.bots.brains.get_mut(&bot).unwrap();
         brain.kind.surprise.strength = 1.0;
         stand(&mut s, bot, seen, 10);
