@@ -17,6 +17,9 @@ pub(super) struct State {
     cursor: usize,
     /// The last tick the weapon in hand was one it could attack with.
     usable: u64,
+    /// What a push from a slot does to a target, as last predicted on a
+    /// planning turn (`shove`): kept between turns, as a flight is dear.
+    shove: Option<(OwnerId, usize, f32, Option<super::shove::Landing>)>,
 }
 impl State {
     pub(super) fn intent(&self, tick: u64) -> Option<Intent> {
@@ -129,6 +132,8 @@ pub(super) struct Choice {
     /// and the seconds it occupies. Nothing for a wind-up kept going.
     pub(super) dealt: f32,
     pub(super) seconds: f32,
+    /// Where its push is predicted to put the target (`shove`).
+    pub(super) landing: Option<super::shove::Landing>,
 }
 #[derive(Clone)]
 pub(super) struct Intent {
@@ -648,6 +653,7 @@ pub(super) fn choose(
                 surface: false,
                 dealt: 0.0,
                 seconds: 0.0,
+                landing: None,
             });
         }
         if distance < cap.near || distance > cap.reach {
@@ -707,6 +713,7 @@ pub(super) fn choose(
             surface: false,
             dealt: 0.0,
             seconds: 0.0,
+            landing: None,
         };
         if curved && !turn {
             if Some(slot) == selected && image.charges() && safe_blast(&bodies, choice, origin) {
@@ -769,6 +776,25 @@ pub(super) fn choose(
             let impact = aim.map_or(target_point, |a| a.impact);
             let (self_clearance, ally_clearance) =
                 clearances(&bodies, impact, aim.map_or(0.0, |a| a.time_seconds as f32));
+            // What its push would do to them (`shove`): flown on the
+            // planning turn, on a share of the solver budget no longer
+            // than a shot's path, and kept until the next.
+            let (push_harm, landing) = if !cap.pushes() {
+                (0.0, None)
+            } else if turn {
+                let mut allowance = budget.solves.min(PATH_TICKS);
+                let spent = allowance;
+                let (harm, landing) =
+                    session.bot_shove(bot, seen.owner, choice.direction, cap.push, &mut allowance);
+                budget.solves -= spent - allowance;
+                state.shove = Some((seen.owner, slot, harm, landing));
+                (harm, landing)
+            } else {
+                state
+                    .shove
+                    .filter(|(owner, s, _, _)| *owner == seen.owner && *s == slot)
+                    .map_or((0.0, None), |(_, _, harm, landing)| (harm, landing))
+            };
             let context = Context {
                 distance,
                 target_health: target.combat.health.max(1.0),
@@ -779,7 +805,7 @@ pub(super) fn choose(
                 aim,
                 ready_rounds,
                 opportunity_cost: 0.0,
-                push_harm: tactics::PUSH_WORTH,
+                push_harm,
                 switch_seconds: if Some(slot) == selected {
                     0.0
                 } else {
@@ -798,6 +824,7 @@ pub(super) fn choose(
             choices.push(Choice {
                 dealt,
                 seconds,
+                landing,
                 ..choice
             });
             // A splash weapon may aim at the feet, or at a surface beside
@@ -1326,6 +1353,7 @@ fn variant(
         surface: solve.surface,
         dealt: 0.0,
         seconds: 0.0,
+        landing: None,
     };
     if !safe_blast(bodies, choice, solve.origin)
         || clear_path(
@@ -2238,6 +2266,7 @@ mod tests {
             surface: false,
             dealt: 0.0,
             seconds: 0.0,
+            landing: None,
         };
         let seen = Seen {
             owner: enemy,

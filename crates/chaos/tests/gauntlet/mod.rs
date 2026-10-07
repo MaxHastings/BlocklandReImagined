@@ -386,6 +386,9 @@ struct Track {
     last_heading: Option<(f32, u64)>,
     was_alive: bool,
     fallen: bool,
+    /// The last tick it stood on something: a fall's airborne window starts
+    /// there.
+    grounded_at: u64,
     /// Ticks in a row in a flavour interrupt (`surprise`).
     goofing: u64,
     /// The behaviour a respawned bot's brain still holds from the life it
@@ -417,8 +420,12 @@ pub struct Report {
     /// Deaths with no killer (falls, the void, drowning).
     pub accidents: u64,
     pub deaths: u64,
-    /// Lives that dropped under the floor (fell off the arena).
+    /// Lives that dropped under the floor (fell off the arena) by their own
+    /// doing.
     pub fell: u64,
+    /// Lives knocked off the arena: an enemy's weapon pushed them after
+    /// they last stood on something (a shove that worked).
+    pub knocked_off: u64,
     pub shots: u64,
     /// Shots more than 25 degrees off the shooter's visible target.
     pub off_target: u64,
@@ -476,7 +483,7 @@ impl Report {
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} deaths={} shots={} off_target={} at_ally={} \
+             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} off_target={} at_ally={} \
              progress={:?}",
             self.name,
             self.bots,
@@ -492,6 +499,7 @@ impl Report {
             self.self_kills,
             self.accidents,
             self.fell,
+            self.knocked_off,
             self.deaths,
             self.shots,
             self.off_target,
@@ -705,9 +713,20 @@ impl Scorer {
             }
             let feet = Vec3::from(state.feet);
             let flat = Vec3::new(feet.x, 0.0, feet.z);
+            if state.grounded {
+                track.grounded_at = tick;
+            }
             if feet.y < self.floor - 2.0 {
                 if !std::mem::replace(&mut track.fallen, true) {
-                    self.report.fell += 1;
+                    // Knocked off when an enemy's weapon pushed it after it
+                    // last stood on something; otherwise its own doing.
+                    if s.pushed_by(*bot).is_some_and(|(by, at)| {
+                        at >= track.grounded_at && sides.get(&by) != sides.get(bot)
+                    }) {
+                        self.report.knocked_off += 1;
+                    } else {
+                        self.report.fell += 1;
+                    }
                 }
                 track.window.clear();
                 track.path.clear();

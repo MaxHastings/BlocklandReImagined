@@ -165,6 +165,8 @@ pub(super) struct Combat {
     /// tick of the last emote let through and the quick ones counted.
     pub voice: Option<u64>,
     pub voice_count: u32,
+    /// Who last pushed this body with a weapon's impulse, and the tick.
+    pub pushed: Option<(OwnerId, u64)>,
 }
 
 impl Combat {
@@ -829,6 +831,7 @@ impl Session {
             gun_slow: None,
             voice: None,
             voice_count: 0,
+            pushed: None,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -854,6 +857,11 @@ impl Session {
         }
     }
 
+    /// Who last pushed `owner`'s body with a weapon's impulse, and the tick
+    /// it landed. Not stable until the modding API freeze.
+    pub fn pushed_by(&self, owner: OwnerId) -> Option<(OwnerId, u64)> {
+        self.peers.get(&owner)?.combat.pushed
+    }
     /// The tick `owner`'s current body spawned (`Vitals::spawn_tick`).
     pub fn spawn_tick(&self, owner: OwnerId) -> Option<u64> {
         Some(self.peers.get(&owner)?.combat.spawn_tick)

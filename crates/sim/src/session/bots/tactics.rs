@@ -7,11 +7,6 @@
 use glam::{DVec3, Vec3};
 
 const HZ: f64 = bri_weapons::TICK_HZ as f64;
-/// What an attack that only pushes is worth, in health it would take,
-/// until the fighting lane's consequence worth supplies
-/// [`Context::push_harm`] from where the push lands (plan row 7), which
-/// deletes this.
-pub const PUSH_WORTH: f32 = 10.0;
 const DT: f64 = 1.0 / HZ;
 pub const MAX_LIFETIME_TICKS: u32 = 36_000;
 pub const MAX_CANDIDATES: usize = 16;
@@ -627,8 +622,9 @@ pub struct Context {
     /// The adapter's explicit opportunity cost in the same score units.
     pub opportunity_cost: f32,
     pub switch_seconds: f32,
-    /// What an attack that only pushes is worth against this target, in
-    /// health: the harm where the push would land it.
+    /// What its push does to this target, in health: the harm where the
+    /// push would land it, or what knocking it off a contested body is
+    /// worth (`combat::choose`). Added to its own damage.
     pub push_harm: f32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -642,17 +638,11 @@ pub enum Unsuited {
     NoDamage,
 }
 
-/// What one attack of `weapon` is worth against a body with `health` left:
-/// its capped damage, or a light hit for one that only pushes (it moves the
-/// opponent off what it is after).
+/// What one attack of `weapon` is worth against a body with `health` left,
+/// wherever it is: its capped damage. Where a push sends it is the
+/// shooter's to predict ([`Context::push_harm`]).
 fn dealt(weapon: Capability, health: f32) -> f32 {
-    if weapon.damage(1.0) > 0.0 {
-        weapon.damage(1.0).min(health)
-    } else if weapon.pushes() {
-        PUSH_WORTH.min(health)
-    } else {
-        0.0
-    }
+    weapon.damage(1.0).min(health)
 }
 
 /// The harm a second `weapon` deals a body with `health` left while it
@@ -738,15 +728,14 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
             return Err(Unsuited::UnsafeBlast);
         }
     }
-    // An attack that only pushes is worth a light hit: it moves the
-    // opponent off what it is after.
-    let damage = if weapon.damage(1.0) > 0.0 {
-        weapon.damage(1.0).min(context.target_health)
-    } else if weapon.pushes() {
-        context.push_harm.min(context.target_health)
+    // Its own damage and the harm of where its push sends the target
+    // (`Context::push_harm`), together at most what the target has left.
+    let pushed = if weapon.pushes() {
+        context.push_harm
     } else {
         0.0
-    } * context.hit_probability;
+    };
+    let damage = (weapon.damage(1.0) + pushed).min(context.target_health) * context.hit_probability;
     if damage <= 0.0 {
         return Err(Unsuited::NoDamage);
     }
@@ -1097,7 +1086,7 @@ mod tests {
             ready_rounds: None,
             opportunity_cost: 0.0,
             switch_seconds: 0.0,
-            push_harm: PUSH_WORTH,
+            push_harm: 0.0,
         }
     }
     fn candidate(slot: u8, capability: Capability, context: Context) -> Candidate {
