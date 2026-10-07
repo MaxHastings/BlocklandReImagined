@@ -45,6 +45,8 @@ jobs:
         run: python -m unittest discover -s tools -p "test_*.py"
       - name: Build
         run: cargo build --workspace --all-targets --locked
+      - name: No Visual C++ Redistributable needed
+        run: python tools/check_windows_imports.py target/debug/bri-client.exe target/debug/bri-server.exe target/debug/bri-import-addon.exe
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
