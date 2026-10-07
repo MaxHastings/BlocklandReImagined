@@ -2438,58 +2438,76 @@ impl Session {
                 .spawn(DEATH_PROJECTILE, actor, feet, Vec3::ZERO, 1.0);
         }
         for (owner, impact) in impacts {
-            let speed = impact.length();
-            let Some(peer) = self.peers.get(&owner) else {
-                continue;
-            };
-            // The engine raises `onImpact` past the datablock's
-            // `minImpactSpeed` (the Horse's is 250), and `Armor::onImpact`
-            // also wants `minImpactSpeed` times the player's height scale.
-            let state = peer.player.state();
-            let min = PlayerType::from_archetype(state.archetype)
-                .unwrap_or_default()
-                .min_impact_speed();
-            if speed <= min || speed < min * state.scale {
-                continue;
-            }
-            // `Armor::onImpact` never hurts a player holding the admin wand.
-            if self.holds_admin_tool(owner) {
-                continue;
-            }
-            // `Armor::onImpact`: a mini-game's own Falling Damage rule, or
-            // outside mini-games the host's `$Pref::Server::FallingDamage`
-            // (Advanced Config; on in v20's server/defaults.cs).
-            let outside = self.admin.settings.falling_damage;
-            let allowed = self
-                .minigames
-                .target_for_player(peer.combat.player)
-                .map(|target| {
-                    match self.minigames.can_damage(
-                        DamageSource::Environment(EnvironmentDamage::Falling),
-                        target,
-                    ) {
-                        Decision::Allow => true,
-                        Decision::OutsideMinigames => outside,
-                        _ => false,
-                    }
-                })
-                .unwrap_or(false);
-            if allowed {
+            if let Some(amount) = self.fall_damage(owner, impact) {
                 let kind = if impact.normalize_or_zero().dot(Vec3::NEG_Y) > 0.5 {
                     DamageKind::Fall
                 } else {
                     DamageKind::Impact
                 };
-                // A guard faced the way they fell takes some of it.
-                let amount = self.weapons.guard_fall(
-                    ActorId(owner),
-                    speed * SPEED_DAMAGE_SCALE,
-                    impact.normalize_or_zero(),
-                );
+                self.weapons
+                    .guard_fall_clang(ActorId(owner), impact.normalize_or_zero());
                 self.damage_player(owner, amount, kind, None)?;
             }
         }
         Ok(())
+    }
+
+    /// The health `owner` would lose striking the ground or a wall at
+    /// `impact` (its velocity as it struck), as `step_combat` takes it: 0
+    /// when the blow is too soft, they hold the admin wand, or the game's
+    /// falling damage is off. Changes nothing, so a bot can ask where a
+    /// shove would land someone. Not stable until the modding API freeze.
+    pub fn fall_harm(&self, owner: OwnerId, impact: Vec3) -> f32 {
+        self.fall_damage(owner, impact).unwrap_or(0.0)
+    }
+
+    /// The one fall formula ([`Self::fall_harm`]): None when the blow does
+    /// not hurt at all.
+    fn fall_damage(&self, owner: OwnerId, impact: Vec3) -> Option<f32> {
+        let speed = impact.length();
+        let peer = self.peers.get(&owner)?;
+        // The engine raises `onImpact` past the datablock's
+        // `minImpactSpeed` (the Horse's is 250), and `Armor::onImpact`
+        // also wants `minImpactSpeed` times the player's height scale.
+        let state = peer.player.state();
+        let min = PlayerType::from_archetype(state.archetype)
+            .unwrap_or_default()
+            .min_impact_speed();
+        if speed <= min || speed < min * state.scale {
+            return None;
+        }
+        // `Armor::onImpact` never hurts a player holding the admin wand.
+        if self.holds_admin_tool(owner) {
+            return None;
+        }
+        // `Armor::onImpact`: a mini-game's own Falling Damage rule, or
+        // outside mini-games the host's `$Pref::Server::FallingDamage`
+        // (Advanced Config; on in v20's server/defaults.cs).
+        let outside = self.admin.settings.falling_damage;
+        let allowed = self
+            .minigames
+            .target_for_player(peer.combat.player)
+            .map(|target| {
+                match self.minigames.can_damage(
+                    DamageSource::Environment(EnvironmentDamage::Falling),
+                    target,
+                ) {
+                    Decision::Allow => true,
+                    Decision::OutsideMinigames => outside,
+                    _ => false,
+                }
+            })
+            .unwrap_or(false);
+        if !allowed {
+            return None;
+        }
+        // A guard faced the way they fell takes some of it.
+        let amount = speed * SPEED_DAMAGE_SCALE;
+        Some(
+            self.weapons
+                .guard_fall_share(ActorId(owner), impact.normalize_or_zero())
+                .map_or(amount, |share| amount * share),
+        )
     }
 
     /// Weapon knockback: `Player::AddVelocity(impulse / mass)`.

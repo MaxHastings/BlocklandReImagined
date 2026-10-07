@@ -7,8 +7,11 @@
 use glam::{DVec3, Vec3};
 
 const HZ: f64 = bri_weapons::TICK_HZ as f64;
-/// What an attack that only pushes is worth, in health it would take.
-const PUSH_WORTH: f32 = 10.0;
+/// What an attack that only pushes is worth, in health it would take,
+/// until the fighting lane's consequence worth supplies
+/// [`Context::push_harm`] from where the push lands (plan row 7), which
+/// deletes this.
+pub const PUSH_WORTH: f32 = 10.0;
 const DT: f64 = 1.0 / HZ;
 pub const MAX_LIFETIME_TICKS: u32 = 36_000;
 pub const MAX_CANDIDATES: usize = 16;
@@ -317,9 +320,10 @@ pub struct Capability {
     pub arm_ticks: u32,
     pub cadence_ticks: u32,
     pub rounds_per_attack: u32,
-    /// How hard its hit pushes a player (impulse and lift): an attack that
-    /// only pushes (a push broom) still moves an opponent off what it wants.
-    pub push: f32,
+    /// How hard its hit pushes a player, along the shot and up (impulse
+    /// and lift, scaled): an attack that only pushes (a push broom) still
+    /// moves an opponent off what it wants.
+    pub push: (f32, f32),
 }
 impl Capability {
     /// What one attack deals: its direct hit and its splash, the splash
@@ -328,6 +332,10 @@ impl Capability {
     /// a target now come from.
     pub fn damage(self, splash_share: f32) -> f32 {
         self.direct_damage + self.splash_damage * splash_share
+    }
+    /// Its hit pushes a player at all.
+    pub fn pushes(self) -> bool {
+        self.push.0 > 0.0 || self.push.1 > 0.0
     }
     pub fn validate(self) -> Result<(), Invalid> {
         finite(&[
@@ -498,9 +506,9 @@ pub fn native_capability(
         },
         cadence_ticks: image.min_shot_ticks.max(cadence_ticks),
         rounds_per_attack: image.magazine.as_ref().map_or(1, |m| m.per_shot),
-        push: (p.impulse.max(0.0) + p.vertical.max(0.0)) * scale,
+        push: (p.impulse.max(0.0) * scale, p.vertical.max(0.0) * scale),
     };
-    if result.direct_damage <= 0.0 && result.splash_damage <= 0.0 && result.push <= 0.0 {
+    if result.direct_damage <= 0.0 && result.splash_damage <= 0.0 && !result.pushes() {
         return Err(DescriptorRequired::MissingAttack);
     }
     result
@@ -524,6 +532,9 @@ pub struct Context {
     /// The adapter's explicit opportunity cost in the same score units.
     pub opportunity_cost: f32,
     pub switch_seconds: f32,
+    /// What an attack that only pushes is worth against this target, in
+    /// health: the harm where the push would land it.
+    pub push_harm: f32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unsuited {
@@ -548,6 +559,7 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
         context.blast_margin,
         context.opportunity_cost,
         context.switch_seconds,
+        context.push_harm,
     ])
     .map_err(|_| Unsuited::Invalid)?;
     if context
@@ -560,6 +572,7 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
         || context.blast_margin < 0.0
         || context.opportunity_cost < 0.0
         || context.switch_seconds < 0.0
+        || context.push_harm < 0.0
     {
         return Err(Unsuited::Invalid);
     }
@@ -601,8 +614,8 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
     // opponent off what it is after.
     let damage = if weapon.damage(1.0) > 0.0 {
         weapon.damage(1.0).min(context.target_health)
-    } else if weapon.push > 0.0 {
-        PUSH_WORTH.min(context.target_health)
+    } else if weapon.pushes() {
+        context.push_harm.min(context.target_health)
     } else {
         0.0
     } * context.hit_probability;
@@ -944,7 +957,7 @@ mod tests {
             arm_ticks: 0,
             cadence_ticks: 12,
             rounds_per_attack: 1,
-            push: 0.0,
+            push: (0.0, 0.0),
         }
     }
     fn context() -> Context {
@@ -959,6 +972,7 @@ mod tests {
             ready_rounds: None,
             opportunity_cost: 0.0,
             switch_seconds: 0.0,
+            push_harm: PUSH_WORTH,
         }
     }
     fn candidate(slot: u8, capability: Capability, context: Context) -> Candidate {

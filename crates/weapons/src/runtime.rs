@@ -1109,22 +1109,25 @@ impl WeaponsWorld {
         self.actors.get_mut(&id).context("Unknown actor")?.bot = bot;
         Ok(())
     }
-    /// A fall or crash's `amount` of hurt to `id`, moving along `toward`
-    /// as it struck: the share a guard they hold and face it with lets
-    /// through ([`crate::Guard::fall_damage`]), with its clang.
-    pub fn guard_fall(&mut self, id: ActorId, amount: f32, toward: Vec3) -> f32 {
-        let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, id) else {
-            return amount;
-        };
-        let Some(share) = guard.fall_damage else {
-            return amount;
-        };
-        if a.frame.direction.dot(toward) <= 0.0 {
-            return amount;
+    /// The share of a fall or crash's hurt to `id`, moving along `toward`
+    /// as it struck, that a guard they hold and face it with lets through
+    /// ([`crate::Guard::fall_damage`]); None when no guard takes any.
+    pub fn guard_fall_share(&self, id: ActorId, toward: Vec3) -> Option<f32> {
+        let (guard, _, a) = guard_held(&self.actors, &self.pack, id)?;
+        let share = guard.fall_damage?;
+        (a.frame.direction.dot(toward) > 0.0).then_some(share)
+    }
+    /// The clang of a guard taking a fall or crash along `toward`
+    /// ([`Self::guard_fall_share`]).
+    pub fn guard_fall_clang(&mut self, id: ActorId, toward: Vec3) {
+        if self.guard_fall_share(id, toward).is_none() {
+            return;
         }
+        let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, id) else {
+            return;
+        };
         let (explosion, middle, scale) = (guard.hit_explosion.clone(), body(a), a.frame.scale);
         self.burst(&explosion, id, middle, scale * 2.0);
-        amount * share
     }
     /// Remove one live projectile without exploding it (`killObjects`).
     pub fn remove_projectile(&mut self, projectile: u64) -> bool {
