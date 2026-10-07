@@ -51,7 +51,7 @@ impl Session {
             self.bot_fire_clear(
                 bot,
                 eye,
-                seen.eye - Vec3::Y * 0.5,
+                seen.aim,
                 weapon.map_or(0.0, |w| w.splash),
                 weapon
                     .filter(|_| ranged)
@@ -62,7 +62,7 @@ impl Session {
         // Where its weapon will hit, for its side to keep out of (`team`):
         // the line the clear-fire check above holds fire for.
         let harm = target.filter(|_| ranged).map(|seen| {
-            let to = seen.eye - Vec3::Y * 0.5;
+            let to = seen.aim;
             let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
             claims::Space {
                 from: eye,
@@ -124,8 +124,17 @@ impl Session {
             let mut budget = std::mem::take(&mut self.bots.combat_budget);
             budget.begin_tick(tick);
             let mut mind = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().surprise);
-            let decision =
-                hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget, &mut mind);
+            let eye = self.peers[&bot].player.eye();
+            let decision = hand_combat::choose(
+                self,
+                bot,
+                seen,
+                eye,
+                tick,
+                &mut combat,
+                &mut budget,
+                &mut mind,
+            );
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.combat = combat;
             brain.surprise = mind;

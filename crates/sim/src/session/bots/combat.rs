@@ -56,6 +56,37 @@ impl Budget {
         self.solves = SOLVES_PER_TICK;
         self.rays = RAYS_PER_TICK;
     }
+    /// Whether `owner` has the planning turn this tick (every slot weighed).
+    pub(super) fn has_turn(&self, owner: OwnerId, tick: u64) -> bool {
+        self.tick == Some(tick) && self.turn == Some(owner)
+    }
+    /// The planning fighter's fair share of what is left this tick, for
+    /// weighing other places to stand (`spots`): the allowance over the
+    /// fighters it is shared by, above the reserve the rays keep for
+    /// launches. What it spends is taken back with [`Self::charge`].
+    pub(super) fn share(&self) -> Budget {
+        let fighters = self.owners.len().max(1) as u32;
+        let reserve = CHEAP_RESERVE + PATH_TICKS;
+        Budget {
+            tick: self.tick,
+            owners: self.owners.clone(),
+            cursor: self.cursor,
+            turn: self.turn,
+            solves: self.solves.min(SOLVES_PER_TICK / fighters),
+            rays: self
+                .rays
+                .min(reserve + (RAYS_PER_TICK - reserve) / fighters),
+        }
+    }
+    /// Takes what `share` spent of the `(solves, rays)` it was given.
+    pub(super) fn charge(&mut self, given: (u32, u32), share: &Budget) {
+        self.solves = self.solves.saturating_sub(given.0 - share.solves);
+        self.rays = self.rays.saturating_sub(given.1 - share.rays);
+    }
+    /// What a share was given, for [`Self::charge`].
+    pub(super) fn allowance(&self) -> (u32, u32) {
+        (self.solves, self.rays)
+    }
     fn register(&mut self, owner: OwnerId, tick: u64) -> bool {
         self.begin_tick(tick);
         if let Some(entry) = self.owners.iter_mut().find(|e| e.0 == owner) {
@@ -94,6 +125,10 @@ pub(super) struct Choice {
     /// Aimed at a surface beside the target that its splash reaches
     /// (`surprise`), rather than at the target itself.
     pub(super) surface: bool,
+    /// What the attack is worth ([`tactics::worth`]): its expected damage
+    /// and the seconds it occupies. Nothing for a wind-up kept going.
+    pub(super) dealt: f32,
+    pub(super) seconds: f32,
 }
 #[derive(Clone)]
 pub(super) struct Intent {
@@ -425,10 +460,14 @@ pub(super) fn weapon_of(cap: Capability, spread: f32) -> Weapon {
     }
 }
 
+/// The best shot `bot` has at `seen` from `origin` (its eye, or a spot it
+/// weighs standing on).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn choose(
     session: &Session,
     bot: OwnerId,
     seen: Seen,
+    origin: Vec3,
     tick: u64,
     state: &mut State,
     budget: &mut Budget,
@@ -453,14 +492,21 @@ pub(super) fn choose(
     let Some(actor) = session.weapons.actor(ActorId(bot)) else {
         return Decision::Unsupported;
     };
-    let origin = peer.player.eye();
     let velocity = Vec3::from(peer.player.state().velocity);
     // A bot leads by about the target's velocity, a little under or over
     // as its own seeded drift goes, never a perfect intercept.
     let target_velocity = Vec3::from(target.player.state().velocity) * super::lead(bot, tick);
-    let target_point = seen.eye - Vec3::Y * 0.5;
-    // Gathered when a candidate first needs them.
-    let bodies = std::cell::LazyCell::new(|| Bodies::of(session, bot));
+    let target_point = seen.aim;
+    // Gathered when a candidate first needs them; its own body where it
+    // would stand to shoot from `origin`.
+    let shift = origin - peer.player.eye();
+    let bodies = std::cell::LazyCell::new(|| {
+        let mut bodies = Bodies::of(session, bot);
+        if let Some(own) = bodies.own.as_mut() {
+            own.centre += shift;
+        }
+        bodies
+    });
     let scale = peer.player.state().scale;
     let selected = actor.selected;
     let mut supported = false;
@@ -544,6 +590,8 @@ pub(super) fn choose(
                 direction: (target_point - origin).normalize_or_zero(),
                 aim: None,
                 surface: false,
+                dealt: 0.0,
+                seconds: 0.0,
             });
         }
         if distance < cap.near || distance > cap.reach {
@@ -595,6 +643,8 @@ pub(super) fn choose(
             capability: cap,
             aim: solutions[0],
             surface: false,
+            dealt: 0.0,
+            seconds: 0.0,
         };
         if curved && !turn {
             if Some(slot) == selected && image.charges() && safe_blast(&bodies, choice, origin) {
@@ -662,7 +712,12 @@ pub(super) fn choose(
                 capability: cap,
                 context,
             });
-            choices.push(choice);
+            let (dealt, seconds) = tactics::worth(cap, context).unwrap_or_default();
+            choices.push(Choice {
+                dealt,
+                seconds,
+                ..choice
+            });
             // A splash weapon may aim at the feet, or at a surface beside
             // the target, where its real blast still hurts.
             if cap.splash_radius > 0.0 && cap.splash_damage > 0.0 {
@@ -882,6 +937,8 @@ fn variant(
         capability: cap,
         aim: Some(aim),
         surface: solve.surface,
+        dealt: 0.0,
+        seconds: 0.0,
     };
     if !safe_blast(bodies, choice, solve.origin)
         || clear_path(
@@ -902,17 +959,22 @@ fn variant(
         direct_damage: 0.0,
         ..cap
     };
-    let score = tactics::suitability(
-        splash,
-        Context {
-            aim: Some(aim),
-            self_clearance,
-            ally_clearance,
-            ..context
+    let context = Context {
+        aim: Some(aim),
+        self_clearance,
+        ally_clearance,
+        ..context
+    };
+    let score = tactics::suitability(splash, context).ok()?;
+    let (dealt, seconds) = tactics::worth(splash, context).ok()?;
+    Some((
+        Choice {
+            dealt,
+            seconds,
+            ..choice
         },
-    )
-    .ok()?;
-    Some((choice, score))
+        score,
+    ))
 }
 
 /// A body a shot must spare, as one decision sees it ([`Bodies`]).
@@ -1044,9 +1106,10 @@ fn clear_path(
                 origin
                     + choice.direction
                         * choice.capability.reach.min(
-                            origin
-                                .distance(session.peers.get(&enemy)?.player.eye() - Vec3::Y * 0.5)
-                                + 0.5,
+                            origin.distance({
+                                let p = &session.peers.get(&enemy)?.player;
+                                sightlines::aim_point(p.eye(), p.state().scale)
+                            }) + 0.5,
                         )
             }
         };
@@ -1426,11 +1489,14 @@ mod tests {
             direction: (target - origin).normalize(),
             aim: None,
             surface: false,
+            dealt: 0.0,
+            seconds: 0.0,
         };
         let seen = Seen {
             owner: enemy,
             eye: session.peers[&enemy].player.eye(),
             feet: session.peers[&enemy].player.state().feet.into(),
+            aim: target,
             real: session.peers[&enemy].player.state().feet.into(),
             way: Way {
                 aim: target,

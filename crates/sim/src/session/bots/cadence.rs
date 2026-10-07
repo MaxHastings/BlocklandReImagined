@@ -100,7 +100,6 @@ pub(crate) mod salt {
     pub(crate) const BURST: u64 = 7;
     pub(crate) const AIM: u64 = 8;
     pub(crate) const LEAD: u64 = 10;
-    pub(crate) const LEAN: u64 = 11;
     /// Looking round for the mood (`team`).
     pub(crate) const MOOD: u64 = 21;
     /// A reflex's drift (`surprise::Domain::reflex`).

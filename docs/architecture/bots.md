@@ -109,10 +109,9 @@ bot does through the same code.
    |---|---|
    | Route | along the planned route, or through the opening it leads through; its jump and crawl |
    | Push | into the body an interaction works |
-   | Stance | where it fights or works: a weave, melee footwork, a ranged strafe and lean, giving ground |
+   | Stance | where it fights or works: a weave, melee footwork, a ranged strafe round the place it fights from |
    | Jet | a jet leg flying itself (its jets, jump and no crouch) |
    | Swim | rising and diving in water, or rising afloat |
-   | Team | out of where a teammate's weapon will hit |
    | Goof | a goof's walk |
    | Dodge | a dodge's step aside |
    | Stand | standing still on purpose (a hop straight up, a hand-off) |
@@ -247,7 +246,7 @@ person presses:
   target close below steps off to the nearest open floor
   (`bot_step_off`). An airborne fighter whose arc (`route::landing`)
   would come down off the floor steers back instead of strafing on, and
-  a way out of an ally's line of fire is only taken onto floor.
+  a place to fight from is only one the walk grid has floor for.
 - swim: head for the next waypoint across the water, whatever the depth,
   holding jump to rise where the way out is higher.
 - jet: walk back onto the launch cell and stand still there (a body that
@@ -581,6 +580,36 @@ getting (an item whose pickup the package decides, or one that did not
 come) or found no way to is passed over for 30 s. Pickups a script
 decides are never candidates.
 
+## Where to stand
+
+A ranged fighter on its feet weighs a few places to stand on its planning
+turn (the shot chooser's, `combat::Budget::has_turn`), as stable options
+named from where it stands (`spots::SPOTS`): here; a body's width left
+or right, and in toward its enemy or out as far as its weapon's band takes
+it back inside (a body's width at least), where the walk grid has floor it
+walks straight to; nearer than the band's near edge it deals nothing, so
+an enemy hugging it is stepped back from; a ledge ahead a jump lands it on; and one higher its jets
+lift it onto, as measured (`reach`). Each has one score, in harm per
+second with no weight of its own (`spots::Terms`):
+
+    dealt / (travel + fire) x (1 - taken)
+
+*dealt* and *fire* are the best shot's damage and seconds from that place,
+the shot chooser itself run with that place as its origin
+(`combat::choose`, `tactics::worth`); *travel* is the walk, hop or
+measured jet there; *taken* is the share of its own health the enemies it
+knows of that see the place (its target and its attackers, one ray each
+on the shared budget), and allies whose line of fire crosses it, would
+take meanwhile (`tactics::rate`). The same harm is a bigger share of less
+health, so a healthy bot takes the quick shot and a hurt one a worse shot
+where nobody looks; cover and giving ground fall out, and retreat has no
+other home. With no shot from anywhere, it keeps to the place that costs
+it least. The surprise chooser picks (`Domain::Spot`) with its hold rule;
+the place chosen is its route's goal (`Goal::Stand`), and once there it
+is "here" again, held from then. Around it the strafe goes on. A melee
+fighter, a swimmer and a rider keep their stance where they are. F3 shows
+each place's three quantities.
+
 ## Ball games: own goals
 
 A pushed body is never aimed at another sensor: the regions of bricks
@@ -723,8 +752,9 @@ at the same spot, costs, each further ally half the one before: the first keeps 
 targets prefers an uncrowded one; following an ally through a gap too narrow to pass it, at its
 pace rather than walking round it is the same rule) and **interaction**
 (a seat an ally offers, or a driving place from which a seated ally's
-mount sees its target, pays; a fight's stance in an ally's line of fire
-costs, so it steps out, where there is floor to step to). Crew of one vehicle neither crowd nor endanger
+mount sees its target, pays). An ally's line of fire is not a term here:
+a place to fight from that it crosses costs what that ally's weapon
+deals, so it fights from somewhere else (see Where to stand). Crew of one vehicle neither crowd nor endanger
 each other; a seat stays the claim's to arbitrate. Socially, an objective
 is worth more as the team trails; idle flavours grow likelier with the
 share of the players a bot sees goofing, less those it sees playing, a

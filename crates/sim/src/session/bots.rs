@@ -64,6 +64,7 @@ mod planning;
 mod search_memory;
 mod sight;
 mod sightlines;
+mod spots;
 pub(super) use sightlines::{Subject as SightSubject, Urgency as SightUrgency};
 mod surprise;
 pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
@@ -377,6 +378,9 @@ struct Brain {
     /// The way a ranged fighter strafes (+1 right, -1 left), and the tick
     /// it turns back.
     strafe: (f32, u64),
+    /// Its strafe leg turned the other way at once (an ally in the way, a
+    /// hit): one such turn a leg, so fire every tick does not jitter it.
+    strafe_parted: bool,
     objective: objectives::State,
     combat: hand_combat::State,
     native_combat_tick: Option<u64>,
@@ -385,6 +389,9 @@ struct Brain {
     /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
     /// someone damageable does not make them more urgent than winning.
     objective_threat: Option<Knowledge>,
+    /// The place it heads for to fight from (`spots`); none where it
+    /// stands.
+    spot: Option<spots::Anchor>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -470,6 +477,8 @@ enum Goal {
     Objective(Vec3),
     /// Where a weapon lies that it goes to pick up.
     Arm(Vec3),
+    /// A place to fight from (`spots`).
+    Stand(Vec3),
     Home,
 }
 impl Goal {
@@ -481,7 +490,8 @@ impl Goal {
             | Self::Carry(p)
             | Self::Interact(p)
             | Self::Objective(p)
-            | Self::Arm(p) => p,
+            | Self::Arm(p)
+            | Self::Stand(p) => p,
             Self::Home => home,
         }
     }
@@ -564,11 +574,13 @@ impl Brain {
             choice_was: ChoiceWas::default(),
             arming: Default::default(),
             strafe: (1.0, 0),
+            strafe_parted: false,
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
             objective_tool: false,
             objective_threat: None,
+            spot: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -610,7 +622,10 @@ impl Brain {
         parted: bool,
     ) -> f32 {
         let (mut side, mut until) = self.strafe;
+        // One turn at once a leg: the next it makes when the leg is up.
+        let parted = parted && !self.strafe_parted;
         if tick >= until || parted {
+            self.strafe_parted = parted;
             // The first leg goes the other way when it can; later legs
             // sometimes keep on.
             let turn = if until == 0 {
@@ -651,8 +666,8 @@ impl Brain {
         }
     }
     /// The goal of going after an enemy: standing its ground in its band
-    /// (`fight`), after the enemy in sight, or to where one was. Whether it
-    /// stands, and whether it gives ground (closer than `near`).
+    /// (`fight`), at the place it chose to fight from (`spots`), after the
+    /// enemy in sight, or to where one was. Whether it stands.
     /// `reach`: how near its body counts as at a search point.
     fn pursue(
         &mut self,
@@ -662,11 +677,11 @@ impl Brain {
         feet: Vec3,
         reach: f32,
         tick: u64,
-    ) -> (bool, bool) {
+    ) -> bool {
         match (enemy, self.memory) {
-            (Some(seen), _) if fight => {
-                self.set_goal(None);
-                (true, flat(seen.feet - feet).length() < near)
+            (Some(_), _) if fight => {
+                self.set_goal(self.spot.map(|a| Goal::Stand(a.at)));
+                true
             }
             (Some(seen), _) => {
                 // The chase heads for where it really stands, and the path
@@ -688,7 +703,7 @@ impl Brain {
                 if moved_on {
                     self.set_goal(Some(Goal::Chase(to)));
                 }
-                (false, false)
+                false
             }
             (None, Some(knowledge)) => {
                 // Settled short of the spot (no route, or one that ends
@@ -701,9 +716,9 @@ impl Brain {
                     .evidence_search
                     .next(knowledge, feet, tick, failed, reach);
                 self.set_goal(next.map(Goal::Search));
-                (next.is_none(), false)
+                next.is_none()
             }
-            (None, None) => (false, false),
+            (None, None) => false,
         }
     }
     /// The goal of strolling: somewhere near its brick, or for a rules bot
@@ -909,12 +924,6 @@ fn leg(u: f32, mean: f32) -> f32 {
 const FOOTWORK_TICKS: u64 = 110;
 /// About how far a step back carries a melee fighter, in units.
 const FOOTWORK_BACK: f32 = 0.6;
-/// A ranged fighter's lean in as it strafes: its most (a share of a
-/// walk), the ticks its seeded drift takes to wander, and how far outside
-/// its band's near edge it must be to lean in.
-const LEAN: f32 = 0.35;
-const LEAN_TICKS: u64 = 360;
-const LEAN_ROOM: f32 = 2.0;
 
 /// Where a melee fighter in its band steps this tick: in toward its target,
 /// back out, a step aside, then a moment planted, each for a seeded share
@@ -982,6 +991,9 @@ struct Seen {
     /// they would stand were the partner's side right behind it).
     eye: Vec3,
     feet: Vec3,
+    /// Where a shot at it aims, as seen along the way
+    /// ([`sightlines::aim_point`]).
+    aim: Vec3,
     /// Where its feet really are.
     real: Vec3,
     way: Way,
@@ -2032,7 +2044,6 @@ impl Session {
             super::admin_players::world_ray(simulation, a, d.normalize_or_zero(), d.length())
                 .is_none()
         };
-        let tall = self.peers[&bot].player.tuning().stand_height;
         let deficit = self.team_deficit(bot);
         // The target it went after died or left (not merely out of sight).
         let target_gone = self.bots.brains[&bot]
@@ -2239,11 +2250,8 @@ impl Session {
             brain.memory,
             arm.map(|(at, _)| at),
             objective,
-            feet,
             brain.home,
-            team::exit(&intents, feet, tall, &|at| {
-                floor_below(&self.simulation, at, &body).is_some()
-            }),
+            brain.spot.map_or(feet, |a| a.at),
             carries,
             explore_to,
         );
@@ -2257,7 +2265,6 @@ impl Session {
             &mut scores,
             &choices,
             &intents,
-            tall,
             &clear,
         );
         brain.team.allies = intents.len();
@@ -2391,6 +2398,30 @@ impl Session {
             }
         }
 
+        // Where it fights from (`spots`): a ranged fighter on its feet
+        // weighs a few places to stand, against the enemies it knows of;
+        // anything else stands its ground where it is.
+        let spot = match (enemy, weapon) {
+            (Some(seen), Some(weapon))
+                if behaviour == Behaviour::Fight
+                    && !weapon.melee
+                    && swim.is_none()
+                    && driving.is_none()
+                    && !self.seated(bot) =>
+            {
+                let mut threats = vec![seen.owner];
+                for k in [threat, hurt_by].into_iter().flatten() {
+                    if !threats.contains(&k.subject) {
+                        threats.push(k.subject);
+                    }
+                }
+                self.bot_stand(bot, seen, weapon, &threats, feet, &body, &costs, tick)
+            }
+            _ => None,
+        };
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        brain.spot = spot;
+
         // Carrying an objective's delivery that needs only its feet (no
         // tool, trigger, body or seat), it shoots an enemy in sight on the
         // way, as a player runs and guns; the walk goes on. (On the way to
@@ -2401,18 +2432,18 @@ impl Session {
             && selected_objective.is_some_and(|view| view.feet_only());
         // Goal.
         brain.chase_offset = Vec3::ZERO;
-        let (hold, back_off) = match behaviour {
+        let hold = match behaviour {
             Behaviour::Arm => {
                 if let Some((at, _)) = arm {
                     brain.set_goal_near(Goal::Arm(at));
                 }
-                (false, false)
+                false
             }
             Behaviour::Interact => {
                 if let Some(o) = opportunity {
                     brain.set_goal_near(Goal::Interact(o.point));
                 }
-                (false, false)
+                false
             }
             Behaviour::Objective => {
                 if let Some(step) = selected_objective.as_ref() {
@@ -2442,18 +2473,18 @@ impl Session {
                         } else {
                             brain.set_goal_near(Goal::Objective(step.point));
                         }
-                        (false, false)
+                        false
                     }
                 } else {
                     // Between steps, held by the hold rule: it stands where
                     // the last step finished until the next is planned.
                     brain.set_goal(None);
-                    (false, false)
+                    false
                 }
             }
             Behaviour::Carry => {
                 brain.set_goal(brain.carry.and_then(|c| c.to.place()).map(Goal::Carry));
-                (false, false)
+                false
             }
             Behaviour::Fight => brain.pursue(enemy, true, near, feet, body.width * 0.5, tick),
             Behaviour::Chase | Behaviour::Search => {
@@ -2473,11 +2504,11 @@ impl Session {
             }
             Behaviour::Return => {
                 brain.set_goal(Some(Goal::Home));
-                (false, false)
+                false
             }
             Behaviour::Respawn => {
                 brain.set_goal(None);
-                (false, false)
+                false
             }
             Behaviour::Explore => {
                 // A route that ends short of the place is as far as it goes
@@ -2488,11 +2519,11 @@ impl Session {
                 } else if let Some(to) = explore_to {
                     brain.set_goal_near(Goal::Wander(to));
                 }
-                (false, false)
+                false
             }
             Behaviour::Wander => {
                 brain.wander(feet, tick, swim.is_some());
-                (false, false)
+                false
             }
         };
         // Respawning: the command a player gives (Ctrl+K), with what it
@@ -2947,18 +2978,14 @@ impl Session {
         let stance = match behaviour {
             // In its band at an objective, or a swimmer fighting (no floor
             // to probe, its water all round): weave so it is not a still
-            // target, and give ground if too close.
+            // target.
             Behaviour::Objective | Behaviour::Fight
                 if wanted.is_none()
                     && hold
                     && (behaviour == Behaviour::Objective || kind.moves == Moves::Swim) =>
             {
                 let side = brain.strafe_leg(tick, WEAVE_SECONDS, &|_| true, false) * 0.7;
-                let mut walk = right * side;
-                if back_off {
-                    walk -= forward;
-                }
-                Some(walk)
+                Some(right * side)
             }
             Behaviour::Fight if wanted.is_none() && hold => {
                 let mut walk = given;
@@ -3009,29 +3036,14 @@ impl Session {
                     let ground = |side: f32| floor(side) && !ally(side);
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
-                    // until the leg is up; one that meets an ally turns
-                    // away from it at once.
-                    let parted = ally(brain.strafe.0) && ground(-brain.strafe.0);
+                    // until the leg is up; one that meets an ally, or is hit
+                    // mid-leg, turns the other way at once.
+                    let parted =
+                        (hurt_by.is_some() || ally(brain.strafe.0)) && ground(-brain.strafe.0);
                     let side = brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
                     if ground(side) {
                         walk = right * side * 0.7;
                     }
-                    // Now and then it presses in a little as it strafes (a
-                    // slow seeded lean, never back toward an edge), so a
-                    // strafe cut short and turned back is not a pace on
-                    // the spot. Never inside its band's near edge.
-                    let lean = cadence::drift(bot, cadence::salt::LEAN, 0, tick, LEAN_TICKS)
-                        .max(0.0)
-                        * LEAN;
-                    if lean > 0.0
-                        && gap.is_some_and(|gap| gap > near + LEAN_ROOM)
-                        && floor_below(&self.simulation, feet + forward * 0.9, &body).is_some()
-                    {
-                        walk += forward * lean;
-                    }
-                }
-                if back_off {
-                    walk -= forward;
                 }
                 Some(walk)
             }
@@ -3107,20 +3119,6 @@ impl Session {
                     ..act::Proposal::buttons(act::Mover::Swim)
                 });
             }
-        }
-        // A fight stands out of where a teammate's weapon will hit (`team`),
-        // where there is floor to stand on (as the strafe checks): on a
-        // deck the way out can be off its edge.
-        if behaviour == Behaviour::Fight
-            && let Some(out) = choices[Behaviour::Fight as usize]
-                .place
-                .filter(|out| *out != feet)
-            && floor_below(&self.simulation, out, &body).is_some()
-        {
-            proposals.push(act::Proposal::walk(
-                act::Mover::Team,
-                flat(out - feet).normalize_or_zero(),
-            ));
         }
         if let Some(walk) = act.direction {
             proposals.push(act::Proposal::walk(act::Mover::Goof, walk));
@@ -3332,6 +3330,20 @@ mod strafe_tests {
     }
 
     #[test]
+    fn hits_through_a_leg_turn_the_strafe_once() {
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, 5, 0);
+        let side = brain.strafe_leg(0, 3.5, &|_| true, false);
+        // Hit on two ticks running, mid-leg: it turns at the first only.
+        let first = brain.strafe_leg(10, 3.5, &|_| true, true);
+        let second = brain.strafe_leg(11, 3.5, &|_| true, true);
+        assert_eq!((first, second), (-side, -side));
+        // A new leg may turn at once again.
+        let until = brain.strafe.1;
+        let next = brain.strafe_leg(until, 3.5, &|_| true, false);
+        assert_eq!(brain.strafe_leg(until + 1, 3.5, &|_| true, true), -next);
+    }
+
+    #[test]
     fn a_strafe_turns_at_once_from_a_closed_side() {
         let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, 3, 0);
         let side = brain.strafe_leg(0, 3.5, &|_| true, false);
@@ -3384,9 +3396,8 @@ fn team_choices(
     memory: Option<Knowledge>,
     arm: Option<Vec3>,
     objective: Option<objectives::View>,
-    feet: Vec3,
     home: Vec3,
-    exit: Option<Vec3>,
+    stand: Vec3,
     carries: Option<(u64, Vec3)>,
     explore: Option<Vec3>,
 ) -> [team::Choice; Behaviour::COUNT] {
@@ -3412,8 +3423,7 @@ fn team_choices(
     if let Some(seen) = enemy {
         let target = Some(Target::Player(seen.owner));
         c[at(Behaviour::Fight)] = team::Choice {
-            place: Some(exit.unwrap_or(feet)),
-            stand: true,
+            place: Some(stand),
             target,
             ..Default::default()
         };

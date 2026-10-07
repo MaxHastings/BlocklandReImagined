@@ -124,13 +124,17 @@ pub(super) enum Domain {
     Move,
     /// Which way a dodge goes (`DODGES`).
     Dodge,
+    /// Where it stands to fight (`spots::SPOTS`).
+    Spot,
 }
 impl Domain {
-    /// A reflex: how it moves this moment under fire.
-    fn reflex(self) -> bool {
-        matches!(self, Self::Move | Self::Dodge)
+    /// Drawn from the bot's own seed, not the stream: a reflex (how it
+    /// moves this moment under fire) and where it stands to fight, so
+    /// neither shifts its other choices.
+    fn seeded(self) -> bool {
+        matches!(self, Self::Move | Self::Dodge | Self::Spot)
     }
-    const ALL: [Domain; 7] = [
+    const ALL: [Domain; 8] = [
         Self::Behaviour,
         Self::Weapon,
         Self::Aim,
@@ -138,6 +142,7 @@ impl Domain {
         Self::Flavour,
         Self::Move,
         Self::Dodge,
+        Self::Spot,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -148,6 +153,7 @@ impl Domain {
             Self::Flavour => "flavour",
             Self::Move => "move",
             Self::Dodge => "dodge",
+            Self::Spot => "spot",
         }
     }
     fn label(self, option: u32) -> String {
@@ -166,6 +172,11 @@ impl Domain {
                 .into(),
             Self::Move => MOVES.get(option as usize).copied().unwrap_or("?").into(),
             Self::Dodge => DODGES.get(option as usize).copied().unwrap_or("?").into(),
+            Self::Spot => super::spots::SPOTS
+                .get(option as usize)
+                .copied()
+                .unwrap_or("?")
+                .into(),
         }
     }
 }
@@ -289,6 +300,8 @@ pub(super) struct Shot {
     pub spawn: u64,
     pub health: f32,
     pub due: u64,
+    /// The place it fired from (`spots`), judged with the shot.
+    pub spot: Option<u32>,
 }
 
 /// Idle things a bot does when it goofs, each an ordinary player action.
@@ -401,7 +414,7 @@ pub(super) enum Moment {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Mind {
     rng: u64,
-    /// Whose mind: a reflex (`Domain::reflex`) draws from the bot's own
+    /// Whose mind: a seeded domain (`Domain::seeded`: a reflex, where it stands) draws from the bot's own
     /// cadence seed instead of the stream, so a fight's dodges never shift
     /// its other choices.
     bot: OwnerId,
@@ -414,6 +427,8 @@ pub(super) struct Mind {
     pub gate: Gate,
     interrupt: Option<Interrupt>,
     shots: Vec<Shot>,
+    /// Each spot's terms at its last choice (`spots`), for the readout.
+    spot_terms: [Option<super::spots::Terms>; super::spots::SPOTS.len()],
 }
 impl Mind {
     pub(super) fn new(bot: OwnerId) -> Self {
@@ -433,10 +448,10 @@ impl Mind {
     fn random(&mut self) -> f32 {
         super::perception::draw(&mut self.rng)
     }
-    /// A draw for `option` in `domain` at `step`: a reflex's from the
-    /// bot's seed, anything else's from the stream.
+    /// A draw for `option` in `domain` at `step`: a seeded domain's from
+    /// the bot's seed, anything else's from the stream.
     fn random_in(&mut self, domain: Domain, option: u32, step: u64) -> f32 {
-        if domain.reflex() {
+        if domain.seeded() {
             let at = (domain as u64) << 56 ^ (option as u64) << 32 ^ step;
             cadence::unit(cadence::seed(self.bot, cadence::salt::REFLEX) ^ cadence::mix(at))
         } else {
@@ -663,9 +678,51 @@ impl Mind {
         d.seen = (now + copy * 0.5).min(copy);
         d.seen_at = tick;
     }
+    /// How far [`Self::pick`] can move scores at `domain`, as shares of the
+    /// plain score: the least `option`'s can come out (its lost
+    /// effectiveness, the band down) and the most any option's can (the
+    /// band up, then a teammate's copy at most `copy`). With the mind off
+    /// both are 1, but for a copy.
+    pub(super) fn reach(
+        &self,
+        cfg: &BotSurprise,
+        copy: f32,
+        domain: Domain,
+        option: u32,
+    ) -> (f32, f32) {
+        let strength = cfg.strength.clamp(0.0, 1.0);
+        let band = BAND * strength;
+        let effectiveness = self
+            .drives
+            .iter()
+            .find(|d| d.domain == domain && d.option == option)
+            .map_or(1.0, |d| d.effectiveness);
+        (
+            (1.0 - strength * (1.0 - effectiveness)) * (1.0 - band),
+            (1.0 + band) * (1.0 + copy.max(0.0)),
+        )
+    }
     /// The option chosen at `domain`.
     pub(super) fn chosen(&self, domain: Domain) -> Option<u32> {
         self.holds[domain as usize].option
+    }
+    /// What the option held at `domain` asked for is done at `tick`, and
+    /// `now` names it from here: a spot chosen one step left is, once stood
+    /// on, where it stands, held from now as a fresh choice (so a bot does
+    /// not step on again at once).
+    pub(super) fn arrived(&mut self, domain: Domain, now: u32, tick: u64) {
+        let hold = &mut self.holds[domain as usize];
+        if hold.option.is_some() {
+            hold.option = Some(now);
+            hold.since = tick;
+        }
+    }
+    /// Keep each spot's terms for the readout.
+    pub(super) fn spot_terms(
+        &mut self,
+        terms: [Option<super::spots::Terms>; super::spots::SPOTS.len()],
+    ) {
+        self.spot_terms = terms;
     }
     pub(super) fn fired(&mut self, shot: Shot) {
         if self.shots.len() >= 8 {
@@ -867,7 +924,16 @@ impl Mind {
                         .terms
                         .iter()
                         .map(|t| BotCandidate {
-                            option: d.domain.label(t.option),
+                            option: match self
+                                .spot_terms
+                                .get(t.option as usize)
+                                .copied()
+                                .flatten()
+                                .filter(|_| d.domain == Domain::Spot)
+                            {
+                                Some(spot) => format!("{} {spot}", d.domain.label(t.option)),
+                                None => d.domain.label(t.option),
+                            },
                             score: t.score,
                             adjusted: t.adjusted,
                             drift: t.drift,
@@ -1123,6 +1189,11 @@ impl Session {
             if hit {
                 worked.push((Domain::Aim, shot.aim));
             }
+            // And the place it fired from: one it keeps missing from loses
+            // its pull, so another is weighed (`spots`).
+            if let Some(spot) = shot.spot {
+                brain.surprise.outcome(cfg, Domain::Spot, spot, hit, tick);
+            }
         }
         self.team_copy(bot, &worked, tick);
     }
@@ -1161,6 +1232,7 @@ impl Session {
             spawn,
             health,
             due: tick + ((flight + 0.6) * TICKS) as u64,
+            spot: brain.surprise.chosen(Domain::Spot),
         });
     }
     /// What playing is worth to the bot now, against which a goof weighs

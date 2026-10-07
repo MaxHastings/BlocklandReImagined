@@ -34,8 +34,11 @@ pub(super) const SIGHT_RAYS: usize = ORDINARY_RAYS + TARGET_RAYS * MOST_BOTS;
 const CACHE_TICKS: u64 = 6;
 /// ...while neither end moves more than this.
 const CACHE_SLACK: f32 = 0.5;
-/// Where the chest is, from the feet toward the eye.
+/// Where the chest is, from the feet toward the eye (a share of the body,
+/// so it follows the body's scale).
 const CHEST: f32 = 0.55;
+/// How far below the eye a shot aims at a body of scale 1: the upper chest.
+const AIM_DROP: f32 = 0.5;
 
 /// What is looked at, for the cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -50,6 +53,8 @@ pub(in crate::session) enum Subject {
     Brick(u64),
     /// A dropped item.
     Drop(u64),
+    /// A place a bot weighs standing on (`spots`): the bot and the option.
+    Spot(OwnerId, u32),
 }
 /// Whether a query may dip into the target reserve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +145,13 @@ impl Sightlines {
     }
 }
 
+/// Where a shot at a body with its eye at `eye` aims: the upper chest,
+/// lower on a giant and higher on a tiny one, so the aim error (an angle)
+/// misses a small body more and a big one less.
+pub(super) fn aim_point(eye: Vec3, scale: f32) -> Vec3 {
+    eye - Vec3::Y * AIM_DROP * scale
+}
+
 /// A player is seen at the eye, or else at the chest.
 pub(super) fn eye_or_chest(
     mut sees: impl FnMut(Subject, Vec3) -> Option<Way>,
@@ -196,7 +208,7 @@ impl Session {
         }
         let way = self
             .simulation
-            .sight(from, to, reach)
+            .eyes_see(from, to, reach)
             .filter(|way| way.carry.is_some() || !self.vehicle_between(viewer, subject, from, to));
         if let Some(k) = key {
             lines.store(k, from, to, way);
@@ -317,6 +329,15 @@ mod tests {
             assert!(lines.ordinary <= ORDINARY_RAYS);
             assert!(lines.cast() <= SIGHT_RAYS, "{}", lines.cast());
         }
+    }
+
+    #[test]
+    fn a_shot_aims_lower_on_a_giant_and_higher_on_a_tiny_body() {
+        let eye = Vec3::new(0.0, 10.0, 0.0);
+        let drop = |scale: f32| eye.y - aim_point(eye, scale).y;
+        assert_eq!(drop(1.0), AIM_DROP);
+        assert_eq!(drop(2.0), 2.0 * AIM_DROP);
+        assert_eq!(drop(0.5), 0.5 * AIM_DROP);
     }
 
     #[test]

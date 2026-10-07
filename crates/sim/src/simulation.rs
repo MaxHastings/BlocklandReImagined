@@ -1658,10 +1658,34 @@ impl Simulation {
     /// The shortest way `from` sees `to` by, no longer than `reach`:
     /// straight across, or in through one opening of a linked brick and
     /// out of its partner ([`bri_content::passage::Passages::ways`]), with
-    /// no opaque surface on any leg (within half a unit of `to`, which
+    /// no solid surface on any leg (within half a unit of `to`, which
     /// may stand in a body). Water bricks are liquid volumes, not walls;
-    /// they remain selectable by editing rays.
+    /// they remain selectable by editing rays. What a hand can reach
+    /// through; [`Self::eyes_see`] is what an eye sees through.
     pub fn sight(&self, from: Vec3, to: Vec3, reach: f32) -> Option<bri_content::passage::Way> {
+        self.way(from, to, reach, false)
+    }
+    /// [`Self::sight`] for an eye: a brick painted under full alpha is
+    /// looked through, as the client draws it see-through (its opaque
+    /// test, `brick_cover`, is alpha at 1). Shots and hands still stop on
+    /// it.
+    pub fn eyes_see(&self, from: Vec3, to: Vec3, reach: f32) -> Option<bri_content::passage::Way> {
+        self.way(from, to, reach, true)
+    }
+    fn way(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        reach: f32,
+        see_through_paint: bool,
+    ) -> Option<bri_content::passage::Way> {
+        let palette = &self.state().palette;
+        let opaque = |brick: &Brick| {
+            !see_through_paint
+                || palette
+                    .get(usize::from(brick.color))
+                    .is_none_or(|rgba| rgba[3] >= 1.0)
+        };
         // Nothing within `slack` of a leg's end counts.
         let clear = |origin: Vec3, direction: Vec3, length: f32, slack: f32| {
             length <= 1e-3
@@ -1672,6 +1696,7 @@ impl Simulation {
                         length.min(Self::MAX_TARGET_DISTANCE),
                         |brick| {
                             brick.raycast
+                                && opaque(brick)
                                 && self.definitions.get(brick).is_ok_and(|definition| {
                                     definition.special != crate::definitions::Special::Water
                                 })

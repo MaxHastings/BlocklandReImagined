@@ -700,7 +700,7 @@ impl Session {
         strolling: bool,
     ) -> Option<Vec3> {
         let kind = &self.bots.brains.get(&bot)?.kind;
-        let (p, sight) = (kind.perception.clone(), kind.sight);
+        let (p, sight) = (kind.perception.clone(), self.bot_sight_reach(kind));
         let reach = sight * SEEN_REACH * p.salience;
         let fast = FAST * self.peers.get(&bot)?.player.tuning().forward.max(0.1);
         let mut stimuli = self.bots.stimuli.clone();

@@ -574,7 +574,7 @@ impl Session {
                     Some(sightlines::Subject::Vehicle(v.id.0)),
                     eye,
                     at + Vec3::Y,
-                    brain.kind.sight,
+                    self.bot_sight_reach(&brain.kind),
                     sightlines::Urgency::Ordinary,
                 )
                 .is_none()

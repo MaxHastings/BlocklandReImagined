@@ -99,19 +99,31 @@ impl Session {
             (mine, theirs) => mine == theirs,
         }
     }
+    /// How far `kind`'s eye reaches now: its own sight, cut to where the
+    /// server's fog is complete (the environment's visible distance), so
+    /// bots lose a player in fog where the player loses them. A map's own
+    /// fog is scene data the host does not load, so only a server-set
+    /// distance caps it.
+    pub(super) fn bot_sight_reach(&self, kind: &BotKind) -> f32 {
+        self.environment
+            .visible_distance
+            .map_or(kind.sight, |fog| kind.sight.min(fog))
+    }
     pub(super) fn bot_sight(&self, bot: OwnerId, brain: &Brain, eye: Vec3) -> Sight {
         let kind = &brain.kind;
+        let reach = self.bot_sight_reach(kind);
         let visible = |owner: OwnerId, urgency: SightUrgency| -> Option<Seen> {
             let p = self.peers.get(&owner)?;
             if !self.bot_enemy(bot, kind, owner) {
                 return None;
             }
             let real = Vec3::from(p.player.state().feet);
-            let way = self.bot_sees_player(bot, owner, eye, kind.sight, urgency)?;
+            let way = self.bot_sees_player(bot, owner, eye, reach, urgency)?;
             Some(Seen {
                 owner,
                 eye: way.aim,
                 feet: way.seen(real),
+                aim: sightlines::aim_point(way.aim, p.player.state().scale),
                 real,
                 way,
             })
@@ -149,7 +161,7 @@ impl Session {
             .iter()
             .filter(|(owner, p)| **owner != bot && p.combat.alive)
             .map(|(owner, p)| (p.player.eye().distance(eye), *owner))
-            .filter(|(d, _)| portals || *d < kind.sight)
+            .filter(|(d, _)| portals || *d < reach)
             .map(|(d, owner)| {
                 (
                     d * (1.0 + kind.team.overlap() * self.team_crowd(bot, owner)),
@@ -212,5 +224,43 @@ impl Session {
             }
         }
         super::Spot::Found(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fog_caps_how_far_a_bot_sees() {
+        let world = bri_world::World::new("Fog".into(), "test/map".into(), vec![[1.0; 4]]);
+        let sim = crate::simulation::Simulation::new(world, crate::testing::definitions(), vec![])
+            .unwrap();
+        let mut session = Session::new(sim);
+        let kind = BotKind::default();
+        assert_eq!(session.bot_sight_reach(&kind), kind.sight, "no fog set");
+        let fog = kind.sight * 0.5;
+        session
+            .set_environment(bri_content::atmosphere::Settings {
+                visible_distance: Some(fog),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            session.bot_sight_reach(&kind),
+            fog,
+            "fog closer than its eye"
+        );
+        session
+            .set_environment(bri_content::atmosphere::Settings {
+                visible_distance: Some(kind.sight * 2.0),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            session.bot_sight_reach(&kind),
+            kind.sight,
+            "fog past its eye"
+        );
     }
 }
