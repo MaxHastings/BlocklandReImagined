@@ -51,3 +51,8 @@ after it played the old animation for the rest of the session.
   chat, since they act on it. Add-On log lines, code that cannot run, the
   trust file, sounds that do not play, elevated code left off and item skin
   failures go to the console.
+- Only a floor holds a body up: the contact must face up past v20's floor
+  rule, `FLOOR_DOT` (re-exported from the motor as
+  `bri_sim::player::FLOOR_DOT`, one definition). A body pressed against a
+  wall never settles there (`settling_never_sticks_a_body_to_a_wall`, which
+  fails when walls count).

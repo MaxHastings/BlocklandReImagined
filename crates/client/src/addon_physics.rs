@@ -215,8 +215,9 @@ impl AddOnPhysics {
             .sum()
     }
     /// Whether any body of `group` lies on the world (the map, a brick,
-    /// terrain): touching a fixed surface within the solver's own allowed
-    /// error.
+    /// terrain): touching, within the solver's own allowed error, a fixed
+    /// surface flat enough to be a floor by the player's own rule
+    /// ([`bri_sim::player::FLOOR_DOT`]). A wall it leans on holds nothing up.
     fn lies_on_world(&self, group: &std::collections::HashSet<RigidBodyHandle>) -> bool {
         let touching = self.world.integration_parameters.allowed_linear_error();
         let fixed = |c: ColliderHandle| {
@@ -228,15 +229,21 @@ impl AddOnPhysics {
         group.iter().any(|h| {
             self.world.bodies[*h].colliders().iter().any(|c| {
                 self.world.narrow_phase.contact_pairs_with(*c).any(|pair| {
-                    let other = if pair.collider1 == *c {
-                        pair.collider2
+                    // The normal points from the first collider to the
+                    // second; turned here to point from the surface into
+                    // the body it touches.
+                    let (other, up) = if pair.collider1 == *c {
+                        (pair.collider2, -1.0)
                     } else {
-                        pair.collider1
+                        (pair.collider1, 1.0)
                     };
                     fixed(other)
                         && pair
                             .find_deepest_contact()
-                            .is_some_and(|(_, point)| point.dist <= touching)
+                            .is_some_and(|(manifold, point)| {
+                                point.dist <= touching
+                                    && manifold.data.normal.y * up > bri_sim::player::FLOOR_DOT
+                            })
                 })
             })
         })
@@ -724,6 +731,35 @@ mod tests {
             });
         }
         commands
+    }
+
+    #[test]
+    fn settling_never_sticks_a_body_to_a_wall() {
+        // A corpse blasted against a wall touches the world but nothing holds
+        // it up: it slides down the wall, never frozen to it.
+        let wall = ColliderBuilder::cuboid(0.5, 20.0, 20.0).translation(Vector::new(2.0, 0.0, 0.0));
+        let definitions = bri_sim::definitions::Definitions {
+            entries: Default::default(),
+        };
+        let building = Building::new(definitions, vec![wall]).unwrap();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&chain(1, 10.0, 1));
+        let mut touched = false;
+        for _ in 0..30 {
+            // Pressed against it, as a blast holds a body to a wall.
+            for body in 1..=3 {
+                physics.apply(&[PhysicsCommand::Push {
+                    body,
+                    velocity: [1.0, 0.0, 0.0],
+                }]);
+            }
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            touched |= physics.snapshot()[&3].position[0] > 1.2;
+            assert!(!physics.settle_oldest(), "never frozen to the wall");
+        }
+        assert!(touched, "it reached the wall");
+        let y = physics.snapshot()[&1].position[1];
+        assert!(y < 9.0, "slid down the wall: {y}");
     }
 
     #[test]

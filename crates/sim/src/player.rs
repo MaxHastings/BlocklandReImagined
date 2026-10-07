@@ -1,5 +1,8 @@
 //! The shared player motor, with the host's item-contact box.
 pub use bri_motor::player::*;
+/// v20's floor rule: a surface whose normal's up part is above this holds a
+/// body up.
+pub use bri_motor::torque::FLOOR_DOT;
 
 /// The player's authoritative contact box as an item/ball overlap volume.
 pub fn item_bounds(player: &Player) -> bri_weapons::ItemBounds {
