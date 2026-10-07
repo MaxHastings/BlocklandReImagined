@@ -34,7 +34,14 @@ impl Session {
         self.damage_results.iter()
     }
 
+    /// How many damage results have ever been recorded, so a reader can
+    /// tell none fell out of the bounded history unread.
+    pub fn damage_recorded(&self) -> u64 {
+        self.damage_recorded
+    }
+
     pub(super) fn observe_damage_result(&mut self, result: DamageResult) {
+        self.damage_recorded += 1;
         if self.damage_results.len() == RETAINED {
             self.damage_results.pop_front();
         }
@@ -163,6 +170,7 @@ mod tests {
         hit(&mut session, 10.0);
         let lost: Vec<f32> = session.damage_results().map(|r| r.amount).collect();
         assert_eq!(lost, vec![10.0, health - 10.0]);
+        assert_eq!(session.damage_recorded(), 2);
         assert!(
             session
                 .damage_results()
