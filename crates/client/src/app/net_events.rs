@@ -415,7 +415,9 @@ impl App {
                     admin: view.administrator,
                 }),
             );
+            log_entered(&mut a);
         }
+        self.show_entry_wait(&mut a);
         self.enter_when_ready(&mut a)?;
         self.present_session(&mut a)?;
         if let Some(view) = &a.view
@@ -880,6 +882,38 @@ impl App {
         Ok(())
     }
 
+    /// Names what entering still waits on once the network part is done.
+    /// Without it the loading screen kept the last network stage (a full
+    /// Receiving World bar) through the brick meshing and the world shader
+    /// compile, which takes minutes on FXC or a slow GPU and starts again
+    /// when the GPU drops out: a load that looks frozen.
+    fn show_entry_wait(&mut self, a: &mut Attempt) {
+        let stage = if a.reloading {
+            // A map change: the new map's scene is in, the renderers restart.
+            let scene_in = a.view.as_ref().is_some_and(|view| {
+                self.scene.scene_map.as_deref() == Some(view.world.map_id.as_str())
+            });
+            if !scene_in || self.scene_pipelines_ready() {
+                return;
+            }
+            bri_progress::Stage::CompilingShaders
+        } else {
+            if !a.ready || a.entered || self.scene.cpu_scene.is_none() {
+                return;
+            }
+            if self.scene.world_source.is_none() {
+                bri_progress::Stage::BuildingBricks
+            } else if !self.scene_pipelines_ready() {
+                bri_progress::Stage::CompilingShaders
+            } else {
+                return;
+            }
+        };
+        if a.progress.snapshot().stage != stage {
+            a.progress.begin(stage, bri_progress::Unit::Steps, None);
+        }
+    }
+
     /// Enters the game once the connection is ready and the world is built.
     fn enter_when_ready(&mut self, a: &mut Attempt) -> Result<()> {
         if a.ready
@@ -915,6 +949,7 @@ impl App {
                 self.ui.apply_session(a.id, update);
             }
             a.entered = true;
+            log_entered(a);
             self.net.reconnects = 0;
             for text in std::mem::take(&mut self.net.join_notices) {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
@@ -1132,5 +1167,16 @@ impl App {
             );
         }
         Ok(())
+    }
+}
+
+/// Closes the load's trail in the session log (`App::show_progress`) with
+/// how long its last stage took.
+fn log_entered(a: &mut Attempt) {
+    if let (Some((_, since)), Some(map)) = (a.logged_stage.take(), a.progress.subject()) {
+        bri_console::echo(format!(
+            "Loading {map}: IN GAME (after {} ms)",
+            since.elapsed().as_millis()
+        ));
     }
 }

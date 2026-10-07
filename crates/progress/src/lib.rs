@@ -39,6 +39,10 @@ pub enum Stage {
     BuildingBricks,
     /// Uploading textures, terrain and brick meshes to the graphics card.
     LoadingGraphics,
+    /// Waiting for the graphics card's world shaders to finish compiling:
+    /// seconds with DXC, minutes with FXC on a slow GPU, and again after
+    /// the GPU drops out and the renderer restarts.
+    CompilingShaders,
     /// The world is ready; waiting to enter it.
     Spawning,
 }
@@ -61,7 +65,8 @@ impl Stage {
             | Self::LoadingMap
             | Self::StartingServer
             | Self::BuildingBricks
-            | Self::LoadingGraphics => false,
+            | Self::LoadingGraphics
+            | Self::CompilingShaders => false,
         }
     }
 }
@@ -114,6 +119,7 @@ impl Snapshot {
             Stage::ReceivingWorld => "RECEIVING WORLD",
             Stage::BuildingBricks => "BUILDING BRICKS",
             Stage::LoadingGraphics => "LOADING GRAPHICS",
+            Stage::CompilingShaders => "COMPILING SHADERS",
             Stage::Spawning => "SPAWNING",
         };
         match (self.unit, self.total) {
