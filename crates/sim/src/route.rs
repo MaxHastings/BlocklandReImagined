@@ -36,6 +36,9 @@ pub struct Motion {
     pub gravity: f32,
     pub jet_acceleration: f32,
     pub can_jet: bool,
+    /// How hard it steers in the air: its ground acceleration times its
+    /// air control.
+    pub air_acceleration: f32,
 }
 impl Motion {
     pub fn of(tuning: &PlayerTuning) -> Self {
@@ -46,6 +49,27 @@ impl Motion {
             gravity: tuning.gravity,
             jet_acceleration: tuning.jet_acceleration,
             can_jet: tuning.can_jet,
+            air_acceleration: tuning.acceleration * tuning.air_control,
+        }
+    }
+    /// Which way to steer in the air to come down at `target` from `feet`
+    /// moving at `velocity`: toward it, until it would carry on past it
+    /// even braking from now on; then against its drift, so it stops over
+    /// it. How a body jumping onto a small landing (a peg, a tread) comes
+    /// down on it rather than past it.
+    pub fn air_steer(&self, feet: Vec3, velocity: Vec3, target: Vec3) -> Vec3 {
+        let (offset, drift) = (flat(target - feet), flat(velocity));
+        let distance = offset.length();
+        let along = if distance > f32::EPSILON {
+            drift.dot(offset / distance)
+        } else {
+            drift.length()
+        };
+        let stopping = along * along / (2.0 * self.air_acceleration.max(f32::EPSILON));
+        if along > 0.0 && stopping >= distance {
+            -drift.normalize_or_zero()
+        } else {
+            offset.normalize_or_zero()
         }
     }
     /// Seconds a hop is in the air until it comes down `rise` above where
