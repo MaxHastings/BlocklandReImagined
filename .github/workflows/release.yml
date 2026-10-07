@@ -119,8 +119,25 @@ jobs:
           if ($tops.Count -ne 1 -or $tops[0].Name -cne $env:RELEASE_NAME) { Write-Output "::error::the zip must hold exactly $env:RELEASE_NAME"; exit 1 }
           $game = $tops[0].FullName
           .\tools\package_playtest.ps1 -VerifyPackage $game
-          & (Join-Path $game 'bri-client.exe') --check (Join-Path $game 'content') (Join-Path $env:RUNNER_TEMP 'bri-zip-state')
-          exit $LASTEXITCODE
+          $state = Join-Path $env:RUNNER_TEMP 'bri-zip-state'
+          Remove-Item -Recurse -Force $state -ErrorAction SilentlyContinue
+          & (Join-Path $game 'bri-client.exe') --check (Join-Path $game 'content') $state
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Every Add-On a release ships must load. A bundle imported before a
+          # pack schema change is only a warning to --check (v0.2.6 preview
+          # fd719c9 left out every bundled brick pack: "Unknown weapon schema
+          # 3"), so the release reads the report --check writes and fails on
+          # a missing report or any Add-On left out.
+          $report = Join-Path $state 'logs\add-on-health.json'
+          if (-not (Test-Path $report)) { Write-Output "::error::--check wrote no $report"; exit 1 }
+          $health = Get-Content $report -Raw | ConvertFrom-Json
+          if ($health.schema_version -ne 1) { Write-Output "::error::add-on-health.json schema $($health.schema_version), this step reads 1"; exit 1 }
+          $leftOut = @($health.problems | Where-Object { $_.kind -eq 'left_out' })
+          if ($leftOut.Count) {
+            $leftOut | Select-Object -First 5 | ForEach-Object { Write-Output "::error::$($_.add_on) left out: $($_.effect)" }
+            Write-Output "::error::$($leftOut.Count) shipped Add-On(s) left out; rebuild the stale pack or bundle (tools/addon_bundle.py upload)"
+            exit 1
+          }
 
       - name: Gather release files
         shell: pwsh
