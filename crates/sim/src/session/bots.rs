@@ -389,9 +389,6 @@ struct Brain {
     /// The place it heads for to fight from (`spots`); none where it
     /// stands.
     spot: Option<spots::Anchor>,
-    /// The place it fights from while it fights (`spots`): its strafe
-    /// keeps within a body's width of it.
-    stand: Option<Vec3>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -580,7 +577,6 @@ impl Brain {
             objective_tool: false,
             objective_threat: None,
             spot: None,
-            stand: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -2418,9 +2414,6 @@ impl Session {
         };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         brain.spot = spot;
-        if !(behaviour == Behaviour::Fight && enemy.is_some()) {
-            brain.stand = None;
-        }
 
         // Carrying an objective's delivery that needs only its feet (no
         // tool, trigger, body or seat), it shoots an enemy in sight on the
@@ -3033,16 +3026,7 @@ impl Session {
                             d.dot(right * side) > 0.0 && d.length() < 1.5
                         })
                     };
-                    // Round the place it fights from (`spots`): a step that
-                    // way may not carry it more than a body's width off it.
-                    let stand = brain.stand;
-                    let near_stand = |side: f32| {
-                        stand.is_none_or(|at| {
-                            let off = flat(feet + right * side * 0.9 - at).length();
-                            off <= body.width || off < flat(feet - at).length()
-                        })
-                    };
-                    let ground = |side: f32| floor(side) && !ally(side) && near_stand(side);
+                    let ground = |side: f32| floor(side) && !ally(side);
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
                     // until the leg is up; one that meets an ally turns

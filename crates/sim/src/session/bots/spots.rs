@@ -111,9 +111,6 @@ impl Session {
     ) -> Option<Anchor> {
         let brain = self.bots.brains.get_mut(&bot)?;
         let mut anchor = brain.spot;
-        // Where it fights from: where it stood when the fight began, until
-        // it reaches a place it chose.
-        brain.stand.get_or_insert(feet);
         // There, or as near as its route gets: that place is where it
         // stands now.
         if let Some(a) = anchor {
@@ -122,7 +119,6 @@ impl Session {
             let stuck = brain.settled && brain.plan.is_empty() && brain.search.is_none();
             if there || stuck {
                 brain.surprise.arrived(surprise::Domain::Spot, HERE, tick);
-                brain.stand = Some(feet);
                 anchor = None;
             }
         }
