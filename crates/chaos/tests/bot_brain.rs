@@ -38,19 +38,23 @@ fn spawn_brick(kind: &str, at: [f32; 3], owner: OwnerId) -> Brick {
     brick
 }
 
-/// A see-through wall of 3-unit columns along x = `x` from `z0` to `z1`:
-/// bots see through it (raycasting off) but cannot walk through or jump it.
+/// A see-through wall of columns along x = `x` from `z0` to `z1`, stacked
+/// above the stock body's measured jump (`fixture::barrier_courses`): bots
+/// see through it (raycasting off) but cannot walk through or jump it.
 fn glass_wall(x: f32, z0: f32, z1: f32, owner: OwnerId) -> Vec<Brick> {
+    let courses = fixture::barrier_courses();
     let mut out = Vec::new();
     let mut z = z0;
     while z <= z1 {
-        let mut column = Brick::new(
-            ContentRef::Resolved(fixture::TALL.into()),
-            [x + 0.25, 1.5, z + 0.25],
-            owner,
-        );
-        column.raycast = false;
-        out.push(column);
+        for &y in &courses {
+            let mut column = Brick::new(
+                ContentRef::Resolved(fixture::TALL.into()),
+                [x + 0.25, y, z + 0.25],
+                owner,
+            );
+            column.raycast = false;
+            out.push(column);
+        }
         z += 0.5;
     }
     out
