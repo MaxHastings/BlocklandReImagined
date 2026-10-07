@@ -206,6 +206,8 @@ struct Attempt {
     /// screen; the network client reports its part into the same one.
     progress: bri_progress::Progress,
     progress_seen: u64,
+    /// The stage last written to the session log, and when it began.
+    logged_stage: Option<(bri_progress::Stage, std::time::Instant)>,
     /// Hosts: the world revision last saved under a name (or entered, or
     /// loaded). `None` takes the next revision seen.
     saved_revision: Option<u64>,

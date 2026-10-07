@@ -1710,6 +1710,15 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
                 if held_frames == 20
                     && let Some(release) = release.take()
                 {
+                    // The loading screen names the wait instead of keeping
+                    // the last network stage's full bar up through it.
+                    let ConnectionState::Loading { status, .. } = &app.ui.core.conn else {
+                        anyhow::bail!("not loading while held: {:?}", app.ui.core.conn);
+                    };
+                    ensure!(
+                        status == "COMPILING SHADERS",
+                        "the held compile shows as {status:?}"
+                    );
                     // Compiled: the game enters and draws.
                     release.send(())?;
                 }
