@@ -22,9 +22,7 @@ env:
 jobs:
   check:
     runs-on: windows-latest
-    # Serial software-GPU coverage exceeds one hour on hosted Windows runners.
-    # Individual test binaries retain the gate's ten-minute stall deadline.
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
@@ -49,10 +47,28 @@ jobs:
         run: cargo build --workspace --all-targets --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # Serial software-GPU coverage runs past two hours on one hosted Windows
+  # runner, so the test targets are split into even shares, one runner
+  # each (tools/gate.py --shard); together they run every target once.
+  # Individual test binaries retain the gate's ten-minute stall deadline.
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Provision software graphics for offscreen tests
         run: ./tools/setup_ci_gpu.ps1
-      - name: Test
-        run: python tools/gate.py --ci-test
+      - name: Test (shard ${{ matrix.shard }} of 4)
+        run: python tools/gate.py --ci-test --shard ${{ matrix.shard }}/4
         env:
           WGPU_BACKEND: dx12
           WGPU_DX12_COMPILER: dxc
