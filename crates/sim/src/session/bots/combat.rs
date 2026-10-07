@@ -327,7 +327,7 @@ const UNKNOWN_WORTH: f32 = 1.0;
 /// damage). 0 for a building tool or a tool known not to attack. The same
 /// estimate ranks the inventory and the upgrades lying about.
 pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
-    if bri_weapons::CORE_TOOLS.contains(&item) {
+    if session.weapons.building_tool(item) {
         return 0.0;
     }
     let pack = &session.weapons.pack;
@@ -410,10 +410,12 @@ pub(super) fn weapon_of(cap: Capability, spread: f32) -> Weapon {
         near: Some(cap.near.max(if cap.family == Family::Melee {
             0.0
         } else {
-            (cap.splash_radius + 3.0).max(5.0)
+            Weapon::standoff(cap.splash_radius)
         })),
         reach: cap.reach.min(match cap.delivery {
-            Delivery::Projectile(f) => f.speed * PATH_TICKS.min(f.lifetime_ticks) as f32 / 120.0,
+            Delivery::Projectile(f) => {
+                f.speed * PATH_TICKS.min(f.lifetime_ticks) as f32 / bri_weapons::TICK_HZ as f32
+            }
             _ => cap.reach,
         }),
         speed,
@@ -648,7 +650,10 @@ pub(super) fn choose(
                 switch_seconds: if Some(slot) == selected {
                     0.0
                 } else {
-                    image.states.first().map_or(0.0, |s| s.ticks as f32 / 120.0)
+                    image
+                        .states
+                        .first()
+                        .map_or(0.0, |s| s.ticks as f32 / bri_weapons::TICK_HZ as f32)
                 },
             };
             candidates.push(tactics::Candidate {
@@ -1024,7 +1029,7 @@ fn clear_path(
     let mut start = origin;
     for n in 1..=ticks {
         let time = if curved {
-            (f64::from(n) / 120.0).min(seconds)
+            (f64::from(n) / f64::from(bri_weapons::TICK_HZ)).min(seconds)
         } else {
             seconds
         };

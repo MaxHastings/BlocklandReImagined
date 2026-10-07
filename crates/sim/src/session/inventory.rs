@@ -217,16 +217,22 @@ impl Session {
     }
 }
 
-pub(super) fn require_equipment(
+/// Refuses unless the selected tool's image runs the host mechanism `tool`.
+pub(super) fn require_host_tool(
     weapons: &WeaponsWorld,
     owner: OwnerId,
-    expected: Option<&str>,
+    tool: bri_weapons::HostTool,
 ) -> Result<()> {
     let actor = weapons.actor(ActorId(owner)).context("Missing inventory")?;
-    let selected = actor
+    let image = actor
         .selected
         .and_then(|slot| actor.inventory.get(slot))
-        .and_then(Option::as_deref);
-    ensure!(selected == expected, "Required tool is not equipped");
+        .and_then(Option::as_deref)
+        .and_then(|item| weapons.pack.items.get(item))
+        .and_then(|item| weapons.pack.images.get(&item.image));
+    ensure!(
+        image.and_then(bri_weapons::host_tool) == Some(tool),
+        "Required tool is not equipped"
+    );
     Ok(())
 }

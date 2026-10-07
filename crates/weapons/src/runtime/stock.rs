@@ -8,7 +8,18 @@
 //! say what their scripts do in data (`Image::scripts`, `Image::commands`,
 //! `Image::shot`, ...), and a behaviour two images need is a data field,
 //! not another name. See docs/architecture/weapon-scripts.md.
-use super::{HOST_TOOL_IMAGES, Image, ProjectileDef};
+use super::{HostTool, Image, ProjectileDef};
+
+/// Images whose v20 `onFire` is a script that raycasts and acts on the hit
+/// object (`hammerImage::onFire`, `wrenchImage::onFire`, ...) instead of
+/// calling `Parent::onFire`, and the host mechanism each runs.
+const HOST_TOOL_IMAGES: [(&str, HostTool); 5] = [
+    ("hammerimage", HostTool::Break),
+    ("wrenchimage", HostTool::Inspect),
+    ("printgunimage", HostTool::Print),
+    ("wandimage", HostTool::Destroy),
+    ("adminwandimage", HostTool::AdminDestroy),
+];
 
 /// What an image's `onFire` does instead of launching its projectile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +27,8 @@ pub(super) enum StockFire {
     /// Launches its projectile (`Parent::onFire`).
     Projectile,
     /// Raycasts and acts on what it hits, in the host
-    /// ([`HOST_TOOL_IMAGES`], [`super::Event::ToolFire`]).
+    /// ([`Stock::host_tool`], or an Add-On tool's `command`;
+    /// [`super::Event::ToolFire`]).
     HostTool,
     /// Puts the skis on or takes them off (`skiWeaponImage::onFire`).
     Skis,
@@ -53,6 +65,8 @@ pub(super) struct Stock {
     /// The arm animation `onPreFire` plays.
     pub prefire_arm: Option<&'static str>,
     pub fire: StockFire,
+    /// The host's building mechanism its `onFire` runs.
+    pub host_tool: Option<HostTool>,
     /// The arm animation after a shot, before the state's own arm or a left
     /// hand's recoil (a throw).
     pub throw_arm: Option<&'static str>,
@@ -96,7 +110,11 @@ impl Stock {
         } else {
             None
         };
-        let fire = if HOST_TOOL_IMAGES.contains(&name) {
+        let host_tool = HOST_TOOL_IMAGES
+            .iter()
+            .find(|(image, _)| *image == name)
+            .map(|(_, tool)| *tool);
+        let fire = if host_tool.is_some() {
             StockFire::HostTool
         } else if name == "skiweaponimage" {
             StockFire::Skis
@@ -128,6 +146,7 @@ impl Stock {
             charge_arm,
             prefire_arm,
             fire,
+            host_tool,
             throw_arm,
             recoil_arm,
             throw,
@@ -189,6 +208,11 @@ mod tests {
         assert_eq!(spear.throw_arm, Some("spearThrow"));
         assert_eq!(Stock::named("wrenchimage").prefire_arm, Some("wrench"));
         assert_eq!(Stock::named("wrenchimage").fire, StockFire::HostTool);
+        assert_eq!(
+            Stock::named("wrenchimage").host_tool,
+            Some(HostTool::Inspect)
+        );
+        assert_eq!(Stock::named("rocketlauncherimage").host_tool, None);
         assert_eq!(Stock::named("swordimage").prefire_arm, Some("armattack"));
         assert_eq!(Stock::named("keyredimage").prefire_arm, Some("shiftLeft"));
         assert_eq!(Stock::named("skiweaponimage").fire, StockFire::Skis);

@@ -490,8 +490,8 @@ impl Session {
 
     /// What anyone visibly does, bot or person alike: a goof (a bot's
     /// published flavour; a person's emote in the last `EMOTED` ticks, or
-    /// a trigger held on something that does not attack, a spray can or
-    /// another tool), play (moving faster than `PURPOSE`, attacking,
+    /// a trigger held on something that does not attack, something that
+    /// paints or another tool), play (moving faster than `PURPOSE`, attacking,
     /// holding something), or nothing much. A bot with no intent published
     /// yet is unknown.
     pub(super) fn seen_doing(
@@ -529,7 +529,7 @@ impl Session {
         let spraying = self
             .weapons
             .image_state(ActorId(who), 0)
-            .is_some_and(|(image, _)| image.id == super::super::tools::SPRAY_CAN_IMAGE);
+            .is_some_and(|(image, _)| super::super::tools::image_paints(image));
         Some(if emoted {
             Doing::Goof(surprise::Flavour::Emote as u8)
         } else if firing && spraying {
