@@ -15,15 +15,11 @@ use bri_ui::{
     gpu::{Headless, UiRenderer},
     screens::ScreenId,
 };
-use std::{
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::Path, time::Duration};
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(ContentRoot: stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper);
 
@@ -48,42 +44,41 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     Ok(())
 }
 
-/// How long a wait may take before it counts as a hang. Each wait ends on
-/// the state it waits for; this deadline only turns a hang into a failure
-/// with diagnostics, so it sits far past what the slowest step takes on a
-/// loaded PC (the gate runs this debug build beside every other test).
-/// Per-step deadlines of 10 s failed there and passed alone.
-const HANG: Duration = Duration::from_secs(300);
+/// The game time any one wait of this flow may take once in game (the
+/// player standing, a mined block, the creeper arriving; each took at most
+/// 12 ticks, a tenth of a second, in runs here). Loading counts its
+/// progress instead, and a stopped app fails after [`wait::STALL`]
+/// ([`wait::until`]).
+const GAME: Duration = Duration::from_secs(30);
 
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    let timeout = HANG;
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-        if ready(app) {
-            return Ok(());
-        }
-        ensure!(
-            start.elapsed() < timeout,
-            "Timed out waiting for {what}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+    until_stepping(app, what, step, ready)
+}
+
+/// [`until`], running `step` each frame.
+fn until_stepping(
+    app: &mut App,
+    what: &str,
+    step: impl FnMut(&mut App, Duration) -> Result<()>,
+    ready: impl Fn(&App) -> bool,
+) -> Result<()> {
+    wait::until_one(app, what, GAME, step, ready).with_context(|| {
+        format!(
+            "screens {:?}; tools {:?}; world bricks {:?}; pending {}; ghost {:?}; chat {:?}; dialogs {:?}",
             app.ui.stack(),
             app.network_view()
                 .and_then(|v| v.tools.get(&v.owner).cloned()),
-            app.ui.core.conn,
             app.network_view().map(|v| v.world.bricks.len()),
             app.pending_requests(),
             app.building().and_then(|b| b.ghost()),
+            app.ui.core.chat.lines,
             app.ui.screen(ScreenId::MessageBox).map(|s| s
                 .view()
                 .walk()
                 .map(|n| s.view().text_of(n))
                 .collect::<Vec<_>>())
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+        )
+    })
 }
 
 fn action(app: &mut App, action: UiAction) -> Result<()> {
@@ -171,7 +166,7 @@ fn capture(
         });
     gpu.device.poll(wgpu::PollType::Wait {
         submission_index: None,
-        timeout: Some(HANG),
+        timeout: Some(wait::STALL),
     })?;
     rx.recv()??;
     let mapped = readback
@@ -300,7 +295,14 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
         })
         .collect();
     eprintln!("letters the base game leaves free: {free}");
-    // Mine: look down and use the panel's key when the base game leaves it free.
+    // Mine: stand, look down and use the panel's key when the base game
+    // leaves it free. The server mines only where the aim meets the ground
+    // within reach and off the command's cooldown, so, as a player would,
+    // the key is pressed again once the server has answered the last press
+    // until a block is mined.
+    until(&mut app, "the player standing", |a| {
+        a.local_motion().is_some_and(|(p, _)| p.grounded)
+    })?;
     action(
         &mut app,
         UiAction::Game(GameAction::Look {
@@ -308,10 +310,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
             pitch: 1.5,
         }),
     )?;
-    for _ in 0..10 {
-        step(&mut app, Duration::from_millis(16))?;
-    }
-    for _ in 0..6 {
+    let mine = |app: &mut App| -> Result<()> {
         if keys.contains(&'h') {
             app.ui.handle_input(bri_ui::input::InputEvent::KeyDown {
                 key: bri_ui::input::Key::Letter('h'),
@@ -322,21 +321,33 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
                 key: bri_ui::input::Key::Letter('h'),
                 mods: bri_ui::input::Modifiers::NONE,
             });
+            Ok(())
         } else {
             action(
-                &mut app,
+                app,
                 UiAction::Game(GameAction::Package {
                     package: "stresslab-economy".into(),
                     command: "mine".into(),
                     pressed: None,
                 }),
-            )?;
+            )
         }
-        for _ in 0..16 {
-            step(&mut app, Duration::from_millis(16))?;
-        }
-    }
-    until(&mut app, "mining", |a| own(a, "mined").unwrap_or(0) > 0)?;
+    };
+    let mut presses = 0;
+    until_stepping(
+        &mut app,
+        "mining",
+        |app, dt| {
+            step(app, dt)?;
+            if app.pending_requests() == 0 {
+                presses += 1;
+                mine(app)?;
+            }
+            Ok(())
+        },
+        |a| own(a, "mined").unwrap_or(0) > 0,
+    )?;
+    eprintln!("mined after {presses} presses");
     for _ in 0..10 {
         step(&mut app, Duration::from_millis(16))?;
     }

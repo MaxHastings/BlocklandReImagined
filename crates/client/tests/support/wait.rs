@@ -6,7 +6,12 @@
 //! A wait ends when `ready` holds. It fails when:
 //! - every app is in game and the server ticks they have all seen pass its
 //!   budget of game time without `ready` (only forward steps count, so a
-//!   rehost starting from tick 0 does not end it);
+//!   rehost starting from tick 0 does not end it). The clock starts once
+//!   every app's scene pipelines have compiled: a step that began with them
+//!   compiling may block on the compile (a GPU opened after entering draws
+//!   its first frame only once they are built), and the hosted server ticks
+//!   on through it, so its ticks are not counted;
+//! - an app's scene pipelines have been compiling for [`STALL`];
 //! - an app that is loading or in game has not moved (no loading step, no
 //!   new server tick) for [`STALL`]: it has stopped, not slowed;
 //! - no app is loading or in game and none has changed for [`STALL`];
@@ -73,8 +78,11 @@ pub fn until(
     let mut changed = start;
     let mut tick: Option<u64> = None;
     let mut game_ticks = 0;
+    // Since when an app's scene pipelines have been compiling.
+    let mut compiling: Option<Instant> = None;
     loop {
         let now = Instant::now();
+        let compiled = apps.iter_mut().all(|a| a.scene_pipelines_ready());
         step(apps, now.duration_since(previous))?;
         previous = now;
         if ready(apps)? {
@@ -109,10 +117,25 @@ pub fn until(
             })
             .collect();
         let latest = all_in_game.and_then(|t| t.into_iter().min());
-        if let (Some(before), Some(after)) = (tick, latest) {
+        if let (Some(before), Some(after)) = (tick, latest)
+            && compiled
+        {
             game_ticks += after.saturating_sub(before);
         }
         tick = latest;
+        compiling = if compiled {
+            None
+        } else {
+            compiling.or(Some(now))
+        };
+        if let Some(since) = compiling
+            && now.duration_since(since) >= STALL
+        {
+            bail!(
+                "Timed out waiting for {what}: scene pipelines still compiling after {STALL:?}; {}",
+                states()
+            );
+        }
         if game_ticks >= ticks(game) {
             bail!(
                 "Timed out waiting for {what}: {game:?} of game time passed; {}",
@@ -152,6 +175,42 @@ pub fn until_one(
         |apps, elapsed| step(&mut *apps[0], elapsed),
         |apps| Ok(ready(&*apps[0])),
     )
+}
+
+/// Run `step` until `ready` holds, for work that does not run on the game
+/// clock: a worker's bake or compile, which a loaded machine slows while the
+/// hosted server ticks on, so game time says nothing about how far it has
+/// got. No game-time budget: the wait fails only when the work is not done
+/// after [`STALL`], or the app's connection fails.
+pub fn until_done(
+    app: &mut App,
+    what: &str,
+    mut step: impl FnMut(&mut App, Duration) -> Result<()>,
+    ready: impl Fn(&App) -> bool,
+) -> Result<()> {
+    let start = Instant::now();
+    let mut previous = start;
+    let failed_before = failed(app).is_some();
+    loop {
+        let now = Instant::now();
+        step(app, now.duration_since(previous))?;
+        previous = now;
+        if ready(app) {
+            return Ok(());
+        }
+        if let Some(reason) = failed(app)
+            && !failed_before
+        {
+            bail!("{what}: connection failed: {reason}");
+        }
+        if now.duration_since(start) >= STALL {
+            bail!(
+                "Timed out waiting for {what}: not done after {STALL:?}; {:?}",
+                app.ui.core.conn
+            );
+        }
+        thread::sleep(Duration::from_millis(8));
+    }
 }
 
 /// The server tick every app has seen, or `None` while one is out of game.
