@@ -423,6 +423,8 @@ struct Brain {
     vehicle_since: Option<(u64, u64)>,
     /// The jet leg of its route it is flying, if any.
     jet_leg: Option<crate::route::JetLeg>,
+    /// The leap of its route it is taking, if any.
+    leap_leg: Option<crate::route::LeapLeg>,
     /// The gear its driving is in (`route::gear`).
     drive_gear: crate::route::Gear,
     /// Where it took a mount's controls (the vehicle and its feet then):
@@ -605,6 +607,7 @@ impl Brain {
             vehicle_headway: Default::default(),
             vehicle_since: None,
             jet_leg: None,
+            leap_leg: None,
             drive_gear: crate::route::Gear::Forward,
             mount_anchor: None,
             brick_team: None,
@@ -1709,7 +1712,7 @@ impl Session {
                             && d.y.abs() < body.step + 0.5
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
-                    Mode::Jet { .. } => {
+                    Mode::Jet { .. } | Mode::Leap { .. } => {
                         state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
                     }
                 };
@@ -3150,6 +3153,39 @@ impl Session {
                     });
                 }
             }
+            Some((to, Mode::Leap { from, seconds })) if driving.is_none() => {
+                brain.jet_leg = None;
+                let tuning = self.peers[&bot].player.tuning();
+                let leg = brain
+                    .leap_leg
+                    .get_or_insert(crate::route::LeapLeg::start(to, from, feet, tuning, tick));
+                if leg.to != to {
+                    *leg = crate::route::LeapLeg::start(to, from, feet, tuning, tick);
+                }
+                let control = crate::route::leap(
+                    leg,
+                    feet,
+                    Vec3::from(state.velocity),
+                    state.grounded,
+                    tuning,
+                    tick,
+                );
+                // Replan from what happened.
+                if leg.failed(feet, state.grounded, body.step, seconds, tick) {
+                    brain.leap_leg = None;
+                    brain.plan.clear();
+                    brain.search = None;
+                    brain.settled = false;
+                    brain.replans += 1;
+                } else {
+                    proposals.push(act::Proposal {
+                        jet: Some(false),
+                        jump: Some(control.jump),
+                        crouch: Some(false),
+                        ..act::Proposal::walk(act::Mover::Leap, control.direction)
+                    });
+                }
+            }
             Some((to, Mode::Swim | Mode::Walk)) if swim.is_none() && wet && !state.grounded => {
                 // Afloat: swim on toward it, rising where the way on (out
                 // onto a higher bank) is higher.
@@ -3162,6 +3198,9 @@ impl Session {
                 }
             }
             _ => brain.jet_leg = None,
+        }
+        if !wanted.is_some_and(|w| matches!(w.mode, Mode::Leap { .. })) {
+            brain.leap_leg = None;
         }
         if swim.is_some() {
             // Up and down as a swimmer does: jump rises, crouch dives.
@@ -3264,7 +3303,8 @@ impl Session {
             act::Ground {
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
-                jet_leg: wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. })),
+                air_leg: wanted
+                    .is_some_and(|w| matches!(w.mode, Mode::Jet { .. } | Mode::Leap { .. })),
                 vehicle_detour: driving.is_none() && pushing.is_none(),
             },
             quarry,

@@ -19,7 +19,7 @@ use bri_motor::player::{MoveInput, Player, PlayerTuning};
 use bri_physics::FIXED_DT;
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 mod handling;
 pub use handling::Handling;
@@ -71,32 +71,34 @@ pub struct Reach {
 /// ledge, or down across a gap), how far off it lands standing on a
 /// landing, and how long that takes. Measured from standing still on a
 /// takeoff no bigger than a landing (a peg, a brick ledge gives no
-/// run-up), steering in the air as a bot does ([`crate::route::Motion::air_steer`]):
-/// a bot takes a leap from a standstill at its takeoff.
+/// run-up), flown by the bot's own leap controller ([`crate::route::leap`]).
 #[derive(Debug, PartialEq)]
 pub struct Leaps {
     /// Rise of each row, lowest first, [`LEAP_SPACING`] apart.
     rises: Vec<f32>,
-    /// Per rise, upright landings: (centre distance, seconds), nearest
-    /// first, [`LEAP_SPACING`] apart; empty when it lands none.
-    upright: Vec<Vec<(f32, f32)>>,
-    /// The same into a crawlspace, crouching once off the ground.
-    crawl: Vec<Vec<(f32, f32)>>,
+    /// Per rise, its landings: (centre distance, seconds), nearest first,
+    /// [`LEAP_SPACING`] apart; empty when it lands none.
+    rows: Vec<Vec<(f32, f32)>>,
 }
 /// Spacing of the rises and distances a leap is measured over: a nav cell,
 /// the grid the planner asks about.
 const LEAP_SPACING: f32 = crate::nav::CELL;
+/// A body that leaps nowhere (a chassis).
+pub static NO_LEAPS: Leaps = Leaps {
+    rises: Vec::new(),
+    rows: Vec::new(),
+};
 impl Leaps {
     fn measure(tuning: &PlayerTuning) -> Self {
         // From as far down as its jump goes up to the highest ledge it
         // could reach with a step on top.
-        let apex = tuning.jump_speed * tuning.jump_speed / (2.0 * tuning.gravity.max(f32::EPSILON));
+        let apex = crate::route::Motion::of(tuning).apex();
         let lowest = -(apex / LEAP_SPACING).ceil() as i32;
         let highest = ((apex + tuning.step_height) / LEAP_SPACING).ceil() as i32;
         let rises: Vec<f32> = (lowest..=highest)
             .map(|k| k as f32 * LEAP_SPACING)
             .collect();
-        let row = |rise: f32, crawl: bool| {
+        let row = |rise: f32| {
             // Out from where the landing touches the takeoff, as far as a
             // walk at its speed carries it over the hop's time in the air.
             let first = landing_width(tuning);
@@ -105,7 +107,7 @@ impl Leaps {
             let mut out = Vec::new();
             let mut across = first;
             while across <= farthest {
-                match leap(tuning, rise, across, crawl) {
+                match leap(tuning, rise, across) {
                     Some(seconds) => out.push((across, seconds)),
                     // Past the farthest it lands: no farther either.
                     None if !out.is_empty() => break,
@@ -115,36 +117,17 @@ impl Leaps {
             }
             out
         };
-        let upright = rises.iter().map(|r| row(*r, false)).collect();
-        // A crawlspace is only ever above a step: lower ones are walked into.
-        let crawl = rises
-            .iter()
-            .map(|r| {
-                if *r > tuning.step_height {
-                    row(*r, true)
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect();
-        Self {
-            rises,
-            upright,
-            crawl,
-        }
+        let rows = rises.iter().map(|r| row(*r)).collect();
+        Self { rises, rows }
     }
     /// Seconds a leap takes onto a landing `rise` above (below) the
-    /// takeoff whose spot is `across` away, upright or into a crawlspace;
-    /// `None` when the body does not land there. A rise between two
-    /// measured is judged as the higher, and one below the lowest as the
-    /// lowest (falling farther, it only reaches farther).
-    pub fn seconds(&self, rise: f32, across: f32, crawl: bool) -> Option<f32> {
+    /// takeoff whose spot is `across` away; `None` when the body does not
+    /// land there. A rise between two measured is judged as the higher,
+    /// and one below the lowest as the lowest (falling farther, it only
+    /// reaches farther).
+    pub fn seconds(&self, rise: f32, across: f32) -> Option<f32> {
         let i = self.rises.iter().position(|r| *r >= rise - f32::EPSILON)?;
-        let row = if crawl {
-            &self.crawl[i]
-        } else {
-            &self.upright[i]
-        };
+        let row = &self.rows[i];
         let (first, last) = (row.first()?, row.last()?);
         if across < first.0 - LEAP_SPACING * 0.5 || across > last.0 + LEAP_SPACING * 0.5 {
             return None;
@@ -153,24 +136,24 @@ impl Leaps {
             .min_by(|a, b| (a.0 - across).abs().total_cmp(&(b.0 - across).abs()))
             .map(|(_, seconds)| *seconds)
     }
-    /// The farthest any leap lands, centre to centre.
+    /// The farthest any leap lands, centre to centre (zero: none does).
     pub fn farthest(&self) -> f32 {
-        self.upright
+        self.rows
             .iter()
-            .chain(&self.crawl)
             .filter_map(|row| row.last())
             .map(|(across, _)| *across)
             .fold(0.0, f32::max)
     }
-    /// The nearest any leap is measured to land: where a landing touches
-    /// its takeoff.
-    pub fn nearest(&self) -> f32 {
-        self.upright
+    /// The farthest back any leap up (onto a landing higher than its
+    /// takeoff) is measured to land from at its nearest.
+    pub fn nearest_up(&self) -> f32 {
+        self.rises
             .iter()
-            .chain(&self.crawl)
-            .filter_map(|row| row.first())
+            .zip(&self.rows)
+            .filter(|(rise, _)| **rise > 0.0)
+            .filter_map(|(_, row)| row.first())
             .map(|(across, _)| *across)
-            .fold(f32::INFINITY, f32::min)
+            .fold(0.0, f32::max)
     }
 }
 
@@ -203,27 +186,28 @@ pub struct JetReach {
 impl Reach {
     /// The measured reach of a body with `tuning`: measured the first time
     /// any body with that tuning asks, then shared.
-    pub fn of(tuning: &PlayerTuning) -> Arc<Self> {
+    pub fn of(tuning: &PlayerTuning) -> &'static Self {
         // A game holds a handful of tunings at most, and every field of one
-        // is mechanical: the same tuning is the same reach.
-        static MEASURED: Mutex<Vec<(PlayerTuning, Arc<Reach>)>> = Mutex::new(Vec::new());
-        let found = |measured: &[(PlayerTuning, Arc<Reach>)]| {
+        // is mechanical: the same tuning is the same reach, kept for good.
+        static MEASURED: Mutex<Vec<(PlayerTuning, &'static Reach)>> = Mutex::new(Vec::new());
+        let found = |measured: &[(PlayerTuning, &'static Reach)]| {
             measured
                 .iter()
                 .find(|(t, _)| t == tuning)
-                .map(|(_, reach)| reach.clone())
+                .map(|(_, reach)| *reach)
         };
         if let Some(reach) = found(&MEASURED.lock().unwrap()) {
             return reach;
         }
         // Measured outside the lock: another tuning's measurement need not
         // wait on this one.
-        let reach = Arc::new(Self::measure(tuning));
+        let reach = Self::measure(tuning);
         let mut measured = MEASURED.lock().unwrap();
         if let Some(reach) = found(&measured) {
             return reach;
         }
-        measured.push((tuning.clone(), reach.clone()));
+        let reach: &'static Reach = Box::leak(Box::new(reach));
+        measured.push((tuning.clone(), reach));
         reach
     }
     /// Measures `tuning` afresh.
@@ -456,13 +440,11 @@ fn fly(tuning: &PlayerTuning, up: f32, across: f32) -> Option<Flight> {
 }
 
 /// A leap as a bot makes one: standing still on a takeoff the size of a
-/// landing, it jumps toward a landing `landing_width` across whose centre
-/// is `across` away and `rise` above (below) it, with nothing but a fall
-/// below (into a crawlspace over it, with `crawl`), steering in the air to
-/// stop over it and crouching once off the ground into a crawlspace, as
-/// the walk leg does. Seconds from the jump to standing on the landing;
-/// `None` when it never does.
-fn leap(tuning: &PlayerTuning, rise: f32, across: f32, crawl: bool) -> Option<f32> {
+/// landing, it jumps onto a landing `landing_width` across whose centre is
+/// `across` away and `rise` above (below) it, with nothing but a fall
+/// below, flown by the bot's own leap controller. Seconds from the jump to
+/// standing on the landing; `None` when it never does.
+fn leap(tuning: &PlayerTuning, rise: f32, across: f32) -> Option<f32> {
     let half = landing_width(tuning) * 0.5;
     // Everything over a void: a body that misses falls far below.
     let void = rise.min(0.0) - tuning.stand_height * 4.0;
@@ -471,63 +453,44 @@ fn leap(tuning: &PlayerTuning, rise: f32, across: f32, crawl: bool) -> Option<f3
         Vec3::new(-half, void, -across - half),
         Vec3::new(half, rise, -across + half),
     );
-    let mut boxes = vec![takeoff, landing];
-    if crawl {
-        let roof = rise + crawlspace(tuning);
-        boxes.push((
-            Vec3::new(-half, roof, -across - half),
-            Vec3::new(half, roof + tuning.stand_height, -across + half),
-        ));
-    }
-    let mut physics = world_over(&boxes, void - 1.0);
-    let mut player =
-        Player::spawn(&mut physics, 1, Vec3::new(0.0, 0.05, 0.0), tuning.clone()).ok()?;
-    // Down onto the takeoff, within a second.
-    for _ in 0..TICKS as usize {
-        if player.state().grounded {
-            break;
-        }
-        step(&mut player, &mut physics, Vec3::ZERO, Press::default());
-    }
-    let (motion, target) = (
-        crate::route::Motion::of(tuning),
-        Vec3::new(0.0, rise, -across),
-    );
-    let (mut jumped, mut flown) = (None, false);
+    let mut physics = world_over(&[takeoff, landing], void - 1.0);
+    let mut player = stand(&mut physics, tuning)?;
+    let target = Vec3::new(0.0, rise, -across);
+    let feet = Vec3::from(player.state().feet);
+    let mut leg = crate::route::LeapLeg::start(target, feet, feet, tuning, 0);
     for tick in 0..(MAX_SECONDS * TICKS) as usize {
         let state = player.state();
         let feet = Vec3::from(state.feet);
-        if state.grounded {
-            if let Some(at) = jumped.filter(|_| flown) {
-                // Down: on the landing, or anywhere else (a miss).
-                let on = (feet.y - rise).abs() < tuning.step_height
-                    && (feet.z + across).abs() <= half
-                    && feet.x.abs() <= half;
-                return on.then(|| (tick - at) as f32 / TICKS);
-            }
-        } else if jumped.is_none() {
-            // Off the takeoff without jumping: it fell.
-            return None;
-        } else {
-            flown = true;
+        if state.grounded && leg.flown {
+            let at = leg.jumped? as usize;
+            // Down: on the landing, or anywhere else (a miss).
+            let on = (feet.y - rise).abs() < tuning.step_height
+                && (feet.z + across).abs() <= half
+                && feet.x.abs() <= half;
+            return on.then(|| (tick - at) as f32 / TICKS);
         }
         if feet.y < void + tuning.step_height {
             return None;
         }
-        let jump = state.grounded && jumped.is_none();
-        if jump {
-            jumped = Some(tick);
+        let control = crate::route::leap(
+            &mut leg,
+            feet,
+            Vec3::from(state.velocity),
+            state.grounded,
+            tuning,
+            tick as u64,
+        );
+        // Off the takeoff without jumping: it fell.
+        if !state.grounded && leg.jumped.is_none() {
+            return None;
         }
-        let crouch = crawl && jumped.is_some() && !state.grounded;
-        let toward = motion.air_steer(feet, Vec3::from(state.velocity), target);
         step(
             &mut player,
             &mut physics,
-            toward.normalize_or_zero(),
+            control.direction,
             Press {
-                jump,
-                crouch,
-                jet: false,
+                jump: control.jump,
+                ..Press::default()
             },
         );
     }
@@ -771,23 +734,25 @@ mod tests {
         let leaps = &Reach::of(&t).leaps;
         // Level across a gap a unit wide: it lands.
         let gap = landing_width(&t) + 1.0;
-        assert!(leaps.seconds(0.0, gap, false).is_some(), "{leaps:?}");
-        // Every measured leap lands, from still and from a walk.
-        for (i, row) in leaps.upright.iter().enumerate() {
+        assert!(leaps.seconds(0.0, gap).is_some(), "{leaps:?}");
+        // Down across one, farther.
+        assert!(leaps.seconds(-2.0, gap + 1.0).is_some(), "{leaps:?}");
+        // Every measured leap lands, as the bot flies it.
+        for (i, row) in leaps.rows.iter().enumerate() {
             for (across, _) in row {
-                assert!(leap(&t, leaps.rises[i], *across, false).is_some());
+                assert!(leap(&t, leaps.rises[i], *across).is_some());
             }
             // One spacing past the farthest, it falls.
             if let Some((last, _)) = row.last() {
                 assert!(
-                    leap(&t, leaps.rises[i], last + LEAP_SPACING, false).is_none(),
+                    leap(&t, leaps.rises[i], last + LEAP_SPACING).is_none(),
                     "rise {}: {last}",
                     leaps.rises[i]
                 );
             }
         }
         // Higher than its jump, nothing.
-        assert_eq!(leaps.seconds(Reach::of(&t).ledge + 1.0, gap, false), None);
+        assert_eq!(leaps.seconds(Reach::of(&t).ledge + 1.0, gap), None);
     }
 
     #[test]
@@ -809,7 +774,7 @@ mod tests {
     #[test]
     fn a_tuning_is_measured_once_and_shared() {
         let t = standard();
-        assert!(Arc::ptr_eq(&Reach::of(&t), &Reach::of(&t.clone())));
+        assert!(std::ptr::eq(Reach::of(&t), Reach::of(&t.clone())));
     }
 
     #[test]

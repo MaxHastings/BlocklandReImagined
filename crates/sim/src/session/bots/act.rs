@@ -33,6 +33,8 @@ pub(super) enum Mover {
     Stance,
     /// A jet leg of its route, flying itself.
     Jet,
+    /// A leap of its route: to the takeoff, still, jump, steer onto it.
+    Leap,
     /// Afloat, or a swimmer rising and diving.
     Swim,
     /// A goof's walk (a circle, a detour, up to someone).
@@ -51,6 +53,7 @@ impl Mover {
             Mover::Push => "push",
             Mover::Stance => "stance",
             Mover::Jet => "jet",
+            Mover::Leap => "leap",
             Mover::Swim => "swim",
             Mover::Goof => "goof",
             Mover::Dodge => "dodge",
@@ -259,8 +262,9 @@ pub(super) struct Ground {
     pub driving: bool,
     /// In water, where a fall is broken.
     pub swimming: bool,
-    /// On a jet leg of its route, which flies its own way.
-    pub jet_leg: bool,
+    /// On a leg of its route through the air (its jets, a leap), which
+    /// flies its own way.
+    pub air_leg: bool,
     /// It may step round a vehicle in its way (on foot, not pushing one).
     pub vehicle_detour: bool,
 }
@@ -305,7 +309,7 @@ impl Session {
             && !ground.swimming
             && (state.grounded || off_route && !controls.jet && !state.jetting)
             && walk != Vec3::ZERO
-            && !ground.jet_leg
+            && !ground.air_leg
             && self.bot_fall_ahead(
                 bot,
                 feet,
