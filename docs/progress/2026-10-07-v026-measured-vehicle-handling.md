@@ -29,6 +29,10 @@ Locomotion lane, branch `claude/v0.2.6-measured-moves-x42j1c`. Design:
 - `cargo test --release -p bri-chaos --test bot_interactions` 19/19;
   `bot_routes` driver tests 3/3; `bri-vehicles` lib passes.
 - clippy `-D warnings` clean on bri-sim, bri-chaos, bri-vehicles.
+- `every_test_catalog_car_measures`: all three wheeled test-catalog
+  chassis measure, about 30-35 ms each (release). The same check over the
+  installed pack, `every_installed_wheeled_vehicle_measures`, is
+  `#[ignore = "needs installed content"]` and runs in the PC gate.
 
 ## Decisions
 
@@ -43,5 +47,6 @@ Locomotion lane, branch `claude/v0.2.6-measured-moves-x42j1c`. Design:
 - Chaos test "a driver mid-turn brakes for an ally on its arc": needs a
   controlled turn, not a pursuit. One try passed with the arc sweep
   switched off; the other placed the ally beside the target the driver was
-  closing on. Goes with the warm-up item.
+  closing on. Goes with the warm-up item; the reviewer suggests a standing
+  car turning toward a fixed point, with the ally dropped on that arc.
 - Warm-up at bot join and the body `Reach` cost cap: the warm-up item.

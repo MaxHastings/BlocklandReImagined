@@ -529,6 +529,48 @@ mod tests {
         assert_ne!(cut.as_ref(), Some(&whole));
     }
 
+    /// Every wheeled chassis in `pack` measures (none comes back empty, so
+    /// bots still drive it); prints what each first measurement took.
+    fn every_wheeled_chassis_measures(pack: Pack) {
+        let wheeled: Vec<&Definition> = pack
+            .definitions
+            .iter()
+            .filter(|d| d.family == bri_vehicles::Family::Wheeled)
+            .collect();
+        assert!(!wheeled.is_empty(), "the pack has a wheeled chassis");
+        let empty: Vec<&str> = wheeled
+            .iter()
+            .filter(|d| {
+                let started = std::time::Instant::now();
+                let handling = Handling::measure(d, 1.0);
+                eprintln!(
+                    "{}: {:?} in {:.1} ms",
+                    d.id,
+                    handling.as_ref().map(|h| (h.top, h.tightest)),
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+                handling.is_none()
+            })
+            .map(|d| d.id.as_str())
+            .collect();
+        assert!(empty.is_empty(), "measured nothing: {empty:?}");
+    }
+
+    #[test]
+    fn every_test_catalog_car_measures() {
+        every_wheeled_chassis_measures(bri_vehicles::testing::pack());
+    }
+
+    #[test]
+    #[ignore = "needs installed content"]
+    fn every_installed_wheeled_vehicle_measures() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let pack =
+            Pack::load(bri_package::testing::pack_dir(&root, "vehicles").join("vehicles.json"))
+                .expect("the installed vehicle pack loads");
+        every_wheeled_chassis_measures(pack);
+    }
+
     #[test]
     fn a_measured_definition_is_shared_and_a_reloaded_pack_measured_again() {
         let world = |edit: fn(&mut Definition)| {
