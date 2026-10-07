@@ -189,9 +189,9 @@ impl AddOnPhysics {
             }
         }
     }
-    /// The mass a force on `handle` moves: every body jointed to it (a
-    /// ragdoll held by one hand), itself included.
-    fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
+    /// `handle` and every body jointed to it, directly or through others
+    /// (a whole ragdoll from one limb).
+    fn jointed(&self, handle: RigidBodyHandle) -> std::collections::HashSet<RigidBodyHandle> {
         let joints = &self.world.impulse_joints;
         let mut seen = std::collections::HashSet::from([handle]);
         let mut next = vec![handle];
@@ -204,7 +204,73 @@ impl AddOnPhysics {
                 }
             }
         }
-        seen.iter().map(|h| self.world.bodies[*h].mass()).sum()
+        seen
+    }
+    /// The mass a force on `handle` moves: every body jointed to it (a
+    /// ragdoll held by one hand), itself included.
+    fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
+        self.jointed(handle)
+            .iter()
+            .map(|h| self.world.bodies[*h].mass())
+            .sum()
+    }
+    /// Whether any body of `group` lies on the world (the map, a brick,
+    /// terrain): touching, within the solver's own allowed error, a fixed
+    /// surface flat enough to be a floor by the player's own rule
+    /// ([`bri_sim::player::FLOOR_DOT`]). A wall it leans on holds nothing up.
+    fn lies_on_world(&self, group: &std::collections::HashSet<RigidBodyHandle>) -> bool {
+        let touching = self.world.integration_parameters.allowed_linear_error();
+        let fixed = |c: ColliderHandle| {
+            self.world
+                .colliders
+                .get(c)
+                .is_some_and(|c| c.parent().is_none())
+        };
+        group.iter().any(|h| {
+            self.world.bodies[*h].colliders().iter().any(|c| {
+                self.world.narrow_phase.contact_pairs_with(*c).any(|pair| {
+                    // The normal points from the first collider to the
+                    // second; turned here to point from the surface into
+                    // the body it touches.
+                    let (other, up) = if pair.collider1 == *c {
+                        (pair.collider2, -1.0)
+                    } else {
+                        (pair.collider1, 1.0)
+                    };
+                    fixed(other)
+                        && pair
+                            .find_deepest_contact()
+                            .is_some_and(|(manifold, point)| {
+                                point.dist <= touching
+                                    && manifold.data.normal.y * up > bri_sim::player::FLOOR_DOT
+                            })
+                })
+            })
+        })
+    }
+    /// Lay the oldest moving body that lies on the world still, with
+    /// everything jointed to it (the oldest ragdoll down on the floor), so
+    /// the next frames cost less: the game calls this when simulating the
+    /// Add-On's bodies took longer than its budget, and old bodies come to
+    /// rest while new ones keep moving. Bodies in the air are never stopped
+    /// there. A settled body moves again when something hits or holds it.
+    /// Returns whether a group was settled.
+    pub fn settle_oldest(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        for handle in self.bodies.values().map(|b| b.handle) {
+            if seen.contains(&handle) || self.world.bodies[handle].is_sleeping() {
+                continue;
+            }
+            let group = self.jointed(handle);
+            seen.extend(group.iter().copied());
+            if self.lies_on_world(&group) {
+                for handle in group {
+                    self.world.bodies[handle].sleep();
+                }
+                return true;
+            }
+        }
+        false
     }
     /// This step's forces: the pushes waiting (`kicks`, all at once) and
     /// each hold pulling its point toward its target. Returns the bodies
@@ -640,6 +706,103 @@ mod tests {
             after != before,
             "the brick built into it moved it: {after:?}"
         );
+    }
+
+    /// Three bodies in a jointed row from `first`, `y` up, group `group`.
+    fn chain(first: u32, y: f32, group: u32) -> Vec<PhysicsCommand> {
+        let mut commands = Vec::new();
+        for (n, x) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+            commands.push(PhysicsCommand::Create {
+                body: first + n as u32,
+                spec: spec(Vec3::new(x, y, group as f32 * 3.0), group),
+            });
+        }
+        for (a, x) in [(first, 0.25), (first + 1, 0.75)] {
+            commands.push(PhysicsCommand::Joint {
+                a,
+                b: a + 1,
+                spec: JointSpec {
+                    anchor: [x, y, group as f32 * 3.0],
+                    axis: [1.0, 0.0, 0.0],
+                    swing: 1.0,
+                    twist: 1.0,
+                    friction: 0.0,
+                },
+            });
+        }
+        commands
+    }
+
+    #[test]
+    fn settling_never_sticks_a_body_to_a_wall() {
+        // A corpse blasted against a wall touches the world but nothing holds
+        // it up: it slides down the wall, never frozen to it.
+        let wall = ColliderBuilder::cuboid(0.5, 20.0, 20.0).translation(Vector::new(2.0, 0.0, 0.0));
+        let definitions = bri_sim::definitions::Definitions {
+            entries: Default::default(),
+        };
+        let building = Building::new(definitions, vec![wall]).unwrap();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&chain(1, 10.0, 1));
+        let mut touched = false;
+        for _ in 0..30 {
+            // Pressed against it, as a blast holds a body to a wall.
+            for body in 1..=3 {
+                physics.apply(&[PhysicsCommand::Push {
+                    body,
+                    velocity: [1.0, 0.0, 0.0],
+                }]);
+            }
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            touched |= physics.snapshot()[&3].position[0] > 1.2;
+            assert!(!physics.settle_oldest(), "never frozen to the wall");
+        }
+        assert!(touched, "it reached the wall");
+        let y = physics.snapshot()[&1].position[1];
+        assert!(y < 9.0, "slid down the wall: {y}");
+    }
+
+    #[test]
+    fn settling_lays_the_oldest_ragdoll_on_the_floor_still_never_one_in_the_air() {
+        // Max, v0.2.5 bot match: "Ragdoll stopped: its physics were too
+        // heavy". Over budget, the oldest ragdoll lying on the floor comes to
+        // rest instead; one thrown into the air flies on.
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        // The oldest, high in the air; a newer one sliding along the floor.
+        physics.apply(&chain(1, 8.0, 1));
+        physics.apply(&chain(4, 0.3, 2));
+        for body in 4..=6 {
+            physics.apply(&[PhysicsCommand::Push {
+                body,
+                velocity: [4.0, 0.0, 0.0],
+            }]);
+        }
+        run(&mut physics, &building, 0.1);
+        assert!(physics.settle_oldest(), "the one on the floor settles");
+        let settled = physics.snapshot();
+        run(&mut physics, &building, 0.1);
+        let now = physics.snapshot();
+        for body in 4..=6 {
+            assert_eq!(
+                now[&body].position, settled[&body].position,
+                "{body}, on the floor, lies still"
+            );
+        }
+        for body in 1..=3 {
+            assert!(
+                now[&body].position[1] < settled[&body].position[1] - 0.2,
+                "{body} keeps falling"
+            );
+        }
+        // Only the one in the air is moving: nothing settles in mid-air.
+        assert!(!physics.settle_oldest(), "never stopped in the air");
+        let airborne = physics.snapshot();
+        run(&mut physics, &building, 0.1);
+        assert!(physics.snapshot()[&1].position[1] < airborne[&1].position[1]);
+        // Down on the floor and still tumbling, it settles too.
+        run(&mut physics, &building, 0.8);
+        assert!(physics.settle_oldest(), "landed");
     }
 
     #[test]

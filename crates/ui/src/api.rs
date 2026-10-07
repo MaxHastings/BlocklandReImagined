@@ -1510,6 +1510,11 @@ pub struct MiniGameUiState {
     /// creator's trust): shown greyed.
     #[serde(default)]
     pub addon_locked: Vec<(MiniGameId, Vec<String>)>,
+    /// The same for a game the local player would create: what Setup
+    /// greys before Create, so the draft never holds a value the host will
+    /// refuse.
+    #[serde(default)]
+    pub addon_locked_new: Vec<String>,
     /// The team list shows only while that setting holds one of these
     /// (Slayer's teams, hidden in a mode without them).
     #[serde(default)]

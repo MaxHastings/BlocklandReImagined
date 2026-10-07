@@ -99,6 +99,9 @@ pub struct AddOnSettings {
     game: Option<MiniGameId>,
     /// Showing the server-wide settings rather than a mini-game's.
     server: bool,
+    /// Setting up a game the Create Mini-Game window has yet to make: Save
+    /// keeps the draft for Create to send ([`Core::send_minigame_draft`]).
+    draft: bool,
     /// Effective values (defaults filled in) of the game's own settings.
     values: BTreeMap<String, MiniGameSettingValue>,
     teams: Vec<DraftTeam>,
@@ -275,6 +278,7 @@ impl AddOnSettings {
             width: W,
             game: core.minigame_addons,
             server: core.server_addon_settings,
+            draft: !core.server_addon_settings && core.minigame_addons.is_none(),
             values: BTreeMap::new(),
             teams: Vec::new(),
             base: (BTreeMap::new(), Vec::new()),
@@ -609,6 +613,9 @@ impl AddOnSettings {
     }
     /// Whether the local player lacks the level `key` needs in this game.
     fn locked(&self, core: &Core, key: &str) -> bool {
+        if self.draft {
+            return core.minigames.addon_locked_new.iter().any(|k| k == key);
+        }
         self.game.is_some_and(|g| {
             core.minigames
                 .addon_locked
@@ -677,12 +684,18 @@ impl AddOnSettings {
                     .as_ref()
                     .is_some_and(|s| s.local_host && s.options.is_some());
         }
+        if self.draft {
+            return core
+                .minigames
+                .can(crate::models::minigames::Operation::Create);
+        }
         self.game
             .is_some_and(|g| core.minigames.addon_editable.contains(&g))
     }
-    /// Whether there is something to show: the server, or a running game.
+    /// Whether there is something to show: the server, a running game, or
+    /// the one Create will make.
     fn open(&self, core: &Core) -> bool {
-        self.server || self.summary(core).is_some()
+        self.server || self.draft || self.summary(core).is_some()
     }
     /// Whether the window shows `s`, by where its value lives.
     fn mine(&self, s: &MiniGameAddOnSetting) -> bool {
@@ -749,6 +762,55 @@ impl AddOnSettings {
             self.values = values.clone();
             self.teams.clear();
             self.base = (values, Vec::new());
+            self.build(core);
+            return;
+        }
+        if self.draft {
+            let kept = core.minigame_addon_draft.as_ref();
+            let declared = || {
+                core.minigames
+                    .addon_settings
+                    .iter()
+                    .filter(|s| !s.team && !s.server)
+            };
+            let defaults: BTreeMap<_, _> = declared()
+                .map(|s| (s.key.clone(), s.default.clone()))
+                .collect();
+            let values = declared()
+                .map(|s| {
+                    let v = kept.and_then(|d| d.settings.get(&s.key)).cloned();
+                    (s.key.clone(), v.unwrap_or_else(|| s.default.clone()))
+                })
+                .collect();
+            let teams = kept
+                .map(|d| {
+                    d.teams
+                        .iter()
+                        .map(|t| DraftTeam {
+                            id: None,
+                            name: t.name.clone(),
+                            color: t.color,
+                            settings: core
+                                .minigames
+                                .addon_settings
+                                .iter()
+                                .filter(|s| s.team)
+                                .map(|s| {
+                                    let v = t.settings.get(&s.key).cloned();
+                                    (s.key.clone(), v.unwrap_or_else(|| s.default.clone()))
+                                })
+                                .collect(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Some(n) = self.view.id("AOS_Window") {
+                self.view.set_text(n, "MiniGame Settings: New Mini-Game");
+            }
+            self.values = values;
+            self.teams = teams;
+            // Changed from the defaults is what Create sends.
+            self.base = (defaults, Vec::new());
             self.build(core);
             return;
         }
@@ -915,16 +977,18 @@ impl AddOnSettings {
         };
         // The Teams page stays open in a mode without teams, to say so and
         // how to change it; the Players page has nothing to assign.
-        let has_game = !self.server && self.summary(core).is_some();
+        let has_game = !self.server && (self.draft || self.summary(core).is_some());
         let teams_used = self.teams_shown(core);
         let teams_available = has_game && teams_used;
+        // Before Create there is nobody in the game to assign.
+        let players_available = teams_available && !self.draft;
         if self.server {
             self.page = Page::Setup;
         }
         let page_open = match self.page {
             Page::Setup => true,
             Page::Teams => has_game,
-            Page::Players => teams_available,
+            Page::Players => players_available,
         };
         if !page_open {
             self.page = Page::Setup;
@@ -940,13 +1004,14 @@ impl AddOnSettings {
             ("AOS_Players", Page::Players),
         ] {
             if let Some(n) = self.view.id(name) {
-                self.view.set_visible(n, !self.server);
+                self.view
+                    .set_visible(n, !(self.server || (self.draft && page == Page::Players)));
                 self.view.set_active(
                     n,
                     match page {
                         Page::Setup => true,
                         Page::Teams => has_game,
-                        Page::Players => teams_available,
+                        Page::Players => players_available,
                     },
                 );
                 self.view.set_text(
@@ -1598,6 +1663,7 @@ impl AddOnSettings {
             None if !editable && self.summary(core).is_some() => {
                 "Only the mini-game's owner or an admin can change these.".into()
             }
+            None if changed && self.draft => "Save keeps these for Create.".into(),
             None if changed => "Not applied yet.".into(),
             None => String::new(),
         };
@@ -1645,11 +1711,16 @@ impl AddOnSettings {
 
         for button in [APPLY, APPLY_RESET, RESET, END, NOTIFY] {
             if let Some(n) = self.view.id(button) {
-                // Server settings only apply: there is no game to reset.
-                let shown = editable && (button == APPLY || !self.server);
+                // Server settings only apply: there is no game to reset. Nor
+                // before Create: Save keeps the draft.
+                let shown = editable && (button == APPLY || !(self.server || self.draft));
                 self.view.set_active(n, ready && shown);
                 self.view.set_visible(n, shown);
             }
+        }
+        if let Some(n) = self.view.id("AOS_NotifyLabel") {
+            self.view
+                .set_visible(n, editable && !(self.server || self.draft));
         }
         if let Some(n) = self.view.id("AOS_AddTeam") {
             self.view.set_active(n, ready && self.teams_shown(core));
@@ -1659,6 +1730,24 @@ impl AddOnSettings {
     fn apply(&mut self, core: &mut Core, reset: bool) {
         if let Err(e) = self.read_fields(core) {
             self.status(core, Some(&e));
+            return;
+        }
+        if self.draft {
+            core.minigame_addon_draft = Some(AddOnFavorite {
+                rules: None,
+                settings: self.values.clone(),
+                teams: self
+                    .teams
+                    .iter()
+                    .map(|t| AddOnFavoriteTeam {
+                        name: t.name.clone(),
+                        color: t.color,
+                        settings: t.settings.clone(),
+                    })
+                    .collect(),
+            });
+            core.minigames.status = "Add-On settings are sent when you press Create.".into();
+            Self::close(core);
             return;
         }
         let (settings, teams) = self.changes(core);

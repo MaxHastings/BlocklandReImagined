@@ -64,9 +64,8 @@ fn start(code: &AddOnCode, budgets: Budgets) -> Result<bri_client_sandbox::AddOn
 
 /// Budgets for tests of anything but wall-clock time. Instructions (fuel)
 /// still bound every call and the GPU budgets keep their defaults, but no
-/// wall-clock limit can fire first on a loaded machine: the default 8 ms
-/// frame is a few scheduler slices, so a busy PC turns a draw or memory
-/// refusal into `Stopped::Time`.
+/// wall-clock limit can fire first on a loaded machine, so a busy PC never
+/// turns a draw or memory refusal into `Stopped::Time`.
 fn budgets() -> Budgets {
     let timed = Budgets::default();
     Budgets {
@@ -347,7 +346,7 @@ fn wall_clock_time_is_a_budget_too() {
     let dir = make(SPIN_IN_FRAME, &[], &[]);
     let budgets = Budgets {
         frame_fuel: u64::MAX / 2,
-        frame_time: Duration::from_millis(20),
+        hang_time: Duration::from_millis(20),
         ..budgets()
     };
     let mut addon = start(&load(dir.path()), budgets).unwrap();
@@ -357,12 +356,37 @@ fn wall_clock_time_is_a_budget_too() {
 }
 
 #[test]
+fn a_frame_stalled_far_past_a_display_frame_carries_on() {
+    // Max, v0.2.5: a lag spike in a bot match must not switch an Add-On (the
+    // Ragdoll) off. A frame that runs many display frames long, as on a PC
+    // that stalls, is slow, not hung: only the hang guard stops a frame.
+    let dir = make(
+        r#"(module (memory (export "memory") 1024)
+            (func (export "frame") (param f32 f32) (local $n i32)
+              (local.set $n (i32.const 32))
+              (loop $l
+                (memory.fill (i32.const 0) (i32.const 7) (i32.const 67108864))
+                (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                (br_if $l (local.get $n)))))"#,
+        &[],
+        &[],
+    );
+    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let started = std::time::Instant::now();
+    addon.frame(frame(0.0)).expect("a slow frame is not a hang");
+    let took = started.elapsed();
+    let display_frame = Duration::from_secs_f32(1.0 / 60.0);
+    assert!(took > display_frame, "the frame stalled for {took:?}");
+    addon.frame(frame(1.0)).expect("and it keeps running");
+}
+
+#[test]
 fn init_and_start_run_under_budget() {
     let spin_start = r#"(module (memory (export "memory") 1)
         (func $s (loop $l (br $l))) (start $s))"#;
     let dir = make(spin_start, &[], &[]);
     let budgets = Budgets {
-        init_time: Duration::from_secs(60),
+        hang_time: Duration::from_secs(60),
         ..Budgets::default()
     };
     assert_eq!(start(&load(dir.path()), budgets).err(), Some(Stopped::Cpu));
