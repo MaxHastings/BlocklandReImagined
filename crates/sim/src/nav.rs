@@ -263,8 +263,11 @@ impl Ground<'_> {
         let (_, lift, tall) = body.clearance(crouched);
         let shape = SharedShape::cuboid(body.width * 0.5, tall * 0.5, body.width * 0.5);
         let query = self.physics.query_pipeline_with_filter(Self::filter());
-        let mut at = feet;
-        for _ in 0..SETTLE_PASSES {
+        // Each push spends some of the half cell on each axis; when that
+        // runs out, it fits nowhere near enough. Every push is at least
+        // `SETTLE_GAP`, so this ends.
+        let (mut at, mut spent) = (feet, Vec3::ZERO);
+        loop {
             let pose = Pose::translation(at.x, at.y + lift + tall * 0.5, at.z);
             // The deepest overlap, as the way out and how far.
             let deepest = query
@@ -283,16 +286,19 @@ impl Ground<'_> {
                 .map(|c| (-Vec3::from(c.normal1.to_array()), -c.dist))
                 .max_by(|a, b| a.1.total_cmp(&b.1));
             let Some((out, depth)) = deepest else {
-                return ((at - feet).abs().max_element() <= CELL * 0.5 && self.stands(body, at))
-                    .then_some(at);
+                return self.stands(body, at).then_some(at);
             };
             let sideways = Vec3::new(out.x, 0.0, out.z);
             if sideways.length() < f32::EPSILON {
                 return None;
             }
-            at += sideways.normalize() * (depth.max(0.0) / sideways.length() + SETTLE_GAP);
+            let push = sideways.normalize() * (depth.max(0.0) / sideways.length() + SETTLE_GAP);
+            spent += push.abs();
+            if spent.max_element() > CELL * 0.5 {
+                return None;
+            }
+            at += push;
         }
-        None
     }
     /// Whether a straight walk from `from` to `to` passes within reach of a
     /// moving body about (`bodies`), or of where it is going over the next
@@ -422,9 +428,6 @@ pub enum Mode {
 
 /// Most grid steps a pulled straight walk passes over at once.
 const PULL_REACH: usize = 16;
-/// The most overlaps [`Ground::settle`] pushes a body out of, one at a time
-/// (a wall, then the jamb across from it, then a corner's other face).
-const SETTLE_PASSES: usize = 4;
 /// How far past touching [`Ground::settle`] pushes a body out of what it
 /// overlapped, so the standing box it then tests no longer touches it.
 const SETTLE_GAP: f32 = 0.01;
