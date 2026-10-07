@@ -456,6 +456,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
                 arm_once: false,
+                raised_arms: None,
                 gesture: String::new(),
                 cues: vec![],
             });

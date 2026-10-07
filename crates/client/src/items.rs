@@ -2299,7 +2299,7 @@ mod add_on_icon_tests {
             )?;
         }
         let weapons = json!({
-            "schema_version": 4, "id": "tool",
+            "schema_version": 5, "id": "tool",
             "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
                 "model": "models/tool.shape.json", "icon": "icons/pick", "can_drop": false } },
             "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.shape.json",

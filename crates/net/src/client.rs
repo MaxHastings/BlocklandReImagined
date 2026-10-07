@@ -107,6 +107,9 @@ pub struct Client {
     sequence: u64,
     /// Replica updates applied (deltas and state datagrams), for the net graph.
     updates: Arc<std::sync::atomic::AtomicU64>,
+    /// The newest host tick a pose datagram brought, as it arrived: where
+    /// the host is, however far behind this client is in reading.
+    heard: Arc<std::sync::atomic::AtomicU64>,
     /// Movement datagrams leave on a millisecond clock while connected.
     _timers: crate::timer_resolution::Guard,
 }
@@ -624,12 +627,19 @@ impl Client {
             }
         });
         let datagram_connection = connection.clone();
+        let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let heard_tick = heard.clone();
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
                 let Ok(items) = codec::decode_datagram::<Vec<Datagram>>(&bytes) else {
                     continue;
                 };
                 for item in items {
+                    if let Datagram::Pose(Pose { tick, .. })
+                    | Datagram::Remote(RemotePose { tick, .. }) = &item
+                    {
+                        heard_tick.fetch_max(*tick, std::sync::atomic::Ordering::Relaxed);
+                    }
                     let _ = events.try_send(match item {
                         Datagram::Pose(pose) => Incoming::Pose(pose),
                         Datagram::Remote(pose) => Incoming::Pose(pose.into_pose()),
@@ -658,6 +668,7 @@ impl Client {
             progress,
             sequence: 0,
             updates: Arc::default(),
+            heard,
             _timers: crate::timer_resolution::Guard::acquire(),
         })
     }
@@ -896,14 +907,15 @@ impl Client {
     /// the host runs [`COMMAND_TICKS`] ticks past the request without the
     /// reply, or sends nothing at all for [`COMMAND_STALL`]. A busy machine
     /// slows the host's ticks with it, and a reply queued behind the rest of
-    /// a joined world waits for those chunks, which keep arriving.
+    /// a joined world waits for those chunks, which keep arriving. The ticks
+    /// count from where the host was as the request went (the newest pose
+    /// datagram heard), not from the update this client last read: a client
+    /// behind on reading has the host's earlier updates still to read before
+    /// the reply, and those are not ticks the host spent on it.
     pub async fn command(&mut self, command: Command) -> Result<Reply> {
         let sequence = self.request(command).await?;
-        let sent = self.replica.tick;
-        // How current this client was when it sent, for the failure: the
-        // newest tick a pose datagram brought (they pass the reliable
-        // stream's backlog) and how many events it had not read yet.
-        let newest_pose = self.replica.poses.values().map(|p| p.tick).max();
+        let read = self.replica.tick;
+        let sent = read.max(self.heard.load(std::sync::atomic::Ordering::Relaxed));
         let unread = self.queued();
         loop {
             let event = tokio::time::timeout(COMMAND_STALL, self.receive())
@@ -926,7 +938,7 @@ impl Client {
             ensure!(
                 ran <= COMMAND_TICKS,
                 "The server ran {ran} ticks without answering command {sequence} \
-                 (sent at update tick {sent}, newest pose tick {newest_pose:?}, {unread} events unread)"
+                 (sent at host tick {sent}, having read to tick {read}, {unread} events unread)"
             );
         }
     }

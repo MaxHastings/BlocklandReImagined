@@ -231,7 +231,7 @@ fn an_items_own_model_checks_and_a_missing_texture_is_named() {
     write(
         &assets,
         "weapons.json",
-        json!({ "schema_version": 4, "id": "tool",
+        json!({ "schema_version": 5, "id": "tool",
             "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
                 "model": "models/pick.shape.json", "icon": "", "can_drop": false } },
             "images": { "tool:image/pick": { "name": "PickImage", "model": "models/pick.shape.json",

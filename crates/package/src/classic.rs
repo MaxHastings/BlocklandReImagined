@@ -11,8 +11,10 @@
 //! another (`ForceRequiredAddOn`) finds it beside it.
 //!
 //! What was converted from what is kept in [`STATE_FILE`]: each dropped
-//! Add-On's [`Stamp`] when it was converted, the package it became, or why
-//! it could not be. This module only plans ([`plan`]); the game runs the
+//! Add-On's [`Stamp`] when it was converted, the pack schemas of the game
+//! that converted it, the package it became, or why it could not be. A
+//! conversion made for other schemas (an older game's, whose packs this one
+//! cannot read) is made again, as a changed zip is. This module only plans ([`plan`]); the game runs the
 //! importer and records the results.
 use crate::library::{DROP_DIR, IMPORT_DIR, LegacyAddOn, Library};
 use anyhow::{Context, Result};
@@ -92,6 +94,10 @@ pub struct Record {
     /// Why it could not be converted; tried again once it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The pack schemas of the game that converted it; None for a
+    /// conversion made before the game kept them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importer: Option<String>,
     /// The package the game ships as it, so it was not converted
     /// ([`Step::Included`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,10 +193,12 @@ pub enum Step {
     },
 }
 
-/// What brings the root's conversions in line with its drop folder.
+/// What brings the root's conversions in line with its drop folder, for a
+/// game that reads the pack schemas `importer`: a zip changed since its
+/// conversion, or converted for other schemas, is converted again.
 /// Removals come first, so a folder an Add-On taken out held is free
 /// before a new conversion may take its name.
-pub fn plan(library: &Library, state: &State) -> Vec<Step> {
+pub fn plan(library: &Library, state: &State, importer: &str) -> Vec<Step> {
     let mut removals = vec![];
     let mut rest = vec![];
     for legacy in &library.legacy {
@@ -198,6 +206,7 @@ pub fn plan(library: &Library, state: &State) -> Vec<Step> {
             continue;
         };
         let record = state.get(&legacy.name);
+        let current = |r: &Record| r.stamp == now && r.importer.as_deref() == Some(importer);
         if let Some(id) = &legacy.included {
             if record.is_none_or(|r| r.included.as_ref() != Some(id)) {
                 rest.push(Step::Included {
@@ -209,13 +218,13 @@ pub fn plan(library: &Library, state: &State) -> Vec<Step> {
             continue;
         }
         match (&legacy.imported_as, record) {
-            (Some(_), Some(r)) if r.stamp == now => {}
+            (Some(_), Some(r)) if current(r) => {}
             (Some(id), None) => rest.push(Step::Adopt {
                 name: legacy.name.clone(),
                 id: id.clone(),
                 stamp: now,
             }),
-            (None, Some(r)) if r.stamp == now && r.error.is_some() => {}
+            (None, Some(r)) if current(r) && r.error.is_some() => {}
             (imported, _) => rest.push(Step::Import {
                 name: legacy.name.clone(),
                 path: legacy.path.clone(),
@@ -267,6 +276,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The pack schemas of the game these tests plan for.
+    const IMPORTER: &str = "weapons 5";
+
     fn temp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("bri-classic-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -309,7 +321,7 @@ mod tests {
         std::fs::write(&zip, b"PK one").unwrap();
         std::fs::write(folder(&root).join("readme.txt"), b"not an add-on").unwrap();
         let mut state = State::load(&root);
-        let steps = plan(&Library::scan(&root).unwrap(), &state);
+        let steps = plan(&Library::scan(&root).unwrap(), &state, IMPORTER);
         assert_eq!(names(&steps), ["import Weapon_Gun None"]);
         // Converted: nothing more to do.
         let dir = converted(&root, "Weapon_Gun");
@@ -323,22 +335,89 @@ mod tests {
             dir: Some(dir.clone()),
             error: None,
             included: None,
+            importer: Some(IMPORTER.into()),
         });
         state.save(&root).unwrap();
         let state = State::load(&root);
-        assert!(plan(&Library::scan(&root).unwrap(), &state).is_empty());
+        assert!(plan(&Library::scan(&root).unwrap(), &state, IMPORTER).is_empty());
         // A new copy is converted again, replacing the old conversion.
         std::fs::write(&zip, b"PK two, longer").unwrap();
         assert_eq!(
-            names(&plan(&Library::scan(&root).unwrap(), &state)),
+            names(&plan(&Library::scan(&root).unwrap(), &state, IMPORTER)),
             ["import Weapon_Gun Some(\"weapon_gun\")"]
         );
         // Taken out of the folder, its conversion goes.
         std::fs::remove_file(&zip).unwrap();
         assert_eq!(
-            names(&plan(&Library::scan(&root).unwrap(), &state)),
+            names(&plan(&Library::scan(&root).unwrap(), &state, IMPORTER)),
             ["remove Weapon_Gun weapon_gun"]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A zip left as it was, converted by an older game (whose packs this
+    /// one cannot read), is converted again in place of that conversion; a
+    /// failure is tried again too, as this game's importer may manage it.
+    #[test]
+    fn an_older_importers_conversion_is_made_again() {
+        let root = temp("older");
+        let zip = folder(&root).join("Weapon_Gun.zip");
+        std::fs::write(&zip, b"PK one").unwrap();
+        let dir = converted(&root, "Weapon_Gun");
+        let mut state = State::load(&root);
+        let record = Record {
+            name: "Weapon_Gun".into(),
+            stamp: stamp(&zip).unwrap(),
+            id: Some("weapon_gun".into()),
+            dir: Some(dir),
+            error: None,
+            included: None,
+            importer: Some("weapons 4".into()),
+        };
+        state.set(record.clone());
+        let library = Library::scan(&root).unwrap();
+        assert_eq!(
+            names(&plan(&library, &state, IMPORTER)),
+            ["import Weapon_Gun Some(\"weapon_gun\")"]
+        );
+        // One from before the game recorded its importer, likewise.
+        state.set(Record {
+            importer: None,
+            ..record.clone()
+        });
+        assert_eq!(
+            names(&plan(&library, &state, IMPORTER)),
+            ["import Weapon_Gun Some(\"weapon_gun\")"]
+        );
+        // Converted by this one: nothing to do.
+        state.set(Record {
+            importer: Some(IMPORTER.into()),
+            ..record.clone()
+        });
+        assert!(plan(&library, &state, IMPORTER).is_empty());
+        // A zip the older importer could not convert is tried again.
+        let bad = folder(&root).join("Broken.zip");
+        std::fs::write(&bad, b"PK").unwrap();
+        let failed = Record {
+            name: "Broken".into(),
+            stamp: stamp(&bad).unwrap(),
+            id: None,
+            dir: None,
+            error: Some("unreadable".into()),
+            included: None,
+            importer: Some("weapons 4".into()),
+        };
+        state.set(failed.clone());
+        let library = Library::scan(&root).unwrap();
+        assert_eq!(
+            names(&plan(&library, &state, IMPORTER)),
+            ["import Broken None"]
+        );
+        state.set(Record {
+            importer: Some(IMPORTER.into()),
+            ..failed
+        });
+        assert!(plan(&library, &state, IMPORTER).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -352,7 +431,7 @@ mod tests {
         let mut state = State::load(&root);
         let library = Library::scan(&root).unwrap();
         assert_eq!(
-            names(&plan(&library, &state)),
+            names(&plan(&library, &state, IMPORTER)),
             ["import Broken None", "adopt Weapon_Old weapon_old"]
         );
         state.set(Record {
@@ -362,23 +441,24 @@ mod tests {
             dir: None,
             error: Some("not a zip".into()),
             included: None,
+            importer: Some(IMPORTER.into()),
         });
         let broken = library.legacy.iter().find(|l| l.name == "Broken").unwrap();
         assert_eq!(state.failed(broken), Some("not a zip"));
         assert_eq!(
-            names(&plan(&library, &state)),
+            names(&plan(&library, &state, IMPORTER)),
             ["adopt Weapon_Old weapon_old"]
         );
         std::fs::write(&bad, b"PK fixed and longer").unwrap();
         assert_eq!(state.failed(broken), None);
         assert_eq!(
-            names(&plan(&library, &state)),
+            names(&plan(&library, &state, IMPORTER)),
             ["import Broken None", "adopt Weapon_Old weapon_old"]
         );
         // Removed after failing: only its record goes.
         std::fs::remove_file(&bad).unwrap();
         assert_eq!(
-            names(&plan(&Library::scan(&root).unwrap(), &state)),
+            names(&plan(&Library::scan(&root).unwrap(), &state, IMPORTER)),
             ["remove Broken ", "adopt Weapon_Old weapon_old"]
         );
         let _ = std::fs::remove_dir_all(&root);

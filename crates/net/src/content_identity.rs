@@ -145,7 +145,13 @@ fn read_weapons(root: &Path) -> Result<(PathBuf, Vec<u8>, bri_weapons::Pack)> {
     std::fs::File::open(&manifest)?
         .take(WEAPON_INDEX_LIMIT + 1)
         .read_to_end(&mut bytes)?;
-    let pack = bri_weapons::Pack::from_json(&bytes)?;
+    let pack = bri_weapons::Pack::from_json(&bytes).inspect_err(|error| {
+        // Players see the plain line; the log and `--check` say how to
+        // rebuild it.
+        if let Some(line) = bri_weapons::OtherSchema::developer_of(error) {
+            eprintln!("{}: {line}", manifest.display());
+        }
+    })?;
     ensure!(
         pack.resources.len() <= 4096,
         "Weapon resource budget exceeded"

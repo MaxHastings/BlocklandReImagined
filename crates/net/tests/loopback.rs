@@ -3053,3 +3053,31 @@ async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
     server.stop().await?;
     Ok(())
 }
+
+/// A client that fell behind reading the host's updates (a busy machine, a
+/// slow frame) still gets its command's reply: the wait counts the host's
+/// ticks from where the host was when the request went, not from the stale
+/// update the client last read, so a backlog of more than
+/// `COMMAND_TICKS` updates ahead of the reply is not taken for a host that
+/// never answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_behind_on_its_updates_still_gets_its_reply() -> Result<()> {
+    let server = server::start(tool_session(), options())?;
+    let mut client = Client::connect(
+        server.address,
+        &server.certificate,
+        "Behind".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let read = client.replica.tick;
+    // Reads nothing while the host runs past the wait's whole allowance.
+    let behind = Duration::from_secs_f64((bri_net::client::COMMAND_TICKS + 240) as f64 / 120.0);
+    tokio::time::sleep(behind).await;
+    assert_eq!(client.replica.tick, read, "nothing read meanwhile");
+    client.command(Command::EquipTool { slot: None }).await?;
+    client.close();
+    server.stop().await?;
+    Ok(())
+}

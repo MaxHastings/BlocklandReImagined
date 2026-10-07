@@ -165,7 +165,7 @@ pub fn casing_kit() -> Pack {
         })
     };
     let json = serde_json::json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "id": "kit",
         "items": {},
         "images": {

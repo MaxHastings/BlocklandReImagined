@@ -23,11 +23,19 @@ mod dialog;
 #[cfg(windows)]
 mod windows;
 pub use dialog::{alert, open, summarize};
+#[cfg(windows)]
+pub use windows::STALL_DUMP_VAR;
 /// The dialog title players see.
 pub const PRODUCT: &str = "Blockland ReImagined";
 
 pub const KEEP_SESSIONS: usize = 20;
 pub const KEEP_CRASHES: usize = 10;
+/// The longest a native crash's capture waits on other threads: for its
+/// minidump, then for the session log. A crashing process still running past
+/// it is hung.
+#[cfg(windows)]
+pub const NATIVE_CAPTURE_WAIT: std::time::Duration =
+    windows::DUMP_WAIT.saturating_add(windows::DRAIN_WAIT);
 /// Lines of the session log copied into a crash report.
 const LOG_TAIL: usize = 200;
 

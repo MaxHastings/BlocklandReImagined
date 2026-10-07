@@ -683,7 +683,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bri-fire-once-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         let pack = serde_json::json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "id": "slow",
             "items": { "slow:weapon/gun": { "ui_name": "Slow", "image": "slow:image/gun" } },
             "images": { "slow:image/gun": {
@@ -709,7 +709,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bri-fire-wait-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("assets")).unwrap();
         let pack = serde_json::json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "id": "idle",
             "items": { "idle:weapon/gun": { "ui_name": "Idle", "image": "idle:image/gun" } },
             "images": { "idle:image/gun": {
