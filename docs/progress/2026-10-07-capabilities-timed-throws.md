@@ -17,9 +17,15 @@ them).
   the host, bots and the client's projectile prediction.
 - Fragments (`children`) no longer make a weapon unusable: they count no
   damage, and widen the danger zone a throw keeps clear of the thrower and
-  allies by how far they fly plus their own blast. Fragments of fragments,
-  lingering or never-expiring fragments, or ones that hurt in flight are
-  refused.
+  allies by how far they fly plus their own blast. Harmless fragments
+  (sparks, smoke, a trail) widen nothing. Fragments of fragments, lingering
+  or never-expiring fragments, or ones that hurt in flight are refused.
+  No stock v20 projectile has fragments, so no stock weapon became usable
+  by allowing them.
+- The planned flight casts one ray per chord of the arc, as long as the arc
+  sags under a plate off it (`fall_per_tick * k^2 / (8 * HZ)`). Review
+  caught the first version missing the `HZ`, which spent about 11 times
+  the rays needed.
 - A timed throw aims at the feet.
 
 ## Evidence
@@ -33,7 +39,12 @@ them).
   the thrower unhurt.
 - Tactics unit tests for the timed delivery, the cooked fuse and the
   fragment reach.
-- `bot_think_time_16` (release): 672 us/tick, under its bar.
+- `a_timed_throw_spends_one_ray_a_chord`: the chord is the longest whose
+  sag stays under a plate, and an open-air throw spends exactly one ray
+  per chord.
+- `bot_think_time_16` (release): 672 us/tick as shipped; 507 us/tick with
+  the arsenal's bouncer made a grenade (a blast and `explode_death`,
+  measured locally and not committed). Both under its 2000 us bar.
 - `cargo clippy --workspace --tests -- -D warnings`: clean.
 - `bri-chaos` `bot_tactics` has two failures that also fail on fighting
   `b6280a24` by itself (`a_close_ranged_bot_backs_out_from_under_a_low_roof_and_delivers_a_safe_blast`,
