@@ -23,7 +23,7 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod death_results;
-pub use death_results::DeathResult;
+pub use death_results::{DamageResult, DeathResult};
 mod round_results;
 pub use round_results::RoundResult;
 mod control;
@@ -956,6 +956,7 @@ pub struct Session {
     minigames: bri_minigames::MinigamesWorld,
     round_results: VecDeque<RoundResult>,
     death_results: VecDeque<DeathResult>,
+    damage_results: VecDeque<DamageResult>,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
     private_notices: VecDeque<(OwnerId, Notice)>,
@@ -1112,6 +1113,7 @@ impl Session {
             ),
             round_results: VecDeque::new(),
             death_results: VecDeque::new(),
+            damage_results: VecDeque::new(),
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
