@@ -215,6 +215,102 @@ fn a_native_crash_leaves_a_minidump_and_a_report() {
     assert_captured(dir.path(), &stderr);
 }
 
+/// A dump that never finishes: the crash stops waiting at its `DUMP_WAIT`
+/// and the report says so, and the dump's snapshot clone (a process of its
+/// own holding the crashed one's memory) is ended with it, not left
+/// running.
+#[cfg(windows)]
+#[test]
+fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
+        .env(CASE, "native")
+        .env(DIR, dir.path())
+        .env(bri_crash::STALL_DUMP_VAR, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        text
+    });
+    // The snapshot is taken: its clone runs as the child's child.
+    let deadline = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
+    while processes::children(child.id()).is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no snapshot taken");
+        std::thread::yield_now();
+    }
+    // The crash gives up on the dump and writes its report; by then the
+    // clone has been ended.
+    let reports = loop {
+        let reports = files(dir.path(), "crash-", ".txt");
+        if reports
+            .first()
+            .and_then(|r| fs::read_to_string(r).ok())
+            .is_some_and(|r| r.contains("minidump failed"))
+        {
+            break reports;
+        }
+        assert!(std::time::Instant::now() < deadline, "no report written");
+        std::thread::yield_now();
+    };
+    assert!(
+        processes::children(child.id()).is_empty(),
+        "the snapshot's clone outlived the dump's wait"
+    );
+    let report = fs::read_to_string(&reports[0]).unwrap();
+    assert!(report.contains("did not finish in time"), "{report}");
+    assert!(!child.wait().unwrap().success());
+    let _ = reader.join();
+}
+
+/// Running copies of this executable started by another: a snapshot's
+/// clone runs the same image as the process it copies (Windows Error
+/// Reporting's own processes do not).
+#[cfg(windows)]
+mod processes {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    /// The ids of processes running this executable whose parent is
+    /// `parent`.
+    pub fn children(parent: u32) -> Vec<u32> {
+        let exe = std::env::current_exe().unwrap();
+        let name: Vec<u16> = exe.file_name().unwrap().encode_wide().collect();
+        // SAFETY: a snapshot of every process, closed below.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        assert_ne!(snapshot, INVALID_HANDLE_VALUE);
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut found = Vec::new();
+        // SAFETY: a valid snapshot and an entry whose size is set.
+        let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+        while more {
+            let image = &entry.szExeFile;
+            let image = &image[..image.iter().position(|c| *c == 0).unwrap_or(image.len())];
+            if entry.th32ParentProcessID == parent && image == name.as_slice() {
+                found.push(entry.th32ProcessID);
+            }
+            // SAFETY: as above.
+            more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+        }
+        // SAFETY: the snapshot opened above.
+        unsafe { CloseHandle(snapshot) };
+        found
+    }
+}
+
 /// The original hang: a crash while the loader was busy on other threads
 /// (libraries loading and unloading, threads starting). A minidump of the
 /// live process suspended those threads mid-load, then loaded a library

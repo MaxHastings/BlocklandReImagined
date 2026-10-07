@@ -53,3 +53,26 @@ A trap met on the way: restoring a source file with `Copy-Item` keeps its
 old modification time, so cargo kept a stale build and a run measured the
 old code. Builds compared here were checked by a string only the new code
 holds.
+
+## Review fix: the snapshot on a dump timeout
+
+Checked on Max's PC with a dump forced to stall (`BRI_CRASH_STALL_DUMP` in a
+test child): the snapshot's clone ran as the crashed process's child while
+it waited, and was gone once that process exited (its handle closed). So it
+does not outlive the process, but while Windows Error Reporting keeps a
+crashed process alive the clone held a copy of its memory. On `DUMP_WAIT`
+the crashing thread now frees the snapshot itself (`free_snapshot`, which
+ends the clone); whichever of it and the dump thread takes the snapshot out
+of `SNAPSHOT` frees it, so never twice. `TerminateProcess` on the clone was
+not enough: it stayed listed until its handle closed.
+
+The breakaway flags are dropped: the earlier error 87 came from
+`PSS_CREATE_BREAKAWAY_OPTIONAL` without `PSS_CREATE_BREAKAWAY`, and with
+neither the snapshot works, so the clone stays in the game's job and dies
+with it.
+
+`a_dump_that_never_finishes_leaves_no_snapshot_behind`: waits for the clone
+to appear, then for the report to say the dump did not finish, and checks no
+copy of the executable is left as the child's child. It failed 3 of 3 with
+the timeout's free taken out and passes with it. Release: the capture test
+and the busy-loader test 20 of 20 each on the final build.

@@ -20,8 +20,8 @@ use windows_sys::Win32::{
         },
         Diagnostics::ProcessSnapshotting::{
             HPSS, PSS_CAPTURE_THREAD_CONTEXT, PSS_CAPTURE_THREADS, PSS_CAPTURE_VA_CLONE,
-            PSS_CREATE_BREAKAWAY, PSS_CREATE_BREAKAWAY_OPTIONAL, PSS_CREATE_RELEASE_SECTION,
-            PSS_CREATE_USE_VM_ALLOCATIONS, PssCaptureSnapshot, PssFreeSnapshot,
+            PSS_CREATE_RELEASE_SECTION, PSS_CREATE_USE_VM_ALLOCATIONS, PssCaptureSnapshot,
+            PssFreeSnapshot,
         },
         Pipes::CreatePipe,
         Threading::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId},
@@ -189,8 +189,13 @@ fn dump(path: &std::path::Path, info: *const EXCEPTION_POINTERS) -> io::Result<(
             done,
         })
         .map_err(|_| io::Error::other("the dump thread has stopped"))?;
-    wait.recv_timeout(DUMP_WAIT)
-        .unwrap_or_else(|_| Err(io::Error::other("the minidump did not finish in time")))
+    wait.recv_timeout(DUMP_WAIT).unwrap_or_else(|_| {
+        // The dump will not finish: free its snapshot now, which ends the
+        // clone, rather than leave a copy of this process's memory alive
+        // while Windows Error Reporting keeps the crashed process around.
+        free_snapshot();
+        Err(io::Error::other("the minidump did not finish in time"))
+    })
 }
 
 pub(crate) fn install(log: File) -> io::Result<()> {
@@ -303,12 +308,38 @@ unsafe extern "system" fn snapshot_callback(
     1
 }
 
-/// A snapshot of this process, freed on drop.
+/// The snapshot a dump is being written from (0 when none). Its clone is a
+/// process of its own, in this one's job, holding a copy of its memory.
+/// Whoever takes it out frees it: the dump thread once the dump is written,
+/// or the crashing thread when it stops waiting ([`DUMP_WAIT`]).
+static SNAPSHOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Free the snapshot a dump is being written from, if no one has yet.
+fn free_snapshot() {
+    let snapshot = SNAPSHOT.swap(0, std::sync::atomic::Ordering::AcqRel);
+    if snapshot != 0 {
+        // SAFETY: a snapshot this process captured, taken out of
+        // `SNAPSHOT` so nothing frees it twice.
+        unsafe { PssFreeSnapshot(GetCurrentProcess(), snapshot as HPSS) };
+    }
+}
+
+/// Set in a crash test's child, the dump thread stops once it has its
+/// snapshot, as a dump that never finishes would.
+pub const STALL_DUMP_VAR: &str = "BRI_CRASH_STALL_DUMP";
+
+/// A snapshot of this process, kept in [`SNAPSHOT`] and freed on drop
+/// unless the crashing thread already freed it.
 struct Snapshot(HPSS);
+impl Snapshot {
+    fn new(handle: HPSS) -> Self {
+        SNAPSHOT.store(handle as usize, std::sync::atomic::Ordering::Release);
+        Self(handle)
+    }
+}
 impl Drop for Snapshot {
     fn drop(&mut self) {
-        // SAFETY: a snapshot this process captured and has not freed.
-        unsafe { PssFreeSnapshot(GetCurrentProcess(), self.0) };
+        free_snapshot();
     }
 }
 
@@ -339,8 +370,6 @@ unsafe fn write_minidump(
     let flags = PSS_CAPTURE_VA_CLONE
         | PSS_CAPTURE_THREADS
         | PSS_CAPTURE_THREAD_CONTEXT
-        | PSS_CREATE_BREAKAWAY
-        | PSS_CREATE_BREAKAWAY_OPTIONAL
         | PSS_CREATE_USE_VM_ALLOCATIONS
         | PSS_CREATE_RELEASE_SECTION;
     let mut handle: HPSS = std::ptr::null_mut();
@@ -353,7 +382,12 @@ unsafe fn write_minidump(
             io::Error::from_raw_os_error(error as i32)
         )));
     }
-    let snapshot = Snapshot(handle);
+    let snapshot = Snapshot::new(handle);
+    if std::env::var_os(STALL_DUMP_VAR).is_some() {
+        loop {
+            std::thread::park();
+        }
+    }
     // SAFETY: the snapshot is valid until `snapshot` drops, after the dump.
     unsafe { write_snapshot(path, &snapshot, info, thread) }
 }

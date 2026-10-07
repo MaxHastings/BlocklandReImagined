@@ -23,6 +23,8 @@ mod dialog;
 #[cfg(windows)]
 mod windows;
 pub use dialog::{alert, open, summarize};
+#[cfg(windows)]
+pub use windows::STALL_DUMP_VAR;
 /// The dialog title players see.
 pub const PRODUCT: &str = "Blockland ReImagined";
 
