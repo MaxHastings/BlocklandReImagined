@@ -1678,8 +1678,9 @@ fn assess(
 }
 
 /// Exact free-flight segments match the native semi-implicit projectile step.
-/// Allies get a swept motion envelope; intended-target collisions are followed
-/// by a world probe so their present body cannot hide an obstacle on that chord.
+/// Intended-target collisions are followed by a world probe so their present
+/// body cannot hide an obstacle on that chord. The chords it checks are
+/// pushed to `chords` for the harm check (`harm::shot_harm`).
 #[allow(clippy::too_many_arguments)]
 fn clear_path(
     session: &Session,

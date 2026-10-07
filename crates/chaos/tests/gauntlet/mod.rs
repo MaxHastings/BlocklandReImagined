@@ -435,6 +435,8 @@ pub struct Report {
     /// other sides, over the match.
     pub team_damage: f32,
     pub enemy_damage: f32,
+    /// The same by the side that did it: (to its own side, to the others).
+    pub damage_by_side: BTreeMap<u32, (f32, f32)>,
     /// Bot ticks with a planned shot that would hurt its own side as much
     /// as its enemies, or kill a teammate (`BotThought::planned`).
     pub bad_plans: u64,
@@ -477,6 +479,20 @@ pub struct Report {
 }
 
 impl Report {
+    /// Each side that hurt its own side hurt its enemies more.
+    pub fn each_side_hurts_its_own_less(&self) -> Result<(), String> {
+        match self
+            .damage_by_side
+            .iter()
+            .find(|(_, (own, enemy))| *own > 0.0 && own >= enemy)
+        {
+            Some((side, (own, enemy))) => Err(format!(
+                "{}: side {side} hurt its own {own} and its enemies {enemy}",
+                self.name
+            )),
+            None => Ok(()),
+        }
+    }
     pub fn share(&self, ticks: u64) -> f32 {
         ticks as f32 / self.bot_ticks.max(1) as f32
     }
@@ -638,9 +654,11 @@ impl Scorer {
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
         for t in thoughts.values() {
-            if t.planned
-                .is_some_and(|p| p.kills_ally || (p.ally > 0.0 && p.ally >= p.enemy))
-            {
+            // As the fire gate judges it: its side's harm, its own
+            // included, under its enemies'.
+            if t.planned.is_some_and(|p| {
+                p.kills_ally || (p.ally + p.own > 0.0 && p.ally + p.own >= p.enemy)
+            }) {
                 self.report.bad_plans += 1;
             }
         }
@@ -951,12 +969,16 @@ impl Scorer {
             let (Some(by), Some(side)) = (d.source, sides.get(&d.victim)) else {
                 continue;
             };
-            match sides.get(&by) {
-                Some(theirs) if by != d.victim && theirs == side => {
-                    self.report.team_damage += d.amount
-                }
-                Some(_) if by != d.victim => self.report.enemy_damage += d.amount,
-                _ => {}
+            let Some(theirs) = sides.get(&by).filter(|_| by != d.victim) else {
+                continue;
+            };
+            let done = self.report.damage_by_side.entry(*theirs).or_default();
+            if theirs == side {
+                self.report.team_damage += d.amount;
+                done.0 += d.amount;
+            } else {
+                self.report.enemy_damage += d.amount;
+                done.1 += d.amount;
             }
         }
         self.last_damage_tick = Some(tick);

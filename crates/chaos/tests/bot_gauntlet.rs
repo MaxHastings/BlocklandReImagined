@@ -220,12 +220,7 @@ fn deathmatch_open_field() {
     // where nearly every shot landing gave 69; 40 is still a fight.
     assert!(r.kills > 0, "a real fight: {}", r.kills);
     assert_eq!(r.team_kills, 0, "no bot kills a teammate");
-    assert!(
-        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
-        "a side hurts its own less than its enemies: {} vs {}",
-        r.team_damage,
-        r.enemy_damage
-    );
+    r.each_side_hurts_its_own_less().unwrap();
     sane(&r);
 }
 
@@ -265,12 +260,7 @@ fn deathmatch_mixed_arsenal() {
     sane(&r);
     assert_eq!(r.self_kills, 0, "no bot blew itself up");
     assert_eq!(r.team_kills, 0, "no bot kills a teammate");
-    assert!(
-        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
-        "a side hurts its own less than its enemies: {} vs {}",
-        r.team_damage,
-        r.enemy_damage
-    );
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 #[test]
@@ -293,12 +283,7 @@ fn rooftop_brawl_without_rails() {
     // that worked (`knocked_off`, printed above).
     assert_eq!(r.fell, 0, "no bot strafed off the deck");
     assert_eq!(r.team_kills, 0, "no bot kills a teammate");
-    assert!(
-        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
-        "a side hurts its own less than its enemies: {} vs {}",
-        r.team_damage,
-        r.enemy_damage
-    );
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 /// A staircase of `steps` bricks rising `rise` each toward +x from `at`.
@@ -516,12 +501,7 @@ fn zombie_survival() {
     );
     sane(&r);
     assert_eq!(r.team_kills, 0, "no bot kills a teammate");
-    assert!(
-        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
-        "a side hurts its own less than its enemies: {} vs {}",
-        r.team_damage,
-        r.enemy_damage
-    );
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 #[test]
@@ -537,12 +517,7 @@ fn capture_the_flag() {
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(caps > 0, "flags were run home: {:?}", r.progress);
     assert_eq!(r.team_kills, 0, "no bot kills a teammate");
-    assert!(
-        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
-        "a side hurts its own less than its enemies: {} vs {}",
-        r.team_damage,
-        r.enemy_damage
-    );
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 /// Runners and nothing else: no weapon and no fighting, each side's flag

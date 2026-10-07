@@ -345,11 +345,9 @@ impl Session {
             return None;
         }
         let intent = brain.combat.intent(plan_tick);
-        // Judged where it believes it aims: its aim error misses for real.
-        // The miss itself must still spare its side.
-        let actual = direction;
+        // Judged where it believes it aims: its aim error misses for real
+        // (the harm check prices that miss, `hand_combat::validate_fire`).
         let direction = perception::believed(&brain.kind.perception, direction, brain.error);
-        let _ = actual;
         let mut budget = std::mem::take(&mut self.bots.combat_budget);
         let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
             hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
