@@ -435,11 +435,13 @@ fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
 /// tiles and liquids) the flight could reach. `tuning` is the target's
 /// current one, its scale applied, so the body is the right size.
 ///
-/// The impact is the motor's own `MotionEvents::impact` on the tick it
-/// lands, the vector the session hands its fall rule. Each motor tick
-/// spends one of `allowance` (the caller's share of its planning budget);
-/// `None` when it has not landed by the time that runs out, which covers a
-/// shove off into nothing and a fall into water deep enough to float it.
+/// The impact is the hardest of the motor's own `MotionEvents::impact`s
+/// from the shove until it lands (a wall slammed on the way down, or the
+/// landing), each the vector the session hands its fall rule. `allowance`
+/// is the caller's share of its planning budget: each collider copied for
+/// the flight and each motor tick spends one. `None` when it has not
+/// landed by the time that runs out, which covers a shove off into nothing
+/// and a fall into water deep enough to float it.
 ///
 /// Not covered: the target steering in the air (it is flown with no input),
 /// other bodies and vehicles in the way, and openings it would pass through.
@@ -466,6 +468,7 @@ pub fn shove_landing(
         .query_pipeline_with_filter(QueryFilter::only_fixed().exclude_sensors())
         .intersect_aabb_conservative(reach)
     {
+        *allowance = allowance.checked_sub(1)?;
         physics.insert_collider(
             ColliderBuilder::new(collider.shared_shape().clone())
                 .position(*collider.position())
@@ -477,14 +480,18 @@ pub fn shove_landing(
     bri_physics::detect_collisions(&mut physics);
     let mut player = Player::spawn_overlapping(&mut physics, 1, feet, tuning.clone()).ok()?;
     player.set_motion(velocity, false);
+    let mut hardest = Vec3::ZERO;
     while *allowance > 0 {
         *allowance -= 1;
         let events = player
             .step_in_water(&mut physics, MoveInput::default(), ground.waters)
             .ok()?;
         physics.step();
+        if events.impact.length() > hardest.length() {
+            hardest = events.impact;
+        }
         if events.landed {
-            return Some((Vec3::from(player.state().feet), events.impact));
+            return Some((Vec3::from(player.state().feet), hardest));
         }
     }
     None
@@ -544,6 +551,18 @@ mod tests {
         let (landing, left) = shove(&[ledge], feet, push);
         assert_eq!(landing, None);
         assert_eq!(left, 0);
+    }
+
+    /// Shoved hard into a wall beside it, the impact it reports is the
+    /// slam into the wall, not the soft landing after.
+    #[test]
+    fn a_shove_into_a_wall_reports_the_slam() {
+        let floor = (Vec3::new(-50.0, -1.0, -50.0), Vec3::new(50.0, 0.0, 50.0));
+        let wall = (Vec3::new(1.0, 0.0, -5.0), Vec3::new(2.0, 6.0, 5.0));
+        let (landing, _) = shove(&[floor, wall], Vec3::ZERO, Vec3::new(12.0, 1.0, 0.0));
+        let (at, impact) = landing.expect("it lands on the floor");
+        assert!(at.x < 1.0 && at.y.abs() < 0.1, "{at}");
+        assert!(impact.x > impact.y.abs(), "{impact}");
     }
     /// A leg eight up onto a landing just beside its takeoff.
     fn climb(reach: &Reach) -> Flight {
