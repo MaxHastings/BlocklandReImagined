@@ -478,10 +478,12 @@ impl Session {
 
 /// How far off its aim a shot of `pellets` with `spread` may land an ally
 /// it must spare, in radians: most of the cone for one projectile, all of
-/// it for several, since one of them may fly at its edge.
+/// it for several, since one of them may fly at its edge. Each pellet
+/// turns by up to the spread about each axis, so the edge is on the
+/// diagonal, √2 of the spread off the line.
 pub(super) fn clear_cone(spread: f32, pellets: u32) -> f32 {
     if pellets > 1 {
-        spread
+        spread * std::f32::consts::SQRT_2
     } else {
         spread * SPREAD_CLEAR
     }
@@ -521,5 +523,20 @@ mod tests {
         };
         assert!(in_line(6), "six pellets: one may fly at the edge");
         assert!(!in_line(1), "one projectile rarely lands at the edge");
+    }
+
+    #[test]
+    fn a_shot_of_several_pellets_holds_fire_for_an_ally_on_its_spread_diagonal() {
+        let spread: f32 = 0.2;
+        let (origin, target) = (Vec3::ZERO, Vec3::Z * 20.0);
+        // Turned by 0.85 of the spread about both axes: 1.2 of it off the
+        // line, past a cone of the spread itself.
+        let off = (0.85 * spread).tan() * 10.0;
+        let ally = Vec3::new(off, off, 10.0);
+        let held =
+            super::super::interactions::shot_space(origin, target, 0.0, 0.0, clear_cone(spread, 6))
+                .unwrap()
+                .holds(ally, 0.0);
+        assert!(held, "a pellet turned about both axes may fly there");
     }
 }
