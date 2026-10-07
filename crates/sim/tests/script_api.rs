@@ -248,7 +248,7 @@ fn behaviour() -> Value {
 /// light key for its reload command, and a scope image to swap in.
 fn weapons() -> bri_weapons::Pack {
     let pack = json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "id": "probe",
         "items": {
             "probe:weapon/gun": { "ui_name": "Probe Gun", "image": "probe:image/gun" },

@@ -28,7 +28,7 @@ impl Query for Air {
 /// A 3-round pistol and a carbine sharing its ammo, and a 4-shell shotgun
 /// loaded shell by shell.
 const GUNS: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "mag",
     "items": {
         "mag:weapon/pistol": { "ui_name": "Pistol", "image": "mag:image/pistol" },

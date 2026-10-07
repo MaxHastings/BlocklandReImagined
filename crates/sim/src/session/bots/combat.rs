@@ -181,15 +181,15 @@ pub(super) fn capability(
             family: Family::Melee,
             delivery: Delivery::Contact,
             trigger: tactics::Trigger::default(),
-            reach: 5.0 * scale,
+            reach: super::super::tools::TOOL_RANGE * scale,
             near: 0.0,
-            direct_damage: 10.0,
+            direct_damage: super::super::tools::HAMMER_DAMAGE,
             splash_damage: 0.0,
             splash_radius: 0.0,
             arm_ticks: 0,
             cadence_ticks: cadence(image),
             rounds_per_attack: 1,
-            push: 0.0,
+            push: (0.0, 0.0),
         });
     }
     if !charge_release_only(image) {
@@ -251,7 +251,7 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
         if let Some(cap) = capability(image, projectile, scale) {
             // One that only pushes (a broom) still moves someone off what
             // they are after.
-            if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 && cap.push <= 0.0 {
+            if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 && !cap.pushes() {
                 continue;
             }
             let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
@@ -288,7 +288,7 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
     capability(image, projectile, scale)
-        .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.push > 0.0)
+        .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.pushes())
 }
 
 /// An item whose attack pushes a player (a broom's shove).
@@ -301,7 +301,7 @@ pub(super) fn item_pushes(session: &Session, item: &str, scale: f32) -> bool {
         .projectile
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
-    capability(image, projectile, scale).is_some_and(|cap| cap.push > 0.0)
+    capability(image, projectile, scale).is_some_and(Capability::pushes)
 }
 
 /// An item that attacks from a distance (not a swing or a stab): one a
@@ -670,6 +670,7 @@ pub(super) fn choose(
                 aim,
                 ready_rounds,
                 opportunity_cost: 0.0,
+                push_harm: tactics::PUSH_WORTH,
                 switch_seconds: if Some(slot) == selected {
                     0.0
                 } else {

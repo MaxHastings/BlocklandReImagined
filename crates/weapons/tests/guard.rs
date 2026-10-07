@@ -55,7 +55,7 @@ impl Query for Field {
 /// a shield that guards while `Ready`, sends shots back and breaks after
 /// two stops.
 const KIT: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "kit",
     "items": {
         "kit:weapon/gun": { "ui_name": "Gun", "image": "kit:image/gun" },
@@ -375,10 +375,15 @@ fn with_bots_keeping_their_shields_only_players_wear_theirs_out() {
 #[test]
 fn a_shield_raised_the_way_its_holder_falls_takes_most_of_the_fall() {
     // Off (the default), a fall hurts in full.
-    let mut w = field("kit:weapon/gun", Vec3::NEG_Y);
-    assert_eq!(w.guard_fall(B, 40.0, Vec3::NEG_Y), 40.0);
+    let w = field("kit:weapon/gun", Vec3::NEG_Y);
+    assert_eq!(w.guard_fall_share(B, Vec3::NEG_Y), None);
     let mut w = field_set("kit:weapon/gun", Vec3::NEG_Y, &[("StopFalls", "true")]);
-    assert!(near(w.guard_fall(B, 40.0, Vec3::NEG_Y), 5.0), "an eighth");
+    let share = w.guard_fall_share(B, Vec3::NEG_Y).expect("met");
+    assert!(near(40.0 * share, 5.0), "an eighth");
+    // Asking makes no sound; the clang is its own call.
+    assert!(!w.step(&mut Field).iter().any(|e| matches!(e,
+        Event::Effect { definition, .. } if definition == "clangexplosion")));
+    w.guard_fall_clang(B, Vec3::NEG_Y);
     let clang = w.step(&mut Field);
     assert!(
         clang.iter().any(|e| matches!(e,
@@ -386,10 +391,10 @@ fn a_shield_raised_the_way_its_holder_falls_takes_most_of_the_fall() {
         "{clang:?}"
     );
     // Looking up, the fall is not met.
-    let mut w = field_set("kit:weapon/gun", Vec3::Y, &[("StopFalls", "true")]);
-    assert_eq!(w.guard_fall(B, 40.0, Vec3::NEG_Y), 40.0);
+    let w = field_set("kit:weapon/gun", Vec3::Y, &[("StopFalls", "true")]);
+    assert_eq!(w.guard_fall_share(B, Vec3::NEG_Y), None);
     // Nor is it with the shield put away.
     let mut w = field_set("kit:weapon/gun", Vec3::NEG_Y, &[("StopFalls", "true")]);
     w.equip(B, None).unwrap();
-    assert_eq!(w.guard_fall(B, 40.0, Vec3::NEG_Y), 40.0);
+    assert_eq!(w.guard_fall_share(B, Vec3::NEG_Y), None);
 }

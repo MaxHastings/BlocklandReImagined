@@ -988,7 +988,7 @@ mod tests {
             })
         };
         let json = serde_json::json!({
-            "schema_version": 3, "id": "kit", "items": {},
+            "schema_version": 4, "id": "kit", "items": {},
             "images": {
                 "kit:image/gun": { "name": "kitGunImage", "casing": "kitShellDebris",
                     "states": [{ "name": "Ready" }] },

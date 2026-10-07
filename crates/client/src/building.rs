@@ -82,11 +82,10 @@ impl CopyGhost {
 pub enum Equipment {
     None,
     Brick(String),
-    Hammer,
-    Wrench,
-    Printer,
+    /// An item whose image runs one of the host's building mechanisms
+    /// (the hammer, wrench, printer and wands; [`bri_weapons::OnFire::Tool`]).
+    Tool(bri_weapons::HostTool),
     Weapon(String),
-    Wand,
     Paint(u8),
     ColorEffect(u8),
     ShapeEffect(u8),
@@ -134,6 +133,9 @@ pub struct Building {
     selected_slot: Option<usize>,
     equipment: Equipment,
     tool_catalog: BTreeMap<String, ToolInfo>,
+    /// The building mechanism each tool item's image runs, by item id
+    /// ([`Self::set_host_tools`]).
+    host_tools: BTreeMap<String, bri_weapons::HostTool>,
     tools: ToolInventory,
     pending_equipment: BTreeMap<u64, (Option<usize>, Equipment)>,
     /// The newest equip the host accepted, with the replica tick its reply
@@ -220,6 +222,7 @@ impl Building {
             .into_iter()
             .map(|t| (t.id.clone(), t))
             .collect(),
+            host_tools: BTreeMap::new(),
             tools: ToolInventory::default(),
             pending_equipment: BTreeMap::new(),
             accepted_equipment: None,
@@ -883,6 +886,11 @@ impl Building {
         ]
     }
 
+    /// Which tool items run a host building mechanism, read from their
+    /// images' declared `on_fire` ([`crate::items::ItemAssets::host_tools`]).
+    pub fn set_host_tools(&mut self, tools: BTreeMap<String, bri_weapons::HostTool>) {
+        self.host_tools = tools;
+    }
     pub fn set_tool_catalog(&mut self, catalog: BTreeMap<String, ToolInfo>) -> Result<()> {
         ensure!(
             catalog.len() <= 1024
@@ -922,12 +930,9 @@ impl Building {
             .get(slot)
             .and_then(Option::as_ref)
             .context("Empty or invalid tool slot")?;
-        Ok(match id.as_str() {
-            "v20.weapon.hammeritem" => Equipment::Hammer,
-            "v20.weapon.wrenchitem" => Equipment::Wrench,
-            "v20.weapon.printgun" => Equipment::Printer,
-            "v20.weapon.wanditem" => Equipment::Wand,
-            _ => Equipment::Weapon(id.clone()),
+        Ok(match self.host_tools.get(id) {
+            Some(tool) => Equipment::Tool(*tool),
+            None => Equipment::Weapon(id.clone()),
         })
     }
     /// Replicated slots are authoritative. Pending request IDs only retain newer
@@ -964,10 +969,7 @@ impl Building {
                         .and_then(Option::as_ref)
                         .is_some_and(|id| match equipment {
                             Equipment::Weapon(expected) => id == expected,
-                            Equipment::Hammer => id == bri_weapons::HAMMER,
-                            Equipment::Wrench => id == bri_weapons::WRENCH,
-                            Equipment::Printer => id == bri_weapons::PRINTER,
-                            Equipment::Wand => id == bri_weapons::WAND,
+                            Equipment::Tool(tool) => self.host_tools.get(id) == Some(tool),
                             _ => false,
                         })
                 })
@@ -1854,14 +1856,7 @@ fn image_equipment(equipment: &Equipment) -> bool {
 }
 
 fn tool_equipment(equipment: &Equipment) -> bool {
-    matches!(
-        equipment,
-        Equipment::Hammer
-            | Equipment::Wrench
-            | Equipment::Printer
-            | Equipment::Weapon(_)
-            | Equipment::Wand
-    )
+    matches!(equipment, Equipment::Tool(_) | Equipment::Weapon(_))
 }
 
 fn same_geometry(a: &Brick, b: &Brick) -> bool {
@@ -3185,6 +3180,13 @@ mod tests {
             );
         }
         b.set_tool_catalog(catalog).unwrap();
+        b.set_host_tools(
+            [
+                (bri_weapons::HAMMER.into(), bri_weapons::HostTool::Break),
+                ("v20.weapon.wanditem".into(), bri_weapons::HostTool::Destroy),
+            ]
+            .into(),
+        );
         b
     }
     fn weapon_inventory() -> ToolInventory {
@@ -3326,7 +3328,10 @@ mod tests {
         after.selected = Some(1);
         b.sync_tools(&after, 7).unwrap();
         assert_eq!(b.active_tool, Some(1));
-        assert_eq!(b.equipment(), &Equipment::Hammer);
+        assert_eq!(
+            b.equipment(),
+            &Equipment::Tool(bri_weapons::HostTool::Break)
+        );
     }
     #[test]
     fn fire_release_survives_equip_reply_and_rejected_switch_without_repeats() {

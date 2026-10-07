@@ -274,7 +274,7 @@ mod shots {
         };
         let names = ["gun", "rocket", "bow", "sword"];
         let json = format!(
-            r#"{{ "schema_version": 3, "id": "t",
+            r#"{{ "schema_version": 4, "id": "t",
               "items": {{ {} }},
               "images": {{ {}, {}, {}, {} }},
               "projectiles": {{ {}, {}, {}, {} }} }}"#,

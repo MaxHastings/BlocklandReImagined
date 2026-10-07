@@ -362,11 +362,7 @@ impl App {
             // colour (`fxDTSBrick::renderObject`), not as ghost bricks.
             let show = matches!(
                 building.equipment(),
-                crate::building::Equipment::Brick(_)
-                    | crate::building::Equipment::Hammer
-                    | crate::building::Equipment::Wrench
-                    | crate::building::Equipment::Printer
-                    | crate::building::Equipment::Wand
+                crate::building::Equipment::Brick(_) | crate::building::Equipment::Tool(_)
             );
             let fading = if show {
                 self.fx.brick_fades.outlined()

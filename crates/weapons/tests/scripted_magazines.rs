@@ -31,7 +31,7 @@ impl Query for Air {
 /// pistol's light key goes through `ManualReload`, straight to the
 /// magazine change when it is not empty.
 const GUNS: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "mag",
     "items": {
         "mag:weapon/pump": { "ui_name": "Pump", "image": "mag:image/pump" },

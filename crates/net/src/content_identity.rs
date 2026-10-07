@@ -851,6 +851,9 @@ mod tests {
                     light: None,
                     paint_picker: false,
                     scripts: Default::default(),
+                    on_fire: None,
+                    sport: None,
+                    riding_image: None,
                 },
             );
             items.insert(

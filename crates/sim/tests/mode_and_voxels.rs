@@ -68,7 +68,7 @@ fn definitions() -> Definitions {
 }
 
 /// A tool whose image runs the rules' `dig` on a click and `place` on jet.
-const KIT_WEAPONS: &str = r#"{ "schema_version": 3, "id": "dig-kit",
+const KIT_WEAPONS: &str = r#"{ "schema_version": 4, "id": "dig-kit",
   "items": { "dig-kit:weapon/spade": { "ui_name": "Spade", "image": "dig-kit:image/spade",
     "model": "", "icon": "", "can_drop": false } },
   "images": { "dig-kit:image/spade": { "name": "SpadeImage", "model": "", "melee": true,
