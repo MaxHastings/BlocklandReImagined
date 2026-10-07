@@ -393,6 +393,12 @@ pub struct Core {
     /// The Add-On Settings window shows the server-wide settings instead
     /// (opened from the Admin menu).
     pub server_addon_settings: bool,
+    /// Add-On settings and teams set up in the Create Mini-Game window's
+    /// Setup before the game exists; sent once Create makes it.
+    pub minigame_addon_draft: Option<AddOnFavorite>,
+    /// Create succeeded: [`Self::minigame_addon_draft`] goes to the new game
+    /// as soon as the host lists it as this player's to edit.
+    pub minigame_draft_created: bool,
     /// Open `TrustInviteGui` invitation.
     /// Open trust invitations, newest last, one per sender, like mini-game
     /// invitations: the dialog shows the newest and Escape leaves them open.
@@ -553,6 +559,9 @@ impl Core {
         self.report = None;
         self.admin = Default::default();
         self.environment = Default::default();
+        // A Setup draft belongs to the server it was made on.
+        self.minigame_addon_draft = None;
+        self.minigame_draft_created = false;
         self.server_name.clear();
         self.max_players = 0;
         self.center_print = None;
@@ -676,6 +685,76 @@ impl Core {
         }
         self.minigames.status = "Waiting for the host...".into();
         Some(self.request_pending(action, Pending::MiniGame(operation)))
+    }
+    /// Send the Add-On settings set up before Create to the game Create
+    /// made, with a reset so its first round starts with them (as Save &
+    /// Reset). Waits until the host lists the game as this player's to edit
+    /// and no other mini-game request is out.
+    pub fn send_minigame_draft(&mut self) {
+        if !self.minigame_draft_created {
+            return;
+        }
+        let Some(draft) = self.minigame_addon_draft.as_ref() else {
+            self.minigame_draft_created = false;
+            return;
+        };
+        let Some(game) = self
+            .minigames
+            .active_game
+            .filter(|_| self.minigames.owns_active_game)
+            .filter(|g| {
+                self.minigames
+                    .can_on(crate::models::minigames::Operation::AddOnSettings, Some(*g))
+            })
+        else {
+            return;
+        };
+        if self
+            .pending
+            .values()
+            .any(|p| matches!(p, Pending::MiniGame(_)))
+        {
+            return;
+        }
+        let declared = |key: &str| self.minigames.addon_settings.iter().find(|s| s.key == key);
+        let changed = |values: &std::collections::BTreeMap<String, MiniGameSettingValue>| {
+            values
+                .iter()
+                // A setting the player may not change in their own game
+                // stays at the host's default (Setup greys it).
+                .filter(|(k, v)| declared(k).is_some_and(|s| s.default != **v))
+                .filter(|(k, _)| !self.minigames.addon_locked_new.contains(k))
+                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                .collect::<Vec<_>>()
+        };
+        let settings = changed(&draft.settings);
+        let teams = (!draft.teams.is_empty()).then(|| {
+            draft
+                .teams
+                .iter()
+                .map(|t| MiniGameTeamEdit {
+                    id: None,
+                    name: t.name.trim().to_owned(),
+                    color: t.color,
+                    settings: changed(&t.settings),
+                })
+                .collect()
+        });
+        self.minigame_addon_draft = None;
+        self.minigame_draft_created = false;
+        if settings.is_empty() && teams.is_none() {
+            return;
+        }
+        self.minigame_request(
+            MiniGameOperation::AddOnSettings,
+            UiAction::EditMiniGameAddOns {
+                game,
+                settings,
+                teams,
+                quiet: true,
+                reset: true,
+            },
+        );
     }
     pub fn is_pending(&self, kind: &Pending) -> bool {
         self.pending.values().any(|p| p == kind)
@@ -1455,6 +1534,8 @@ impl Ui {
             minigame_addons: None,
             minigame_addons_teams: false,
             server_addon_settings: false,
+            minigame_addon_draft: None,
+            minigame_draft_created: false,
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
             package_panels: Vec::new(),
@@ -1997,6 +2078,7 @@ impl Ui {
             }
             UiUpdate::MiniGames(state) => {
                 c.minigames = state;
+                c.send_minigame_draft();
             }
             UiUpdate::MessageBox { title, text } => c.message_ok(&title, &text),
             UiUpdate::Confirm {
