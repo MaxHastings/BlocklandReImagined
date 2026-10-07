@@ -37,16 +37,43 @@ impl Session {
     /// override file now, over the kinds given (`set_vehicle_pack`), and
     /// returns what in it no longer fits.
     pub fn set_bot_tuning(&mut self, source: BotTuning) -> Result<Vec<String>> {
-        let shipped = self.bots.kinds.clone();
         let overrides = match &source.overrides {
             Some(path) => Overrides::load(path)?,
             None => Overrides::new(),
         };
+        self.set_bot_tuning_with(source, overrides)
+    }
+    /// [`Self::set_bot_tuning`] with the override file's dials given, not
+    /// read: a replayed match starts with the ones its recording did.
+    pub fn set_bot_tuning_with(
+        &mut self,
+        source: BotTuning,
+        overrides: Overrides,
+    ) -> Result<Vec<String>> {
+        let shipped = self.bots.kinds.clone();
         self.bots.tuning = Tuning {
             source,
             shipped: Some(shipped.clone()),
             overrides,
         };
+        self.apply_bot_overrides(shipped)
+    }
+
+    /// The override dials in effect: what a recorded match starts from.
+    pub fn bot_overrides(&self) -> &Overrides {
+        &self.bots.tuning.overrides
+    }
+    /// Put `overrides` in effect over the bot kinds as shipped, keeping
+    /// where they come from: a replayed map change starts with the dials
+    /// its recording's new session read.
+    pub fn set_bot_overrides(&mut self, overrides: Overrides) -> Result<Vec<String>> {
+        let shipped = self
+            .bots
+            .tuning
+            .shipped
+            .clone()
+            .unwrap_or_else(|| self.bots.kinds.clone());
+        self.bots.tuning.overrides = overrides;
         self.apply_bot_overrides(shipped)
     }
 
@@ -161,7 +188,7 @@ impl Session {
     /// Changes not saved with `/botsave` are dropped.
     fn bot_reload(&mut self) -> Result<Vec<String>> {
         let shipped = match &self.bots.tuning.source.reload {
-            Some(reload) => reload()?,
+            Some(reload) => self.outside(|| crate::replay::BotReload(reload())).0?,
             None => self
                 .bots
                 .tuning
@@ -173,7 +200,10 @@ impl Session {
             kind.validate()?;
         }
         self.bots.tuning.overrides = match &self.bots.tuning.source.overrides {
-            Some(path) => Overrides::load(path)?,
+            Some(path) => {
+                self.outside(|| crate::replay::OverridesRead(Overrides::load(path)))
+                    .0?
+            }
             None => Overrides::new(),
         };
         self.bots.tuning.shipped = Some(shipped.clone());
@@ -196,7 +226,9 @@ impl Session {
             .overrides
             .clone()
             .context("This host keeps no bot overrides.")?;
-        self.bots.tuning.overrides.save(&path)?;
+        let overrides = &self.bots.tuning.overrides;
+        self.outside(|| crate::replay::Written(overrides.save(&path)))
+            .0?;
         Ok(vec![format!(
             "Saved {} bot overrides to {}.",
             self.bots.tuning.overrides.len(),

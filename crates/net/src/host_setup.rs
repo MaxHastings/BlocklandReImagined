@@ -17,7 +17,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 /// The content every session of a host is built from, whatever the map.
 /// Every field is required: a new kind of content is added here once and
 /// the compiler then asks every host for it.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionContent {
     pub tool_catalog: ToolCatalog,
     pub weapon_pack: bri_weapons::Pack,
@@ -166,6 +166,10 @@ pub struct HostSetup {
     /// overrides are kept (`/botset`, `/botsave`); applied as each session
     /// starts. None: the shipped kinds only.
     pub bot_tuning: Option<bri_sim::session::BotTuning>,
+    /// The override dials each session starts with, in place of reading
+    /// `bot_tuning`'s file: a replay's, as its recording started. None
+    /// reads the file.
+    pub bot_overrides: Option<bri_sim::bot_kind::tuning::Overrides>,
 }
 
 impl HostSetup {
@@ -182,6 +186,31 @@ impl HostSetup {
     /// scripts and their saved state. Also the spawn points: a package world
     /// generates its own ground.
     pub fn session(&self, hosted: &Hosted, map: MapSession) -> Result<(Session, Vec<Vec3>)> {
+        let save = self.package_save(hosted)?;
+        self.session_with(hosted, map, save.as_deref())
+    }
+
+    /// The Add-On state kept for `hosted`'s map from the last game on it
+    /// (the encoded [`PackageSave`]), if it runs Add-Ons and one was kept.
+    pub fn package_save(&self, hosted: &Hosted) -> Result<Option<Vec<u8>>> {
+        if hosted.catalog.is_none() {
+            return Ok(None);
+        }
+        let path = self
+            .add_ons
+            .as_ref()
+            .and_then(|a| a.save_path(&hosted.save_key));
+        Ok(path.and_then(|path| std::fs::read(path).ok()))
+    }
+
+    /// [`Self::session`] with the Add-On state `save` (see
+    /// [`Self::package_save`]) instead of reading it.
+    pub fn session_with(
+        &self,
+        hosted: &Hosted,
+        map: MapSession,
+        save: Option<&[u8]>,
+    ) -> Result<(Session, Vec<Vec3>)> {
         let content = &self.content;
         let mut session = Session::new(map.simulation);
         session.set_lan_host(self.lan);
@@ -192,7 +221,13 @@ impl HostSetup {
         session.set_body_mount_points(BLOCKHEAD_MODEL, content.body_mounts.clone())?;
         session.set_vehicle_pack(content.vehicle_pack.clone(), content.bot_kinds.clone())?;
         if let Some(tuning) = &self.bot_tuning {
-            for problem in session.set_bot_tuning(tuning.clone())? {
+            let problems = match &self.bot_overrides {
+                Some(overrides) => {
+                    session.set_bot_tuning_with(tuning.clone(), overrides.clone())?
+                }
+                None => session.set_bot_tuning(tuning.clone())?,
+            };
+            for problem in problems {
                 bri_console::warn(format!("Bot override left out: {problem}"));
             }
         }
@@ -217,15 +252,7 @@ impl HostSetup {
         }
         let mut spawn_points = map.spawn_points;
         if let Some(catalog) = &hosted.catalog {
-            let save = match self
-                .add_ons
-                .as_ref()
-                .and_then(|a| a.save_path(&hosted.save_key))
-                .map(std::fs::read)
-            {
-                Some(Ok(bytes)) => Some(PackageSave::decode(&bytes)?),
-                _ => None,
-            };
+            let save = save.map(PackageSave::decode).transpose()?;
             let world = catalog.world().is_some();
             let generated = session.install_packages(catalog.clone(), save)?;
             if world {
@@ -263,15 +290,35 @@ impl HostSetup {
     }
 }
 
-impl crate::server::MapHost for HostSetup {
-    fn load(&self, map: &str) -> Result<Session> {
+impl HostSetup {
+    /// The session for `map` (Change Map), set up with the Add-On state
+    /// `save` (for a replay) or the one kept for it.
+    pub fn load_map(
+        &self,
+        map: &str,
+        save: Option<Option<&[u8]>>,
+    ) -> Result<(Session, Option<Vec<u8>>)> {
         let load_map = self
             .load_map
             .as_ref()
             .context("This host cannot change maps")?;
         let hosted = self.hosted(map)?;
-        let (session, _) = self.session(&hosted, load_map(&hosted.base_map)?)?;
-        Ok(session)
+        let save = match save {
+            Some(save) => save.map(<[u8]>::to_vec),
+            None => self.package_save(&hosted)?,
+        };
+        let (session, _) =
+            self.session_with(&hosted, load_map(&hosted.base_map)?, save.as_deref())?;
+        Ok((session, save))
+    }
+}
+
+impl crate::server::MapHost for HostSetup {
+    fn load(&self, map: &str) -> Result<Session> {
+        Ok(self.load_map(map, None)?.0)
+    }
+    fn load_with_save(&self, map: &str) -> Result<(Session, Option<Vec<u8>>)> {
+        self.load_map(map, None)
     }
     fn outgoing(&self, session: &Session) {
         if let Err(error) = self.keep(session) {

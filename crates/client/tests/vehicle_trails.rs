@@ -224,6 +224,7 @@ impl Viewer {
                 color: None,
                 occupants: vec![Some(10)],
                 destroyed: false,
+                turret_broken: false,
                 scale: 1.0,
             },
         )]);

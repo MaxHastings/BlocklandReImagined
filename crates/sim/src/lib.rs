@@ -23,6 +23,7 @@ pub mod player;
 pub mod player_types;
 pub mod prediction;
 pub mod presentation;
+pub mod replay;
 pub mod route;
 pub mod session;
 pub mod simulation;

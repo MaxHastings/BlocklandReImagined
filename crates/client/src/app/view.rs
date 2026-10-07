@@ -201,7 +201,9 @@ impl App {
     /// from the eye node through their seat (`getRenderEyeTransform`).
     /// A player sitting on foot (`/sit`) sees from the eye node of the body
     /// as drawn, so the view drops with the sit pose and any crouch on top
-    /// of it. `None` on foot otherwise.
+    /// of it. Getting up, the view eases from that eye to the `standing`
+    /// one (the smoothed predicted eye) while the body blends upright.
+    /// `None` on foot otherwise.
     pub(super) fn posed_eye(
         avatars: &BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
         avatar_assets: &crate::avatar::AvatarAssets,
@@ -209,12 +211,19 @@ impl App {
         vehicles: &crate::vehicles::ClientVehicles,
         view: &network::View,
         local: &bri_sim::player::PlayerState,
+        standing: Option<Vec3>,
     ) -> Option<Vec3> {
         let vitals = view.vitals.get(&view.owner)?;
-        if vitals.mounted.is_none() && vitals.ride.is_none() && !vitals.sitting {
-            return None;
-        }
         let avatar = avatars.get(&view.owner)?;
+        if vitals.mounted.is_none() && vitals.ride.is_none() && !vitals.sitting {
+            let (sit, standing) = avatar.getting_up().zip(standing)?;
+            let head = avatar
+                .animated_world_node(avatar_assets, "Eye")?
+                .w_axis
+                .truncate();
+            let eye = standing.lerp(head, sit);
+            return eye.is_finite().then_some(eye);
+        }
         let driving = vitals.mounted.and_then(|(vehicle, seat)| {
             let info = view.vehicles.get(&vehicle)?;
             let d = vehicle_assets.definition(&info.definition)?;

@@ -413,6 +413,18 @@ impl ContentPaths {
         world_id: Option<&str>,
         palette: Option<&[[f32; 4]]>,
     ) -> Result<LoadedMap> {
+        self.map_content()?
+            .load(self.start_world(map_id, world_id, palette)?)
+    }
+
+    /// The world [`Self::load_map_with_palette`] loads the map with, as it
+    /// is before loading (what a match recording keeps).
+    pub fn start_world(
+        &self,
+        map_id: &str,
+        world_id: Option<&str>,
+        palette: Option<&[[f32; 4]]>,
+    ) -> Result<bri_world::World> {
         ensure!(
             world_id.is_none() || palette.is_none(),
             "Cannot replace a saved world's colorset"
@@ -429,7 +441,7 @@ impl ContentPaths {
             .context("Selected map is missing from native map bundle")?;
         validate_scene(&self.map_bundle, entry, &bundle)?;
         validate_catalog(self)?;
-        let world = if let Some(id) = world_id {
+        Ok(if let Some(id) = world_id {
             let index = world_index(&self.worlds)?;
             let entry = index
                 .iter()
@@ -458,8 +470,16 @@ impl ContentPaths {
                 map_id.into(),
                 palette.map_or_else(|| default_palette(&pack), |colors| Ok(colors.to_vec()))?,
             )
-        };
-        self.map_content()?.load(world)
+        })
+    }
+
+    /// The palette Change Map paints new worlds with: `palette`, or the
+    /// default colorset.
+    pub fn map_palette(&self, palette: Option<&[[f32; 4]]>) -> Result<Vec<[f32; 4]>> {
+        palette.map_or_else(
+            || default_palette(&load_ui_schema(&self.ui_pack)?),
+            |colors| Ok(colors.to_vec()),
+        )
     }
 }
 
