@@ -1767,13 +1767,14 @@ fn source_minigame_tasks_render_offscreen() -> anyhow::Result<()> {
                 }
             })
             .collect();
+    // Slayer's own settings plus the port's free-for-all bots (`ffa_bots`).
     assert_eq!(
         actual
             .addon_settings
             .iter()
             .filter(|s| !s.team && !s.server)
             .count(),
-        65
+        66
     );
     assert_eq!(actual.addon_settings.iter().filter(|s| s.team).count(), 54);
     actual.teams_shown_when = metadata.get("teams_shown_when").map(condition);

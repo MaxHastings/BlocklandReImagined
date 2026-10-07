@@ -100,10 +100,12 @@ fn tool_pack() -> bri_weapons::Pack {
     };
     let mut items = std::collections::BTreeMap::new();
     let mut images = std::collections::BTreeMap::new();
-    for (id, stem) in bri_weapons::CORE_TOOLS
-        .into_iter()
-        .zip(["hammer", "wrench", "printGun", "wand"])
-    {
+    for (id, (stem, tool)) in bri_weapons::CORE_TOOLS.into_iter().zip([
+        ("hammer", bri_weapons::HostTool::Break),
+        ("wrench", bri_weapons::HostTool::Inspect),
+        ("printGun", bri_weapons::HostTool::Print),
+        ("wand", bri_weapons::HostTool::Destroy),
+    ]) {
         let image = format!("v20.image.{}image", stem.to_ascii_lowercase());
         let states = vec![
             bri_weapons::State {
@@ -172,7 +174,9 @@ fn tool_pack() -> bri_weapons::Pack {
                 light: None,
                 paint_picker: false,
                 scripts: Default::default(),
-                on_fire: None,
+                // What the stock tools' `onFire` runs, as the importer
+                // declares it.
+                on_fire: Some(bri_weapons::OnFire::Tool(tool)),
                 sport: None,
                 riding_image: None,
             },
