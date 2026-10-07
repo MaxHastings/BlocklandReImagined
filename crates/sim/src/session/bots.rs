@@ -976,12 +976,18 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
         0.5 + body.step + body.drop,
     )
 }
-/// About how long a hop is in the air, in seconds.
-const HOP_FLIGHT: f32 = 0.8;
 /// A hop keeps the way it was moving: whether it comes down on floor
-/// (a bot hopping at a deck's edge went off it).
-fn hop_lands(simulation: &crate::simulation::Simulation, feet: Vec3, velocity: Vec3) -> bool {
-    let drift = flat(velocity) * HOP_FLIGHT;
+/// (a bot hopping at a deck's edge went off it), after the time a jump
+/// from level ground is in the air (up at `jump_speed`, back down under
+/// `gravity`).
+fn hop_lands(
+    simulation: &crate::simulation::Simulation,
+    feet: Vec3,
+    velocity: Vec3,
+    tuning: &crate::player::PlayerTuning,
+) -> bool {
+    let flight = 2.0 * tuning.jump_speed / tuning.gravity.max(f32::EPSILON);
+    let drift = flat(velocity) * flight;
     super::admin_players::world_ray(simulation, feet + drift + Vec3::Y * 0.5, Vec3::NEG_Y, 1.5)
         .is_some()
 }
@@ -3501,4 +3507,78 @@ fn team_choices(
         choice.carries = carries;
     }
     c
+}
+
+#[cfg(test)]
+mod hop_tests {
+    use super::*;
+    use crate::player::MoveInput;
+
+    /// A player standing on a deck whose edge is 4 units ahead (+z) of
+    /// the origin.
+    fn deck() -> (Session, OwnerId) {
+        use rapier3d::prelude::*;
+        let world = bri_world::World::new("Hops".into(), "fixture".into(), vec![[1.0; 4]]);
+        let deck =
+            ColliderBuilder::cuboid(20.0, 0.5, 12.0).translation(Vector::new(0.0, -0.5, -8.0));
+        let sim =
+            crate::simulation::Simulation::new(world, crate::testing::definitions(), vec![deck])
+                .unwrap();
+        let mut s = Session::new(sim);
+        let owner = s
+            .join("Hopper".into(), Vec3::new(0.0, 0.05, -10.0), false)
+            .unwrap();
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        (s, owner)
+    }
+
+    #[test]
+    fn a_hop_is_judged_over_the_time_a_real_jump_is_in_the_air() {
+        let (mut s, owner) = deck();
+        // A real jump: the ticks from leaving the deck until it stands
+        // again, with a move each tick as a client sends them.
+        let mut left = None;
+        let mut airborne = 0u32;
+        for tick in 0..600u64 {
+            s.movement(
+                owner,
+                tick + 1,
+                MoveInput {
+                    jump: tick == 0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            s.step().unwrap();
+            let grounded = s.peers[&owner].player.state().grounded;
+            match (left, grounded) {
+                (None, false) => left = Some(tick),
+                (Some(_), true) => break,
+                _ => {}
+            }
+            if left.is_some() {
+                airborne += 1;
+            }
+        }
+        let tuning = s.peers[&owner].player.tuning().clone();
+        let flight = 2.0 * tuning.jump_speed / tuning.gravity;
+        let measured = airborne as f32 / 120.0;
+        assert!(
+            (measured - flight).abs() < 0.1,
+            "a jump is {measured} s in the air, judged {flight} s"
+        );
+        // Moving at walking speed 4 units from the edge, it would come down
+        // past it; half as fast, on the deck.
+        let at = Vec3::new(0.0, 0.0, 0.0);
+        let speed = 4.0 / flight;
+        assert!(!hop_lands(
+            &s.simulation,
+            at,
+            Vec3::Z * speed * 1.2,
+            &tuning
+        ));
+        assert!(hop_lands(&s.simulation, at, Vec3::Z * speed * 0.6, &tuning));
+    }
 }
