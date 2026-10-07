@@ -12,7 +12,7 @@
 //! it, swims because water floats it, and a vehicle turns as tightly as its
 //! wheelbase and steering angle let it.
 use crate::nav::Mode;
-use crate::reach::{Handling, Reach};
+use crate::reach::Reach;
 use bri_motor::player::PlayerTuning;
 use glam::Vec3;
 use std::sync::Arc;
@@ -394,6 +394,68 @@ pub fn jet_patience(seconds: f32) -> u64 {
     (seconds * PATIENCE / bri_physics::FIXED_DT) as u64
 }
 
+/// Sideways acceleration a chassis's tyres hold in a turn, widening its
+/// turning circle with speed.
+const CORNERING: f32 = 10.0;
+
+/// How a wheeled chassis turns: from its definition's wheels and steering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Chassis {
+    /// Distance between its frontmost and rearmost axles.
+    pub wheelbase: f32,
+    /// Steering angle at full lock (`max_steering`), radians.
+    pub steer: f32,
+    /// How far the frontmost and rearmost wheels turn with the steering
+    /// (`Wheel::steering`: 1 a steered front, 0 a fixed rear, below 0 a
+    /// rear that steers against it).
+    pub front: f32,
+    pub rear: f32,
+}
+impl Chassis {
+    /// From its wheels as (position along the chassis, scaled, where -z is
+    /// forward; steering share), its full-lock angle and its length.
+    pub fn of(wheels: impl IntoIterator<Item = (f32, f32)>, steer: f32, length: f32) -> Self {
+        let wheels: Vec<(f32, f32)> = wheels.into_iter().collect();
+        let front = wheels
+            .iter()
+            .copied()
+            .reduce(|a, b| if b.0 < a.0 { b } else { a });
+        let rear = wheels
+            .iter()
+            .copied()
+            .reduce(|a, b| if b.0 > a.0 { b } else { a });
+        match (front, rear) {
+            (Some(f), Some(r)) if r.0 - f.0 > 0.1 => Self {
+                wheelbase: r.0 - f.0,
+                steer,
+                front: f.1,
+                rear: r.1,
+            },
+            _ => Self {
+                wheelbase: (length * 0.6).max(0.5),
+                steer,
+                front: 1.0,
+                rear: 0.0,
+            },
+        }
+    }
+    /// The radius of its tightest turn at walking pace, set by its
+    /// wheelbase and lock.
+    pub fn radius(&self) -> f32 {
+        let turn = (self.steer * self.front).tan() - (self.steer * self.rear).tan();
+        self.wheelbase / turn.abs().max(0.05)
+    }
+    /// The fastest it can take an arc of `radius` before its tyres let go.
+    pub fn arc_speed(radius: f32) -> f32 {
+        (CORNERING * radius.max(0.0)).sqrt()
+    }
+    /// The fastest it still turns as tightly as it can: the speed for
+    /// backing out of or pulling out of its circle.
+    pub fn manoeuvre_speed(&self) -> f32 {
+        Self::arc_speed(self.radius())
+    }
+}
+
 /// Which way a driver drives toward its next point.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Gear {
@@ -425,11 +487,8 @@ impl Gear {
 /// reversing policy (`REVERSE_DEGREES`, `REVERSE_DISTANCE` in the bots' drive).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Driving {
-    /// Its tightest turn (`reach::Handling::tightest`).
+    /// Its tightest turn at manoeuvring speed.
     pub radius: f32,
-    /// The fastest it holds that turn, give or take `reach`
-    /// (`reach::Handling::manoeuvre_speed`).
-    pub manoeuvre: f32,
     /// How near a point it counts as there: half its width.
     pub reach: f32,
     /// Cruise speeds, forward and in reverse.
@@ -455,7 +514,6 @@ pub struct Driving {
 pub fn gear(drive: &Driving, error: f32, distance: f32, was: Gear) -> Gear {
     let Driving {
         radius,
-        manoeuvre,
         reach,
         cruise,
         behind,
@@ -478,7 +536,7 @@ pub fn gear(drive: &Driving, error: f32, distance: f32, was: Gear) -> Gear {
         (false, true)
             if distance <= reverse_limit
                 && distance / cruise.1.max(0.1)
-                    < std::f32::consts::PI * radius / manoeuvre.max(0.1)
+                    < std::f32::consts::PI * radius / Chassis::arc_speed(radius)
                         + distance / cruise.0.max(0.1) =>
         {
             Gear::Reverse { nose: false }
@@ -490,21 +548,19 @@ pub fn gear(drive: &Driving, error: f32, distance: f32, was: Gear) -> Gear {
 /// How fast a driver in `gear` may go toward a point `distance` away
 /// whose bearing is `heading` off the way it steers: pure pursuit takes an
 /// arc of distance^2 / (2 x sideways), and a point abeam or behind is
-/// turned for at full lock; either no faster than it was measured holding
-/// that turn (`Handling::arc_speed`), never slower than its manoeuvring
-/// speed, and no faster than its `cruise` (forward, reverse). Backing or
-/// pulling out of its turning circle goes at manoeuvring speed.
-pub fn pace(handling: &Handling, drive: &Driving, gear: Gear, heading: f32, distance: f32) -> f32 {
-    let (radius, cruise) = (drive.radius, drive.cruise);
+/// turned for at full lock; either no faster than its tyres hold, nor than
+/// its `cruise` (forward, reverse). Backing or pulling out of its turning
+/// circle goes at manoeuvring speed.
+pub fn pace(radius: f32, gear: Gear, heading: f32, distance: f32, cruise: (f32, f32)) -> f32 {
     let arc = if heading.abs() >= std::f32::consts::FRAC_PI_2 {
         radius
     } else {
         distance * distance / (2.0 * (distance * heading.sin().abs()).max(1e-3))
     };
     match gear {
-        Gear::Forward => handling.arc_speed(arc).max(drive.manoeuvre).min(cruise.0),
-        Gear::Reverse { nose: false } => handling.arc_speed(arc).max(drive.manoeuvre).min(cruise.1),
-        Gear::Reverse { nose: true } | Gear::PullOut => drive.manoeuvre.min(cruise.1),
+        Gear::Forward => Chassis::arc_speed(arc.max(radius)).min(cruise.0),
+        Gear::Reverse { nose: false } => Chassis::arc_speed(arc.max(radius)).min(cruise.1),
+        Gear::Reverse { nose: true } | Gear::PullOut => Chassis::arc_speed(radius).min(cruise.1),
     }
 }
 
@@ -516,9 +572,6 @@ pub fn upright(rotation: [f32; 4]) -> bool {
 
 /// Seconds getting into a seat takes once beside it.
 pub const BOARD_SECONDS: f32 = 1.0;
-/// The most throttle a driver gives: it eases off from there for its
-/// heading error (`reach::Handling` is measured at it).
-pub const DRIVE_THROTTLE: f32 = 0.8;
 /// The share of its top speed a driver cruises at.
 pub const CRUISE: f32 = 0.6;
 
@@ -633,14 +686,22 @@ mod tests {
     }
 
     #[test]
-    fn a_driver_backs_out_of_its_circle_and_turns_no_faster_than_measured() {
-        let car = Handling::measure(&crate::reach::test_car(|_| {}), 1.0).expect("it drives");
-        let r = car.tightest;
+    fn a_chassis_turns_by_its_wheelbase_and_lock_and_backs_out_of_its_circle() {
+        // The test car: wheels 1.6 ahead and behind, front steered, 0.8 lock.
+        let car = Chassis::of([(-1.6, 1.0), (-1.6, 1.0), (1.6, 0.0), (1.6, 0.0)], 0.8, 4.8);
+        let r = car.radius();
+        assert!((r - 3.2 / 0.8f32.tan()).abs() < 1e-3, "{r}");
+        assert!(
+            Chassis::arc_speed(2.0 * r) > car.manoeuvre_speed(),
+            "wider arcs take more speed"
+        );
+        // Rear wheels steering against the front turn tighter.
+        let four = Chassis::of([(-1.8, 1.0), (1.8, -0.5)], 0.8, 5.0);
+        assert!(four.radius() < 3.6 / 0.8f32.tan());
         // Straight ahead: drive. Close beside: inside the circle, back up.
         let reach = 1.0;
         let drive = Driving {
             radius: r,
-            manoeuvre: car.manoeuvre_speed(reach),
             reach,
             cruise: (18.0, 6.0),
             behind: 103f32.to_radians(),
@@ -673,13 +734,10 @@ mod tests {
         assert_eq!(gear(3.1, 40.0, Gear::Forward), Gear::Forward);
         // Straight ahead goes at cruise; a turn at lock, slower; backing
         // out, at manoeuvring speed.
-        let cruise = drive.cruise;
-        let pace = |gear, heading, distance| pace(&car, &drive, gear, heading, distance);
-        assert_eq!(pace(Gear::Forward, 0.0, 300.0), cruise.0);
-        let turning = pace(Gear::Forward, 3.0, 10.0);
-        assert!((turning - drive.manoeuvre).abs() < 1e-4, "{turning}");
-        assert!(turning < cruise.0, "a turn at lock is slower");
-        assert!(pace(Gear::PullOut, 0.0, 2.0) <= cruise.1);
+        assert_eq!(pace(r, Gear::Forward, 0.0, 30.0, (18.0, 6.0)), 18.0);
+        let turning = pace(r, Gear::Forward, 3.0, 10.0, (18.0, 6.0));
+        assert!((turning - car.manoeuvre_speed()).abs() < 1e-4, "{turning}");
+        assert!(pace(r, Gear::PullOut, 0.0, 2.0, (18.0, 6.0)) <= 6.0);
         // Close behind to one side, inside the circle: pull ahead first.
         assert_eq!(gear(2.2, 2.5, Gear::Forward), Gear::PullOut);
         // A full-lock turn that passes within reach of it is good enough.

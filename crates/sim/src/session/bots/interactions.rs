@@ -1092,62 +1092,10 @@ impl Session {
 
     /// Local execution uses the actual oriented chassis, above its wheel
     /// contact plane. Static navigation is only a corridor proposal.
-    /// Whether anything stands on the path a driven chassis rolls along
-    /// for `length`, setting out along `travel` and turning by `curvature`
-    /// (radians a unit, about up): its hull swept along the arc in chords
-    /// no more than `ARC_STEP` apart, and allies on foot within
-    /// `(length, radius)` of it.
-    fn bot_vehicle_path_blocked(
-        &self,
-        bot: OwnerId,
-        v: &VehicleSnapshot,
-        travel: Vec3,
-        curvature: f32,
-        length: f32,
-        (ally_length, radius): (f32, f32),
-    ) -> bool {
-        // Each chord: where it starts (from here), the hull's turn there,
-        // and the way and length it runs.
-        let chords = |length: f32| {
-            let n = (curvature.abs() * length / ARC_STEP).ceil().max(1.0) as usize;
-            let step = length / n as f32;
-            let turn = |along: f32| glam::Quat::from_rotation_y(curvature * along);
-            let mut from = Vec3::ZERO;
-            let mut chords = Vec::with_capacity(n);
-            for i in (0..n).filter(|_| step > 0.0) {
-                let along = turn((i as f32 + 0.5) * step) * travel;
-                chords.push((from, turn(i as f32 * step), along, step));
-                from += along * step;
-            }
-            chords
-        };
-        let at = Vec3::from(v.transform.position);
-        chords(ally_length)
-            .into_iter()
-            .any(|(from, _, way, step)| self.bot_ally_corridor(bot, at + from, way, step, radius))
-            || chords(length).into_iter().any(|(from, turn, way, step)| {
-                !self.bot_hull_clear(bot, v, (from, turn), way, step)
-            })
-    }
-
     fn bot_vehicle_clear(
         &self,
         bot: OwnerId,
         v: &VehicleSnapshot,
-        direction: Vec3,
-        reach: f32,
-    ) -> bool {
-        self.bot_hull_clear(bot, v, (Vec3::ZERO, glam::Quat::IDENTITY), direction, reach)
-    }
-
-    /// Whether the hull of `v`, moved by `offset` (a shift, and a turn
-    /// about its centre) from where it is, sweeps clear `reach` along
-    /// `direction`.
-    fn bot_hull_clear(
-        &self,
-        bot: OwnerId,
-        v: &VehicleSnapshot,
-        offset: (Vec3, glam::Quat),
         direction: Vec3,
         reach: f32,
     ) -> bool {
@@ -1164,8 +1112,8 @@ impl Session {
         let mut half = (max - min) * 0.5;
         half.y = (half.y - 0.15).max(0.05);
         let local_centre = (max + min) * 0.5 + Vec3::Y * 0.15;
-        let rotation = offset.1 * glam::Quat::from_array(v.transform.rotation);
-        let at = Vec3::from(v.transform.position) + offset.0 + rotation * local_centre;
+        let rotation = glam::Quat::from_array(v.transform.rotation);
+        let at = Vec3::from(v.transform.position) + rotation * local_centre;
         let pose = Pose {
             translation: at,
             rotation,
@@ -1341,13 +1289,10 @@ impl Session {
             .context("No vehicle definition")?;
         // An affordance lost: a wreck, or a wheeled hull on its side or its
         // roof, ends the drive (and any ride in it) at once.
-        let handling = (d.family == Family::Wheeled)
-            .then(|| crate::reach::Handling::of(w, d, v.scale))
-            .flatten();
         if v.destroyed
             || d.family == Family::Wheeled
-                && (handling.is_none()
-                    || d.wheeled_flight.is_none() && !crate::route::upright(v.transform.rotation))
+                && d.wheeled_flight.is_none()
+                && !crate::route::upright(v.transform.rotation)
         {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.next_interaction = tick + GIVE_UP_TICKS;
@@ -1405,7 +1350,7 @@ impl Session {
                 tick
             }
         };
-        if let Some(handling) = handling.filter(|_| role.controls) {
+        if role.controls && d.family == Family::Wheeled {
             let hull = super::super::vehicles::heading(v.transform.rotation);
             let at = Vec3::from(v.transform.position);
             let speed = Vec3::from(v.velocity).length();
@@ -1441,13 +1386,20 @@ impl Session {
                 .map(|p| flat(p.feet - at))
                 .or(strike);
             let error = toward.map_or(0.0, |d| wrap(yaw_to(d) - hull));
-            // Pure pursuit that knows how tightly this chassis turns, as
-            // measured (`reach::Handling`): a point inside its turning
-            // circle is backed out of, never circled (`route::gear`). A
-            // chassis that made no headway backs straight up for a while.
+            // Pure pursuit that knows how tightly this chassis turns: a
+            // point inside its turning circle is backed out of, never
+            // circled (`route::gear`). A chassis that made no headway backs
+            // straight up for a while.
+            let chassis = crate::route::Chassis::of(
+                d.wheels
+                    .iter()
+                    .map(|w| (w.position[2] * v.scale, w.steering)),
+                d.max_steering,
+                (d.bounds_max[2] - d.bounds_min[2]) * v.scale,
+            );
             let yaw_rate = -v.angular_velocity[1];
             let brain = self.bots.brains.get_mut(&bot).unwrap();
-            let turn = handling.tightest;
+            let turn = chassis.radius();
             let cruise = (
                 d.max_speed * crate::route::CRUISE,
                 d.reverse_speed * crate::route::CRUISE,
@@ -1459,12 +1411,10 @@ impl Session {
                 behaviour,
                 Behaviour::Fight | Behaviour::Chase | Behaviour::Search
             );
-            // It arrives once its side passes the point.
-            let arrive = (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5;
             let drive = crate::route::Driving {
                 radius: turn,
-                manoeuvre: handling.manoeuvre_speed(arrive),
-                reach: arrive,
+                // It arrives once its side passes the point.
+                reach: (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5,
                 cruise,
                 behind: REVERSE_DEGREES.to_radians(),
                 reverse_limit: if pursuing {
@@ -1511,29 +1461,12 @@ impl Session {
                         .owner_claim(*other, tick)
                         .is_some_and(|c| c.resource.vehicle() == vehicle)
             });
-            // Where it rolls before it can stop (`Handling::stopping`),
-            // along the arc it is turning on now: a hull in the way, or an
-            // ally on foot, is braked for.
-            let stopping = handling.stopping(speed);
+            let braking = (d.brake_force / d.mass).max(1.0);
+            let stopping = speed * 0.3 + speed * speed / (2.0 * braking) + 1.0;
             let travel = hull_forward * travel_sign;
-            let curvature = (v.angular_velocity[1] / speed.max(f32::EPSILON))
-                .clamp(-1.0 / handling.tightest, 1.0 / handling.tightest);
             let radius = (d.bounds_max[0] - d.bounds_min[0]) * v.scale * 0.5;
-            // How far its end leads its middle the way it rolls (-z is the
-            // nose): allies are kept clear of that end, not of its middle.
-            let nose = if travel_sign > 0.0 {
-                -d.bounds_min[2]
-            } else {
-                d.bounds_max[2]
-            } * v.scale;
-            let hazard = self.bot_vehicle_path_blocked(
-                bot,
-                &v,
-                travel,
-                curvature,
-                stopping,
-                (nose + stopping + ALLY_ROOM, radius),
-            );
+            let hazard = self.bot_ally_corridor(bot, at, travel, stopping + 2.0, radius)
+                || !self.bot_vehicle_clear(bot, &v, travel, stopping);
             let waiting = crew_waiting && tick < since + CREW_WAIT && speed < 2.0;
             let distance = toward.map_or(0.0, |delta| delta.length());
             // The leave leg (`route`): a chassis that cannot hurt the one it
@@ -1562,18 +1495,18 @@ impl Session {
             });
             let gap = carried.map(|(_, enemy, _)| flat(enemy - at).length() - standoff);
             let corner_speed =
-                crate::route::pace(&handling, &drive, gear, heading_error, distance).max(2.0);
-            let arrival_speed = handling
-                .stopping_speed(gap.map_or(distance, |g| distance.min(g)).max(0.0))
-                .max(2.0);
+                crate::route::pace(turn, gear, heading_error, distance, cruise).max(2.0);
+            let arrival_speed =
+                (2.0 * braking * gap.map_or(distance, |g| distance.min(g)).max(0.0))
+                    .sqrt()
+                    .max(2.0);
             let brake = signed_speed * travel_sign < -0.5
                 || speed > corner_speed.min(arrival_speed)
                 || gap.is_some_and(|g| g <= 0.0) && travel_sign > 0.0;
             input.forward = if toward.is_none() || hazard || waiting || brake {
                 0.0
             } else {
-                travel_sign
-                    * (1.0 - heading_error.abs() * 0.3).clamp(0.25, crate::route::DRIVE_THROTTLE)
+                travel_sign * (1.0 - heading_error.abs() * 0.3).clamp(0.25, 0.8)
             };
             input.jump = input.forward == 0.0;
             let leave = carried.is_some_and(|(_, enemy, velocity)| {
@@ -1685,11 +1618,6 @@ const ROUTE_DROP_SLACK: f32 = 0.5;
 /// How far a driven chassis must get from where it last made headway for
 /// that to count as headway again.
 const VEHICLE_PROGRESS: f32 = 3.0;
-/// Room a driver leaves an ally on foot beyond where it would stop.
-const ALLY_ROOM: f32 = 2.0;
-/// The most a driver's predicted path turns between two of the hull
-/// checks swept along it, radians.
-const ARC_STEP: f32 = std::f32::consts::FRAC_PI_8;
 /// Ticks without headway after which a driven chassis backs straight up for
 /// a second, and plans again every second.
 const VEHICLE_STALLED: u64 = 360;
