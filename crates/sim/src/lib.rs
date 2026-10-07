@@ -7,6 +7,7 @@ pub mod archetype;
 pub mod blueprint;
 pub mod bot_kind;
 pub mod chunks;
+pub mod cpu_time;
 pub mod crouch;
 pub mod definitions;
 pub mod drop_later;

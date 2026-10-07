@@ -22,6 +22,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::wait;
+
 const SIZE: (u32, u32) = (960, 720);
 const BRICK: &str = "v20/brick/brick2x4data";
 /// How far below the horizon the guest aims to build and hammer.
@@ -1079,15 +1083,15 @@ fn new_player_screens() -> Result<()> {
     Ok(())
 }
 
-/// Regression: once the server shows the grey brick in hand, a click must
-/// still place the ghost (it went to the brick image's trigger instead).
-#[test]
-#[ignore = "packaged or generated content, loopback UDP and an offscreen GPU; no window"]
-fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
+/// Hosts Slate alone from the content root (BRI_CONTENT_ROOT, else the
+/// checkout's `content`), standing, aiming down, the 2x4 brick in hand.
+/// Loading waits on its progress, not a deadline; once in game each step
+/// gets its budget of game time ([`wait`]).
+fn host_holding_brick(name: &str, server: &str) -> Result<(Box<App>, PathBuf)> {
     let content = std::env::var_os("BRI_CONTENT_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
-    let state = std::env::temp_dir().join(format!("bri-brick-hand-{}", std::process::id()));
+    let state = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
     let mut app = App::load(&content, &state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
@@ -1098,17 +1102,19 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
             mode: ServerMode::SinglePlayer,
             game_mode: None,
             max_players: 1,
-            server_name: "Brick hand".into(),
+            server_name: server.into(),
             password: String::new(),
             admin_password: String::new(),
             super_admin_password: String::new(),
         },
     )?;
-    let start = Instant::now();
-    while !(in_game(&app) && grounded(&app)) {
-        ensure!(start.elapsed() < Duration::from_secs(120), "never in game");
-        run_for(&mut app, 50)?;
-    }
+    wait::until_one(
+        &mut app,
+        "standing in game",
+        Duration::from_secs(120),
+        step,
+        |a| in_game(a) && grounded(a),
+    )?;
     aim(&mut app, 0.0, DOWN)?;
     request(
         &mut app,
@@ -1116,22 +1122,29 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
             brick: BRICK.into(),
         },
     )?;
-    let holds = |a: &App| {
-        a.network_view().is_some_and(|v| {
-            v.weapons.images.get(&v.owner).is_some_and(|i| {
-                i.iter()
-                    .any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+    wait::until_one(
+        &mut app,
+        "the brick in hand",
+        Duration::from_secs(10),
+        step,
+        |a| {
+            a.network_view().is_some_and(|v| {
+                v.weapons.images.get(&v.owner).is_some_and(|i| {
+                    i.iter()
+                        .any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
+                })
             })
-        })
-    };
-    let start = Instant::now();
-    while !holds(&app) {
-        ensure!(
-            start.elapsed() < Duration::from_secs(10),
-            "brick never in hand"
-        );
-        run_for(&mut app, 16)?;
-    }
+        },
+    )?;
+    Ok((app, state))
+}
+
+/// Regression: once the server shows the grey brick in hand, a click must
+/// still place the ghost (it went to the brick image's trigger instead).
+#[test]
+#[ignore = "packaged or generated content, loopback UDP and an offscreen GPU; no window"]
+fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
+    let (mut app, state) = host_holding_brick("bri-brick-hand", "Brick hand")?;
     run_for(&mut app, 100)?;
     request(
         &mut app,
@@ -1153,54 +1166,7 @@ fn click_places_the_ghost_after_the_brick_is_in_hand() -> Result<()> {
 #[test]
 #[ignore = "packaged or generated content, loopback UDP and an offscreen GPU; no window"]
 fn placing_the_ghost_shows_the_brick_trail_and_puff() -> Result<()> {
-    let content = std::env::var_os("BRI_CONTENT_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
-    let state = std::env::temp_dir().join(format!("bri-brick-puff-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&state);
-    let mut app = App::load(&content, &state, SIZE)?;
-    app.ui.core.pop(ScreenId::DefaultControls);
-    request(
-        &mut app,
-        UiAction::HostGame {
-            map: "v20/add-ons/map_slate/slate.mis".into(),
-            mode: ServerMode::SinglePlayer,
-            game_mode: None,
-            max_players: 1,
-            server_name: "Brick puff".into(),
-            password: String::new(),
-            admin_password: String::new(),
-            super_admin_password: String::new(),
-        },
-    )?;
-    let start = Instant::now();
-    while !(in_game(&app) && grounded(&app)) {
-        ensure!(start.elapsed() < Duration::from_secs(120), "never in game");
-        run_for(&mut app, 50)?;
-    }
-    aim(&mut app, 0.0, DOWN)?;
-    request(
-        &mut app,
-        UiAction::InstantUseBrick {
-            brick: BRICK.into(),
-        },
-    )?;
-    let holds = |a: &App| {
-        a.network_view().is_some_and(|v| {
-            v.weapons.images.get(&v.owner).is_some_and(|i| {
-                i.iter()
-                    .any(|i| i.hand == 0 && i.image == "v20.image.brickimage")
-            })
-        })
-    };
-    let start = Instant::now();
-    while !holds(&app) {
-        ensure!(
-            start.elapsed() < Duration::from_secs(10),
-            "brick never in hand"
-        );
-        run_for(&mut app, 16)?;
-    }
+    let (mut app, state) = host_holding_brick("bri-brick-puff", "Brick puff")?;
     // The host steps on the wall clock: give it real time, frame by frame.
     let live = |app: &mut App, ms: u64| -> Result<()> {
         for _ in 0..(ms / 16).max(1) {

@@ -334,43 +334,9 @@ fn steps(s: &mut Session, n: usize) {
 /// 12-24 ms tick past the bound with no change in the work done.
 const STALL: Duration = Duration::from_millis(50);
 fn timed(f: impl FnOnce()) -> Duration {
-    let start = thread_cpu_time();
+    let start = bri_sim::cpu_time::thread();
     f();
-    thread_cpu_time().saturating_sub(start)
-}
-#[cfg(windows)]
-fn thread_cpu_time() -> Duration {
-    use windows_sys::Win32::{Foundation::FILETIME, System::Threading};
-    let zero = FILETIME {
-        dwLowDateTime: 0,
-        dwHighDateTime: 0,
-    };
-    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-    // SAFETY: the pseudo-handle of the current thread and four owned FILETIMEs.
-    let ok = unsafe {
-        Threading::GetThreadTimes(
-            Threading::GetCurrentThread(),
-            &mut created,
-            &mut exited,
-            &mut kernel,
-            &mut user,
-        )
-    };
-    assert_ne!(ok, 0, "GetThreadTimes failed");
-    let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
-    // FILETIME counts 100 ns intervals.
-    Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
-}
-#[cfg(unix)]
-fn thread_cpu_time() -> Duration {
-    let mut t = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: an owned timespec for the current thread's CPU clock.
-    let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-    assert_eq!(ok, 0, "clock_gettime failed");
-    Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
+    bri_sim::cpu_time::thread().saturating_sub(start)
 }
 
 // ----------------------------------------- 1. script work per tick and call
