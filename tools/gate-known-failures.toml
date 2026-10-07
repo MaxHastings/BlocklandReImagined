@@ -56,16 +56,6 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "The bot's jet climb to the 7-unit deck stalls near 4 units (the planner's flight estimate says it reaches); the search half was fixed in v0.2.5; the climb is parked for after v0.2.5 (bots/next-version.md)."
 
 [[failure]]
-test = "the_fixed_save_corpus_hosts_like_the_game"
-owner = "v0.2.5 bot/test cleanup"
-reason = "Duplications/bed.bls now keeps 16 bricks (8 placed, 8 set aside) against the corpus's 8 after the v0.2.4 merge; decide which is right and update save-corpus.json or the loader."
-
-[[failure]]
-test = "a_tap_inside_one_frame_still_fires::content"
-owner = "v0.2.5 bot/test cleanup"
-reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
-
-[[failure]]
 test = "steady_play_builds_and_uploads_nothing_whole::content"
 owner = "v0.2.5 bot/test cleanup"
 reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."
@@ -76,11 +66,21 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
 
 [[failure]]
-test = "steady_play_builds_and_uploads_nothing_whole::synthetic"
-owner = "v0.2.5 bot/test cleanup"
-reason = "TEMPORARY: the rocket-soak wall loses no bricks on Max's PC, intermittently in the synthetic variant (fails on unmodified main too). The bot lane fixes the rocket-soak family; remove this entry before v0.2.5 is published."
-
-[[failure]]
 test = "an_idle_bot_near_a_loose_ball_pushes_it"
 owner = "v0.2.6 bot work"
 reason = "Idle ball play outside a game runs its own push (interactions.rs) beside the objective's; the bot reaches the ball but gets it nowhere. v0.2.6 rebuilds it on the one shared push."
+
+[[failure]]
+test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
+owner = "v0.2.6 bot work"
+reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."
+
+[[failure]]
+test = "imported_ctf_bot_takes_the_actual_flag_and_returns_it_for_its_team"
+owner = "v0.2.6 bot work"
+reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."
+
+[[failure]]
+test = "profile_sixteen_bots_in_the_real_bedroom"
+owner = "v0.2.6 bot work"
+reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."

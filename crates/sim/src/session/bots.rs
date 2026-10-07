@@ -3065,21 +3065,24 @@ impl Session {
         if !walking {
             brain.progress.reset();
         }
-        // Trapped: trying to get somewhere (walking at it, or wanting a
-        // goal it has no route to) again and again, and still within
-        // `PINNED` of where it began trying. Leaving that spot, or no try
-        // for `TRY_GAP`, clears it.
-        let no_way = driving.is_none()
-            && wanted.is_none()
+        // Trapped: trying again and again to get somewhere beyond
+        // `2 * PINNED` (walking at it, or wanting a goal it has no route
+        // to), and still within `PINNED` of where it began. A stroll that
+        // gets there leaves the spot, which clears it, as does no try for
+        // `TRY_GAP`. An objective's step is the step's to give up (its own
+        // deadline), not a trap.
+        let far_goal = brain.goal.is_some_and(|g| {
+            !matches!(g, Goal::Objective(_)) && flat(g.point(brain.home) - feet).length() > 2.0 * PINNED
+        });
+        let tries = far_goal
+            && driving.is_none()
             && pushing.is_none()
             && !at_work
-            && brain
-                .goal
-                .is_some_and(|g| flat(g.point(brain.home) - feet).length() > PINNED);
+            && (walking || wanted.is_none());
         brain.pinned = brain.pinned.filter(|(at, _, last)| {
             flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP
         });
-        if walking || no_way {
+        if tries {
             let (at, since, _) = brain.pinned.unwrap_or((feet, tick, tick));
             brain.pinned = Some((at, since, tick));
         }
