@@ -24,8 +24,10 @@ change.
 
 ## Evidence
 
-- Reasoned from the code: the bake is the only work landing on a worker
-  that changes a drawn frame without a step in between; the test needs
+- Reasoned from the code, not reproduced: the bake is the work I found
+  that lands on a worker and changes a drawn frame with no step between
+  the two frames compared (pipelines `wait`; chunks upload in the frame).
+  The test needs
   the v20 content, which the cloud checkout does not have, so it was not
   run here. `cargo clippy --workspace --tests -- -D warnings` clean.
 - Next: the PC gate under load is the proof; remove nothing from
