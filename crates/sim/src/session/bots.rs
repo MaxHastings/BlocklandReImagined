@@ -780,8 +780,10 @@ struct Weapon {
 const SPREAD_BODY: f32 = 3.5;
 /// The nearest a scattering weapon's band ends, however wide its spread.
 const SPREAD_MIN_FAR: f32 = 3.0;
-/// The share of a scattering weapon's spread kept clear of allies: its
-/// pellets fall evenly across the cone, so the outer edge is thin.
+/// The share of a scattering projectile's spread kept clear of allies: it
+/// lands across the cone, rarely at the edge. A shot of several pellets
+/// keeps the whole cone clear (`fire::clear_cone`): one of them may fly
+/// at the edge.
 const SPREAD_CLEAR: f32 = 0.6;
 /// How far above the feet a splash weapon aims.
 const FEET_AIM: f32 = 0.2;

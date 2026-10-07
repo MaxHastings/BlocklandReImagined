@@ -44,9 +44,14 @@ impl Session {
         let ranged = weapon.is_some_and(|w| !w.melee);
         let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
         // A scattering weapon's shot also fans out by its spread: allies
-        // inside most of that cone are in the line of fire too.
+        // inside that cone are in the line of fire too.
+        let pellets = self
+            .weapons
+            .image_state(ActorId(bot), 0)
+            .and_then(|(image, _)| image.shot.as_ref().map(|s| s.projectiles))
+            .unwrap_or(1);
         let aim_off =
-            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| w.spread * SPREAD_CLEAR);
+            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| clear_cone(w.spread, pellets));
         let attack_clear = target.is_none_or(|seen| {
             self.bot_fire_clear(
                 bot,
@@ -469,6 +474,17 @@ impl Session {
     }
 }
 
+/// How far off its aim a shot of `pellets` with `spread` may land an ally
+/// it must spare, in radians: most of the cone for one projectile, all of
+/// it for several, since one of them may fly at its edge.
+pub(super) fn clear_cone(spread: f32, pellets: u32) -> f32 {
+    if pellets > 1 {
+        spread
+    } else {
+        spread * SPREAD_CLEAR
+    }
+}
+
 /// v20's `%spread`: each projectile turns by up to 5π·spread about each
 /// axis, in radians.
 pub(super) fn image_spread(image: &bri_weapons::Image) -> f32 {
@@ -477,4 +493,31 @@ pub(super) fn image_spread(image: &bri_weapons::Image) -> f32 {
         .as_ref()
         .filter(|s| s.spread > 0.0)
         .map_or(0.0, |s| (5.0 * std::f32::consts::PI * s.spread).min(1.4))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shot_of_several_pellets_holds_fire_for_an_ally_inside_its_outer_spread() {
+        let spread: f32 = 0.2;
+        let (origin, target) = (Vec3::ZERO, Vec3::Z * 20.0);
+        // An ally ten units out, off the line by 0.8 of the spread's angle:
+        // past most of the cone, inside all of it.
+        let ally = Vec3::new((0.8 * spread).tan() * 10.0, 0.0, 10.0);
+        let in_line = |pellets| {
+            super::super::interactions::shot_space(
+                origin,
+                target,
+                0.0,
+                0.0,
+                clear_cone(spread, pellets),
+            )
+            .unwrap()
+            .holds(ally, 0.0)
+        };
+        assert!(in_line(6), "six pellets: one may fly at the edge");
+        assert!(!in_line(1), "one projectile rarely lands at the edge");
+    }
 }
