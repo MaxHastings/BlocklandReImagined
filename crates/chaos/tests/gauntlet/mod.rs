@@ -427,6 +427,9 @@ pub struct Report {
     /// they last stood on something (a shove that worked).
     pub knocked_off: u64,
     pub shots: u64,
+    /// Bots' launches of projectiles that only push (a shove, a push
+    /// broom): no damage of their own.
+    pub push_fired: u64,
     /// Shots more than 25 degrees off the shooter's visible target.
     pub off_target: u64,
     /// Shots whose line passes nearest an ally.
@@ -506,7 +509,7 @@ impl Report {
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
+             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} push_fired={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
              progress={:?}",
             self.name,
             self.bots,
@@ -525,6 +528,7 @@ impl Report {
             self.knocked_off,
             self.deaths,
             self.shots,
+            self.push_fired,
             self.off_target,
             self.at_ally,
             self.team_damage,
@@ -592,6 +596,8 @@ pub struct Scorer {
     seen_shots: BTreeSet<u64>,
     /// Projectiles that hurt nothing (a can's paint): not shots.
     harmless: BTreeSet<String>,
+    /// Of those, the ones that push a player.
+    pushers: BTreeSet<String>,
     seen_deaths: usize,
     last_death_tick: u64,
     /// Damage results already counted: those at or before this tick.
@@ -622,6 +628,18 @@ impl Scorer {
                 .projectiles
                 .into_values()
                 .filter(|p| p.damage <= 0.0 && p.explosion.damage <= 0.0)
+                .map(|p| p.id)
+                .collect(),
+            pushers: fixture::synthetic_weapons()
+                .unwrap()
+                .0
+                .projectiles
+                .into_values()
+                .filter(|p| {
+                    p.damage <= 0.0
+                        && p.explosion.damage <= 0.0
+                        && (p.impulse > 0.0 || p.vertical > 0.0)
+                })
                 .map(|p| p.id)
                 .collect(),
             seen_deaths: 0,
@@ -873,7 +891,13 @@ impl Scorer {
         // Shots: new projectiles a bot fired.
         let view = s.weapon_view();
         for p in view.fired() {
-            if !self.seen_shots.insert(p.id) || self.harmless.contains(&p.definition) {
+            if !self.seen_shots.insert(p.id) {
+                continue;
+            }
+            if self.harmless.contains(&p.definition) {
+                if self.pushers.contains(&p.definition) && thoughts.contains_key(&p.source.0) {
+                    self.report.push_fired += 1;
+                }
                 continue;
             }
             let shooter = p.source.0;

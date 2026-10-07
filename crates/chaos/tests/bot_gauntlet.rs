@@ -286,6 +286,36 @@ fn rooftop_brawl_without_rails() {
     r.each_side_hurts_its_own_less().unwrap();
 }
 
+/// Push brooms only, on a deck high enough that a fall from it kills, one
+/// side with its back to the edge: a push is the one attack, worth the fall
+/// it sends its target into, so pushes are fired (the acceptance run once
+/// saw none at all) and some knock enemies off.
+#[test]
+fn push_brooms_on_a_high_deck() {
+    const TOP: f32 = 23.0;
+    let mut spec = Spec::new(
+        "push_brooms_on_a_high_deck",
+        // One side with its back to the deck's -x edge (at x = -79), the
+        // other a few steps in front of it.
+        line(-78.3, TOP, 48.0, 3),
+        line(-74.0, TOP, 48.0, 3),
+        &[bri_weapons::testing::BROOM_ITEM],
+    );
+    spec.bricks = floor(Vec3::new(-79.0, 0.0, 40.0), [3, 2], TOP);
+    spec.settings.falling_damage = true;
+    spec.settings.player_type = NO_JETS.into();
+    let mut b = battle(spec, |_| {});
+    let r = b.play(TOP, 60, |_, _| {});
+    assert!(r.push_fired > 0, "pushes fired: {}", r.push_fired);
+    assert!(
+        r.knocked_off > 0,
+        "a push knocked an enemy off: {}",
+        r.knocked_off
+    );
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    r.each_side_hurts_its_own_less().unwrap();
+}
+
 /// A staircase of `steps` bricks rising `rise` each toward +x from `at`.
 fn stairs(at: Vec3, steps: usize, rise: f32, width: usize) -> Vec<Brick> {
     let mut out = Vec::new();
