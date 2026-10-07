@@ -188,14 +188,15 @@ Edges are the ways the bot's body can actually move between them now:
 |---|---|---|
 | walk, step | the motor steps it (`Body::step`) | distance |
 | jump | a ledge no higher than the body was measured to jump onto (`reach::Reach::ledge`) | distance + a jump |
-| crawl | only a crouched body fits | distance + crawling |
+| crawl | only a crouched body fits; up into one (a window up a wall), no higher than the body was measured to jump into one, crouching once off the ground (`reach::Reach::crawl_ledge`) | distance + crawling (+ a jump) |
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
 | jet | the body's jets lift it (measured), the kind's `fly` weight is above 0, the full-width column up from the launch cell, the crossing at the apex and the descent are clear, and its energy holds the leg's measured jetting | the leg's measured flight time (`reach::JetReach`), plus takeoff |
 | board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
 
 **Measured reach** (`crate::reach`). What a body can jump onto and how
-long a jet leg takes are not worked out from a formula: they are measured
+long a jet leg takes, and how high a crawlspace it can jump into, are
+not worked out from a formula: they are measured
 once per tuning by running the real player motor on a bare test floor,
 under the same controls a bot uses (walking at a ledge and jumping as the
 walk leg does; flying a jet leg with `route::jet`), and shared by every
@@ -226,7 +227,8 @@ at most a few jet tests per search, one landing sample per goal.
 **Execution.** Each leg turns into ordinary controls, the same keys a
 person presses:
 
-- walk: step, jump, crouch into crawlspaces, walk through openings. The
+- walk: step, jump, crouch into crawlspaces (a jump up into one crouches
+  once off the ground, as it was measured), walk through openings. The
   grid's eight-way steps are pulled straight (`nav::pull`): each plain
   walking waypoint heads for the farthest later one of the same walk that
   the full-width standing body walks straight to (`Ground::walkable`: its

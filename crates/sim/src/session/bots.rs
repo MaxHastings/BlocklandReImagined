@@ -2876,12 +2876,17 @@ impl Session {
             proposals.push(act::Proposal {
                 jump: Some(
                     next.jump
-                        && flat(next.feet - feet).length() < crate::route::JUMP_TAKEOFF
+                        && flat(next.feet - feet).length() < crate::route::PRESS_NEAR
                         && state.grounded,
                 ),
                 // Into a crawlspace: crouch on the way in (the body stays
-                // down until it has room to stand).
-                crouch: Some(next.crouch && flat(next.feet - feet).length() < 1.6),
+                // down until it has room to stand); one jumped into, once
+                // off the ground.
+                crouch: Some(
+                    next.crouch
+                        && flat(next.feet - feet).length() < crate::route::PRESS_NEAR
+                        && !(next.jump && state.grounded),
+                ),
                 ..act::Proposal::walk(
                     act::Mover::Route,
                     if let Some(through) = next.through {

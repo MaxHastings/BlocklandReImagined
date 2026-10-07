@@ -52,6 +52,9 @@ const ON_LEDGE: f32 = crate::nav::CELL;
 pub struct Reach {
     /// Highest ledge a jump from a walk lands it on.
     pub ledge: f32,
+    /// Highest crawlspace floor (a window up a wall) a jump from a walk,
+    /// crouching once off the ground, gets it into.
+    pub crawl_ledge: f32,
     /// What its jets do with an endless supply of energy; `None` when they
     /// do not lift it (or it has none).
     pub jets: Option<JetReach>,
@@ -112,7 +115,8 @@ impl Reach {
     /// Measures `tuning` afresh.
     pub fn measure(tuning: &PlayerTuning) -> Self {
         Self {
-            ledge: ledge(tuning),
+            ledge: ledge(tuning, false),
+            crawl_ledge: ledge(tuning, true),
             jets: JetReach::measure(tuning),
         }
     }
@@ -244,8 +248,17 @@ fn world(boxes: &[(Vec3, Vec3)]) -> PhysicsWorld {
     physics
 }
 
-/// One tick of `player` moving along flat `direction` (facing -z).
-fn step(player: &mut Player, physics: &mut PhysicsWorld, direction: Vec3, jump: bool, jet: bool) {
+/// The buttons held for one measured tick.
+#[derive(Clone, Copy, Default)]
+struct Press {
+    jump: bool,
+    crouch: bool,
+    jet: bool,
+}
+
+/// One tick of `player` moving along flat `direction` (facing -z) with
+/// `press` held.
+fn step(player: &mut Player, physics: &mut PhysicsWorld, direction: Vec3, press: Press) {
     player
         .step(
             physics,
@@ -253,8 +266,9 @@ fn step(player: &mut Player, physics: &mut PhysicsWorld, direction: Vec3, jump: 
                 // Yaw zero faces -z with +x on the right.
                 forward: (-direction.z).clamp(-1.0, 1.0),
                 right: direction.x.clamp(-1.0, 1.0),
-                jump,
-                jet,
+                jump: press.jump,
+                crouch: press.crouch,
+                jet: press.jet,
                 ..Default::default()
             },
         )
@@ -271,7 +285,7 @@ fn stand(physics: &mut PhysicsWorld, tuning: &PlayerTuning) -> Option<Player> {
         if player.state().grounded {
             return Some(player);
         }
-        step(&mut player, physics, Vec3::ZERO, false, false);
+        step(&mut player, physics, Vec3::ZERO, Press::default());
     }
     None
 }
@@ -312,23 +326,41 @@ fn fly(tuning: &PlayerTuning, up: f32, across: f32) -> Option<Flight> {
             &mut player,
             &mut physics,
             control.direction,
-            control.jump,
-            control.jet,
+            Press {
+                jump: control.jump,
+                jet: control.jet,
+                ..Press::default()
+            },
         );
     }
     None
 }
 
+/// How tall a crawlspace a jump into one is measured through: the crouched
+/// body and half a nav cell, the grid's slack. A taller one is easier.
+fn crawlspace(tuning: &PlayerTuning) -> f32 {
+    tuning.crouch_height + crate::nav::CELL * 0.5
+}
+
 /// Whether a body with `tuning` walking at a ledge `height` high and
-/// jumping as a bot does lands on top of it.
-fn lands_on(tuning: &PlayerTuning, height: f32) -> bool {
+/// jumping as a bot does lands on top of it; with `crawl`, into a
+/// [`crawlspace`] over it (a window up a wall), crouching once off the
+/// ground as the walk leg does.
+fn lands_on(tuning: &PlayerTuning, height: f32, crawl: bool) -> bool {
     // A run-up long enough to reach its walking speed.
     let edge = tuning.forward.max(1.0);
     let top = Vec3::new(0.0, height, -edge - ON_LEDGE);
-    let mut physics = world(&[(
-        Vec3::new(-50.0, -1.0, -edge - 50.0),
-        Vec3::new(50.0, height, -edge),
-    )]);
+    let far = Vec3::new(50.0, height, -edge);
+    let near = Vec3::new(-50.0, -1.0, -edge - 50.0);
+    let roof = height + crawlspace(tuning);
+    let mut boxes = vec![(near, far)];
+    if crawl {
+        boxes.push((
+            Vec3::new(near.x, roof, near.z),
+            Vec3::new(far.x, roof + 50.0, far.z),
+        ));
+    }
+    let mut physics = world(&boxes);
     let Some(mut player) = stand(&mut physics, tuning) else {
         return false;
     };
@@ -353,13 +385,18 @@ fn lands_on(tuning: &PlayerTuning, height: f32) -> bool {
         } else {
             flown = true;
         }
-        let jump = state.grounded && toward.length() < crate::route::JUMP_TAKEOFF;
+        let pressing = toward.length() < crate::route::PRESS_NEAR;
+        let jump = state.grounded && pressing;
+        let crouch = crawl && (pressing && !state.grounded || feet.y > height - LEDGE_TOLERANCE);
         step(
             &mut player,
             &mut physics,
             toward.normalize_or_zero(),
-            jump,
-            false,
+            Press {
+                jump,
+                crouch,
+                jet: false,
+            },
         );
     }
     false
@@ -368,15 +405,17 @@ fn lands_on(tuning: &PlayerTuning, height: f32) -> bool {
 /// The highest ledge a body with `tuning` jumps onto from a walk, between
 /// what it steps up without jumping and what its jump speed could lift it to
 /// with a step on top.
-fn ledge(tuning: &PlayerTuning) -> f32 {
+/// With `crawl`, the highest crawlspace floor a jump then a crouch in the
+/// air gets it into.
+fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
     let rise = tuning.jump_speed * tuning.jump_speed / (2.0 * tuning.gravity);
     let (mut low, mut high) = (tuning.step_height, rise + tuning.step_height);
-    if !lands_on(tuning, low) {
+    if !lands_on(tuning, low, crawl) {
         return tuning.step_height;
     }
     while high - low > LEDGE_TOLERANCE {
         let mid = (low + high) * 0.5;
-        if lands_on(tuning, mid) {
+        if lands_on(tuning, mid, crawl) {
             low = mid;
         } else {
             high = mid;
@@ -409,8 +448,17 @@ mod tests {
         let reach = Reach::of(&t);
         let rise = t.jump_speed * t.jump_speed / (2.0 * t.gravity);
         assert!(reach.ledge > t.step_height && reach.ledge < rise + t.step_height);
-        assert!(lands_on(&t, reach.ledge));
-        assert!(!lands_on(&t, reach.ledge + LEDGE_TOLERANCE * 2.0));
+        assert!(lands_on(&t, reach.ledge, false));
+        assert!(!lands_on(&t, reach.ledge + LEDGE_TOLERANCE * 2.0, false));
+        // Into a crawlspace no higher than onto a ledge; the roof can only
+        // cut the jump short.
+        assert!(reach.crawl_ledge > t.step_height && reach.crawl_ledge <= reach.ledge);
+        assert!(lands_on(&t, reach.crawl_ledge, true));
+        assert!(!lands_on(
+            &t,
+            reach.crawl_ledge + LEDGE_TOLERANCE * 2.0,
+            true
+        ));
     }
 
     #[test]

@@ -1256,6 +1256,7 @@ impl Session {
                 crouch_height: Vec3::from(d.bounds_max).y * v.scale - support,
                 step: 0.2,
                 jump: 0.2,
+                crawl_jump: 0.2,
                 drop: 0.4,
                 floor_cos: 0.85,
                 conservative: true,

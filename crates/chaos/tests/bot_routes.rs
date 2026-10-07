@@ -193,6 +193,64 @@ fn a_bot_jets_from_open_sky_onto_a_high_platform_instead_of_hovering_under_it() 
     assert!(s.vitals()[&human].health < 100.0, "it reached melee range");
 }
 
+/// The enemy stands in a roofed room whose only way in is a window up its
+/// wall, too low to stand in. A bot that cannot jet gets in the way a
+/// player does: a jump that crouches in the air, as high as its body was
+/// measured to make one (`reach::Reach::crawl_ledge`). Nothing here is
+/// named a window: the grid finds a floor only a crouched body fits.
+#[test]
+fn a_bot_jumps_crouching_through_a_window_up_a_wall_to_reach_its_enemy() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.melee = Some(bite(5.0));
+        k.behaviours.insert("fly".into(), 0.0);
+        k.behaviours.insert("interact".into(), 0.0);
+    });
+    let spawn = Vec3::new(13.0, 0.05, 30.0);
+    s.set_spawn_points(vec![spawn]).unwrap();
+    let human = s.join("Builder".into(), spawn, true).unwrap();
+    let mut sequence = 1 << 41;
+    steps(&mut s, &[human], 10, &mut sequence);
+    // Walls of two-by-four bricks (two units along x, one along z, 0.6
+    // high), ten high: the room inside is x 11..15, z 28..32. The west
+    // wall (x 9..11) leaves out three courses, sill 1.8 to 3.6, over z
+    // 29..31: the bot sees its enemy through it.
+    let course = |k: usize| 0.3 + 0.6 * k as f32;
+    let window = |z: f32, k: usize| (29.0..31.0).contains(&z) && (3..6).contains(&k);
+    let mut bricks = vec![spawn_brick(fixture::BOT, [2.0, 0.1, 30.0], human)];
+    for k in 0..10 {
+        for i in 0..6 {
+            let z = 27.5 + i as f32;
+            if !window(z, k) {
+                bricks.push(brick(fixture::BRICK, [10.0, course(k), z], human));
+            }
+            bricks.push(brick(fixture::BRICK, [16.0, course(k), z], human));
+        }
+        for x in [12.0, 14.0] {
+            bricks.push(brick(fixture::BRICK, [x, course(k), 27.5], human));
+            bricks.push(brick(fixture::BRICK, [x, course(k), 32.5], human));
+        }
+    }
+    bricks.push(brick(fixture::BASEPLATE, [13.0, 6.1, 30.0], human));
+    load(&mut s, human, bricks);
+    minigame(&mut s, human);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut reached = None;
+    for tick in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        if reached.is_none() && feet(&s, bot).distance(feet(&s, human)) < 3.0 {
+            reached = Some(tick);
+        }
+    }
+    assert!(
+        reached.is_some(),
+        "the bot got in through the window: bot {} enemy {}",
+        feet(&s, bot),
+        feet(&s, human)
+    );
+}
+
 /// A strip of deep water lies between a bot that cannot jet and its enemy,
 /// who paces its bank. A walker floating in the water used to have no
 /// route at all once it planned again there (the walk grid lies on the

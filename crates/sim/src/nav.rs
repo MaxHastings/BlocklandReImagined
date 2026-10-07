@@ -71,6 +71,8 @@ pub struct Body {
     pub step: f32,
     /// Highest ledge a jump lands it on.
     pub jump: f32,
+    /// Highest crawlspace floor a jump then a crouch in the air gets it into.
+    pub crawl_jump: f32,
     /// Deepest drop it walks off.
     pub drop: f32,
     /// Cosine of the steepest floor it stands on.
@@ -84,10 +86,10 @@ pub struct Body {
 }
 impl Body {
     pub fn of(tuning: &bri_motor::player::PlayerTuning, scale: f32) -> Self {
-        let ledge = if scale == 1.0 {
-            crate::reach::Reach::of(tuning).ledge
+        let reach = if scale == 1.0 {
+            crate::reach::Reach::of(tuning)
         } else {
-            crate::reach::Reach::of(&tuning.clone().scaled(scale)).ledge
+            crate::reach::Reach::of(&tuning.clone().scaled(scale))
         };
         Self {
             width: tuning.width * scale,
@@ -95,7 +97,8 @@ impl Body {
             crouch_height: tuning.crouch_height * scale,
             step: tuning.step_height,
             // As high as its own motor was measured to jump on.
-            jump: ledge.max(tuning.step_height),
+            jump: reach.ledge.max(tuning.step_height),
+            crawl_jump: reach.crawl_ledge.max(tuning.step_height),
             drop: 4.0,
             floor_cos: tuning.slope_degrees.to_radians().cos(),
             conservative: false,
@@ -621,19 +624,26 @@ impl Nav {
                 let floor = self.floor(ground, body, x, z, level)?;
                 step = floor.and_then(|f| Some((f, link(body, swims, from, afloat, f)?)));
             }
-            // A crawlspace is walked into, never jumped into. A drop is
-            // stepped off only where the body clears the way out over the
-            // edge at the height it stands at: a rail or a lip between the
-            // two cells' centres, which neither cell's own sample sees,
-            // holds it back.
+            // A drop is stepped off only where the body clears the way out
+            // over the edge at the height it stands at (crouched, out of a
+            // crawlspace): a rail or a lip between the two cells' centres,
+            // which neither cell's own sample sees, holds it back.
             if let Some((f, jump)) = step
-                && !(jump && f.low)
-                && (f.y >= from - body.step
-                    || ground.sweep(
-                        body,
+                && (f.y >= from - body.step || {
+                    let crouched = !ground.clear(body, node.feet(), false);
+                    let (half_width, _, _) = body.clearance(crouched);
+                    let height = if crouched {
+                        body.crouch_height
+                    } else {
+                        body.height
+                    };
+                    ground.sweep_box(
+                        half_width,
+                        height,
                         node.feet(),
                         Vec3::new(x as f32 * CELL, from, z as f32 * CELL),
-                    ))
+                    )
+                })
             {
                 let next = Node::at(x, z, f.y);
                 straight[i] = Some((next, jump, f));
@@ -674,7 +684,7 @@ fn link(body: &Body, swims: bool, from: f32, afloat: Option<f32>, to: Floor) -> 
         return None;
     }
     if !swims {
-        return edge(body, from, to.y);
+        return edge(body, from, to);
     }
     if let Some(level) = afloat {
         // Within the same water it swims; out of it onto a bank level with
@@ -686,7 +696,7 @@ fn link(body: &Body, swims: bool, from: f32, afloat: Option<f32>, to: Floor) -> 
             (to.y - level <= body.jump).then_some(true)
         };
     }
-    match edge(body, from, to.y) {
+    match edge(body, from, to) {
         // Deep water breaks a drop of any height.
         None if to.wet && to.y < from => Some(false),
         found => found,
@@ -695,13 +705,15 @@ fn link(body: &Body, swims: bool, from: f32, afloat: Option<f32>, to: Floor) -> 
 
 /// Whether a body at height `from` gets to a neighbouring floor at `to`:
 /// `Some(false)` walking, `Some(true)` with a jump.
-fn edge(body: &Body, from: f32, to: f32) -> Option<bool> {
-    let rise = to - from;
+fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
+    let rise = to.y - from;
+    // Into a crawlspace, a jump crouches in the air.
+    let jump = if to.low { body.crawl_jump } else { body.jump };
     if rise < -body.drop {
         None
     } else if rise <= body.step + 0.05 {
         Some(false)
-    } else if rise <= body.jump {
+    } else if rise <= jump {
         Some(true)
     } else {
         None
@@ -758,22 +770,32 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Option<Flo
     crawl(ground, body, px, pz, from)
 }
 
-/// A floor at cell `px, pz` a body fits only crouched, walked in to from
-/// height `from` (never jumped up to).
+/// A floor at cell `px, pz` a body fits only crouched, from height `from`:
+/// walked in to, or jumped in to crouching in the air (a window up a wall),
+/// as high as it was measured to (`Body::crawl_jump`).
 fn crawl(ground: &Ground, body: &Body, px: f32, pz: f32, from: f32) -> Option<Floor> {
-    let top = from + body.step + 0.05;
-    let (distance, normal) = ground.ray(
-        Vec3::new(px, top, pz),
-        Vec3::NEG_Y,
-        body.step + body.drop + 0.15,
-    )?;
-    let feet = Vec3::new(px, top - distance + 0.01, pz);
-    (normal.y >= body.floor_cos && ground.clear(body, feet, true)).then(|| Floor {
-        y: top - distance,
-        snug: !ground.fits(body, feet, true),
-        low: true,
-        wet: ground.floats(body, feet).is_some(),
-    })
+    let mut top = from + body.crawl_jump.max(body.step) + 0.05;
+    let bottom = from - body.drop - 0.1;
+    // Past the undersides and walls the ray starts in or meets on the way
+    // down, as `sample` does.
+    for _ in 0..8 {
+        if top <= bottom {
+            break;
+        }
+        let (distance, normal) = ground.ray(Vec3::new(px, top, pz), Vec3::NEG_Y, top - bottom)?;
+        let hit = top - distance;
+        let feet = Vec3::new(px, hit + 0.01, pz);
+        if normal.y >= body.floor_cos && ground.clear(body, feet, true) {
+            return Some(Floor {
+                y: hit,
+                snug: !ground.fits(body, feet, true),
+                low: true,
+                wet: ground.floats(body, feet).is_some(),
+            });
+        }
+        top = hit - 0.02;
+    }
+    None
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1525,6 +1547,35 @@ mod tests {
             }
         };
         assert!(matches!(found, Found::Path(_)), "{found:?}");
+    }
+
+    /// A wall with a window up it too low to stand in: the only way on is
+    /// a jump that crouches in the air, as high as the body was measured to
+    /// get into one; set higher than that, there is no way.
+    #[test]
+    fn a_window_up_a_wall_is_jumped_into_crouching() {
+        let wall = |sill: f32| {
+            let top = sill + body().crouch_height + 0.3;
+            world(&[
+                floor(),
+                (Vec3::new(4.0, 0.0, -40.0), Vec3::new(6.0, sill, 40.0)),
+                (Vec3::new(4.0, top, -40.0), Vec3::new(6.0, 8.0, 40.0)),
+            ])
+        };
+        let sill = body().crawl_jump - 0.3;
+        assert!(sill > body().step + 0.5, "{sill}");
+        let p = path(search(&wall(sill), Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)).0);
+        assert!(
+            p.iter()
+                .any(|w| w.jump && w.crouch && (w.feet.y - sill).abs() < 0.1),
+            "jumped into the window crouching: {p:?}"
+        );
+        let (found, _) = search(
+            &wall(body().crawl_jump + 0.5),
+            Vec3::ZERO,
+            Vec3::new(10.0, 0.0, 0.0),
+        );
+        assert!(matches!(found, Found::Partial(_)), "{found:?}");
     }
 
     /// Under a slab at head height a body fits only crouched: the path

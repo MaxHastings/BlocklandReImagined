@@ -25,8 +25,8 @@ const STOCK_VISCOSITY: f32 = 40.0;
 const TAKEOFF: f32 = 3.0;
 /// Fixed cost of going into deep water, in walking units.
 const WADE_IN: f32 = 1.5;
-/// How near a jump waypoint a walking body presses jump.
-pub const JUMP_TAKEOFF: f32 = 1.6;
+/// How near a jump or crawl waypoint a walking body presses jump or crouch.
+pub const PRESS_NEAR: f32 = 1.6;
 /// Height over the landing a jet leg crosses at.
 pub const JET_CLEARANCE: f32 = 1.0;
 
