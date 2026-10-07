@@ -296,7 +296,7 @@ Per Add-On (`host::Budgets`; defaults shown):
 |---|---|---|---|
 | Instructions per `frame` | 20 million | Wasmtime fuel | Stopped: "it used too much processing time" |
 | Instructions for start and `init` | 500 million | Fuel | Never starts |
-| Wall clock per `frame` | 8 ms | Epoch interruption (1 ms tick) | Stopped: "it took too long to respond" |
+| Wall clock per call (start-up, `init` or a `frame`) | 1 s, the hang guard: fuel bounds the work, and no lag spike lasts this long | Epoch interruption (1 ms tick) | Stopped: "it took too long to respond" |
 | Wall clock for start and `init` | 1 s | Epoch | Never starts |
 | Memory | 64 MiB, one memory, one instance, 100k table elements | `StoreLimits`, trap on failed growth | Stopped: "it used too much memory" |
 | WebAssembly stack | 512 KiB | `max_wasm_stack` | Stopped: crashed (stack overflow) |

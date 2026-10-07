@@ -214,25 +214,56 @@ impl AddOnPhysics {
             .map(|h| self.world.bodies[*h].mass())
             .sum()
     }
-    /// Lay the oldest moving body still, with everything jointed to it (the
-    /// oldest ragdoll still tumbling), so the next frames cost less: the game
-    /// calls this when simulating the Add-On's bodies took longer than its
-    /// budget, and old bodies come to rest while new ones keep moving. A
-    /// settled body moves again when something hits or holds it. Returns
-    /// whether any body was moving.
-    pub fn settle_oldest(&mut self) -> bool {
-        let Some(oldest) = self
-            .bodies
-            .values()
-            .map(|b| b.handle)
-            .find(|h| !self.world.bodies[*h].is_sleeping())
-        else {
-            return false;
+    /// Whether any body of `group` lies on the world (the map, a brick,
+    /// terrain): touching a fixed surface within the solver's own allowed
+    /// error.
+    fn lies_on_world(&self, group: &std::collections::HashSet<RigidBodyHandle>) -> bool {
+        let touching = self.world.integration_parameters.allowed_linear_error();
+        let fixed = |c: ColliderHandle| {
+            self.world
+                .colliders
+                .get(c)
+                .is_some_and(|c| c.parent().is_none())
         };
-        for handle in self.jointed(oldest) {
-            self.world.bodies[handle].sleep();
+        group.iter().any(|h| {
+            self.world.bodies[*h].colliders().iter().any(|c| {
+                self.world.narrow_phase.contact_pairs_with(*c).any(|pair| {
+                    let other = if pair.collider1 == *c {
+                        pair.collider2
+                    } else {
+                        pair.collider1
+                    };
+                    fixed(other)
+                        && pair
+                            .find_deepest_contact()
+                            .is_some_and(|(_, point)| point.dist <= touching)
+                })
+            })
+        })
+    }
+    /// Lay the oldest moving body that lies on the world still, with
+    /// everything jointed to it (the oldest ragdoll down on the floor), so
+    /// the next frames cost less: the game calls this when simulating the
+    /// Add-On's bodies took longer than its budget, and old bodies come to
+    /// rest while new ones keep moving. Bodies in the air are never stopped
+    /// there. A settled body moves again when something hits or holds it.
+    /// Returns whether a group was settled.
+    pub fn settle_oldest(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        for handle in self.bodies.values().map(|b| b.handle) {
+            if seen.contains(&handle) || self.world.bodies[handle].is_sleeping() {
+                continue;
+            }
+            let group = self.jointed(handle);
+            seen.extend(group.iter().copied());
+            if self.lies_on_world(&group) {
+                for handle in group {
+                    self.world.bodies[handle].sleep();
+                }
+                return true;
+            }
         }
-        true
+        false
     }
     /// This step's forces: the pushes waiting (`kicks`, all at once) and
     /// each hold pulling its point toward its target. Returns the bodies
@@ -696,33 +727,46 @@ mod tests {
     }
 
     #[test]
-    fn settling_lays_the_oldest_moving_bodies_still_and_leaves_the_rest() {
+    fn settling_lays_the_oldest_ragdoll_on_the_floor_still_never_one_in_the_air() {
         // Max, v0.2.5 bot match: "Ragdoll stopped: its physics were too
-        // heavy". Over budget, the oldest ragdoll comes to rest instead.
+        // heavy". Over budget, the oldest ragdoll lying on the floor comes to
+        // rest instead; one thrown into the air flies on.
         let building = floor();
         let mut physics = AddOnPhysics::default();
+        // The oldest, high in the air; a newer one sliding along the floor.
         physics.apply(&chain(1, 8.0, 1));
-        physics.apply(&chain(4, 8.0, 2));
-        run(&mut physics, &building, 0.25);
-        assert!(physics.settle_oldest(), "both were falling");
+        physics.apply(&chain(4, 0.3, 2));
+        for body in 4..=6 {
+            physics.apply(&[PhysicsCommand::Push {
+                body,
+                velocity: [4.0, 0.0, 0.0],
+            }]);
+        }
+        run(&mut physics, &building, 0.1);
+        assert!(physics.settle_oldest(), "the one on the floor settles");
         let settled = physics.snapshot();
-        run(&mut physics, &building, 0.25);
+        run(&mut physics, &building, 0.1);
         let now = physics.snapshot();
-        for body in 1..=3 {
+        for body in 4..=6 {
             assert_eq!(
                 now[&body].position, settled[&body].position,
-                "{body}, the oldest, lies still"
+                "{body}, on the floor, lies still"
             );
         }
-        for body in 4..=6 {
+        for body in 1..=3 {
             assert!(
-                now[&body].position[1] < settled[&body].position[1] - 0.5,
+                now[&body].position[1] < settled[&body].position[1] - 0.2,
                 "{body} keeps falling"
             );
         }
-        // Next over budget, the next oldest.
-        assert!(physics.settle_oldest());
-        assert!(!physics.settle_oldest(), "nothing left moving");
+        // Only the one in the air is moving: nothing settles in mid-air.
+        assert!(!physics.settle_oldest(), "never stopped in the air");
+        let airborne = physics.snapshot();
+        run(&mut physics, &building, 0.1);
+        assert!(physics.snapshot()[&1].position[1] < airborne[&1].position[1]);
+        // Down on the floor and still tumbling, it settles too.
+        run(&mut physics, &building, 0.8);
+        assert!(physics.settle_oldest(), "landed");
     }
 
     #[test]

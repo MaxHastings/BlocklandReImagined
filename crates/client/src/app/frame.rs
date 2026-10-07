@@ -87,14 +87,7 @@ impl App {
         self.poll_old_saves();
         self.update_package_hud();
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
-            let skins = self.addons.item_skins.take_messages();
-            for text in self
-                .addons
-                .client_code
-                .take_messages()
-                .into_iter()
-                .chain(skins)
-            {
+            for text in self.addons.client_code.take_messages() {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
         }

@@ -16,7 +16,7 @@ after it played the old animation for the rest of the session.
   and `Budgets::physics_strikes` are deleted. `physics_ms_per_frame` (4 ms)
   stays as the cost bound.
 - A frame whose Add-On physics took longer than that settles the oldest body
-  still moving, with everything jointed to it (`AddOnPhysics::settle_oldest`):
+  still moving that lies on the world, with everything jointed to it (`AddOnPhysics::settle_oldest`):
   the oldest ragdoll lies still, new deaths keep tumbling. One group per
   frame over, so the cost falls back under the bound without a new number. A
   settled body moves again when something hits or holds it.
@@ -26,10 +26,28 @@ after it played the old animation for the rest of the session.
 
 ## Evidence
 
-- New `settling_lays_the_oldest_moving_bodies_still_and_leaves_the_rest`:
-  two falling jointed chains; settling lays the older one still for the
-  following frames while the newer keeps falling, then the next, then
-  nothing is left moving.
+- Settling is tested in `settling_lays_the_oldest_ragdoll_on_the_floor_still_never_one_in_the_air`
+  (see Review fixes).
 - `a_graphics_card_reset_stops_all_addon_code` now checks the chat stays empty.
 - `cargo test -p bri-client --lib`, `cargo test -p bri-client-sandbox`,
   workspace `cargo clippy --tests -D warnings`, all at below-normal priority.
+
+## Review fixes
+
+- Settling only lays still a group already lying on the world: a body of it
+  touching a fixed collider (map, brick, terrain) within the solver's
+  `allowed_linear_error`. A frame over budget with only airborne groups
+  moving settles nothing, so a corpse thrown by a blast never hangs in the
+  air (`settling_lays_the_oldest_ragdoll_on_the_floor_still_never_one_in_the_air`).
+- The 8 ms wall-clock limit per Add-On frame (`Budgets::frame_time`) could
+  still stop the Ragdoll in a stall ("it took too long to respond"). Fuel
+  already bounds a frame's work; the clock only backs it up for what fuel
+  undercounts (bulk memory loops). It is now one `hang_time` for any call,
+  the existing 1 s start-up allowance, which no lag spike reaches
+  (`a_frame_stalled_far_past_a_display_frame_carries_on`: a frame stalled
+  several display frames long carries on; `bulk_memory_loops_are_stopped_by_the_clock`
+  still passes).
+- Only "you have not trusted this server to run it" stays in the players'
+  chat, since they act on it. Add-On log lines, code that cannot run, the
+  trust file, sounds that do not play, elevated code left off and item skin
+  failures go to the console.

@@ -148,7 +148,7 @@ impl ClientCode {
                 Ok(None) => {}
                 Err(problems) => {
                     for p in problems {
-                        out.messages.push(format!(
+                        bri_console::warn(format!(
                             "Add-On {} has code that cannot run: {} ({})",
                             entry.id, p.message, p.code
                         ));
@@ -200,8 +200,7 @@ impl ClientCode {
         let trust = match host {
             Host::Local => None,
             Host::Remote(_) => Some(TrustStore::load(state_dir).unwrap_or_else(|e| {
-                self.messages
-                    .push(format!("Could not read {TRUST_FILE}: {e:#}"));
+                bri_console::warn(format!("Could not read {TRUST_FILE}: {e:#}"));
                 TrustStore::default()
             })),
         };
@@ -209,8 +208,7 @@ impl ClientCode {
             match Sandbox::new() {
                 Ok(sandbox) => self.sandbox = Some(sandbox),
                 Err(e) => {
-                    self.messages
-                        .push(format!("Add-On code cannot run on this PC: {e:#}"));
+                    bri_console::warn(format!("Add-On code cannot run on this PC: {e:#}"));
                     return;
                 }
             }
@@ -232,17 +230,18 @@ impl ClientCode {
             };
             let Some(granted) = granted else {
                 let summary = CodeSummary::from(code);
-                self.messages.push(if summary.tier() == Tier::Elevated {
-                    format!(
+                // Only what the player can act on goes to their chat.
+                if summary.tier() == Tier::Elevated {
+                    bri_console::warn(format!(
                         "{}'s code is off: it asks for more than the sandbox allows",
                         code.name
-                    )
+                    ));
                 } else {
-                    format!(
+                    self.messages.push(format!(
                         "{}'s code is off: you have not trusted this server to run it",
                         code.name
-                    )
-                });
+                    ));
+                }
                 continue;
             };
             let sandbox = self.sandbox.as_ref().expect("created above");
@@ -262,9 +261,10 @@ impl ClientCode {
                             Ok(asset) => {
                                 sounds.insert(name.clone(), Arc::new(asset));
                             }
-                            Err(e) => self
-                                .messages
-                                .push(format!("{}: {name} does not play: {e}", code.name)),
+                            Err(e) => bri_console::warn(format!(
+                                "{}: {name} does not play: {e}",
+                                code.name
+                            )),
                         }
                     }
                     self.running.push(Running {
@@ -426,7 +426,6 @@ impl ClientCode {
             .map_or(0.0, |last| (now - last).clamped(0.0, 0.25) as f32);
         self.last = Some(now);
         self.time += dt;
-        let messages = &mut self.messages;
         let sounds = &mut self.sounds;
         let poses = &mut self.poses;
         poses.clear();
@@ -462,7 +461,7 @@ impl ClientCode {
             match r.addon.frame(input) {
                 Ok(frame) => {
                     for line in &frame.log {
-                        messages.push(format!("{name}: {line}"));
+                        bri_console::echo(format!("{name}: {line}"));
                     }
                     for sound in &frame.sounds {
                         if let Some(asset) = r.sounds.get(&sound.name)
@@ -852,7 +851,8 @@ mod tests {
         let placed = code.running[0].frame.draws[0].model;
         // Three units ahead of where the camera was.
         assert_eq!([placed[12], placed[14]], [13.0, 5.0]);
-        assert_eq!(code.take_messages(), ["Spinning Cube: spinning cube ready"]);
+        // Its log goes to the console, not the players' chat.
+        assert!(code.take_messages().is_empty());
         code.stop();
         assert!(code.running().is_empty());
     }

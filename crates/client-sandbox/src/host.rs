@@ -9,8 +9,8 @@
 //! for their signatures.
 //!
 //! Budgets are enforced three ways: Wasmtime fuel bounds the instructions a
-//! call may run (deterministic), an epoch deadline bounds its wall-clock
-//! time (a backstop for anything fuel undercounts), and store limits bound
+//! call may run (deterministic), an epoch deadline stops a hung call (a
+//! backstop for anything fuel undercounts), and store limits bound
 //! memory and tables. Host functions count what they are asked to do. Any
 //! budget exceeded stops the Add-On for the session, with a reason the
 //! player can read; the game carries on without it.
@@ -63,10 +63,12 @@ pub struct Budgets {
     pub init_fuel: u64,
     /// Instructions (Wasmtime fuel) for one `frame` call.
     pub frame_fuel: u64,
-    /// Wall-clock time for instantiation and `init`.
-    pub init_time: Duration,
-    /// Wall-clock time for one `frame` call.
-    pub frame_time: Duration,
+    /// Wall-clock time after which any one call (instantiation and `init`,
+    /// or a `frame`) is hung. Fuel bounds the work a call does; this only
+    /// catches what fuel undercounts (a loop of bulk memory instructions),
+    /// so it is the whole start-up allowance, which no lag spike reaches: a
+    /// frame stalled by the PC is never taken for a hang.
+    pub hang_time: Duration,
     pub meshes: usize,
     pub mesh_vertices: usize,
     /// Total vertex and index bytes across every mesh.
@@ -103,8 +105,7 @@ impl Default for Budgets {
             memory_bytes: 64 * 1024 * 1024,
             init_fuel: 500_000_000,
             frame_fuel: 20_000_000,
-            init_time: Duration::from_secs(1),
-            frame_time: Duration::from_millis(8),
+            hang_time: Duration::from_secs(1),
             meshes: 1024,
             mesh_vertices: 65_536,
             mesh_bytes: 32 * 1024 * 1024,
@@ -134,8 +135,7 @@ impl Budgets {
     /// frame compiles its shaders), so they are lifted with the rest.
     pub fn untimed() -> Self {
         Self {
-            init_time: Duration::from_secs(3600),
-            frame_time: Duration::from_secs(3600),
+            hang_time: Duration::from_secs(3600),
             gpu_ms_per_frame: 1.0e9,
             gpu_stop_ms: 1.0e9,
             physics_ms_per_frame: 1.0e9,
@@ -324,7 +324,7 @@ impl Sandbox {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(budgets.init_fuel).expect("fuel is enabled");
-        store.set_epoch_deadline(ticks(budgets.init_time));
+        store.set_epoch_deadline(ticks(budgets.hang_time));
         store.epoch_deadline_trap();
         let instance = linker
             .instantiate(&mut store, &module)
@@ -652,7 +652,7 @@ impl AddOn {
             self.store
                 .set_fuel(budgets.frame_fuel)
                 .expect("fuel is enabled");
-            self.store.set_epoch_deadline(ticks(budgets.frame_time));
+            self.store.set_epoch_deadline(ticks(budgets.hang_time));
             if let Err(e) = frame.call(&mut self.store, (input.time, input.dt)) {
                 let reason = stopped(&mut self.store, e);
                 return Err(self.stop(reason));
