@@ -298,8 +298,33 @@ pub enum Family {
 pub enum Delivery {
     Ray,
     Projectile(Flight),
+    /// Flies, bounces and goes off on its own clock (a grenade): where it
+    /// bursts comes from following its flight past each bounce with the
+    /// host's own rules (`bri_weapons::runtime::{expires, hit_bursts,
+    /// rebound}`). `fuse` is a cooked image's whole fuse
+    /// (`bri_weapons::Cook::fuse_ticks`), lit before the throw.
+    Timed {
+        flight: Flight,
+        fuse: Option<u32>,
+    },
     /// Reaches by touch: a melee swing.
     Contact,
+}
+/// A timed delivery's cooked fuse, 0 for none.
+fn fuse_of(weapon: Capability) -> u32 {
+    match weapon.delivery {
+        Delivery::Timed { fuse, .. } => fuse.unwrap_or(0),
+        _ => 0,
+    }
+}
+impl Delivery {
+    /// The launch of a flying delivery.
+    pub fn flight(self) -> Option<Flight> {
+        match self {
+            Self::Projectile(flight) | Self::Timed { flight, .. } => Some(flight),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Trigger {
@@ -316,6 +341,11 @@ pub struct Capability {
     pub direct_damage: f32,
     pub splash_damage: f32,
     pub splash_radius: f32,
+    /// How much further than `splash_radius` the fragments its burst throws
+    /// out can still hurt (`ProjectileDef::children`, their flight and
+    /// their own blast): the danger zone a safe throw keeps clear of the
+    /// thrower and allies. Fragments count no damage of their own.
+    pub danger: f32,
     /// Arm time limits feasible damaging impact, independently of trigger charge.
     pub arm_ticks: u32,
     pub cadence_ticks: u32,
@@ -344,6 +374,7 @@ impl Capability {
             self.direct_damage,
             self.splash_damage,
             self.splash_radius,
+            self.danger,
         ])?;
         if self.reach <= 0.0
             || self.reach > 1_000_000.0
@@ -355,17 +386,25 @@ impl Capability {
             || self.direct_damage > 100_000.0
             || self.splash_damage > 100_000.0
             || self.splash_radius > 100_000.0
+            || !(0.0..=100_000.0).contains(&self.danger)
             || self.cadence_ticks == 0
             || self.cadence_ticks > MAX_LIFETIME_TICKS
             || self.rounds_per_attack == 0
         {
             return Err(Invalid::OutOfBounds);
         }
-        if let Delivery::Projectile(flight) = self.delivery {
+        if let Some(flight) = self.delivery.flight() {
             flight.validate()?;
             if self.arm_ticks > flight.lifetime_ticks {
                 return Err(Invalid::OutOfBounds);
             }
+        }
+        if let Delivery::Timed { fuse, .. } = self.delivery
+            && (self.family != Family::Splash
+                || self.arm_ticks != 0
+                || fuse.is_some_and(|f| f == 0 || f > MAX_LIFETIME_TICKS))
+        {
+            return Err(Invalid::OutOfBounds);
         }
         if self.family == Family::Splash && (self.splash_radius == 0.0 || self.splash_damage == 0.0)
         {
@@ -393,20 +432,20 @@ pub enum DescriptorRequired {
 /// min_shot_ticks alone is only a lower bound, never its complete fire rate.
 /// More complex native state/volley/lob/recoil and scripted tools require an explicit descriptor;
 /// no absent projectile becomes an imaginary melee attack.
+/// `projectiles` holds the fragments a projectile throws out (its
+/// `children`), which widen its danger zone ([`Capability::danger`]).
 pub fn native_capability(
     image: &bri_weapons::Image,
     projectile: Option<&bri_weapons::ProjectileDef>,
     scale: f32,
     cadence_ticks: u32,
+    projectiles: &std::collections::BTreeMap<String, bri_weapons::ProjectileDef>,
 ) -> Result<Capability, DescriptorRequired> {
     if image.command.is_some() || !image.commands.is_empty() || !image.scripts.is_empty() {
         return Err(DescriptorRequired::ScriptedTool);
     }
     if image.melee {
         return Err(DescriptorRequired::GeometryAdjustedMelee);
-    }
-    if image.cook.is_some() {
-        return Err(DescriptorRequired::SecondaryEffects);
     }
     if image.last_shot.is_some()
         || !image.state_shots.is_empty()
@@ -435,9 +474,10 @@ pub fn native_capability(
             DescriptorRequired::MissingAttack
         });
     };
-    if !p.children.is_empty() || p.aura.is_some() {
+    if p.aura.is_some() {
         return Err(DescriptorRequired::SecondaryEffects);
     }
+    let danger = fragment_reach(p, scale, projectiles)?;
     if !p.collide_players {
         return Err(DescriptorRequired::NonActorAttack);
     }
@@ -463,15 +503,29 @@ pub fn native_capability(
         return Err(DescriptorRequired::StateDependentLaunch);
     }
     let using = image.bot.unwrap_or_default();
+    let splash = p.explosion.radius > 0.0 && p.explosion.damage > 0.0;
+    // Goes off on its own clock: lit in the hand, or bouncing until armed.
+    let timed = ray.is_none()
+        && (image.cook.is_some() || (p.ballistic && !p.explode_player && p.arm_ticks > 0));
+    if image.cook.is_some() && !splash {
+        // A cooked smoke or flare: no burst to aim.
+        return Err(DescriptorRequired::SecondaryEffects);
+    }
+    let flight = Flight {
+        speed: p.speed * scale,
+        fall_per_tick: bri_weapons::runtime::fall_per_tick(p),
+        inherit: p.inherit * scale,
+        lifetime_ticks: p.lifetime_ticks,
+    };
     let delivery = if ray.is_some() {
         Delivery::Ray
+    } else if timed && splash {
+        Delivery::Timed {
+            flight,
+            fuse: image.cook.as_ref().map(|c| c.fuse_ticks),
+        }
     } else {
-        Delivery::Projectile(Flight {
-            speed: p.speed * scale,
-            fall_per_tick: bri_weapons::runtime::fall_per_tick(p),
-            inherit: p.inherit * scale,
-            lifetime_ticks: p.lifetime_ticks,
-        })
+        Delivery::Projectile(flight)
     };
     let reach = using.reach.unwrap_or_else(|| {
         ray.map_or(p.speed * scale * p.lifetime_ticks as f32 / HZ as f32, |r| {
@@ -479,7 +533,7 @@ pub fn native_capability(
         })
     });
     let result = Capability {
-        family: if p.explosion.radius > 0.0 && p.explosion.damage > 0.0 {
+        family: if splash {
             Family::Splash
         } else {
             Family::Direct
@@ -498,7 +552,13 @@ pub fn native_capability(
             * if p.fixed_damage { 1.0 } else { scale },
         splash_damage: p.explosion.damage * scale,
         splash_radius: p.explosion.radius.max(p.explosion.impulse_radius) * scale,
-        arm_ticks: if ray.is_some() || !p.ballistic || p.explode_player || p.explosion.damage == 0.0
+        danger,
+        // A timed throw's arming is part of where it bursts.
+        arm_ticks: if ray.is_some()
+            || !p.ballistic
+            || p.explode_player
+            || p.explosion.damage == 0.0
+            || matches!(delivery, Delivery::Timed { .. })
         {
             0
         } else {
@@ -515,6 +575,37 @@ pub fn native_capability(
         .validate()
         .map_err(|_| DescriptorRequired::InvalidNativeData)?;
     Ok(result)
+}
+
+/// How far past its own blast the fragments `p` throws out can hurt: each
+/// set's launch speed over its fragment's life, plus that fragment's own
+/// blast. Fragments that throw out fragments of their own, linger (an
+/// aura), never expire, or hurt anywhere but at the burst are refused, so
+/// the reach stays something a bot can keep clear of.
+fn fragment_reach(
+    p: &bri_weapons::ProjectileDef,
+    scale: f32,
+    projectiles: &std::collections::BTreeMap<String, bri_weapons::ProjectileDef>,
+) -> Result<f32, DescriptorRequired> {
+    let mut reach = 0.0_f32;
+    for set in &p.children {
+        let child = projectiles
+            .get(&set.projectile)
+            .ok_or(DescriptorRequired::MissingProjectile)?;
+        let hurts = child.damage > 0.0 || child.explosion.damage > 0.0;
+        if !child.children.is_empty()
+            || child.aura.is_some()
+            || child.lifetime_ticks == 0
+            || (hurts && (set.every_ticks > 0 || set.on_bounce || set.on_hit))
+        {
+            return Err(DescriptorRequired::SecondaryEffects);
+        }
+        let speed = set.speed.max(0.0) + set.inherit.abs() * p.speed.max(0.0);
+        let flown = speed * child.lifetime_ticks as f32 / HZ as f32;
+        let blast = child.explosion.radius.max(child.explosion.impulse_radius);
+        reach = reach.max((flown + blast) * scale);
+    }
+    Ok(reach)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -618,11 +709,11 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
     {
         return Err(Unsuited::Ammo);
     }
-    let flight_seconds = if let Delivery::Projectile(flight) = weapon.delivery {
+    let flight_seconds = if let Some(flight) = weapon.delivery.flight() {
         let aim = context.aim.ok_or(Unsuited::NoIntercept)?;
         if !aim.time_seconds.is_finite()
             || aim.time_seconds <= 0.0
-            || aim.time_seconds > f64::from(flight.lifetime_ticks) * DT
+            || aim.time_seconds > f64::from(flight.lifetime_ticks.max(fuse_of(weapon))) * DT
             || !aim.direction.is_finite()
             || (aim.direction.length_squared() - 1.0).abs() > 0.001
             || !aim.launch_velocity.is_finite()
@@ -638,7 +729,7 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
         0.0
     };
     if weapon.splash_radius > 0.0 {
-        let safe = weapon.splash_radius + context.blast_margin;
+        let safe = weapon.splash_radius + weapon.danger + context.blast_margin;
         if context.self_clearance <= safe || context.ally_clearance.is_some_and(|d| d <= safe) {
             return Err(Unsuited::UnsafeBlast);
         }
@@ -983,6 +1074,7 @@ mod tests {
             direct_damage: 20.0,
             splash_damage: 0.0,
             splash_radius: 0.0,
+            danger: 0.0,
             arm_ticks: 0,
             cadence_ticks: 12,
             rounds_per_attack: 1,
@@ -1037,6 +1129,7 @@ mod tests {
         let splash = Capability {
             family: Family::Splash,
             splash_radius: 8.0,
+            danger: 0.0,
             splash_damage: 80.0,
             ..ray()
         };
@@ -1077,6 +1170,7 @@ mod tests {
         let splash = Capability {
             family: Family::Splash,
             splash_radius: 8.0,
+            danger: 0.0,
             splash_damage: 80.0,
             ..ray()
         };
@@ -1264,7 +1358,7 @@ mod tests {
             },
         ];
         let p = native_projectile();
-        let cap = native_capability(&image, Some(&p), 2.0, 60).unwrap();
+        let cap = native_capability(&image, Some(&p), 2.0, 60, &Default::default()).unwrap();
         let Delivery::Projectile(f) = cap.delivery else {
             panic!("projectile descriptor");
         };
@@ -1276,13 +1370,16 @@ mod tests {
         assert_eq!(cap.cadence_ticks, 60);
         image.id = "totally-different:unnamed".into();
         image.name = "Rocket Sword Gun".into();
-        assert_eq!(native_capability(&image, Some(&p), 2.0, 60).unwrap(), cap);
+        assert_eq!(
+            native_capability(&image, Some(&p), 2.0, 60, &Default::default()).unwrap(),
+            cap
+        );
         let fixed = bri_weapons::ProjectileDef {
             fixed_damage: true,
             ..p
         };
         assert_eq!(
-            native_capability(&image, Some(&fixed), 2.0, 60)
+            native_capability(&image, Some(&fixed), 2.0, 60, &Default::default())
                 .unwrap()
                 .direct_damage,
             30.0
@@ -1293,7 +1390,7 @@ mod tests {
     fn absent_projectile_and_unknown_scripts_are_never_invented_melee() {
         let image = bri_weapons::Image::default();
         assert_eq!(
-            native_capability(&image, None, 1.0, 60),
+            native_capability(&image, None, 1.0, 60, &Default::default()),
             Err(DescriptorRequired::MissingAttack)
         );
         let tool = bri_weapons::Image {
@@ -1305,7 +1402,7 @@ mod tests {
             ..image
         };
         assert_eq!(
-            native_capability(&tool, None, 1.0, 60),
+            native_capability(&tool, None, 1.0, 60, &Default::default()),
             Err(DescriptorRequired::ScriptedTool)
         );
         let melee = bri_weapons::Image {
@@ -1313,11 +1410,23 @@ mod tests {
             ..native_image()
         };
         assert_eq!(
-            native_capability(&melee, Some(&native_projectile()), 1.0, 60),
+            native_capability(
+                &melee,
+                Some(&native_projectile()),
+                1.0,
+                60,
+                &Default::default()
+            ),
             Err(DescriptorRequired::GeometryAdjustedMelee)
         );
         assert_eq!(
-            native_capability(&native_image(), Some(&native_projectile()), 1.0, 0),
+            native_capability(
+                &native_image(),
+                Some(&native_projectile()),
+                1.0,
+                0,
+                &Default::default()
+            ),
             Err(DescriptorRequired::InvalidNativeData)
         );
     }
@@ -1336,21 +1445,28 @@ mod tests {
             },
             ..native_projectile()
         };
-        let cap = native_capability(&image, Some(&p), 2.0, 60).unwrap();
+        let cap = native_capability(&image, Some(&p), 2.0, 60, &Default::default()).unwrap();
         assert_eq!(cap.family, Family::Splash);
         assert_eq!(cap.splash_damage, 100.0);
         assert_eq!(cap.splash_radius, 16.0);
         assert_eq!(cap.arm_ticks, 0);
+        // Bouncing until armed, it goes off on its own clock: a timed
+        // throw, whose arming is part of where it bursts.
         let p = bri_weapons::ProjectileDef {
             explode_player: false,
             ..p
         };
-        assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60)
-                .unwrap()
-                .arm_ticks,
-            120
-        );
+        let timed = native_capability(&image, Some(&p), 1.0, 60, &Default::default()).unwrap();
+        assert!(matches!(timed.delivery, Delivery::Timed { fuse: None, .. }));
+        assert_eq!(timed.arm_ticks, 0);
+        // Without a blast it stays an ordinary throw, held to its arming.
+        let dud = bri_weapons::ProjectileDef {
+            explosion: Default::default(),
+            damage: 30.0,
+            ..p
+        };
+        let cap = native_capability(&image, Some(&dud), 1.0, 60, &Default::default()).unwrap();
+        assert!(matches!(cap.delivery, Delivery::Projectile(_)));
     }
 
     #[test]
@@ -1360,12 +1476,12 @@ mod tests {
         )
         .unwrap();
         let p = native_projectile();
-        let cap = native_capability(&image, Some(&p), 1.0, 60).unwrap();
+        let cap = native_capability(&image, Some(&p), 1.0, 60, &Default::default()).unwrap();
         assert_eq!(cap.delivery, Delivery::Ray);
         assert_eq!(cap.reach, 150.0);
         image.shot.as_mut().unwrap().recoil = 3.0;
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60),
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::StateDependentLaunch)
         );
         image.shot.as_mut().unwrap().recoil = 0.0;
@@ -1378,7 +1494,7 @@ mod tests {
             .unwrap()
             .explosion = "another:blast".into();
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60),
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::AlternateHitscanImpact)
         );
     }
@@ -1397,7 +1513,7 @@ mod tests {
             "ordinary moving-shooter launch ray differs from the look we validate"
         );
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60),
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::StateDependentLaunch)
         );
         image
@@ -1409,14 +1525,14 @@ mod tests {
             .unwrap()
             .from_eye = true;
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60)
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default())
                 .unwrap()
                 .delivery,
             Delivery::Ray
         );
         p.collide_players = false;
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60),
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::NonActorAttack)
         );
         p.collide_players = true;
@@ -1424,7 +1540,7 @@ mod tests {
         let ray = image.shot.as_mut().unwrap().hitscan.as_mut().unwrap();
         ray.from_eye = false;
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60)
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default())
                 .unwrap()
                 .delivery,
             Delivery::Ray
@@ -1435,7 +1551,7 @@ mod tests {
             ray.converge = converge;
             ray.eye_within = (!converge).then_some(2.0);
             assert_eq!(
-                native_capability(&image, Some(&p), 1.0, 60),
+                native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
                 Err(DescriptorRequired::StateDependentLaunch)
             );
         }
@@ -1449,7 +1565,7 @@ mod tests {
             .unwrap()
             .moving_range = Some(10.0);
         assert_eq!(
-            native_capability(&image, Some(&p), 1.0, 60),
+            native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::StateDependentLaunch)
         );
     }
@@ -1462,17 +1578,62 @@ mod tests {
             serde_json::from_value(serde_json::json!({"script":"onpin", "fuse_ticks":120}))
                 .unwrap(),
         );
+        // A cooked image with no blast (smoke) has nothing to aim.
         assert_eq!(
-            native_capability(&cooked, Some(&p), 1.0, 60),
+            native_capability(&cooked, Some(&p), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::SecondaryEffects)
         );
-        let mut child = p.clone();
+        // With a blast, its fuse rides the throw.
+        let blast = bri_weapons::ProjectileDef {
+            explosion: bri_weapons::Explosion {
+                damage: 50.0,
+                radius: 4.0,
+                ..Default::default()
+            },
+            ..p.clone()
+        };
+        let grenade =
+            native_capability(&cooked, Some(&blast), 1.0, 60, &Default::default()).unwrap();
+        assert!(matches!(
+            grenade.delivery,
+            Delivery::Timed {
+                fuse: Some(120),
+                ..
+            }
+        ));
+        // Fragments it throws out widen its danger zone by how far they fly
+        // and their own blast; an unknown fragment is refused.
+        let mut child = blast.clone();
         child.children.push(
-            serde_json::from_value(serde_json::json!({"projectile":"foreign:projectile/orbit"}))
-                .unwrap(),
+            serde_json::from_value(serde_json::json!({
+                "projectile": "foreign:projectile/shard", "count": 4, "speed": 10.0,
+                "on_explode": true
+            }))
+            .unwrap(),
         );
         assert_eq!(
-            native_capability(&image, Some(&child), 1.0, 60),
+            native_capability(&image, Some(&child), 1.0, 60, &Default::default()),
+            Err(DescriptorRequired::MissingProjectile)
+        );
+        let shard = bri_weapons::ProjectileDef {
+            id: "foreign:projectile/shard".into(),
+            lifetime_ticks: 60,
+            explosion: bri_weapons::Explosion {
+                radius: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(shard.id.clone(), shard.clone());
+        let cap = native_capability(&image, Some(&child), 1.0, 60, &table).unwrap();
+        assert!((cap.danger - (10.0 * 60.0 / HZ as f32 + 1.0)).abs() < 1e-4);
+        // Fragments that throw out fragments of their own are refused.
+        let mut nested = shard.clone();
+        nested.children = child.children.clone();
+        table.insert(shard.id.clone(), nested);
+        assert_eq!(
+            native_capability(&image, Some(&child), 1.0, 60, &table),
             Err(DescriptorRequired::SecondaryEffects)
         );
         let mut aura = p.clone();
@@ -1481,20 +1642,20 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            native_capability(&image, Some(&aura), 1.0, 60),
+            native_capability(&image, Some(&aura), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::SecondaryEffects)
         );
         let mut non_actor = p.clone();
         non_actor.collide_players = false;
         assert_eq!(
-            native_capability(&image, Some(&non_actor), 1.0, 60),
+            native_capability(&image, Some(&non_actor), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::NonActorAttack)
         );
         let mut cosmetic = p;
         cosmetic.damage = 0.0;
         cosmetic.explosion.damage = 0.0;
         assert_eq!(
-            native_capability(&image, Some(&cosmetic), 1.0, 60),
+            native_capability(&image, Some(&cosmetic), 1.0, 60, &Default::default()),
             Err(DescriptorRequired::MissingAttack)
         );
     }

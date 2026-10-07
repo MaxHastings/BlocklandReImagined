@@ -194,11 +194,15 @@ fn charge_release_only(image: &Image) -> bool {
 /// preferred over the body: a blast at the feet still lands when a dodging
 /// body would have made the shot miss, so players aim rockets low.
 const SPLASH_AIM: f32 = 1.5;
+/// The share of its blast radius a splash aim's burst may land from the
+/// body's middle: inside the edge, where the blast still hurts.
+const SPLASH_REACH: f32 = 0.9;
 
 pub(super) fn capability(
     image: &Image,
     projectile: Option<&bri_weapons::ProjectileDef>,
     scale: f32,
+    projectiles: &std::collections::BTreeMap<String, bri_weapons::ProjectileDef>,
 ) -> Option<Capability> {
     if super::super::tools::native_hammer(image) {
         if !scale.is_finite() || !(0.01..=100.0).contains(&scale) {
@@ -213,6 +217,7 @@ pub(super) fn capability(
             direct_damage: super::super::tools::HAMMER_DAMAGE,
             splash_damage: 0.0,
             splash_radius: 0.0,
+            danger: 0.0,
             arm_ticks: 0,
             cadence_ticks: cadence(image),
             rounds_per_attack: 1,
@@ -232,13 +237,15 @@ pub(super) fn capability(
         return None;
     }
     if !image.melee {
-        return tactics::native_capability(image, projectile, scale, cadence(image)).ok();
+        return tactics::native_capability(image, projectile, scale, cadence(image), projectiles)
+            .ok();
     }
     // Session hand frames currently have muzzle == eye, so native melee's
     // geometry correction is exactly one. Reject unresolved non-damage tools.
     let mut native = image.clone();
     native.melee = false;
-    let cap = tactics::native_capability(&native, projectile, scale, cadence(image)).ok()?;
+    let cap =
+        tactics::native_capability(&native, projectile, scale, cadence(image), projectiles).ok()?;
     let mut cap = cap;
     cap.family = Family::Melee;
     cap.near = image.bot.and_then(|b| b.near).unwrap_or(0.0);
@@ -275,7 +282,7 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
             .projectile
             .as_ref()
             .and_then(|id| session.weapons.pack.projectiles.get(id));
-        if let Some(cap) = capability(image, projectile, scale) {
+        if let Some(cap) = capability(image, projectile, scale, &session.weapons.pack.projectiles) {
             // One that only pushes (a broom) still moves someone off what
             // they are after.
             if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 && !cap.pushes() {
@@ -314,7 +321,7 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .projectile
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
-    capability(image, projectile, scale)
+    capability(image, projectile, scale, &session.weapons.pack.projectiles)
         .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.pushes())
 }
 
@@ -328,7 +335,8 @@ pub(super) fn item_pushes(session: &Session, item: &str, scale: f32) -> bool {
         .projectile
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
-    capability(image, projectile, scale).is_some_and(Capability::pushes)
+    capability(image, projectile, scale, &session.weapons.pack.projectiles)
+        .is_some_and(Capability::pushes)
 }
 
 /// An item that attacks from a distance (not a swing or a stab): one a
@@ -342,7 +350,7 @@ pub(super) fn item_attacks_from_afar(session: &Session, item: &str, scale: f32) 
         .projectile
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
-    capability(image, projectile, scale).is_some_and(|cap| {
+    capability(image, projectile, scale, &session.weapons.pack.projectiles).is_some_and(|cap| {
         cap.family != Family::Melee && (cap.direct_damage > 0.0 || cap.splash_damage > 0.0)
     })
 }
@@ -373,29 +381,29 @@ pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
         .projectile
         .as_ref()
         .and_then(|id| pack.projectiles.get(id));
-    let (damage, reach) = match capability(image, projectile, scale) {
-        Some(cap) => (cap.damage(SPLASH_WORTH), cap.reach),
-        None => {
-            if known_noncombat_manipulation(image) {
-                return 0.0;
-            }
-            // A script fires it: estimate from what its data does say.
-            let shot = image.shot.as_ref();
-            let ray = shot.and_then(|s| s.hitscan.as_ref());
-            let count = shot.map_or(1, |s| s.projectiles.max(1)) as f32;
-            let direct = ray
-                .and_then(|r| r.damage)
-                .or(projectile.map(|p| p.damage))
-                .unwrap_or(0.0)
-                .max(0.0);
-            let splash = projectile.map_or(0.0, |p| p.explosion.damage.max(0.0));
-            let reach =
-                ray.map(|r| r.range * scale).or(projectile
+    let (damage, reach) =
+        match capability(image, projectile, scale, &session.weapons.pack.projectiles) {
+            Some(cap) => (cap.damage(SPLASH_WORTH), cap.reach),
+            None => {
+                if known_noncombat_manipulation(image) {
+                    return 0.0;
+                }
+                // A script fires it: estimate from what its data does say.
+                let shot = image.shot.as_ref();
+                let ray = shot.and_then(|s| s.hitscan.as_ref());
+                let count = shot.map_or(1, |s| s.projectiles.max(1)) as f32;
+                let direct = ray
+                    .and_then(|r| r.damage)
+                    .or(projectile.map(|p| p.damage))
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let splash = projectile.map_or(0.0, |p| p.explosion.damage.max(0.0));
+                let reach = ray.map(|r| r.range * scale).or(projectile
                     .map(|p| p.speed * p.lifetime_ticks as f32 / bri_weapons::TICK_HZ as f32));
-            let reach = image.bot.and_then(|b| b.reach).or(reach).unwrap_or(3.0);
-            (count * direct + splash * SPLASH_WORTH, reach)
-        }
-    };
+                let reach = image.bot.and_then(|b| b.reach).or(reach).unwrap_or(3.0);
+                (count * direct + splash * SPLASH_WORTH, reach)
+            }
+        };
     let rate = bri_weapons::TICK_HZ as f32 / cadence(image).max(1) as f32;
     let worth = damage * rate * (reach / FULL_REACH).clamp(0.05, 1.0).sqrt();
     if worth.is_finite() && worth > 0.0 {
@@ -434,10 +442,9 @@ fn available_rounds(a: &bri_weapons::runtime::AmmoView) -> u32 {
 /// its band, flight and blast, and `spread` (`fire::image_spread`). The one
 /// reader of a natively modelled image (`Session::bot_weapon` uses it too).
 pub(super) fn weapon_of(cap: Capability, spread: f32) -> Weapon {
-    let (speed, fall) = match cap.delivery {
-        Delivery::Projectile(f) => (f.speed, f.fall_per_tick * bri_weapons::TICK_HZ as f32),
-        _ => (0.0, 0.0),
-    };
+    let (speed, fall) = cap.delivery.flight().map_or((0.0, 0.0), |f| {
+        (f.speed, f.fall_per_tick * bri_weapons::TICK_HZ as f32)
+    });
     Weapon {
         melee: cap.family == Family::Melee,
         hold: cap.trigger.hold,
@@ -447,12 +454,9 @@ pub(super) fn weapon_of(cap: Capability, spread: f32) -> Weapon {
         } else {
             Weapon::standoff(cap.splash_radius)
         })),
-        reach: cap.reach.min(match cap.delivery {
-            Delivery::Projectile(f) => {
-                f.speed * PATH_TICKS.min(f.lifetime_ticks) as f32 / bri_weapons::TICK_HZ as f32
-            }
-            _ => cap.reach,
-        }),
+        reach: cap.reach.min(cap.delivery.flight().map_or(cap.reach, |f| {
+            f.speed * PATH_TICKS.min(f.lifetime_ticks) as f32 / bri_weapons::TICK_HZ as f32
+        })),
         speed,
         fall,
         splash: cap.splash_radius,
@@ -541,7 +545,8 @@ pub(super) fn choose(
             .projectile
             .as_ref()
             .and_then(|p| session.weapons.pack.projectiles.get(p));
-        let Some(cap) = capability(image, projectile, scale) else {
+        let Some(cap) = capability(image, projectile, scale, &session.weapons.pack.projectiles)
+        else {
             continue;
         };
         if Some(slot) == selected
@@ -604,8 +609,8 @@ pub(super) fn choose(
             shooter_velocity: velocity,
         };
         let mut solutions = [None, None];
-        let curved = matches!(cap.delivery, Delivery::Projectile(f) if f.fall_per_tick > 0.0);
-        if let Delivery::Projectile(f) = cap.delivery {
+        let curved = cap.delivery.flight().is_some_and(|f| f.fall_per_tick > 0.0);
+        if let Some(f) = cap.delivery.flight() {
             let Ok(mut search) = tactics::InterceptSearch::new(f, input) else {
                 continue;
             };
@@ -663,9 +668,25 @@ pub(super) fn choose(
             continue;
         }
         for aim in solutions.into_iter().take(if curved { 2 } else { 1 }) {
-            if matches!(cap.delivery, Delivery::Projectile(_)) && aim.is_none() {
+            if cap.delivery.flight().is_some() && aim.is_none() {
                 continue;
             }
+            // A timed throw is judged where it goes off, not where it first
+            // lands.
+            let timed = matches!(cap.delivery, Delivery::Timed { .. });
+            let aim = match aim.filter(|_| timed) {
+                Some(thrown) => match timed_aim(
+                    session, bot, seen.owner, slot, cap, origin, thrown, budget, false,
+                ) {
+                    None => {
+                        pending = true;
+                        break;
+                    }
+                    Some(None) => continue,
+                    Some(burst) => burst,
+                },
+                None => aim,
+            };
             let choice = Choice {
                 aim,
                 direction: aim.map_or(direction, |a| a.direction),
@@ -674,9 +695,13 @@ pub(super) fn choose(
             if !safe_blast(&bodies, choice, origin) {
                 continue;
             }
-            match clear_path(
-                session, bot, seen.owner, choice, origin, &bodies, budget, false,
-            ) {
+            match if timed {
+                Some(true)
+            } else {
+                clear_path(
+                    session, bot, seen.owner, choice, origin, &bodies, budget, false,
+                )
+            } {
                 None => {
                     pending = true;
                     break;
@@ -871,6 +896,271 @@ pub(super) fn choose(
     }
 }
 
+/// What a timed throw does ([`Delivery::Timed`]): where it goes off and the
+/// tick, if it does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Burst {
+    position: Vec3,
+    ticks: u32,
+}
+
+/// How many ticks of a timed throw's arc one ray covers: the most whose
+/// sag off the straight chord (`fall_per_tick * k^2 / 8`) stays under the
+/// thinnest brick, a plate, so no brick can slip between ray and arc.
+fn chord_ticks(fall_per_tick: f32) -> u32 {
+    let plate = bri_content::brick::PLATE;
+    if fall_per_tick <= 0.0 {
+        return PATH_TICKS;
+    }
+    ((8.0 * plate / fall_per_tick).sqrt() as u32).clamp(1, PATH_TICKS)
+}
+
+/// The cooked fuse a timed throw from `image` carries if released now:
+/// what is left since it was lit, or for an unlit one the whole fuse less
+/// the ticks its states take from lighting to firing.
+fn fuse_left(session: &Session, bot: OwnerId, image: &Image, fuse: u32) -> Option<u32> {
+    let actor = session.weapons.actor(ActorId(bot))?;
+    if let Some(lit) = actor.fuse_lit(&image.id) {
+        let burned = session.simulation.state().tick.saturating_sub(lit);
+        return Some(fuse.saturating_sub(burned.min(u64::from(u32::MAX)) as u32));
+    }
+    let cook = image.cook.as_ref()?;
+    let mut at = image
+        .states
+        .iter()
+        .position(|s| s.script.eq_ignore_ascii_case(&cook.script))?;
+    let mut ticks = 0_u32;
+    for _ in 0..image.states.len() {
+        let state = &image.states[at];
+        if state.script.eq_ignore_ascii_case("onfire") {
+            return Some(fuse.saturating_sub(ticks));
+        }
+        ticks = ticks.saturating_add(state.ticks);
+        at = state.timeout.or(state.up).or(state.down)?;
+    }
+    None
+}
+
+/// The projectile a slot's image throws.
+fn thrown<'a>(
+    session: &'a Session,
+    bot: OwnerId,
+    slot: usize,
+) -> Option<(&'a Image, &'a bri_weapons::ProjectileDef)> {
+    let actor = session.weapons.actor(ActorId(bot))?;
+    let item = actor.inventory.get(slot)?.as_ref()?;
+    let image = session
+        .weapons
+        .pack
+        .images
+        .get(&session.weapons.pack.items.get(item)?.image)?;
+    let projectile = session
+        .weapons
+        .pack
+        .projectiles
+        .get(image.projectile.as_ref()?)?;
+    Some((image, projectile))
+}
+
+/// Follow a timed throw from `origin` at `launch` until it goes off, with
+/// the host's own rules: the clock first (`expires`), then at each hit
+/// whether it bursts (`hit_bursts`), sticks or bounces (`rebound`). A
+/// stuck throw, or one whose bounce can no longer lift it off the ground
+/// for a tick, waits where it is for its clock. None when the shared ray
+/// budget runs out (try again next turn); Some(None) when it never goes
+/// off where a bot can follow (it fades, or flies through a portal).
+#[allow(clippy::too_many_arguments)]
+fn burst(
+    session: &Session,
+    bot: OwnerId,
+    def: &bri_weapons::ProjectileDef,
+    fall_per_tick: f32,
+    origin: Vec3,
+    launch: Vec3,
+    fuse: Option<u32>,
+    budget: &mut Budget,
+    critical: bool,
+) -> Option<Option<Burst>> {
+    use bri_weapons::runtime::{Rebound, expires, hit_bursts, rebound};
+    // A body at rest goes off when its clock says.
+    let waits = |at: Vec3, age: u32| -> Option<Option<Burst>> {
+        let fuse = fuse.filter(|f| *f >= age && *f < def.lifetime_ticks);
+        Some(match fuse {
+            Some(ticks) => Some(Burst {
+                position: at,
+                ticks,
+            }),
+            None if def.explode_death => Some(Burst {
+                position: at,
+                ticks: def.lifetime_ticks.max(age),
+            }),
+            None => None,
+        })
+    };
+    let shapes = session.tutorial_shape_targets();
+    let mut q = crate::weapon_query::WeaponQuery {
+        simulation: &session.simulation,
+        affect: &|_, _| true,
+        affect_radius: &|_, _| true,
+        ally: &|_, _| false,
+        catch: &|_, _| false,
+        responses: &session.events.projectile_responses,
+        truncated_targets: 0,
+        shapes: &shapes,
+    };
+    let chord = chord_ticks(fall_per_tick);
+    let at = |start: Vec3, velocity: Vec3, ticks: u32| -> Option<Vec3> {
+        tactics::flight_position(
+            start,
+            velocity,
+            fall_per_tick,
+            f64::from(ticks) / f64::from(bri_weapons::TICK_HZ),
+        )
+        .ok()
+        .map(|p| p.as_vec3())
+    };
+    // The arc being followed: where it left from, at what velocity, and the
+    // ticks flown on it so far; and the throw's age and bounces.
+    let (mut start, mut velocity, mut flown) = (origin, launch, 0_u32);
+    let (mut age, mut bounces) = (0_u32, 0_u32);
+    while age < tactics::MAX_LIFETIME_TICKS {
+        // Up to one chord of ticks, stopping where the clock runs out.
+        let mut ticks = 0;
+        let mut expiry = None;
+        while ticks < chord {
+            if let Some(bursts) = expires(def, age + ticks + 1, fuse) {
+                expiry = Some(bursts);
+                break;
+            }
+            ticks += 1;
+        }
+        if ticks > 0 {
+            let from = at(start, velocity, flown)?;
+            let to = at(start, velocity, flown + ticks)?;
+            if !budget.ray(true, critical) {
+                return None;
+            }
+            if q.passage(from, to).is_some() {
+                return Some(None);
+            }
+            let filter = Filter {
+                projectile_age_ticks: Some(age + 1),
+                source: ActorId(bot),
+                players: def.collide_players,
+                world_only: false,
+            };
+            if let Some(hit) = q.sweep(from, to, filter) {
+                let into = ((hit.fraction * ticks as f32).ceil() as u32).clamp(1, ticks);
+                let hit_age = age + into;
+                let normal = hit.normal.normalize_or_zero();
+                if normal == Vec3::ZERO {
+                    return Some(None);
+                }
+                if hit_bursts(def, hit_age, matches!(hit.target, TargetId::Actor(_))) {
+                    return Some(Some(Burst {
+                        position: hit.position,
+                        ticks: hit_age,
+                    }));
+                }
+                let moving = velocity + Vec3::NEG_Y * fall_per_tick * (flown + into) as f32;
+                match rebound(def, moving, normal, bounces) {
+                    Rebound::Stuck => return waits(hit.position, hit_age),
+                    Rebound::Bounced { bursts: true, .. } => {
+                        return Some(Some(Burst {
+                            position: hit.position,
+                            ticks: hit_age,
+                        }));
+                    }
+                    Rebound::Bounced { velocity: off, .. } => {
+                        bounces += 1;
+                        // Its bounce cannot lift it for even a tick: it
+                        // rolls to rest where it is.
+                        if normal.y > 0.0 && off.y <= fall_per_tick {
+                            return waits(hit.position, hit_age);
+                        }
+                        (start, velocity, flown, age) =
+                            (hit.position + normal * 0.001, off, 0, hit_age);
+                        continue;
+                    }
+                }
+            }
+        }
+        flown += ticks;
+        age += ticks;
+        match expiry {
+            Some(true) => {
+                return Some(Some(Burst {
+                    position: at(start, velocity, flown)?,
+                    ticks: age + 1,
+                }));
+            }
+            Some(false) => return Some(None),
+            None => {}
+        }
+    }
+    Some(None)
+}
+
+/// A timed throw at `aim` from `origin`: the aim moved to where it goes
+/// off, if that is within its blast of `enemy` where the enemy will be by
+/// then. None when the ray budget ran out.
+#[allow(clippy::too_many_arguments)]
+fn timed_aim(
+    session: &Session,
+    bot: OwnerId,
+    enemy: OwnerId,
+    slot: usize,
+    cap: Capability,
+    origin: Vec3,
+    aim: Aim,
+    budget: &mut Budget,
+    critical: bool,
+) -> Option<Option<Aim>> {
+    let Delivery::Timed { flight, fuse } = cap.delivery else {
+        return Some(Some(aim));
+    };
+    let Some((image, def)) = thrown(session, bot, slot) else {
+        return Some(None);
+    };
+    let fuse = match fuse {
+        Some(f) => match fuse_left(session, bot, image, f) {
+            Some(left) => Some(left),
+            None => return Some(None),
+        },
+        None => None,
+    };
+    let Some(burst) = burst(
+        session,
+        bot,
+        def,
+        flight.fall_per_tick,
+        origin,
+        aim.launch_velocity,
+        fuse,
+        budget,
+        critical,
+    )?
+    else {
+        return Some(None);
+    };
+    let seconds = f64::from(burst.ticks) / f64::from(bri_weapons::TICK_HZ);
+    let Some(body) = session.peers.get(&enemy) else {
+        return Some(None);
+    };
+    let centre = Vec3::from(body.player.state().feet)
+        + Vec3::Y * body.player.tuning().stand_height * 0.5
+        + Vec3::from(body.player.state().velocity) * seconds as f32;
+    if burst.position.distance(centre) > cap.splash_radius * SPLASH_REACH {
+        return Some(None);
+    }
+    Some(Some(Aim {
+        impact: burst.position,
+        time_seconds: seconds,
+        flight_tick: burst.ticks,
+        ..aim
+    }))
+}
+
 /// Where a splash aim goes ([`variant`]).
 #[derive(Clone, Copy)]
 struct Solve {
@@ -898,9 +1188,7 @@ fn variant(
     bodies: &Bodies,
     budget: &mut Budget,
 ) -> Option<(Choice, f32)> {
-    let Delivery::Projectile(f) = cap.delivery else {
-        return None;
-    };
+    let f = cap.delivery.flight()?;
     let mut search = tactics::InterceptSearch::new(
         f,
         Intercept {
@@ -923,11 +1211,27 @@ fn variant(
         search.advance(count);
     }
     let aim = search.result().low?;
+    let timed = matches!(cap.delivery, Delivery::Timed { .. });
+    let aim = if timed {
+        timed_aim(
+            session,
+            bot,
+            enemy,
+            solve.slot,
+            cap,
+            solve.origin,
+            aim,
+            budget,
+            false,
+        )??
+    } else {
+        aim
+    };
     let body = session.peers.get(&enemy)?;
     let centre = Vec3::from(body.player.state().feet)
         + Vec3::Y * body.player.tuning().stand_height * 0.5
         + Vec3::from(body.player.state().velocity) * aim.time_seconds as f32;
-    if aim.impact.distance(centre) > cap.splash_radius * 0.9 {
+    if !timed && aim.impact.distance(centre) > cap.splash_radius * SPLASH_REACH {
         return None;
     }
     let choice = Choice {
@@ -1038,7 +1342,7 @@ fn safe_blast(bodies: &Bodies, choice: Choice, origin: Vec3) -> bool {
         return false;
     };
     let (own, ally) = clearances(bodies, aim.impact, aim.time_seconds as f32);
-    let safe = choice.capability.splash_radius + 1.0;
+    let safe = choice.capability.splash_radius + choice.capability.danger + 1.0;
     origin.distance(aim.impact) > safe && own > safe && ally.is_none_or(|d| d > safe)
 }
 
@@ -1070,8 +1374,11 @@ fn clear_path(
                 == Some(TargetId::Actor(ActorId(enemy))),
         );
     }
-    let curved =
-        matches!(choice.capability.delivery, Delivery::Projectile(f) if f.fall_per_tick > 0.0);
+    let curved = choice
+        .capability
+        .delivery
+        .flight()
+        .is_some_and(|f| f.fall_per_tick > 0.0);
     let shapes = session.tutorial_shape_targets();
     let mut q = crate::weapon_query::WeaponQuery {
         simulation: &session.simulation,
@@ -1096,8 +1403,8 @@ fn clear_path(
         } else {
             seconds
         };
-        let end = match (choice.capability.delivery, choice.aim) {
-            (Delivery::Projectile(f), Some(a)) => {
+        let end = match (choice.capability.delivery.flight(), choice.aim) {
+            (Some(f), Some(a)) => {
                 tactics::flight_position(origin, a.launch_velocity, f.fall_per_tick, time)
                     .ok()?
                     .as_vec3()
@@ -1199,22 +1506,41 @@ pub(super) fn validate_fire(
     }
     choice.direction = actual_direction.normalize();
     let origin = peer.player.eye();
-    if let (Delivery::Projectile(f), Some(mut aim)) = (choice.capability.delivery, choice.aim) {
+    let timed = matches!(choice.capability.delivery, Delivery::Timed { .. });
+    if let (Some(f), Some(mut aim)) = (choice.capability.delivery.flight(), choice.aim) {
         aim.direction = choice.direction;
         aim.launch_velocity =
             choice.direction * f.speed + Vec3::from(peer.player.state().velocity) * f.inherit;
         if !aim.launch_velocity.is_finite() || aim.launch_velocity.length() > 10_000.0 {
             return false;
         }
-        let Ok(impact) = tactics::flight_position(
-            origin,
-            aim.launch_velocity,
-            f.fall_per_tick,
-            aim.time_seconds,
-        ) else {
-            return false;
-        };
-        aim.impact = impact.as_vec3();
+        if timed {
+            // Where the real throw goes off, from the real direction.
+            match timed_aim(
+                session,
+                bot,
+                seen.owner,
+                choice.slot,
+                choice.capability,
+                origin,
+                aim,
+                budget,
+                true,
+            ) {
+                Some(Some(burst)) => aim = burst,
+                _ => return false,
+            }
+        } else {
+            let Ok(impact) = tactics::flight_position(
+                origin,
+                aim.launch_velocity,
+                f.fall_per_tick,
+                aim.time_seconds,
+            ) else {
+                return false;
+            };
+            aim.impact = impact.as_vec3();
+        }
         choice.aim = Some(aim);
     }
     let bodies = Bodies::of(session, bot);
@@ -1232,8 +1558,9 @@ pub(super) fn validate_fire(
         let (min, max) = target.player.world_bounds();
         let min = Vec3::from(min) + travel;
         let max = Vec3::from(max) + travel;
-        if choice.surface {
-            // A surface shot lands beside the body: its blast must reach it.
+        if choice.surface || timed {
+            // A surface shot lands beside the body, a timed throw goes off
+            // near it: its blast must reach it.
             if aim.impact.distance((min + max) * 0.5) > choice.capability.splash_radius {
                 return false;
             }
@@ -1241,9 +1568,10 @@ pub(super) fn validate_fire(
             return false;
         }
     }
-    clear_path(
-        session, bot, seen.owner, choice, origin, &bodies, budget, true,
-    ) == Some(true)
+    timed
+        || clear_path(
+            session, bot, seen.owner, choice, origin, &bodies, budget, true,
+        ) == Some(true)
 }
 
 /// Called after player movement, collision synchronization and frame update.
@@ -1291,7 +1619,13 @@ pub(super) fn validate_intent(
         .projectile
         .as_ref()
         .and_then(|p| session.weapons.pack.projectiles.get(p));
-    if capability(image, projectile, actor.frame.scale) != Some(intent.choice.capability) {
+    if capability(
+        image,
+        projectile,
+        actor.frame.scale,
+        &session.weapons.pack.projectiles,
+    ) != Some(intent.choice.capability)
+    {
         return FireAdmission::Abort; // Launch metadata changed after planning.
     }
     if let Some(ammo) = session.weapons.ammo(ActorId(bot)) {
@@ -1442,7 +1776,8 @@ mod tests {
                     .projectile
                     .as_ref()
                     .and_then(|p| pack.projectiles.get(p)),
-                1.0
+                1.0,
+                &pack.projectiles
             )
             .is_none()
         );
@@ -1480,7 +1815,13 @@ mod tests {
         let origin = session.peers[&shooter].player.eye();
         let image = &session.weapons.pack.images[bri_weapons::testing::GUN_IMAGE];
         let projectile = &session.weapons.pack.projectiles[bri_weapons::testing::GUN_PROJECTILE];
-        let mut cap = capability(image, Some(projectile), 1.0).unwrap();
+        let mut cap = capability(
+            image,
+            Some(projectile),
+            1.0,
+            &session.weapons.pack.projectiles,
+        )
+        .unwrap();
         cap.delivery = Delivery::Ray;
         let choice = Choice {
             slot: 0,

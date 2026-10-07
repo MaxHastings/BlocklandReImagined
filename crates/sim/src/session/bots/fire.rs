@@ -244,7 +244,9 @@ impl Session {
             .projectile
             .as_ref()
             .and_then(|p| self.weapons.pack.projectiles.get(p));
-        if let Some(cap) = hand_combat::capability(image, projectile, scale) {
+        if let Some(cap) =
+            hand_combat::capability(image, projectile, scale, &self.weapons.pack.projectiles)
+        {
             let w = hand_combat::weapon_of(cap, spread);
             return Some(Weapon {
                 hold: w.hold || hold,

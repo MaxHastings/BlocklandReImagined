@@ -940,6 +940,14 @@ fn take_shot(a: &mut Actor, key: &str, magazine: &crate::Magazine) -> bool {
     last
 }
 impl Actor {
+    /// The tick the fuse of the cooked image `image` was lit, while it
+    /// burns in the hand ([`crate::Cook`]).
+    pub fn fuse_lit(&self, image: &str) -> Option<u64> {
+        self.cook
+            .as_ref()
+            .filter(|c| c.image == image)
+            .map(|c| c.lit)
+    }
     /// Whether the fire button is held, whatever is (or is not) in hand.
     pub fn trigger_held(&self) -> bool {
         self.trigger
