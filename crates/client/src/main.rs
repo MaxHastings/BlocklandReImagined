@@ -201,6 +201,8 @@ fn report_installed(done: Option<bri_package::defaults::Installed>) {
     }
 }
 fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    bri_client::system_libraries::check()?;
     // The GPU opens while the content loads.
     let early_gpu = platform::EarlyGpu::start();
     install_default_add_ons(content).context("Loading the game")?;

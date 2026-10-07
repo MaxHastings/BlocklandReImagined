@@ -98,16 +98,34 @@ impl EarlyGpu {
 fn backend_order() -> Vec<(wgpu::Backends, bool)> {
     match wgpu::Backends::from_env() {
         Some(backends) => vec![(backends, false), (backends, true)],
-        None => vec![
-            (wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN, false),
-            (wgpu::Backends::VULKAN, false),
-            (wgpu::Backends::PRIMARY, true),
-        ],
+        // Only backends this build has for this platform, so Linux starts
+        // with Vulkan instead of a failed attempt at DX12 and Metal.
+        None => {
+            let built = wgpu::Instance::enabled_backend_features();
+            vec![
+                (
+                    wgpu::Backends::PRIMARY & !wgpu::Backends::VULKAN & built,
+                    false,
+                ),
+                (wgpu::Backends::VULKAN & built, false),
+                (wgpu::Backends::PRIMARY & built, true),
+            ]
+        }
     }
     .into_iter()
     .filter(|(backends, _)| !backends.is_empty())
     .collect()
 }
+
+/// What a player can do when no GPU backend opens, shown ahead of the
+/// per-backend details.
+#[cfg(target_os = "linux")]
+const NO_GPU_HELP: &str = "No working Vulkan driver was found. Install the Vulkan driver for your graphics card (Mesa's Vulkan drivers for AMD and Intel, or NVIDIA's own driver), then start the game again";
+#[cfg(windows)]
+const NO_GPU_HELP: &str =
+    "The graphics driver could not start. Update your graphics driver, then start the game again";
+#[cfg(not(any(target_os = "linux", windows)))]
+const NO_GPU_HELP: &str = "The graphics driver could not start";
 
 fn request_device(
     instance: &wgpu::Instance,
@@ -466,7 +484,7 @@ fn open_gpu(
             )),
         }
     }
-    anyhow::bail!("No usable GPU backend: {}", failures.join("; "))
+    Err(anyhow::anyhow!("No usable GPU backend: {}", failures.join("; ")).context(NO_GPU_HELP))
 }
 fn present_mode(vsync: bool, modes: &[wgpu::PresentMode]) -> Result<wgpu::PresentMode> {
     if vsync {

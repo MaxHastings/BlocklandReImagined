@@ -499,6 +499,7 @@ dependencies = [
  "glam 0.33.10",
  "image",
  "imbl",
+ "libloading",
  "mimalloc",
  "pollster",
  "rapier3d",
