@@ -423,8 +423,8 @@ pub struct Report {
     /// Lives that dropped under the floor (fell off the arena) by their own
     /// doing.
     pub fell: u64,
-    /// Lives knocked off the arena: an enemy's shot reached them within the
-    /// fall's airborne window (a shove that worked).
+    /// Lives knocked off the arena: an enemy's weapon pushed them after
+    /// they last stood on something (a shove that worked).
     pub knocked_off: u64,
     pub shots: u64,
     /// Shots more than 25 degrees off the shooter's visible target.
@@ -565,8 +565,6 @@ pub struct Scorer {
     pub report: Report,
     tracks: BTreeMap<OwnerId, Track>,
     seen_shots: BTreeSet<u64>,
-    /// The tick the latest enemy shot through each body reaches it.
-    struck: BTreeMap<OwnerId, u64>,
     /// Projectiles that hurt nothing (a can's paint): not shots.
     harmless: BTreeSet<String>,
     seen_deaths: usize,
@@ -591,7 +589,6 @@ impl Scorer {
             },
             tracks: BTreeMap::new(),
             seen_shots: BTreeSet::new(),
-            struck: BTreeMap::new(),
             harmless: fixture::synthetic_weapons()
                 .unwrap()
                 .0
@@ -721,13 +718,11 @@ impl Scorer {
             }
             if feet.y < self.floor - 2.0 {
                 if !std::mem::replace(&mut track.fallen, true) {
-                    // Knocked off when an enemy's shot reached it after it
+                    // Knocked off when an enemy's weapon pushed it after it
                     // last stood on something; otherwise its own doing.
-                    if self
-                        .struck
-                        .get(bot)
-                        .is_some_and(|t| *t >= track.grounded_at)
-                    {
+                    if s.pushed_by(*bot).is_some_and(|(by, at)| {
+                        at >= track.grounded_at && sides.get(&by) != sides.get(bot)
+                    }) {
                         self.report.knocked_off += 1;
                     } else {
                         self.report.fell += 1;
@@ -886,14 +881,6 @@ impl Scorer {
                     (miss < 1.0).then_some((along, *o))
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0));
-            // An enemy's shot through a body: when it gets there.
-            if let Some((along, hit)) = nearest
-                && sides.get(&hit) != sides.get(&shooter)
-            {
-                let speed = p.velocity.length().max(f32::MIN_POSITIVE);
-                let flight = (along / speed * TICKS_PER_SECOND as f32).ceil() as u64;
-                self.struck.insert(hit, tick + flight);
-            }
             if let Some((_, hit)) = nearest
                 && sides.get(&hit).is_some()
                 && sides.get(&hit) == sides.get(&shooter)
