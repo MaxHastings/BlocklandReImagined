@@ -1280,14 +1280,13 @@ impl Search {
             )
         })
     }
-    /// Leaps from `node` ([`crate::reach::Leaps`]), along each of
-    /// [`LEAP_HEADINGS`] headings: up onto the first ledge ahead over its
-    /// own level, from no farther back than a leap up is measured to take
-    /// off; and off an edge across open air, onto the first support below
-    /// and, past that, onto the far side. Onto each floor there it is
-    /// measured to land on, where the whole arc is clear: straight up to
-    /// the top of its jump, over, and down. Each with the seconds it
-    /// takes. `None` when the sampling budget ran out.
+    /// Leaps from `node` ([`crate::reach::Leaps`]) off an edge: along each
+    /// of [`LEAP_HEADINGS`] headings where the cell beside it is open air
+    /// or a drop, onto the first support below and, past that, onto the
+    /// far side (level, higher or lower). Onto each floor there it is
+    /// measured to land on, where the whole arc is clear
+    /// ([`Ground::sweep_arc`]). Each with the seconds it takes. `None`
+    /// when the sampling budget ran out.
     fn leaps(
         &self,
         nav: &mut Nav,
@@ -1302,9 +1301,6 @@ impl Search {
         if farthest <= 0.0 || swum || ground.floats(body, from).is_some() {
             return Some(out);
         }
-        // A leap up is taken from as near as it lands from: farther back
-        // only takes longer.
-        let back = body.leaps.nearest_up() + CELL;
         let level = |f: &Floor| !f.low && (f.y - from.y).abs() <= body.step + 0.05;
         for k in 0..LEAP_HEADINGS {
             let angle = k as f32 * std::f32::consts::TAU / LEAP_HEADINGS as f32;
@@ -1315,7 +1311,6 @@ impl Search {
             let mut last = (node.x, node.z);
             let mut across = CELL;
             while across <= farthest + CELL * 0.5 {
-                let at = across;
                 let (x, z) = cell_of(from + heading * across);
                 across += CELL;
                 if (x, z) == last {
@@ -1326,26 +1321,17 @@ impl Search {
                 let floors = nav.floor(ground, body, x, z, from.y)?;
                 let highest = floors.first().map(|f| f.y);
                 let take = if !gap {
-                    if floors.iter().any(level) {
-                        // Still on its own level: walked, not leapt, up to
-                        // as far back as a leap up takes off from.
-                        if at > back {
-                            break;
-                        }
-                        continue;
+                    // Only off an edge: floor at its own level beside it is
+                    // walked on, and a ledge or a wall there jumped onto
+                    // from here or not at all.
+                    if !beside
+                        || floors.iter().any(level)
+                        || highest.is_some_and(|h| h > from.y + body.step)
+                    {
+                        break;
                     }
-                    match highest {
-                        // A ledge (or a wall) ahead: onto it, then no more;
-                        // one a jump from beside it lands on is jumped there.
-                        Some(h) if h > from.y + body.jump => true,
-                        Some(h) if h > from.y + body.step => break,
-                        // Open air, or a drop: only off the edge beside it.
-                        _ if !beside => break,
-                        _ => {
-                            gap = true;
-                            highest.is_some()
-                        }
-                    }
+                    gap = true;
+                    highest.is_some()
                 } else {
                     match (highest, support) {
                         (None, _) => false,
@@ -1376,7 +1362,7 @@ impl Search {
                 // Onto a ledge, the far side, or past the bottom of the
                 // gap: nothing farther is leapt to.
                 let h = highest.unwrap_or(f32::NEG_INFINITY);
-                if !gap || support.is_some() || h >= from.y - body.step {
+                if support.is_some() || h >= from.y - body.step {
                     break;
                 }
                 support = Some(h);

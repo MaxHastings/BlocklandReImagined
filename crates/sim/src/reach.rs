@@ -144,17 +144,6 @@ impl Leaps {
             .map(|(across, _)| *across)
             .fold(0.0, f32::max)
     }
-    /// The farthest back any leap up (onto a landing higher than its
-    /// takeoff) is measured to land from at its nearest.
-    pub fn nearest_up(&self) -> f32 {
-        self.rises
-            .iter()
-            .zip(&self.rows)
-            .filter(|(rise, _)| **rise > 0.0)
-            .filter_map(|(_, row)| row.first())
-            .map(|(across, _)| *across)
-            .fold(0.0, f32::max)
-    }
 }
 
 /// One jet leg as flown: from takeoff to standing on the landing.
