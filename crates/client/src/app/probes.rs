@@ -235,6 +235,20 @@ impl App {
             && !self.switchable_sheets_due()
             && self.gpu.gpu_scene.is_some()
     }
+    /// Which parts of [`Self::map_lighting_settled`] hold, for a wait's
+    /// failure message.
+    pub fn map_lighting_parts(&self) -> String {
+        let light = &self.lighting.light_volume;
+        format!(
+            "world drawn {}, source loading {}, modern {}, baking {}, sheets due {}, scene on GPU {}",
+            self.world_render_ready(),
+            light.source_loading.is_some(),
+            light.source_modern,
+            light.baking.is_some(),
+            self.switchable_sheets_due(),
+            self.gpu.gpu_scene.is_some()
+        )
+    }
     /// Presented (predicted and interpolated) local state and camera eye.
     pub fn local_motion(&self) -> Option<(bri_sim::player::PlayerState, Option<Vec3>)> {
         let view = self.network_view()?;

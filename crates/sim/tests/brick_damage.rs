@@ -308,6 +308,44 @@ fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn(f: &Fixt
 }
 
 on_both! {
+/// Respawned bricks are solid again: a second rocket at the same bricks
+/// knocks them out again (the soak's wall, with its 2 s brick respawn, let a
+/// second rocket through under load).
+fn a_rocket_knocks_out_respawned_bricks_again(f: &Fixture) {
+    let mut blast = fire(f, Rocket {
+        lan: true,
+        bystander_bricks: false,
+        game: Some(Settings {
+            // The shortest a minigame allows, as the client soak uses.
+            brick_respawn_ms: bri_minigames::Limits::default().brick_respawn_ms[0],
+            ..brick_damage(f, true).unwrap()
+        }),
+        drop_in_flight: false,
+    });
+    blast.assert_knocked_out();
+    respawned(&mut blast, 60 * HZ).expect("bricks never respawned");
+    let shooter = blast.s.names().into_keys().next().unwrap();
+    let aim = aim_at(&mut blast.s, shooter, Vec3::new(0.0, 0.3, -8.0));
+    blast.thrown.clear();
+    blast.s.take_cues();
+    for (sequence, down) in [(9, true), (10, false)] {
+        blast
+            .s
+            .command_with_aim(shooter, sequence, Command::WeaponTrigger { down }, Some(aim))
+            .unwrap();
+    }
+    for _ in 0..240 {
+        blast.s.step().unwrap();
+        let tick = blast.s.simulation().state().tick;
+        blast
+            .thrown
+            .extend(kills(&mut blast.s).into_iter().map(|(b, _, _)| (b, tick)));
+    }
+    blast.assert_knocked_out();
+}
+}
+
+on_both! {
 fn rocket_leaves_bricks_alone_in_a_minigame_with_brick_damage_off(f: &Fixture) {
     for lan in [false, true] {
         for bystander_bricks in [false, true] {

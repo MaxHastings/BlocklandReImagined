@@ -37,7 +37,7 @@ pub(super) struct LightVolumeState {
     /// Prepared source descriptors; no recovery runs in the client.
     pub(super) recovered: Vec<bri_render::map_lighting::MapLight>,
     pub(super) source_modern: bool,
-    source_loading: Option<(bool, std::sync::Mutex<LightingSourceReceiver>)>,
+    pub(super) source_loading: Option<(bool, std::sync::Mutex<LightingSourceReceiver>)>,
     source_failed: Option<bool>,
     /// The map's images hold the per-texel lightmaps (the scene uploaded
     /// again with them).
