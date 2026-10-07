@@ -903,8 +903,8 @@ impl ClientVehicles {
                 push(&wheel.model, body * local, [1.0; 4]);
             }
             // A broken turret flew off as its explosion's debris.
-            if let (Some(model), Some(mount), false) =
-                (&d.attachment_model, &d.attachment_mount, info.turret_broken)
+            if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount)
+                && !info.turret_broken
             {
                 let local =
                     to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
@@ -1622,9 +1622,6 @@ pub(crate) mod tests {
         };
         assert_eq!(body_tint(&d, &plain), [1.0; 4]);
     }
-    /// A wreck burns with its own `damageEmitter`s, each once: the stand-in
-    /// plane names `StandInWreckEmitter` (a base-game name to it) twice; an Add-On's own emitter
-    /// resolves to its id; a mount without any (a horse) does not burn.
     #[test]
     fn a_material_named_with_its_extension_finds_its_texture() {
         let image = |label: &str| SceneImage {
@@ -1660,6 +1657,9 @@ pub(crate) mod tests {
         );
         assert_eq!(found(tank, "missing.png"), None);
     }
+    /// A wreck burns with its own `damageEmitter`s, each once: the stand-in
+    /// plane names `StandInWreckEmitter` (a base-game name to it) twice; an Add-On's own emitter
+    /// resolves to its id; a mount without any (a horse) does not burn.
     #[test]
     fn a_wreck_burns_with_its_own_damage_emitters() {
         let plane: Pack = serde_json::from_slice(include_bytes!(

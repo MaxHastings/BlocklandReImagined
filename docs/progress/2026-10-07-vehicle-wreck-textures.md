@@ -57,3 +57,19 @@ Test: `vehicles::tests::a_broken_turret_leaves_the_hull_and_its_gunner_sits_on_t
 painted black. That stays true for the paint rule, but a destroyed tank's
 turret has always been blown off first (the hull's death fires the turret
 explosion when the turret is still on), so the wreck now shows no turret.
+
+## Review and follow-ups
+
+An independent review found nothing blocking. Its comment-placement and
+style notes were fixed. Host test added:
+`session::vehicles::tests::a_shot_off_turret_and_a_destroyed_hull_both_replicate_the_turret_gone`
+(the turret shot off alone, and the hull destroyed with its turret on).
+
+Left for later, both cosmetic or minor and outside this fix:
+- A gunner whose turret was shot off keeps the turret player's eye height
+  and pitch limits (`app/view.rs` gunner camera, `app/frame.rs` look
+  limits). The host agrees, since it keeps the seat's role too.
+- The driver's predicted vehicle (`sim/src/prediction.rs` `DriveSpawn`)
+  still has a turret collider after the turret is gone, so a driver
+  could get small corrections from the host under a low overhang.
+  `VehicleInfo::turret_broken` can now be passed through to fix it.
