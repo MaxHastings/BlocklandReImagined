@@ -1867,7 +1867,10 @@ fn render_scale_draws_the_world_smaller_and_fills_the_window() -> anyhow::Result
             / a.len() as f64
     };
     let whole = difference(&full, &half);
-    ensure!(whole < 12.0, "the scaled frame differs by {whole:.1} on average");
+    ensure!(
+        whole < 12.0,
+        "the scaled frame differs by {whole:.1} on average"
+    );
     let corner = |p: &[u8]| -> Vec<u8> {
         (SIZE.1 * 3 / 4..SIZE.1)
             .flat_map(|y| {
@@ -1887,7 +1890,10 @@ fn render_scale_draws_the_world_smaller_and_fills_the_window() -> anyhow::Result
     );
     app.graphics.render_scale = 100;
     frame(&mut app)?.context("the frame back at 100% drew no game")?;
-    ensure!(app.gpu.upscale.is_none(), "100% kept drawing through a copy");
+    ensure!(
+        app.gpu.upscale.is_none(),
+        "100% kept drawing through a copy"
+    );
     Ok(())
 }
 

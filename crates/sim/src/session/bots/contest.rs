@@ -66,11 +66,17 @@ impl Session {
         if contested || at_the_body || play.enemy == Some(seen.owner) {
             return 1.0;
         }
-        let scale = self.peers.get(&seen.owner).map_or(1.0, |p| p.player.state().scale);
+        let scale = self
+            .peers
+            .get(&seen.owner)
+            .map_or(1.0, |p| p.player.state().scale);
         let armed = self
             .weapons
             .actor(ActorId(seen.owner))
-            .and_then(|a| a.selected.and_then(|s| a.inventory.get(s).cloned().flatten()))
+            .and_then(|a| {
+                a.selected
+                    .and_then(|s| a.inventory.get(s).cloned().flatten())
+            })
             .is_some_and(|item| super::hand_combat::item_attacks(self, &item, scale))
             || self
                 .bots

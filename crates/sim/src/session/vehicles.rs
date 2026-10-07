@@ -1071,7 +1071,9 @@ impl Session {
     pub(super) fn ride_refusal(&self, owner: OwnerId, vehicle_owner: OwnerId) -> String {
         let name = self.brick_group_name(vehicle_owner);
         match self.ride_decision(owner, vehicle_owner) {
-            Some(Decision::OutsideMinigames) => format!("{name} does not trust you enough to ride."),
+            Some(Decision::OutsideMinigames) => {
+                format!("{name} does not trust you enough to ride.")
+            }
             Some(Decision::Deny(mg::Denial::DifferentGame)) if self.owner_game(owner).is_some() => {
                 "This vehicle is not part of the mini-game.".into()
             }

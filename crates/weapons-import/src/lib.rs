@@ -923,10 +923,13 @@ pub fn collision_sounds(scripts: &[bri_convert::tscript::Script], pack: &mut Pac
     let word = Regex::new(r"^[A-Za-z_]\w*$").unwrap();
     // `%name = Sound;` in a body: a parameter's default.
     let default = |f: &Function, var: &str| {
-        Regex::new(&format!(r"(?i){}\s*=\s*([A-Za-z_]\w*)\s*;", regex::escape(var)))
-            .ok()?
-            .captures(&f.body)
-            .map(|c| c[1].to_owned())
+        Regex::new(&format!(
+            r"(?i){}\s*=\s*([A-Za-z_]\w*)\s*;",
+            regex::escape(var)
+        ))
+        .ok()?
+        .captures(&f.body)
+        .map(|c| c[1].to_owned())
     };
     // A literal sound name, or a variable bound to one.
     let resolve = |f: &Function, arg: &str, bound: &BTreeMap<String, String>| {
@@ -1004,25 +1007,29 @@ fn at_top(body: &str, callee: &str) -> bool {
 /// then `%speed > N`, and `getSimTime() + ms`.
 fn guards(f: &bri_convert::tscript::Function) -> (f32, u32) {
     let body = bri_convert::tscript::without_comments(&f.body);
-    let speed = Regex::new(
-        r"(?i)(%\w+)\s*=\s*vectorLen\s*\(\s*%\w+\s*\.\s*getVelocity\s*\(\s*\)\s*\)",
-    )
-    .unwrap()
-    .captures(&body)
-    .and_then(|c| {
-        Regex::new(&format!(r"(?i){}\s*>=?\s*([0-9]*\.?[0-9]+)", regex::escape(&c[1])))
-            .ok()?
-            .captures(&body)?[1]
-            .parse::<f32>()
-            .ok()
-    })
-    .unwrap_or(0.0)
-    .clamped(0.0, 1000.0);
+    let speed =
+        Regex::new(r"(?i)(%\w+)\s*=\s*vectorLen\s*\(\s*%\w+\s*\.\s*getVelocity\s*\(\s*\)\s*\)")
+            .unwrap()
+            .captures(&body)
+            .and_then(|c| {
+                Regex::new(&format!(
+                    r"(?i){}\s*>=?\s*([0-9]*\.?[0-9]+)",
+                    regex::escape(&c[1])
+                ))
+                .ok()?
+                .captures(&body)?[1]
+                    .parse::<f32>()
+                    .ok()
+            })
+            .unwrap_or(0.0)
+            .clamped(0.0, 1000.0);
     let gap = Regex::new(r"(?i)getSimTime\s*\(\s*\)\s*\+\s*([0-9]+)")
         .unwrap()
         .captures(&body)
         .and_then(|c| c[1].parse::<u64>().ok())
-        .map_or(0, |ms| (ms * u64::from(TICK_HZ)).div_ceil(1000).min(1200) as u32);
+        .map_or(0, |ms| {
+            (ms * u64::from(TICK_HZ)).div_ceil(1000).min(1200) as u32
+        });
     (speed, gap)
 }
 #[cfg(test)]
@@ -1074,7 +1081,10 @@ function dBall::onCollision(%this, %obj, %col, %fade, %pos, %normal)
 "#;
         let path = "Add-Ons/Item_Test/server.cs";
         let mut pack = lower(parse(script, path).unwrap()).unwrap();
-        collision_sounds(&[bri_convert::tscript::read(script, path).unwrap()], &mut pack);
+        collision_sounds(
+            &[bri_convert::tscript::read(script, path).unwrap()],
+            &mut pack,
+        );
         let sound = |name: &str| {
             pack.projectiles[&native_id("projectile", name)]
                 .collision_sound
@@ -1086,7 +1096,11 @@ function dBall::onCollision(%this, %obj, %col, %fade, %pos, %normal)
             gap_ticks: 12,
         };
         assert_eq!(sound("aBall"), Some(guarded("bonkSound")));
-        assert_eq!(sound("bBall"), Some(guarded("thudSound")), "the helper's default");
+        assert_eq!(
+            sound("bBall"),
+            Some(guarded("thudSound")),
+            "the helper's default"
+        );
         assert_eq!(
             sound("cBall"),
             Some(CollisionSound {
