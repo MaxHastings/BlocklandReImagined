@@ -8,8 +8,12 @@ until they pressed Esc; Bedroom then loaded fine.
 - Hosting Slate headless with a real offscreen GPU and a fresh state folder
   (a scratch probe driving `App::tick` and printing every loading status):
   - origin/main 498d7f58 on the main checkout's `content`: single player,
-    LAN and internet hosts, and Classic, Unified and Dynamic lighting all
-    entered the game (8 to 47 s on this PC while other builds ran).
+    LAN and internet hosts entered the game (8 to 47 s on this PC while
+    other builds ran). A second probe drew frames from startup, hosted
+    Slate as the first map in Classic, Unified and Dynamic lighting and
+    played 40 s: each logged one `Compiled scene pipelines` line, so the
+    first map never compiles the world pipelines a second time (the
+    startup compile already uses the lighting mode's shadow settings).
   - v0.2.5 (tag, 2cf0b3a4b) on a copy of the v0.2.5 release's `content`:
     single player and internet hosts entered in 16 s.
   - v0.2.5: a guest with six fewer Add-Ons joined a Slate host over
@@ -57,5 +61,9 @@ world arrives had the same silent bar.
 
 - The friend's `logs` folder from the game folder would confirm the cause:
   look for `Shader compiler: FXC` and `Compiled scene pipelines in N ms`.
+- Every map change after the first still rebuilds the renderers
+  (`take_prepared_scene`) and compiles the scene pipelines again: about
+  50 ms with DXC and a warm driver cache (Max's v0.2.5 log), but a full
+  compile again on an FXC machine.
 - A shader compile still has no upper bound: a slow GPU is not a failure,
   and Esc leaves the load.
