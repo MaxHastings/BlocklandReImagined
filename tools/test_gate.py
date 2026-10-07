@@ -8,6 +8,44 @@ import sys
 import gate
 
 
+class TestPlanning(unittest.TestCase):
+    binaries = [("a/x", "x.exe", ".", "Running x"), ("b/y", "y.exe", ".", "Running y"),
+                ("c/z", "z.exe", ".", "Running z")]
+
+    def test_the_slowest_and_the_unmeasured_start_first(self):
+        units = gate.plan_units(self.binaries, ["--include-ignored"], {"a/x": 5.0, "b/y": 9.0},
+                                jobs=100)
+        self.assertEqual([u[0] for u in units], ["c/z", "b/y", "a/x"])
+        self.assertTrue(all(u[4] == ["--include-ignored"] for u in units))
+
+    def test_a_long_binary_splits_into_even_shares_of_its_tests(self):
+        names = [f"t{i}" for i in range(6)]
+        with patch.object(gate, "list_tests", return_value=names):
+            units = gate.plan_units(self.binaries, ["--include-ignored"],
+                                    {"a/x": 90.0, "b/y": 5.0, "c/z": 5.0}, jobs=4)
+        parts = [u for u in units if u[0] == "a/x"]
+        self.assertEqual(len(parts), 4)
+        run = sorted(n for u in parts for n in u[4][u[4].index("--exact") + 1:])
+        self.assertEqual(run, sorted(names))
+        self.assertTrue(all(u[4][0] == "--include-ignored" for u in parts))
+
+    def test_a_port_bound_binary_never_splits(self):
+        with patch.object(gate, "list_tests", return_value=["t0", "t1"]):
+            units = gate.plan_units(self.binaries, [], {"a/x": 90.0, "b/y": 1.0, "c/z": 1.0},
+                                    jobs=4, exclusive={"a/x"})
+        self.assertEqual(len([u for u in units if u[0] == "a/x"]), 1)
+
+    def test_timings_keep_earlier_binaries_they_did_not_run(self):
+        path = Path(os.environ.get("TEMP", ".")) / f"gate-timings-test-{os.getpid()}.json"
+        try:
+            gate.save_timings(path, {"a/x": 3.0})
+            gate.save_timings(path, {"b/y": 4.0})
+            self.assertEqual(gate.load_timings(path), {"a/x": 3.0, "b/y": 4.0})
+        finally:
+            path.unlink(missing_ok=True)
+        self.assertEqual(gate.load_timings(path), {})
+
+
 class CiShards(unittest.TestCase):
     def test_the_shards_run_each_target_exactly_once(self):
         labels = [f"crate{i}/t" for i in range(23)]

@@ -57,7 +57,15 @@ PROTOCOL_RE = re.compile(r"^pub const VERSION: u32 = (\d+);", re.M)
 PROTOCOL_CHANGES_DIR = "crates/net/protocol-changes"
 LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
-TEST_JOBS = 8
+# Test processes at once: every logical CPU unless --jobs says otherwise.
+TEST_JOBS = os.cpu_count() or 8
+# Each test binary's last wall time, kept in the gate's target dir, so the
+# next run starts the slowest first and splits the longest (`plan_units`).
+TIMINGS_FILE = "gate-timings.json"
+# Longest command line a split may build (Windows allows 32767 characters).
+MAX_COMMAND = 30000
+# Test time over which the gate prints a warning.
+TEST_WARN_SECONDS = 10 * 60
 # A test binary still running after this long is stopped and fails the run.
 BINARY_TIMEOUT = 10 * 60
 HEAVY_JOBS = 3
@@ -593,28 +601,33 @@ def full_gate(sha, root, changed=()):
         env = gate_env(os.environ, main_checkout() / "content")
         target = ["--target-dir", str(root / "target")]
         started = time.time()
+        phases = {}
         steps = [
             ("tool-tests", [sys.executable, "-m", "unittest", "discover", "-s", str(worktree / "tools"), "-p", "test_*.py"]),
             ("build", ["cargo", "build", "--workspace", "--all-targets", "--locked", *target]),
-            ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", *target,
-                        "--", "-D", "warnings"]),
         ]
         for name, command in steps:
             if not tree_intact(worktree, sha):
                 return False
+            step_started = time.time()
             if not run_step(name, command, worktree, log, env):
                 print(tail(log, f"===== {name} ====="))
                 say(f"full log: {log}")
                 return False
+            phases[name] = time.time() - step_started
         state = root / "check-state"
         shutil.rmtree(state, ignore_errors=True)
         exe = root / "target" / "debug" / ("bri-client.exe" if os.name == "nt" else "bri-client")
-        if not run_step("content-check", [exe, "--check", worktree / "content", state], worktree, log, env):
+        # The check also refreshes the default Add-Ons' installed copies with
+        # the binary just built, so a stale copy of an older build's data
+        # never fails a content test.
+        check_env = dict(env, BRI_INSTALL_DEFAULT_ADD_ONS="1")
+        if not run_step("content-check", [exe, "--check", worktree / "content", state], worktree, log,
+                        check_env):
             print(tail(log, "===== content-check ====="))
             return False
         known, skips = known_failures(worktree)
         skip_args = [arg for name in skips for arg in ("--skip", name)]
-        say(f"test: {TEST_JOBS} test binaries at a time, --include-ignored")
         test_started = time.time()
         with open(log, "a", encoding="utf-8") as handle:
             handle.write("\n===== test =====\n")
@@ -623,9 +636,38 @@ def full_gate(sha, root, changed=()):
             print(tail(log, "===== test ====="))
             say("a test target failed to compile")
             return False
-        run_binaries(binaries, ["--include-ignored", *skip_args], log, TEST_JOBS,
-                     port_bound_targets(worktree), env)
-        say(f"test: ran {len(binaries)} binaries in {time.time() - test_started:.0f}s")
+        # Clippy needs no test process and test processes need no cargo lock,
+        # so it runs alongside the test pass, into a log of its own.
+        clippy_log = root / "logs" / f"{sha[:12]}-clippy.log"
+        clippy_log.write_text("", encoding="utf-8")
+        clippy = {}
+
+        def run_clippy():
+            started_clippy = time.time()
+            clippy["ok"] = run_step("clippy", ["cargo", "clippy", "--workspace", "--all-targets",
+                                               "--locked", *target, "--", "-D", "warnings"],
+                                    worktree, clippy_log, env)
+            clippy["seconds"] = time.time() - started_clippy
+
+        clippy_thread = threading.Thread(target=run_clippy)
+        clippy_thread.start()
+        timings = root / "target" / TIMINGS_FILE
+        units = plan_units(binaries, ["--include-ignored", *skip_args], load_timings(timings),
+                           TEST_JOBS, port_bound_targets(worktree), env)
+        say(f"test: {len(units)} test processes for {len(binaries)} binaries, "
+            f"{TEST_JOBS} at a time, slowest first, --include-ignored")
+        seconds = run_binaries(units, log, TEST_JOBS, port_bound_targets(worktree), env)
+        save_timings(timings, seconds)
+        phases["tests"] = time.time() - test_started
+        say(f"test: ran {len(binaries)} binaries in {phases['tests']:.0f}s")
+        clippy_thread.join()
+        phases["clippy"] = clippy.get("seconds", 0.0)
+        with open(log, "a", encoding="utf-8", errors="replace") as handle:
+            handle.write(Path(clippy_log).read_text(encoding="utf-8", errors="replace"))
+        if not clippy.get("ok"):
+            print(tail(clippy_log, "===== clippy ====="))
+            say(f"full log: {log}")
+            return False
         if not tree_intact(worktree, sha):
             return False
         failed, compile_error = parse_failures(log)
@@ -647,6 +689,7 @@ def full_gate(sha, root, changed=()):
             return False
         # Offscreen app tests wait on wall-clock timeouts, which a machine busy
         # with other sessions' builds can miss. Retry each new failure alone once.
+        retries_started = time.time()
         for key in list(unexpected):
             name = key.split("::", 1)[1]
             if name == "gate_timeout":
@@ -673,6 +716,8 @@ def full_gate(sha, root, changed=()):
                 unexpected.remove(key)
             elif f"test {name} ..." not in text:
                 say(f"retry of {key} ran no test named {name}; it still counts as failed")
+        phases["retries"] = time.time() - retries_started
+        summary(phases, time.time() - started)
         if unexpected:
             say("new test failures:")
             for key in unexpected:
@@ -832,16 +877,97 @@ def run_binary(label, executable, args, cwd, env=None):
         return output, 1
 
 
-def run_binaries(binaries, args, log, jobs, exclusive=(), env=None):
-    """Run test binaries in parallel, appending each one's output to log in
-    listing order. Returns True when every binary passed.
+def load_timings(path):
+    """Each test binary's last wall time in seconds, by label; {} when none."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {label: float(seconds) for label, seconds in data.items()
+            if isinstance(seconds, (int, float))}
+
+
+def save_timings(path, seconds):
+    """Keep this run's times, and earlier ones for binaries it didn't run."""
+    merged = dict(load_timings(path), **seconds)
+    try:
+        Path(path).write_text(json.dumps(merged, indent=1, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def list_tests(executable, args, cwd, env=None):
+    """The test names a binary would run with `args` (its skips applied)."""
+    try:
+        result = subprocess.run([executable, *args, "--list"], cwd=cwd, env=env, text=True,
+                                capture_output=True, errors="replace", timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    return [line[:-len(": test")] for line in result.stdout.splitlines()
+            if line.endswith(": test")]
+
+
+def split_evenly(names, parts):
+    """`names` dealt into `parts` lists, in sorted order."""
+    return [names[k::parts] for k in range(parts)]
+
+
+def plan_units(binaries, args, timings, jobs, exclusive=(), env=None):
+    """The test processes to run: (label, executable, cwd, header, args,
+    expected seconds), slowest first, with a binary never measured first so it
+    gets measured.
+
+    A binary whose last time is over its share (all recorded time / jobs) runs
+    as several processes, each with an even share of its tests by name
+    (`--exact`), so one long binary no longer sets the wall time. Port-bound
+    binaries stay whole: they run alone anyway."""
+    total = sum(timings.get(label, 0.0) for label, _, _, _ in binaries)
+    share = total / max(1, jobs)
+    units = []
+    for label, executable, cwd, header in binaries:
+        seconds = timings.get(label)
+        parts = 1
+        if seconds and share > 0 and seconds > share and label not in exclusive:
+            names = list_tests(executable, args, cwd, env)
+            if names:
+                parts = min(len(names), -(-int(seconds) // max(1, int(share))))
+                chunks = split_evenly(sorted(names), parts) if parts > 1 else []
+                longest = max((sum(len(n) + 3 for n in c) for c in chunks), default=0)
+                if parts > 1 and len(str(executable)) + longest < MAX_COMMAND:
+                    for chunk in chunks:
+                        units.append((label, executable, cwd, header,
+                                      [*args, "--exact", *chunk], seconds / parts))
+                    continue
+                parts = 1
+        units.append((label, executable, cwd, header, list(args),
+                      float("inf") if seconds is None else seconds))
+    order = {entry[0]: i for i, entry in enumerate(binaries)}
+    return sorted(units, key=lambda u: (-u[5], order[u[0]]))
+
+
+def summary(phases, total):
+    """One line of where the gate's time went, and a warning past the limit."""
+    parts = [f"{name} {phases[name]:.0f}s" for name in
+             ("tool-tests", "build", "clippy", "tests", "retries") if name in phases]
+    say(f"phases: {', '.join(parts)}, total {total:.0f}s (clippy ran alongside tests)")
+    if phases.get("tests", 0) > TEST_WARN_SECONDS:
+        say(f"warning: tests took {phases['tests'] / 60:.1f} minutes, over "
+            f"{TEST_WARN_SECONDS // 60}")
+
+
+def run_binaries(units, log, jobs, exclusive=(), env=None):
+    """Run test processes (`plan_units`) in parallel, in the order given,
+    appending each one's output to log in listing order. Returns each binary's
+    wall time (its processes added up), by label.
 
     Whole-app and GPU test binaries wait on wall-clock timeouts, so at most
     HEAVY_JOBS of them run at once, in their own pool; the rest share the
     remaining jobs. Targets in `exclusive` bind fixed ports (a hosted game's
     UDP 28000/28050), so they run one at a time in a pool of their own."""
     def one(entry):
-        label, executable, cwd, header = entry
+        label, executable, cwd, header, args, _ = entry
         started = time.time()
         output, code = run_binary(label, executable, args, cwd, env)
         return header, output, code, time.time() - started, label
@@ -857,19 +983,22 @@ def run_binaries(binaries, args, log, jobs, exclusive=(), env=None):
     with concurrent.futures.ThreadPoolExecutor(1) as alone, \
             concurrent.futures.ThreadPoolExecutor(HEAVY_JOBS) as heavy, \
             concurrent.futures.ThreadPoolExecutor(max(1, jobs - HEAVY_JOBS)) as light:
-        futures = [pool_for(b[0]).submit(one, b) for b in binaries]
+        futures = [pool_for(u[0]).submit(one, u) for u in units]
         results = [future.result() for future in futures]
-    ok = True
+    seconds = {}
+    for _, _, _, secs, label in results:
+        seconds[label] = seconds.get(label, 0.0) + secs
+    listing = sorted(range(len(units)), key=lambda i: (units[i][3], i))
     with open(log, "a", encoding="utf-8", errors="replace") as handle:
-        for header, output, code, _, _ in results:
+        for i in listing:
+            header, output, _, _, _ = results[i]
             handle.write(f"{header}\n{output}\n")
-            ok = ok and code == 0
-    slowest = sorted(((secs, label) for _, _, _, secs, label in results), reverse=True)
+    slowest = sorted(((secs, label) for label, secs in seconds.items()), reverse=True)
     with open(log, "a", encoding="utf-8", errors="replace") as handle:
         handle.write("[gate] seconds per test binary, slowest first:\n")
         handle.writelines(f"[gate] {secs:7.1f} {label}\n" for secs, label in slowest)
     say("slowest test binaries: " + ", ".join(f"{label} {secs:.0f}s" for secs, label in slowest[:3]))
-    return ok
+    return seconds
 
 
 def shard(labels, part):
@@ -999,6 +1128,7 @@ def forget_hook_repository():
 
 
 def main():
+    global TEST_JOBS
     forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
@@ -1012,8 +1142,12 @@ def main():
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
                         help="only run the history check on BASE..TIP (used by CI)")
+    parser.add_argument("--jobs", type=int, default=None, metavar="N",
+                        help=f"test processes at once (default: every logical CPU, {TEST_JOBS})")
     parser.add_argument("commit", nargs="?", default="HEAD")
     args = parser.parse_args()
+    if args.jobs:
+        TEST_JOBS = max(HEAVY_JOBS + 1, args.jobs)
     try:
         if args.install_hook:
             install_hook()
