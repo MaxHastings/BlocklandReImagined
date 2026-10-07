@@ -10,16 +10,18 @@ keys are in `PLAYTEST.md`.
 1. Download for Windows 10 or 11 (x86-64), an Apple Silicon Mac (M1 or newer),
    or Linux x86-64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12,
    Fedora 36, or newer). A graphics card or graphics built into the
-   processor both work; with neither, the game falls back to slow software
-   drawing. Linux needs a Vulkan driver: most desktop installs have one, and
-   if the game says none was found, install Mesa's Vulkan drivers (AMD,
-   Intel) or NVIDIA's own driver.
+   processor both work; with neither, Windows and Mac fall back to slow
+   software drawing. Linux needs a Vulkan driver: most desktop installs have
+   one, and if the game says none was found, install Mesa's Vulkan drivers
+   (AMD, Intel) or NVIDIA's own driver. Software drawing on Linux needs
+   Mesa's software Vulkan driver (lavapipe) installed.
 2. Extract the whole zip to a normal folder you can write to, such as your
    Desktop or Documents. On Windows, avoid Program Files. Keep the files together.
 3. On Windows, run `Launch.cmd`; leave its console open while you play.
    On Mac, open `BlocklandReImagined.app`; `PLAYTEST-MAC.md` in the Mac release
    explains the first launch. On Linux, run `./launch.sh` from the extracted
-   folder in a terminal. You don't need the original Blockland.
+   folder in a terminal; if it says permission denied (some extractors drop
+   the executable bit), run `bash launch.sh` instead. You don't need the original Blockland.
 4. **Windows: "Windows protected your PC"**: the game isn't signed yet. Click **More
    info**, check the name is `Launch.cmd` or `bri-client.exe`, then **Run
    anyway**. If Windows blocked the download itself, right-click the zip,

@@ -53,24 +53,18 @@ const X11: [Library; 5] = [
         "libxkbcommon-x11",
     ),
 ];
-/// What winit opens for a Wayland window.
-const WAYLAND: [Library; 2] = [
-    library(
-        "libwayland-client.so.0",
-        "libwayland-client0",
-        "libwayland-client",
-        "wayland",
-    ),
-    library(
-        "libwayland-cursor.so.0",
-        "libwayland-cursor0",
-        "libwayland-cursor",
-        "wayland",
-    ),
-];
+/// What winit opens for a Wayland window (its cursors are drawn by the
+/// pure-Rust wayland-cursor crate, which loads no library).
+const WAYLAND: [Library; 1] = [library(
+    "libwayland-client.so.0",
+    "libwayland-client0",
+    "libwayland-client",
+    "wayland",
+)];
 
 /// Whether winit will open a Wayland window: it prefers Wayland whenever the
-/// session names a compositor, the same test it makes.
+/// session names a compositor, the same test it makes, and does not fall back
+/// to X11 when Wayland fails (winit 0.30 `platform_impl/linux/mod.rs`).
 fn wayland_session() -> bool {
     let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET")
