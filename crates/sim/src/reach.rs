@@ -429,12 +429,121 @@ fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
     low
 }
 
+/// Where a body shoved off its feet comes down, and the impact it lands
+/// with: the real player motor flown from `feet` at `velocity` with no
+/// input, against the fixed collision of `ground` (its map, loaded terrain
+/// tiles and liquids) the flight could reach. `tuning` is the target's
+/// current one, its scale applied, so the body is the right size.
+///
+/// The impact is the motor's own `MotionEvents::impact` on the tick it
+/// lands, the vector the session hands its fall rule. Each motor tick
+/// spends one of `allowance` (the caller's share of its planning budget);
+/// `None` when it has not landed by the time that runs out, which covers a
+/// shove off into nothing and a fall into water deep enough to float it.
+///
+/// Not covered: the target steering in the air (it is flown with no input),
+/// other bodies and vehicles in the way, and openings it would pass through.
+pub fn shove_landing(
+    tuning: &PlayerTuning,
+    feet: Vec3,
+    velocity: Vec3,
+    ground: &crate::nav::Ground,
+    allowance: &mut u32,
+) -> Option<(Vec3, Vec3)> {
+    // As far as the flight can go before the allowance runs out: its own
+    // speed and gravity, with no input to add to either.
+    let seconds = *allowance as f32 * FIXED_DT;
+    let flat = Vec3::new(velocity.x, 0.0, velocity.z).length() * seconds + tuning.width;
+    let rise = velocity.y.max(0.0) * seconds + tuning.stand_height;
+    let fall = (-velocity.y).max(0.0) * seconds + 0.5 * tuning.gravity * seconds * seconds;
+    let reach = Aabb::new(
+        Vector::from_array((feet - Vec3::new(flat, fall, flat)).to_array()),
+        Vector::from_array((feet + Vec3::new(flat, rise, flat)).to_array()),
+    );
+    let mut physics = bri_physics::new_world();
+    for (_, collider) in ground
+        .physics
+        .query_pipeline_with_filter(QueryFilter::only_fixed().exclude_sensors())
+        .intersect_aabb_conservative(reach)
+    {
+        physics.insert_collider(
+            ColliderBuilder::new(collider.shared_shape().clone())
+                .position(*collider.position())
+                .collision_groups(collider.collision_groups())
+                .user_data(collider.user_data),
+            None,
+        );
+    }
+    bri_physics::detect_collisions(&mut physics);
+    let mut player = Player::spawn_overlapping(&mut physics, 1, feet, tuning.clone()).ok()?;
+    player.set_motion(velocity, false);
+    while *allowance > 0 {
+        *allowance -= 1;
+        let events = player
+            .step_in_water(&mut physics, MoveInput::default(), ground.waters)
+            .ok()?;
+        physics.step();
+        if events.landed {
+            return Some((Vec3::from(player.state().feet), events.impact));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn standard() -> PlayerTuning {
         PlayerTuning::default()
+    }
+
+    fn shove(boxes: &[(Vec3, Vec3)], feet: Vec3, velocity: Vec3) -> (Option<(Vec3, Vec3)>, u32) {
+        let mut physics = bri_physics::new_world();
+        for (min, max) in boxes {
+            let half = (*max - *min) * 0.5;
+            let centre = (*min + *max) * 0.5;
+            physics.insert_collider(
+                ColliderBuilder::cuboid(half.x, half.y, half.z)
+                    .translation(Vector::new(centre.x, centre.y, centre.z)),
+                None,
+            );
+        }
+        bri_physics::detect_collisions(&mut physics);
+        let passages = bri_content::passage::Passages {
+            list: Vec::new(),
+            closed: Vec::new(),
+        };
+        let ground = crate::nav::Ground {
+            physics: &physics,
+            terrain: &|_, _, _| None,
+            passages: &passages,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        // Two seconds of flight.
+        let mut allowance = TICKS as u32 * 2;
+        let landing = shove_landing(&standard(), feet, velocity, &ground, &mut allowance);
+        (landing, allowance)
+    }
+
+    /// Shoved off a ledge, a body comes down on the floor below it, past
+    /// the edge, landing with a downward impact; shoved off into nothing it
+    /// never lands, and the whole allowance is spent.
+    #[test]
+    fn a_shove_off_a_ledge_lands_below_and_one_into_nothing_does_not() {
+        let ledge = (Vec3::new(-2.0, -1.0, -2.0), Vec3::new(2.0, 0.0, 2.0));
+        let below = (Vec3::new(-50.0, -7.0, -50.0), Vec3::new(50.0, -6.0, 50.0));
+        let (feet, push) = (Vec3::new(1.5, 0.0, 0.0), Vec3::new(8.0, 4.0, 0.0));
+        let (landing, _) = shove(&[ledge, below], feet, push);
+        let (at, impact) = landing.expect("it lands on the floor below");
+        assert!((at.y + 6.0).abs() < 0.1, "{at}");
+        assert!(at.x > 2.0, "{at}");
+        assert!(impact.y < 0.0, "{impact}");
+        let (landing, left) = shove(&[ledge], feet, push);
+        assert_eq!(landing, None);
+        assert_eq!(left, 0);
     }
     /// A leg eight up onto a landing just beside its takeoff.
     fn climb(reach: &Reach) -> Flight {
