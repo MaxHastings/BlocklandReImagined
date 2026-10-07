@@ -166,14 +166,14 @@ pub fn start(
         start: StartState {
             admin,
             held_minigame: session.held_minigame().cloned(),
-            bot_overrides: session.bot_tuning_state().1,
+            bot_overrides: session.bot_overrides().clone(),
         },
     };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let mut file =
-        std::fs::File::create(&path).with_context(|| format!("Creating {}", path.display()))?;
+        std::fs::File::create_new(&path).with_context(|| format!("Creating {}", path.display()))?;
     file.write_all(MAGIC)?;
     file.write_all(&FILE_SCHEMA.to_le_bytes())?;
     let mut out = zstd::stream::write::Encoder::new(file, COMPRESSION_LEVEL)?.auto_finish();
@@ -343,40 +343,40 @@ pub const RECORDINGS_DIR: &str = "recordings";
 pub const KEPT_RECORDINGS: usize = 10;
 
 /// The file for a new recording in `dir`, after deleting the oldest so
-/// that with it `dir` holds [`KEPT_RECORDINGS`].
+/// that with it `dir` holds [`KEPT_RECORDINGS`]. Recordings are numbered
+/// in the order they start (`match-<n>.brimatch`), so the newest is never
+/// mistaken for an old one, whatever the clock does.
 pub fn next_recording(dir: &Path) -> Result<PathBuf> {
-    prune(dir, KEPT_RECORDINGS - 1)?;
-    Ok(recording_path(dir))
-}
-
-/// Where a host keeps its match recordings, newest last by name.
-pub fn recording_path(dir: &Path) -> PathBuf {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    dir.join(format!("match-{millis}.{EXTENSION}"))
-}
-
-/// Delete all but the newest `keep` recordings in `dir` (by name, which
-/// orders them by when they started). Other files are left alone.
-pub fn prune(dir: &Path, keep: usize) -> Result<()> {
-    let mut found: Vec<PathBuf> = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| {
-                p.extension().is_some_and(|e| e == EXTENSION)
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("match-"))
-            })
-            .collect(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    found.sort();
-    let excess = found.len().saturating_sub(keep);
-    for old in &found[..excess] {
+    let found = recordings(dir)?;
+    let next = found.last().map_or(1, |(number, _)| number + 1);
+    let excess = found.len().saturating_sub(KEPT_RECORDINGS - 1);
+    for (_, old) in &found[..excess] {
         std::fs::remove_file(old).with_context(|| format!("Removing {}", old.display()))?;
     }
-    Ok(())
+    Ok(dir.join(format!("match-{next}.{EXTENSION}")))
+}
+
+/// The numbered recordings in `dir`, oldest first. Other files are left
+/// out.
+fn recordings(dir: &Path) -> Result<Vec<(u64, PathBuf)>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut found: Vec<(u64, PathBuf)> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == EXTENSION))
+        .filter_map(|p| {
+            let number = p
+                .file_stem()?
+                .to_str()?
+                .strip_prefix("match-")?
+                .parse()
+                .ok()?;
+            Some((number, p))
+        })
+        .collect();
+    found.sort();
+    Ok(found)
 }

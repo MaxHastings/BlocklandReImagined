@@ -6,7 +6,10 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use bri_admin::Principal;
-use bri_sim::{replay::Recorder, session::Session};
+use bri_sim::{
+    replay::{Recorder, panic_message},
+    session::Session,
+};
 use bri_world::OwnerId;
 use glam::Vec3;
 use quinn::{Connection, Endpoint};
@@ -1337,15 +1340,6 @@ fn close_admin_disconnects(
     }
 }
 
-/// The text a panic was raised with.
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
-    panic
-        .downcast_ref::<&str>()
-        .map(|s| s.to_string())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown panic".into())
-}
-
 /// A bug (a panic) in one request, join or tick costs that request, join or
 /// tick, not the game for everyone: the host answers the request with an
 /// error, logs it (the crash hook also writes a report with its backtrace)
@@ -1642,17 +1636,17 @@ async fn run(
                 for (owner,notice) in recorder.take_private_notices(&mut session){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}}
             }
             }
-            event_overload.0+=recorder.take_event_overload(&mut session);
+            event_overload.0+=session.take_event_overload();
             if event_overload.0>0 && event_overload.1.is_none_or(|at|now.duration_since(at)>=Duration::from_secs(10)) {
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
-            let (diagnostics,slow)=(recorder.take_event_diagnostics(&mut session),recorder.take_slow_event_ticks(&mut session));
+            let (diagnostics,slow)=(session.take_event_diagnostics(),session.take_slow_event_ticks());
             event_notes.log(now,diagnostics,slow);
-            hold_package_problems(&package_problems,recorder.take_package_problems(&mut session));
+            hold_package_problems(&package_problems,session.take_package_problems());
             if let Some(keeper)=keeper.as_mut(){keeper.tick(now,&session);}
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
-                && let Some(summary)=perf_window.finish(now,recorder.take_package_script_time(&mut session),peers.len() as u32)
+                && let Some(summary)=perf_window.finish(now,session.take_package_script_time(),peers.len() as u32)
             {
                 let mut held=perf.lock().unwrap_or_else(|e|e.into_inner());
                 // The overlay's request and the bots' readout carry over.
@@ -1872,13 +1866,24 @@ mod tests {
         player.close();
         server.stop().await?;
 
-        let mut opened = crate::replay::open(&path)?;
-        let crate::replay::Rebuilt { mut session, setup } =
-            crate::replay::rebuild(root.path(), &opened.header)?;
-        let report =
-            bri_sim::replay::replay(&mut session, &mut opened.frames, &mut |map, save| {
-                crate::replay::load_map(&setup, map, save)
-            })?;
+        // The file as written, and as a replay of `bytes` ends: its report
+        // and the session it played into. `tamper` changes how the host is
+        // set up again.
+        let replayed = |bytes: &[u8], tamper: &dyn Fn(&mut crate::replay::Header)| {
+            let copy = slot.path().join("copy.brimatch");
+            std::fs::write(&copy, bytes)?;
+            let mut opened = crate::replay::open(&copy)?;
+            tamper(&mut opened.header);
+            let crate::replay::Rebuilt { mut session, setup } =
+                crate::replay::rebuild(root.path(), &opened.header)?;
+            let report =
+                bri_sim::replay::replay(&mut session, &mut opened.frames, &mut |map, save| {
+                    crate::replay::load_map(&setup, map, save)
+                })?;
+            anyhow::Ok((report, session))
+        };
+        let recorded = std::fs::read(&path)?;
+        let (report, session) = replayed(&recorded, &|_| ())?;
         assert_eq!(report.divergence, None, "{report:?}");
         assert_eq!(report.cut_off, None);
         assert!(report.ticks > WALKED, "{report:?}");
@@ -1891,6 +1896,19 @@ mod tests {
                 .any(|b| b.position == ON_TOP && b.definition == one_by_one()),
             "the replay builds what the player built"
         );
+        // A host killed mid-write leaves a compressed stream cut short: it
+        // matches as far as it goes, and says the file ends early.
+        // (A short match is mostly its header, so cut its last byte.)
+        let (cut, _) = replayed(&recorded[..recorded.len() - 1], &|_| ())?;
+        assert_eq!(cut.divergence, None, "{cut:?}");
+        assert!(cut.cut_off.is_some(), "{cut:?}");
+        assert!(cut.ticks <= report.ticks, "{cut:?}");
+        // Set up again without the brick it started with, it differs at
+        // once, in the bricks.
+        let (bare, _) = replayed(&recorded, &|header| header.host.world.bricks.clear())?;
+        let divergence = bare.divergence.context("a missing brick is caught")?;
+        let later = divergence.later.context("the start is a full check")?;
+        assert_eq!(later.parts, ["bricks"], "{later:?}");
         Ok(())
     }
     /// A clean stop leaves no recovery snapshot behind.

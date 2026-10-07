@@ -94,14 +94,14 @@ pub enum Read {
 impl Read {
     fn kind(&self) -> &'static str {
         match self {
-            Self::WallClock(_) => "the clock",
-            Self::LoadSpare(_) => "the load budget",
-            Self::CopyPoll(_) => "the copy store",
-            Self::HostData(_) => "Add-On data",
-            Self::BotReload(_) => "bot kinds",
-            Self::Overrides(_) => "bot overrides",
-            Self::Written(_) => "a file write",
-            Self::Persisted(_) => "administration storage",
+            Self::WallClock(_) => WallClock::KIND,
+            Self::LoadSpare(_) => LoadSpare::KIND,
+            Self::CopyPoll(_) => CopyPoll::KIND,
+            Self::HostData(_) => HostData::KIND,
+            Self::BotReload(_) => BotReload::KIND,
+            Self::Overrides(_) => OverridesRead::KIND,
+            Self::Written(_) => Written::KIND,
+            Self::Persisted(_) => Persisted::KIND,
         }
     }
 }
@@ -158,15 +158,18 @@ impl CopyDone {
 /// A value the session reads from outside the game, so a recording can
 /// keep it and a replay serve it.
 pub trait Outside: Sized {
+    /// What it is, in words.
+    const KIND: &'static str;
     fn into_read(self) -> Read;
     /// The value back, or the read unchanged when it is another kind.
     fn from_read(read: Read) -> Result<Self, Read>;
 }
 macro_rules! outside {
-    ($(#[$doc:meta])* $name:ident($inner:ty) => $variant:ident, $to:expr, $from:expr) => {
+    ($(#[$doc:meta])* $name:ident($inner:ty) => $variant:ident, $kind:literal, $to:expr, $from:expr) => {
         $(#[$doc])*
         pub struct $name(pub $inner);
         impl Outside for $name {
+            const KIND: &'static str = $kind;
             fn into_read(self) -> Read {
                 Read::$variant(($to)(self.0))
             }
@@ -181,7 +184,7 @@ macro_rules! outside {
 }
 outside!(
     /// Seconds since the Unix epoch.
-    WallClock(u64) => WallClock, |v| v, |v| v
+    WallClock(u64) => WallClock, "the clock", |v| v, |v| v
 );
 impl WallClock {
     pub fn now() -> Self {
@@ -195,42 +198,51 @@ impl WallClock {
 }
 outside!(
     /// Whether a save load has time left in this tick.
-    LoadSpare(bool) => LoadSpare, |v| v, |v| v
+    LoadSpare(bool) => LoadSpare, "the load budget", |v| v, |v| v
 );
 outside!(
     /// The copy store's finished requests.
-    CopyPoll(Vec<(u64, StoreDone)>) => CopyPoll,
+    CopyPoll(Vec<(u64, StoreDone)>) => CopyPoll, "the copy store",
     |v: Vec<(u64, StoreDone)>| v.into_iter().map(|(id, d)| (id, CopyDone::of(d))).collect(),
     |v: Vec<(u64, CopyDone)>| v.into_iter().map(|(id, d)| (id, d.done())).collect()
 );
 outside!(
     /// One Add-On's host-kept data.
-    HostData(BTreeMap<String, serde_json::Value>) => HostData, |v| v, |v| v
+    HostData(BTreeMap<String, serde_json::Value>) => HostData, "Add-On data", |v| v, |v| v
 );
 outside!(
     /// Bot kinds read again.
-    BotReload(anyhow::Result<Vec<BotKind>>) => BotReload, kept, restored
+    BotReload(anyhow::Result<Vec<BotKind>>) => BotReload, "bot kinds", kept, restored
 );
 outside!(
     /// Bot override dials read again.
-    OverridesRead(anyhow::Result<Overrides>) => Overrides, kept, restored
+    OverridesRead(anyhow::Result<Overrides>) => Overrides, "bot overrides", kept, restored
 );
 outside!(
     /// A file write's result.
-    Written(anyhow::Result<()>) => Written, kept, restored
+    Written(anyhow::Result<()>) => Written, "a file write", kept, restored
 );
 outside!(
     /// The host's storing of administration changes.
-    Persisted(anyhow::Result<()>) => Persisted, kept, restored
+    Persisted(anyhow::Result<()>) => Persisted, "administration storage", kept, restored
 );
 
 /// Where a recorded or replayed session's outside reads go and come from.
 /// Shared with the session it is installed in ([`Session::set_tape`]).
 #[derive(Clone, Debug)]
 pub struct Tape(Arc<Mutex<TapeState>>);
+/// What a tape does with the reads it sees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Recording,
+    Replaying,
+    /// The recording ended (it could not be written): reads go straight
+    /// through and nothing is kept.
+    Stopped,
+}
 #[derive(Debug)]
 struct TapeState {
-    replaying: bool,
+    mode: Mode,
     /// Recording: reads kept during the current call. Replaying: the
     /// current call's recorded reads not served yet.
     reads: VecDeque<Read>,
@@ -238,9 +250,9 @@ struct TapeState {
     fault: Option<String>,
 }
 impl Tape {
-    fn new(replaying: bool) -> Self {
+    fn new(mode: Mode) -> Self {
         Self(Arc::new(Mutex::new(TapeState {
-            replaying,
+            mode,
             reads: VecDeque::new(),
             fault: None,
         })))
@@ -249,15 +261,27 @@ impl Tape {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
     /// The next value of `T`: recorded live, or served from the recording.
-    /// A replay that runs out of reads, or finds another kind, reads live
-    /// and notes the fault; the replay reports it as a divergence.
+    /// A replay never reads live (that could write the files a recording
+    /// names): one that runs out of reads, or finds another kind, notes the
+    /// fault and abandons the call ([`ReplayFault`]); the replay reports it
+    /// as a divergence.
     fn read<T: Outside>(&self, live: impl FnOnce() -> T) -> T {
-        let replaying = self.state().replaying;
-        if !replaying {
-            // Nothing is held across `live`: it may take its time.
-            let read = live().into_read();
-            self.state().reads.push_back(read.clone());
-            return T::from_read(read).unwrap_or_else(|_| unreachable!("a read is its own kind"));
+        let mode = self.state().mode;
+        match mode {
+            Mode::Stopped => return live(),
+            Mode::Recording => {
+                // Nothing is held across `live`: it may take its time.
+                let read = live().into_read();
+                let mut state = self.state();
+                // The recording may have stopped meanwhile.
+                if state.mode == Mode::Recording {
+                    state.reads.push_back(read.clone());
+                }
+                drop(state);
+                return T::from_read(read)
+                    .unwrap_or_else(|_| unreachable!("a read is its own kind"));
+            }
+            Mode::Replaying => {}
         }
         let next = self.state().reads.pop_front();
         let fault = match next.map(T::from_read) {
@@ -265,15 +289,19 @@ impl Tape {
             Some(Err(other)) => format!(
                 "the recording read {} where this run reads {}",
                 other.kind(),
-                live_kind::<T>()
+                T::KIND
             ),
-            None => format!(
-                "this run reads {} that the recording never did",
-                live_kind::<T>()
-            ),
+            None => format!("this run reads {} that the recording never did", T::KIND),
         };
         self.state().fault.get_or_insert(fault);
-        live()
+        // Without the panic hook: this is the replay's own signal.
+        std::panic::resume_unwind(Box::new(ReplayFault))
+    }
+    /// Stop keeping reads: the recording ended.
+    fn stop(&self) {
+        let mut state = self.state();
+        state.mode = Mode::Stopped;
+        state.reads.clear();
     }
     fn take_reads(&self) -> Vec<Read> {
         self.state().reads.drain(..).collect()
@@ -294,21 +322,9 @@ impl Tape {
         })
     }
 }
-/// What kind of read `T` is, for messages.
-fn live_kind<T: Outside>() -> &'static str {
-    // Each kind's name is on its read; build one from a value-free stand-in.
-    match std::any::type_name::<T>().rsplit("::").next() {
-        Some("WallClock") => "the clock",
-        Some("LoadSpare") => "the load budget",
-        Some("CopyPoll") => "the copy store",
-        Some("HostData") => "Add-On data",
-        Some("BotReload") => "bot kinds",
-        Some("OverridesRead") => "bot overrides",
-        Some("Written") => "a file write",
-        Some("Persisted") => "administration storage",
-        _ => "an outside value",
-    }
-}
+/// A replayed call stopped because the recording could not answer one of
+/// its outside reads (the tape notes which).
+pub struct ReplayFault;
 /// [`Tape::read`] when there is a tape, else `live` directly.
 pub fn outside<T: Outside>(tape: Option<&Tape>, live: impl FnOnce() -> T) -> T {
     match tape {
@@ -370,12 +386,13 @@ pub enum Call {
         reason: String,
     },
     Step,
-    /// The host took something the session holds for it. Taking can
-    /// matter to play (the changed-brick set is read by brick events until
-    /// replication takes it), so it is replayed at the same moment.
+    /// The host took what the session made for it to send or act on. What
+    /// it took is compared, and taking happens at the same moment.
     Take(Take),
 }
-/// What the host takes out of the session.
+/// What the host takes out of the session to send or act on. Diagnostics
+/// the host takes (script time, slow ticks, event overload, Add-On
+/// problems) are not play and are not recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Take {
     Dirty,
@@ -385,27 +402,20 @@ pub enum Take {
     MapChange,
     AdminDisconnects,
     AdminDisconnectMessage(OwnerId),
-    EventOverload,
-    EventDiagnostics,
-    SlowEventTicks,
-    PackageProblems,
-    PackageScriptTime,
 }
 impl Take {
-    fn run(self, s: &mut Session) {
+    /// Take it, and digest what was taken.
+    fn run(self, s: &mut Session) -> u64 {
         match self {
-            Self::Dirty => drop(s.take_dirty()),
-            Self::Cues => drop(s.take_cues()),
-            Self::Notices => drop(s.take_notices()),
-            Self::PrivateNotices => drop(s.take_private_notices()),
-            Self::MapChange => drop(s.take_map_change()),
-            Self::AdminDisconnects => drop(s.take_admin_disconnects()),
-            Self::AdminDisconnectMessage(owner) => drop(s.take_admin_disconnect_message(owner)),
-            Self::EventOverload => drop(s.take_event_overload()),
-            Self::EventDiagnostics => drop(s.take_event_diagnostics()),
-            Self::SlowEventTicks => drop(s.take_slow_event_ticks()),
-            Self::PackageProblems => drop(s.take_package_problems()),
-            Self::PackageScriptTime => drop(s.take_package_script_time()),
+            Self::Dirty => digest_of(&s.take_dirty()),
+            Self::Cues => digest_of(&s.take_cues()),
+            Self::Notices => digest_of(&s.take_notices()),
+            Self::PrivateNotices => digest_of(&s.take_private_notices()),
+            Self::MapChange => digest_of(&s.take_map_change()),
+            Self::AdminDisconnects => digest_of(&s.take_admin_disconnects()),
+            Self::AdminDisconnectMessage(owner) => {
+                digest_of(&s.take_admin_disconnect_message(owner))
+            }
         }
     }
 }
@@ -415,7 +425,7 @@ impl Take {
 pub enum Outcome {
     Done,
     Joined(OwnerId),
-    /// A command's reply, digested.
+    /// A command's reply, or what the host took, digested.
     Replied(u64),
     Failed(ErrorText),
     /// The call panicked, with this message. Replaying it panics the same
@@ -425,6 +435,9 @@ pub enum Outcome {
 
 /// What a panic was raised with.
 pub fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if panic.is::<ReplayFault>() {
+        return "the recording could not answer an outside read".into();
+    }
     panic
         .downcast_ref::<&str>()
         .map(|s| (*s).to_owned())
@@ -452,6 +465,8 @@ pub enum Frame {
         map: String,
         /// The Add-On state the new map's session was set up with.
         package_save: Option<Vec<u8>>,
+        /// The bot dials it read as it loaded (off the session's tape).
+        bot_overrides: Overrides,
         reads: Vec<Read>,
         outcome: Outcome,
     },
@@ -469,6 +484,8 @@ enum Returned {
     Unit(Result<()>),
     Owner(Result<OwnerId>),
     Reply(Result<Reply>),
+    /// What a [`Call::Take`] took, digested.
+    Taken(u64),
 }
 impl Returned {
     fn outcome(&self, secrets: &Secrets) -> Outcome {
@@ -476,6 +493,7 @@ impl Returned {
             Self::Unit(Ok(())) => Outcome::Done,
             Self::Owner(Ok(owner)) => Outcome::Joined(*owner),
             Self::Reply(Ok(reply)) => Outcome::Replied(reply_digest(reply, secrets)),
+            Self::Taken(digest) => Outcome::Replied(*digest),
             Self::Unit(Err(e)) | Self::Owner(Err(e)) | Self::Reply(Err(e)) => {
                 Outcome::Failed(secrets.redact_error(e))
             }
@@ -546,10 +564,7 @@ fn apply(
         }
         // The host's own step function: a test may make it fail.
         Call::Step => Returned::Unit(s.step()),
-        Call::Take(take) => {
-            take.run(s);
-            Returned::Unit(Ok(()))
-        }
+        Call::Take(take) => Returned::Taken(take.run(s)),
     }
 }
 
@@ -597,13 +612,14 @@ impl Secrets {
         }
         call
     }
-    /// `text` with every secret replaced by its stand-in.
+    /// `text`, or its stand-in when it is a secret. Only a whole value is
+    /// replaced: a secret is a typed field, and a short password ("1234")
+    /// must not rewrite other text that happens to contain it.
     fn redact_text(&self, text: &str) -> String {
         self.stand_ins
-            .iter()
-            .fold(text.to_owned(), |text, (real, stand_in)| {
-                text.replace(real, stand_in)
-            })
+            .get(text)
+            .cloned()
+            .unwrap_or_else(|| text.to_owned())
     }
     fn redact_error(&self, error: &anyhow::Error) -> ErrorText {
         ErrorText(
@@ -614,8 +630,9 @@ impl Secrets {
         )
     }
 }
-/// A reply's digest. An administration reply can echo a password the
-/// player set; it is digested with its secrets as stand-ins.
+/// A reply's digest. An administration reply can carry a password the
+/// player set (a [`bri_admin::Secret`] field); it is digested with its
+/// secrets as stand-ins.
 fn reply_digest(reply: &Reply, secrets: &Secrets) -> u64 {
     match reply {
         // Digested the same way whether or not there are secrets to
@@ -800,7 +817,7 @@ impl Digester {
             weapons: digest_of(&s.weapon_view()),
             vehicles: digest_of(&(s.vehicle_poses(), s.vehicle_infos())),
             minigames: digest_of(&s.minigame_views()),
-            packages: digest_of(&(s.package_entities(), s.package_state_revision())),
+            packages: digest_of(&(s.package_entities(), s.package_store())),
             chat: self.chat,
         }
     }
@@ -842,6 +859,10 @@ impl<W: Write> FrameWriter<W> {
         self.buffer.clear();
         // Fields by name: the game's types read back only from maps.
         rmp_serde::encode::write_named(&mut self.buffer, frame)?;
+        ensure!(
+            self.buffer.len() <= MAX_FRAME_BYTES,
+            "A recording frame is larger than a replay reads"
+        );
         let len = u32::try_from(self.buffer.len()).context("Frame too large")?;
         self.out.write_all(&len.to_le_bytes())?;
         self.out.write_all(&self.buffer)?;
@@ -850,16 +871,13 @@ impl<W: Write> FrameWriter<W> {
     pub fn flush(&mut self) -> Result<()> {
         Ok(self.out.flush()?)
     }
-    pub fn into_inner(self) -> W {
-        self.out
-    }
 }
 /// Reads frames written by [`FrameWriter`].
 pub struct FrameReader<R: std::io::Read> {
     input: R,
     buffer: Vec<u8>,
     /// Why the recording ends early: the host stopped mid-write (a crash,
-    /// a killed process), or the file is damaged from there on.
+    /// a killed process). Damage anywhere else is an error.
     pub cut_off: Option<String>,
 }
 impl<R: std::io::Read> FrameReader<R> {
@@ -871,47 +889,54 @@ impl<R: std::io::Read> FrameReader<R> {
         }
     }
     /// The next frame; `None` at the end (or where the recording was cut
-    /// off).
+    /// off). A file that is damaged, not just cut short, is an error.
     pub fn next_frame(&mut self) -> Result<Option<Frame>> {
         if self.cut_off.is_some() {
             return Ok(None);
         }
         let mut len = [0; 4];
-        match read_all(&mut self.input, &mut len) {
+        match read_all(&mut self.input, &mut len)? {
             Ok(0) => return Ok(None),
             Ok(4) => {}
-            Ok(_) => return self.cut("the last frame is cut off"),
-            Err(error) => return self.cut(&format!("{error}")),
+            Ok(_) | Err(()) => return self.cut(),
         }
         let len = u32::from_le_bytes(len) as usize;
-        ensure!(len <= MAX_FRAME_BYTES, "Recording frame too large");
+        ensure!(
+            len <= MAX_FRAME_BYTES,
+            "The recording is damaged: a frame claims {len} bytes"
+        );
         self.buffer.resize(len, 0);
-        match read_all(&mut self.input, &mut self.buffer) {
+        match read_all(&mut self.input, &mut self.buffer)? {
             Ok(read) if read == len => {}
-            Ok(_) => return self.cut("the last frame is cut off"),
-            Err(error) => return self.cut(&format!("{error}")),
+            Ok(_) | Err(()) => return self.cut(),
         }
-        Ok(Some(
-            rmp_serde::from_slice(&self.buffer).context("Reading a recording frame")?,
-        ))
+        Ok(Some(rmp_serde::from_slice(&self.buffer).context(
+            "The recording is damaged: a frame does not read back",
+        )?))
     }
-    fn cut(&mut self, why: &str) -> Result<Option<Frame>> {
-        self.cut_off = Some(why.to_owned());
+    fn cut(&mut self) -> Result<Option<Frame>> {
+        self.cut_off = Some("the file ends partway through a frame".into());
         Ok(None)
     }
 }
-/// Fill `buffer`, short only at the end of `input`; how much was read.
-fn read_all(input: &mut impl std::io::Read, buffer: &mut [u8]) -> std::io::Result<usize> {
+/// Fill `buffer`, short only at the end of `input`: how much was read, or
+/// `Err(())` where `input` itself ends unfinished (a compressed stream cut
+/// mid-block). Any other read error is damage.
+fn read_all(
+    input: &mut impl std::io::Read,
+    buffer: &mut [u8],
+) -> Result<std::result::Result<usize, ()>> {
     let mut filled = 0;
     while filled < buffer.len() {
         match input.read(&mut buffer[filled..]) {
             Ok(0) => break,
             Ok(n) => filled += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(Err(())),
+            Err(e) => return Err(anyhow::Error::new(e).context("The recording is damaged")),
         }
     }
-    Ok(filled)
+    Ok(Ok(filled))
 }
 /// A small value as MessagePack, for a recording's header.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
@@ -944,7 +969,7 @@ impl Recorder {
     /// Start recording `s` into `out` (after the host's own header): the
     /// state now is the first frame.
     pub fn start(s: &mut Session, secrets: Secrets, out: Box<dyn Write + Send>) -> Result<Self> {
-        let tape = Tape::new(false);
+        let tape = Tape::new(Mode::Recording);
         s.set_tape(Some(tape.clone()));
         let mut digester = Digester::new(s);
         let mut out = FrameWriter::new(out);
@@ -959,24 +984,22 @@ impl Recorder {
             }),
         })
     }
-    pub fn recording(&self) -> bool {
-        self.live.is_some()
-    }
-    /// The recording's stand-in for a password, for the host's header.
-    pub fn redact(&mut self, secret: &bri_admin::Secret) -> Option<bri_admin::Secret> {
-        self.live.as_mut().map(|live| live.secrets.redact(secret))
-    }
     /// Finish the file (flushing what is buffered).
     pub fn finish(&mut self) {
         self.flush();
-        self.live = None;
+        self.stop();
+    }
+    fn stop(&mut self) {
+        if let Some(live) = self.live.take() {
+            live.tape.stop();
+        }
     }
     fn write(&mut self, frame: &Frame) {
         if let Some(live) = self.live.as_mut()
             && let Err(error) = live.out.write(frame)
         {
             eprintln!("The match recording stopped; writing it failed: {error:#}");
-            self.live = None;
+            self.stop();
         }
     }
     fn call(
@@ -1018,7 +1041,7 @@ impl Recorder {
             && let Err(error) = live.out.flush()
         {
             eprintln!("The match recording stopped; writing it failed: {error:#}");
-            self.live = None;
+            self.stop();
         }
     }
     fn unit(&mut self, s: &mut Session, call: Call) -> Result<()> {
@@ -1208,6 +1231,7 @@ impl Recorder {
         };
         let tape = live.tape.clone();
         new.set_tape(Some(tape.clone()));
+        let bot_overrides = new.bot_overrides().clone();
         let old = std::mem::replace(s, new);
         let result = s.adopt(old, admin);
         let returned = Returned::Unit(result);
@@ -1215,19 +1239,25 @@ impl Recorder {
             admin,
             map: map.to_owned(),
             package_save,
+            bot_overrides,
             reads: tape.take_reads(),
             outcome: returned.outcome(&live.secrets),
         };
         self.write(&frame);
         returned.unit()
     }
-    fn take<T>(&mut self, s: &mut Session, which: Take, take: impl FnOnce(&mut Session) -> T) -> T {
+    fn take<T: Serialize>(
+        &mut self,
+        s: &mut Session,
+        which: Take,
+        take: impl FnOnce(&mut Session) -> T,
+    ) -> T {
         let taken = take(s);
         if self.live.is_some() {
             self.write(&Frame::Call {
                 call: Call::Take(which),
                 reads: Vec::new(),
-                outcome: Outcome::Done,
+                outcome: Outcome::Replied(digest_of(&taken)),
             });
         }
         taken
@@ -1257,31 +1287,6 @@ impl Recorder {
         self.take(s, Take::AdminDisconnectMessage(owner), |s| {
             s.take_admin_disconnect_message(owner)
         })
-    }
-    pub fn take_event_overload(&mut self, s: &mut Session) -> u64 {
-        self.take(s, Take::EventOverload, Session::take_event_overload)
-    }
-    pub fn take_event_diagnostics(&mut self, s: &mut Session) -> Vec<String> {
-        self.take(s, Take::EventDiagnostics, Session::take_event_diagnostics)
-    }
-    pub fn take_slow_event_ticks(
-        &mut self,
-        s: &mut Session,
-    ) -> Option<crate::session::SlowEventTicks> {
-        self.take(s, Take::SlowEventTicks, Session::take_slow_event_ticks)
-    }
-    pub fn take_package_problems(&mut self, s: &mut Session) -> Vec<bri_package::diag::Diagnostic> {
-        self.take(s, Take::PackageProblems, Session::take_package_problems)
-    }
-    pub fn take_package_script_time(
-        &mut self,
-        s: &mut Session,
-    ) -> BTreeMap<String, std::time::Duration> {
-        self.take(
-            s,
-            Take::PackageScriptTime,
-            Session::take_package_script_time,
-        )
     }
 }
 /// A call made with no recording: straight to the session.
@@ -1335,13 +1340,16 @@ pub struct Report {
     pub cut_off: Option<String>,
 }
 
+/// A replay's passwords are already the stand-ins: nothing to redact.
+static NO_SECRETS: Secrets = Secrets {
+    stand_ins: BTreeMap::new(),
+};
+
 /// Plays a recording's frames into a session built as the recorded one
 /// was, and compares as it goes.
 pub struct Replayer {
     tape: Tape,
     digester: Digester,
-    /// A replay's passwords are already the stand-ins; nothing to redact.
-    secrets: Secrets,
     report: Report,
     /// Seen the divergence's later full check (or there is no divergence
     /// to explain): nothing more to learn.
@@ -1356,12 +1364,11 @@ impl Replayer {
     /// Replay into `s`, which must be set up as the recorded session was
     /// when recording started.
     pub fn start(s: &mut Session) -> Self {
-        let tape = Tape::new(true);
+        let tape = Tape::new(Mode::Replaying);
         s.set_tape(Some(tape.clone()));
         Self {
             tape,
             digester: Digester::new(s),
-            secrets: Secrets::default(),
             report: Report::default(),
             explained: false,
         }
@@ -1414,7 +1421,7 @@ impl Replayer {
                 let tape = self.tape.clone();
                 // Administration storage is answered from the recording.
                 let replayed = match caught(|| apply(s, call, Some(&tape), &mut |_| Ok(()))) {
-                    Ok(returned) => returned.outcome(&self.secrets),
+                    Ok(returned) => returned.outcome(&NO_SECRETS),
                     Err(message) => Outcome::Panicked(message),
                 };
                 self.report.calls += 1;
@@ -1424,16 +1431,19 @@ impl Replayer {
                 admin,
                 map,
                 package_save,
+                bot_overrides,
                 reads,
                 outcome,
             } => {
                 self.tape.serve(reads);
                 let mut new = load_map(&map, package_save.as_deref())
                     .with_context(|| format!("Loading {map} as the recording did"))?;
+                new.set_bot_overrides(bot_overrides)
+                    .with_context(|| format!("Setting {map}'s bot dials as the recording did"))?;
                 new.set_tape(Some(self.tape.clone()));
                 let old = std::mem::replace(s, new);
                 let replayed = match caught(|| s.adopt(old, admin)) {
-                    Ok(adopted) => Returned::Unit(adopted).outcome(&self.secrets),
+                    Ok(adopted) => Returned::Unit(adopted).outcome(&NO_SECRETS),
                     Err(message) => Outcome::Panicked(message),
                 };
                 self.report.calls += 1;
@@ -1505,6 +1515,8 @@ pub fn replay<R: std::io::Read>(
     s.set_tape(None);
     let mut report = replayer.report();
     report.cut_off = frames.cut_off.clone();
+    // Every recording starts with the state it started from.
+    ensure!(report.ticks > 0, "The recording holds no match");
     Ok(report)
 }
 

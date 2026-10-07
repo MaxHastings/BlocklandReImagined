@@ -444,7 +444,7 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 (vehicle_pack, bot_kinds),
-                (start_world, map_palette),
+                recipe_start,
             ) = tokio::task::spawn_blocking(move || -> Result<_> {
                 let _permit = permit;
                 let weapons = paths.weapon_content()?;
@@ -452,10 +452,18 @@ impl App {
                 let item_physics = paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
                 // Package worlds grow their ground when the session is
-                // built, so a recording keeps the world as it starts.
+                // built, so a recording keeps the world as it starts, and
+                // the palette Change Map paints with.
                 let start_world = paths.start_world(&base_map, None, host_palette.as_deref())?;
-                let map_palette = paths.map_palette(host_palette.as_deref())?;
-                let loaded = paths.map_content()?.load(start_world.clone())?;
+                let recipe_start = if record {
+                    Some((
+                        start_world.clone(),
+                        paths.map_palette(host_palette.as_deref())?,
+                    ))
+                } else {
+                    None
+                };
+                let loaded = paths.map_content()?.load(start_world)?;
                 let visual = load_visual_map(&paths.map_bundle, &base_map, lighting)?;
                 let mut light_volume = LightVolumeState::start(
                     &visual.scene,
@@ -534,7 +542,7 @@ impl App {
                     weapons.pack,
                     item_physics.bounds,
                     (vehicle_pack, bot_kinds),
-                    (start_world, map_palette),
+                    recipe_start,
                 ))
             })
             .await??;
@@ -601,7 +609,7 @@ impl App {
             let (session, spawn_points) =
                 setup.session_with(&hosted, loaded.into_session(), package_save.as_deref())?;
             // A recording that cannot start leaves the game unrecorded.
-            let recording = if record {
+            let recording = if let Some((start_world, map_palette)) = recipe_start {
                 let dir = state_dir.join(bri_net::replay::RECORDINGS_DIR);
                 match bri_net::replay::next_recording(&dir) {
                     Ok(path) => Some(bri_net::replay::Recording {

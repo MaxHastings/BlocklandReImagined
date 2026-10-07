@@ -59,17 +59,22 @@ impl Session {
         self.apply_bot_overrides(shipped)
     }
 
-    /// The bot kinds as shipped (before overrides) and the override dials
-    /// in effect: what a recorded match starts from.
-    pub fn bot_tuning_state(&self) -> (Vec<BotKind>, Overrides) {
-        (
-            self.bots
-                .tuning
-                .shipped
-                .clone()
-                .unwrap_or_else(|| self.bots.kinds.clone()),
-            self.bots.tuning.overrides.clone(),
-        )
+    /// The override dials in effect: what a recorded match starts from.
+    pub fn bot_overrides(&self) -> &Overrides {
+        &self.bots.tuning.overrides
+    }
+    /// Put `overrides` in effect over the bot kinds as shipped, keeping
+    /// where they come from: a replayed map change starts with the dials
+    /// its recording's new session read.
+    pub fn set_bot_overrides(&mut self, overrides: Overrides) -> Result<Vec<String>> {
+        let shipped = self
+            .bots
+            .tuning
+            .shipped
+            .clone()
+            .unwrap_or_else(|| self.bots.kinds.clone());
+        self.bots.tuning.overrides = overrides;
+        self.apply_bot_overrides(shipped)
     }
 
     fn apply_bot_overrides(&mut self, shipped: Vec<BotKind>) -> Result<Vec<String>> {

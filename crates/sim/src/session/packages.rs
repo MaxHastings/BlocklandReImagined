@@ -3500,6 +3500,11 @@ impl Session {
             })
             .unwrap_or_default()
     }
+    /// Every value the Add-Ons keep, hidden ones included (a match
+    /// recording's digest).
+    pub fn package_store(&self) -> Option<&Store> {
+        self.packages.as_ref().map(|h| &h.store)
+    }
     /// Package state every client receives: keys visible to everyone.
     pub fn package_state(&self) -> PackageStateView {
         self.package_view(None)

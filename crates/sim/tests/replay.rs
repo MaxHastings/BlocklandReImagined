@@ -1,6 +1,7 @@
 //! Recording a match and replaying it: the same calls into a session set
-//! up the same way play out the same, tick for tick, and a changed input
-//! is caught at the tick it changes the match.
+//! up the same way play out the same, tick for tick, and a changed input,
+//! Add-On value, host take or outside read is caught where it changes the
+//! match.
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -9,8 +10,12 @@ use bri_content::{
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    replay::{Call, Frame, FrameReader, FrameWriter, Recorder, Report, Secrets, replay},
-    session::{Command, MiniGameRequest, Session, shape_mount_points},
+    presentation::Cue,
+    replay::{
+        Call, Frame, FrameReader, FrameWriter, Outcome, Read, Recorder, Report, Secrets, Take,
+        digest_of, replay,
+    },
+    session::{Command, MiniGameRequest, PackageArg, PackageCommand, Session, shape_mount_points},
     simulation::Simulation,
 };
 use bri_world::{OwnerId, World};
@@ -314,20 +319,25 @@ fn frames(bytes: &[u8]) -> Vec<Frame> {
     frames
 }
 
-fn replay_of(frames: &[Frame]) -> Report {
+fn written(frames: &[Frame]) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut writer = FrameWriter::new(&mut bytes);
     for frame in frames {
         writer.write(frame).unwrap();
     }
+    bytes
+}
+
+/// `bytes` replayed into `s`, built as the recorded session was.
+fn replay_into(mut s: Session, bytes: &[u8]) -> anyhow::Result<Report> {
+    replay(&mut s, &mut FrameReader::new(bytes), &mut |map, _| {
+        anyhow::bail!("This match never changes to {map}")
+    })
+}
+
+fn replay_of(frames: &[Frame]) -> Report {
     // The recording's password is its stand-in.
-    let mut s = session("replay-secret-1");
-    replay(
-        &mut s,
-        &mut FrameReader::new(bytes.as_slice()),
-        &mut |map, _| anyhow::bail!("This match never changes to {map}"),
-    )
-    .unwrap()
+    replay_into(session("replay-secret-1"), &written(frames)).unwrap()
 }
 
 #[test]
@@ -342,7 +352,7 @@ fn a_recorded_match_replays_tick_for_tick() {
         "the start and every tick checked"
     );
     assert_eq!(report.cut_off, None);
-    // Twice, the same: nothing outside the recording leaks in.
+    // A second replay in this process finds the same.
     assert_eq!(replay_of(&frames), report);
 }
 
@@ -384,11 +394,7 @@ fn a_changed_input_is_caught_where_it_changes_the_match() {
 fn a_cut_off_recording_replays_what_it_holds() {
     let recording = record_match();
     let cut = &recording[..recording.len() / 2];
-    let mut s = session("replay-secret-1");
-    let report = replay(&mut s, &mut FrameReader::new(cut), &mut |map, _| {
-        anyhow::bail!("This match never changes to {map}")
-    })
-    .unwrap();
+    let report = replay_into(session("replay-secret-1"), cut).unwrap();
     assert!(report.cut_off.is_some());
     assert_eq!(report.divergence, None, "{report:#?}");
     assert!(report.ticks > MATCH_TICKS / 4);
@@ -425,4 +431,157 @@ fn an_off_recorder_passes_calls_straight_through() {
             .0
     };
     assert_eq!(state(&direct, a), state(&through, a));
+}
+
+/// The host taking what the session made for it is compared: a replay that
+/// takes the cues at another moment than the match did is caught there.
+#[test]
+fn a_changed_take_is_caught() {
+    let mut frames = frames(&record_match());
+    let nothing = digest_of(&Vec::<Cue>::new());
+    let late = frames
+        .iter()
+        .position(|f| {
+            matches!(f, Frame::Call {
+                call: Call::Take(Take::Cues),
+                outcome: Outcome::Replied(taken),
+                ..
+            } if *taken != nothing)
+        })
+        .expect("the match made cues");
+    // This run skips that take, so the next one takes two batches.
+    frames.remove(late);
+    let divergence = replay_of(&frames).divergence.expect("the change is caught");
+    assert!(divergence.what.contains("Cues"), "{divergence:#?}");
+}
+
+/// A replay never answers an outside read live: one the recording does
+/// not hold stops that call and is reported where it happened.
+#[test]
+fn a_missing_outside_read_is_reported_not_read_live() {
+    let mut frames = frames(&record_match());
+    let login = frames
+        .iter_mut()
+        .find_map(|f| match f {
+            Frame::Call {
+                call: Call::Command { .. },
+                reads,
+                ..
+            } if reads.iter().any(|r| matches!(r, Read::WallClock(_))) => Some(reads),
+            _ => None,
+        })
+        .expect("a login read the clock");
+    login.retain(|r| !matches!(r, Read::WallClock(_)));
+    let divergence = replay_of(&frames).divergence.expect("the gap is caught");
+    assert!(
+        divergence
+            .what
+            .contains("reads the clock that the recording never did"),
+        "{divergence:#?}"
+    );
+}
+
+/// A recording with nothing in it, or a frame that does not read back, is
+/// not a match that "played out the same".
+#[test]
+fn an_empty_or_damaged_recording_is_an_error() {
+    assert!(replay_into(session("replay-secret-1"), &[]).is_err());
+    let mut damaged = record_match();
+    // The first frame's body: its length is the first four bytes.
+    for byte in &mut damaged[4..12] {
+        *byte = 0xc1; // MessagePack's one never-used byte.
+    }
+    let error = replay_into(session("replay-secret-1"), &damaged).unwrap_err();
+    assert!(format!("{error:#}").contains("damaged"), "{error:#}");
+}
+
+// ------------------------------------------------- Add-On state (probe) ---
+
+/// An Add-On that keeps one hidden value a player sets.
+const PROBE_SCRIPT: &str = "fn cmd_put(p, v) { set(\"note\", v); }\n";
+
+fn probe_catalog(root: &std::path::Path) -> Arc<bri_package_runtime::Catalog> {
+    let dir = root.join("probe");
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
+        "name": "Probe", "description": "Keeps one value.", "authors": ["Tests"],
+        "license": "CC0-1.0", "provenance": { "source": "original" },
+        "capabilities": [],
+        "provides": [
+            { "kind": "behaviour", "id": "probe:behaviour/probe", "file": "behaviour.json" },
+            { "kind": "script", "id": "probe:script/probe", "file": "probe.rhai" }
+        ]
+    });
+    let behaviour = serde_json::json!({
+        "schema_version": 1, "script": "probe.rhai",
+        "commands": [{ "name": "put", "args": ["string"] }],
+        "state": { "player": {}, "global": { "note": { "default": "", "visible": "server" } } }
+    });
+    std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
+    std::fs::write(dir.join("behaviour.json"), behaviour.to_string()).unwrap();
+    std::fs::write(dir.join("probe.rhai"), PROBE_SCRIPT).unwrap();
+    let set = bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: vec![bri_package::packages::PackageEntry {
+            id: "probe".into(),
+            version: "1.0.0".into(),
+            side: bri_package::packages::Side::Server,
+            dir: "probe".into(),
+            role: None,
+        }],
+    };
+    Arc::new(
+        bri_package_runtime::Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")),
+    )
+}
+
+fn probe_session(catalog: &Arc<bri_package_runtime::Catalog>) -> Session {
+    let mut s = session(ADMIN_PASSWORD);
+    s.install_packages(catalog.clone(), None).unwrap();
+    s
+}
+
+fn put(value: &str) -> Command {
+    Command::Package(PackageCommand {
+        package: "probe".into(),
+        command: "put".into(),
+        args: vec![PackageArg::String(value.into())],
+    })
+}
+
+/// An Add-On value that differs is caught even when the Add-On changed its
+/// state as many times (the digest is of the values, not a count).
+#[test]
+fn a_changed_add_on_value_is_caught() {
+    let scratch = bri_content::testing::ScratchDir::new("replay-probe").unwrap();
+    let catalog = probe_catalog(scratch.path());
+    let mut s = probe_session(&catalog);
+    let file = Shared::default();
+    let mut host = Recorder::start(&mut s, Secrets::default(), Box::new(file.clone())).unwrap();
+    let a = host
+        .join_verified(&mut s, "Alice".into(), Vec3::ZERO, false, None)
+        .unwrap();
+    host.command(&mut s, a, 1, put("left"), None, |_| Ok(()))
+        .unwrap();
+    for _ in 0..bri_sim::replay::FULL_CHECK_TICKS {
+        host.step(&mut s, Session::step).unwrap();
+    }
+    host.finish();
+    let mut frames = frames(&file.0.lock().unwrap());
+    let replayed =
+        |frames: &[Frame]| replay_into(probe_session(&catalog), &written(frames)).unwrap();
+    assert_eq!(replayed(&frames).divergence, None);
+    for frame in &mut frames {
+        if let Frame::Call {
+            call: Call::Command { command, .. },
+            ..
+        } = frame
+        {
+            *command = put("right");
+        }
+    }
+    let divergence = replayed(&frames).divergence.expect("the value is caught");
+    let later = divergence.later.expect("a full check follows");
+    assert_eq!(later.parts, ["Add-Ons"], "{later:#?}");
 }

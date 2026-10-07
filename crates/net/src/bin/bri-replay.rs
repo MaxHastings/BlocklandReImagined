@@ -2,8 +2,10 @@
 //! recorded, and if not, where it first parted and what differed.
 //!
 //! Usage: bri-replay <content-root> <recording.brimatch>
-//! Exits 0 when the replay matches, 1 when it parts from the recording,
-//! 2 when it cannot replay at all.
+//! Exits 0 when the replay matches the whole recording, 1 when it parts
+//! from the recording, 2 when it cannot replay at all (a damaged file, other
+//! content), and 3 when it matches as far as a file that was cut short (the
+//! host stopped while writing it) goes.
 use anyhow::{Context, Result};
 use bri_net::replay;
 use bri_sim::replay::{Divergence, Report};
@@ -14,19 +16,29 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const TICKS_PER_SECOND: u64 = bri_world::TICKS_PER_SECOND;
 
+/// How a replay ended, as the process's exit code.
+enum Ending {
+    Matched,
+    Diverged,
+    MatchedUntilCut,
+}
+const DIVERGED: u8 = 1;
+const FAILED: u8 = 2;
+const MATCHED_UNTIL_CUT: u8 = 3;
+
 fn main() -> ExitCode {
     match run() {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
+        Ok(Ending::Matched) => ExitCode::SUCCESS,
+        Ok(Ending::Diverged) => ExitCode::from(DIVERGED),
+        Ok(Ending::MatchedUntilCut) => ExitCode::from(MATCHED_UNTIL_CUT),
         Err(error) => {
             eprintln!("Could not replay: {error:#}");
-            ExitCode::from(2)
+            ExitCode::from(FAILED)
         }
     }
 }
 
-/// Whether the replay matched its recording.
-fn run() -> Result<bool> {
+fn run() -> Result<Ending> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     anyhow::ensure!(
         args.len() == 2,
@@ -61,7 +73,11 @@ fn run() -> Result<bool> {
         replay::load_map(&setup, map, save)
     })?;
     print_report(&report, started);
-    Ok(report.divergence.is_none())
+    Ok(match (&report.divergence, &report.cut_off) {
+        (Some(_), _) => Ending::Diverged,
+        (None, Some(_)) => Ending::MatchedUntilCut,
+        (None, None) => Ending::Matched,
+    })
 }
 
 /// `tick` as minutes and seconds into the match.
@@ -82,12 +98,14 @@ fn print_report(report: &Report, started: u64) {
         clock(report.last_tick, started),
         report.calls
     );
-    if let Some(why) = &report.cut_off {
-        println!("The recording ends early ({why}): the host stopped while writing it.");
-    }
-    match &report.divergence {
-        None => println!("It plays out exactly as recorded."),
-        Some(divergence) => print_divergence(divergence, started),
+    match (&report.divergence, &report.cut_off) {
+        (Some(divergence), _) => print_divergence(divergence, started),
+        (None, Some(why)) => println!(
+            "It matches the recording up to tick {} ({}), where the file ends early ({why}): the host stopped while writing it.",
+            report.last_tick,
+            clock(report.last_tick, started)
+        ),
+        (None, None) => println!("It plays out exactly as recorded."),
     }
 }
 

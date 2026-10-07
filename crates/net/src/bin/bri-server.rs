@@ -97,12 +97,19 @@ async fn main() -> Result<()> {
         .to_string();
     let mut host = dedicated::load(&content_root, world)?;
     host.configure(&config)?;
+    // A recording that cannot start leaves the match unrecorded.
     let recording = if record {
         let dir = state_dir.join(bri_net::replay::RECORDINGS_DIR);
-        Some(bri_net::replay::Recording {
-            path: bri_net::replay::next_recording(&dir)?,
-            host: host.recipe()?,
-        })
+        match bri_net::replay::next_recording(&dir) {
+            Ok(path) => Some(bri_net::replay::Recording {
+                path,
+                host: host.recipe()?,
+            }),
+            Err(error) => {
+                eprintln!("Not recording this match ({}): {error:#}", dir.display());
+                None
+            }
+        }
     } else {
         None
     };
