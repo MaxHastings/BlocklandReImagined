@@ -245,8 +245,8 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
         assert!(std::time::Instant::now() < deadline, "no snapshot taken");
         std::thread::yield_now();
     }
-    // The crash gives up on the dump and writes its report; by then the
-    // clone has been ended.
+    // The crash gives up on the dump, frees the snapshot and writes its
+    // report.
     let reports = loop {
         let reports = files(dir.path(), "crash-", ".txt");
         if reports
@@ -259,10 +259,22 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
         assert!(std::time::Instant::now() < deadline, "no report written");
         std::thread::yield_now();
     };
-    assert!(
-        processes::children(child.id()).is_empty(),
-        "the snapshot's clone outlived the dump's wait"
-    );
+    // Freeing the snapshot ends its clone; Windows tears the process down
+    // after, later on a loaded machine. It must go while the crashed process
+    // is still there: a clone left to go only when that process does is the
+    // copy of its memory this guards against.
+    let released = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
+    while !processes::children(child.id()).is_empty() {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the snapshot's clone outlived the crashed process"
+        );
+        assert!(
+            std::time::Instant::now() < released,
+            "the snapshot's clone was never released"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     let report = fs::read_to_string(&reports[0]).unwrap();
     assert!(report.contains("did not finish in time"), "{report}");
     assert!(!child.wait().unwrap().success());
