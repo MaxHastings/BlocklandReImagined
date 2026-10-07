@@ -121,7 +121,7 @@ Done when, in runtime code outside importers and tests:
 - no engine code chooses behaviour by image, projectile or brick name;
 - each interpretation in the duplicates list exists once.
 
-**Not in this version** (one-line reasons): vehicle `Family` and the stock-specific weapon
+**Not in this version** (one-line reasons): the default loadout stays written twice (minigames and ui) because the only crate both depend on is `bri-package`, which holds package identity, not stock content; vehicle `Family` and the stock-specific weapon
 events (`HorseTransform`, `FootballCatch`...) wait for a second Add-On that needs them; the
 Tutorial port is a faithful copy of one map's script; client presentation names (horse camera,
 player emitters) don't change gameplay.
