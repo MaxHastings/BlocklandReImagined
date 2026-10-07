@@ -322,7 +322,7 @@ impl Session {
         } else {
             walk * tuning.forward
         };
-        let hop = controls.hop && super::hop_lands(&self.simulation, feet, drift, tuning);
+        let hop = controls.hop && super::hop_lands(&self.simulation, feet, drift, tuning, 0.0);
         (walk, held_back, controls.jump || hop)
     }
 }

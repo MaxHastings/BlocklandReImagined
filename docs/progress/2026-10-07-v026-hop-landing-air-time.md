@@ -24,6 +24,18 @@ real player and checks that air time against the motor (within 0.1 s). It
 also checks that a hop toward an edge is refused where the old constant
 would have passed it.
 
+## Review follow-up: jetted hops
+
+The dodge hop holds its jets for `HOP_TICKS` when it has them, and the jet
+dodge always does after its crouch. Jet thrust beats gravity, so such a hop
+is in the air longer than a plain jump. `hop_flight` now takes the seconds
+of jets fired: up at `jump_speed`, climbing at `jet_acceleration` less
+gravity while the jets fire, then back down under gravity. The dodge judges
+its "up" ways over `HOP_TICKS` of jets when it has jets. A second test,
+`a_hop_that_fires_its_jets_is_judged_over_its_jetted_flight`, checks the
+model against a real jetted hop within 0.1 s. That tolerance is three of the
+motor's 32 ms ticks, the most landing can be seen late.
+
 ## Evidence
 
 The branch is ledge pushes (ec7db637) merged with origin/main d068f06e,

@@ -39,7 +39,7 @@ const LOOKAHEAD_STEP: f32 = 1.0 / 60.0;
 const INCOMING: f32 = 40.0;
 /// A dodge's hop or jets, the strafe's step aside, the crouch that charges
 /// a jet, and the rest after a dodge.
-const HOP_TICKS: u64 = 30;
+pub(super) const HOP_TICKS: u64 = 30;
 const STRAFE_TICKS: u64 = 40;
 const CHARGE_TICKS: u64 = 10;
 const DODGE_REST: u64 = 72;
@@ -382,15 +382,23 @@ impl Session {
         let jets = crate::route::Jets::of(&tuning, state.energy, brain.kind.weight("fly"));
         let ways = incoming.map(|(_, _, side)| {
             use super::surprise::{DODGE_HOP, DODGE_JET, DODGE_STRAFE};
-            let up = super::hop_lands(&self.simulation, feet, velocity, &tuning);
+            // A hop fires its jets too while it has them (a jet dodge
+            // after a crouch): judged over that jetted flight.
+            let jetted = if jets.is_some() {
+                HOP_TICKS as f32 / 120.0
+            } else {
+                0.0
+            };
+            let up = super::hop_lands(&self.simulation, feet, velocity, &tuning, jetted);
             let fuel = jets.as_ref().is_some_and(|j| j.seconds >= JET_SECONDS);
             let to = feet + side * tuning.forward * STRAFE_TICKS as f32 / 120.0;
-            let aside = super::hop_lands(&self.simulation, feet, side * tuning.forward, &tuning)
-                && !self.bots.claims.intents(tick).any(|(o, i)| {
-                    o != bot
-                        && self.bot_allies(bot, o)
-                        && i.harm.is_some_and(|h| h.holds(to + Vec3::Y, tuning.width))
-                });
+            let aside =
+                super::hop_lands(&self.simulation, feet, side * tuning.forward, &tuning, 0.0)
+                    && !self.bots.claims.intents(tick).any(|(o, i)| {
+                        o != bot
+                            && self.bot_allies(bot, o)
+                            && i.harm.is_some_and(|h| h.holds(to + Vec3::Y, tuning.width))
+                    });
             let open = |on: bool| if on { DODGE } else { 0.0 };
             [
                 (DODGE_HOP, open(up)),

@@ -976,18 +976,30 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
         0.5 + body.step + body.drop,
     )
 }
+/// Seconds a hop from level ground is in the air: up at `jump_speed`,
+/// its jets (when it fires them) pushing it straight up for `jets` seconds
+/// more, then back down under `gravity`.
+fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
+    let g = tuning.gravity.max(f32::EPSILON);
+    let jets = if tuning.can_jet { jets.max(0.0) } else { 0.0 };
+    // Under thrust it climbs at `jet_acceleration` less gravity.
+    let thrust = tuning.jet_acceleration - g;
+    let rise = tuning.jump_speed + thrust * jets;
+    let height = tuning.jump_speed * jets + 0.5 * thrust * jets * jets;
+    let top = height + rise.max(0.0).powi(2) / (2.0 * g);
+    jets + rise.max(0.0) / g + (2.0 * top.max(0.0) / g).sqrt()
+}
 /// A hop keeps the way it was moving: whether it comes down on floor
-/// (a bot hopping at a deck's edge went off it), after the time a jump
-/// from level ground is in the air (up at `jump_speed`, back down under
-/// `gravity`).
+/// (a bot hopping at a deck's edge went off it), after [`hop_flight`]
+/// with `jets` seconds of jets.
 fn hop_lands(
     simulation: &crate::simulation::Simulation,
     feet: Vec3,
     velocity: Vec3,
     tuning: &crate::player::PlayerTuning,
+    jets: f32,
 ) -> bool {
-    let flight = 2.0 * tuning.jump_speed / tuning.gravity.max(f32::EPSILON);
-    let drift = flat(velocity) * flight;
+    let drift = flat(velocity) * hop_flight(tuning, jets);
     super::admin_players::world_ray(simulation, feet + drift + Vec3::Y * 0.5, Vec3::NEG_Y, 1.5)
         .is_some()
 }
@@ -3534,11 +3546,11 @@ mod hop_tests {
         (s, owner)
     }
 
-    #[test]
-    fn a_hop_is_judged_over_the_time_a_real_jump_is_in_the_air() {
+    /// Seconds a real hop is in the air: from leaving the deck until it
+    /// stands again, its jets held for `jet_ticks`, with a move each tick as
+    /// a client sends them.
+    fn airborne(jet_ticks: u64) -> (f32, crate::player::PlayerTuning) {
         let (mut s, owner) = deck();
-        // A real jump: the ticks from leaving the deck until it stands
-        // again, with a move each tick as a client sends them.
         let mut left = None;
         let mut airborne = 0u32;
         for tick in 0..600u64 {
@@ -3547,6 +3559,7 @@ mod hop_tests {
                 tick + 1,
                 MoveInput {
                     jump: tick == 0,
+                    jet: tick < jet_ticks,
                     ..Default::default()
                 },
             )
@@ -3562,23 +3575,73 @@ mod hop_tests {
                 airborne += 1;
             }
         }
-        let tuning = s.peers[&owner].player.tuning().clone();
-        let flight = 2.0 * tuning.jump_speed / tuning.gravity;
-        let measured = airborne as f32 / 120.0;
+        (
+            airborne as f32 / 120.0,
+            s.peers[&owner].player.tuning().clone(),
+        )
+    }
+
+    /// The motor steps v20's 32 ms ticks inside the 120 Hz steps, so it
+    /// stands again up to a few steps after the exact landing: three of its
+    /// ticks.
+    const LANDING_SLACK: f32 = 0.1;
+
+    #[test]
+    fn a_hop_is_judged_over_the_time_a_real_jump_is_in_the_air() {
+        let (measured, tuning) = airborne(0);
+        let flight = hop_flight(&tuning, 0.0);
         assert!(
-            (measured - flight).abs() < 0.1,
+            (measured - flight).abs() < LANDING_SLACK,
             "a jump is {measured} s in the air, judged {flight} s"
         );
-        // Moving at walking speed 4 units from the edge, it would come down
-        // past it; half as fast, on the deck.
-        let at = Vec3::new(0.0, 0.0, 0.0);
+        // Moving 4 units from the edge, a little too fast it comes down
+        // past it; a little slow, on the deck.
+        let (mut s, _) = deck();
+        s.step().unwrap();
+        let at = Vec3::ZERO;
         let speed = 4.0 / flight;
         assert!(!hop_lands(
             &s.simulation,
             at,
             Vec3::Z * speed * 1.2,
-            &tuning
+            &tuning,
+            0.0
         ));
-        assert!(hop_lands(&s.simulation, at, Vec3::Z * speed * 0.6, &tuning));
+        assert!(hop_lands(
+            &s.simulation,
+            at,
+            Vec3::Z * speed * 0.8,
+            &tuning,
+            0.0
+        ));
+    }
+
+    #[test]
+    fn a_hop_that_fires_its_jets_is_judged_over_its_jetted_flight() {
+        let jets = extras::HOP_TICKS;
+        let (measured, tuning) = airborne(jets);
+        let flight = hop_flight(&tuning, jets as f32 / 120.0);
+        assert!(
+            (measured - flight).abs() < LANDING_SLACK,
+            "a jetted hop is {measured} s in the air, judged {flight} s"
+        );
+        assert!(flight > hop_flight(&tuning, 0.0) + LANDING_SLACK);
+        // At a speed the plain hop lands from, the jetted one goes off.
+        let (s, _) = deck();
+        let speed = 4.0 / flight;
+        assert!(hop_lands(
+            &s.simulation,
+            Vec3::ZERO,
+            Vec3::Z * speed,
+            &tuning,
+            0.0
+        ));
+        assert!(!hop_lands(
+            &s.simulation,
+            Vec3::ZERO,
+            Vec3::Z * speed * 1.1,
+            &tuning,
+            jets as f32 / 120.0
+        ));
     }
 }
