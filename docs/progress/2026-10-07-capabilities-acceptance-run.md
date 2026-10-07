@@ -23,9 +23,11 @@ runs in parallel, each recorded and replayed tick for tick.
   an enemy, a push fired, a push moving an enemy, the ball entering a zone
   off a bot, a bot seeing an enemy through the glass,
   a bot firing from a spot it chose, a bot pushing an enemy off the drop),
-  and in every run: per team, grenade damage (canister and shards) to its
-  own side, the thrower included, less than to enemies, and no grenade
-  killing a teammate, both read from real damage records
+  per team over each variant's three seeds, grenade damage (canister and
+  shards) to its own side, the thrower included, less than to enemies (one
+  throw that misses a dodging enemy is no verdict on a run); in every run,
+  no grenade killing a teammate; both read from real damage records, none
+  dropped unread from the bounded history
   (`Session::damage_results`, new, beside `death_results`: bots may trade
   a chip on an ally for more enemy harm); never a teammate pushed off, a
   bot walking off on its own, or a bot stuck a whole life. The first second

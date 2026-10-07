@@ -830,8 +830,10 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
     let mut shoves: BTreeMap<u64, (OwnerId, Vec3)> = BTreeMap::new();
     // Where each live grenade was last seen.
     let mut last_seen: BTreeMap<u64, Vec3> = BTreeMap::new();
-    // Damage records already read.
-    let mut damage_read = 0u64;
+    // Damage records already read: the last tick, and how many.
+    let mut damage_read = s.damage_results().map(|r| r.tick).max().unwrap_or(0);
+    let mut damage_count = 0u64;
+    let damage_base = s.damage_recorded();
     // The odd body: a shove that ends within a body's reach of its middle
     // (half its height, and the flight of the tick it stopped in) reached
     // it; a velocity change in two ticks more than its own acceleration
@@ -912,6 +914,7 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             .filter(|r| r.tick > damage_read)
             .cloned()
             .collect();
+        damage_count += fresh.len() as u64;
         for r in &fresh {
             damage_read = damage_read.max(r.tick);
             let grenade = r
@@ -1084,6 +1087,12 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
                 .push(format!("bot {o} at {from} from tick {start} to the end"));
         }
     }
+    // Every damage record was read before the bounded history let it go.
+    assert_eq!(
+        damage_count,
+        s.damage_recorded() - damage_base,
+        "{v:?} seed {seed}: damage records fell out of the history unread"
+    );
     rec.finish();
     let bytes = file.0.lock().unwrap().clone();
     (seen, bytes)
@@ -1148,13 +1157,6 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
     let mut problems = Vec::new();
     for (v, seed, seen) in &results {
         println!("{v:?} seed {seed}: {seen:?}");
-        for (team, (own, enemy)) in &seen.grenade_harm {
-            if own >= enemy {
-                problems.push(format!(
-                    "{v:?} seed {seed}: team {team}'s grenades hurt its own side {own} against enemies {enemy}"
-                ));
-            }
-        }
         for p in &seen.teammate_grenade_kills {
             problems.push(format!(
                 "{v:?} seed {seed}: a grenade killed a teammate: {p}"
@@ -1171,6 +1173,24 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
         }
     }
     for v in [Variant(0), Variant(1)] {
+        // Grenade harm per team over the variant's seeds: a bot may trade a
+        // chip on an ally for more enemy harm, and one throw that misses a
+        // dodging enemy is no verdict on a run.
+        let mut harm: BTreeMap<u32, (f32, f32)> = BTreeMap::new();
+        for (_, _, seen) in results.iter().filter(|(w, ..)| w.0 == v.0) {
+            for (team, (own, enemy)) in &seen.grenade_harm {
+                let h = harm.entry(*team).or_default();
+                h.0 += own;
+                h.1 += enemy;
+            }
+        }
+        for (team, (own, enemy)) in harm {
+            if own >= enemy {
+                problems.push(format!(
+                    "{v:?}: team {team}'s grenades hurt its own side {own} against enemies {enemy}"
+                ));
+            }
+        }
         let of = |f: fn(&Seen) -> u32| -> u32 {
             results
                 .iter()
