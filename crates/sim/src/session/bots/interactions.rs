@@ -917,6 +917,33 @@ impl Session {
             * state.scale.max(1.0);
         Some(impact * impact / (2.0 * gravity))
     }
+    /// Whether a step along `toward` takes `bot` nearer a live projectile
+    /// whose blast would reach it there and could hurt it (its own, an
+    /// ally's or an enemy's; `Session::can_damage_player`): a grenade
+    /// lying where it waits to go off is not walked into. Stepping away
+    /// from one, or past one that cannot hurt it, is kept.
+    pub(super) fn bot_blast_ahead(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        toward: Vec3,
+    ) -> bool {
+        let centre = feet + Vec3::Y * body.height * 0.5;
+        let next = centre + toward * body.width;
+        self.weapons.projectiles().any(|p| {
+            let Some(d) = self.weapons.pack.projectiles.get(&p.definition) else {
+                return false;
+            };
+            let reach = d.explosion.radius * p.scale + body.width * 0.5;
+            d.explosion.damage > 0.0
+                // One flying off away from it is not waiting for it.
+                && p.velocity.dot(p.position - centre) <= 0.0
+                && next.distance(p.position) < reach
+                && next.distance(p.position) < centre.distance(p.position)
+                && self.can_damage_player(p.source.0, bot, true)
+        })
+    }
     pub(super) fn bot_fall_ahead(
         &self,
         bot: OwnerId,
