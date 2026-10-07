@@ -1043,14 +1043,30 @@ fn burst(
             if q.passage(from, to).is_some() {
                 return Some(None);
             }
-            let filter = Filter {
-                projectile_age_ticks: Some(age + 1),
+            let filter = |age: u32| Filter {
+                projectile_age_ticks: Some(age),
                 source: ActorId(bot),
                 players: def.collide_players,
                 world_only: false,
             };
-            if let Some(hit) = q.sweep(from, to, filter) {
-                let into = ((hit.fraction * ticks as f32).ceil() as u32).clamp(1, ticks);
+            // The chord touched something: find the tick it hits, one ray a
+            // tick, as the host flies it. The arc may pass what the chord
+            // touched.
+            let mut struck = None;
+            if q.sweep(from, to, filter(age + 1)).is_some() {
+                for into in 1..=ticks {
+                    let a = at(start, velocity, flown + into - 1)?;
+                    let b = at(start, velocity, flown + into)?;
+                    if !budget.ray(true, critical) {
+                        return None;
+                    }
+                    if let Some(hit) = q.sweep(a, b, filter(age + into)) {
+                        struck = Some((into, hit));
+                        break;
+                    }
+                }
+            }
+            if let Some((into, hit)) = struck {
                 let hit_age = age + into;
                 let normal = hit.normal.normalize_or_zero();
                 if normal == Vec3::ZERO {
@@ -1078,8 +1094,15 @@ fn burst(
                         if normal.y > 0.0 && off.y <= fall_per_tick {
                             return waits(hit.position, hit_age);
                         }
-                        (start, velocity, flown, age) =
-                            (hit.position + normal * 0.001, off, 0, hit_age);
+                        // It flies the rest of that tick off the surface, as
+                        // the host's step does.
+                        let rest_of_tick = off * (1.0 - hit.fraction) / bri_weapons::TICK_HZ as f32;
+                        (start, velocity, flown, age) = (
+                            hit.position + normal * 0.001 + rest_of_tick,
+                            off,
+                            0,
+                            hit_age,
+                        );
                         continue;
                     }
                 }
@@ -1704,6 +1727,168 @@ pub(super) fn trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A timed throw's planned burst ([`burst`]) against the host flying the
+    /// same projectile over the same floor, for each way it goes off: an
+    /// armed hit, its last allowed bounce, its cooked fuse, the end of its
+    /// life, stuck where it struck, and rolled to rest. The tick agrees
+    /// exactly; the place to within a hair, or for a body the plan rests at
+    /// its last bounce, to within how far it can still roll.
+    #[test]
+    fn a_planned_burst_matches_the_host_flying_it() {
+        use rapier3d::prelude::*;
+        let grenade = |id: &str| bri_weapons::ProjectileDef {
+            id: id.into(),
+            name: "An unfamiliar canister".into(),
+            speed: 12.0,
+            gravity: 1.0,
+            ballistic: true,
+            elasticity: 0.5,
+            friction: 0.2,
+            lifetime_ticks: 600,
+            arm_ticks: 600,
+            explode_death: true,
+            explosion: bri_weapons::Explosion {
+                damage: 50.0,
+                radius: 3.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cases = [
+            (
+                "armed",
+                bri_weapons::ProjectileDef {
+                    arm_ticks: 20,
+                    ..grenade("t:p/armed")
+                },
+                None,
+            ),
+            (
+                "last bounce",
+                bri_weapons::ProjectileDef {
+                    max_bounces: 2,
+                    ..grenade("t:p/bounce")
+                },
+                None,
+            ),
+            ("fuse", grenade("t:p/fuse"), Some(70)),
+            (
+                "end of life",
+                bri_weapons::ProjectileDef {
+                    lifetime_ticks: 150,
+                    ..grenade("t:p/life")
+                },
+                None,
+            ),
+            (
+                "stuck",
+                bri_weapons::ProjectileDef {
+                    min_stick_speed: 1.0,
+                    bounce_angle: 180.0,
+                    lifetime_ticks: 200,
+                    ..grenade("t:p/stick")
+                },
+                None,
+            ),
+            (
+                "rolled",
+                bri_weapons::ProjectileDef {
+                    elasticity: 0.2,
+                    friction: 0.6,
+                    lifetime_ticks: 400,
+                    ..grenade("t:p/roll")
+                },
+                None,
+            ),
+        ];
+        for (case, def, fuse) in cases {
+            let mut pack = bri_weapons::testing::pack();
+            pack.projectiles.insert(def.id.clone(), def.clone());
+            let world = bri_world::World::new("Throw".into(), "fixture".into(), vec![[1.0; 4]]);
+            let sim = crate::simulation::Simulation::new(
+                world,
+                crate::testing::definitions(),
+                vec![
+                    ColliderBuilder::cuboid(40.0, 0.5, 40.0)
+                        .translation(Vector::new(0.0, -0.5, 0.0)),
+                ],
+            )
+            .unwrap();
+            let mut session = Session::new(sim);
+            session.set_weapon_pack(pack).unwrap();
+            let thrower = session
+                .join("Thrower".into(), Vec3::new(-20.0, 0.05, 0.0), false)
+                .unwrap();
+            let origin = Vec3::new(0.0, 2.0, 0.0);
+            let launch = Vec3::new(8.0, 6.0, 1.0);
+            let fall = bri_weapons::runtime::fall_per_tick(&def);
+            let mut budget = Budget::default();
+            budget.begin_tick(0);
+            let planned = burst(
+                &session,
+                thrower,
+                &def,
+                fall,
+                origin,
+                launch,
+                fuse,
+                &mut budget,
+                true,
+            )
+            .expect("the critical budget covers one throw")
+            .unwrap_or_else(|| panic!("{case}: planned no burst"));
+            let id = session
+                .weapons
+                .spawn(&def.id, ActorId(thrower), origin, launch, 1.0)
+                .unwrap();
+            if let Some(fuse) = fuse {
+                session.weapons.light_fuse(id, fuse);
+            }
+            let shapes = session.tutorial_shape_targets();
+            let mut flown = None;
+            for tick in 1..=def.lifetime_ticks + 1 {
+                let mut q = crate::weapon_query::WeaponQuery {
+                    simulation: &session.simulation,
+                    affect: &|_, _| true,
+                    affect_radius: &|_, _| true,
+                    ally: &|_, _| false,
+                    catch: &|_, _| false,
+                    responses: &session.events.projectile_responses,
+                    truncated_targets: 0,
+                    shapes: &shapes,
+                };
+                let blast = session
+                    .weapons
+                    .step(&mut q)
+                    .into_iter()
+                    .find_map(|e| match e {
+                        bri_weapons::Event::Blast { position, .. } => Some(position),
+                        _ => None,
+                    });
+                if let Some(position) = blast {
+                    flown = Some((tick, position));
+                    break;
+                }
+            }
+            let (ticks, position) =
+                flown.unwrap_or_else(|| panic!("{case}: the host never burst it"));
+            assert_eq!(planned.ticks, ticks, "{case}: tick");
+            let roll = if case == "rolled" {
+                // It rests at its last bounce in the plan; the host rolls it
+                // on, slowed by friction, until its clock runs out.
+                launch.length() * def.elasticity
+            } else {
+                0.01
+            };
+            assert!(
+                planned.position.distance(position) <= roll,
+                "{case}: planned {:?}, host {:?}",
+                planned.position,
+                position
+            );
+        }
+    }
     #[test]
     fn shared_budget_rotates_colliding_owner_residues_without_starvation() {
         let owners = [

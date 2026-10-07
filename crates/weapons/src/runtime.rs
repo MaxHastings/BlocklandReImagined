@@ -1197,6 +1197,13 @@ impl WeaponsWorld {
         let (explosion, middle, scale) = (guard.hit_explosion.clone(), body(a), a.frame.scale);
         self.burst(&explosion, id, middle, scale * 2.0);
     }
+    /// Give a live projectile what is left of a cooked fuse: it goes off
+    /// `fuse` ticks into its flight ([`expires`]).
+    pub fn light_fuse(&mut self, projectile: u64, fuse: u32) {
+        if self.projectiles.contains_key(&projectile) {
+            self.fuses.insert(projectile, fuse);
+        }
+    }
     /// Remove one live projectile without exploding it (`killObjects`).
     pub fn remove_projectile(&mut self, projectile: u64) -> bool {
         let removed = self.projectiles.remove(&projectile).is_some();
@@ -3529,8 +3536,7 @@ impl WeaponsWorld {
                             .map(|c| c.lit),
                     ) {
                         let burned = self.tick.saturating_sub(lit).min(u64::from(u32::MAX)) as u32;
-                        self.fuses
-                            .insert(self.next_id - 1, cook.fuse_ticks.saturating_sub(burned));
+                        self.light_fuse(self.next_id - 1, cook.fuse_ticks.saturating_sub(burned));
                     }
                 }
                 if a.cook.as_ref().is_some_and(|c| c.image == image.id) {
