@@ -162,6 +162,9 @@ pub(super) struct Strike {
     pub blast: Option<(f32, f32, f32)>,
     /// A swing: the body it strikes, if any.
     pub contact: Option<Option<OwnerId>>,
+    /// It bounces off a body it meets (a timed throw), rather than going
+    /// off there.
+    pub rebounds: bool,
 }
 impl Strike {
     /// The strike of `cap`, whose projectile `def` its image fires `pellets`
@@ -182,6 +185,7 @@ impl Strike {
             spread,
             blast,
             contact: None,
+            rebounds: matches!(cap.delivery, super::tactics::Delivery::Timed { .. }),
         }
     }
 }
@@ -283,6 +287,9 @@ pub(super) fn shot_harm(
     // The bodies its way meets: priced by the plan whatever they take (a
     // push's target takes no damage, yet the shot is meant for it).
     let mut met = Vec::new();
+    // A throw that bounces off a body short of where it is meant to go off
+    // goes off somewhere the plan cannot say, perhaps back by the thrower.
+    let mut rebound = None;
     if let Some(struck) = strike.contact {
         // A swing strikes what the host's own trace says it strikes.
         way.extend_from_slice(chords);
@@ -336,6 +343,13 @@ pub(super) fn shot_harm(
             match first {
                 Some((t, i)) => {
                     let at = c.from + (c.to - c.from) * t;
+                    let planned = chords.last().map_or(at, |c| c.to);
+                    let reach = strike
+                        .blast
+                        .map_or(0.0, |(_, radius, danger)| radius + danger);
+                    if strike.rebounds && at.distance(planned) > reach {
+                        rebound = Some(origin);
+                    }
                     way.push(Chord { to: at, ..*c });
                     end = at;
                     seconds = c.seconds;
@@ -359,9 +373,15 @@ pub(super) fn shot_harm(
                 continue;
             }
             let ahead = end.distance(b.at(seconds));
+            // Bounced short, it is priced at the worse for its side: for
+            // enemies where it would be farthest from them, for its own side
+            // where nearest, back at the thrower included.
+            let back = rebound.map(|o: Vec3| o.distance(b.at(seconds)).min(o.distance(b.centre)));
             let d = match b.side {
-                Side::Enemy | Side::Other => ahead,
-                Side::Own | Side::Ally => ahead.min(end.distance(b.centre)),
+                Side::Enemy | Side::Other => ahead.max(back.unwrap_or(0.0)),
+                Side::Own | Side::Ally => ahead
+                    .min(end.distance(b.centre))
+                    .min(back.unwrap_or(f32::INFINITY)),
             };
             let share = if danger > 0.0 && d <= radius + danger {
                 1.0
@@ -483,6 +503,7 @@ mod tests {
             spread,
             blast: None,
             contact: None,
+            rebounds: false,
         };
         let (harm, _) = shot_harm(
             &Bodies(vec![ally]),
@@ -510,6 +531,7 @@ mod tests {
             spread: 0.0,
             blast: Some((80.0, 6.0, 0.0)),
             contact: None,
+            rebounds: false,
         };
         let enemy = body(2, Side::Enemy, Vec3::new(3.0, 0.0, 10.0));
         let (harm, shape) = shot_harm(
@@ -531,6 +553,7 @@ mod tests {
             spread: 0.0,
             blast: None,
             contact: None,
+            rebounds: false,
         };
         let ally = body(2, Side::Ally, Vec3::new(0.0, 0.0, 5.0));
         let enemy = body(3, Side::Enemy, Vec3::new(0.0, 0.0, 10.0));
@@ -552,6 +575,7 @@ mod tests {
             spread: 0.0,
             blast: Some((80.0, 6.0, 0.0)),
             contact: None,
+            rebounds: false,
         };
         let mut ally = body(2, Side::Ally, Vec3::new(0.0, 0.0, 10.0));
         ally.blast = false;
@@ -574,6 +598,7 @@ mod tests {
             spread: 0.0,
             blast: Some((80.0, 6.0, 0.0)),
             contact: None,
+            rebounds: false,
         }
     }
     /// Whether the shot is one a full-health shooter takes (`tactics`):
@@ -687,6 +712,7 @@ mod tests {
             spread: 0.0,
             blast: None,
             contact: None,
+            rebounds: false,
         };
         let (harm, shape) = shot_harm(
             &Bodies(vec![enemy]),
@@ -696,5 +722,30 @@ mod tests {
         );
         assert_eq!(harm.enemy, 0.0);
         assert_eq!(shape.priced, vec![2]);
+    }
+
+    #[test]
+    fn a_throw_that_bounces_off_a_body_short_of_its_burst_is_priced_back_by_the_thrower() {
+        // A timed throw meant to go off at an enemy 12 out, with a body in
+        // the way 4 out: it bounces off there, maybe back to the thrower.
+        let enemy = body(2, Side::Enemy, Vec3::new(0.0, 0.0, 12.0));
+        let blocker = body(3, Side::Other, Vec3::new(0.0, 0.0, 4.0));
+        let own = body(1, Side::Own, Vec3::new(0.0, 1.0, 0.0));
+        let throw = Strike {
+            rebounds: true,
+            ..rocket()
+        };
+        let way = straight(Vec3::new(0.0, 0.0, 12.0));
+        let (harm, _) = shot_harm(&Bodies(vec![enemy, blocker, own]), Vec3::ZERO, &way, &throw);
+        assert!(
+            harm.own > 0.0 && harm.enemy == 0.0 && !taken(harm),
+            "{harm:?}"
+        );
+        // Unblocked it goes off at the enemy.
+        let (harm, _) = shot_harm(&Bodies(vec![enemy, own]), Vec3::ZERO, &way, &throw);
+        assert!(
+            harm.enemy > 0.0 && harm.own == 0.0 && taken(harm),
+            "{harm:?}"
+        );
     }
 }

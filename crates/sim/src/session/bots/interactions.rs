@@ -917,32 +917,53 @@ impl Session {
             * state.scale.max(1.0);
         Some(impact * impact / (2.0 * gravity))
     }
-    /// Whether a step along `toward` takes `bot` nearer a live projectile
-    /// whose blast would reach it there and could hurt it (its own, an
-    /// ally's or an enemy's; `Session::can_damage_player`): a grenade
-    /// lying where it waits to go off is not walked into. Stepping away
-    /// from one, or past one that cannot hurt it, is kept.
-    pub(super) fn bot_blast_ahead(
+    /// The live projectiles whose blast would reach a body of `bot`'s
+    /// standing at `feet` (grown by its half width) and could hurt it (its
+    /// own, an ally's or an enemy's; `Session::can_damage_player`): a
+    /// grenade lying where it waits to go off. One flying off away from it
+    /// is not waiting for it.
+    fn bot_live_blasts(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+    ) -> impl Iterator<Item = Vec3> + '_ {
+        let centre = feet + Vec3::Y * body.height * 0.5;
+        let width = body.width;
+        self.weapons.projectiles().filter_map(move |p| {
+            let d = self.weapons.pack.projectiles.get(&p.definition)?;
+            let reach = d.explosion.radius * p.scale + width * 0.5;
+            (d.explosion.damage > 0.0
+                && p.velocity.dot(p.position - centre) <= 0.0
+                && centre.distance(p.position) < reach
+                && self.can_damage_player(p.source.0, bot, true))
+            .then_some(p.position)
+        })
+    }
+    /// Where a step along `toward` from `feet` goes about live blasts
+    /// (`bot_live_blasts`): `None` when it takes `bot` into one or nearer
+    /// one it is in; else the walk, turned straight out of the nearest it
+    /// stands in, so it gets clear before it goes off.
+    pub(super) fn bot_blast_walk(
         &self,
         bot: OwnerId,
         feet: Vec3,
         body: &crate::nav::Body,
         toward: Vec3,
-    ) -> bool {
-        let centre = feet + Vec3::Y * body.height * 0.5;
-        let next = centre + toward * body.width;
-        self.weapons.projectiles().any(|p| {
-            let Some(d) = self.weapons.pack.projectiles.get(&p.definition) else {
-                return false;
-            };
-            let reach = d.explosion.radius * p.scale + body.width * 0.5;
-            d.explosion.damage > 0.0
-                // One flying off away from it is not waiting for it.
-                && p.velocity.dot(p.position - centre) <= 0.0
-                && next.distance(p.position) < reach
-                && next.distance(p.position) < centre.distance(p.position)
-                && self.can_damage_player(p.source.0, bot, true)
-        })
+    ) -> Option<Vec3> {
+        let next = feet + toward * body.width;
+        let centre = |f: Vec3| f + Vec3::Y * body.height * 0.5;
+        if let Some(at) = self.bot_live_blasts(bot, feet, body).min_by(|a, b| {
+            a.distance(centre(feet))
+                .total_cmp(&b.distance(centre(feet)))
+        }) {
+            let away = flat(centre(feet) - at).normalize_or_zero();
+            return Some(if toward.dot(away) > 0.0 { toward } else { away });
+        }
+        self.bot_live_blasts(bot, next, body)
+            .next()
+            .is_none()
+            .then_some(toward)
     }
     pub(super) fn bot_fall_ahead(
         &self,

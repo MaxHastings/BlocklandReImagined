@@ -269,8 +269,8 @@ impl Session {
     /// Safety, the last word on the walk, which only takes away: never
     /// through a portal (`passage`) unless its route leads through one, so
     /// footwork, a goof or a push never stumbles in; round a vehicle in the
-    /// way; never nearer a live blast that would catch it; and never off an
-    /// edge whose fall would hurt it. What it wants
+    /// way; never into a live blast that would catch it, and out of one it
+    /// stands in; and never off an edge whose fall would hurt it. What it wants
     /// beyond is not worth the fall: it stands at the edge and gets
     /// nowhere, so it plans again. Off its route on its feet it does not
     /// step down where it could not walk back up; in the air (footwork, a
@@ -318,12 +318,15 @@ impl Session {
             walk = Vec3::ZERO;
         }
         // Nor into a live blast, a grenade lying where it waits to go off
-        // its own included: it stands until it has.
-        if !ground.driving
-            && walk != Vec3::ZERO
-            && self.bot_blast_ahead(bot, feet, body, flat(walk).normalize_or_zero())
-        {
-            walk = Vec3::ZERO;
+        // its own included: it stands until it has; in one, it walks
+        // straight out.
+        if !ground.driving && !ground.swimming {
+            let toward = flat(walk).normalize_or_zero();
+            walk = match self.bot_blast_walk(bot, feet, body, toward) {
+                Some(way) if way == toward => walk,
+                Some(way) => way,
+                None => Vec3::ZERO,
+            };
         }
         let tuning = self.peers[&bot].player.tuning();
         let drift = if walk == Vec3::ZERO {
@@ -385,11 +388,12 @@ mod tests {
         assert_eq!(c.walk, Vec3::Z, "a mover with no walk leaves it");
     }
 
-    /// A live rocket lying 3 units ahead of a bot, its blast reaching 5:
-    /// a step toward it is not taken, one away is; one that cannot hurt it
-    /// (outside a mini-game nothing does) is not avoided.
+    /// A live rocket lying ahead of a bot, its blast reaching 5: from
+    /// outside it a step in is not taken and one away is; standing inside
+    /// it, the walk turns straight out. One that cannot hurt it (outside a
+    /// mini-game nothing does) is not avoided.
     #[test]
-    fn a_bot_does_not_step_nearer_a_live_blast_that_would_hurt_it() {
+    fn a_bot_keeps_out_of_a_live_blast_and_walks_out_of_one() {
         use rapier3d::prelude::*;
         let world = bri_world::World::new("Blast".into(), "fixture".into(), vec![[1.0; 4]]);
         let floor =
@@ -409,22 +413,27 @@ mod tests {
             .spawn(
                 bri_weapons::testing::ROCKET_PROJECTILE,
                 bri_weapons::ActorId(thrower),
-                Vec3::new(0.0, 0.5, 3.0),
+                Vec3::new(0.0, 0.5, 6.0),
                 Vec3::ZERO,
                 1.0,
             )
             .unwrap();
         let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
-        let feet = Vec3::ZERO;
-        assert!(
-            !s.bot_blast_ahead(bot, feet, &body, Vec3::Z),
+        let edge = Vec3::ZERO;
+        assert_eq!(
+            s.bot_blast_walk(bot, edge, &body, Vec3::Z),
+            Some(Vec3::Z),
             "outside a game it cannot hurt"
         );
         super::super::harm::one_game(&mut s, thrower, bot);
-        assert!(s.bot_blast_ahead(bot, feet, &body, Vec3::Z), "toward it");
-        assert!(
-            !s.bot_blast_ahead(bot, feet, &body, Vec3::NEG_Z),
-            "away from it"
+        assert_eq!(s.bot_blast_walk(bot, edge, &body, Vec3::Z), None, "into it");
+        assert_eq!(
+            s.bot_blast_walk(bot, edge, &body, Vec3::NEG_Z),
+            Some(Vec3::NEG_Z),
+            "away"
         );
+        let inside = Vec3::new(0.0, 0.0, 4.0);
+        let out = s.bot_blast_walk(bot, inside, &body, Vec3::X).unwrap();
+        assert!(out.z < -0.9, "straight out: {out}");
     }
 }
