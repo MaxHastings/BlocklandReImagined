@@ -9,8 +9,8 @@
 //! for their signatures.
 //!
 //! Budgets are enforced three ways: Wasmtime fuel bounds the instructions a
-//! call may run (deterministic), an epoch deadline bounds its wall-clock
-//! time (a backstop for anything fuel undercounts), and store limits bound
+//! call may run (deterministic), an epoch deadline stops a hung call (a
+//! backstop for anything fuel undercounts), and store limits bound
 //! memory and tables. Host functions count what they are asked to do. Any
 //! budget exceeded stops the Add-On for the session, with a reason the
 //! player can read; the game carries on without it.
@@ -63,10 +63,12 @@ pub struct Budgets {
     pub init_fuel: u64,
     /// Instructions (Wasmtime fuel) for one `frame` call.
     pub frame_fuel: u64,
-    /// Wall-clock time for instantiation and `init`.
-    pub init_time: Duration,
-    /// Wall-clock time for one `frame` call.
-    pub frame_time: Duration,
+    /// Wall-clock time after which any one call (instantiation and `init`,
+    /// or a `frame`) is hung. Fuel bounds the work a call does; this only
+    /// catches what fuel undercounts (a loop of bulk memory instructions),
+    /// so it is the whole start-up allowance, which no lag spike reaches: a
+    /// frame stalled by the PC is never taken for a hang.
+    pub hang_time: Duration,
     pub meshes: usize,
     pub mesh_vertices: usize,
     /// Total vertex and index bytes across every mesh.
@@ -91,10 +93,9 @@ pub struct Budgets {
     pub bodies: usize,
     pub joints: usize,
     pub physics_calls_per_frame: usize,
-    /// Time the game may spend simulating the Add-On's bodies per frame,
-    /// and for how many frames in a row it may exceed that.
+    /// Time the game spends simulating the Add-On's bodies per frame
+    /// before it settles their oldest moving ones.
     pub physics_ms_per_frame: f32,
-    pub physics_strikes: u32,
     /// `avatar.pose`: players posed per frame.
     pub poses_per_frame: usize,
 }
@@ -104,8 +105,7 @@ impl Default for Budgets {
             memory_bytes: 64 * 1024 * 1024,
             init_fuel: 500_000_000,
             frame_fuel: 20_000_000,
-            init_time: Duration::from_secs(1),
-            frame_time: Duration::from_millis(8),
+            hang_time: Duration::from_secs(1),
             meshes: 1024,
             mesh_vertices: 65_536,
             mesh_bytes: 32 * 1024 * 1024,
@@ -123,7 +123,6 @@ impl Default for Budgets {
             joints: 512,
             physics_calls_per_frame: 1024,
             physics_ms_per_frame: 4.0,
-            physics_strikes: 30,
             poses_per_frame: 64,
         }
     }
@@ -136,8 +135,7 @@ impl Budgets {
     /// frame compiles its shaders), so they are lifted with the rest.
     pub fn untimed() -> Self {
         Self {
-            init_time: Duration::from_secs(3600),
-            frame_time: Duration::from_secs(3600),
+            hang_time: Duration::from_secs(3600),
             gpu_ms_per_frame: 1.0e9,
             gpu_stop_ms: 1.0e9,
             physics_ms_per_frame: 1.0e9,
@@ -164,8 +162,6 @@ pub enum Stopped {
     /// Its render layer took too much GPU time too many frames in a row,
     /// or the GPU refused it.
     Gpu(String),
-    /// Its bodies took too much time to simulate too many frames in a row.
-    Physics(String),
 }
 impl std::fmt::Display for Stopped {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -177,7 +173,6 @@ impl std::fmt::Display for Stopped {
             Self::Misuse(what) => write!(f, "it broke a sandbox rule: {what}"),
             Self::Crashed(what) => write!(f, "it crashed: {what}"),
             Self::Gpu(what) => write!(f, "its graphics were too heavy: {what}"),
-            Self::Physics(what) => write!(f, "its physics were too heavy: {what}"),
         }
     }
 }
@@ -329,7 +324,7 @@ impl Sandbox {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(budgets.init_fuel).expect("fuel is enabled");
-        store.set_epoch_deadline(ticks(budgets.init_time));
+        store.set_epoch_deadline(ticks(budgets.hang_time));
         store.epoch_deadline_trap();
         let instance = linker
             .instantiate(&mut store, &module)
@@ -345,7 +340,6 @@ impl Sandbox {
             frame,
             stopped: None,
             gpu_strikes: 0,
-            physics_strikes: 0,
             init_log: Vec::new(),
             _ticker: self.ticker.clone(),
         };
@@ -619,7 +613,6 @@ pub struct AddOn {
     frame: Option<TypedFunc<(f32, f32), ()>>,
     stopped: Option<Stopped>,
     gpu_strikes: u32,
-    physics_strikes: u32,
     init_log: Vec<String>,
     _ticker: Arc<Ticker>,
 }
@@ -659,7 +652,7 @@ impl AddOn {
             self.store
                 .set_fuel(budgets.frame_fuel)
                 .expect("fuel is enabled");
-            self.store.set_epoch_deadline(ticks(budgets.frame_time));
+            self.store.set_epoch_deadline(ticks(budgets.hang_time));
             if let Err(e) = frame.call(&mut self.store, (input.time, input.dt)) {
                 let reason = stopped(&mut self.store, e);
                 return Err(self.stop(reason));
@@ -694,29 +687,6 @@ impl AddOn {
 
     pub fn budgets(&self) -> &Budgets {
         &self.store.data().budgets
-    }
-
-    /// The game reports how long simulating the Add-On's bodies took this
-    /// frame. Too many frames in a row over budget stops it; the game then
-    /// drops its bodies.
-    pub fn report_physics_time(&mut self, ms: f32) -> Result<(), Stopped> {
-        if let Some(stopped) = &self.stopped {
-            return Err(stopped.clone());
-        }
-        let budgets = &self.store.data().budgets;
-        if ms > budgets.physics_ms_per_frame {
-            self.physics_strikes += 1;
-            if self.physics_strikes >= budgets.physics_strikes {
-                let reason = Stopped::Physics(format!(
-                    "{ms:.1} ms a frame for {} frames in a row (budget {:.1} ms)",
-                    self.physics_strikes, budgets.physics_ms_per_frame
-                ));
-                return Err(self.stop(reason));
-            }
-        } else {
-            self.physics_strikes = 0;
-        }
-        Ok(())
     }
 
     /// The renderer reports how long the Add-On's layer took on the GPU.

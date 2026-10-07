@@ -296,7 +296,7 @@ Per Add-On (`host::Budgets`; defaults shown):
 |---|---|---|---|
 | Instructions per `frame` | 20 million | Wasmtime fuel | Stopped: "it used too much processing time" |
 | Instructions for start and `init` | 500 million | Fuel | Never starts |
-| Wall clock per `frame` | 8 ms | Epoch interruption (1 ms tick) | Stopped: "it took too long to respond" |
+| Wall clock per call (start-up, `init` or a `frame`) | 1 s, the hang guard: fuel bounds the work, and no lag spike lasts this long | Epoch interruption (1 ms tick) | Stopped: "it took too long to respond" |
 | Wall clock for start and `init` | 1 s | Epoch | Never starts |
 | Memory | 64 MiB, one memory, one instance, 100k table elements | `StoreLimits`, trap on failed growth | Stopped: "it used too much memory" |
 | WebAssembly stack | 512 KiB | `max_wasm_stack` | Stopped: crashed (stack overflow) |
@@ -310,7 +310,7 @@ Per Add-On (`host::Budgets`; defaults shown):
 | Incoming messages queued | 256 | Host | Oldest kept, newer dropped |
 | Local bodies and joints | 256 and 512 alive | Host | Stopped: asked for too much |
 | Physics calls per frame | 1,024 | Host | Stopped |
-| Physics time per frame | 4 ms of its bodies' simulation; 30 frames over it stops the Add-On | `AddOn::report_physics_time` | Stopped: "its physics were too heavy" |
+| Physics time per frame | 4 ms of its bodies' simulation | Timed round each frame's simulation (`ClientCode::advance_physics`) | Never stops it: its oldest moving bodies (with everything jointed to them) are laid still, one group per frame over (`AddOnPhysics::settle_oldest`) |
 | Players posed per frame | 64 | Host | Stopped |
 | Shader loop allowance | 16 iterations until the GPU is measured; then fitted to the GPU's speed, the screen size and the shader's cost, at most 4,096 | `gpu::loop_limit`, set per frame in `bri_frame.limits.x` | Loops end early (the shader still draws) |
 | GPU time per frame | 4 ms; over it the allowance halves; 20 frames in a row over it stops the Add-On | Timestamp queries around the layer, where the GPU has them | Stopped: "its graphics were too heavy" |
@@ -335,8 +335,8 @@ used to run 4,096 iterations (0.96 s). A server with no client code never
 calibrates, times or draws anything.
 
 A stopped Add-On is dropped for the session: its meshes and materials are
-released, its layer stops drawing, and the player sees one line naming the
-Add-On and the reason. Nothing else stops. Misuse (a pointer outside its
+released, its layer stops drawing, and the console and log get one line
+naming the Add-On and the reason (never the players' chat). Nothing else stops. Misuse (a pointer outside its
 memory, a bad handle, a non-finite number) stops it the same way, with the
 rule it broke.
 
