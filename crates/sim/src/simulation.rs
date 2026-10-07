@@ -1064,7 +1064,9 @@ impl Simulation {
     }
     /// Whether `brick` could go into the world now, support aside: no
     /// overlap with another brick, not buried in the map, not stuck in a
-    /// player or vehicle.
+    /// player or vehicle. A plant goes where a player stands, as v20's
+    /// does; this asks for a rule placing a brick by itself (a voxel piled
+    /// on the one its placer stands on), which must not bury anyone.
     pub fn fits(&self, brick: &Brick) -> bool {
         let engine = Actor {
             administrator: true,
@@ -1079,6 +1081,29 @@ impl Simulation {
             brick,
         )
         .is_ok()
+            && !self.engulfs_character(brick)
+    }
+    /// Whether `brick` would stand inside a player's or a bot's body.
+    fn engulfs_character(&self, brick: &Brick) -> bool {
+        let Ok(definition) = self.definitions.get(brick) else {
+            return true;
+        };
+        let placement = pose(brick);
+        let aabb = definition.shape.compute_aabb(&placement);
+        self.physics
+            .query_pipeline()
+            .intersect_aabb_conservative(aabb)
+            .filter(|(_, body)| is_character(body.user_data))
+            .any(|(_, body)| {
+                rapier3d::parry::query::contact(
+                    &placement,
+                    definition.shape.as_ref(),
+                    body.position(),
+                    body.shape(),
+                    0.0,
+                )
+                .map_or(true, |c| c.is_some_and(|c| c.dist < -0.002))
+            })
     }
     /// Put bricks removed earlier back exactly as they were, owner, name,
     /// events, lights and all: undoing a cut. Each must still fit where it
