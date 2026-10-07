@@ -823,6 +823,11 @@ pub(super) fn choose(
                     .filter(|(owner, s, _, _)| *owner == seen.owner && *s == slot)
                     .map_or((0.0, None), |(_, _, harm, landing)| (harm, landing))
             };
+            // Its push's outcome is the enemies' too (`Harm::push`).
+            let harm = Harm {
+                push: push_harm,
+                ..harm
+            };
             let context = Context {
                 distance,
                 target_health: target.combat.health.max(1.0),
@@ -832,7 +837,6 @@ pub(super) fn choose(
                 aim,
                 ready_rounds,
                 opportunity_cost: 0.0,
-                push_harm,
                 switch_seconds: if Some(slot) == selected {
                     0.0
                 } else {
@@ -1588,7 +1592,6 @@ fn choose_mounted(
         aim: Some(aim),
         ready_rounds: None,
         opportunity_cost: 0.0,
-        push_harm: 0.0,
         switch_seconds: 0.0,
     };
     let Ok((dealt, seconds)) = tactics::worth(cap, context) else {
@@ -1923,7 +1926,10 @@ pub(super) fn validate_fire(
     let bodies = Bodies::of(session, bot, Vec3::ZERO);
     let strike = hand_strike(session, bot, image, choice.capability, contact);
     let (harm, _) = assess(session, bot, strike, &chords, origin, &bodies);
-    tactics::harm_allows(harm, peer.combat.health) && harm.ally + harm.own < choice.harm.enemy
+    // Its push, judged as planned (`Session::bot_shove` flies it on the
+    // planning turn), counts with its enemies' harm.
+    tactics::harm_allows(harm, peer.combat.health)
+        && harm.ally + harm.own < choice.harm.enemy + choice.harm.push
 }
 
 /// Called after player movement, collision synchronization and frame update.

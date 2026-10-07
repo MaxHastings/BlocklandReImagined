@@ -698,7 +698,10 @@ pub struct Harm {
     pub enemy: f32,
     pub ally: f32,
     pub own: f32,
-    /// What its push does to allies; nothing yet (v0.2.7).
+    /// What its push does to its target, in health: the harm where the
+    /// push would land it, or what knocking it off a contested body is
+    /// worth (`combat::choose`, from `Session::bot_shove`). Counted with the
+    /// enemies' harm; a push's harm to allies is not priced yet (v0.2.7).
     pub push: f32,
     /// It is expected to kill an ally: the harm to one ally reaches the
     /// health that ally has left.
@@ -728,10 +731,6 @@ pub struct Context {
     /// The adapter's explicit opportunity cost in the same score units.
     pub opportunity_cost: f32,
     pub switch_seconds: f32,
-    /// What its push does to this target, in health: the harm where the
-    /// push would land it, or what knocking it off a contested body is
-    /// worth (`combat::choose`). Added to its own damage.
-    pub push_harm: f32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unsuited {
@@ -747,7 +746,7 @@ pub enum Unsuited {
 
 /// What one attack of `weapon` is worth against a body with `health` left,
 /// wherever it is: its capped damage. Where a push sends it is the
-/// shooter's to predict ([`Context::push_harm`]).
+/// shooter's to predict ([`Harm::push`]).
 fn dealt(weapon: Capability, health: f32) -> f32 {
     weapon.damage(1.0).min(health)
 }
@@ -789,7 +788,6 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
         context.own_health,
         context.opportunity_cost,
         context.switch_seconds,
-        context.push_harm,
     ])
     .map_err(|_| Unsuited::Invalid)?;
     if !context.harm.finite()
@@ -798,7 +796,6 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
         || !(0.0..=1.0).contains(&context.hit_probability)
         || context.opportunity_cost < 0.0
         || context.switch_seconds < 0.0
-        || context.push_harm < 0.0
     {
         return Err(Unsuited::Invalid);
     }
@@ -836,13 +833,9 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
         return Err(Unsuited::Kills);
     }
     // What it does to its enemies, the harm of where its push sends the
-    // target (`Context::push_harm`) included, less what it does to its own
-    // side, one for one.
-    let pushed = if weapon.pushes() {
-        context.push_harm
-    } else {
-        0.0
-    };
+    // target (`Harm::push`) included, less what it does to its own side,
+    // one for one.
+    let pushed = if weapon.pushes() { harm.push } else { 0.0 };
     // The push adds to what it does to its target, which loses no more
     // than the health it has left.
     let enemy = harm.enemy + pushed.min((context.target_health - harm.enemy).max(0.0));
@@ -1199,7 +1192,6 @@ mod tests {
             ready_rounds: None,
             opportunity_cost: 0.0,
             switch_seconds: 0.0,
-            push_harm: 0.0,
         }
     }
     /// A candidate whose attack lands on its enemy alone, as its data
