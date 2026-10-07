@@ -260,9 +260,9 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
         std::thread::yield_now();
     };
     // Freeing the snapshot ends its clone; Windows tears the process down
-    // after, later on a loaded machine. It must go while the crashed process
-    // is still there: a clone left to go only when that process does is the
-    // copy of its memory this guards against.
+    // after, later on a loaded machine. Wait for it to go, and it must not
+    // outlive the crashed process. (This does not show the free itself: the
+    // test passes with the frees removed. Proving that is v0.2.7.)
     let released = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
     while !processes::children(child.id()).is_empty() {
         assert!(
