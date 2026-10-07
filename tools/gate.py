@@ -16,7 +16,9 @@ Checks, cheapest first, on the exact commit being pushed:
      file is removed)
   3. cargo build --workspace --all-targets --locked
   4. cargo clippy --workspace --all-targets --locked -- -D warnings
-  5. bri-client --check against the main checkout's content
+  5. bri-client --check against the main checkout's content; it also
+     refreshes that content's installed default Add-Ons (content/addons)
+     from the build, so a stale copy can't fail a test
   6. cargo test --workspace --locked -- --include-ignored, with failures listed
      in tools/gate-known-failures.toml tolerated
   7. the fixed save corpus (crates/client/tests/save-corpus.json), only when
@@ -651,7 +653,8 @@ def full_gate(sha, root, changed=()):
 
         clippy_thread = threading.Thread(target=run_clippy)
         clippy_thread.start()
-        timings = root / "target" / TIMINGS_FILE
+        # Beside the gate's target dir, not in it: target/ gets wiped.
+        timings = root / TIMINGS_FILE
         units = plan_units(binaries, ["--include-ignored", *skip_args], load_timings(timings),
                            TEST_JOBS, port_bound_targets(worktree), env)
         say(f"test: {len(units)} test processes for {len(binaries)} binaries, "
@@ -692,10 +695,10 @@ def full_gate(sha, root, changed=()):
         retries_started = time.time()
         for key in list(unexpected):
             name = key.split("::", 1)[1]
-            if name == "gate_timeout":
-                # Not a test name: the whole binary hung past BINARY_TIMEOUT.
-                # A name-filtered rerun would match nothing, so don't pretend.
-                say(f"not retried: {key.split('::', 1)[0]} ran past {BINARY_TIMEOUT}s")
+            if whole_process_failure(name):
+                # Not a test name: the whole process hung past BINARY_TIMEOUT
+                # or crashed. A name-filtered rerun would match nothing.
+                say(f"not retried: {name}")
                 continue
             retry = root / "logs" / f"{sha[:12]}-retry.log"
             retry.write_text("", encoding="utf-8")
@@ -863,7 +866,7 @@ def run_binary(label, executable, args, cwd, env=None):
                                env=env)
     try:
         output, _ = process.communicate(timeout=BINARY_TIMEOUT)
-        return output, process.returncode
+        return output + exit_failure(label, output, process.returncode), process.returncode
     except subprocess.TimeoutExpired:
         # A hung test (a stuck child process) must fail the run, not hold
         # the gate lock forever. End this test binary and its children.
@@ -875,6 +878,22 @@ def run_binary(label, executable, args, cwd, env=None):
         output += (f"\n[gate] {label} ran past {BINARY_TIMEOUT}s and was stopped\n"
                    f"test {label}::gate_timeout ... FAILED\n")
         return output, 1
+
+
+def exit_failure(label, output, code):
+    """A failure line for a test process that exited non-zero without naming
+    a failed test (a stack overflow, a driver crash, an out-of-memory kill),
+    so the crash fails the gate; "" otherwise."""
+    if code == 0 or re.search(r"^test \S+ \.\.\. FAILED", output, re.MULTILINE):
+        return ""
+    return (f"\n[gate] {label} exited with code {code} and no failed test\n"
+            f"test {label}::process_exit ... FAILED\n")
+
+
+def whole_process_failure(name):
+    """A failure key's name part that stands for a whole test process (it
+    hung or crashed), not a test a name-filtered rerun could match."""
+    return name.endswith(("::gate_timeout", "::process_exit"))
 
 
 def load_timings(path):

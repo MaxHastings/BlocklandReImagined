@@ -4,8 +4,27 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 import sys
+import tempfile
 
 import gate
+
+
+class ProcessExit(unittest.TestCase):
+    def test_a_crash_with_no_failed_test_is_a_failure(self):
+        output = "running 3 tests\ntest a ... ok\nthread 'b' has overflowed its stack\n"
+        line = gate.exit_failure("crate/t", output, 0xC00000FD)
+        self.assertIn("test crate/t::process_exit ... FAILED", line)
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "gate.log"
+            log.write_text("===== test =====\n     Running tests/t.rs\n" + output + line,
+                           encoding="utf-8")
+            failed, _ = gate.parse_failures(log)
+        self.assertEqual(failed, {"tests/t.rs::crate/t::process_exit"})
+        self.assertTrue(gate.whole_process_failure("crate/t::process_exit"))
+
+    def test_named_failures_and_clean_exits_add_nothing(self):
+        self.assertEqual(gate.exit_failure("c/t", "test a ... FAILED\n", 101), "")
+        self.assertEqual(gate.exit_failure("c/t", "test a ... ok\n", 0), "")
 
 
 class TestPlanning(unittest.TestCase):
