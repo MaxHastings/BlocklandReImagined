@@ -204,7 +204,7 @@ impl Session {
                 near: None,
                 reach: speed * p.lifetime_ticks as f32 * TICK,
                 speed,
-                fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
+                fall: bri_weapons::runtime::fall_per_tick(p) * bri_weapons::TICK_HZ as f32,
                 splash: p.explosion.radius,
                 spread: 0.0,
             });
@@ -261,9 +261,9 @@ impl Session {
             if !image.melee && using.reach.is_none() {
                 return None;
             }
-            let reach = using.reach.unwrap_or(3.0);
+            let reach = using.reach.unwrap_or(MELEE_DEFAULT_REACH);
             return Some(Weapon {
-                melee: reach < 6.0,
+                melee: reach < MELEE_REACH_LIMIT,
                 hold,
                 charge: image.charges(),
                 near: using.near,
@@ -278,13 +278,13 @@ impl Session {
             .reach
             .unwrap_or(p.speed * p.lifetime_ticks as f32 * TICK);
         Some(Weapon {
-            melee: image.melee || reach < 6.0,
+            melee: image.melee || reach < MELEE_REACH_LIMIT,
             hold,
             charge: image.charges(),
             near: using.near,
             reach,
             speed: p.speed,
-            fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
+            fall: bri_weapons::runtime::fall_per_tick(p) * bri_weapons::TICK_HZ as f32,
             splash: p.explosion.radius,
             spread,
         })

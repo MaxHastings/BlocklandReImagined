@@ -1646,8 +1646,8 @@ impl Session {
         let spray = self
             .weapons
             .image_state(ActorId(bot), 0)
-            .is_some_and(|(image, _)| image.id == super::super::tools::SPRAY_CAN_IMAGE);
-        // A can is held down; anything else clicks.
+            .is_some_and(|(image, _)| super::super::tools::image_paints(image));
+        // Something that paints is held down; anything else clicks.
         let beat = tick.saturating_sub(i.since) % CLICK_TICKS;
         if item.is_none() && clear && beat == 0 {
             let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);

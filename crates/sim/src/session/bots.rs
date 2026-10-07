@@ -765,13 +765,50 @@ const SPREAD_MIN_FAR: f32 = 3.0;
 const SPREAD_CLEAR: f32 = 0.6;
 /// How far above the feet a splash weapon aims.
 const FEET_AIM: f32 = 0.2;
+/// The share of its reach a melee weapon swings from: inside it, so a
+/// step back by the target does not leave the swing short.
+const MELEE_BAND_SHARE: f32 = 0.8;
+/// The farthest a melee weapon swings from however short it reaches: about
+/// an arm's length, so a body never presses into its target to swing.
+const MELEE_BAND_MIN: f32 = 1.2;
+/// The share of its reach a ranged weapon fights from: inside it, so its
+/// shots still land on a target backing off.
+const RANGED_BAND_SHARE: f32 = 0.7;
+/// The nearest and farthest a ranged weapon's band ends, whatever it
+/// reaches: closer is a brawl, farther is past where a player picks a
+/// target out to shoot at.
+const RANGED_BAND_FAR: std::ops::RangeInclusive<f32> = 6.0..=40.0;
+/// The share of its band's far end the near end may come out to, so a band
+/// always has room to back into.
+const RANGED_NEAR_SHARE: f32 = 0.75;
+/// The least room between a ranged band's ends, wider for a single shot
+/// than a scattering one (which needs to close in to land its spread).
+const BAND_ROOM: f32 = 4.0;
+const SPREAD_BAND_ROOM: f32 = 2.0;
+/// Room kept past a weapon's own blast so a near miss does not catch its
+/// holder, and the least standoff for any ranged weapon.
+const BLAST_CLEARANCE: f32 = 3.0;
+const MIN_STANDOFF: f32 = 5.0;
+/// An attack that reaches less than this is a swing or a stab, fought up
+/// close, whatever its image says.
+const MELEE_REACH_LIMIT: f32 = 6.0;
+/// How far a melee image reaches when neither its data nor a projectile
+/// says.
+const MELEE_DEFAULT_REACH: f32 = 3.0;
 impl Weapon {
+    /// The nearest a ranged weapon with this blast is fought from, when its
+    /// data does not say.
+    fn standoff(splash: f32) -> f32 {
+        (splash + BLAST_CLEARANCE).max(MIN_STANDOFF)
+    }
     /// Closest and farthest it likes to fight from.
     fn band(&self) -> (f32, f32) {
         if self.melee {
-            (0.0, (self.reach * 0.8).max(1.2))
+            (0.0, (self.reach * MELEE_BAND_SHARE).max(MELEE_BAND_MIN))
         } else {
-            let mut far = (self.reach * 0.7).clamp(6.0, 40.0).min(self.reach);
+            let mut far = (self.reach * RANGED_BAND_SHARE)
+                .clamp(*RANGED_BAND_FAR.start(), *RANGED_BAND_FAR.end())
+                .min(self.reach);
             // A scattering weapon lands its shot where its spread is still
             // about a body wide: farther, most of it flies past.
             if self.spread > 0.0 {
@@ -779,9 +816,13 @@ impl Weapon {
             }
             let near = self
                 .near
-                .unwrap_or((self.splash + 3.0).max(5.0))
-                .min(far * 0.75);
-            let room = if self.spread > 0.0 { 2.0 } else { 4.0 };
+                .unwrap_or(Self::standoff(self.splash))
+                .min(far * RANGED_NEAR_SHARE);
+            let room = if self.spread > 0.0 {
+                SPREAD_BAND_ROOM
+            } else {
+                BAND_ROOM
+            };
             (near, far.max(near + room).min(self.reach))
         }
     }

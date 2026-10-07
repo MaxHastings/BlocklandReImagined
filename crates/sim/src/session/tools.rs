@@ -298,6 +298,16 @@ fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
     }
 }
 
+/// Whether an image's shot paints what it lands on (a spray can's colour or
+/// effect): what bots ask of a held image instead of naming the can. Any
+/// palette index will do, since only whether it paints at all is asked.
+pub(super) fn image_paints(image: &bri_weapons::Image) -> bool {
+    image
+        .projectile
+        .as_deref()
+        .is_some_and(|p| paint_edit(p, Some(0)).is_some())
+}
+
 fn copy_actor(actor: &Actor) -> Actor {
     actor.clone()
 }
@@ -1235,5 +1245,31 @@ fn dialog_fields_match(mode: InspectMode, original: &Brick, brick: &Brick) -> bo
         }
         InspectMode::Events => original.events == brick.events,
         InspectMode::Printer => original.print == brick.print,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::image_paints;
+
+    fn shooting(projectile: Option<&str>) -> bri_weapons::Image {
+        bri_weapons::Image {
+            projectile: projectile.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_image_paints_by_what_its_shot_does_not_by_its_name() {
+        assert!(image_paints(&shooting(Some(
+            "v20.projectile.bluepaintprojectile"
+        ))));
+        assert!(image_paints(&shooting(Some(
+            "v20.projectile.chromepaintprojectile"
+        ))));
+        assert!(!image_paints(&shooting(Some(
+            "v20.projectile.gunprojectile"
+        ))));
+        assert!(!image_paints(&shooting(None)));
     }
 }
