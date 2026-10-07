@@ -111,6 +111,7 @@ fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
                 color: Some([0.9, 0.1, 0.1, 1.0]),
                 occupants: vec![],
                 destroyed: false,
+                turret_broken: false,
                 scale: 1.0,
             },
         )]
@@ -192,6 +193,7 @@ fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
         color: Some([0.9, 0.1, 0.1, 1.0]),
         occupants: vec![],
         destroyed: false,
+        turret_broken: false,
         scale: 1.0,
     };
     // Nose up a 20 degree incline, heading 0.6 rad.

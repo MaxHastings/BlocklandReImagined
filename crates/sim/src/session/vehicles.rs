@@ -138,6 +138,9 @@ pub struct VehicleInfo {
     pub color: Option<[f32; 4]>,
     pub occupants: Vec<Option<OwnerId>>,
     pub destroyed: bool,
+    /// Its attached turret (the Tank's) has blown off: the turret explosion
+    /// threw it as debris, so it is no longer drawn on the hull.
+    pub turret_broken: bool,
     /// The spawn's uniform scale: a driving client predicts the vehicle at it.
     pub scale: f32,
 }
@@ -423,6 +426,9 @@ impl Session {
                     .map(|s| s.occupant.map(|o| o.owner.0))
                     .collect(),
                 destroyed: v.destroyed,
+                turret_broken: v
+                    .turret_damage
+                    .is_some_and(|damage| damage >= veh::TURRET_MAX_DAMAGE),
                 scale: v.scale,
             })
             .collect()
