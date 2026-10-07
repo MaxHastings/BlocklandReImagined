@@ -78,7 +78,9 @@ iteration rules keep out of the lane. Per the design it comes out whole:
   0, four seeds) and `a_bot_never_weighs_a_place_with_no_floor`.
 - `cargo test -p bri-sim --lib session::bots`: 156 pass, 1 ignored.
 - `cargo clippy -p bri-sim --tests -- -D warnings`: clean.
-- Think time: see below.
+- `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_16
+  -- --ignored --nocapture`: 1441 us/tick for 16 bots, all dials on (90 us
+  a bot), under the 2000 us release bar; passes.
 
 ## Next
 
