@@ -61,3 +61,18 @@ unit tests pass.
 The glibc floor stays at 2.35 (Debian 11, Ubuntu 20.04 and RHEL 9 family are
 below it). Lowering it means building in an older container or with a glibc
 target pin; decide once a player on such a system reports.
+
+## Mac and Windows check (same day)
+
+- Mac zip: the ad-hoc signature's seal matches all 9,415 files, the binary
+  is arm64 only with `minos 11.0`, matching `LSMinimumSystemVersion`. Intel
+  Macs can't run it. Startup errors only reached stderr, and
+  `bri_crash::open` called `xdg-open`, which macOS lacks. Fixed: osascript
+  alert with an Open Logs button, `open` on macOS.
+- Windows zip: `bri-client.exe` and `bri-server.exe` import
+  `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`, which the zip doesn't ship.
+  Fixed: `.cargo/config.toml` links the C runtime statically, and
+  `tools/check_windows_imports.py` guards it in CI and the release job.
+- Not done, needs Max: notarizing the Mac app (paid Apple Developer
+  account), a universal Intel+Apple Silicon build, signing the Windows exe
+  (removes the SmartScreen warning; needs a certificate).
