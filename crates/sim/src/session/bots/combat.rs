@@ -226,6 +226,12 @@ pub(super) fn capability(
             push: (0.0, 0.0),
         });
     }
+    // Its `onFire` runs something else in place of launching (a host
+    // building tool other than the hammer's swing, skis, a key, a swap):
+    // its projectile, if it has one, never flies.
+    if image.on_fire.is_some() {
+        return None;
+    }
     if !charge_release_only(image) {
         return None;
     }
@@ -316,6 +322,18 @@ pub(super) fn attack_of(
     if let Some(cap) = capability(image, projectile, scale, &session.weapons.pack.projectiles) {
         return (cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.pushes())
             .then_some(Some(cap));
+    }
+    // What its data says: a building tool that destroys or flings (the
+    // wands) counts, since a fling can hurt through the fall; one that
+    // inspects or prints, skis, a key, a swap, or anything that paints
+    // hurts nobody.
+    match &image.on_fire {
+        Some(bri_weapons::OnFire::Tool(
+            bri_weapons::HostTool::Destroy | bri_weapons::HostTool::AdminDestroy,
+        )) => return Some(None),
+        Some(_) => return None,
+        None if super::super::tools::image_paints(image) => return None,
+        None => {}
     }
     // Only an explicit manipulation descriptor with no native attack
     // metadata identifies a noncombat tool. No IDs or command-name
@@ -1752,6 +1770,40 @@ pub(super) fn trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The stock tools read by their data: the hammer's swing and the
+    /// wands' destroy and fling count as attacks; the wrench, the printer
+    /// and the spray can hurt nobody, whatever projectile they carry.
+    #[test]
+    fn stock_tools_read_as_their_data_says() {
+        use bri_weapons::testing as t;
+        let world = bri_world::World::new("Tools".into(), "fixture".into(), vec![[1.0; 4]]);
+        let sim = crate::simulation::Simulation::new(world, crate::testing::definitions(), vec![])
+            .unwrap();
+        let mut session = Session::new(sim);
+        let mut pack = t::pack();
+        // The stock wrench carries a damaging projectile it never launches.
+        pack.images.get_mut(t::WRENCH_IMAGE).unwrap().projectile = Some(t::GUN_PROJECTILE.into());
+        session.set_weapon_pack(pack).unwrap();
+        let read = |image: &str| attack_of(&session, &session.weapons.pack.images[image], 1.0);
+        assert!(matches!(read(t::HAMMER_IMAGE), Some(Some(_))));
+        assert_eq!(read(t::WAND_IMAGE), Some(None));
+        assert_eq!(read(t::ADMIN_WAND_IMAGE), Some(None));
+        for harmless in [t::WRENCH_IMAGE, t::PRINTER_IMAGE, t::SPRAY_CAN_IMAGE] {
+            assert_eq!(read(harmless), None, "{harmless}");
+        }
+        let wrench = &session.weapons.pack.images[t::WRENCH_IMAGE];
+        let projectile = &session.weapons.pack.projectiles[t::GUN_PROJECTILE];
+        assert!(
+            capability(
+                wrench,
+                Some(projectile),
+                1.0,
+                &session.weapons.pack.projectiles
+            )
+            .is_none(),
+            "the wrench is no weapon"
+        );
+    }
     /// What a bot could hurt someone with is read cautiously: a native
     /// attack by its capability, and a weapon it reads only by its states
     /// (ported scripts, as an Add-On knife) as one too, so neither the fight
