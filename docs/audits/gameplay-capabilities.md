@@ -105,10 +105,11 @@ until then, the existing headless tests.
 
 1. **Weapon reading (bots only, no data change).** One weapon description; trigger style
    derived from the image; name the `band` numbers; akimbo by its state data.
-2. **Host tools declared.** Importer writes `host_tool` and its numbers onto the five stock
-   tool images; the runtime, bots and client read it.
-3. **Stock behaviours declared.** `stock.rs` table moves to the importer; stray names in
-   `runtime.rs`, `sports.rs` and `lib.rs` fold in.
+2. **Host tools read once (done).** `bri_weapons::HostTool`, decided only in the sanctioned
+   `stock.rs` table; sim, bots and the wrench/printer dialogs read it. No content change.
+3. **Stock behaviours declared in data.** The `stock.rs` table, host tools included, moves to
+   the importer; stray names in `runtime.rs`, `sports.rs` and `lib.rs` fold in; the client
+   `Equipment` mapping reads the declared host tool. Needs a content regeneration on Max's PC.
 4. **Bricks, projectiles and copies.** Declared special bricks, paint, pumpkin, brick-deploy,
    admin-wand immunity once, one `Letters` rule, one default loadout, delete dead cues, fix the
    `world_edit` item check.

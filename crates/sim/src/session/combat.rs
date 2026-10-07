@@ -2453,11 +2453,7 @@ impl Session {
                 continue;
             }
             // `Armor::onImpact` never hurts a player holding the admin wand.
-            if self
-                .weapons
-                .image_state(ActorId(owner), 0)
-                .is_some_and(|(image, _)| image.id == super::tools::ADMIN_WAND_IMAGE)
-            {
+            if self.holds_admin_tool(owner) {
                 continue;
             }
             // `Armor::onImpact`: a mini-game's own Falling Damage rule, or

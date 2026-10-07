@@ -4,6 +4,7 @@
 //! identities or arbitrary source records cross this boundary.
 use super::undo::UndoEntry;
 use super::*;
+use bri_content::brick_materials::{UNIVERSAL_PRINT_ASPECT, print_fits};
 use bri_weapons::{ActorId, HostTool, TargetId};
 use bri_world::authority::trust as level;
 
@@ -157,7 +158,7 @@ impl ToolCatalog {
             ensure!(
                 self.prints
                     .get(id)
-                    .is_some_and(|aspect| aspect.eq_ignore_ascii_case("Letters")),
+                    .is_some_and(|aspect| aspect.eq_ignore_ascii_case(UNIVERSAL_PRINT_ASPECT)),
                 "Default print must be an available universal Letters print"
             );
         }
@@ -179,8 +180,7 @@ impl ToolCatalog {
         };
         let print_aspect = self.prints.get(id).context("Print is unavailable")?;
         ensure!(
-            print_aspect.eq_ignore_ascii_case(aspect)
-                || print_aspect.eq_ignore_ascii_case("Letters"),
+            print_fits(print_aspect, aspect),
             "Print aspect does not match brick"
         );
         Ok(())
@@ -492,6 +492,15 @@ impl Session {
             bri_minigames::BuildAction::Wand,
         )?;
         self.hold_image(owner, WAND_IMAGE, None)
+    }
+
+    /// Whether `owner` holds the administrator's destroying tool
+    /// ([`HostTool::AdminDestroy`]), which v20 exempts from impact damage
+    /// (`Armor::onImpact`) and brick touches (`onPlayerTouch`).
+    pub(super) fn holds_admin_tool(&self, owner: OwnerId) -> bool {
+        self.weapons
+            .image_state(ActorId(owner), 0)
+            .is_some_and(|(image, _)| bri_weapons::host_tool(image) == Some(HostTool::AdminDestroy))
     }
 
     fn hold_image(&mut self, owner: OwnerId, image: &str, paint: Option<u8>) -> Result<()> {

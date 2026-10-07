@@ -612,8 +612,7 @@ impl ToolUi {
                     &self.catalog.brick_print_aspects[resolved(&inspection.brick.definition)?];
                 let print_aspect = self.catalog.prints.get(print).context("Unknown print ID")?;
                 ensure!(
-                    print_aspect.eq_ignore_ascii_case(aspect)
-                        || print_aspect.eq_ignore_ascii_case("Letters"),
+                    bri_content::brick_materials::print_fits(print_aspect, aspect),
                     "Print does not fit this brick"
                 );
                 ToolAction::SetPrint {
