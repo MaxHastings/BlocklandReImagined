@@ -515,6 +515,9 @@ fn sync(
     send: &std::sync::mpsc::Sender<SyncNote>,
 ) -> String {
     let (mut converted, mut failed, mut removed, mut included) = (vec![], vec![], vec![], vec![]);
+    // Converted again only because an older game made them: they keep
+    // their place, on or off.
+    let mut updated = vec![];
     let mut state = State::load(root);
     for step in steps {
         match step {
@@ -572,6 +575,10 @@ fn sync(
                     notice: format!("Converting {name}..."),
                     finished: false,
                 });
+                let for_this_version = replaces.is_some()
+                    && state.get(&name).is_some_and(|r| {
+                        r.stamp == stamp && r.importer.as_deref() != Some(&reads())
+                    });
                 let mut record = Record {
                     name: name.clone(),
                     stamp,
@@ -585,7 +592,11 @@ fn sync(
                     Ok((id, dir)) => {
                         record.id = Some(id);
                         record.dir = Some(dir);
-                        converted.push(name);
+                        if for_this_version {
+                            updated.push(name);
+                        } else {
+                            converted.push(name);
+                        }
                     }
                     Err(error) => {
                         record.error = Some(format!("{error:#}"));
@@ -618,6 +629,14 @@ fn sync(
         n => notice.push(format!(
             "Converted {n} classic Add-Ons: {}. They start off.",
             list(&converted)
+        )),
+    }
+    match updated.len() {
+        0 => {}
+        1 => notice.push(format!("Updated {} for this version.", updated[0])),
+        n => notice.push(format!(
+            "Updated {n} Add-Ons for this version: {}.",
+            list(&updated)
         )),
     }
     if !failed.is_empty() {
@@ -1076,7 +1095,7 @@ mod tests {
         state.save(&root).unwrap();
         assert_eq!(
             sync_now(&root).last().unwrap().notice,
-            "Converted Weapon_Gun. It starts off."
+            "Updated Weapon_Gun for this version."
         );
         assert_eq!(
             State::load(&root).get("Weapon_Gun").unwrap().importer,
