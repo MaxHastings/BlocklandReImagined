@@ -30,7 +30,9 @@ pub fn thread() -> Duration {
             &mut user,
         )
     };
-    assert_ne!(ok, 0, "GetThreadTimes failed");
+    if ok == 0 {
+        return Duration::ZERO;
+    }
     let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
     // FILETIME counts 100 ns intervals.
     Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
@@ -44,6 +46,8 @@ pub fn thread() -> Duration {
     };
     // SAFETY: an owned timespec for the current thread's CPU clock.
     let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-    assert_eq!(ok, 0, "clock_gettime failed");
+    if ok != 0 {
+        return Duration::ZERO;
+    }
     Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
 }

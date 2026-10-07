@@ -27,19 +27,23 @@ properly.
   the brick in hand (the old wall-clock numbers, now game time).
 - **stresslab_flow**: its own 300 s wall-clock `until` is replaced by the
   shared wait (30 s of game time per in-game step; each took at most 12
-  ticks here). Mining waits for the player to stand, then presses the key
-  each time the server has answered the last press, until a block is
-  mined. The old test sent six presses on fixed frame counts: the first
-  press after looking down misses here every run (tick 720: two presses,
-  no block; tick 732, after the 12-tick cooldown: mined), and on a loaded
-  machine all six could miss or land inside cooldowns, leaving a 300 s wait
-  for a mine that never came. Inferred from these runs; the gate failure's
-  own log had no press-by-press detail (the failure now prints chat).
+  ticks here). Mining now waits for the server to show the player
+  standing, then presses the key once and waits for the mined count. The
+  press carries its aim, so one press mines: a run that pressed again
+  whenever the last press was answered printed three presses, but the
+  server pose already showed the player falling into the mined hole after
+  the first; the count only arrives a snapshot later. No first-press bug.
+  The old test sent six presses on fixed frame counts without checking the
+  player stood, so under load it could press before landing; that cause is
+  inferred (the gate's log had no press detail; a failure now prints chat).
+- **cpu_time**: the server reads it every tick, so a failed OS read counts
+  as zero instead of panicking.
 
 ## Evidence (this container, 4 cores, lavapipe)
 
 - `bot_think_time_16` (debug): 4331 us/tick alone; 4623 us/tick with 12
   busy-loop processes, while the whole step went from 5483 to 19085 us/tick.
+- `stresslab_flow` (one press): 3 runs alone and 2 under 12 busy loops pass.
 - Synthetic variants pass: `stresslab_flow`, `app_item_render` (3),
   `held_items_render`, `item_ghost` (2), `app_flow`, `player_types_render`,
   `sit_first_person`, `view_jitter`; `hardening_packages` 27/27.

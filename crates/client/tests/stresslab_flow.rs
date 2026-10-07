@@ -52,16 +52,6 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 const GAME: Duration = Duration::from_secs(30);
 
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    until_stepping(app, what, step, ready)
-}
-
-/// [`until`], running `step` each frame.
-fn until_stepping(
-    app: &mut App,
-    what: &str,
-    step: impl FnMut(&mut App, Duration) -> Result<()>,
-    ready: impl Fn(&App) -> bool,
-) -> Result<()> {
     wait::until_one(app, what, GAME, step, ready).with_context(|| {
         format!(
             "screens {:?}; tools {:?}; world bricks {:?}; pending {}; ghost {:?}; chat {:?}; dialogs {:?}",
@@ -295,13 +285,15 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
         })
         .collect();
     eprintln!("letters the base game leaves free: {free}");
-    // Mine: stand, look down and use the panel's key when the base game
-    // leaves it free. The server mines only where the aim meets the ground
-    // within reach and off the command's cooldown, so, as a player would,
-    // the key is pressed again once the server has answered the last press
-    // until a block is mined.
+    // Mine: stand, look down and use the panel's key once when the base
+    // game leaves it free. The press carries the aim, so one press while
+    // the server has the player standing mines the block underfoot. (A run
+    // that pressed again whenever the server had answered pressed three
+    // times before the mined count arrived; the player was already falling
+    // into the hole after the first.)
     until(&mut app, "the player standing", |a| {
-        a.local_motion().is_some_and(|(p, _)| p.grounded)
+        a.network_view()
+            .is_some_and(|v| v.poses.get(&v.owner).is_some_and(|p| p.player.grounded))
     })?;
     action(
         &mut app,
@@ -310,44 +302,29 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
             pitch: 1.5,
         }),
     )?;
-    let mine = |app: &mut App| -> Result<()> {
-        if keys.contains(&'h') {
-            app.ui.handle_input(bri_ui::input::InputEvent::KeyDown {
-                key: bri_ui::input::Key::Letter('h'),
-                mods: bri_ui::input::Modifiers::NONE,
-                repeat: false,
-            });
-            app.ui.handle_input(bri_ui::input::InputEvent::KeyUp {
-                key: bri_ui::input::Key::Letter('h'),
-                mods: bri_ui::input::Modifiers::NONE,
-            });
-            Ok(())
-        } else {
-            action(
-                app,
-                UiAction::Game(GameAction::Package {
-                    package: "stresslab-economy".into(),
-                    command: "mine".into(),
-                    pressed: None,
-                }),
-            )
-        }
-    };
-    let mut presses = 0;
-    until_stepping(
-        &mut app,
-        "mining",
-        |app, dt| {
-            step(app, dt)?;
-            if app.pending_requests() == 0 {
-                presses += 1;
-                mine(app)?;
-            }
-            Ok(())
-        },
-        |a| own(a, "mined").unwrap_or(0) > 0,
-    )?;
-    eprintln!("mined after {presses} presses");
+    if keys.contains(&'h') {
+        app.ui.handle_input(bri_ui::input::InputEvent::KeyDown {
+            key: bri_ui::input::Key::Letter('h'),
+            mods: bri_ui::input::Modifiers::NONE,
+            repeat: false,
+        });
+        app.ui.handle_input(bri_ui::input::InputEvent::KeyUp {
+            key: bri_ui::input::Key::Letter('h'),
+            mods: bri_ui::input::Modifiers::NONE,
+        });
+    } else {
+        action(
+            &mut app,
+            UiAction::Game(GameAction::Package {
+                package: "stresslab-economy".into(),
+                command: "mine".into(),
+                pressed: None,
+            }),
+        )?;
+    }
+    until(&mut app, "one press to mine", |a| {
+        own(a, "mined").unwrap_or(0) > 0
+    })?;
     for _ in 0..10 {
         step(&mut app, Duration::from_millis(16))?;
     }
