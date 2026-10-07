@@ -328,7 +328,7 @@ const UNKNOWN_WORTH: f32 = 1.0;
 /// damage). 0 for a building tool or a tool known not to attack. The same
 /// estimate ranks the inventory and the upgrades lying about.
 pub(super) fn item_worth(session: &Session, item: &str, scale: f32) -> f32 {
-    if bri_weapons::CORE_TOOLS.contains(&item) {
+    if session.weapons.building_tool(item) {
         return 0.0;
     }
     let pack = &session.weapons.pack;

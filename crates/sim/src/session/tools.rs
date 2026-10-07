@@ -4,7 +4,7 @@
 //! identities or arbitrary source records cross this boundary.
 use super::undo::UndoEntry;
 use super::*;
-use bri_weapons::{ActorId, TargetId};
+use bri_weapons::{ActorId, HostTool, TargetId};
 use bri_world::authority::trust as level;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,33 +332,11 @@ struct ToolHit {
     direction: Vec3,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NativeTool {
-    Hammer,
-    Wand,
-    AdminWand,
-    Wrench,
-    Printer,
-}
-
-/// Resolve the installed native callback once for players and NPC affordances.
-/// This names an engine mechanism, not a game's items, labels or objectives.
-fn native_tool_callback(id: &str) -> Option<NativeTool> {
-    Some(match id.strip_prefix("v20.image.").unwrap_or(id) {
-        "hammerimage" => NativeTool::Hammer,
-        "wandimage" => NativeTool::Wand,
-        "adminwandimage" => NativeTool::AdminWand,
-        "wrenchimage" => NativeTool::Wrench,
-        "printgunimage" => NativeTool::Printer,
-        _ => return None,
-    })
-}
-
-/// Admission for the existing host Hammer callback, not an item/display-name
-/// guess. Overridden callbacks remain opaque to native capability planning.
+/// Admission for the host's breaking tool ([`HostTool::Break`]) as bots plan
+/// with it: one whose `onFire` is that mechanism alone. Overridden callbacks
+/// remain opaque to native capability planning.
 pub(super) fn native_hammer(image: &bri_weapons::Image) -> bool {
-    native_tool_callback(&image.id) == Some(NativeTool::Hammer)
-        && image.name.eq_ignore_ascii_case("hammerImage")
+    bri_weapons::host_tool(image) == Some(HostTool::Break)
         && image
             .states
             .iter()
@@ -528,7 +506,7 @@ impl Session {
     /// The `onFire` of a host tool image (hammer, wrench, printer, wands),
     /// from the image state machine at the moment the swing lands. A swing
     /// that hits nothing is not an error: the animation already played.
-    pub(super) fn tool_fire(&mut self, owner: OwnerId, image: &str) -> Result<()> {
+    pub(super) fn tool_fire(&mut self, owner: OwnerId, tool: HostTool) -> Result<()> {
         let Some(actor) = self.weapons.actor(ActorId(owner)) else {
             return Ok(());
         };
@@ -539,8 +517,8 @@ impl Session {
             return Ok(());
         }
         let melee_range = if dir.y < -0.9 { 5.5 } else { 5.0 } * scale;
-        match native_tool_callback(image) {
-            Some(NativeTool::Hammer) => {
+        match tool {
+            HostTool::Break => {
                 let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
                     return Ok(());
                 };
@@ -615,7 +593,7 @@ impl Session {
                     TargetId::Map(_) | TargetId::Shape(_) => {}
                 }
             }
-            Some(NativeTool::Wand) => {
+            HostTool::Destroy => {
                 // The wand item from a loadout or spawner obeys the same
                 // mini-game and tutorial rules as `/wand`.
                 let may_wand = self.tutorial_allows_wand(owner)
@@ -672,7 +650,7 @@ impl Session {
                     _ => {}
                 }
             }
-            Some(NativeTool::AdminWand) => {
+            HostTool::AdminDestroy => {
                 if !self.peers[&owner].actor.administrator {
                     return Ok(());
                 }
@@ -697,7 +675,7 @@ impl Session {
                     _ => {}
                 }
             }
-            Some(NativeTool::Wrench) => {
+            HostTool::Inspect => {
                 let Some(hit) = self.tool_ray(owner, start, dir, 10.0 * scale, Reach::Wrench)?
                 else {
                     return Ok(());
@@ -720,7 +698,7 @@ impl Session {
                 self.open_inspection(owner, id, InspectMode::Wrench);
                 self.tool_sound("wrenchHitSound", hit.position);
             }
-            Some(NativeTool::Printer) => {
+            HostTool::Print => {
                 let Some(ToolHit {
                     target: TargetId::Brick(id),
                     ..
@@ -736,7 +714,6 @@ impl Session {
                     self.open_inspection(owner, id, InspectMode::Printer);
                 }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -1064,20 +1041,21 @@ impl Session {
         Ok(best.map(|(_, hit)| hit))
     }
 
-    /// Dialog commands act on the brick the wrench or printer last hit
+    /// Dialog commands act on the brick the wrench or printer last hit, with
+    /// a tool that runs the same mechanism still in hand
     /// (`%client.wrenchBrick` / `%client.printBrick`), wherever the player
     /// has moved since.
     pub(super) fn tool_action(&mut self, owner: OwnerId, action: ToolAction) -> Result<Reply> {
         let required = match &action {
             ToolAction::UndoBrick => None,
-            ToolAction::SetPrint { .. } => Some(bri_weapons::PRINTER),
+            ToolAction::SetPrint { .. } => Some(HostTool::Print),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
             | ToolAction::SetEvents { .. }
-            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::WRENCH),
+            | ToolAction::RespawnVehicle { .. } => Some(HostTool::Inspect),
         };
         if let Some(required) = required {
-            inventory::require_equipment(&self.weapons, owner, Some(required))?;
+            inventory::require_host_tool(&self.weapons, owner, required)?;
         }
         if action == ToolAction::UndoBrick {
             return self.undo_brick(owner);

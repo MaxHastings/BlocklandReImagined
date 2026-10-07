@@ -437,7 +437,7 @@ impl Session {
         // first that is not a building tool, unless it holds one.
         let real = |item: &Option<String>| {
             item.as_deref()
-                .is_some_and(|id| !bri_weapons::CORE_TOOLS.contains(&id))
+                .is_some_and(|id| !self.weapons.building_tool(id))
         };
         let slot = match best {
             Some((slot, w)) if w > held => Some(slot),
