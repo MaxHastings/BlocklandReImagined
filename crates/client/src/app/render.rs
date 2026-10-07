@@ -1094,8 +1094,10 @@ impl App {
                 .map(|(_, draw)| *draw),
         );
         item_draws.extend(shared_draws.iter().copied());
-        {
-            use bri_render::scene::ShadowCasters;
+        use bri_render::scene::ShadowCasters;
+        // Every view's shadow casters: views whose eye the player's shadows
+        // do not reach (a window onto a far place) draw their own from them.
+        let (bodies, cast_models, blockers, blocking, map, terrain_map) = {
             // Players, vehicles and items (dropped and held) cast, like v20's
             // projected shape shadows; bricks only with the BrickShadows pref,
             // and bricks that do not cast still stop shadows passing through
@@ -1144,7 +1146,6 @@ impl App {
             } else {
                 Vec::new()
             };
-            renderer.begin_timing(frame.encoder);
             let terrain_map: Vec<_> = if effective.lighting == 3 {
                 self.gpu
                     .gpu_terrain
@@ -1154,11 +1155,15 @@ impl App {
             } else {
                 Vec::new()
             };
-            renderer.render_shadows_with_geometry(
-                frame.encoder,
+            (bodies, models, blockers, blocking, map, terrain_map)
+        };
+        let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+            renderer.render_view_shadows(
+                encoder,
+                view,
                 ShadowCasters {
                     scenes: &bodies,
-                    instances: &models,
+                    instances: &cast_models,
                 },
                 ShadowCasters {
                     scenes: &blockers,
@@ -1169,6 +1174,12 @@ impl App {
                     instances: &terrain_map,
                 },
             );
+        };
+        renderer.begin_timing(frame.encoder);
+        // Live mirror and window planes record the player's shadows
+        // themselves, after those with their own.
+        if !reflecting {
+            shadows(frame.encoder, 0);
         }
         let clear = wgpu::Color { r, g, b, a };
         let reflections = self.lighting.reflections.as_ref().unwrap();
@@ -1222,7 +1233,15 @@ impl App {
                 skins.render_view(pass, view);
                 layers.render_view(pass, view);
             };
-            reflections.render_views(renderer, frame.encoder, &scenes, &models, clear, &late);
+            reflections.render_views(
+                renderer,
+                frame.encoder,
+                &scenes,
+                &models,
+                clear,
+                &late,
+                &shadows,
+            );
             renderer.mark(frame.encoder, "mirrors");
         }
         let probe = self.lighting.environment_probe.as_ref().unwrap();

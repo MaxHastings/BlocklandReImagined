@@ -266,7 +266,15 @@ impl Gpu {
         let [r, g, b, a] = data.clear_color.map(f64::from);
         let clear = wgpu::Color { r, g, b, a };
         let mut encoder = device.create_command_encoder(&Default::default());
-        reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
+        reflections.render(
+            &renderer,
+            &mut encoder,
+            &[&scene],
+            &[],
+            clear,
+            &|_, _| {},
+            &|_, _| {},
+        );
         let surfaces =
             |pass: &mut wgpu::RenderPass<'_>, view: usize| reflections.draw_surfaces(pass, view);
         environment.render(

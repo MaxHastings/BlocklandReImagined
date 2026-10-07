@@ -15,6 +15,7 @@
 //! count: 2.1 MB/s (17 Mbit/s) for 32 players running. Clients render each
 //! remote player far enough in the past for its own rate.
 use crate::protocol::{Datagram, Orb, POSE_INTERVAL, Pose, RemotePose, WeaponDelta};
+use bri_content::passage::Passages;
 use bri_sim::session::WeaponView;
 use bri_sim::{player::PlayerState, session::VehiclePose};
 use bri_weapons::Projectile;
@@ -197,7 +198,9 @@ pub struct StateStream {
 impl StateStream {
     /// The datagram items of the interval at `tick`, in send order, with
     /// who gets each. `viewers` are the connected players with where each
-    /// sees from (None: anywhere, so full rate).
+    /// sees from (None: anywhere, so full rate). Distances run the shortest
+    /// way, through `passages` too: a player seen through a portal is as
+    /// near as they look.
     pub fn interval(
         &mut self,
         tick: u64,
@@ -205,7 +208,13 @@ impl StateStream {
         vehicles: Vec<VehiclePose>,
         orbs: Vec<(OwnerId, [f32; 3])>,
         viewers: &[(OwnerId, Option<[f32; 3]>)],
+        passages: &Passages,
     ) -> Vec<(Datagram, Audience)> {
+        let distance = |eye: [f32; 3], feet: [f32; 3]| {
+            passages
+                .shortest(glam::Vec3::from(eye), glam::Vec3::from(feet))
+                .0
+        };
         let mut out = Vec::new();
         let mut viewers = viewers.to_vec();
         viewers.sort_unstable_by_key(|(viewer, _)| *viewer);
@@ -233,10 +242,7 @@ impl StateStream {
             let mut near: Vec<(f32, OwnerId)> = moving
                 .iter()
                 .filter(|p| p.player.owner != *viewer)
-                .map(|p| {
-                    let feet = glam::Vec3::from(p.player.feet);
-                    (glam::Vec3::from(*eye).distance(feet), p.player.owner)
-                })
+                .map(|p| (distance(*eye, p.player.feet), p.player.owner))
                 .collect();
             near.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
             for (rank, (distance, owner)) in near.into_iter().enumerate() {
@@ -257,9 +263,7 @@ impl StateStream {
                 // Still players settle and keep alive at their distance's rate.
                 let interval = match (intervals.get(&(*viewer, owner)), eye) {
                     (Some(interval), _) => *interval,
-                    (None, Some(eye)) => pose_interval(
-                        glam::Vec3::from(*eye).distance(glam::Vec3::from(pose.player.feet)),
-                    ),
+                    (None, Some(eye)) => pose_interval(distance(*eye, pose.player.feet)),
                     (None, None) => POSE_INTERVAL,
                 };
                 match decide(
@@ -571,20 +575,35 @@ mod tests {
     #[test]
     fn a_new_body_reaches_its_owner_at_once_even_where_the_old_one_stood() {
         let mut stream = StateStream::default();
-        stream.interval(0, vec![pose(1, 0, 0.0)], vec![], vec![], VIEWERS);
+        stream.interval(
+            0,
+            vec![pose(1, 0, 0.0)],
+            vec![],
+            vec![],
+            VIEWERS,
+            &Passages::default(),
+        );
         let still = stream.interval(
             POSE_INTERVAL,
             vec![pose(1, POSE_INTERVAL, 0.0)],
             vec![],
             vec![],
             VIEWERS,
+            &Passages::default(),
         );
         assert!(!still.iter().any(|(_, a)| *a == Audience::Only(1)));
         let respawned = Pose {
             spawn_tick: 2 * POSE_INTERVAL,
             ..pose(1, 2 * POSE_INTERVAL, 0.0)
         };
-        let items = stream.interval(2 * POSE_INTERVAL, vec![respawned], vec![], vec![], VIEWERS);
+        let items = stream.interval(
+            2 * POSE_INTERVAL,
+            vec![respawned],
+            vec![],
+            vec![],
+            VIEWERS,
+            &Passages::default(),
+        );
         assert!(items.iter().any(|(d, a)| *a == Audience::Only(1)
             && matches!(d, Datagram::Pose(p) if p.spawn_tick == 2 * POSE_INTERVAL)));
     }
@@ -601,7 +620,14 @@ mod tests {
             } else {
                 (interval - 59) as f32
             };
-            let items = stream.interval(tick, vec![pose(1, tick, x)], vec![], vec![], VIEWERS);
+            let items = stream.interval(
+                tick,
+                vec![pose(1, tick, x)],
+                vec![],
+                vec![],
+                VIEWERS,
+                &Passages::default(),
+            );
             sent.push(audiences(&items, 1));
         }
         // First sight goes to everyone, then SETTLE unchanged intervals to
@@ -639,6 +665,49 @@ mod tests {
     }
 
     #[test]
+    fn a_player_seen_through_a_portal_is_as_near_as_they_look() {
+        // An opening two units in front of viewer 2 leads 500 units away,
+        // where player 1 runs ten units past its partner.
+        let opening = bri_content::passage::Passage {
+            brick: 1,
+            centre: glam::Vec3::new(0.0, 1.0, -2.0),
+            normal: glam::Vec3::Z,
+            u: glam::Vec3::X,
+            v: glam::Vec3::Y,
+            half: glam::Vec2::new(1.0, 1.5),
+            carry: glam::Affine3A::from_translation(glam::Vec3::new(500.0, 0.0, 0.0)),
+        };
+        let passages = Passages {
+            list: vec![opening],
+            closed: vec![],
+        };
+        let viewers = [(2, Some([0.0; 3]))];
+        for (passages, interval) in [
+            (&passages, POSE_INTERVAL),
+            (&Passages::default(), POSE_INTERVAL * 8),
+        ] {
+            let mut stream = StateStream::default();
+            let mut sent = Vec::new();
+            for i in 0..40_u64 {
+                let tick = i * POSE_INTERVAL;
+                let mut running = pose(1, tick, 500.0 + i as f32 * 0.02);
+                running.player.feet[2] = -10.0;
+                for (datagram, audience) in
+                    stream.interval(tick, vec![running], vec![], vec![], &viewers, passages)
+                {
+                    if matches!(datagram, Datagram::Remote(_)) && audience.includes(2) {
+                        sent.push(tick);
+                    }
+                }
+            }
+            assert!(
+                sent.windows(2).skip(1).all(|p| p[1] - p[0] == interval),
+                "{sent:?}"
+            );
+        }
+    }
+
+    #[test]
     fn far_players_are_sent_less_often_and_resume_from_where_they_rested() {
         assert_eq!(pose_interval(0.0), POSE_INTERVAL);
         assert_eq!(pose_interval(NEAR), POSE_INTERVAL);
@@ -654,9 +723,14 @@ mod tests {
         for interval in 0..3000_u64 {
             let tick = interval * POSE_INTERVAL;
             let x = (tick as f32 * 5.0 / 120.0).min(300.0);
-            for (datagram, audience) in
-                stream.interval(tick, vec![pose(1, tick, x)], vec![], vec![], &viewers)
-            {
+            for (datagram, audience) in stream.interval(
+                tick,
+                vec![pose(1, tick, x)],
+                vec![],
+                vec![],
+                &viewers,
+                &Passages::default(),
+            ) {
                 if let Datagram::Remote(p) = datagram {
                     if audience.includes(2) {
                         to_2.push((p.tick, p.clone().into_pose().player.feet[0]));
@@ -701,7 +775,14 @@ mod tests {
         // Walking back from rest: the resting pose one interval earlier,
         // then the move, both to the far viewer.
         let tick = 3000 * POSE_INTERVAL;
-        let items = stream.interval(tick, vec![pose(1, tick, 299.0)], vec![], vec![], &viewers);
+        let items = stream.interval(
+            tick,
+            vec![pose(1, tick, 299.0)],
+            vec![],
+            vec![],
+            &viewers,
+            &Passages::default(),
+        );
         let to_2: Vec<_> = items
             .iter()
             .filter(|(_, a)| a.includes(2))
@@ -788,7 +869,9 @@ mod tests {
                 })
                 .collect();
             poses.push(pose(31, tick, 0.5));
-            for (datagram, audience) in stream.interval(tick, poses, vec![], vec![], &viewers) {
+            for (datagram, audience) in
+                stream.interval(tick, poses, vec![], vec![], &viewers, &Passages::default())
+            {
                 if let Datagram::Remote(p) = datagram
                     && audience.includes(100)
                     && interval > 0
@@ -842,6 +925,7 @@ mod tests {
                 vec![vehicle],
                 vec![(1, [noise; 3])],
                 VIEWERS,
+                &Passages::default(),
             );
             if interval > SETTLE as u64 {
                 assert!(
@@ -852,7 +936,7 @@ mod tests {
         }
         assert!(
             stream
-                .interval(60, vec![], vec![], vec![], VIEWERS)
+                .interval(60, vec![], vec![], vec![], VIEWERS, &Passages::default())
                 .is_empty()
         );
         assert!(stream.remote.is_empty() && stream.vehicles.is_empty() && stream.orbs.is_empty());

@@ -550,7 +550,9 @@ pub fn plan_after(
         path.push(out.group_keys[group].clone());
         path
     };
-    while out.planes.len() < settings.planes {
+    // The views after the planes' (the environment probe's faces) and the
+    // planes' own sun shadows are laid out for at most `MAX_PLANES`.
+    while out.planes.len() < settings.planes.min(ReflectionSettings::MAX_PLANES) {
         let score = |&(view, group, r): &(usize, usize, [f32; 4])| {
             let area = (r[2] - r[0]) * (r[3] - r[1]);
             if before.is_empty() || !before.contains(&path(&out.paths, view, group)) {
@@ -760,6 +762,9 @@ pub struct Reflections {
     /// Vertex ranges per pipeline, by coplanar group.
     ranges: [Vec<Range<u32>>; 2],
     plan: Plan,
+    /// Per live plane: whether its view fitted sun shadows of its own (its
+    /// eye is past the player's shadows, or it is seen in a view that did).
+    own_shadows: Vec<bool>,
     camera: Camera,
 }
 
@@ -908,6 +913,7 @@ impl Reflections {
             vertices: None,
             ranges: Default::default(),
             plan: Plan::default(),
+            own_shadows: Vec::new(),
             camera: Camera::default(),
         }
     }
@@ -1071,21 +1077,39 @@ impl Reflections {
                 screen,
             )),
         );
+        // A view whose eye the player's sun shadows do not reach (a window
+        // onto a far place) fits its own, and so does every view seen in
+        // one: those all draw before the player's shadows (`render_views`).
+        self.own_shadows.clear();
         for (i, plane) in self.plan.planes.iter().enumerate() {
             queue.write_buffer(
                 &self.frames[1 + i].buffer,
                 0,
                 bytemuck::bytes_of(&frame(plane.view_projection, plane.eye, self.size)),
             );
-            renderer.update_view(
-                queue,
-                1 + i,
-                &Camera {
-                    view_projection: plane.view_projection.to_cols_array(),
-                    eye: plane.eye.extend(1.0).to_array(),
-                    ..*camera
-                },
-            );
+            let view = Camera {
+                view_projection: plane.view_projection.to_cols_array(),
+                eye: plane.eye.extend(1.0).to_array(),
+                ..*camera
+            };
+            renderer.update_view(queue, 1 + i, &view);
+            let own = plane
+                .parent
+                .checked_sub(1)
+                .is_some_and(|parent| self.own_shadows[parent])
+                || !renderer.shadows_reach(plane.eye);
+            // Shadows fit the view's whole frustum: the player's, moved as
+            // the plane moves it. The plane's own projection is cut to its
+            // window (an oblique near plane, a crop), which leaves no far
+            // plane to split.
+            let whole = Camera {
+                view_projection: (Mat4::from_cols_array(&camera.view_projection)
+                    * plane.unreflect.inverse())
+                .to_cols_array(),
+                ..view
+            };
+            self.own_shadows
+                .push(own && renderer.fit_view_shadows(queue, 1 + i, &whole));
         }
         // Surfaces by pipeline, then by coplanar group.
         let mut vertices = Vec::new();
@@ -1227,6 +1251,9 @@ impl Reflections {
     /// mirrors may show (the player's own body even in first person);
     /// `after` records last in each plane's pass, given its view (1 + the
     /// plane's index), for what draws outside the scene renderer.
+    /// `shadows` records the shadows a view reads (0 the player's), as
+    /// [`Self::render_views`] says.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         renderer: &SceneRenderer,
@@ -1235,12 +1262,25 @@ impl Reflections {
         instances: &[(&GpuScene, &GpuInstances)],
         clear: wgpu::Color,
         after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
+        shadows: &dyn Fn(&mut wgpu::CommandEncoder, usize),
     ) {
-        self.render_views(renderer, encoder, scenes, &|_| instances, clear, after);
+        self.render_views(
+            renderer,
+            encoder,
+            scenes,
+            &|_| instances,
+            clear,
+            after,
+            shadows,
+        );
     }
     /// Draw the same reflection plan with model visibility chosen independently
     /// for each virtual camera (view 1 + the plane index, as for `after`).
-    /// This does not change geometry or shadow casters.
+    /// `shadows(encoder, view)` records the shadows a view reads, typically
+    /// [`SceneRenderer::render_view_shadows`]: first for each view that
+    /// fitted its own, right before its pass, then once for the player's (0),
+    /// which the other planes and every later pass read.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_views<'a>(
         &self,
         renderer: &SceneRenderer,
@@ -1249,6 +1289,7 @@ impl Reflections {
         instances: &dyn Fn(usize) -> &'a [(&'a GpuScene, &'a GpuInstances)],
         clear: wgpu::Color,
         after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
+        shadows: &dyn Fn(&mut wgpu::CommandEncoder, usize),
     ) {
         // Keep last frame's pictures before this frame draws over them.
         for (target, held) in self.targets.iter().zip(&self.held) {
@@ -1261,9 +1302,13 @@ impl Reflections {
             }
         }
         // A plane is planned after the view it is seen in: deepest first.
-        for (i, plane) in self.plan.planes.iter().enumerate().rev() {
-            let Some(target) = self.targets.get(i) else {
-                continue;
+        // Views with their own sun shadows draw them into the player's
+        // layers, so they all go before the player's shadows; every view
+        // seen in one has its own too, so each still follows what it shows.
+        let own = |i: usize| self.own_shadows.get(i).copied().unwrap_or(false);
+        let draw = |encoder: &mut wgpu::CommandEncoder, i: usize| {
+            let (plane, Some(target)) = (&self.plan.planes[i], self.targets.get(i)) else {
+                return;
             };
             let surfaces = |pass: &mut wgpu::RenderPass<'_>| self.draw_surfaces(pass, 1 + i);
             let late = |pass: &mut wgpu::RenderPass<'_>| after(pass, 1 + i);
@@ -1282,6 +1327,15 @@ impl Reflections {
                 scenes,
                 instances(1 + i),
             );
+        };
+        let deepest_first = (0..self.plan.planes.len()).rev();
+        for i in deepest_first.clone().filter(|&i| own(i)) {
+            shadows(encoder, 1 + i);
+            draw(encoder, i);
+        }
+        shadows(encoder, 0);
+        for i in deepest_first.filter(|&i| !own(i)) {
+            draw(encoder, i);
         }
     }
     fn grow_frames(&mut self, device: &wgpu::Device, count: usize) {

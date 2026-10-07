@@ -105,6 +105,12 @@ const MAP_REACH: f32 = 10000.0;
 const CASTER_STRIDE: u64 = 256;
 /// Caster uniform: light matrix, then the occluder gap (padded to a vec4).
 const CASTER_SIZE: u64 = 80;
+/// Views whose receivers read sun cascades of their own: the player's, then
+/// each live mirror or window plane (`ShadowMaps::fit_view`). A plane's eye
+/// can be anywhere (a window onto a far place), out of the player's reach.
+pub const FITTED_VIEWS: usize = 1 + crate::reflection::ReflectionSettings::MAX_PLANES;
+/// Receiver uniform stride per view; bound offsets must be 256-byte aligned.
+const RECEIVER_STRIDE: u64 = (std::mem::size_of::<ShadowUniform>() as u64).div_ceil(256) * 256;
 /// Occluders must lie this many world units past a caster to stop its
 /// shadow, so the brick a player stands on still receives it.
 const OCCLUDER_GAP: f32 = 0.1;
@@ -648,6 +654,14 @@ pub(crate) struct ShadowMaps {
     /// Opaque, alpha-masked and cut opaque occluder pipelines.
     pub occluder_pipelines: [wgpu::RenderPipeline; 3],
     pub cascades: Vec<Cascade>,
+    /// The player's view direction the cascades split along.
+    forward: Vec3,
+    /// The player's receiver uniform this frame, which every view starts
+    /// from.
+    player: ShadowUniform,
+    /// Per live plane (view 1 and up): its own cascades, while it fits them
+    /// this frame (kept from frame to frame as `cascades_after`'s previous).
+    views: Vec<(bool, Vec<Cascade>)>,
     /// The sun direction the cascades were fitted to (normalized).
     pub sun: Vec3,
     /// Per slot, the lamp casting there (a lamp keeps its slot while it
@@ -726,16 +740,24 @@ impl ShadowMaps {
             ..Default::default()
         });
         use crate::BufferInit;
+        let mut receivers = vec![0; (RECEIVER_STRIDE as usize) * FITTED_VIEWS];
+        let disabled = ShadowUniform::zeroed_disabled();
+        let uniform = bytemuck::bytes_of(&disabled);
+        for region in receivers.chunks_exact_mut(RECEIVER_STRIDE as usize) {
+            region[..uniform.len()].copy_from_slice(uniform);
+        }
         let receiver = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("sun shadow receiver uniform"),
-            contents: bytemuck::bytes_of(&ShadowUniform::zeroed_disabled()),
+            contents: &receivers,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let caster = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow caster matrices"),
             size: CASTER_STRIDE
-                * (MAX_CASCADES * 3 + MAX_LAMPS * FACES + crate::map_lighting::MAX_LIGHTS * FACES)
-                    as u64,
+                * (MAX_CASCADES * 3
+                    + MAX_LAMPS * FACES
+                    + crate::map_lighting::MAX_LIGHTS * FACES
+                    + 2 * MAX_CASCADES * (FITTED_VIEWS - 1)) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -974,6 +996,9 @@ impl ShadowMaps {
                 ),
             ],
             cascades: Vec::new(),
+            forward: Vec3::ZERO,
+            player: ShadowUniform::zeroed_disabled(),
+            views: vec![(false, Vec::new()); FITTED_VIEWS - 1],
             sun: Vec3::ZERO,
             lamps: Vec::new(),
             drawn: Vec::new(),
@@ -1002,40 +1027,12 @@ impl ShadowMaps {
         });
         let mut uniform = ShadowUniform::zeroed_disabled();
         self.cascades.clear();
+        self.forward = Vec3::ZERO;
         self.sun = sun.normalize_or_zero();
         if let (Some(settings), Some((cascades, forward))) = (self.settings, fitted) {
-            for (i, cascade) in cascades.iter().enumerate() {
-                uniform.matrices[i] = cascade.view_projection.to_cols_array();
-                uniform.splits[i] = cascade.far;
-                uniform.texels[i] = cascade.texel;
-                uniform.depth_scale[i] = cascade.depth_scale;
-                let mut caster = [0.0f32; 20];
-                caster[..16].copy_from_slice(&cascade.view_projection.to_cols_array());
-                caster[16] = OCCLUDER_GAP * cascade.depth_scale;
-                queue.write_buffer(
-                    &self.caster,
-                    i as u64 * CASTER_STRIDE,
-                    bytemuck::bytes_of(&caster),
-                );
-                caster[..16].copy_from_slice(&cascade.map_view_projection.to_cols_array());
-                caster[16] = 0.0;
-                queue.write_buffer(
-                    &self.caster,
-                    Self::map_offset(i) as u64,
-                    bytemuck::bytes_of(&caster),
-                );
-                uniform.map_scale[i] = cascade.map_depth[0];
-                uniform.map_offset[i] = cascade.map_depth[1];
-            }
-            uniform.forward_count = forward.extend(cascades.len() as f32).to_array();
-            uniform.origin = eye.extend(1.0).to_array();
-            uniform.params = [
-                settings.cascades as f32,
-                settings.resolution as f32,
-                0.0,
-                0.0,
-            ];
+            self.write_cascades(queue, 0, &mut uniform, &settings, &cascades, forward, eye);
             self.cascades = cascades;
+            self.forward = forward;
         }
         let previous: Vec<usize> = self.lamps.iter().flatten().map(|l| l.light).collect();
         let mut slots: Vec<Option<Lamp>> = Vec::new();
@@ -1143,18 +1140,168 @@ impl ShadowMaps {
             uniform.origin = eye.extend(1.0).to_array();
         }
         self.lamps = slots;
-        queue.write_buffer(&self.receiver, 0, bytemuck::bytes_of(&uniform));
+        // Every view reads the player's shadows until it fits its own.
+        for view in 0..FITTED_VIEWS {
+            queue.write_buffer(
+                &self.receiver,
+                view as u64 * RECEIVER_STRIDE,
+                bytemuck::bytes_of(&uniform),
+            );
+        }
+        for (fitted, _) in &mut self.views {
+            *fitted = false;
+        }
+        self.player = uniform;
     }
-    pub fn caster_offset(cascade: usize) -> u32 {
-        (cascade as u64 * CASTER_STRIDE) as u32
+    /// The sun's part of `uniform` and the casters' matrices for `view`'s
+    /// `cascades`, split along `forward` from `eye`.
+    #[allow(clippy::too_many_arguments)]
+    fn write_cascades(
+        &self,
+        queue: &wgpu::Queue,
+        view: usize,
+        uniform: &mut ShadowUniform,
+        settings: &ShadowSettings,
+        cascades: &[Cascade],
+        forward: Vec3,
+        eye: Vec3,
+    ) {
+        for (i, cascade) in cascades.iter().enumerate() {
+            uniform.matrices[i] = cascade.view_projection.to_cols_array();
+            uniform.splits[i] = cascade.far;
+            uniform.texels[i] = cascade.texel;
+            uniform.depth_scale[i] = cascade.depth_scale;
+            let mut caster = [0.0f32; 20];
+            caster[..16].copy_from_slice(&cascade.view_projection.to_cols_array());
+            caster[16] = OCCLUDER_GAP * cascade.depth_scale;
+            queue.write_buffer(
+                &self.caster,
+                Self::caster_offset(view, i) as u64,
+                bytemuck::bytes_of(&caster),
+            );
+            caster[..16].copy_from_slice(&cascade.map_view_projection.to_cols_array());
+            caster[16] = 0.0;
+            queue.write_buffer(
+                &self.caster,
+                Self::map_offset(view, i) as u64,
+                bytemuck::bytes_of(&caster),
+            );
+            uniform.map_scale[i] = cascade.map_depth[0];
+            uniform.map_offset[i] = cascade.map_depth[1];
+        }
+        uniform.forward_count = forward.extend(cascades.len() as f32).to_array();
+        uniform.origin = eye.extend(1.0).to_array();
+        uniform.params = [
+            settings.cascades as f32,
+            settings.resolution as f32,
+            0.0,
+            0.0,
+        ];
+    }
+    /// Whether the player's cascades hold `point` (as receivers find their
+    /// cascade): a view seen from there can read the player's shadows.
+    pub fn reach(&self, point: Vec3) -> bool {
+        let Some(last) = self.cascades.last() else {
+            return false;
+        };
+        let margin = 3.0 / self.resolution() as f32;
+        let eye = Vec4::from(self.player.origin).truncate();
+        (point - eye).dot(self.forward) < last.far
+            && self.cascades.iter().any(|cascade| {
+                let clip = cascade.view_projection.project_point3(point);
+                let uv = glam::Vec2::new(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+                uv.cmpgt(glam::Vec2::splat(margin)).all()
+                    && uv.cmplt(glam::Vec2::splat(1.0 - margin)).all()
+                    && (0.0..1.0).contains(&clip.z)
+            })
+    }
+    /// Fit cascades of `view`'s own (a live plane, after `update`) to its
+    /// camera, for receivers it draws: its eye lies past the player's
+    /// shadows. Lamps stay the player's. False when `view` cannot have its
+    /// own (shadows off, or not a plane), and it reads the player's.
+    pub fn fit_view(
+        &mut self,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_projection: Mat4,
+        eye: Vec3,
+    ) -> bool {
+        let (Some(settings), Some(index)) = (self.settings, view.checked_sub(1)) else {
+            return false;
+        };
+        let Some((_, previous)) = self.views.get(index) else {
+            return false;
+        };
+        let Some((cascades, forward)) =
+            cascades_after(view_projection, eye, self.sun, &settings, previous)
+        else {
+            return false;
+        };
+        let mut uniform = self.player;
+        self.write_cascades(
+            queue,
+            view,
+            &mut uniform,
+            &settings,
+            &cascades,
+            forward,
+            eye,
+        );
+        queue.write_buffer(
+            &self.receiver,
+            view as u64 * RECEIVER_STRIDE,
+            bytemuck::bytes_of(&uniform),
+        );
+        self.views[index] = (true, cascades);
+        true
+    }
+    /// The cascades `view` draws its own sun shadows into: the player's for
+    /// view 0, a plane's while it fits its own this frame.
+    pub fn view_cascades(&self, view: usize) -> Option<&[Cascade]> {
+        match view.checked_sub(1) {
+            None => Some(&self.cascades),
+            Some(index) => match self.views.get(index) {
+                Some((true, cascades)) => Some(cascades),
+                _ => None,
+            },
+        }
+    }
+    /// `view`'s receiver uniform (views past the planes read the player's).
+    pub fn receiver_binding(&self, view: usize) -> wgpu::BindingResource<'_> {
+        let region = if view < FITTED_VIEWS { view } else { 0 };
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: &self.receiver,
+            offset: region as u64 * RECEIVER_STRIDE,
+            size: wgpu::BufferSize::new(std::mem::size_of::<ShadowUniform>() as u64),
+        })
+    }
+    /// Caster matrices: the player's cascades first; a plane's own after
+    /// the kept brick layers' (`kept_offset`), casters then map layers.
+    fn view_slot(view: usize) -> usize {
+        MAX_CASCADES * 3
+            + MAX_LAMPS * FACES
+            + crate::map_lighting::MAX_LIGHTS * FACES
+            + (view - 1) * 2 * MAX_CASCADES
+    }
+    pub fn caster_offset(view: usize, cascade: usize) -> u32 {
+        let slot = match view {
+            0 => cascade,
+            _ => Self::view_slot(view) + cascade,
+        };
+        (slot as u64 * CASTER_STRIDE) as u32
     }
     /// A lamp face's caster matrix, after the cascades'.
     pub fn lamp_offset(slot: usize, face: usize) -> u32 {
         ((MAX_CASCADES + slot * FACES + face) as u64 * CASTER_STRIDE) as u32
     }
-    /// A cascade's map-layer matrix, after the lamps'.
-    pub fn map_offset(cascade: usize) -> u32 {
-        ((MAX_CASCADES + MAX_LAMPS * FACES + cascade) as u64 * CASTER_STRIDE) as u32
+    /// A cascade's map-layer matrix, after the lamps' (a plane's after its
+    /// casters').
+    pub fn map_offset(view: usize, cascade: usize) -> u32 {
+        let slot = match view {
+            0 => MAX_CASCADES + MAX_LAMPS * FACES + cascade,
+            _ => Self::view_slot(view) + MAX_CASCADES + cascade,
+        };
+        (slot as u64 * CASTER_STRIDE) as u32
     }
     /// A map light's cube face matrix, after the map layers'.
     pub fn cube_offset(light: usize, face: usize) -> u32 {
@@ -1197,11 +1344,14 @@ impl ShadowMaps {
     pub fn set_map_drawn(&self, queue: &wgpu::Queue, drawn: bool) {
         let first = self.settings.map_or(0, |s| s.lamp_map_tile(0).0);
         let flag = [f32::from(u8::from(drawn)), first as f32, 0.0, 0.0];
-        queue.write_buffer(
-            &self.receiver,
-            std::mem::offset_of!(ShadowUniform, map_params) as u64,
-            bytemuck::bytes_of(&flag),
-        );
+        for view in 0..FITTED_VIEWS {
+            queue.write_buffer(
+                &self.receiver,
+                view as u64 * RECEIVER_STRIDE
+                    + std::mem::offset_of!(ShadowUniform, map_params) as u64,
+                bytemuck::bytes_of(&flag),
+            );
+        }
     }
 }
 impl ShadowMaps {
