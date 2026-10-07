@@ -1118,6 +1118,7 @@ impl Session {
         {
             peer.combat.last_direct = Some((name.clone(), tick));
         }
+        let lost = amount.min(peer.combat.health);
         peer.combat.health = (peer.combat.health - amount).max(0.0);
         peer.combat.pain_level = if tick.saturating_sub(peer.combat.pain_tick) > PAIN_TICKS {
             amount
@@ -1127,8 +1128,18 @@ impl Session {
         peer.combat.pain_tick = tick;
         let alive = peer.combat.health > 0.0;
         let level = peer.combat.pain_level;
-        self.bots.note_hurt(target, source_observation, tick);
         let feet = peer.player.state().feet;
+        self.bots.note_hurt(target, source_observation, tick);
+        self.observe_damage_result(DamageResult {
+            victim: target,
+            source,
+            amount: lost,
+            projectile: match &kind {
+                DamageKind::Weapon { projectile, .. } => projectile.clone(),
+                _ => None,
+            },
+            tick,
+        });
         self.emote_cue(
             tick,
             crate::presentation::CueKind::Pain {
