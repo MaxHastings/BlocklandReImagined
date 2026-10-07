@@ -207,14 +207,17 @@ pub type GroupKey = ([i32; 4], Vec<i64>);
 pub enum Shows {
     /// Live plane i's reflection, drawn this frame for this view.
     Live(usize),
-    /// Live plane i's last picture, reprojected: a mirror seen deeper than
-    /// the passes reach shows what the same mirror showed nearer the
-    /// player, a frame late, so facing mirrors repeat into the distance.
+    /// Live plane i's picture, reprojected: a mirror seen deeper than the
+    /// passes reach shows what the same mirror showed nearer the player,
+    /// so facing mirrors repeat into the distance. Only views drawn after
+    /// plane i show it; earlier ones show its picture from the frame
+    /// before ([`Shows::Last`]).
     Echo(usize),
-    /// The frame before's picture of this group, kept in target i: what a
-    /// surface shows where no live pass draws it this frame (a window in
-    /// sight of its own partner, deeper than the passes), as Valve's Portal
-    /// does past its recursion limit, instead of a flat colour.
+    /// The frame before's picture of this group, kept in target i with the
+    /// sampling that frame drew it for: what a surface shows where no live
+    /// pass has drawn it yet this frame (a window in sight of its own
+    /// partner, deeper than the passes; a nearer mirror's echo), as Valve's
+    /// Portal does past its recursion limit, instead of a flat colour.
     Last(usize),
     Silver,
 }
@@ -250,6 +253,19 @@ impl Plan {
             for slot in &mut out {
                 if matches!(slot, Some(Shows::Live(j) | Shows::Echo(j)) if *j == i) {
                     *slot = Some(Shows::Silver);
+                }
+            }
+            // Planes draw deepest first, so a nearer plane's target still
+            // holds its picture from the frame before, which this frame's
+            // viewport and view no longer frame: where the view moved, the
+            // echo would show the target's clear colour (grey flicker down a
+            // tunnel of facing mirrors while the player moves). That
+            // picture's own sampling from the frame before frames it.
+            for (slot, key) in out.iter_mut().zip(&self.group_keys) {
+                if matches!(slot, Some(Shows::Echo(j)) if *j < i)
+                    && let Some((_, k)) = self.last.iter().find(|(last, _)| last == key)
+                {
+                    *slot = Some(Shows::Last(*k));
                 }
             }
         }
@@ -1808,6 +1824,14 @@ mod tests {
         assert_eq!(p.slots(0), vec![Some(Shows::Live(0)), Some(Shows::Echo(1))]);
         assert_eq!(p.slots(1), vec![None, Some(Shows::Live(1))]);
         assert_eq!(p.slots(2), vec![Some(Shows::Echo(0)), None]);
+        // The second plane draws before the first, whose target still holds
+        // the frame before's picture: once a target kept it, the second
+        // shows it as that frame sampled it. The player's view draws last
+        // and echoes this frame's.
+        let mut kept = p.clone();
+        kept.last = vec![(kept.group_keys[0].clone(), 1)];
+        assert_eq!(kept.slots(2), vec![Some(Shows::Last(1)), None]);
+        assert_eq!(kept.slots(0), p.slots(0));
         // A head between the mirrors, seen by way of the back mirror and
         // then the front one, lands where the two surfaces sample it.
         let head = Vec3::new(-0.2, 0.1, 5.0);
