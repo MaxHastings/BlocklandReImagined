@@ -91,10 +91,9 @@ pub struct Budgets {
     pub bodies: usize,
     pub joints: usize,
     pub physics_calls_per_frame: usize,
-    /// Time the game may spend simulating the Add-On's bodies per frame,
-    /// and for how many frames in a row it may exceed that.
+    /// Time the game spends simulating the Add-On's bodies per frame
+    /// before it settles their oldest moving ones.
     pub physics_ms_per_frame: f32,
-    pub physics_strikes: u32,
     /// `avatar.pose`: players posed per frame.
     pub poses_per_frame: usize,
 }
@@ -123,7 +122,6 @@ impl Default for Budgets {
             joints: 512,
             physics_calls_per_frame: 1024,
             physics_ms_per_frame: 4.0,
-            physics_strikes: 30,
             poses_per_frame: 64,
         }
     }
@@ -164,8 +162,6 @@ pub enum Stopped {
     /// Its render layer took too much GPU time too many frames in a row,
     /// or the GPU refused it.
     Gpu(String),
-    /// Its bodies took too much time to simulate too many frames in a row.
-    Physics(String),
 }
 impl std::fmt::Display for Stopped {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -177,7 +173,6 @@ impl std::fmt::Display for Stopped {
             Self::Misuse(what) => write!(f, "it broke a sandbox rule: {what}"),
             Self::Crashed(what) => write!(f, "it crashed: {what}"),
             Self::Gpu(what) => write!(f, "its graphics were too heavy: {what}"),
-            Self::Physics(what) => write!(f, "its physics were too heavy: {what}"),
         }
     }
 }
@@ -345,7 +340,6 @@ impl Sandbox {
             frame,
             stopped: None,
             gpu_strikes: 0,
-            physics_strikes: 0,
             init_log: Vec::new(),
             _ticker: self.ticker.clone(),
         };
@@ -619,7 +613,6 @@ pub struct AddOn {
     frame: Option<TypedFunc<(f32, f32), ()>>,
     stopped: Option<Stopped>,
     gpu_strikes: u32,
-    physics_strikes: u32,
     init_log: Vec<String>,
     _ticker: Arc<Ticker>,
 }
@@ -694,29 +687,6 @@ impl AddOn {
 
     pub fn budgets(&self) -> &Budgets {
         &self.store.data().budgets
-    }
-
-    /// The game reports how long simulating the Add-On's bodies took this
-    /// frame. Too many frames in a row over budget stops it; the game then
-    /// drops its bodies.
-    pub fn report_physics_time(&mut self, ms: f32) -> Result<(), Stopped> {
-        if let Some(stopped) = &self.stopped {
-            return Err(stopped.clone());
-        }
-        let budgets = &self.store.data().budgets;
-        if ms > budgets.physics_ms_per_frame {
-            self.physics_strikes += 1;
-            if self.physics_strikes >= budgets.physics_strikes {
-                let reason = Stopped::Physics(format!(
-                    "{ms:.1} ms a frame for {} frames in a row (budget {:.1} ms)",
-                    self.physics_strikes, budgets.physics_ms_per_frame
-                ));
-                return Err(self.stop(reason));
-            }
-        } else {
-            self.physics_strikes = 0;
-        }
-        Ok(())
     }
 
     /// The renderer reports how long the Add-On's layer took on the GPU.

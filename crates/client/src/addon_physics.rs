@@ -189,9 +189,9 @@ impl AddOnPhysics {
             }
         }
     }
-    /// The mass a force on `handle` moves: every body jointed to it (a
-    /// ragdoll held by one hand), itself included.
-    fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
+    /// `handle` and every body jointed to it, directly or through others
+    /// (a whole ragdoll from one limb).
+    fn jointed(&self, handle: RigidBodyHandle) -> std::collections::HashSet<RigidBodyHandle> {
         let joints = &self.world.impulse_joints;
         let mut seen = std::collections::HashSet::from([handle]);
         let mut next = vec![handle];
@@ -204,7 +204,35 @@ impl AddOnPhysics {
                 }
             }
         }
-        seen.iter().map(|h| self.world.bodies[*h].mass()).sum()
+        seen
+    }
+    /// The mass a force on `handle` moves: every body jointed to it (a
+    /// ragdoll held by one hand), itself included.
+    fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
+        self.jointed(handle)
+            .iter()
+            .map(|h| self.world.bodies[*h].mass())
+            .sum()
+    }
+    /// Lay the oldest moving body still, with everything jointed to it (the
+    /// oldest ragdoll still tumbling), so the next frames cost less: the game
+    /// calls this when simulating the Add-On's bodies took longer than its
+    /// budget, and old bodies come to rest while new ones keep moving. A
+    /// settled body moves again when something hits or holds it. Returns
+    /// whether any body was moving.
+    pub fn settle_oldest(&mut self) -> bool {
+        let Some(oldest) = self
+            .bodies
+            .values()
+            .map(|b| b.handle)
+            .find(|h| !self.world.bodies[*h].is_sleeping())
+        else {
+            return false;
+        };
+        for handle in self.jointed(oldest) {
+            self.world.bodies[handle].sleep();
+        }
+        true
     }
     /// This step's forces: the pushes waiting (`kicks`, all at once) and
     /// each hold pulling its point toward its target. Returns the bodies
@@ -640,6 +668,61 @@ mod tests {
             after != before,
             "the brick built into it moved it: {after:?}"
         );
+    }
+
+    /// Three bodies in a jointed row from `first`, `y` up, group `group`.
+    fn chain(first: u32, y: f32, group: u32) -> Vec<PhysicsCommand> {
+        let mut commands = Vec::new();
+        for (n, x) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+            commands.push(PhysicsCommand::Create {
+                body: first + n as u32,
+                spec: spec(Vec3::new(x, y, group as f32 * 3.0), group),
+            });
+        }
+        for (a, x) in [(first, 0.25), (first + 1, 0.75)] {
+            commands.push(PhysicsCommand::Joint {
+                a,
+                b: a + 1,
+                spec: JointSpec {
+                    anchor: [x, y, group as f32 * 3.0],
+                    axis: [1.0, 0.0, 0.0],
+                    swing: 1.0,
+                    twist: 1.0,
+                    friction: 0.0,
+                },
+            });
+        }
+        commands
+    }
+
+    #[test]
+    fn settling_lays_the_oldest_moving_bodies_still_and_leaves_the_rest() {
+        // Max, v0.2.5 bot match: "Ragdoll stopped: its physics were too
+        // heavy". Over budget, the oldest ragdoll comes to rest instead.
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&chain(1, 8.0, 1));
+        physics.apply(&chain(4, 8.0, 2));
+        run(&mut physics, &building, 0.25);
+        assert!(physics.settle_oldest(), "both were falling");
+        let settled = physics.snapshot();
+        run(&mut physics, &building, 0.25);
+        let now = physics.snapshot();
+        for body in 1..=3 {
+            assert_eq!(
+                now[&body].position, settled[&body].position,
+                "{body}, the oldest, lies still"
+            );
+        }
+        for body in 4..=6 {
+            assert!(
+                now[&body].position[1] < settled[&body].position[1] - 0.5,
+                "{body} keeps falling"
+            );
+        }
+        // Next over budget, the next oldest.
+        assert!(physics.settle_oldest());
+        assert!(!physics.settle_oldest(), "nothing left moving");
     }
 
     #[test]

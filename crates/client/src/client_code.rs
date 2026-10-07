@@ -276,9 +276,7 @@ impl ClientCode {
                         sounds,
                     })
                 }
-                Err(reason) => self
-                    .messages
-                    .push(format!("{} stopped: {reason}", code.name)),
+                Err(reason) => bri_console::warn(format!("{} stopped: {reason}", code.name)),
             }
         }
     }
@@ -387,7 +385,9 @@ impl ClientCode {
     }
     /// Simulate every Add-On's bodies for `dt` seconds against the world
     /// this client has, pushed by what it draws. An Add-On whose bodies
-    /// cost too much, frame after frame, is stopped and its bodies go.
+    /// took longer than its budget has its oldest moving bodies settled
+    /// ([`crate::addon_physics::AddOnPhysics::settle_oldest`]); it is never
+    /// stopped for it.
     pub fn advance_physics(
         &mut self,
         dt: f32,
@@ -395,27 +395,18 @@ impl ClientCode {
         pushers: &[crate::local_physics::Pusher],
         shots: &[crate::local_physics::Shot],
     ) -> anyhow::Result<()> {
-        let messages = &mut self.messages;
         let mut result = Ok(());
-        self.running.retain_mut(|r| {
+        for r in &mut self.running {
             let started = std::time::Instant::now();
-            let advanced = r.physics.advance(dt, building, pushers, shots);
-            if let Err(e) = advanced {
+            if let Err(e) = r.physics.advance(dt, building, pushers, shots) {
                 result = Err(e);
-                return true;
-            }
-            if r.physics.is_empty() {
-                return true;
+                continue;
             }
             let ms = started.elapsed().as_secs_f32() * 1000.0;
-            match r.addon.report_physics_time(ms) {
-                Ok(()) => true,
-                Err(reason) => {
-                    messages.push(format!("{} stopped: {reason}", r.addon.name));
-                    false
-                }
+            if ms > r.addon.budgets().physics_ms_per_frame {
+                r.physics.settle_oldest();
             }
-        });
+        }
         result
     }
 
@@ -497,7 +488,7 @@ impl ClientCode {
                     true
                 }
                 Err(reason) => {
-                    messages.push(format!("{} stopped: {reason}", r.addon.name));
+                    bri_console::warn(format!("{} stopped: {reason}", r.addon.name));
                     false
                 }
             }
@@ -545,7 +536,6 @@ impl ClientCode {
             speed
         });
         let time = self.time;
-        let messages = &mut self.messages;
         self.running.retain_mut(|r| {
             let renderer = r.renderer.get_or_insert_with(|| {
                 LayerRenderer::new(
@@ -567,7 +557,7 @@ impl ClientCode {
             match renderer.prepare(device, queue, &mut r.addon, &r.frame, camera, [time, 0.0]) {
                 Ok(()) => true,
                 Err(reason) => {
-                    messages.push(format!("{} stopped: {reason}", r.addon.name));
+                    bri_console::warn(format!("{} stopped: {reason}", r.addon.name));
                     false
                 }
             }
@@ -630,7 +620,7 @@ impl ClientCode {
     /// renderer as usual.
     pub fn device_lost(&mut self) {
         for r in self.running.drain(..) {
-            self.messages.push(format!(
+            bri_console::warn(format!(
                 "{} stopped: the graphics card reset, so Add-On code is off until you rejoin",
                 r.addon.name
             ));
@@ -903,8 +893,8 @@ mod tests {
         code.device_lost();
         code.gpu_stopped();
         assert!(code.running().is_empty());
-        let messages = code.take_messages();
-        assert!(messages[0].contains("graphics card reset"), "{messages:?}");
+        // Why goes to the console, never the players' chat.
+        assert!(code.take_messages().is_empty());
         // Frames and draws carry on as for a server with no code.
         code.run_frame(
             0.0,
