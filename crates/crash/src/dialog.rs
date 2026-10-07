@@ -16,7 +16,13 @@ pub fn alert(title: &str, text: &str, logs: Option<&Path>) -> bool {
     {
         imp::alert(title, text, logs)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // The terminal and the logs get it too: the dialog may not show.
+        eprintln!("{title}: {text}");
+        desktop::alert(title, text, logs)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = logs;
         eprintln!("{title}: {text}");
@@ -111,9 +117,85 @@ mod imp {
     }
 }
 
+/// Linux has no system message box, so the desktop's own dialog tool shows
+/// it: zenity (GNOME and most others) or kdialog (KDE). Started from a file
+/// manager, the game has no terminal to print to.
+#[cfg(any(target_os = "linux", test))]
+mod desktop {
+    use std::path::Path;
+
+    /// The dialog tools to try in order, each as a program and its arguments.
+    pub(super) fn commands(title: &str, text: &str, logs: Option<&Path>) -> Vec<Vec<String>> {
+        let (zenity, kdialog, body) = match logs {
+            Some(dir) => (
+                "--question",
+                "--yesno",
+                format!(
+                    "{text}\n\nThe logs are in:\n{}\n\nOpen that folder now?",
+                    dir.display()
+                ),
+            ),
+            None => ("--error", "--error", text.to_string()),
+        };
+        let owned = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect();
+        vec![
+            owned(&[
+                "zenity",
+                zenity,
+                "--no-markup",
+                "--title",
+                title,
+                "--text",
+                &body,
+            ]),
+            owned(&["kdialog", "--title", title, kdialog, &body]),
+        ]
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn alert(title: &str, text: &str, logs: Option<&Path>) -> bool {
+        let desktop = ["WAYLAND_DISPLAY", "DISPLAY"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+        if !desktop {
+            return false;
+        }
+        for command in commands(title, text, logs) {
+            // A tool that is not installed fails to start; try the next.
+            let Ok(status) = std::process::Command::new(&command[0])
+                .args(&command[1..])
+                .status()
+            else {
+                continue;
+            };
+            // Both tools exit 0 for Yes (and for OK on an error).
+            return match logs {
+                Some(dir) if status.success() => super::open(&dir.to_string_lossy()),
+                _ => false,
+            };
+        }
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linux_dialogs_offer_the_logs_folder_and_show_text_as_plain_text() {
+        let logs = Path::new("/home/player/game/logs");
+        let commands = desktop::commands("Title", "No <b>GPU</b>", Some(logs));
+        let zenity = &commands[0];
+        assert_eq!(zenity[..3], ["zenity", "--question", "--no-markup"]);
+        let body = zenity.last().unwrap();
+        assert!(body.starts_with("No <b>GPU</b>"));
+        assert!(body.contains("/home/player/game/logs"));
+        assert_eq!(commands[1][..4], ["kdialog", "--title", "Title", "--yesno"]);
+        let error_only = desktop::commands("Title", "text", None);
+        assert_eq!(error_only[0][1], "--error");
+        assert_eq!(error_only[1][3], "--error");
+    }
+
     #[test]
     fn long_errors_are_shortened_for_the_dialog() {
         assert_eq!(summarize("short"), "short");
