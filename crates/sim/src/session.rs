@@ -1069,6 +1069,10 @@ pub struct Session {
     movables: movables::Movables,
     /// Recent trips through portals, for whatever follows things across.
     crossings: crossings::Crossings,
+    /// What this session reads from outside the game (the clock, the
+    /// load budget, files) while a match is recorded or replayed
+    /// ([`crate::replay`]); `None` reads it directly.
+    tape: Option<crate::replay::Tape>,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -1163,7 +1167,22 @@ impl Session {
             map_change: None,
             packages: None,
             package_revision: 0,
+            tape: None,
         }
+    }
+    /// Record or replay what this session reads from outside the game
+    /// ([`crate::replay::Tape`]); `None` reads it directly again.
+    pub fn set_tape(&mut self, tape: Option<crate::replay::Tape>) {
+        self.tape = tape;
+    }
+    /// A value read from outside the game: taken from the replayed match,
+    /// or read live (and kept, while recording).
+    pub(crate) fn outside<T: crate::replay::Outside>(&self, live: impl FnOnce() -> T) -> T {
+        crate::replay::outside(self.tape.as_ref(), live)
+    }
+    /// Seconds since the Unix epoch, for bans and administration.
+    pub(crate) fn wall_clock(&self) -> u64 {
+        self.outside(crate::replay::WallClock::now).0
     }
     /// Mark a single-player or LAN host (v20 `$Server::LAN`).
     pub fn set_lan_host(&mut self, lan: bool) {
@@ -1868,10 +1887,7 @@ impl Session {
                 peer.actions = peer.actions.saturating_add(1);
                 ensure!(peer.actions <= 60, "Action command rate exceeded");
             }
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let now = self.wall_clock();
             let call = self.admin_request(owner, request.clone(), now, &mut persist)?;
             return Ok(Reply::Admin(Box::new(call.reply)));
         }

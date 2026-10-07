@@ -154,7 +154,7 @@ impl Session {
             .into_iter()
             .map(|id| id.index)
             .collect();
-        bricks.extend(self.dirty.iter());
+        bricks.extend(self.dirty.events_unread());
         let state = self.simulation.state();
         let bricks: Vec<BrickId> = bricks
             .into_iter()

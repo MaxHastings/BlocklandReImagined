@@ -52,6 +52,7 @@ impl Session {
         let Some(store) = self.addon_data.clone() else {
             return;
         };
+        let tape = self.tape.clone();
         let Some(host) = self.packages.as_mut() else {
             return;
         };
@@ -61,7 +62,9 @@ impl Session {
             .map(|(id, _)| id.clone())
             .collect();
         for id in ids {
-            let mut data = store.load(&id);
+            let mut data =
+                crate::replay::outside(tape.as_ref(), || crate::replay::HostData(store.load(&id)))
+                    .0;
             data.retain(|k, v| {
                 rules_key(k) && serde_json::to_vec(v).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
             });

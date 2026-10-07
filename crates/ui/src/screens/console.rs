@@ -469,6 +469,12 @@ pub fn registry(core: &Core) -> Registry<Core> {
         Kind::Bool,
         "HUD tool tips.",
     );
+    r.cvar(
+        "recordmatches",
+        crate::api::RECORD_MATCHES_PREF,
+        Kind::Bool,
+        "Record each game you host to recordings/ for bri-replay (the newest ten are kept).",
+    );
 
     for info in &core.console.host_commands {
         r.forward(info);
