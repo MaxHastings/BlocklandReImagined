@@ -1,0 +1,86 @@
+# 2026-10-07 v0.2.6 fighting: one visibility question and where to stand
+
+Branch `claude/v0.2.6-fighting-ki8k6d`, PR 3 of `docs/plans/v0.2.6-bots.md`,
+built to the reviewed `docs/plans/v0.2.6-design-fighting.md`.
+
+## What changed
+
+**One visibility question.** Bot sight now asks what an eye sees, from
+engine data only:
+
+- Paint: `Simulation::eyes_see` looks through a brick painted under full
+  alpha, the client's own see-through test (`brick_cover`). Bot sight
+  (`bot_sees`) uses it. `Simulation::sight` is unchanged for hands and
+  vehicle boarding, and shots (`clear_path`) still stop on glass.
+- Fog: `Session::bot_sight_reach` caps a kind's sight at the server's
+  visible distance (the live environment). Every bot eye check uses it.
+  Known gap: a map's own authored fog is scene data the host does not
+  load, so only a server-set distance caps bot sight.
+- Target size: `Seen::aim` (`sightlines::aim_point`) drops from the eye by
+  half a unit times the target's scale, for the shot chooser, the
+  clear-fire check and the harm line. The aim error stays an angle.
+
+**Where to stand** (`bots/spots.rs`). A ranged fighter on its feet weighs
+seven stable options on its planning turn (here, left, right, in, out a
+body's width; hop onto a ledge ahead; jet onto one higher), from the walk
+grid and measured reach. One score in harm per second, no new weight:
+`dealt / (travel + fire) x (1 - taken)`, with dealt and fire from the shot
+chooser run from that place (`combat::choose`'s origin parameter,
+`tactics::worth`), and taken the share of its health the known threats
+seeing the place and allies' lines across it would take
+(`tactics::rate`). With no shot anywhere, the least exposed place wins.
+`Domain::Spot` in the surprise chooser picks with the hold rule; the
+place is a route goal (`Goal::Stand`), and once reached it is "here"
+again, held from then (`Mind::arrived`). F3 shows each place's three
+quantities.
+
+**Deleted:** the Team mover (`act::Mover::Team`, `team::exit`; an ally's
+line of fire is now a cost of a place), the stance's step back inside the
+band's near edge (`back_off`) and the strafe's lean in (`LEAN`,
+`LEAN_TICKS`, `LEAN_ROOM`, `cadence::salt::LEAN`).
+
+**Not in this PR: the cover case.** The design's second case (covering a
+body a teammate holds by scoring the places round it, deleting
+`contest::cover` and the swap) needs a different worth (reaching the body
+when the claim frees, standing in the push line) and the soccer "ignoring
+ball" share measured before and after on full matches, which the lane's
+iteration rules keep out of the lane. Per the design it comes out whole:
+`contest::cover` and its swap are untouched, and the case stays queued.
+
+## Decisions
+
+- Spots are for ranged fighters on foot only. A melee fighter closes and
+  keeps its footwork; a swimmer weaves; a rider rides. Their old step
+  back went with `back_off` (a melee band's near edge is 0, so it never
+  fired for melee).
+- Hop and jet probe the column one body width toward the enemy. The grid
+  finds a floor within a step and a half of the height it is asked at, so
+  hop asks where that window tops out at the measured jump height, and jet
+  steps a window at a time up to one jump above the enemy's floor. A ledge
+  lower than that window, or straight overhead, is not offered.
+- A melee fighter standing in an ally's line of fire is no longer walked
+  out of it (the Team mover is gone and spots are ranged only); its Fight
+  score still pays the line's cost (`team` harm term) and the ally still
+  holds fire across it (`bot_fire_clear`).
+- With no shot from a place, its fire time is the weapon in hand's cycle,
+  so standing in sight still costs something and a bot with nothing to
+  shoot keeps out of sight.
+- Exposure rays use the bot's own fog-capped sight reach for every threat
+  (it sees them that far; they see it that far), cached per (threat,
+  bot, option) like other sight answers.
+
+## Evidence
+
+- `cargo test -p bri-sim --test building eyes_see_through`, `--lib
+  fog_caps_how_far_a_bot_sees a_shot_aims_lower`: pass.
+- `cargo test -p bri-sim --lib spots`: six pass, among them
+  `a_bot_behind_a_wall_steps_aside_to_the_open_side_every_time` (strength
+  0, four seeds) and `a_bot_never_weighs_a_place_with_no_floor`.
+- `cargo test -p bri-sim --lib session::bots`: 156 pass, 1 ignored.
+- `cargo clippy -p bri-sim --tests -- -D warnings`: clean.
+- Think time: see below.
+
+## Next
+
+- The cover case as its own change, with the soccer share before and after.
+- Replay of one of Max's saves on this branch for reproduction.
