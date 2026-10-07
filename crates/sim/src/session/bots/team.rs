@@ -563,7 +563,13 @@ impl Session {
                 let p = self.peers.get(o).filter(|p| p.combat.alive)?;
                 let from = p.player.eye();
                 let seen = self
-                    .bot_sees_player(*o, bot, from, brain.kind.sight, SightUrgency::Ordinary)
+                    .bot_sees_player(
+                        *o,
+                        bot,
+                        from,
+                        self.bot_sight_reach(&brain.kind),
+                        SightUrgency::Ordinary,
+                    )
                     .is_some();
                 Some((*o, copied(&brain.kind.team, seen)))
             })

@@ -51,7 +51,7 @@ impl Session {
             self.bot_fire_clear(
                 bot,
                 eye,
-                seen.eye - Vec3::Y * 0.5,
+                seen.aim,
                 weapon.map_or(0.0, |w| w.splash),
                 weapon
                     .filter(|_| ranged)
@@ -62,7 +62,7 @@ impl Session {
         // Where its weapon will hit, for its side to keep out of (`team`):
         // the line the clear-fire check above holds fire for.
         let harm = target.filter(|_| ranged).map(|seen| {
-            let to = seen.eye - Vec3::Y * 0.5;
+            let to = seen.aim;
             let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
             claims::Space {
                 from: eye,

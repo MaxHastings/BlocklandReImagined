@@ -941,6 +941,9 @@ struct Seen {
     /// they would stand were the partner's side right behind it).
     eye: Vec3,
     feet: Vec3,
+    /// Where a shot at it aims, as seen along the way
+    /// ([`sightlines::aim_point`]).
+    aim: Vec3,
     /// Where its feet really are.
     real: Vec3,
     way: Way,

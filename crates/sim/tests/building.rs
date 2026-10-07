@@ -72,6 +72,38 @@ fn actor(owner: u64) -> Actor {
 }
 
 #[test]
+fn eyes_see_through_see_through_paint_and_hands_do_not() {
+    let from = Vec3::new(-2.0, 0.1, 0.25);
+    let to = Vec3::new(3.0, 0.1, 0.25);
+    let with_paint = |alpha: f32| {
+        let mut w = World::new(
+            "Test".into(),
+            "map".into(),
+            vec![[1.0; 4], [0.6, 0.8, 1.0, alpha]],
+        );
+        let mut wall = brick(0.1);
+        wall.position[0] = 2.0;
+        wall.color = 1;
+        w.bricks.insert(1, wall);
+        w.next_brick_id = 2;
+        Simulation::new(w, definitions(), vec![]).unwrap()
+    };
+    for alpha in [0.0, 0.5, 0.99] {
+        let sim = with_paint(alpha);
+        assert!(
+            sim.eyes_see(from, to, 6.0).is_some(),
+            "alpha {alpha} is looked through"
+        );
+        assert!(
+            sim.sight(from, to, 6.0).is_none(),
+            "alpha {alpha} still stops a hand"
+        );
+    }
+    let sim = with_paint(1.0);
+    assert!(sim.eyes_see(from, to, 6.0).is_none(), "full paint hides");
+}
+
+#[test]
 fn liquid_volumes_do_not_block_sight_but_still_remain_selectable() {
     let mut defs = definitions();
     let mut water = defs.entries["plate"].clone();

@@ -456,7 +456,7 @@ pub(super) fn choose(
     // A bot leads by about the target's velocity, a little under or over
     // as its own seeded drift goes, never a perfect intercept.
     let target_velocity = Vec3::from(target.player.state().velocity) * super::lead(bot, tick);
-    let target_point = seen.eye - Vec3::Y * 0.5;
+    let target_point = seen.aim;
     // Gathered when a candidate first needs them.
     let bodies = std::cell::LazyCell::new(|| Bodies::of(session, bot));
     let scale = peer.player.state().scale;
@@ -1038,9 +1038,10 @@ fn clear_path(
                 origin
                     + choice.direction
                         * choice.capability.reach.min(
-                            origin
-                                .distance(session.peers.get(&enemy)?.player.eye() - Vec3::Y * 0.5)
-                                + 0.5,
+                            origin.distance({
+                                let p = &session.peers.get(&enemy)?.player;
+                                sightlines::aim_point(p.eye(), p.state().scale)
+                            }) + 0.5,
                         )
             }
         };
@@ -1425,6 +1426,7 @@ mod tests {
             owner: enemy,
             eye: session.peers[&enemy].player.eye(),
             feet: session.peers[&enemy].player.state().feet.into(),
+            aim: target,
             real: session.peers[&enemy].player.state().feet.into(),
             way: Way {
                 aim: target,
