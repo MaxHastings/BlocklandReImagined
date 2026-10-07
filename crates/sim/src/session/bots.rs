@@ -393,6 +393,9 @@ struct Brain {
     /// The body its objective works, as of its last think: what an
     /// opponent it shoves off it contests (`contest::shove_worth`).
     contest_body: Option<u64>,
+    /// The place it fights from while it fights (`spots`): its strafe
+    /// keeps within a body's width of it.
+    stand: Option<Vec3>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -582,6 +585,7 @@ impl Brain {
             objective_threat: None,
             spot: None,
             contest_body: None,
+            stand: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -2405,10 +2409,10 @@ impl Session {
         // Where it fights from (`spots`): a ranged fighter on its feet
         // weighs a few places to stand, against the enemies it knows of;
         // anything else stands its ground where it is.
-        let spot = match enemy {
-            Some(seen)
+        let spot = match (enemy, weapon) {
+            (Some(seen), Some(weapon))
                 if behaviour == Behaviour::Fight
-                    && weapon.is_some_and(|w| !w.melee)
+                    && !weapon.melee
                     && swim.is_none()
                     && driving.is_none()
                     && !self.seated(bot) =>
@@ -2419,12 +2423,15 @@ impl Session {
                         threats.push(k.subject);
                     }
                 }
-                self.bot_stand(bot, seen, &threats, feet, &body, &costs, tick)
+                self.bot_stand(bot, seen, weapon, &threats, feet, &body, &costs, tick)
             }
             _ => None,
         };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         brain.spot = spot;
+        if !(behaviour == Behaviour::Fight && enemy.is_some()) {
+            brain.stand = None;
+        }
 
         // Carrying an objective's delivery that needs only its feet (no
         // tool, trigger, body or seat), it shoots an enemy in sight on the
@@ -3037,7 +3044,16 @@ impl Session {
                             d.dot(right * side) > 0.0 && d.length() < 1.5
                         })
                     };
-                    let ground = |side: f32| floor(side) && !ally(side);
+                    // Round the place it fights from (`spots`): a step that
+                    // way may not carry it more than a body's width off it.
+                    let stand = brain.stand;
+                    let near_stand = |side: f32| {
+                        stand.is_none_or(|at| {
+                            let off = flat(feet + right * side * 0.9 - at).length();
+                            off <= body.width || off < flat(feet - at).length()
+                        })
+                    };
+                    let ground = |side: f32| floor(side) && !ally(side) && near_stand(side);
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
                     // until the leg is up; one that meets an ally turns
