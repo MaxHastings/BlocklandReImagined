@@ -536,9 +536,42 @@ pub enum Unsuited {
     NoDamage,
 }
 
+/// What one attack of `weapon` is worth against a body with `health` left:
+/// its capped damage, or a light hit for one that only pushes (it moves the
+/// opponent off what it is after).
+fn dealt(weapon: Capability, health: f32) -> f32 {
+    if weapon.damage(1.0) > 0.0 {
+        weapon.damage(1.0).min(health)
+    } else if weapon.push > 0.0 {
+        PUSH_WORTH.min(health)
+    } else {
+        0.0
+    }
+}
+
+/// The harm a second `weapon` deals a body with `health` left while it
+/// keeps attacking: what a threat holding it costs that body.
+pub fn rate(weapon: Capability, health: f32) -> f32 {
+    if weapon.validate().is_err() || !health.is_finite() || health <= 0.0 {
+        return 0.0;
+    }
+    dealt(weapon, health) / (weapon.cadence_ticks as f32 / HZ as f32)
+}
+
 /// Expected capped damage per occupied attack second minus opportunity cost.
 /// Permission, aim error and current image readiness remain live executor gates.
 pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited> {
+    let (damage, seconds) = worth(weapon, context)?;
+    let score = damage / seconds - context.opportunity_cost;
+    if !score.is_finite() {
+        return Err(Unsuited::Invalid);
+    }
+    Ok(score)
+}
+
+/// [`suitability`]'s two halves: the expected capped damage of one attack,
+/// and the seconds it occupies (its cadence, flight and switch).
+pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuited> {
     weapon.validate().map_err(|_| Unsuited::Invalid)?;
     finite(&[
         context.distance,
@@ -597,24 +630,12 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
             return Err(Unsuited::UnsafeBlast);
         }
     }
-    // An attack that only pushes is worth a light hit: it moves the
-    // opponent off what it is after.
-    let damage = if weapon.damage(1.0) > 0.0 {
-        weapon.damage(1.0).min(context.target_health)
-    } else if weapon.push > 0.0 {
-        PUSH_WORTH.min(context.target_health)
-    } else {
-        0.0
-    } * context.hit_probability;
+    let damage = dealt(weapon, context.target_health) * context.hit_probability;
     if damage <= 0.0 {
         return Err(Unsuited::NoDamage);
     }
     let seconds = weapon.cadence_ticks as f32 / HZ as f32 + flight_seconds + context.switch_seconds;
-    let score = damage / seconds - context.opportunity_cost;
-    if !score.is_finite() {
-        return Err(Unsuited::Invalid);
-    }
-    Ok(score)
+    Ok((damage, seconds))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

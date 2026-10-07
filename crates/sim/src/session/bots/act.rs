@@ -2,7 +2,7 @@
 //! buttons this tick.
 //!
 //! The chooser has picked a behaviour; its route, its stance in a fight, a
-//! jet leg, a swim, its team's room, a dodge, a goof and the like each
+//! jet leg, a swim, a dodge, a goof and the like each
 //! *propose* how to move ([`Proposal`]). They never write the controls.
 //! [`resolve`] decides once, in one fixed priority order ([`Mover`]): the
 //! highest mover with a walk of its own sets the walk, the buttons a mover
@@ -29,14 +29,12 @@ pub(super) enum Mover {
     /// Into the body it works (an interaction's push).
     Push,
     /// Its stance where it fights or works: a weave, melee footwork, a
-    /// ranged strafe and lean, giving ground.
+    /// ranged strafe round the place it fights from (`spots`).
     Stance,
     /// A jet leg of its route, flying itself.
     Jet,
     /// Afloat, or a swimmer rising and diving.
     Swim,
-    /// Out of where a teammate's weapon will hit.
-    Team,
     /// A goof's walk (a circle, a detour, up to someone).
     Goof,
     /// A dodge's step aside.
@@ -54,7 +52,6 @@ impl Mover {
             Mover::Stance => "stance",
             Mover::Jet => "jet",
             Mover::Swim => "swim",
-            Mover::Team => "team",
             Mover::Goof => "goof",
             Mover::Dodge => "dodge",
             Mover::Stand => "stand",

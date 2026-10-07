@@ -53,6 +53,8 @@ pub(in crate::session) enum Subject {
     Brick(u64),
     /// A dropped item.
     Drop(u64),
+    /// A place a bot weighs standing on (`spots`): the bot and the option.
+    Spot(OwnerId, u32),
 }
 /// Whether a query may dip into the target reserve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

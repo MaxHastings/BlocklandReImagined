@@ -56,6 +56,10 @@ impl Budget {
         self.solves = SOLVES_PER_TICK;
         self.rays = RAYS_PER_TICK;
     }
+    /// Whether `owner` has the planning turn this tick (every slot weighed).
+    pub(super) fn has_turn(&self, owner: OwnerId, tick: u64) -> bool {
+        self.tick == Some(tick) && self.turn == Some(owner)
+    }
     fn register(&mut self, owner: OwnerId, tick: u64) -> bool {
         self.begin_tick(tick);
         if let Some(entry) = self.owners.iter_mut().find(|e| e.0 == owner) {
@@ -94,6 +98,10 @@ pub(super) struct Choice {
     /// Aimed at a surface beside the target that its splash reaches
     /// (`surprise`), rather than at the target itself.
     pub(super) surface: bool,
+    /// What the attack is worth ([`tactics::worth`]): its expected damage
+    /// and the seconds it occupies. Nothing for a wind-up kept going.
+    pub(super) dealt: f32,
+    pub(super) seconds: f32,
 }
 #[derive(Clone)]
 pub(super) struct Intent {
@@ -547,6 +555,8 @@ pub(super) fn choose(
                 direction: (target_point - origin).normalize_or_zero(),
                 aim: None,
                 surface: false,
+                dealt: 0.0,
+                seconds: 0.0,
             });
         }
         if distance < cap.near || distance > cap.reach {
@@ -598,6 +608,8 @@ pub(super) fn choose(
             capability: cap,
             aim: solutions[0],
             surface: false,
+            dealt: 0.0,
+            seconds: 0.0,
         };
         if curved && !turn {
             if Some(slot) == selected && image.charges() && safe_blast(&bodies, choice, origin) {
@@ -664,7 +676,12 @@ pub(super) fn choose(
                 capability: cap,
                 context,
             });
-            choices.push(choice);
+            let (dealt, seconds) = tactics::worth(cap, context).unwrap_or_default();
+            choices.push(Choice {
+                dealt,
+                seconds,
+                ..choice
+            });
             // A splash weapon may aim at the feet, or at a surface beside
             // the target, where its real blast still hurts.
             if cap.splash_radius > 0.0 && cap.splash_damage > 0.0 {
@@ -884,6 +901,8 @@ fn variant(
         capability: cap,
         aim: Some(aim),
         surface: solve.surface,
+        dealt: 0.0,
+        seconds: 0.0,
     };
     if !safe_blast(bodies, choice, solve.origin)
         || clear_path(
@@ -904,17 +923,22 @@ fn variant(
         direct_damage: 0.0,
         ..cap
     };
-    let score = tactics::suitability(
-        splash,
-        Context {
-            aim: Some(aim),
-            self_clearance,
-            ally_clearance,
-            ..context
+    let context = Context {
+        aim: Some(aim),
+        self_clearance,
+        ally_clearance,
+        ..context
+    };
+    let score = tactics::suitability(splash, context).ok()?;
+    let (dealt, seconds) = tactics::worth(splash, context).ok()?;
+    Some((
+        Choice {
+            dealt,
+            seconds,
+            ..choice
         },
-    )
-    .ok()?;
-    Some((choice, score))
+        score,
+    ))
 }
 
 /// A body a shot must spare, as one decision sees it ([`Bodies`]).
@@ -1429,6 +1453,8 @@ mod tests {
             direction: (target - origin).normalize(),
             aim: None,
             surface: false,
+            dealt: 0.0,
+            seconds: 0.0,
         };
         let seen = Seen {
             owner: enemy,

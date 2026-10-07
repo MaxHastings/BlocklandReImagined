@@ -124,13 +124,15 @@ pub(super) enum Domain {
     Move,
     /// Which way a dodge goes (`DODGES`).
     Dodge,
+    /// Where it stands to fight (`spots::SPOTS`).
+    Spot,
 }
 impl Domain {
     /// A reflex: how it moves this moment under fire.
     fn reflex(self) -> bool {
         matches!(self, Self::Move | Self::Dodge)
     }
-    const ALL: [Domain; 7] = [
+    const ALL: [Domain; 8] = [
         Self::Behaviour,
         Self::Weapon,
         Self::Aim,
@@ -138,6 +140,7 @@ impl Domain {
         Self::Flavour,
         Self::Move,
         Self::Dodge,
+        Self::Spot,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -148,6 +151,7 @@ impl Domain {
             Self::Flavour => "flavour",
             Self::Move => "move",
             Self::Dodge => "dodge",
+            Self::Spot => "spot",
         }
     }
     fn label(self, option: u32) -> String {
@@ -166,6 +170,11 @@ impl Domain {
                 .into(),
             Self::Move => MOVES.get(option as usize).copied().unwrap_or("?").into(),
             Self::Dodge => DODGES.get(option as usize).copied().unwrap_or("?").into(),
+            Self::Spot => super::spots::SPOTS
+                .get(option as usize)
+                .copied()
+                .unwrap_or("?")
+                .into(),
         }
     }
 }
@@ -414,6 +423,8 @@ pub(super) struct Mind {
     pub gate: Gate,
     interrupt: Option<Interrupt>,
     shots: Vec<Shot>,
+    /// Each spot's terms at its last choice (`spots`), for the readout.
+    spot_terms: [Option<super::spots::Terms>; super::spots::SPOTS.len()],
 }
 impl Mind {
     pub(super) fn new(bot: OwnerId) -> Self {
@@ -667,6 +678,24 @@ impl Mind {
     pub(super) fn chosen(&self, domain: Domain) -> Option<u32> {
         self.holds[domain as usize].option
     }
+    /// What the option held at `domain` asked for is done at `tick`, and
+    /// `now` names it from here: a spot chosen one step left is, once stood
+    /// on, where it stands, held from now as a fresh choice (so a bot does
+    /// not step on again at once).
+    pub(super) fn arrived(&mut self, domain: Domain, now: u32, tick: u64) {
+        let hold = &mut self.holds[domain as usize];
+        if hold.option.is_some() {
+            hold.option = Some(now);
+            hold.since = tick;
+        }
+    }
+    /// Keep each spot's terms for the readout.
+    pub(super) fn spot_terms(
+        &mut self,
+        terms: [Option<super::spots::Terms>; super::spots::SPOTS.len()],
+    ) {
+        self.spot_terms = terms;
+    }
     pub(super) fn fired(&mut self, shot: Shot) {
         if self.shots.len() >= 8 {
             self.shots.remove(0);
@@ -867,7 +896,16 @@ impl Mind {
                         .terms
                         .iter()
                         .map(|t| BotCandidate {
-                            option: d.domain.label(t.option),
+                            option: match self
+                                .spot_terms
+                                .get(t.option as usize)
+                                .copied()
+                                .flatten()
+                                .filter(|_| d.domain == Domain::Spot)
+                            {
+                                Some(spot) => format!("{} {spot}", d.domain.label(t.option)),
+                                None => d.domain.label(t.option),
+                            },
                             score: t.score,
                             adjusted: t.adjusted,
                             drift: t.drift,
