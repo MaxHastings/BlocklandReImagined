@@ -2037,7 +2037,6 @@ impl Session {
             super::admin_players::world_ray(simulation, a, d.normalize_or_zero(), d.length())
                 .is_none()
         };
-        let tall = self.peers[&bot].player.tuning().stand_height;
         let deficit = self.team_deficit(bot);
         // The target it went after died or left (not merely out of sight).
         let target_gone = self.bots.brains[&bot]
@@ -2259,7 +2258,6 @@ impl Session {
             &mut scores,
             &choices,
             &intents,
-            tall,
             &clear,
         );
         brain.team.allies = intents.len();
@@ -3404,7 +3402,6 @@ fn team_choices(
         let target = Some(Target::Player(seen.owner));
         c[at(Behaviour::Fight)] = team::Choice {
             place: Some(stand),
-            stand: true,
             target,
             ..Default::default()
         };

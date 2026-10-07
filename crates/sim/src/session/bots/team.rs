@@ -4,7 +4,8 @@
 //! line its weapon will hit. Each bot then reads its allies' intents into
 //! its own scores through two terms: overlap (the same target, or a place
 //! close to theirs, costs more) and interaction (taking a seat they expose
-//! scores more, a place their weapon will hit costs more). A third, mood,
+//! scores more). Where their weapons will hit is a cost of where a fighter
+//! stands (`spots`), not of what it does. A third, mood,
 //! raises the chance of an idle flavour as nearby bots of either side are
 //! doing one, and of the same one. Nothing here chooses: the brain's
 //! chooser, with its surprise and commitments, still picks.
@@ -24,10 +25,6 @@ const MOOD_TICKS: u64 = 120;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct Choice {
     pub place: Option<Vec3>,
-    /// Whether it stays at `place` while it does this (a fight's stance)
-    /// rather than heading there. Only a stance can stand in an ally's line
-    /// of fire; on the way, the ally holds fire (`bot_fire_clear`).
-    pub stand: bool,
     pub target: Option<Target>,
     /// The vehicle whose seat it would take.
     pub seat: Option<u64>,
@@ -40,11 +37,10 @@ pub(super) struct Choice {
 pub(super) struct Terms {
     pub overlap: f32,
     pub uses: f32,
-    pub harm: f32,
 }
 impl Terms {
     pub(super) fn total(self) -> f32 {
-        self.uses - self.overlap - self.harm
+        self.uses - self.overlap
     }
 }
 
@@ -78,7 +74,6 @@ pub(super) fn terms(
     (option, since): (u8, u64),
     choice: Choice,
     allies: &[(OwnerId, Intent)],
-    body: f32,
     clear: &dyn Fn(Vec3, Vec3) -> bool,
 ) -> Terms {
     let mut t = Terms::default();
@@ -112,11 +107,6 @@ pub(super) fn terms(
         {
             t.uses += cfg.uses();
         }
-        if let (Some(at), Some(harm), true) = (choice.place, intent.harm.as_ref(), choice.stand)
-            && inside(harm, at, body)
-        {
-            t.harm += cfg.harm();
-        }
     }
     t
 }
@@ -147,7 +137,6 @@ pub(super) fn side_terms(
     scores: &mut [f32; Behaviour::COUNT],
     choices: &[Choice; Behaviour::COUNT],
     allies: &[(OwnerId, Intent)],
-    body: f32,
     clear: &dyn Fn(Vec3, Vec3) -> bool,
 ) -> [Terms; Behaviour::COUNT] {
     let mut all = [Terms::default(); Behaviour::COUNT];
@@ -156,15 +145,7 @@ pub(super) fn side_terms(
     }
     for (b, score) in scores.iter_mut().enumerate() {
         if *score > 0.0 {
-            all[b] = terms(
-                cfg,
-                me,
-                (b as u8, sinces(b)),
-                choices[b],
-                allies,
-                body,
-                clear,
-            );
+            all[b] = terms(cfg, me, (b as u8, sinces(b)), choices[b], allies, clear);
             *score = (*score + all[b].total()).max(f32::MIN_POSITIVE);
         }
     }
@@ -182,7 +163,6 @@ pub(super) fn callout<'a>(
     let pulls = [
         ("overlap", terms[before].overlap - terms[after].overlap),
         ("uses", terms[after].uses - terms[before].uses),
-        ("harm", terms[before].harm - terms[after].harm),
     ];
     let (term, by) = pulls.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))?;
     (by > 0.0).then(|| cfg.callouts.get(term).map(String::as_str))?
@@ -239,11 +219,11 @@ pub(super) fn copied(cfg: &BotTeam, seen: bool) -> f32 {
 
 /// Why a bot's last choice moved, for the why-view: how many allies'
 /// intents it read, each option's terms that are not zero (behaviour,
-/// overlap, uses, harm), and its last callout.
+/// overlap, uses), and its last callout.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BotTeamView {
     pub allies: usize,
-    pub terms: Vec<(&'static str, f32, f32, f32)>,
+    pub terms: Vec<(&'static str, f32, f32)>,
     pub said: Option<String>,
 }
 impl State {
@@ -254,7 +234,7 @@ impl State {
                 .into_iter()
                 .zip(self.terms)
                 .filter(|(_, t)| *t != Terms::default())
-                .map(|(b, t)| (b.name(), t.overlap, t.uses, t.harm))
+                .map(|(b, t)| (b.name(), t.overlap, t.uses))
                 .collect(),
             said: self.said.clone(),
         }
@@ -326,7 +306,6 @@ impl Session {
             (option as u8, since),
             choice,
             &allies,
-            0.0,
             &open,
         )
         .overlap
@@ -592,7 +571,7 @@ mod tests {
     fn cfg() -> BotTeam {
         BotTeam {
             teamwork: 1.0,
-            callouts: [("harm".to_string(), "Moving!".to_string())].into(),
+            callouts: [("overlap".to_string(), "Moving!".to_string())].into(),
             ..Default::default()
         }
     }
@@ -619,20 +598,7 @@ mod tests {
     fn at(x: f32, z: f32) -> Choice {
         Choice {
             place: Some(Vec3::new(x, 0.0, z)),
-            stand: true,
             ..Default::default()
-        }
-    }
-
-    fn shooter() -> Intent {
-        Intent {
-            harm: Some(Space {
-                from: Vec3::ZERO,
-                to: Vec3::new(0.0, 0.0, -20.0),
-                radius: 3.0,
-                spread: 0.0,
-            }),
-            ..intent(0)
         }
     }
 
@@ -650,7 +616,7 @@ mod tests {
             ..Default::default()
         };
         let cost = |allies: &[(OwnerId, Intent)], since| {
-            terms(&cfg, 2, (0, since), same, allies, 2.0, &open).overlap
+            terms(&cfg, 2, (0, since), same, allies, &open).overlap
         };
         assert_eq!(cost(&[(1, ally)], 20), cfg.overlap());
         assert!(
@@ -662,15 +628,14 @@ mod tests {
             0.0,
             "the one who took it first keeps it"
         );
-        let near = |d: f32, option| {
-            terms(&cfg, 2, (option, 20), at(d, 0.0), &[(1, ally)], 2.0, &open).overlap
-        };
+        let near =
+            |d: f32, option| terms(&cfg, 2, (option, 20), at(d, 0.0), &[(1, ally)], &open).overlap;
         assert!(near(1.0, 0) > near(3.0, 0) && near(3.0, 0) > 0.0 && near(5.0, 0) == 0.0);
         assert_eq!(near(1.0, 1), 0.0, "an ally doing something else there");
     }
 
     #[test]
-    fn an_exposed_seat_scores_more_and_a_harm_volume_costs() {
+    fn an_exposed_seat_scores_more() {
         let cfg = cfg();
         let driver = Intent {
             seats: Some(44),
@@ -681,18 +646,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            terms(&cfg, 2, (0, 0), seat(44), &[(1, driver)], 2.0, &open).uses,
+            terms(&cfg, 2, (0, 0), seat(44), &[(1, driver)], &open).uses,
             cfg.uses()
         );
         assert_eq!(
-            terms(&cfg, 2, (0, 0), seat(45), &[(1, driver)], 2.0, &open).uses,
+            terms(&cfg, 2, (0, 0), seat(45), &[(1, driver)], &open).uses,
             0.0
         );
-        let harm = |c| terms(&cfg, 2, (0, 0), c, &[(1, shooter())], 2.0, &open).harm;
-        // On the line, and in its blast radius at the end: cost. Beside: none.
-        assert_eq!(harm(at(0.5, -10.0)), cfg.harm());
-        assert_eq!(harm(at(2.0, -21.0)), cfg.harm());
-        assert_eq!(harm(at(8.0, -10.0)), 0.0);
     }
 
     #[test]
@@ -713,7 +673,7 @@ mod tests {
             carries: Some((vehicle, Vec3::Y * 0.5)),
             ..at(x, 0.0)
         };
-        let uses = |c| terms(&cfg, 2, (0, 0), c, &[(1, gunner)], 2.0, &wall).uses;
+        let uses = |c| terms(&cfg, 2, (0, 0), c, &[(1, gunner)], &wall).uses;
         assert_eq!(
             uses(drive(4.0, 7)),
             cfg.uses(),
@@ -727,13 +687,18 @@ mod tests {
     #[test]
     fn a_clearly_better_own_option_still_wins_and_options_stay_options() {
         let cfg = cfg();
+        // An ally already on the same target costs Fight its overlap.
         let mut choices = [Choice::default(); Behaviour::COUNT];
-        choices[Behaviour::Fight as usize] = at(0.0, -10.0);
+        choices[Behaviour::Fight as usize].target = Some(Target::Player(9));
+        let ally = Intent {
+            target: Some(Target::Player(9)),
+            ..intent(0)
+        };
         let pick = |fight: f32| {
             let mut scores = [0.0; Behaviour::COUNT];
             scores[Behaviour::Fight as usize] = fight;
             scores[Behaviour::Wander as usize] = 0.1;
-            let all = [(1, shooter())];
+            let all = [(1, ally)];
             side_terms(
                 &cfg,
                 2,
@@ -742,13 +707,12 @@ mod tests {
                 &mut scores,
                 &choices,
                 &all,
-                2.0,
                 &open,
             );
             (behaviour::best(&scores), scores)
         };
-        assert_eq!(pick(1.0).0, Behaviour::Fight, "0.4 still beats 0.1");
-        let (b, scores) = pick(0.65);
+        assert_eq!(pick(1.0).0, Behaviour::Fight, "0.82 still beats 0.1");
+        let (b, scores) = pick(0.25);
         assert_eq!(b, Behaviour::Wander);
         assert!(
             scores[Behaviour::Fight as usize] > 0.0,
@@ -786,7 +750,6 @@ mod tests {
                 &mut scores,
                 &choices,
                 &all,
-                2.0,
                 &open,
             );
             let mut mind = surprise::Mind::new(seed);
@@ -1001,12 +964,12 @@ mod tests {
             Behaviour::Chase as usize,
             Behaviour::Wander as usize,
         );
-        terms[fight].harm = 0.6;
+        terms[fight].overlap = 0.6;
         assert_eq!(callout(&cfg, &terms, fight, wander), Some("Moving!"));
         assert_eq!(
             callout(&cfg, &terms, wander, fight),
             None,
-            "the harm did not move it"
+            "the overlap did not move it"
         );
         terms[chase].uses = 0.15;
         assert_eq!(

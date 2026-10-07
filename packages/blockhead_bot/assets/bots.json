@@ -19,7 +19,7 @@
       // Teamwork, 0 to 1: how much teammates' intents (where they go, what
       // they use, where they shoot) move its own choices; never an order. A choice an ally's intent changed may be
       // said in team chat, keyed by the term that changed it.
-      "team": { "teamwork": 0.6, "callouts": { "uses": "Coming!", "harm": "Moving!" } },
+      "team": { "teamwork": 0.6, "callouts": { "uses": "Coming!" } },
       // Perception, 0 to 4: how human its noticing, reactions and aim are
       // (more is slower to notice, fewer hits).
       "perception": { "strength": 1 },

@@ -470,8 +470,16 @@ pub(super) fn choose(
     // as its own seeded drift goes, never a perfect intercept.
     let target_velocity = Vec3::from(target.player.state().velocity) * super::lead(bot, tick);
     let target_point = seen.aim;
-    // Gathered when a candidate first needs them.
-    let bodies = std::cell::LazyCell::new(|| Bodies::of(session, bot));
+    // Gathered when a candidate first needs them; its own body where it
+    // would stand to shoot from `origin`.
+    let shift = origin - peer.player.eye();
+    let bodies = std::cell::LazyCell::new(|| {
+        let mut bodies = Bodies::of(session, bot);
+        if let Some(own) = bodies.own.as_mut() {
+            own.centre += shift;
+        }
+        bodies
+    });
     let scale = peer.player.state().scale;
     let selected = actor.selected;
     let mut supported = false;

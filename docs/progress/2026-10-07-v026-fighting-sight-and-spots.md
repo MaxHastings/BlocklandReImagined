@@ -49,19 +49,30 @@ iteration rules keep out of the lane. Per the design it comes out whole:
 
 ## Decisions
 
+- In and out step as far as the weapon's own band (`Weapon::band`) takes
+  the fighter back inside it, a body's width at least, and a place nearer
+  the enemy than the band's near edge deals nothing: so a rocket or gun bot
+  with an enemy hugging it steps back out, the job `back_off` did. The
+  shot chooser now puts the shooter's own body at the origin it weighs
+  (its blast clearance), not where it stands.
+- The ledge probes step by two body steps from a body step up; `Nav::node_at`
+  finds a floor within more than a step of where it is asked, so no height
+  is skipped and no nav tolerance is copied as a number.
 - Spots are for ranged fighters on foot only. A melee fighter closes and
   keeps its footwork; a swimmer weaves; a rider rides. Their old step
   back went with `back_off` (a melee band's near edge is 0, so it never
   fired for melee).
-- Hop and jet probe the column one body width toward the enemy. The grid
-  finds a floor within a step and a half of the height it is asked at, so
-  hop asks where that window tops out at the measured jump height, and jet
-  steps a window at a time up to one jump above the enemy's floor. A ledge
-  lower than that window, or straight overhead, is not offered.
+- Hop and jet probe the column one body width toward the enemy, hop up to
+  the measured jump height and jet up to one jump above the enemy's floor.
+  A ledge straight overhead is not offered.
 - A melee fighter standing in an ally's line of fire is no longer walked
-  out of it (the Team mover is gone and spots are ranged only); its Fight
-  score still pays the line's cost (`team` harm term) and the ally still
-  holds fire across it (`bot_fire_clear`).
+  out of it (the Team mover is gone and spots are ranged only); the ally
+  still holds fire across it (`bot_fire_clear`). The `team` harm term,
+  which cost a Fight standing in a line (dropping a sword bot's Fight below
+  Chase once nothing walked it out), is deleted with the `harm` callout key
+  (`bot_kind::TERMS`, the Blockhead's `bots.json`): an ally's line is a
+  cost of a place now, so the gunner steps aside. Melee line of fire waits
+  for v0.2.7.
 - With no shot from a place, its fire time is the weapon in hand's cycle,
   so standing in sight still costs something and a bot with nothing to
   shoot keeps out of sight.
@@ -73,10 +84,13 @@ iteration rules keep out of the lane. Per the design it comes out whole:
 
 - `cargo test -p bri-sim --test building eyes_see_through`, `--lib
   fog_caps_how_far_a_bot_sees a_shot_aims_lower`: pass.
-- `cargo test -p bri-sim --lib spots`: six pass, among them
+- `cargo test -p bri-sim --lib spots`: seven pass, among them
+  `a_ranged_bot_with_an_enemy_inside_its_band_steps_back_out_of_it` (a
+  rocket and a gun bot two units from an enemy each choose *out*, to the
+  band's near edge),
   `a_bot_behind_a_wall_steps_aside_to_the_open_side_every_time` (strength
   0, four seeds) and `a_bot_never_weighs_a_place_with_no_floor`.
-- `cargo test -p bri-sim --lib session::bots`: 156 pass, 1 ignored.
+- `cargo test -p bri-sim --lib -- session::bots bot_kind`: 165 pass, 1 ignored.
 - `cargo clippy -p bri-sim --tests -- -D warnings`: clean.
 - `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_16
   -- --ignored --nocapture`: 1441 us/tick for 16 bots, all dials on (90 us

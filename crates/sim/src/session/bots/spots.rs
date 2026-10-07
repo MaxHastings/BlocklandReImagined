@@ -133,7 +133,11 @@ impl Session {
         let cycle = self
             .bot_capability(bot)
             .map(|cap| cap.cadence_ticks as f32 / bri_weapons::TICK_HZ as f32)?;
-        let places = self.bot_places(seen, feet, body, costs, walk_speed);
+        // Its weapon's band: it fights from no nearer than its near edge
+        // (where a blast or a scatter is its own risk), as the behaviour
+        // chooser reads it.
+        let (near, far) = self.bot_weapon(bot)?.band();
+        let places = self.bot_places(seen, feet, body, costs, walk_speed, (near, far));
         // The shot from each place: the chooser's own, on a scratch state
         // and a copy of its mind, under the shared solver budget.
         let mut budget = std::mem::take(&mut self.bots.combat_budget);
@@ -174,6 +178,11 @@ impl Session {
                 continue;
             };
             let seconds = travel + fire;
+            let dealt = if flat(seen.real - at).length() < near {
+                0.0
+            } else {
+                dealt
+            };
             // Each threat that sees the place, and each ally whose line of
             // fire crosses it, costs what its weapon deals a second.
             let mut rate = 0.0;
@@ -248,9 +257,10 @@ impl Session {
     }
 
     /// Each of [`SPOTS`] it can stand on, with the seconds getting there
-    /// takes: a body's width each way where the walk grid has floor it
-    /// walks straight to, a ledge ahead a jump lands it on, and one higher
-    /// its jets lift it onto (`reach`).
+    /// takes: a body's width aside where the walk grid has floor it walks
+    /// straight to, and in or out as far as its weapon's `band` (near, far)
+    /// takes it back inside, a body's width at least; a ledge ahead a jump
+    /// lands it on, and one higher its jets lift it onto (`reach`).
     fn bot_places(
         &mut self,
         seen: Seen,
@@ -258,6 +268,7 @@ impl Session {
         body: &Body,
         costs: &crate::route::Costs,
         walk_speed: f32,
+        (near, far): (f32, f32),
     ) -> [Option<(Vec3, f32)>; SPOTS.len()] {
         let mut places = [None; SPOTS.len()];
         places[HERE as usize] = Some((feet, 0.0));
@@ -289,32 +300,42 @@ impl Session {
                 .flatten()
                 .map(crate::nav::Node::feet)
         };
-        for (option, way) in [(LEFT, -right), (RIGHT, right), (IN, toward), (OUT, -toward)] {
-            places[option as usize] = floor(feet + way * body.width)
+        let gap = flat(seen.real - feet).length();
+        for (option, way, length) in [
+            (LEFT, -right, body.width),
+            (RIGHT, right, body.width),
+            (IN, toward, gap - far),
+            (OUT, -toward, near - gap),
+        ] {
+            places[option as usize] = floor(feet + way * length.max(body.width))
                 .filter(|to| ground.walkable(body, feet, *to))
                 .map(|to| (to, flat(to - feet).length() / walk_speed));
         }
-        // Up ahead: the grid finds a floor within a step and a half of the
-        // height it is asked at, so it is asked where that window tops out
-        // at the height a jump lands, then a window higher at a time for
-        // the jets, as far as one jump above the enemy's own floor.
+        // Up ahead: the grid finds a floor within more than a step of the
+        // height it is asked at (`Nav::node_at`), so asking a step and
+        // again two steps higher at a time misses no height: up to the
+        // height a jump lands for the hop, and from there as far as one
+        // jump above the enemy's own floor for the jets.
         let ahead = feet + toward * body.width;
-        let window = body.step + 0.5;
-        places[HOP as usize] = floor(ahead.with_y(feet.y + body.jump - window))
-            .filter(|to| to.y - feet.y > body.step && to.y - feet.y <= body.jump)
-            .map(|to| (to, flat(to - feet).length() / walk_speed));
-        if let Some(jets) = &costs.jets {
-            let top = seen.feet.y.max(feet.y) + body.jump;
-            let mut height = feet.y + body.jump + window;
-            while height <= top {
-                if let Some(to) = floor(ahead.with_y(height)).filter(|to| to.y - feet.y > body.jump)
-                    && let Some(seconds) = jets.flight(feet, to)
+        let mut ledge = |from: f32, to: f32, takes: &dyn Fn(Vec3) -> Option<f32>| {
+            let mut height = feet.y + from + body.step;
+            while height - body.step <= feet.y + to {
+                if let Some(at) = floor(ahead.with_y(height))
+                    .filter(|at| at.y - feet.y > from && at.y - feet.y <= to)
+                    && let Some(seconds) = takes(at)
                 {
-                    places[JET as usize] = Some((to, seconds));
-                    break;
+                    return Some((at, seconds));
                 }
-                height += 2.0 * window;
+                height += 2.0 * body.step;
             }
+            None
+        };
+        places[HOP as usize] = ledge(body.step, body.jump, &|at| {
+            Some(flat(at - feet).length() / walk_speed)
+        });
+        if let Some(jets) = &costs.jets {
+            let top = seen.feet.y.max(feet.y) + body.jump - feet.y;
+            places[JET as usize] = ledge(body.jump, top, &|at| jets.flight(feet, at));
         }
         places
     }
@@ -392,30 +413,39 @@ mod tests {
     /// from a step to its -x side, but not from a step to its +x side. The
     /// floor ends just -x of the gunner when `edge`.
     fn behind_a_wall(edge: bool, seed: u64) -> (Session, OwnerId, Seen) {
+        fixture(Some(edge), bri_weapons::testing::GUN_ITEM, 12.0, seed)
+    }
+
+    /// A bot holding `item` at the origin and an unarmed enemy `ahead` of it
+    /// (+z): behind [`behind_a_wall`]'s wall when `wall` (its floor's edge
+    /// as given), else on an open floor.
+    fn fixture(wall: Option<bool>, item: &str, ahead: f32, seed: u64) -> (Session, OwnerId, Seen) {
         use rapier3d::prelude::*;
         let world = bri_world::World::new("Spots".into(), "fixture".into(), vec![[1.0; 4]]);
-        let floor = if edge {
+        let floor = if wall == Some(true) {
             ColliderBuilder::cuboid(20.0, 0.5, 20.0).translation(Vector::new(19.4, -0.5, 0.0))
         } else {
             ColliderBuilder::cuboid(20.0, 0.5, 20.0).translation(Vector::new(0.0, -0.5, 0.0))
         };
-        // From x = -6 to x = 0.2, across the line at z = 6.
-        let wall = ColliderBuilder::cuboid(3.1, 4.0, 0.25).translation(Vector::new(-2.9, 4.0, 6.0));
-        let sim = crate::simulation::Simulation::new(
-            world,
-            crate::testing::definitions(),
-            vec![floor, wall],
-        )
-        .unwrap();
+        let mut colliders = vec![floor];
+        if wall.is_some() {
+            // From x = -6 to x = 0.2, across the line at z = 6.
+            colliders.push(
+                ColliderBuilder::cuboid(3.1, 4.0, 0.25).translation(Vector::new(-2.9, 4.0, 6.0)),
+            );
+        }
+        let sim =
+            crate::simulation::Simulation::new(world, crate::testing::definitions(), colliders)
+                .unwrap();
         let mut s = Session::new(sim);
         s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
         let bot = s
             .join("Gunner".into(), Vec3::new(0.0, 0.05, 0.0), false)
             .unwrap();
         let enemy = s
-            .join("Target".into(), Vec3::new(0.0, 0.05, 12.0), false)
+            .join("Target".into(), Vec3::new(0.0, 0.05, ahead), false)
             .unwrap();
-        let slot = s.give_item(bot, bri_weapons::testing::GUN_ITEM).unwrap();
+        let slot = s.give_item(bot, item).unwrap();
         s.equip_tool(bot, Some(slot)).unwrap();
         let mut kind = BotKind {
             id: "spot-probe".into(),
@@ -493,7 +523,7 @@ mod tests {
             swim: None,
             jets: None,
         };
-        let places = s.bot_places(seen, feet, &body, &costs, 1.0);
+        let places = s.bot_places(seen, feet, &body, &costs, 1.0, (0.0, 20.0));
         for (option, place) in places.iter().enumerate() {
             if let Some((at, _)) = place {
                 assert!(at.x > -0.6, "{} at {at} is off the floor", SPOTS[option]);
@@ -503,5 +533,25 @@ mod tests {
             places.iter().filter(|p| p.is_some()).count() >= 3,
             "{places:?}"
         );
+    }
+
+    #[test]
+    fn a_ranged_bot_with_an_enemy_inside_its_band_steps_back_out_of_it() {
+        use bri_weapons::testing::{GUN_ITEM, ROCKET_ITEM};
+        for item in [ROCKET_ITEM, GUN_ITEM] {
+            let (mut s, bot, seen) = fixture(None, item, 2.0, 0);
+            let feet = Vec3::from(s.peers[&bot].player.state().feet);
+            let (near, _) = s.bot_weapon(bot).unwrap().band();
+            assert!(near > 2.0, "{item}: the enemy is inside the band");
+            let anchor = stand(&mut s, bot, seen, 10).unwrap_or_else(|| panic!("{item} stood"));
+            let away = |at: Vec3| flat(seen.real - at).length();
+            assert_eq!(anchor.option, OUT, "{item}: {anchor:?}");
+            assert!(
+                away(anchor.at) >= near - 0.5 && away(anchor.at) > away(feet),
+                "{item}: from {} to {}",
+                away(feet),
+                away(anchor.at)
+            );
+        }
     }
 }

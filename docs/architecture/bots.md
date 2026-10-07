@@ -584,9 +584,11 @@ decides are never candidates.
 
 A ranged fighter on its feet weighs a few places to stand on its planning
 turn (the shot chooser's, `combat::Budget::has_turn`), as stable options
-named from where it stands (`spots::SPOTS`): here; a body's width left,
-right, in toward its enemy or out, where the walk grid has floor it walks
-straight to; a ledge ahead a jump lands it on; and one higher its jets
+named from where it stands (`spots::SPOTS`): here; a body's width left
+or right, and in toward its enemy or out as far as its weapon's band takes
+it back inside (a body's width at least), where the walk grid has floor it
+walks straight to; nearer than the band's near edge it deals nothing, so
+an enemy hugging it is stepped back from; a ledge ahead a jump lands it on; and one higher its jets
 lift it onto, as measured (`reach`). Each has one score, in harm per
 second with no weight of its own (`spots::Terms`):
 
@@ -750,10 +752,9 @@ at the same spot, costs, each further ally half the one before: the first keeps 
 targets prefers an uncrowded one; following an ally through a gap too narrow to pass it, at its
 pace rather than walking round it is the same rule) and **interaction**
 (a seat an ally offers, or a driving place from which a seated ally's
-mount sees its target, pays; a fight's stance in an ally's line of fire
-costs, and a place to fight from that an ally's line crosses costs what
-that ally's weapon deals, so it fights from somewhere else; see Where to
-stand). Crew of one vehicle neither crowd nor endanger
+mount sees its target, pays). An ally's line of fire is not a term here:
+a place to fight from that it crosses costs what that ally's weapon
+deals, so it fights from somewhere else (see Where to stand). Crew of one vehicle neither crowd nor endanger
 each other; a seat stays the claim's to arbitrate. Socially, an objective
 is worth more as the team trails; idle flavours grow likelier with the
 share of the players a bot sees goofing, less those it sees playing, a
