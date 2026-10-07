@@ -1490,7 +1490,7 @@ fn a_drivers_free_seats_are_read_from_the_vehicles_own_seat_data() {
             t.team
                 .terms
                 .iter()
-                .any(|(option, _, uses, _)| *option == "interact" && *uses > 0.0)
+                .any(|(option, _, uses)| *option == "interact" && *uses > 0.0)
         });
         if used {
             break;
