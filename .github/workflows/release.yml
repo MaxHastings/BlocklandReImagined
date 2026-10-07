@@ -84,6 +84,9 @@ jobs:
       - name: Build the game, Add-On importer and dedicated server
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
 
+      - name: No Visual C++ Redistributable needed
+        run: python tools/check_windows_imports.py target/release/bri-client.exe target/release/bri-server.exe target/release/bri-import-addon.exe
+
       - name: Verify release panic capture
         run: cargo test --release --locked -p bri-crash --test capture
 
