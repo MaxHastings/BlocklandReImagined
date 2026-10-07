@@ -100,3 +100,10 @@ iteration rules keep out of the lane. Per the design it comes out whole:
 
 - The cover case as its own change, with the soccer share before and after.
 - Replay of one of Max's saves on this branch for reproduction.
+
+For v0.2.7:
+
+- Bots no longer call out "Moving!" when an ally's fire moves them: the
+  `harm` callout went with the team harm term, and a step out of an ally's
+  line is now a choice of place, which has no callout yet.
+- Melee line of fire: a melee bot in an ally's line is not walked out of it.
