@@ -8,14 +8,20 @@ use std::{
     time::SystemTime,
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE},
+    Foundation::{CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, S_FALSE},
     Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL},
     System::{
         Console::{GetStdHandle, STD_ERROR_HANDLE, SetStdHandle},
         Diagnostics::Debug::{
-            EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, MINIDUMP_EXCEPTION_INFORMATION,
-            MiniDumpScanMemory, MiniDumpWithIndirectlyReferencedMemory, MiniDumpWriteDump,
-            SetUnhandledExceptionFilter,
+            EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, IsProcessSnapshotCallback,
+            MINIDUMP_CALLBACK_INFORMATION, MINIDUMP_CALLBACK_INPUT, MINIDUMP_CALLBACK_OUTPUT,
+            MINIDUMP_EXCEPTION_INFORMATION, MiniDumpScanMemory,
+            MiniDumpWithIndirectlyReferencedMemory, MiniDumpWriteDump, SetUnhandledExceptionFilter,
+        },
+        Diagnostics::ProcessSnapshotting::{
+            HPSS, PSS_CAPTURE_THREAD_CONTEXT, PSS_CAPTURE_THREADS, PSS_CAPTURE_VA_CLONE,
+            PSS_CREATE_BREAKAWAY, PSS_CREATE_BREAKAWAY_OPTIONAL, PSS_CREATE_RELEASE_SECTION,
+            PSS_CREATE_USE_VM_ALLOCATIONS, PssCaptureSnapshot, PssFreeSnapshot,
         },
         Pipes::CreatePipe,
         Threading::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId},
@@ -96,7 +102,7 @@ struct Tee {
 /// How long `finish` and the panic hook wait for the reader. If the pipe
 /// never reaches its end (some other handle to it is still open), the
 /// process must still exit rather than hang.
-const DRAIN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+pub(crate) const DRAIN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 static TEE: std::sync::Mutex<Option<Tee>> = std::sync::Mutex::new(None);
 
@@ -139,11 +145,11 @@ struct DumpJob {
 static DUMPER: std::sync::Mutex<Option<std::sync::mpsc::Sender<DumpJob>>> =
     std::sync::Mutex::new(None);
 
-/// How long a crashing thread waits for its minidump. MiniDumpWriteDump
-/// suspends every other thread, and one of them may hold a lock the dump
-/// needs; under load that hung about one crash in ten. Past this wait the
-/// report is written without the dump and the process exits.
-const DUMP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a crashing thread waits for its minidump; past it the report is
+/// written without the dump and the process exits. The dump is written from
+/// a snapshot ([`write_minidump`]), so nothing it does suspends this thread
+/// and the wait always ends.
+pub(crate) const DUMP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The dump thread, started before any crash so the crash filter never has
 /// to write the dump on the crashing thread itself.
@@ -169,11 +175,11 @@ fn start_dumper() -> io::Result<()> {
 fn dump(path: &std::path::Path, info: *const EXCEPTION_POINTERS) -> io::Result<()> {
     // SAFETY: no preconditions.
     let thread = unsafe { GetCurrentThreadId() };
-    let sender = DUMPER.lock().ok().and_then(|g| g.clone());
-    let Some(sender) = sender else {
-        // SAFETY: the filter's own exception, on this thread.
-        return unsafe { write_minidump(path, info, thread) };
-    };
+    let sender = DUMPER
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .ok_or_else(|| io::Error::other("the dump thread is not running"))?;
     let (done, wait) = std::sync::mpsc::channel();
     sender
         .send(DumpJob {
@@ -277,10 +283,86 @@ unsafe extern "system" fn on_native_crash(info: *const EXCEPTION_POINTERS) -> i3
     EXCEPTION_CONTINUE_SEARCH
 }
 
+/// Tells dbghelp that the handle it was given is a process snapshot.
+///
+/// # Safety
+/// Called by MiniDumpWriteDump with its own valid input and output.
+unsafe extern "system" fn snapshot_callback(
+    _param: *mut std::ffi::c_void,
+    input: *const MINIDUMP_CALLBACK_INPUT,
+    output: *mut MINIDUMP_CALLBACK_OUTPUT,
+) -> windows_sys::core::BOOL {
+    // SAFETY: dbghelp's valid callback structures; packed, so read and
+    // written unaligned.
+    unsafe {
+        let kind = std::ptr::read_unaligned(std::ptr::addr_of!((*input).CallbackType));
+        if kind == IsProcessSnapshotCallback as u32 {
+            std::ptr::write_unaligned(std::ptr::addr_of_mut!((*output).Anonymous.Status), S_FALSE);
+        }
+    }
+    1
+}
+
+/// A snapshot of this process, freed on drop.
+struct Snapshot(HPSS);
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        // SAFETY: a snapshot this process captured and has not freed.
+        unsafe { PssFreeSnapshot(GetCurrentProcess(), self.0) };
+    }
+}
+
+/// Every thread's full register state, for the dump's thread list.
+#[cfg(target_arch = "x86_64")]
+const THREAD_CONTEXT: u32 = windows_sys::Win32::System::Diagnostics::Debug::CONTEXT_ALL_AMD64;
+#[cfg(target_arch = "aarch64")]
+const THREAD_CONTEXT: u32 = windows_sys::Win32::System::Diagnostics::Debug::CONTEXT_ALL_ARM64;
+#[cfg(target_arch = "x86")]
+const THREAD_CONTEXT: u32 = windows_sys::Win32::System::Diagnostics::Debug::CONTEXT_ALL_X86;
+
+/// Write a minidump of this process from a snapshot of it, never from the
+/// live process. MiniDumpWriteDump on the live process suspends every other
+/// thread and then loads libraries and allocates; a thread suspended while
+/// the loader or the heap was busy (a library loading, a thread starting,
+/// another allocating) left it waiting forever, the crashing thread and its
+/// [`DUMP_WAIT`] suspended with it. The snapshot (a clone of the address
+/// space and every thread's context, taken by the kernel) suspends nothing
+/// here, so whatever holds those locks finishes and the dump goes on.
+///
 /// # Safety
 /// `info` must be the pointers handed to an exception filter (or null).
 unsafe fn write_minidump(
     path: &std::path::Path,
+    info: *const EXCEPTION_POINTERS,
+    thread: u32,
+) -> io::Result<()> {
+    let flags = PSS_CAPTURE_VA_CLONE
+        | PSS_CAPTURE_THREADS
+        | PSS_CAPTURE_THREAD_CONTEXT
+        | PSS_CREATE_BREAKAWAY
+        | PSS_CREATE_BREAKAWAY_OPTIONAL
+        | PSS_CREATE_USE_VM_ALLOCATIONS
+        | PSS_CREATE_RELEASE_SECTION;
+    let mut handle: HPSS = std::ptr::null_mut();
+    // SAFETY: this process, documented flags, an out-pointer to a local.
+    let error =
+        unsafe { PssCaptureSnapshot(GetCurrentProcess(), flags, THREAD_CONTEXT, &mut handle) };
+    if error != 0 {
+        return Err(io::Error::other(format!(
+            "the process snapshot failed: {}",
+            io::Error::from_raw_os_error(error as i32)
+        )));
+    }
+    let snapshot = Snapshot(handle);
+    // SAFETY: the snapshot is valid until `snapshot` drops, after the dump.
+    unsafe { write_snapshot(path, &snapshot, info, thread) }
+}
+
+/// # Safety
+/// `info` must be the pointers handed to an exception filter (or null).
+unsafe fn write_snapshot(
+    path: &std::path::Path,
+    snapshot: &Snapshot,
     info: *const EXCEPTION_POINTERS,
     thread: u32,
 ) -> io::Result<()> {
@@ -308,10 +390,15 @@ unsafe fn write_minidump(
         ExceptionPointers: info as *mut EXCEPTION_POINTERS,
         ClientPointers: 0,
     };
-    // SAFETY: this process, an open writable file, and the filter's exception.
+    let callback = MINIDUMP_CALLBACK_INFORMATION {
+        CallbackRoutine: Some(snapshot_callback),
+        CallbackParam: std::ptr::null_mut(),
+    };
+    // SAFETY: the snapshot, an open writable file, the filter's exception
+    // and a callback that answers dbghelp's snapshot question.
     let ok = unsafe {
         MiniDumpWriteDump(
-            GetCurrentProcess(),
+            snapshot.0 as HANDLE,
             GetCurrentProcessId(),
             file,
             MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory,
@@ -321,7 +408,7 @@ unsafe fn write_minidump(
                 &exception
             },
             std::ptr::null(),
-            std::ptr::null(),
+            &callback,
         )
     };
     let result = if ok == 0 {

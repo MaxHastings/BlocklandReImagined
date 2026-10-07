@@ -14,6 +14,43 @@ fn child(case: &str, dir: &Path) -> std::process::Output {
         .unwrap()
 }
 
+/// A native-crash child, killed if it is still running once its capture
+/// can no longer be waiting for anything ([`bri_crash::NATIVE_CAPTURE_WAIT`]):
+/// a hung capture fails the test instead of hanging it. Returns stderr, or
+/// None when it hung.
+#[cfg(windows)]
+fn crashing_child(case: &str, dir: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
+        .env(CASE, case)
+        .env(DIR, dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Read stderr as it comes, so a full pipe never stalls the child.
+    let mut pipe = child.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        text
+    });
+    let deadline = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(!status.success());
+            return Some(reader.join().unwrap());
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::yield_now();
+    }
+}
+
 fn files(dir: &Path, prefix: &str, ext: &str) -> Vec<std::path::PathBuf> {
     fs::read_dir(dir)
         .unwrap()
@@ -32,15 +69,17 @@ fn child_entry() {
         return;
     };
     let dir = std::path::PathBuf::from(std::env::var(DIR).unwrap());
-    bri_crash::install("capture-test", &[dir]).unwrap();
+    bri_crash::install("capture-test", std::slice::from_ref(&dir)).unwrap();
     eprintln!("line before the crash");
     match case.as_str() {
         "panic" => panic!("deliberate test panic"),
         #[cfg(windows)]
-        "native" => unsafe {
-            // A real access violation, not a Rust panic.
-            std::ptr::write_volatile(std::ptr::null_mut::<u32>(), 1);
-        },
+        "native" => crash(),
+        #[cfg(windows)]
+        "loader_busy" => {
+            loader::keep_busy(&dir);
+            crash();
+        }
         _ => {}
     }
 }
@@ -120,21 +159,72 @@ fn assert_native_frames(report: &str) {
     );
 }
 
+/// A real access violation, not a Rust panic, after naming the thread it
+/// happens on.
 #[cfg(windows)]
-#[test]
-fn a_native_crash_leaves_a_minidump_and_a_report() {
-    let dir = tempfile::tempdir().unwrap();
-    let out = child("native", dir.path());
-    assert!(!out.status.success());
-    let dumps = files(dir.path(), "crash-", ".dmp");
-    assert_eq!(dumps.len(), 1, "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(fs::metadata(&dumps[0]).unwrap().len() > 1024);
+fn crash() {
+    // SAFETY: no preconditions.
+    let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+    eprintln!("{CRASHING_THREAD}{thread}");
+    // SAFETY: deliberately writes through null.
+    unsafe { std::ptr::write_volatile(std::ptr::null_mut::<u32>(), 1) };
+}
+#[cfg(windows)]
+const CRASHING_THREAD: &str = "crashing thread: ";
+
+/// The child's crash, its minidump and its report: the dump holds the
+/// exception, raised on the crashing thread, and that thread.
+#[cfg(windows)]
+fn assert_captured(dir: &Path, stderr: &str) {
+    let thread: u32 = stderr
+        .lines()
+        .find_map(|l| l.strip_prefix(CRASHING_THREAD))
+        .expect("the child named its crashing thread")
+        .trim()
+        .parse()
+        .unwrap();
+    let dumps = files(dir, "crash-", ".dmp");
+    assert_eq!(dumps.len(), 1, "{stderr}");
     let report = fs::read_to_string(dumps[0].with_extension("txt")).unwrap();
     assert!(report.contains("exception: 0xC0000005"), "{report}");
+    assert!(report.contains("minidump: "), "{report}");
     assert!(
         report.contains("line before the crash"),
         "session tail included"
     );
+    let dump = minidump::Dump::read(&dumps[0]);
+    assert_eq!(
+        dump.exception(),
+        Some((thread, ACCESS_VIOLATION)),
+        "the dump holds the access violation on the crashing thread"
+    );
+    assert!(
+        dump.threads().contains(&thread),
+        "the crashing thread dumped"
+    );
+}
+/// `EXCEPTION_ACCESS_VIOLATION`.
+#[cfg(windows)]
+const ACCESS_VIOLATION: u32 = 0xC000_0005;
+
+#[cfg(windows)]
+#[test]
+fn a_native_crash_leaves_a_minidump_and_a_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let stderr = crashing_child("native", dir.path()).expect("the crash capture hung");
+    assert_captured(dir.path(), &stderr);
+}
+
+/// The original hang: a crash while the loader was busy on other threads
+/// (libraries loading and unloading, threads starting). A minidump of the
+/// live process suspended those threads mid-load, then loaded a library
+/// itself and waited for them forever, its crashing thread suspended too.
+#[cfg(windows)]
+#[test]
+fn a_native_crash_while_other_threads_load_libraries_still_dumps() {
+    let dir = tempfile::tempdir().unwrap();
+    let stderr = crashing_child("loader_busy", dir.path()).expect("the crash capture hung");
+    assert_captured(dir.path(), &stderr);
 }
 
 /// Copy just the executable, as a player distribution does. Raw native frames
@@ -165,4 +255,100 @@ fn a_copied_executable_retains_native_frames_without_adjacent_symbols() {
         "copied executable module mapped: {report}"
     );
     assert!(files(dir.path(), "", ".pdb").is_empty());
+}
+
+/// Other threads keeping the loader busy until the crash's report exists.
+#[cfg(windows)]
+mod loader {
+    use std::ffi::c_void;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LoadLibraryW(name: *const u16) -> *mut c_void;
+        fn FreeLibrary(module: *mut c_void) -> i32;
+    }
+    /// System libraries a test executable does not load itself.
+    const LIBRARIES: [&str; 2] = ["version.dll", "winmm.dll"];
+
+    /// One thread per library, each loading and unloading it and starting a
+    /// thread (whose start-up runs under the loader too) over and over;
+    /// returns once each has been round once.
+    pub fn keep_busy(dir: &std::path::Path) {
+        let (started, running) = std::sync::mpsc::channel();
+        for name in LIBRARIES {
+            let dir = dir.to_path_buf();
+            let started = started.clone();
+            let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            std::thread::spawn(move || {
+                loop {
+                    // SAFETY: a NUL-terminated name; freed below.
+                    let module = unsafe { LoadLibraryW(wide.as_ptr()) };
+                    let _ = std::thread::spawn(|| {}).join();
+                    if !module.is_null() {
+                        // SAFETY: loaded above by this thread.
+                        unsafe { FreeLibrary(module) };
+                    }
+                    let _ = started.send(());
+                    if !super::files(&dir, "crash-", ".txt").is_empty() {
+                        break;
+                    }
+                }
+            });
+        }
+        for _ in LIBRARIES {
+            running.recv().unwrap();
+        }
+    }
+}
+
+/// Just enough of the minidump format to find the exception and threads.
+#[cfg(windows)]
+mod minidump {
+    /// `MINIDUMP_STREAM_TYPE`s.
+    const THREAD_LIST: u32 = 3;
+    const EXCEPTION: u32 = 6;
+    /// "MDMP", little-endian.
+    const SIGNATURE: u32 = 0x504D_444D;
+    /// `MINIDUMP_THREAD`'s size.
+    const THREAD_SIZE: usize = 48;
+    /// `MINIDUMP_DIRECTORY`'s size: stream type, data size, data offset.
+    const DIRECTORY_ENTRY: usize = 12;
+
+    pub struct Dump(Vec<u8>);
+    impl Dump {
+        pub fn read(path: &std::path::Path) -> Self {
+            let dump = Self(std::fs::read(path).unwrap());
+            assert_eq!(dump.u32(0), SIGNATURE, "a minidump");
+            dump
+        }
+        fn u32(&self, at: usize) -> u32 {
+            u32::from_le_bytes(self.0[at..at + 4].try_into().unwrap())
+        }
+        /// Each stream's (type, offset): `MINIDUMP_HEADER` gives their count
+        /// at 8 and the directory's offset at 12.
+        fn streams(&self) -> impl Iterator<Item = (u32, usize)> + '_ {
+            let (count, directory) = (self.u32(8) as usize, self.u32(12) as usize);
+            (0..count).map(move |i| {
+                let entry = directory + i * DIRECTORY_ENTRY;
+                (self.u32(entry), self.u32(entry + 8) as usize)
+            })
+        }
+        fn stream(&self, kind: u32) -> Option<usize> {
+            self.streams().find(|(k, _)| *k == kind).map(|(_, at)| at)
+        }
+        /// `MINIDUMP_EXCEPTION_STREAM`: the thread id, then (after 4 bytes
+        /// of alignment) the record, whose first field is the code.
+        pub fn exception(&self) -> Option<(u32, u32)> {
+            let at = self.stream(EXCEPTION)?;
+            Some((self.u32(at), self.u32(at + 8)))
+        }
+        /// `MINIDUMP_THREAD_LIST`: a count, then each thread, id first.
+        pub fn threads(&self) -> Vec<u32> {
+            let Some(at) = self.stream(THREAD_LIST) else {
+                return Vec::new();
+            };
+            (0..self.u32(at) as usize)
+                .map(|i| self.u32(at + 4 + i * THREAD_SIZE))
+                .collect()
+        }
+    }
 }
