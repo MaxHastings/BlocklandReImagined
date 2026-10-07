@@ -34,6 +34,16 @@ const JUMP_WINDOW_TICKS: u8 = 8;
 /// 96, so the motor runs v20's ticks exactly inside the server's steps.
 const STEP_PARTS: u8 = 25;
 const TICK_PARTS: u8 = 96;
+/// The collision group of a dead player's body. Player bodies move
+/// through it (no player is blocked by a corpse, nor a corpse by another),
+/// while weapons, vehicles and grabs still find it.
+const CORPSE: Group = Group::GROUP_1;
+/// What a player body's motion collides with: everything but corpses.
+const MOVES_AGAINST: InteractionGroups = InteractionGroups::new(
+    Group::ALL,
+    Group::ALL.difference(CORPSE),
+    InteractionTestMode::And,
+);
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -894,7 +904,11 @@ impl Player {
     pub fn clear(physics: &PhysicsWorld, feet: Vec3, tuning: &PlayerTuning) -> bool {
         feet.is_finite()
             && physics
-                .query_pipeline_with_filter(QueryFilter::default().exclude_sensors())
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .groups(MOVES_AGAINST),
+                )
                 .intersect_shape(tuning.pose(feet, false), tuning.shape(false).as_ref())
                 .next()
                 .is_none()
@@ -1183,6 +1197,16 @@ impl Player {
     pub fn set_solid(&self, physics: &mut PhysicsWorld, solid: bool) {
         physics.colliders[self.collider].set_sensor(!solid);
     }
+    /// A dead body stops blocking players (and being blocked by them) at
+    /// once, but stays solid to everything else until it is cleared.
+    pub fn set_corpse(&self, physics: &mut PhysicsWorld, corpse: bool) {
+        let groups = if corpse {
+            InteractionGroups::new(CORPSE, Group::ALL, InteractionTestMode::And)
+        } else {
+            InteractionGroups::all()
+        };
+        physics.colliders[self.collider].set_collision_groups(groups);
+    }
     /// Server relocation (spawn/respawn/teleport): clears motion state.
     pub fn teleport(&mut self, physics: &mut PhysicsWorld, feet: Vec3, yaw: f32) -> Result<()> {
         ensure!(
@@ -1407,7 +1431,8 @@ impl Player {
         let feet = Vec3::from(self.state.feet);
         let filter = QueryFilter::default()
             .exclude_sensors()
-            .exclude_rigid_body(self.body);
+            .exclude_rigid_body(self.body)
+            .groups(MOVES_AGAINST);
         let query = physics.query_pipeline_with_filter(filter);
         // v20 updateMove (0x5ae2ea) crouches a fully submerged player as if
         // crouch were held, so swimmers under water use the crouch box.

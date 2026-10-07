@@ -293,6 +293,12 @@ impl Gpu {
                 &[],
             );
         }
+        let pixels = self.read(encoder, &target)?;
+        Ok((pixels, renderer.stats()))
+    }
+    /// Submit `encoder` with a copy of `target` after it; its pixels.
+    fn read(&self, mut encoder: wgpu::CommandEncoder, target: &wgpu::Texture) -> Result<Vec<u8>> {
+        let device = &self.device;
         let row = (SIZE * 4).div_ceil(256) * 256;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mirror test readback"),
@@ -327,7 +333,81 @@ impl Gpu {
             .chunks_exact(row as usize)
             .flat_map(|r| r[..SIZE as usize * 4].iter().copied())
             .collect();
-        Ok((pixels, renderer.stats()))
+        Ok(pixels)
+    }
+    /// A frame through each of `cameras` in turn, one after another as the
+    /// game draws them (echoes show pictures from the frame before), over
+    /// [`UNDRAWN`]: each frame's pixels.
+    fn frames_walking(
+        &self,
+        cameras: &[Camera],
+        settings: ReflectionSettings,
+        data: &SceneData,
+        mirrors: &[Mirror],
+    ) -> Result<Vec<Vec<u8>>> {
+        let device = &self.device;
+        let mut renderer = SceneRenderer::with_settings(device, FORMAT, 1, None);
+        let scene = renderer.upload(device, &self.queue, data)?;
+        let mut instance = GpuInstances::new(device, 1)?;
+        instance.update(&self.queue, &[SceneTransform::default()])?;
+        let models = [(&scene, &instance)];
+        let mut reflections = Reflections::new(device, FORMAT, 1, settings);
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mirror test"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let depth = create_depth_samples(device, SIZE, SIZE, 1).create_view(&Default::default());
+        let mut frames = Vec::with_capacity(cameras.len());
+        for camera in cameras {
+            renderer.update_camera(&self.queue, camera);
+            reflections.prepare(
+                device,
+                &self.queue,
+                &mut renderer,
+                camera,
+                (SIZE, SIZE),
+                mirrors,
+            )?;
+            let mut encoder = device.create_command_encoder(&Default::default());
+            reflections.render_views(
+                &renderer,
+                &mut encoder,
+                &[],
+                &|_| &models,
+                UNDRAWN,
+                &|_, _| {},
+                &|_, _| {},
+            );
+            let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
+            renderer.render_world(
+                &mut encoder,
+                WorldPass {
+                    view: 0,
+                    color: &view,
+                    resolve: None,
+                    depth: &depth,
+                    viewport: None,
+                    clear: Some(UNDRAWN),
+                    after_opaque: Some(&surfaces),
+                    after_all: None,
+                },
+                &[&scene],
+                &[],
+            );
+            frames.push(self.read(encoder, &target)?);
+        }
+        Ok(frames)
     }
 }
 
@@ -626,6 +706,91 @@ fn in_a_mirror_room_a_side_wall_past_the_passes_never_shows_another_view() -> Re
         .filter(|p| p[..3].iter().all(|c| *c < 25))
         .count();
     assert_eq!(black, 0, "black pixels from echoes of the wrong view");
+    Ok(())
+}
+
+/// The clear colour of [`Gpu::frames_walking`], magenta: in a closed box no
+/// view sees past the walls, so it shows only where a picture was never
+/// drawn.
+const UNDRAWN: wgpu::Color = wgpu::Color {
+    r: 1.0,
+    g: 0.0,
+    b: 1.0,
+    a: 1.0,
+};
+/// Pixels of [`UNDRAWN`] the worst frame of the walk down the mirror tunnel
+/// may show: half a percent of the screen (81). Measured on this walk,
+/// main's worst frame showed 444 and the fix's 3, at the vanishing point;
+/// the fix's worst over a walk four times as fast was 44.
+const MOST_UNDRAWN: usize = (SIZE * SIZE / 200) as usize;
+/// A closed box of stripes between two facing mirrors (z = 0 and z = 6).
+fn mirror_tunnel() -> (SceneData, [Mirror; 2]) {
+    let mut data = SceneData::default();
+    let (half, stripe, length) = (1.5, 0.5, 6.0);
+    for i in 0..(length / stripe) as usize {
+        let (z0, z1) = (i as f32 * stripe, (i + 1) as f32 * stripe);
+        let color = if i % 2 == 0 {
+            [0.2, 0.7, 0.2, 1.0]
+        } else {
+            [0.8, 0.8, 0.1, 1.0]
+        };
+        let h = half;
+        for wall in [
+            [[-h, -h, z0], [h, -h, z0], [h, -h, z1], [-h, -h, z1]],
+            [[-h, h, z0], [h, h, z0], [h, h, z1], [-h, h, z1]],
+            [[-h, -h, z0], [-h, h, z0], [-h, h, z1], [-h, -h, z1]],
+            [[h, -h, z0], [h, h, z0], [h, h, z1], [h, -h, z1]],
+        ] {
+            quad(&mut data, wall, color, true);
+        }
+    }
+    let mut behind = mirror();
+    behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, length));
+    (data, [mirror(), behind])
+}
+
+#[test]
+fn walking_between_facing_mirrors_never_shows_an_undrawn_picture() -> Result<()> {
+    // Max's report (v0.2.6 preview): between two facing mirrors, grey
+    // patches flickered down the tunnel as he moved. A mirror deeper than
+    // the passes showed its nearer plane's picture from the frame before,
+    // framed by this frame's view: where the view moved, it showed the
+    // target's clear colour (the sky's, in the game).
+    let gpu = Gpu::turn()?;
+    let (data, mirrors) = mirror_tunnel();
+    let frames = 12;
+    let cameras: Vec<Camera> = (0..frames)
+        .map(|f| {
+            // Backing away from the front mirror while sidestepping and
+            // turning, as a walk does.
+            let t = 0.5 + f as f32 / 60.0;
+            let eye = Vec3::new(
+                0.6 * (t * 6.0).sin(),
+                0.1 + 0.3 * (t * 5.0).sin(),
+                3.0 + 1.5 * (t * 4.0).cos(),
+            );
+            let ahead = eye + Vec3::new(0.5 * (t * 9.0).sin(), -0.15, -1.0);
+            Camera::perspective(eye.to_array(), ahead.to_array(), 1.0, 1.0, 0.05, 100.0)
+        })
+        .collect();
+    let undrawn = |pixels: &[u8]| {
+        pixels
+            .chunks_exact(4)
+            .filter(|p| p[0] > 200 && p[1] < 40 && p[2] > 200)
+            .count()
+    };
+    let missed: Vec<usize> = gpu
+        .frames_walking(&cameras, ReflectionSettings::MEDIUM, &data, &mirrors)?
+        .iter()
+        .map(|pixels| undrawn(pixels))
+        .collect();
+    println!("undrawn pixels per frame: {missed:?}");
+    // The tunnel's last few texels, too small to fill, may still miss.
+    let worst = missed.iter().copied().max().unwrap_or(0);
+    assert!(
+        worst <= MOST_UNDRAWN,
+        "{worst} undrawn pixels in a frame: {missed:?}"
+    );
     Ok(())
 }
 

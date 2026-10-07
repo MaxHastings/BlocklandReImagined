@@ -964,7 +964,8 @@ fn all_dials_on() {
     assert!(broken.is_empty(), "all on: {broken:#?}");
 }
 
-/// Bot think time (`Session::bot_think_nanos`) per tick with the server's
+/// Bot think time (`Session::bot_think_nanos`, the ticking thread's CPU
+/// time, so a loaded machine does not stretch it) per tick with the server's
 /// most bots (16, `MAX_BOTS`) in the busiest scenario (a mixed-arsenal
 /// deathmatch, eight a side) with every dial on, against the bar in
 /// `bot_tuning.json` (`perf`: one for debug builds, one for release).

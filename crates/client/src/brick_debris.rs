@@ -602,8 +602,10 @@ impl BrickDebris {
             self.pushers.clear(&mut self.world);
             return Ok(());
         }
-        // Bricks changed: the solid surroundings are rebuilt from scratch.
-        self.surroundings.sync(&mut self.world, building);
+        // Bricks changed: resting debris looks again for its support.
+        if self.surroundings.sync(&mut self.world, building) {
+            self.world.wake_up_all(true);
+        }
         self.accumulator += dt;
         let mut steps = (self.accumulator / STEP) as u32;
         if steps > MAX_STEPS {
@@ -728,7 +730,8 @@ impl BrickDebris {
             .collect();
         let dead = &self.dead;
         self.surroundings
-            .load(&mut self.world, building, &boxes, |id| dead.contains(&id))
+            .load(&mut self.world, building, &boxes, |id| dead.contains(&id))?;
+        Ok(())
     }
     /// Forget deaths the world has since undone (respawned bricks) or made
     /// permanent (removed bricks).

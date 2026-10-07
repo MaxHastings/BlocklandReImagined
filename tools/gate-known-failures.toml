@@ -59,18 +59,3 @@ reason = "The soak's rocket knocks none of its floating test wall out after the 
 test = "the_bundled_soccer_field_loads_whole_from_load_bricks"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
-
-[[failure]]
-test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
-owner = "v0.2.6 bot work"
-reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."
-
-[[failure]]
-test = "imported_ctf_bot_takes_the_actual_flag_and_returns_it_for_its_team"
-owner = "v0.2.6 bot work"
-reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."
-
-[[failure]]
-test = "profile_sixteen_bots_in_the_real_bedroom"
-owner = "v0.2.6 bot work"
-reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."

@@ -283,7 +283,8 @@ pub(super) struct Bots {
     sightlines: std::sync::Mutex<sightlines::Sightlines>,
     /// Live dials (`/botset`) and where overrides are kept.
     tuning: tuning::Tuning,
-    /// Wall time spent in `step_bots`, for the bot performance bar.
+    /// CPU time spent in `step_bots` ([`crate::cpu_time`]), for the bot
+    /// performance bar.
     pub(super) think_nanos: u64,
 }
 /// A bot that saw an enemy, or was hurt, tells its side where.
