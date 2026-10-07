@@ -36,13 +36,21 @@ pub struct Print {
     pub diffuse: Image,
     pub icon: Image,
 }
+/// The print class every printable brick takes (v20's letters).
+pub const UNIVERSAL_PRINT_ASPECT: &str = "Letters";
+/// Whether a print of class `print_aspect` fits a brick of class
+/// `brick_aspect`: v20 serverCmdSetPrint accepts the brick's class and
+/// [`UNIVERSAL_PRINT_ASPECT`] for every printable brick. An empty class
+/// identifies a non-printable brick.
+pub fn print_fits(print_aspect: &str, brick_aspect: &str) -> bool {
+    !brick_aspect.is_empty()
+        && (print_aspect.eq_ignore_ascii_case(brick_aspect)
+            || print_aspect.eq_ignore_ascii_case(UNIVERSAL_PRINT_ASPECT))
+}
 impl Print {
-    /// v20 serverCmdSetPrint accepts the brick's class and Letters for every
-    /// printable brick. An empty class identifies a non-printable brick.
+    /// Whether this print fits a brick of class `aspect` ([`print_fits`]).
     pub fn compatible(&self, aspect: &str) -> bool {
-        !aspect.is_empty()
-            && (self.aspect.eq_ignore_ascii_case(aspect)
-                || self.aspect.eq_ignore_ascii_case("Letters"))
+        print_fits(&self.aspect, aspect)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

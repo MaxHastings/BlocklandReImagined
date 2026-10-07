@@ -404,8 +404,6 @@ impl ClientAudio {
                 self.trigger("brick.break", Placement::World(cue.position));
                 return;
             }
-            CueKind::HammerHit => "tool.hammer.hit",
-            CueKind::WrenchHit => "tool.wrench.hit",
             CueKind::Pain { cry: true, .. } => "player.pain_cry",
             CueKind::Death { .. } => "player.death_cry",
             // `mediumSplashSoundVelocity` 10, `hardSplashSoundVelocity` 20.

@@ -1047,17 +1047,15 @@ impl Session {
         let mut programs = lab_programs(mode);
         let mut spawn: Option<String> = None;
         if mode == "soccer" {
-            spawn = self
-                .vehicle_choices()
-                .into_iter()
-                .find(|(_, name)| {
-                    name.to_ascii_lowercase().contains("steel")
-                        && name.to_ascii_lowercase().contains("ball")
-                })
-                .map(|(id, _)| id);
+            // A ball by what it is (a rolling ball body), not by its name.
+            spawn = self.vehicles.world.as_ref().and_then(|w| {
+                w.definitions()
+                    .find(|d| d.family == bri_vehicles::Family::Ball && d.family.spawnable())
+                    .map(|d| d.id.clone())
+            });
             ensure!(
                 spawn.is_some(),
-                "Enable the Steel Ball Add-On before creating Soccer"
+                "Enable a ball vehicle Add-On (the Steel Ball) before creating Soccer"
             );
         }
         if matches!(mode, "soccer" | "teamdoor") {

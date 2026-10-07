@@ -260,8 +260,11 @@ impl Perform for ops::SetBrickItem {
                 .packages
                 .as_ref()
                 .context("No packages are enabled")?;
+            // The base game's items (`v20.weapon.gunitem`) are every
+            // package's to hand out, as v20's `setItem` took any datablock.
+            let base_game = item.split(['.', ':']).next() == Some(bri_package::id::BASE_NAMESPACE);
             ensure!(
-                item.starts_with("v20/") || item_hooks::owns(&host.catalog, package, item),
+                base_game || item_hooks::owns(&host.catalog, package, item),
                 "`{item}` is not an item of `{package}` or an Add-On it depends on"
             );
         }

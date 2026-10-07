@@ -774,8 +774,23 @@ fn a_window_onto_a_far_place_shows_the_shadows_standing_there_would() -> Result<
     // shadows on the far side showed only once he went through. The sun's
     // shadows were fitted around the player alone; a view from far away
     // fits its own.
+    window_shows_the_shadows_standing_there_would(Vec3::new(1000.0, 0.0, 0.0))
+}
+
+#[test]
+fn a_window_onto_a_place_at_the_edge_of_the_players_shadows_shows_them() -> Result<()> {
+    // Max's second report: a partner ahead of the player, near the end of
+    // the player's shadow distance, still showed none. Its eye lies inside
+    // the player's last cascade, but what it looks at lies past the
+    // distance (or where the shadows fade out).
+    let ahead = ShadowSettings::LOW.distance;
+    window_shows_the_shadows_standing_there_would(Vec3::new(0.0, 0.0, -ahead))
+}
+
+/// Through a window whose partner is `far` from it, the floor past the
+/// partner shows the shadow standing there would.
+fn window_shows_the_shadows_standing_there_would(far: Vec3) -> Result<()> {
     let gpu = Gpu::turn()?;
-    let far = Vec3::new(1000.0, 0.0, 0.0);
     let carry = glam::Affine3A::from_translation(far);
     let window = |corners: [Vec3; 4], carry: glam::Affine3A| Mirror {
         corners,
@@ -852,6 +867,71 @@ fn a_window_onto_a_far_place_shows_the_shadows_standing_there_would() -> Result<
         share < 0.02,
         "{:.1}% differ through the window",
         share * 100.0
+    );
+    Ok(())
+}
+
+/// Boxes per side of the bench's square build (its brick count squared).
+const BENCH_SIDE: usize = 150;
+/// Frames each bench run draws, after one to warm up.
+const BENCH_FRAMES: usize = 60;
+/// Bench runs per case; the fastest counts, as the least disturbed.
+const BENCH_RUNS: usize = 3;
+
+/// What a live mirror adds to a frame in front of a large build with sun
+/// shadows on: frame time with the mirror less without it. Run on two
+/// checkouts to compare the cost of a change on a real GPU:
+/// `cargo test --release -p bri-render --test mirrors mirror_shadow_cost
+/// -- --ignored --nocapture`.
+#[test]
+#[ignore = "bench: needs a real GPU to mean anything"]
+fn mirror_shadow_cost() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut build = SceneData::default();
+    for x in 0..BENCH_SIDE {
+        for z in 0..BENCH_SIDE {
+            let min = Vec3::new(x as f32 * 2.0 - BENCH_SIDE as f32, -2.0, -(z as f32) * 2.0);
+            lit_box(
+                &mut build,
+                min,
+                min + Vec3::new(1.0, 1.0 + (x * z % 3) as f32, 1.0),
+            );
+        }
+    }
+    // Behind the player, the mirror shows the build in front.
+    let mut camera = Camera::perspective([0.0, 1.0, -4.0], [0.0, 0.5, 0.0], 1.0, 1.0, 0.05, 400.0);
+    camera.sun_direction = Vec3::new(0.4, -0.6, 0.7).normalize().extend(0.0).to_array();
+    let room = SceneData::default();
+    let time = |mirrors: &[Mirror], frames: usize| -> Result<f64> {
+        let started = std::time::Instant::now();
+        gpu.frame_with_model_visibility(
+            &camera,
+            1,
+            ReflectionSettings::MEDIUM,
+            &room,
+            mirrors,
+            frames,
+            true,
+            Some((ShadowSettings::HIGH, &build)),
+        )?;
+        Ok(started.elapsed().as_secs_f64() * 1000.0)
+    };
+    let per_frame = |mirrors: &[Mirror]| -> Result<f64> {
+        // A one-frame run carries the setup and readback; the rest is frames.
+        let mut fastest = f64::INFINITY;
+        for _ in 0..BENCH_RUNS {
+            let one = time(mirrors, 1)?;
+            let run = (time(mirrors, 1 + BENCH_FRAMES)? - one) / BENCH_FRAMES as f64;
+            fastest = fastest.min(run);
+        }
+        Ok(fastest)
+    };
+    let without = per_frame(&[])?;
+    let with = per_frame(&[mirror()])?;
+    println!(
+        "{} boxes: {without:.2} ms a frame, {with:.2} ms with a mirror (+{:.2} ms)",
+        BENCH_SIDE * BENCH_SIDE,
+        with - without
     );
     Ok(())
 }

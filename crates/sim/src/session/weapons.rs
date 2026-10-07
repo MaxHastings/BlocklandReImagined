@@ -563,10 +563,15 @@ impl Session {
                     self.take_click_aim(actor.0);
                     self.addon_tool_fire(actor.0, &command);
                 }
-                WeaponEvent::ToolFire { actor, image, .. } => {
+                WeaponEvent::ToolFire {
+                    actor,
+                    tool: Some(tool),
+                    ..
+                } => {
                     self.take_click_aim(actor.0);
-                    self.tool_fire(actor.0, &image)?;
+                    self.tool_fire(actor.0, tool)?;
                 }
+                WeaponEvent::ToolFire { actor, .. } => self.take_click_aim(actor.0),
                 // `brickDeployProjectile::onCollision` only moves the ghost
                 // (client side here) and never calls the parent that raises
                 // `onProjectileHit`; its explosion still shows.

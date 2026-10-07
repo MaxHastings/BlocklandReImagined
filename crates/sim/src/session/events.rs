@@ -1209,11 +1209,7 @@ impl Session {
         // on contact, so a player spawned onto the brick would lose the
         // touch for good; `Armor::Damage`'s spawn protection still stops a
         // kill brick (see `player_op`).
-        let wand = self
-            .weapons
-            .image_state(ActorId(owner), 0)
-            .is_some_and(|(image, _)| image.id == super::tools::ADMIN_WAND_IMAGE);
-        if wand {
+        if self.holds_admin_tool(owner) {
             return;
         }
         let input = if self.is_bot(owner) {

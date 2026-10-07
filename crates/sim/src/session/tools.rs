@@ -4,7 +4,8 @@
 //! identities or arbitrary source records cross this boundary.
 use super::undo::UndoEntry;
 use super::*;
-use bri_weapons::{ActorId, TargetId};
+use bri_content::brick_materials::{UNIVERSAL_PRINT_ASPECT, print_fits};
+use bri_weapons::{ActorId, HostTool, TargetId};
 use bri_world::authority::trust as level;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,7 +158,7 @@ impl ToolCatalog {
             ensure!(
                 self.prints
                     .get(id)
-                    .is_some_and(|aspect| aspect.eq_ignore_ascii_case("Letters")),
+                    .is_some_and(|aspect| aspect.eq_ignore_ascii_case(UNIVERSAL_PRINT_ASPECT)),
                 "Default print must be an available universal Letters print"
             );
         }
@@ -179,8 +180,7 @@ impl ToolCatalog {
         };
         let print_aspect = self.prints.get(id).context("Print is unavailable")?;
         ensure!(
-            print_aspect.eq_ignore_ascii_case(aspect)
-                || print_aspect.eq_ignore_ascii_case("Letters"),
+            print_fits(print_aspect, aspect),
             "Print aspect does not match brick"
         );
         Ok(())
@@ -298,6 +298,16 @@ fn paint_edit(definition: &str, paint: Option<u8>) -> Option<Edit> {
     }
 }
 
+/// Whether an image's shot paints what it lands on (a spray can's colour or
+/// effect): what bots ask of a held image instead of naming the can. Any
+/// palette index will do, since only whether it paints at all is asked.
+pub(super) fn image_paints(image: &bri_weapons::Image) -> bool {
+    image
+        .projectile
+        .as_deref()
+        .is_some_and(|p| paint_edit(p, Some(0)).is_some())
+}
+
 fn copy_actor(actor: &Actor) -> Actor {
     actor.clone()
 }
@@ -322,33 +332,11 @@ struct ToolHit {
     direction: Vec3,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NativeTool {
-    Hammer,
-    Wand,
-    AdminWand,
-    Wrench,
-    Printer,
-}
-
-/// Resolve the installed native callback once for players and NPC affordances.
-/// This names an engine mechanism, not a game's items, labels or objectives.
-fn native_tool_callback(id: &str) -> Option<NativeTool> {
-    Some(match id.strip_prefix("v20.image.").unwrap_or(id) {
-        "hammerimage" => NativeTool::Hammer,
-        "wandimage" => NativeTool::Wand,
-        "adminwandimage" => NativeTool::AdminWand,
-        "wrenchimage" => NativeTool::Wrench,
-        "printgunimage" => NativeTool::Printer,
-        _ => return None,
-    })
-}
-
-/// Admission for the existing host Hammer callback, not an item/display-name
-/// guess. Overridden callbacks remain opaque to native capability planning.
+/// Admission for the host's breaking tool ([`HostTool::Break`]) as bots plan
+/// with it: one whose `onFire` is that mechanism alone. Overridden callbacks
+/// remain opaque to native capability planning.
 pub(super) fn native_hammer(image: &bri_weapons::Image) -> bool {
-    native_tool_callback(&image.id) == Some(NativeTool::Hammer)
-        && image.name.eq_ignore_ascii_case("hammerImage")
+    bri_weapons::host_tool(image) == Some(HostTool::Break)
         && image
             .states
             .iter()
@@ -506,6 +494,15 @@ impl Session {
         self.hold_image(owner, WAND_IMAGE, None)
     }
 
+    /// Whether `owner` holds the administrator's destroying tool
+    /// ([`HostTool::AdminDestroy`]), which v20 exempts from impact damage
+    /// (`Armor::onImpact`) and brick touches (`onPlayerTouch`).
+    pub(super) fn holds_admin_tool(&self, owner: OwnerId) -> bool {
+        self.weapons
+            .image_state(ActorId(owner), 0)
+            .is_some_and(|(image, _)| bri_weapons::host_tool(image) == Some(HostTool::AdminDestroy))
+    }
+
     fn hold_image(&mut self, owner: OwnerId, image: &str, paint: Option<u8>) -> Result<()> {
         self.weapons.drop_ball(ActorId(owner))?;
         self.weapons.mount_image(ActorId(owner), image, paint)?;
@@ -518,7 +515,7 @@ impl Session {
     /// The `onFire` of a host tool image (hammer, wrench, printer, wands),
     /// from the image state machine at the moment the swing lands. A swing
     /// that hits nothing is not an error: the animation already played.
-    pub(super) fn tool_fire(&mut self, owner: OwnerId, image: &str) -> Result<()> {
+    pub(super) fn tool_fire(&mut self, owner: OwnerId, tool: HostTool) -> Result<()> {
         let Some(actor) = self.weapons.actor(ActorId(owner)) else {
             return Ok(());
         };
@@ -529,8 +526,8 @@ impl Session {
             return Ok(());
         }
         let melee_range = if dir.y < -0.9 { 5.5 } else { 5.0 } * scale;
-        match native_tool_callback(image) {
-            Some(NativeTool::Hammer) => {
+        match tool {
+            HostTool::Break => {
                 let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
                     return Ok(());
                 };
@@ -609,7 +606,7 @@ impl Session {
                     TargetId::Map(_) | TargetId::Shape(_) => {}
                 }
             }
-            Some(NativeTool::Wand) => {
+            HostTool::Destroy => {
                 // The wand item from a loadout or spawner obeys the same
                 // mini-game and tutorial rules as `/wand`.
                 let may_wand = self.tutorial_allows_wand(owner)
@@ -666,7 +663,7 @@ impl Session {
                     _ => {}
                 }
             }
-            Some(NativeTool::AdminWand) => {
+            HostTool::AdminDestroy => {
                 if !self.peers[&owner].actor.administrator {
                     return Ok(());
                 }
@@ -691,7 +688,7 @@ impl Session {
                     _ => {}
                 }
             }
-            Some(NativeTool::Wrench) => {
+            HostTool::Inspect => {
                 let Some(hit) = self.tool_ray(owner, start, dir, 10.0 * scale, Reach::Wrench)?
                 else {
                     return Ok(());
@@ -714,7 +711,7 @@ impl Session {
                 self.open_inspection(owner, id, InspectMode::Wrench);
                 self.tool_sound("wrenchHitSound", hit.position);
             }
-            Some(NativeTool::Printer) => {
+            HostTool::Print => {
                 let Some(ToolHit {
                     target: TargetId::Brick(id),
                     ..
@@ -730,7 +727,6 @@ impl Session {
                     self.open_inspection(owner, id, InspectMode::Printer);
                 }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -1058,20 +1054,21 @@ impl Session {
         Ok(best.map(|(_, hit)| hit))
     }
 
-    /// Dialog commands act on the brick the wrench or printer last hit
+    /// Dialog commands act on the brick the wrench or printer last hit, with
+    /// a tool that runs the same mechanism still in hand
     /// (`%client.wrenchBrick` / `%client.printBrick`), wherever the player
     /// has moved since.
     pub(super) fn tool_action(&mut self, owner: OwnerId, action: ToolAction) -> Result<Reply> {
         let required = match &action {
             ToolAction::UndoBrick => None,
-            ToolAction::SetPrint { .. } => Some(bri_weapons::PRINTER),
+            ToolAction::SetPrint { .. } => Some(HostTool::Print),
             ToolAction::Inspect { .. }
             | ToolAction::SetWrench { .. }
             | ToolAction::SetEvents { .. }
-            | ToolAction::RespawnVehicle { .. } => Some(bri_weapons::WRENCH),
+            | ToolAction::RespawnVehicle { .. } => Some(HostTool::Inspect),
         };
         if let Some(required) = required {
-            inventory::require_equipment(&self.weapons, owner, Some(required))?;
+            inventory::require_host_tool(&self.weapons, owner, required)?;
         }
         if action == ToolAction::UndoBrick {
             return self.undo_brick(owner);
@@ -1239,5 +1236,31 @@ fn dialog_fields_match(mode: InspectMode, original: &Brick, brick: &Brick) -> bo
         }
         InspectMode::Events => original.events == brick.events,
         InspectMode::Printer => original.print == brick.print,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::image_paints;
+
+    fn shooting(projectile: Option<&str>) -> bri_weapons::Image {
+        bri_weapons::Image {
+            projectile: projectile.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_image_paints_by_what_its_shot_does_not_by_its_name() {
+        assert!(image_paints(&shooting(Some(
+            "v20.projectile.bluepaintprojectile"
+        ))));
+        assert!(image_paints(&shooting(Some(
+            "v20.projectile.chromepaintprojectile"
+        ))));
+        assert!(!image_paints(&shooting(Some(
+            "v20.projectile.gunprojectile"
+        ))));
+        assert!(!image_paints(&shooting(None)));
     }
 }
