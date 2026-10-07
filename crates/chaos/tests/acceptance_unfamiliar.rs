@@ -1198,6 +1198,13 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
                 .map(|(.., s)| f(s))
                 .sum()
         };
+        // Pushes knocking an enemy off the drop are reported, not required:
+        // no bot plans a push with worth on this deck (its enemies are never
+        // where a push sends them somewhere that hurts), so the ones seen
+        // came from pushes at the ball. Lining a push up is v0.2.7; the
+        // gauntlet's push_brooms_on_a_high_deck shows a push planned with
+        // worth fires and knocks an enemy off.
+        println!("{v:?}: {} pushed off the drop", of(|s| s.pushed_enemy_off));
         for (what, count) in [
             (
                 "a grenade going off near an enemy",
@@ -1214,10 +1221,6 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
             (
                 "a bot firing from a spot it chose",
                 of(|s| s.fired_from_chosen_spot),
-            ),
-            (
-                "a bot pushing an enemy off the drop",
-                of(|s| s.pushed_enemy_off),
             ),
         ] {
             if count == 0 {
