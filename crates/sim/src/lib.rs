@@ -24,6 +24,7 @@ pub mod player_types;
 pub mod prediction;
 pub mod presentation;
 pub mod reach;
+pub mod replay;
 pub mod route;
 pub mod session;
 pub mod simulation;

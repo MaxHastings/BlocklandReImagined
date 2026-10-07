@@ -416,6 +416,11 @@ impl App {
             .collect();
         let progress = bri_progress::Progress::new();
         let palette_for_maps = host_palette.clone();
+        let record = self
+            .ui
+            .core
+            .prefs
+            .bool_or(bri_ui::api::RECORD_MATCHES_PREF, false);
         progress.set_subject(&map);
         let reporting = progress.clone();
         let host_runtime = self.host_runtime.handle().clone();
@@ -439,14 +444,26 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 (vehicle_pack, bot_kinds),
+                recipe_start,
             ) = tokio::task::spawn_blocking(move || -> Result<_> {
                 let _permit = permit;
                 let weapons = paths.weapon_content()?;
                 weapon_snapshot.ensure_same(&weapons)?;
                 let item_physics = paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
-                let loaded =
-                    paths.load_map_with_palette(&base_map, None, host_palette.as_deref())?;
+                // Package worlds grow their ground when the session is
+                // built, so a recording keeps the world as it starts, and
+                // the palette Change Map paints with.
+                let start_world = paths.start_world(&base_map, None, host_palette.as_deref())?;
+                let recipe_start = if record {
+                    Some((
+                        start_world.clone(),
+                        paths.map_palette(host_palette.as_deref())?,
+                    ))
+                } else {
+                    None
+                };
+                let loaded = paths.map_content()?.load(start_world)?;
                 let visual = load_visual_map(&paths.map_bundle, &base_map, lighting)?;
                 let mut light_volume = LightVolumeState::start(
                     &visual.scene,
@@ -525,6 +542,7 @@ impl App {
                     weapons.pack,
                     item_physics.bounds,
                     (vehicle_pack, bot_kinds),
+                    recipe_start,
                 ))
             })
             .await??;
@@ -573,6 +591,7 @@ impl App {
                     }),
                     overrides: Some(state_dir.join(bri_sim::bot_kind::tuning::OVERRIDES_FILE)),
                 }),
+                bot_overrides: None,
                 // Change Map keeps the host's Server Settings.
                 settings: Some(server_settings),
                 passwords: Some((admin, super_admin)),
@@ -586,11 +605,29 @@ impl App {
                     })
                 }),
             });
-            let (session, spawn_points) = setup.session(&hosted, loaded.into_session())?;
+            let package_save = setup.package_save(&hosted)?;
+            let (session, spawn_points) =
+                setup.session_with(&hosted, loaded.into_session(), package_save.as_deref())?;
+            // A recording that cannot start leaves the game unrecorded.
+            let recording = if let Some((start_world, map_palette)) = recipe_start {
+                let dir = state_dir.join(bri_net::replay::RECORDINGS_DIR);
+                match bri_net::replay::next_recording(&dir) {
+                    Ok(path) => Some(bri_net::replay::Recording {
+                        path,
+                        host: setup.recipe(&hosted, start_world, package_save, map_palette),
+                    }),
+                    Err(error) => {
+                        eprintln!("Not recording this match ({}): {error:#}", dir.display());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let map_loader: server::MapLoader = setup;
             // The server's tasks spawn onto the host runtime it is started in.
             let entered = host_runtime.enter();
-            let mut host = server::start_with_admin_store_and_limit(
+            let mut host = server::start_with_admin_store_limit_and_recording(
                 session,
                 ServerOptions {
                     bind,
@@ -612,6 +649,7 @@ impl App {
                 },
                 max_players as usize,
                 state_dir.join("administration.json"),
+                recording,
             )?;
             drop(entered);
             // Unless keeping it failed above, the slot is free.

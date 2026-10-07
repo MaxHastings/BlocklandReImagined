@@ -138,6 +138,9 @@ pub struct VehicleInfo {
     pub color: Option<[f32; 4]>,
     pub occupants: Vec<Option<OwnerId>>,
     pub destroyed: bool,
+    /// Its attached turret (the Tank's) has blown off: the turret explosion
+    /// threw it as debris, so it is no longer drawn on the hull.
+    pub turret_broken: bool,
     /// The spawn's uniform scale: a driving client predicts the vehicle at it.
     pub scale: f32,
 }
@@ -423,6 +426,9 @@ impl Session {
                     .map(|s| s.occupant.map(|o| o.owner.0))
                     .collect(),
                 destroyed: v.destroyed,
+                turret_broken: v
+                    .turret_damage
+                    .is_some_and(|damage| damage >= veh::TURRET_MAX_DAMAGE),
                 scale: v.scale,
             })
             .collect()
@@ -2377,4 +2383,102 @@ fn spawn_color(brick: &Brick, palette: &[[f32; 4]]) -> Option<[f32; 4]> {
         .filter(|v| v.recolor)
         .and_then(|_| palette.get(usize::from(brick.color)))
         .map(|&[r, g, b, _]| [r, g, b, 1.0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{definitions::Definitions, simulation::Simulation};
+
+    /// A session with one test tank parked at the origin.
+    fn tank_session() -> (Session, u64) {
+        let simulation = Simulation::new(
+            bri_world::World::new("Lab".into(), "lab".into(), vec![[1.0; 4]]),
+            Definitions {
+                entries: Default::default(),
+            },
+            vec![
+                rapier3d::prelude::ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+                    .translation(Vec3::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap();
+        let mut s = Session::new(simulation);
+        s.set_vehicle_pack(bri_vehicles::testing::pack(), Vec::new())
+            .unwrap();
+        let id = VehicleId(1);
+        s.vehicles
+            .world
+            .as_mut()
+            .unwrap()
+            .spawn(
+                &mut s.simulation.physics,
+                veh::Spawn {
+                    id,
+                    owner: veh::OwnerId(1),
+                    definition: bri_vehicles::testing::TANK.into(),
+                    transform: Default::default(),
+                    spawn_id: None,
+                    respawn_ticks: None,
+                    scale: 1.0,
+                },
+            )
+            .unwrap();
+        // Past the spawn's invulnerable time, so the hull takes damage.
+        let world = s.vehicles.world.as_mut().unwrap();
+        let grace = world
+            .definition(bri_vehicles::testing::TANK)
+            .unwrap()
+            .invulnerable_ticks;
+        for _ in 0..grace {
+            world.pre_step(&mut s.simulation.physics, &[]).unwrap();
+            world.post_step(&mut s.simulation.physics).unwrap();
+        }
+        (s, id.0)
+    }
+    /// Shoot `part` of the tank with exactly the damage that destroys it.
+    fn destroy(s: &mut Session, vehicle: u64, at: [f32; 3]) {
+        let world = s.vehicles.world.as_ref().unwrap();
+        let id = VehicleId(vehicle);
+        let part = world.hit_part(&s.simulation.physics, id, at);
+        let amount = world.max_damage(id, part).unwrap();
+        s.damage_vehicle(
+            vehicle,
+            amount,
+            2,
+            "test",
+            Vec3::from(at),
+            VehicleHarm::Weapon { projectile: None },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_shot_off_turret_and_a_destroyed_hull_both_replicate_the_turret_gone() {
+        let (mut s, tank) = tank_session();
+        let info = &s.vehicle_infos()[0];
+        assert!(!info.turret_broken && !info.destroyed, "a new tank");
+        let snapshot = |s: &Session| {
+            s.vehicles
+                .world
+                .as_ref()
+                .unwrap()
+                .vehicle_snapshot(&s.simulation.physics, VehicleId(tank))
+                .unwrap()
+        };
+        // The middle of the test turret's box, which stands 0.8 above its mount.
+        const TURRET_MIDDLE: f32 = 0.4;
+        let mount = Vec3::from(snapshot(&s).turret_transform.unwrap().position);
+        destroy(&mut s, tank, (mount + Vec3::Y * TURRET_MIDDLE).to_array());
+        let info = &s.vehicle_infos()[0];
+        assert!(info.turret_broken, "the turret is shot off");
+        assert!(!info.destroyed, "and the hull lives on");
+
+        let (mut s, tank) = tank_session();
+        let hull = snapshot(&s).transform.position;
+        destroy(&mut s, tank, hull);
+        let info = &s.vehicle_infos()[0];
+        assert!(info.destroyed, "the hull is destroyed");
+        assert!(info.turret_broken, "and its turret blew off with it");
+    }
 }

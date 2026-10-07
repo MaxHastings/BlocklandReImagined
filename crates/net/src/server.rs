@@ -6,7 +6,10 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use bri_admin::Principal;
-use bri_sim::session::Session;
+use bri_sim::{
+    replay::{Recorder, panic_message},
+    session::Session,
+};
 use bri_world::OwnerId;
 use glam::Vec3;
 use quinn::{Connection, Endpoint};
@@ -76,6 +79,11 @@ pub trait MapHost: Send + Sync {
     /// The session for `map`, set up as the host's first map was; runs on a
     /// blocking thread.
     fn load(&self, map: &str) -> Result<Session>;
+    /// [`Self::load`], with the Add-On state the session was set up with
+    /// (for a match recording).
+    fn load_with_save(&self, map: &str) -> Result<(Session, Option<Vec<u8>>)> {
+        Ok((self.load(map)?, None))
+    }
     /// `session` is leaving play.
     fn outgoing(&self, _session: &Session) {}
 }
@@ -610,20 +618,32 @@ pub fn start_with_limit(
     options: ServerOptions,
     max_players: usize,
 ) -> Result<ServerHandle> {
-    start_configured(session, options, max_players, None, false)
+    start_configured(session, options, max_players, None, false, None)
 }
 /// Persistent administration variant preserving the host-selected player cap.
 pub fn start_with_admin_store_and_limit(
+    session: Session,
+    options: ServerOptions,
+    max_players: usize,
+    path: impl AsRef<std::path::Path>,
+) -> Result<ServerHandle> {
+    start_with_admin_store_limit_and_recording(session, options, max_players, path, None)
+}
+/// [`start_with_admin_store_and_limit`], recording the match
+/// ([`crate::replay`]) when `recording` says where. A recording that cannot
+/// start is reported and the game is served unrecorded.
+pub fn start_with_admin_store_limit_and_recording(
     mut session: Session,
     options: ServerOptions,
     max_players: usize,
     path: impl AsRef<std::path::Path>,
+    recording: Option<crate::replay::Recording>,
 ) -> Result<ServerHandle> {
     let (store, state) = AdminStore::open(path)?;
     let mut bytes = Vec::new();
     state.write(&mut bytes)?;
     session.restore_admin_state(&bytes)?;
-    start_configured(session, options, max_players, Some(store), true)
+    start_configured(session, options, max_players, Some(store), true, recording)
 }
 fn start_configured(
     session: Session,
@@ -631,6 +651,7 @@ fn start_configured(
     max_players: usize,
     admin_store: Option<AdminStore>,
     require_identity: bool,
+    recording: Option<crate::replay::Recording>,
 ) -> Result<ServerHandle> {
     start_stepping(
         session,
@@ -639,6 +660,7 @@ fn start_configured(
         admin_store,
         require_identity,
         Session::step,
+        recording,
     )
 }
 /// [`start_configured`] with what one simulation step is (tests make it fail).
@@ -649,6 +671,7 @@ fn start_stepping(
     admin_store: Option<AdminStore>,
     require_identity: bool,
     step: fn(&mut Session) -> Result<()>,
+    recording: Option<crate::replay::Recording>,
 ) -> Result<ServerHandle> {
     ensure!((1..=64).contains(&max_players), "Invalid player limit");
     ensure!(
@@ -689,6 +712,23 @@ fn start_stepping(
     // the first tick it would hold the server's loop, and the handshakes
     // waiting behind it, for as long as a big world takes.
     session.prepare_events();
+    // Recording starts from the session as it is served.
+    let recorder = match recording {
+        None => Recorder::off(),
+        Some(recording) => {
+            let path = recording.path.clone();
+            match crate::replay::start(&mut session, recording, &options.environment) {
+                Ok(recorder) => {
+                    println!("Recording this match to {}", path.display());
+                    recorder
+                }
+                Err(error) => {
+                    eprintln!("Not recording this match ({}): {error:#}", path.display());
+                    Recorder::off()
+                }
+            }
+        }
+    };
     let task = tokio::spawn(run(
         players.clone(),
         perf.clone(),
@@ -706,6 +746,7 @@ fn start_stepping(
         stop_rx,
         recovery_rx,
         step,
+        recorder,
     ));
     Ok(ServerHandle {
         address,
@@ -1281,27 +1322,22 @@ fn hold_package_problems(
     let over = held.len().saturating_sub(MAX_HELD_PROBLEMS);
     held.drain(..over);
 }
-fn close_admin_disconnects(session: &mut Session, peers: &mut BTreeMap<OwnerId, Peer>) {
-    for target in session.take_admin_disconnects() {
-        let message = session.take_admin_disconnect_message(target);
+fn close_admin_disconnects(
+    session: &mut Session,
+    recorder: &mut Recorder,
+    peers: &mut BTreeMap<OwnerId, Peer>,
+) {
+    for target in recorder.take_admin_disconnects(session) {
+        let message = recorder.take_admin_disconnect_message(session, target);
         if let Some(target_peer) = peers.remove(&target) {
             // The close frame must fit one packet; messages stay short.
             target_peer.connection.close(
                 0_u32.into(),
                 &message.as_bytes()[..message.floor_char_boundary(400)],
             );
-            let _ = session.disconnect(target);
+            let _ = recorder.disconnect(session, target);
         }
     }
-}
-
-/// The text a panic was raised with.
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
-    panic
-        .downcast_ref::<&str>()
-        .map(|s| s.to_string())
-        .or_else(|| panic.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown panic".into())
 }
 
 /// A bug (a panic) in one request, join or tick costs that request, join or
@@ -1372,6 +1408,7 @@ async fn run(
     mut stop: oneshot::Receiver<()>,
     mut recovery: mpsc::Receiver<crate::recovery::Recovery>,
     step: fn(&mut Session) -> Result<()>,
+    mut recorder: Recorder,
 ) -> ServerReport {
     // The tick and pose sends wake on a 1 ms clock while hosting.
     let _timers = crate::timer_resolution::Guard::acquire();
@@ -1424,7 +1461,10 @@ async fn run(
     let mut event_overload = (0_u64, None::<std::time::Instant>);
     let mut event_notes = EventNotes::default();
     let mut spawn_points = options.spawn_points.clone();
-    let (map_tx, mut map_rx) = mpsc::channel::<(OwnerId, Result<Session>)>(1);
+    // A map Change Map loaded: who asked, which map, and its session with
+    // the Add-On state it was set up with.
+    let (map_tx, mut map_rx) =
+        mpsc::channel::<(OwnerId, String, Result<(Session, Option<Vec<u8>>)>)>(1);
     let mut joins = 0;
     let mut resumes = 0;
     let mut commands = 0;
@@ -1452,14 +1492,13 @@ async fn run(
             }
         },
         Some(_)=tasks.join_next(),if !tasks.is_empty()=>{},
-        Some((admin,loaded))=map_rx.recv()=>{
+        Some((admin,map,loaded))=map_rx.recv()=>{
             match loaded {
-                Ok(new)=>{
-                    let old=std::mem::replace(&mut session,new);
-                    if let Some(host)=&options.map_loader{host.outgoing(&old);}
-                    session.adopt(old,admin)?;
+                Ok((new,package_save))=>{
+                    if let Some(host)=&options.map_loader{host.outgoing(&session);}
+                    recorder.map_changed(&mut session,new,admin,&map,package_save)?;
                     // Players the new map could not place are let go with the reason.
-                    close_admin_disconnects(&mut session,&mut peers);
+                    close_admin_disconnects(&mut session,&mut recorder,&mut peers);
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
                     spawn_points=session.spawn_points().to_vec();
                     names=session.names();avatars=session.avatars();tools=session.tool_inventories();weapons.reset(session.weapon_view(),session.simulation().state().tick,session.projectile_falls());
@@ -1470,7 +1509,7 @@ async fn run(
                     package_views = PackageViews::default();send_package_views(&session,&peers,&mut package_views);
                     broadcast_admin_snapshots(&session,&peers);
                 }
-                Err(error)=>session.map_change_failed(admin,&format!("{error:#}")),
+                Err(error)=>recorder.map_change_failed(&mut session,admin,&format!("{error:#}")),
             }
         },
         Some(event)=incoming.recv()=>{match event {
@@ -1486,23 +1525,23 @@ async fn run(
                         // network dropped and came back before the host timed it out.
                         // Its ticket and identity prove it is them, so the new
                         // connection replaces the stale one and keeps their number.
-                        if let Some(stale)=peers.remove(&owner){stale.connection.close(0_u32.into(),b"Replaced by a new connection");package_views.sent.remove(&owner);let _=session.disconnect(owner);}
+                        if let Some(stale)=peers.remove(&owner){stale.connection.close(0_u32.into(),b"Replaced by a new connection");package_views.sent.remove(&owner);let _=recorder.disconnect(&mut session,owner);}
                         let administrator=ticket_host || supplied_host;
-                        let mut error=None;let mut found=false;for spawn in &spawn_points {match session.resume_verified(owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
+                        let mut error=None;let mut found=false;for spawn in &spawn_points {match recorder.resume_verified(&mut session,owner,*spawn,administrator,principal){Ok(())=>{found=true;break},Err(e)=>error=Some(e)}}ensure!(found,"{}",error.context("No spawn points")?);
                         tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o))?;
                         resumes+=1;(owner,token)
                     }else{
                         let mut bytes=[0;32];getrandom::fill(&mut bytes).map_err(|e|anyhow::anyhow!("OS randomness failed: {e}"))?;let token=ResumeToken(bytes);
                         let administrator=supplied_host;
-                        let mut owner=None;let mut error=None;for spawn in &spawn_points {match session.join_verified(hello.name.clone(),*spawn,administrator,principal){Ok(id)=>{owner=Some(id);break},Err(e)=>error=Some(e)}}
+                        let mut owner=None;let mut error=None;for spawn in &spawn_points {match recorder.join_verified(&mut session,hello.name.clone(),*spawn,administrator,principal){Ok(id)=>{owner=Some(id);break},Err(e)=>error=Some(e)}}
                         let owner=owner.ok_or_else(||error.unwrap_or_else(||anyhow::anyhow!("No spawn points")))?;
-                        if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=session.disconnect(owner);return Err(error)}
+                        if let Err(error)=tickets.insert(token_key(&token),Ticket{owner,host:administrator,principal,issued:0},|o|peers.contains_key(&o)){let _=recorder.disconnect(&mut session,owner);return Err(error)}
                         joins+=1;(owner,token)
                     };
                     // `onConnectRequest` takes the clan tags with the name.
-                    if let Err(error)=session.set_clan(owner,&hello.clan){eprintln!("Player {owner}: clan tags not taken: {error:#}");}
-                    if !differences.unavailable.is_empty(){session.private_chat(owner,crate::client::unavailable_notice(&differences.unavailable));}
-                    if !differences.cosmetic.is_empty(){session.private_chat(owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
+                    if let Err(error)=recorder.set_clan(&mut session,owner,&hello.clan){eprintln!("Player {owner}: clan tags not taken: {error:#}");}
+                    if !differences.unavailable.is_empty(){recorder.private_chat(&mut session,owner,crate::client::unavailable_notice(&differences.unavailable));}
+                    if !differences.cosmetic.is_empty(){recorder.private_chat(&mut session,owner,format!("Some presentation packages differ from the server's, so things may look or sound different: {}",bri_package::environment::describe(&differences.cosmetic)));}
                     // O(1) on the loop; the world is chunked and encoded off it.
                     let (mut checkpoint,bricks)=Checkpoint::from_session(&session,cursor);
                     let view=session.package_state_for(owner);checkpoint.package_state=view.clone();
@@ -1511,37 +1550,37 @@ async fn run(
                     // Bricks around the joiner first; they play while the rest arrive.
                     let focus=session.motion_states().into_iter().find(|(p,_)|p.owner==owner).map(|(p,_)|p.feet);
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks,focus},traffic.clone(),1);
-                    if out.try_send(welcome).is_err(){let _=session.disconnect(owner);anyhow::bail!("Join writer unavailable");}
+                    if out.try_send(welcome).is_err(){let _=recorder.disconnect(&mut session,owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
                     peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.sent.insert(owner,view);Ok(owner)
                 })())? {Ok(join)=>join,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
-            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.sent.remove(&owner);let _=session.disconnect(owner);broadcast_admin_snapshots(&session,&peers);}},
+            Event::Lost{owner,generation}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){peers.remove(&owner);package_views.sent.remove(&owner);let _=recorder.disconnect(&mut session,owner);broadcast_admin_snapshots(&session,&peers);}},
             Event::Command{owner,generation,request,_body_permit}=>{
                 if let Some(peer)=peers.get(&owner).filter(|p|p.generation==generation){
                     commands+=1;
                     let old_admin_revision=session.admin_revision();
-                    let result=match fuse.guard("a player's request",||session.command_with_aim_and_admin_persistence(owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")}))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
+                    let result=match fuse.guard("a player's request",||recorder.command(&mut session,owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")}))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                     if result.is_err(){rejected+=1;}
                     match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
                         Ok(bytes)=>{traffic.add(Kind::Reply,bytes.len(),1);peer.send(Frame::Ready(Arc::new(bytes)))},
                         Err(error)=>peer.send_message(Kind::Reply,&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
                     }
-                    close_admin_disconnects(&mut session,&mut peers);
+                    close_admin_disconnects(&mut session,&mut recorder,&mut peers);
                     if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers);}
-                    if let Some((admin,map))=session.take_map_change(){
+                    if let Some((admin,map))=recorder.take_map_change(&mut session){
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
                                 // A loader that panics still answers the administrator.
-                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load(&map).map(|mut new|{new.prepare_events();new}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
-                                let _=tx.blocking_send((admin,loaded));});}
-                            None=>session.map_change_failed(admin,"This host cannot change maps"),
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load_with_save(&map).map(|(mut new,save)|{new.prepare_events();(new,save)}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let _=tx.blocking_send((admin,map,loaded));});}
+                            None=>recorder.map_change_failed(&mut session,admin,"This host cannot change maps"),
                         }
                     }
                 }
             },
-            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=session.seat_report(owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
+            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);
@@ -1549,7 +1588,7 @@ async fn run(
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             for _ in 0..steps {
             let started=std::time::Instant::now();
-            let stepped=match fuse.guard("a server tick",||step(&mut session))? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
+            let stepped=match fuse.guard("a server tick",||recorder.step(&mut session,step))? {Ok(stepped)=>stepped,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
             perf_window.step(started.elapsed());
             // A failing gameplay adapter must not stop the host for everyone.
             if let Err(error)=stepped{step_errors+=1;if step_errors<=16||step_errors.is_power_of_two(){eprintln!("Server step error ({step_errors}): {error:#}");}}
@@ -1567,7 +1606,7 @@ async fn run(
                 send_state(&peers,&traffic,state_stream.interval(tick,poses(&session),session.vehicle_poses(),session.camera_orbs(),&viewers,session.simulation().passages()));
             }
             if tick.is_multiple_of(UPDATE_INTERVAL) {
-                let mut bricks=BTreeMap::new();for id in session.take_dirty(){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
+                let mut bricks=BTreeMap::new();for id in recorder.take_dirty(&mut session){bricks.insert(id,session.simulation().state().bricks.get(&id).map(public_brick));}
                 let changed_avatars=crate::stream::changed_entries(&mut avatars,session.avatars());
                 let changed_tools=crate::stream::changed_entries(&mut tools,session.tool_inventories());
                 let changed_weapons=weapons.delta(&session.weapon_view(),tick);
@@ -1585,7 +1624,7 @@ async fn run(
                 let changed_weapon_settings=if weapon_settings!=*session.weapon_settings(){weapon_settings=session.weapon_settings().clone();Some(weapon_settings.clone())}else{None};
                 let chat=session.chat_after(last_chat);if let Some(line)=chat.last(){last_chat=line.id;}
                 let next=cursor.checked_add(1).context("Replication sequence exhausted")?;
-                let cues=session.take_cues();let dropped_cues=session.dropped_cues();
+                let cues=recorder.take_cues(&mut session);let dropped_cues=session.dropped_cues();
                 let delta=Delta{base:cursor,cursor:next,tick,bricks,names:changed_names,avatars:changed_avatars,tools:changed_tools,weapons:changed_weapons,palette:changed_palette,chat,cues,dropped_cues,vitals:changed_vitals,minigames:changed_minigames,vehicles:changed_vehicles,time_scale:changed_time_scale,broken_shapes:changed_broken,targets:changed_targets,map_lights:changed_lights,environment:changed_environment,weapon_settings:changed_weapon_settings,entities:changed_entities,world_shapes:changed_shapes};
                 // An update with nothing in it only moves the clients' clock.
                 // Clients coast projectiles on each update's tick, so they keep 20 Hz.
@@ -1594,7 +1633,7 @@ async fn run(
                     broadcast(peers.values(),Kind::Update,&Message::Update(delta));cursor=next;
                 }
                 send_package_views(&session,&peers,&mut package_views);
-                for (owner,notice) in session.take_private_notices(){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}}
+                for (owner,notice) in recorder.take_private_notices(&mut session){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}}
             }
             }
             event_overload.0+=session.take_event_overload();
@@ -1602,7 +1641,8 @@ async fn run(
                 eprintln!("Events: {} explosions/projectiles over the per-tick limit were dropped",event_overload.0);
                 event_overload=(0,Some(now));
             }
-            event_notes.log(now,session.take_event_diagnostics(),session.take_slow_event_ticks());
+            let (diagnostics,slow)=(session.take_event_diagnostics(),session.take_slow_event_ticks());
+            event_notes.log(now,diagnostics,slow);
             hold_package_problems(&package_problems,session.take_package_problems());
             if let Some(keeper)=keeper.as_mut(){keeper.tick(now,&session);}
             if perf_window.started.is_none_or(|at|now.duration_since(at)>=PerfWindow::LENGTH)
@@ -1616,6 +1656,7 @@ async fn run(
         },
     }}Ok(())})).await;
     endpoint.close(0_u32.into(), b"Server shutdown");
+    recorder.finish();
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     let failure = match outcome {
@@ -1712,9 +1753,15 @@ mod tests {
             map_loader: None,
             packages: None,
         };
-        let server = start_stepping(host.session, options, 4, None, false, |_| {
-            panic!("a bug in every tick")
-        })?;
+        let server = start_stepping(
+            host.session,
+            options,
+            4,
+            None,
+            false,
+            |_| panic!("a bug in every tick"),
+            None,
+        )?;
         let slot = tempfile::tempdir()?;
         let path = slot.path().join("recovery.json");
         server.keep_recovery(Recovery::new(path.clone()))?;
@@ -1733,6 +1780,135 @@ mod tests {
         let kept = bri_world::build::decode(&std::fs::read(&path)?)?;
         assert_eq!(kept.world.bricks.len(), 1);
         assert_eq!(kept.world.name, "Kept");
+        Ok(())
+    }
+    /// A host recording its match writes a file that replays tick for tick:
+    /// a player joins over the network, walks, builds and chats, and the
+    /// replay rebuilt from the same content folder plays out the same.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_recorded_match_replays_as_played() -> Result<()> {
+        const WALKED: u64 = 60;
+        let root = crate::testing::ScratchRoot::new()?;
+        let set = bri_package::packages::PackageSet::load_root(root.path())?;
+        // A 1x1 fixture brick is three plates (0.6) tall: the planted one
+        // stands on this one.
+        const BASE: [f32; 3] = [0.25, 5.1, 0.25];
+        const ON_TOP: [f32; 3] = [0.25, 5.7, 0.25];
+        let one_by_one =
+            || bri_world::ContentRef::Resolved(crate::testing::MENU_BRICKS[0].0.into());
+        let mut world = bri_world::World::new(
+            "Recorded".into(),
+            crate::testing::MAP.into(),
+            vec![[1.0; 4]],
+        );
+        world
+            .bricks
+            .insert(1, bri_world::Brick::new(one_by_one(), BASE, 0));
+        world.next_brick_id = 2;
+        let host = crate::dedicated::load_packages(root.path(), &set, world)?;
+        let slot = tempfile::tempdir()?;
+        let recording = crate::replay::Recording {
+            path: crate::replay::next_recording(slot.path())?,
+            host: host.recipe()?,
+        };
+        let path = recording.path.clone();
+        let options = ServerOptions {
+            bind: "127.0.0.1:0".parse()?,
+            environment: host.environment.clone(),
+            spawn_points: host.spawn_points.clone(),
+            certificate: None,
+            map_loader: Some(host.setup.clone()),
+            packages: None,
+        };
+        let server = start_with_admin_store_limit_and_recording(
+            host.session,
+            options,
+            4,
+            slot.path().join("administration.json"),
+            Some(recording),
+        )?;
+        let identity =
+            bri_identity::ClientIdentity::load_or_create(slot.path().join("client.identity"))?;
+        let mut player = crate::client::Client::connect_with_identity(
+            server.address,
+            &server.certificate,
+            "Recorder".into(),
+            host.environment.packages.clone(),
+            None,
+            None,
+            &identity,
+        )
+        .await?;
+        let planted = player
+            .command(bri_sim::session::Command::Plant {
+                definition: crate::testing::MENU_BRICKS[0].0.into(),
+                position: ON_TOP,
+                quarter_turns: 0,
+                color: 0,
+            })
+            .await?;
+        assert!(
+            matches!(planted, bri_sim::session::Reply::Planted(_)),
+            "{planted:?}"
+        );
+        for newest in 1..=WALKED {
+            let input = bri_sim::player::MoveInput {
+                forward: 1.0,
+                yaw: newest as f32 / WALKED as f32,
+                ..Default::default()
+            };
+            player.movement(newest, &[input], None, None)?;
+            tokio::time::sleep(Duration::from_millis(8)).await;
+        }
+        player
+            .command(bri_sim::session::Command::Chat("on the record".into()))
+            .await?;
+        player.close();
+        server.stop().await?;
+
+        // The file as written, and as a replay of `bytes` ends: its report
+        // and the session it played into. `tamper` changes how the host is
+        // set up again.
+        let replayed = |bytes: &[u8], tamper: &dyn Fn(&mut crate::replay::Header)| {
+            let copy = slot.path().join("copy.brimatch");
+            std::fs::write(&copy, bytes)?;
+            let mut opened = crate::replay::open(&copy)?;
+            tamper(&mut opened.header);
+            let crate::replay::Rebuilt { mut session, setup } =
+                crate::replay::rebuild(root.path(), &opened.header)?;
+            let report =
+                bri_sim::replay::replay(&mut session, &mut opened.frames, &mut |map, save| {
+                    crate::replay::load_map(&setup, map, save)
+                })?;
+            anyhow::Ok((report, session))
+        };
+        let recorded = std::fs::read(&path)?;
+        let (report, session) = replayed(&recorded, &|_| ())?;
+        assert_eq!(report.divergence, None, "{report:?}");
+        assert_eq!(report.cut_off, None);
+        assert!(report.ticks > WALKED, "{report:?}");
+        assert!(
+            session
+                .simulation()
+                .state()
+                .bricks
+                .values()
+                .any(|b| b.position == ON_TOP && b.definition == one_by_one()),
+            "the replay builds what the player built"
+        );
+        // A host killed mid-write leaves a compressed stream cut short: it
+        // matches as far as it goes, and says the file ends early.
+        // (A short match is mostly its header, so cut its last byte.)
+        let (cut, _) = replayed(&recorded[..recorded.len() - 1], &|_| ())?;
+        assert_eq!(cut.divergence, None, "{cut:?}");
+        assert!(cut.cut_off.is_some(), "{cut:?}");
+        assert!(cut.ticks <= report.ticks, "{cut:?}");
+        // Set up again without the brick it started with, it differs at
+        // once, in the bricks.
+        let (bare, _) = replayed(&recorded, &|header| header.host.world.bricks.clear())?;
+        let divergence = bare.divergence.context("a missing brick is caught")?;
+        let later = divergence.later.context("the start is a full check")?;
+        assert_eq!(later.parts, ["bricks"], "{later:?}");
         Ok(())
     }
     /// A clean stop leaves no recovery snapshot behind.

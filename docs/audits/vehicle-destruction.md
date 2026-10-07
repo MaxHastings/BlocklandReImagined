@@ -20,7 +20,7 @@ the v20 reference; ours (`packages/imported/vehicle_stunt_plane`) is a
 | 3 | First explosion | `initialExplosionProjectile` (jeep, tank, default `vehicleExplosionProjectile`) | Same (`world.rs` `damage`) | Pass |
 | 4 | Fire | `damageEmitter` `VehicleBurnEmitter` past `damageLevelTolerance` 0.99 | Burns from destruction until removal | Pass, with one accepted gap: v20 also burns in the last 1% of health. Health is not replicated and a cosmetic gets no bandwidth, so ours starts at destruction |
 | 5 | Final explosion and removal | After `burnTime` (Jeep, Tank, Ball 4 s; Magic Carpet 0.5 s) `finalExplosionProjectile` (black smoke cloud) and the wreck is deleted | Same (`world.rs` `post_step`) | Pass |
-| 6 | Tank turret destroyed | `TankTurretExplosionProjectile` | Same | Pass |
+| 6 | Tank turret destroyed | `TankTurretExplosionProjectile`, whose debris is the turret mesh | Fired, but the hull kept drawing its turret, so it showed twice | **Fixed** 2026-10-07: `VehicleInfo::turret_broken`; the hull stops drawing it and its gunner sits on the fallback seat (`docs/progress/2026-10-07-vehicle-wreck-textures.md`) |
 | 7 | PlayerData mounts (horse, rowboat, cannon) | Die like players (`Armor::onDisabled`), no repaint | No repaint | Pass |
 
 Single source: the wreck's fire is drawn only from the replicated

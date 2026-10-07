@@ -12,20 +12,26 @@ use std::{path::PathBuf, time::Duration};
 /// `bri_net::allocator::tune` keeps its purges off the tick.
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+/// Asks for the match to be recorded.
+const RECORD_FLAG: &str = "--record";
 #[tokio::main]
 async fn main() -> Result<()> {
     bri_net::allocator::tune();
     // Watched from the start: a stop asked for while loading still saves.
     let mut shutdown = dedicated::Shutdown::watch()?;
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let given = args.len();
+    args.retain(|a| a != RECORD_FLAG);
+    let record = args.len() < given;
     ensure!(
         args.len() == 4 || args.len() == 5,
-        "Usage: bri-server <content-root> <map | world.json | resume> <state-dir> <listen-address> [run-seconds]
+        "Usage: bri-server [--record] <content-root> <map | world.json | resume> <state-dir> <listen-address> [run-seconds]
          <map> starts an empty world on a base map by name (slate, bedroom, kitchen, slopes, ...).
          `resume` continues from the newest world this server saved in <state-dir> when it last stopped
          (or, after a crash, the world it kept for recovery).
          <state-dir>/server.json holds the admin passwords and server settings (written with defaults on first start).
          <listen-address> is usually 0.0.0.0:28000 (UDP).
+         --record writes the match to <state-dir>/recordings (the newest ten are kept) for bri-replay to check.
          The content root's packages.json lists the packages to load (the base game's list and the default Add-Ons when absent)."
     );
     let content_root = PathBuf::from(&args[0]);
@@ -91,6 +97,22 @@ async fn main() -> Result<()> {
         .to_string();
     let mut host = dedicated::load(&content_root, world)?;
     host.configure(&config)?;
+    // A recording that cannot start leaves the match unrecorded.
+    let recording = if record {
+        let dir = state_dir.join(bri_net::replay::RECORDINGS_DIR);
+        match bri_net::replay::next_recording(&dir) {
+            Ok(path) => Some(bri_net::replay::Recording {
+                path,
+                host: host.recipe()?,
+            }),
+            Err(error) => {
+                eprintln!("Not recording this match ({}): {error:#}", dir.display());
+                None
+            }
+        }
+    } else {
+        None
+    };
     println!(
         "{}: up to {} players; settings and admin passwords in {}",
         config.settings.name,
@@ -106,6 +128,7 @@ async fn main() -> Result<()> {
         unresolved_items,
         pending_objects,
         merge_notes,
+        ..
     } = host;
     for note in &merge_notes {
         eprintln!("{note}");
@@ -117,7 +140,7 @@ async fn main() -> Result<()> {
     }
     let content_id = environment.digest();
     let initial_static_items = session.weapon_view().static_items.len();
-    let mut server = server::start_with_admin_store_and_limit(
+    let mut server = server::start_with_admin_store_limit_and_recording(
         session,
         ServerOptions {
             bind,
@@ -135,6 +158,7 @@ async fn main() -> Result<()> {
         },
         usize::from(config.settings.max_players),
         state_dir.join("administration.json"),
+        recording,
     )?;
     // Connect to IP and the LAN list show the server's name and map.
     if seconds.is_none()

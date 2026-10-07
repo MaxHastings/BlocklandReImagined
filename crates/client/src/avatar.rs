@@ -694,6 +694,7 @@ impl AvatarAssets {
             last_time: None,
             channels: None,
             transition: None,
+            stood_at: None,
             crouch: CrouchThread::default(),
             body: None,
             dead: false,
@@ -776,6 +777,8 @@ pub struct AvatarMesh {
     channels: Option<Channels>,
     /// Frozen source pose and start time of the current action transition.
     transition: Option<(Channels, f64)>,
+    /// When the body last left the [`SIT`] pose.
+    stood_at: Option<f64>,
     crouch: CrouchThread,
     /// The spawn this mesh animates (`Vitals::spawn_tick`).
     body: Option<u64>,
@@ -963,6 +966,9 @@ pub fn follow_drawn_bodies<'a>(
     }
 }
 
+/// The held `sit` pose (`/sit`, or a seat or mount point posed `sit`).
+const SIT: &str = "sit";
+
 /// `sAnimationTransitionTime`, and the shorter jump transition.
 const TRANSITION_TIME: f64 = 0.25;
 const JUMP_TRANSITION_TIME: f64 = 0.15;
@@ -1057,6 +1063,13 @@ impl AvatarMesh {
     /// from the previous one (`transitionToSequence`).
     pub fn action(&self) -> (&'static str, bool) {
         (self.mode, self.transition.is_some())
+    }
+    /// While the body blends up out of the `sit` pose, how much of the
+    /// sit is left: 1 as it leaves the pose, falling to 0 over one action
+    /// transition, whatever actions cut in meanwhile. `None` once upright.
+    pub fn getting_up(&self) -> Option<f32> {
+        let elapsed = self.last_time? - self.stood_at?;
+        (elapsed < TRANSITION_TIME).then(|| (1.0 - elapsed / TRANSITION_TIME) as f32)
     }
     /// A node's last posed transform relative to the model (feet, facing
     /// -Z, unscaled), for placing something on it before this frame's pose.
@@ -1334,7 +1347,7 @@ impl AvatarMesh {
         let scripted = if animation_input.dead {
             Some("death1")
         } else if animation_input.sitting {
-            Some("sit")
+            Some(SIT)
         } else {
             None
         };
@@ -1370,6 +1383,11 @@ impl AvatarMesh {
             .sequence(next.map_or(self.mode, |action| action.sequence))
             .context("Missing avatar movement clip")?;
         if let Some(action) = next {
+            if action.sequence == SIT {
+                self.stood_at = None;
+            } else if self.mode == SIT {
+                self.stood_at = Some(time);
+            }
             self.transition = self
                 .channels
                 .take()
@@ -1671,6 +1689,7 @@ impl AvatarMesh {
         self.last_time = old.last_time;
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
+        self.stood_at = old.stood_at;
         self.crouch = old.crouch;
         self.body = old.body;
     }
@@ -1687,6 +1706,7 @@ impl AvatarMesh {
             self.last_time = None;
             self.channels = None;
             self.transition = None;
+            self.stood_at = None;
             self.crouch = CrouchThread::default();
             self.drawn_offset = None;
         }
@@ -2185,6 +2205,7 @@ mod tests {
         rebuilt_outfit_continues_the_running_clip,
         mount_action_is_only_the_playing_actions_motion,
         seated_body_takes_the_mount_rotation,
+        getting_up_eases_out_of_the_sit_over_one_transition,
         free_look_turns_only_the_head_toward_the_camera,
         original_outfits_materials_and_customization_rules,
         ragdoll_on_the_real_blockhead,
@@ -2929,6 +2950,46 @@ mod tests {
         )?;
         let up = mesh.body_transform().transform_vector3(Vec3::Y);
         assert!(up.dot(tilt * Vec3::Y) > 0.999, "{up}");
+        Ok(())
+    }
+    fn getting_up_eases_out_of_the_sit_over_one_transition(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        let sitting = AvatarAnimationInput {
+            sitting: true,
+            ..Default::default()
+        };
+        let standing = AvatarAnimationInput::default();
+        let mut p = player();
+        let eye = |mesh: &AvatarMesh| -> Result<f32> {
+            Ok(mesh.world_node(assets, "Eye").context("Eye node")?.w_axis.y)
+        };
+        for frame in 0..30 {
+            mesh.pose_with_animation(assets, &p, f64::from(frame) / 30.0, &sitting)?;
+        }
+        assert_eq!(mesh.getting_up(), None, "sitting is not getting up");
+        let sat = eye(&mesh)?;
+        let up = 1.0;
+        mesh.pose_with_animation(assets, &p, up, &standing)?;
+        assert_eq!(mesh.getting_up(), Some(1.0));
+        assert!(
+            (eye(&mesh)? - sat).abs() < 1e-4,
+            "the body leaves the sit as it was"
+        );
+        // Running off part way up starts another transition; the rise keeps
+        // its own clock.
+        p.velocity = [0.0, 0.0, -5.0];
+        mesh.pose_with_animation(assets, &p, up + TRANSITION_TIME / 2.0, &standing)?;
+        assert_eq!(mesh.action().0, "run");
+        let half = mesh.getting_up().context("still getting up")?;
+        assert!((half - 0.5).abs() < 1e-4, "{half}");
+        mesh.pose_with_animation(assets, &p, up + TRANSITION_TIME, &standing)?;
+        assert_eq!(mesh.getting_up(), None, "upright after one transition");
+        // Sitting back down part way up is sitting, not getting up.
+        mesh.pose_with_animation(assets, &p, up + 2.0, &sitting)?;
+        mesh.pose_with_animation(assets, &p, up + 3.0, &standing)?;
+        mesh.pose_with_animation(assets, &p, up + 3.0 + TRANSITION_TIME / 2.0, &sitting)?;
+        assert_eq!(mesh.getting_up(), None);
         Ok(())
     }
     #[test]
