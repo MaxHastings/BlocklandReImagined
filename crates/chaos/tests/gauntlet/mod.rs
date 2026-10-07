@@ -723,7 +723,11 @@ impl Scorer {
                 if !std::mem::replace(&mut track.fallen, true) {
                     // Knocked off when an enemy's shot reached it after it
                     // last stood on something; otherwise its own doing.
-                    if self.struck.get(bot).is_some_and(|t| *t >= track.grounded_at) {
+                    if self
+                        .struck
+                        .get(bot)
+                        .is_some_and(|t| *t >= track.grounded_at)
+                    {
                         self.report.knocked_off += 1;
                     } else {
                         self.report.fell += 1;
