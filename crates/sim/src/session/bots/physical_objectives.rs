@@ -461,11 +461,7 @@ pub(super) fn candidates(
                 4.0 / (1.0 + d.mass.max(0.0) / combat::PLAYER_MASS)
             };
             budget
-                .reserve(
-                    0,
-                    1,
-                    goal.object.definition.len(),
-                )
+                .reserve(0, 1, goal.object.definition.len())
                 .map_err(|_| Rejection::Budget)?;
             choices.push(Choice {
                 goal: goal.clone(),
@@ -548,11 +544,7 @@ pub(super) fn candidates(
                 }
                 let speed = (force / d.mass.max(1.0)).sqrt().clamp(0.1, 8.0);
                 budget
-                    .reserve(
-                        0,
-                        1,
-                        goal.object.definition.len() + image.id.len(),
-                    )
+                    .reserve(0, 1, goal.object.definition.len() + image.id.len())
                     .map_err(|_| Rejection::Budget)?;
                 choices.push(Choice {
                     goal: goal.clone(),
@@ -588,11 +580,7 @@ pub(super) fn candidates(
             })
         {
             budget
-                .reserve(
-                    0,
-                    1,
-                    goal.object.definition.len(),
-                )
+                .reserve(0, 1, goal.object.definition.len())
                 .map_err(|_| Rejection::Budget)?;
             choices.push(Choice {
                 goal,

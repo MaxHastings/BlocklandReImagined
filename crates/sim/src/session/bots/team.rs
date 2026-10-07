@@ -251,7 +251,9 @@ pub(super) fn mood(
         if who != me && seen && feet.distance(at) < radius {
             near += weight;
             match what {
-                Doing::Goof(f) if usize::from(f) < FLAVOURS.len() => doing[usize::from(f)] += weight,
+                Doing::Goof(f) if usize::from(f) < FLAVOURS.len() => {
+                    doing[usize::from(f)] += weight
+                }
                 Doing::Play => play += weight,
                 _ => {}
             }
@@ -786,7 +788,17 @@ mod tests {
             scores[Behaviour::Fight as usize] = fight;
             scores[Behaviour::Wander as usize] = 0.1;
             let all = [(1, shooter())];
-            side_terms(&cfg, 2, Default::default(), |_| 0, &mut scores, &choices, &all, 2.0, &open);
+            side_terms(
+                &cfg,
+                2,
+                Default::default(),
+                |_| 0,
+                &mut scores,
+                &choices,
+                &all,
+                2.0,
+                &open,
+            );
             (behaviour::best(&scores), scores)
         };
         assert_eq!(pick(1.0).0, Behaviour::Fight, "0.4 still beats 0.1");
@@ -820,7 +832,17 @@ mod tests {
             scores[Behaviour::Fight as usize] = 0.6 + team.overlap();
             scores[Behaviour::Chase as usize] = 0.6;
             let all = [(0, ally)];
-            side_terms(&team, seed, Default::default(), |_| 10, &mut scores, &choices, &all, 2.0, &open);
+            side_terms(
+                &team,
+                seed,
+                Default::default(),
+                |_| 10,
+                &mut scores,
+                &choices,
+                &all,
+                2.0,
+                &open,
+            );
             let mut mind = surprise::Mind::new(seed);
             let gate = surprise::Gate::default();
             let hold = crate::bot_kind::BotHold::default();

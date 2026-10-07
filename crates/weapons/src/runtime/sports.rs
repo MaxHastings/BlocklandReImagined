@@ -98,7 +98,12 @@ impl WeaponsWorld {
     /// `footballProjectile::onCollision`'s `CatchFootballMessage`: a
     /// football caught before it touched the ground, by whichever way the
     /// catcher met it.
-    pub(super) fn football_catch(&mut self, p: &Projectile, d: &crate::ProjectileDef, catcher: ActorId) {
+    pub(super) fn football_catch(
+        &mut self,
+        p: &Projectile,
+        d: &crate::ProjectileDef,
+        catcher: ActorId,
+    ) {
         if StockProjectile::of(d) != Some(StockProjectile::Football) || p.bounced {
             return;
         }

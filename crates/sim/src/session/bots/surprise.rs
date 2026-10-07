@@ -830,13 +830,12 @@ impl Mind {
     /// A goof it stands still for (a look, an emote, a hop): while it
     /// lasts the bot wants to go nowhere.
     pub(super) fn standing(&self) -> bool {
-        self.flavour()
-            .is_some_and(|f| {
-                !matches!(
-                    f,
-                    Flavour::Circle | Flavour::Detour | Flavour::Light | Flavour::Door
-                )
-            })
+        self.flavour().is_some_and(|f| {
+            !matches!(
+                f,
+                Flavour::Circle | Flavour::Detour | Flavour::Light | Flavour::Door
+            )
+        })
     }
     pub(super) fn view(&self, cfg: &BotSurprise) -> BotSurpriseView {
         BotSurpriseView {
@@ -1357,10 +1356,17 @@ impl Session {
                         // sword): a whack in the face, so only one that
                         // cannot hurt them, as `hands_goof` uses it.
                         let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
-                        let harmless = i.target.is_some_and(|t| !self.can_damage_player(bot, t, false));
+                        let harmless = i
+                            .target
+                            .is_some_and(|t| !self.can_damage_player(bot, t, false));
                         let strikes = |slot: &Option<usize>| {
                             slot.and_then(|s| {
-                                let item = self.weapons.actor(ActorId(bot))?.inventory.get(s)?.clone()?;
+                                let item = self
+                                    .weapons
+                                    .actor(ActorId(bot))?
+                                    .inventory
+                                    .get(s)?
+                                    .clone()?;
                                 let hurts = hand_combat::item_attacks(self, &item, scale);
                                 let item = self.weapons.pack.items.get(&item)?;
                                 let melee = self.weapons.pack.images.get(&item.image)?.melee;

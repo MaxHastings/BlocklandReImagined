@@ -1479,7 +1479,10 @@ fn sword_soccer_plays_the_ball_and_fights_for_it() {
     }
     let bot_time = 4.0 * 2.0 * seconds as f32;
     assert!(goals > 0, "the ball is still played to goal: {goals} goals");
-    assert!(combat > 0.0, "with swords that hurt, bots fight for the ball");
+    assert!(
+        combat > 0.0,
+        "with swords that hurt, bots fight for the ball"
+    );
     assert!(
         combat < 0.9 * bot_time,
         "fighting does not take over the match: {combat:.1} of {bot_time:.0} bot-s"
@@ -1525,10 +1528,7 @@ fn rockets_spears_and_jeeps_keep_the_match_going() {
                 r.circling < 0.5 * bot_time,
                 format!("circling {:.1} bot-s", r.circling),
             ),
-            (
-                r.idle < 0.5 * bot_time,
-                format!("idle {:.1} bot-s", r.idle),
-            ),
+            (r.idle < 0.5 * bot_time, format!("idle {:.1} bot-s", r.idle)),
             (
                 r.slowest_kickoff < 30.0,
                 format!("slow kickoff {:.1} s", r.slowest_kickoff),

@@ -429,8 +429,11 @@ datablock fxDTSBrickData (brickTestDoorData : brickTestDoorOpenData)
 #[test]
 fn an_open_door_closes_the_way_it_opened() {
     let dir = temp("door-close").join("Brick_Test_Close");
-    write(&dir.join("server.cs"), "exec(\"./Bricks.cs\");
-");
+    write(
+        &dir.join("server.cs"),
+        "exec(\"./Bricks.cs\");
+",
+    );
     write(
         &dir.join("Bricks.cs"),
         r#"datablock fxDTSBrickData (brickBoxOpenData)
@@ -462,12 +465,18 @@ datablock fxDTSBrickData (brickPaneOpenCCWData : brickPaneOpenCWData) { uiName =
 datablock fxDTSBrickData (brickPaneCWData : brickPaneOpenCWData) { uiName = "Pane"; isOpen = 0; };
 "#,
     );
-    write(&dir.join("Door.blb"), "1 1 3
+    write(
+        &dir.join("Door.blb"),
+        "1 1 3
 BRICK
-");
-    write(&dir.join("description.txt"), "Title: Close
+",
+    );
+    write(
+        &dir.join("description.txt"),
+        "Title: Close
 Author: Tester
-");
+",
+    );
     let out = temp("door-close-out").join("out");
     import(&Options {
         input: dir,

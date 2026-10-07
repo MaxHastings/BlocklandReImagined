@@ -867,8 +867,7 @@ impl Bots {
                     subject: source.0,
                     at: source.1,
                     observed: tick,
-                    expires: tick
-                        .saturating_add(ticks(self.brains[&bot].kind.memory_seconds)),
+                    expires: tick.saturating_add(ticks(self.brains[&bot].kind.memory_seconds)),
                 },
             );
         }
@@ -947,11 +946,7 @@ fn footwork(bot: OwnerId, tick: u64, forward: Vec3, right: Vec3, room: bool) -> 
 
 /// How far below `at` the floor is, within a step up and a drop `body`
 /// walks down: `None` where it would walk off into a fall.
-fn floor_below(
-    simulation: &crate::simulation::Simulation,
-    at: Vec3,
-    body: &Body,
-) -> Option<f32> {
+fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body) -> Option<f32> {
     super::admin_players::world_ray(
         simulation,
         at + Vec3::Y * 0.5,
@@ -1020,7 +1015,6 @@ struct Sight {
 }
 
 impl Session {
-
     /// One brain tick per bot: see, choose a goal, find the way, aim and
     /// pull the trigger.
     pub(super) fn step_bots(&mut self) -> Result<()> {
@@ -1062,10 +1056,7 @@ impl Session {
                         && self.riding.driver_of(**bot).is_none()
                         && !self.riding.is_riding(**bot)
                         && brain.objective.ready(tick)
-                        && brain
-                            .kind
-                            .weight("objective")
-                            > 0.0
+                        && brain.kind.weight("objective") > 0.0
                         && self.peers.get(bot).is_some_and(|p| p.combat.alive)
                 })
                 .map(|(bot, _)| *bot),
@@ -1197,7 +1188,10 @@ impl Session {
             brain.chase_offset = Vec3::ZERO;
             brain.pinned = None;
             // A life it ended itself begins where respawning brought it.
-            brain.life = brain.life.filter(|(_, ended)| *ended).map(|_| (Vec3::NAN, true));
+            brain.life = brain
+                .life
+                .filter(|(_, ended)| *ended)
+                .map(|_| (Vec3::NAN, true));
         }
         Ok(())
     }
@@ -1756,9 +1750,7 @@ impl Session {
             .unwrap_or_else(|| peer.player.eye());
         // The legs its body can take now, costed from its own tuning: jets
         // when it can lift itself and its kind flies at all.
-        let fly_weight = self.bots.brains[&bot]
-            .kind
-            .weight("fly");
+        let fly_weight = self.bots.brains[&bot].kind.weight("fly");
         // A kind that keeps to its water (`moves: swim`) swims there by
         // itself and takes no swim or jet legs.
         let walker = self.bots.brains[&bot].kind.moves != Moves::Swim;
@@ -1891,9 +1883,7 @@ impl Session {
         if unplanned {
             self.bots.claims.release_owner(bot);
         }
-        let opportunity = if unplanned
-            || objective.is_some_and(|view| view.resource.is_some())
-        {
+        let opportunity = if unplanned || objective.is_some_and(|view| view.resource.is_some()) {
             None
         } else {
             self.bot_interaction(bot, interaction_enemy, objective.is_none(), tick)
@@ -1954,9 +1944,7 @@ impl Session {
         // upgrades in a game with nothing else at stake.
         let wants_arm = driving.is_none()
             && (!can_retaliate || objective.is_none())
-            && self.bots.brains[&bot]
-                .kind
-                .weight("arm") > 0.0
+            && self.bots.brains[&bot].kind.weight("arm") > 0.0
             && if can_retaliate {
                 self.game_of(bot).is_some()
             } else {
@@ -2199,7 +2187,10 @@ impl Session {
             explore: explore_to.is_some(),
             // Never a way out of a fight: not with an enemy in sight or
             // one that hurt it, nor while it carries something.
-            trapped: if sight.target.is_none() && threat.is_none() && hurt_by.is_none() && !holding
+            trapped: if sight.target.is_none()
+                && threat.is_none()
+                && hurt_by.is_none()
+                && !holding
                 && !objective.is_some_and(|view| view.committed)
             {
                 respawn_worth
@@ -2210,9 +2201,7 @@ impl Session {
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
         brain.chase_feet = enemy.map(|seen| seen.feet);
-        let mut scores = behaviour::scores(&situation, |b| {
-            kind.weight(b.name())
-        });
+        let mut scores = behaviour::scores(&situation, |b| kind.weight(b.name()));
         // What the choice must answer at once (`behaviour::Hold`): urgent
         // damage, an objective offered (one gone a moment is held, `paused`),
         // picked up or dropped, an enemy coming into sight, another target,
@@ -2253,8 +2242,7 @@ impl Session {
             feet,
             brain.home,
             team::exit(&intents, feet, tall, &|at| {
-                floor_below(&self.simulation, at, &body)
-                .is_some()
+                floor_below(&self.simulation, at, &body).is_some()
             }),
             carries,
             explore_to,
@@ -2754,7 +2742,11 @@ impl Session {
                     });
                     looks.push(act::Look {
                         by: act::Looker::Carry,
-                        yaw: if d.length() > 0.05 { yaw_to(d) } else { brain.yaw },
+                        yaw: if d.length() > 0.05 {
+                            yaw_to(d)
+                        } else {
+                            brain.yaw
+                        },
                         pitch: carry_pitch.unwrap_or(0.15),
                     });
                 }
@@ -2763,7 +2755,9 @@ impl Session {
             && !gunning
             && selected_objective.is_none_or(|view| view.enemy.is_none())
         {
-            let delta = selected_objective.as_ref().map(|objective| objective.aim - eye);
+            let delta = selected_objective
+                .as_ref()
+                .map(|objective| objective.aim - eye);
             looks.push(act::Look {
                 by: act::Looker::Objective,
                 yaw: delta.map_or(brain.yaw, yaw_to),
@@ -2837,7 +2831,11 @@ impl Session {
             });
         } else if let Some(next) = wanted {
             let d = flat(next.through.unwrap_or(next.feet) - feet);
-            let mut yaw = if d.length() > 0.05 { yaw_to(d) } else { brain.yaw };
+            let mut yaw = if d.length() > 0.05 {
+                yaw_to(d)
+            } else {
+                brain.yaw
+            };
             // Strolling, the look drifts a little off the way.
             if idle {
                 yaw = wrap(yaw + perception::drift(&kind.perception, bot, tick));
@@ -2854,7 +2852,9 @@ impl Session {
             let from = *brain.sweep_from.get_or_insert(brain.yaw);
             looks.push(act::Look {
                 by: act::Looker::Sweep,
-                yaw: wrap(from + SWEEP * cadence::drift(bot, cadence::salt::SWEEP, 0, tick, SWEEP_TICKS)),
+                yaw: wrap(
+                    from + SWEEP * cadence::drift(bot, cadence::salt::SWEEP, 0, tick, SWEEP_TICKS),
+                ),
                 pitch: 0.0,
             });
         }
@@ -2982,8 +2982,7 @@ impl Session {
                     // not where the floor ends or a wall or an ally stands
                     // that way.
                     let floor = |side: f32| {
-                        let under =
-                            floor_below(&self.simulation, feet + right * side * 0.9, &body);
+                        let under = floor_below(&self.simulation, feet + right * side * 0.9, &body);
                         let wall = super::admin_players::world_ray(
                             &self.simulation,
                             feet + Vec3::Y * 0.5,
@@ -3153,16 +3152,17 @@ impl Session {
         // `TRY_GAP`. An objective's step is the step's to give up (its own
         // deadline), not a trap.
         let far_goal = brain.goal.is_some_and(|g| {
-            !matches!(g, Goal::Objective(_)) && flat(g.point(brain.home) - feet).length() > 2.0 * PINNED
+            !matches!(g, Goal::Objective(_))
+                && flat(g.point(brain.home) - feet).length() > 2.0 * PINNED
         });
         let tries = far_goal
             && driving.is_none()
             && pushing.is_none()
             && !at_work
             && (walking || wanted.is_none());
-        brain.pinned = brain.pinned.filter(|(at, _, last)| {
-            flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP
-        });
+        brain.pinned = brain
+            .pinned
+            .filter(|(at, _, last)| flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP);
         if tries {
             let (at, since, _) = brain.pinned.unwrap_or((feet, tick, tick));
             brain.pinned = Some((at, since, tick));
@@ -3285,7 +3285,6 @@ impl Session {
             },
         )
     }
-
 }
 
 #[cfg(test)]

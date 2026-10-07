@@ -289,7 +289,10 @@ fn a_dodge_jets_up_only_for_a_kind_whose_jets_fly() {
         k.behaviours.insert("fly".into(), 0.0);
     });
     assert!(flies > 0, "some dodges went up on the jets");
-    assert_eq!(grounded, 0, "a kind that never flies hops or strafes instead");
+    assert_eq!(
+        grounded, 0,
+        "a kind that never flies hops or strafes instead"
+    );
 }
 
 const DOOR: &str = "test/brick/door";

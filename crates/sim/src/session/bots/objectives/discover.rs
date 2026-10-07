@@ -4,7 +4,10 @@
 use super::*;
 
 impl Session {
-    pub(super) fn rule_desired_state(&self, bot: OwnerId) -> Result<DesiredState, planning::Failure> {
+    pub(super) fn rule_desired_state(
+        &self,
+        bot: OwnerId,
+    ) -> Result<DesiredState, planning::Failure> {
         let game = self.game_of(bot).ok_or(planning::Failure::NoPlan)?;
         let g = self
             .minigames
@@ -93,7 +96,10 @@ impl Session {
             .iter()
             .map(|(o, ids)| format!("{o:?}: {}", ids.len()))
             .collect();
-        let _ = writeln!(out, "game owner {owner:?}; indexed sources by owner {indexed:?}");
+        let _ = writeln!(
+            out,
+            "game owner {owner:?}; indexed sources by owner {indexed:?}"
+        );
         let (sources, _) = self.objective_candidates(bot, owner);
         let _ = writeln!(out, "{} candidate sources", sources.len());
         if let Some(world) = self.events.world.as_ref() {
@@ -122,7 +128,11 @@ impl Session {
                 return out;
             }
         };
-        let _ = writeln!(out, "goals offered (unsupported {}):", discovery.unsupported);
+        let _ = writeln!(
+            out,
+            "goals offered (unsupported {}):",
+            discovery.unsupported
+        );
         for d in &discovery.candidates {
             let _ = writeln!(out, "  {d:?}");
         }
@@ -141,7 +151,11 @@ impl Session {
             Ok((facts, desired, actions, _)) => {
                 let _ = writeln!(out, "facts {facts:?}");
                 for a in &actions {
-                    let _ = writeln!(out, "  action {} cost {} effects {:?}", a.id, a.cost, a.effect_groups);
+                    let _ = writeln!(
+                        out,
+                        "  action {} cost {} effects {:?}",
+                        a.id, a.cost, a.effect_groups
+                    );
                 }
                 let _ = writeln!(
                     out,

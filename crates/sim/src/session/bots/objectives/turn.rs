@@ -3,12 +3,12 @@
 use super::*;
 
 impl Session {
-    pub(in crate::session::bots) fn bot_objective(&mut self, bot: OwnerId, tick: u64) -> Option<View> {
-        if self.bots.brains[&bot]
-            .kind
-            .weight("objective")
-            <= 0.0
-        {
+    pub(in crate::session::bots) fn bot_objective(
+        &mut self,
+        bot: OwnerId,
+        tick: u64,
+    ) -> Option<View> {
+        if self.bots.brains[&bot].kind.weight("objective") <= 0.0 {
             return None;
         }
         let mut state = std::mem::take(&mut self.bots.brains.get_mut(&bot)?.objective);
@@ -198,16 +198,13 @@ impl Session {
                         .or_else(|| {
                             desireds
                                 .iter()
-                                .find(|d| {
-                                    desireds.len() == 1
-                                        || !state.failed_desired.holds(d)
-                                })
+                                .find(|d| desireds.len() == 1 || !state.failed_desired.holds(d))
                                 .cloned()
                         })
                         .ok_or(planning::Failure::NoPlan)?;
-                    untried = desireds.iter().any(|d| {
-                        *d != desired && !state.failed_desired.holds(d)
-                    });
+                    untried = desireds
+                        .iter()
+                        .any(|d| *d != desired && !state.failed_desired.holds(d));
                     state.desired = Some(desired.clone());
                     self.objective_snapshot_with_budget(
                         bot,
@@ -285,7 +282,9 @@ impl Session {
                 Err(f) => {
                     let was_paused = std::mem::take(&mut state.paused);
                     if let Some(desired) = state.desired.take() {
-                        state.failed_desired.give_up(desired, tick + UNREACHED_TICKS);
+                        state
+                            .failed_desired
+                            .give_up(desired, tick + UNREACHED_TICKS);
                         if untried {
                             state.next = tick;
                             state.paused = was_paused;
@@ -328,7 +327,11 @@ impl Session {
         self.bots.brains.get_mut(&bot)?.objective = state;
         result
     }
-    pub(in crate::session::bots) fn bot_objective_act(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
+    pub(in crate::session::bots) fn bot_objective_act(
+        &mut self,
+        bot: OwnerId,
+        tick: u64,
+    ) -> Result<()> {
         let Some(step) = self.bots.brains[&bot].objective.step.as_ref() else {
             return Ok(());
         };

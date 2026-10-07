@@ -171,10 +171,7 @@ impl Behaviour {
             // One lost from sight: one in sight is fought or chased.
             Behaviour::Search => fits(s.remembers && s.enemy.is_none(), 0.4),
             Behaviour::Return => fits(!s.pursuing, 0.3 * s.strayed.clamp(0.0, 1.0)),
-            Behaviour::Objective => fits(
-                s.objective,
-                if s.committed { 0.92 } else { 0.65 },
-            ),
+            Behaviour::Objective => fits(s.objective, if s.committed { 0.92 } else { 0.65 }),
             // Above strolling, below every purpose.
             Behaviour::Explore => fits(s.explore, EXPLORE),
             // The last resort, rising the longer it stays trapped: above

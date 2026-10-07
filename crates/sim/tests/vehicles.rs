@@ -2181,7 +2181,10 @@ fn an_untrusted_rider_is_told_why_and_an_absent_builders_jeep_is_anyones() -> an
     };
     p.feed(&mut s, MoveInput::default(), 120)?;
     s.take_private_notices();
-    assert!(p.board(&mut s, 0.0).is_err(), "the builder does not trust them");
+    assert!(
+        p.board(&mut s, 0.0).is_err(),
+        "the builder does not trust them"
+    );
     let notices = s.take_private_notices();
     assert!(
         notices.iter().any(|(o, n)| *o == guest
@@ -2213,7 +2216,10 @@ fn an_untrusted_rider_is_told_why_and_an_absent_builders_jeep_is_anyones() -> an
             break;
         }
     }
-    assert!(s.mounted(guest).is_some(), "riding the absent builder's jeep");
+    assert!(
+        s.mounted(guest).is_some(),
+        "riding the absent builder's jeep"
+    );
     Ok(())
 }
 
