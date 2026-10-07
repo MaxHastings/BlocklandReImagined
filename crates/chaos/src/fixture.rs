@@ -40,6 +40,25 @@ pub fn content_root() -> Option<PathBuf> {
 }
 
 pub use bri_sim::testing::{BASEPLATE, BRICK, PLATE, STONE, TALL, WATER};
+
+/// How far a wall a bot must not cross rises above the highest ledge the
+/// stock body was measured to jump onto.
+pub const BARRIER_CLEARANCE: f32 = 0.5;
+
+/// The heights of the middles of [`TALL`] columns stacked from the floor
+/// into a wall the stock body cannot jump ([`bri_sim::reach::Reach`]'s
+/// measured ledge plus [`BARRIER_CLEARANCE`]). A fixture that needs a wall
+/// nobody crosses builds it from these instead of assuming a height, so a
+/// truer jump never quietly opens it.
+pub fn barrier_courses() -> Vec<f32> {
+    let tall = bri_sim::testing::definitions().entries[TALL]
+        .mesh
+        .height_plates as f32
+        * bri_content::brick::PLATE;
+    let reach = bri_sim::reach::Reach::of(&bri_sim::player::PlayerTuning::default());
+    let courses = ((reach.ledge + BARRIER_CLEARANCE) / tall).ceil() as usize;
+    (0..courses).map(|k| tall * (k as f32 + 0.5)).collect()
+}
 /// The spawn-brick kind that makes a wandering bot (the Blockhead Bot Add-On's).
 pub const BOT: &str = "bot.blockhead";
 

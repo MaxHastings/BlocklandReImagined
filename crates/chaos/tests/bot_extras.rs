@@ -360,23 +360,25 @@ fn door_room() -> (bool, bool) {
         .unwrap();
     let mut sequence = 0;
     steps(&mut s, &[human], 10, &mut sequence);
-    let glass = |x: f32, z: f32| {
-        let mut b = Brick::new(ContentRef::Resolved(t::TALL.into()), [x, 1.5, z], human);
-        b.raycast = false;
-        b
+    // Walls no jump clears; over the door, only the courses above it.
+    let courses = fixture::barrier_courses();
+    let glass = |bricks: &mut Vec<Brick>, x: f32, z: f32, door: bool| {
+        for &y in &courses[usize::from(door)..] {
+            let mut b = Brick::new(ContentRef::Resolved(t::TALL.into()), [x, y, z], human);
+            b.raycast = false;
+            bricks.push(b);
+        }
     };
     let mut bricks = vec![bot_brick([-5.0, 0.1, 0.0], human)];
     for i in 0..14 {
         let z = -3.25 + i as f32 * 0.5;
-        bricks.push(glass(-8.25, z));
-        if z.abs() > 1.0 {
-            bricks.push(glass(-1.75, z));
-        }
+        glass(&mut bricks, -8.25, z, false);
+        glass(&mut bricks, -1.75, z, z.abs() < 1.0);
     }
     for i in 1..12 {
         let x = -8.25 + i as f32 * 0.5;
-        bricks.push(glass(x, -3.75));
-        bricks.push(glass(x, 3.75));
+        glass(&mut bricks, x, -3.75, false);
+        glass(&mut bricks, x, 3.75, false);
     }
     bricks.push(Brick::new(
         ContentRef::Resolved(DOOR.into()),
