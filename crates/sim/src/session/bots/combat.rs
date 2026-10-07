@@ -913,14 +913,17 @@ struct Burst {
 }
 
 /// How many ticks of a timed throw's arc one ray covers: the most whose
-/// sag off the straight chord (`fall_per_tick * k^2 / 8`) stays under the
-/// thinnest brick, a plate, so no brick can slip between ray and arc.
+/// sag off the straight chord stays under the thinnest brick, a plate, so
+/// no brick can slip between ray and arc. Over `k` ticks the arc falls
+/// `fall_per_tick` (a speed lost each tick) for `k / HZ` seconds, so it
+/// sags `fall_per_tick * k^2 / (8 * HZ)`.
 fn chord_ticks(fall_per_tick: f32) -> u32 {
     let plate = bri_content::brick::PLATE;
     if fall_per_tick <= 0.0 {
         return PATH_TICKS;
     }
-    ((8.0 * plate / fall_per_tick).sqrt() as u32).clamp(1, PATH_TICKS)
+    let hz = bri_weapons::TICK_HZ as f32;
+    ((8.0 * plate * hz / fall_per_tick).sqrt() as u32).clamp(1, PATH_TICKS)
 }
 
 /// The cooked fuse a timed throw from `image` carries if released now:
@@ -1735,6 +1738,75 @@ pub(super) fn trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A timed throw spends one ray per chord, and a chord sags no more than
+    /// a plate off the real arc: pinned for a known arc in open air.
+    #[test]
+    fn a_timed_throw_spends_one_ray_a_chord() {
+        use rapier3d::prelude::*;
+        let def = bri_weapons::ProjectileDef {
+            id: "t:p/high".into(),
+            speed: 10.0,
+            gravity: 1.0,
+            ballistic: true,
+            lifetime_ticks: 360,
+            arm_ticks: 360,
+            explode_death: true,
+            ..Default::default()
+        };
+        let fall = bri_weapons::runtime::fall_per_tick(&def);
+        let chord = chord_ticks(fall);
+        let sag = |k: u32| {
+            let at = |t: u32| {
+                tactics::flight_position(Vec3::ZERO, Vec3::X * 10.0, fall, f64::from(t) / 120.0)
+                    .unwrap()
+                    .as_vec3()
+            };
+            let middle = at(k / 2);
+            let chord_middle = at(0).lerp(at(k), (k / 2) as f32 / k as f32);
+            (middle - chord_middle).length()
+        };
+        assert!(sag(chord) <= bri_content::brick::PLATE, "chord {chord}");
+        assert!(
+            sag(chord + 2) > bri_content::brick::PLATE,
+            "chord {chord} is the longest"
+        );
+        let mut pack = bri_weapons::testing::pack();
+        pack.projectiles.insert(def.id.clone(), def.clone());
+        let world = bri_world::World::new("Sky".into(), "fixture".into(), vec![[1.0; 4]]);
+        let sim = crate::simulation::Simulation::new(
+            world,
+            crate::testing::definitions(),
+            vec![ColliderBuilder::cuboid(1.0, 0.5, 1.0).translation(Vector::new(0.0, -0.5, 0.0))],
+        )
+        .unwrap();
+        let mut session = Session::new(sim);
+        session.set_weapon_pack(pack).unwrap();
+        let thrower = session
+            .join("Thrower".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        let mut budget = Budget::default();
+        budget.begin_tick(0);
+        let before = budget.rays;
+        let planned = burst(
+            &session,
+            thrower,
+            &def,
+            fall,
+            Vec3::new(100.0, 5000.0, 0.0),
+            Vec3::X * 10.0,
+            None,
+            &mut budget,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(planned.ticks, def.lifetime_ticks);
+        // It flies 359 ticks before its life ends on the 360th.
+        assert_eq!(
+            before - budget.rays,
+            (def.lifetime_ticks - 1).div_ceil(chord)
+        );
+    }
 
     /// A timed throw's planned burst ([`burst`]) against the host flying the
     /// same projectile over the same floor, for each way it goes off: an

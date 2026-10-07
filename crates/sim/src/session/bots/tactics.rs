@@ -593,6 +593,10 @@ fn fragment_reach(
             .get(&set.projectile)
             .ok_or(DescriptorRequired::MissingProjectile)?;
         let hurts = child.damage > 0.0 || child.explosion.damage > 0.0;
+        // Sparks, smoke, a trail: nothing to keep clear of.
+        if !hurts && child.children.is_empty() && child.aura.is_none() {
+            continue;
+        }
         if !child.children.is_empty()
             || child.aura.is_some()
             || child.lifetime_ticks == 0
@@ -1620,11 +1624,20 @@ mod tests {
             lifetime_ticks: 60,
             explosion: bri_weapons::Explosion {
                 radius: 1.0,
+                damage: 5.0,
                 ..Default::default()
             },
             ..Default::default()
         };
         let mut table = std::collections::BTreeMap::new();
+        // Harmless sparks or smoke widen nothing.
+        let spark = bri_weapons::ProjectileDef {
+            explosion: Default::default(),
+            ..shard.clone()
+        };
+        table.insert(shard.id.clone(), spark);
+        let cap = native_capability(&image, Some(&child), 1.0, 60, &table).unwrap();
+        assert_eq!(cap.danger, 0.0);
         table.insert(shard.id.clone(), shard.clone());
         let cap = native_capability(&image, Some(&child), 1.0, 60, &table).unwrap();
         assert!((cap.danger - (10.0 * 60.0 / HZ as f32 + 1.0)).abs() < 1e-4);
