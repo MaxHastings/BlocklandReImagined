@@ -7,6 +7,7 @@
     python tools/gate.py --hook ...      (called by the pre-push hook)
     python tools/gate.py --history-range BASE TIP   (history check only; CI)
     python tools/gate.py --ci-test       content-free tests only (CI)
+    python tools/gate.py --ci-test --shard K/N   the Kth of N even shares of them
 
 Checks, cheapest first, on the exact commit being pushed:
   1. the commit already contains the latest origin/main (rebase first)
@@ -871,8 +872,25 @@ def run_binaries(binaries, args, log, jobs, exclusive=(), env=None):
     return ok
 
 
-def ci_test():
-    """Run every test binary except targets that need generated v20 content.
+def shard(labels, part):
+    """The labels of shard `part` = (k, n): every nth label from the kth,
+    in sorted order, so the n shards together run each label exactly once."""
+    k, n = part
+    return [label for i, label in enumerate(sorted(labels)) if i % n == k]
+
+
+def parse_shard(text):
+    """`K/N` (shards counted from 0) as (k, n)."""
+    k, _, n = text.partition("/")
+    k, n = int(k), int(n)
+    if not 0 <= k < n:
+        raise argparse.ArgumentTypeError(f"shard {text}: need 0 <= K < N")
+    return k, n
+
+
+def ci_test(part=(0, 1)):
+    """Run every test binary except targets that need generated v20 content,
+    or one even share of them (`part`, see `shard`).
 
     GitHub runners have no v20 content. Those targets are listed as
     [[ci_skip_target]] in tools/gate-known-failures.toml; the local gate still
@@ -889,9 +907,13 @@ def ci_test():
         say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
         return False
     failed = []
+    mine = set(shard([label for label, _, _, _ in binaries if label not in skipped], part))
+    say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(binaries) - len(skipped)} test targets")
     for label, executable, cwd, _ in sorted(binaries):
         if label in skipped:
             say(f"skipping {label} (needs generated content)")
+            continue
+        if label not in mine:
             continue
         say(f"running {label}")
         output, code = run_binary(label, executable, [], cwd)
@@ -984,6 +1006,8 @@ def main():
     parser.add_argument("--diff-only", action="store_true")
     parser.add_argument("--ci-test", action="store_true",
                         help="run the tests that need no generated content (used by CI)")
+    parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
+                        help="with --ci-test, run only the Kth of N even shares (from 0)")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
@@ -1007,7 +1031,7 @@ def main():
             say("history check " + ("FAILED" if problems else "ok"))
             return 1 if problems else 0
         if args.ci_test:
-            return 0 if ci_test() else 1
+            return 0 if ci_test(args.shard) else 1
         if args.push:
             return 0 if push_main() else 1
         if args.hook is not None:
