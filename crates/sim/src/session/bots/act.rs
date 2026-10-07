@@ -201,12 +201,14 @@ impl Proposal {
 }
 
 /// Buttons pressed on top of whatever the movers set: a crouch, the jets,
-/// and a hop (a goof's, a dodge's, one into a body, the stall judge's),
-/// which safety lets through only where it comes down on floor along the
-/// walk it takes.
+/// a hop (a goof's, a dodge's, one into a body), which safety lets through
+/// only where it comes down on floor along the walk it takes, and the
+/// stall judge's jump in place (over what its shins catch, off a body it
+/// stands on), which goes as it is: its walk is already checked.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Press {
     pub hop: bool,
+    pub jump: bool,
     pub crouch: bool,
     pub jet: bool,
 }
@@ -244,6 +246,7 @@ pub(super) fn resolve(proposals: &mut [Proposal], press: Press) -> Controls {
         out.jet = p.jet.unwrap_or(out.jet);
     }
     out.hop = press.hop;
+    out.jump |= press.jump;
     out.crouch |= press.crouch;
     out.jet |= press.jet;
     out

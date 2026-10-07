@@ -3092,7 +3092,8 @@ impl Session {
         let controls = act::resolve(
             &mut proposals,
             act::Press {
-                hop: act.jump || extra.jump || into_body || stall_hop,
+                hop: act.jump || extra.jump || into_body,
+                jump: stall_hop,
                 crouch: act.crouch || extra.crouch,
                 jet: extra.jet,
             },

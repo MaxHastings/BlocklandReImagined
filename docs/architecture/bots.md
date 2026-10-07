@@ -123,14 +123,21 @@ bot does through the same code.
    (`Session::bot_safe_walk`): no step into a portal off the route, round
    a vehicle in the way, and never off an edge whose fall would hurt (see
    Routes). A new mover goes in at its place in that order; nothing runs
-   "after" another to win. The aim is one chain in `step_bot` (carry,
-   objective, enemy, glance, route, sweep; a goof's or an extra's look
-   over it), and the trigger is still decided in several places
-   (`bot_act`, `fire.rs`, the goof spray): folding those into the stage is
-   the next step.
+   "after" another to win. The look is decided the same way: each that
+   wants the bot's eyes proposes an `act::Look`, and the highest
+   `act::Looker` has them (hold, sweep, route, glance, target, objective,
+   carry, down, gesture). The trigger has one owner a tick, in `bot_act`:
+   a goof's, else an objective tool's, else the fight's. What the stage did
+   (who walked, who looked, who has the trigger, an edge held back, stalls
+   and replans) is `act::Acted`, the F3 readout's "Acts" line.
 
-   Then getting unstuck (hop,
-   plan again, give up the goal) on foot; drivers instead brake, replan and
+   Then getting unstuck (hop, judged before the stage resolves and pressed
+   like any other hop, then plan again, give up the goal) on foot. A bot
+   that keeps trying to get somewhere and stays within 2 units of where it
+   began is trapped (bricks respawned round it): past 10 s its Respawn
+   option rises, and once sure it gives the command a player gives
+   (Ctrl+K). Respawn scores 0 with an enemy in sight, when hurt, or while
+   carrying, so it is never a way out of a fight; drivers instead brake, replan and
    relinquish an unproductive seat. Shared claims are exclusive advisory
    intentions, released on success, preemption or invalidation. A claim never
    overrides human occupancy, trust, mini-game policy or an Add-On ride hook.
