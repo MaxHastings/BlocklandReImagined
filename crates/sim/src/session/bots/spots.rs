@@ -143,43 +143,31 @@ impl Session {
         let (near, far) = weapon.band();
         let places = self.bot_places(seen, feet, body, costs, walk_speed, (near, far));
         // The shot from each place: the chooser's own, on a scratch state
-        // and a copy of its mind, under the shared solver budget.
-        let mut budget = std::mem::take(&mut self.bots.combat_budget);
+        // and a copy of its mind, on its fair share of the shared budget
+        // (a place it has no budget left for has no shot this turn).
+        let mut budget = self.bots.combat_budget.share();
+        let given = budget.allowance();
         let mind = self.bots.brains[&bot].surprise.clone();
-        let shots: Vec<Option<(f32, f32)>> = places
-            .iter()
-            .map(|place| {
-                let (at, _) = (*place)?;
-                let mut state = hand_combat::State::default();
-                let mut mind = mind.clone();
-                Some(
-                    match hand_combat::choose(
-                        self,
-                        bot,
-                        seen,
-                        at + eye,
-                        tick,
-                        &mut state,
-                        &mut budget,
-                        &mut mind,
-                    ) {
-                        hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c)
-                            if c.dealt > 0.0 =>
-                        {
-                            (c.dealt, c.seconds)
-                        }
-                        _ => (0.0, cycle),
-                    },
-                )
-            })
-            .collect();
-        self.bots.combat_budget = budget;
         let intents = self.team_intents(bot, tick);
         let reach = self.bot_sight_reach(&self.bots.brains[&bot].kind);
-        let mut terms = [None; SPOTS.len()];
-        for (option, (place, shot)) in places.iter().zip(&shots).enumerate() {
-            let (Some((at, travel)), Some((dealt, fire))) = (*place, *shot) else {
-                continue;
+        let weigh = |option: usize, budget: &mut hand_combat::Budget| -> Option<Terms> {
+            let (at, travel) = places[option]?;
+            let (dealt, fire) = match hand_combat::choose(
+                self,
+                bot,
+                seen,
+                at + eye,
+                tick,
+                &mut hand_combat::State::default(),
+                budget,
+                &mut mind.clone(),
+            ) {
+                hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c)
+                    if c.dealt > 0.0 =>
+                {
+                    (c.dealt, c.seconds)
+                }
+                _ => (0.0, cycle),
             };
             let seconds = travel + fire;
             let dealt = if flat(seen.real - at).length() < near {
@@ -227,12 +215,36 @@ impl Session {
                     rate += tactics::rate(cap, health);
                 }
             }
-            terms[option] = Some(Terms {
+            Some(Terms {
                 dealt,
                 seconds,
                 taken: (rate * seconds / health.max(f32::MIN_POSITIVE)).min(1.0),
-            });
+            })
+        };
+        let mut terms = [None; SPOTS.len()];
+        terms[HERE as usize] = weigh(HERE as usize, &mut budget);
+        // Standing with a shot, it weighs the other places only when one
+        // could beat it: no place's shot does more than its hardest-hitting
+        // weapon at its quickest cycle, even unseen, after the walk there.
+        let best = self.bot_best_attack(bot, seen.owner);
+        let beaten = |t: Terms| {
+            best.is_none_or(|(dealt, fire)| {
+                places
+                    .iter()
+                    .enumerate()
+                    .filter(|(o, _)| *o != HERE as usize)
+                    .filter_map(|(_, p)| *p)
+                    .any(|(_, travel)| dealt / (travel + fire) > t.score())
+            })
+        };
+        if anchor.is_some() || terms[HERE as usize].is_none_or(|t| t.score() <= 0.0 || beaten(t)) {
+            for (option, term) in terms.iter_mut().enumerate() {
+                if option != HERE as usize {
+                    *term = weigh(option, &mut budget);
+                }
+            }
         }
+        self.bots.combat_budget.charge(given, &budget);
         let options = scores(&terms);
         let brain = self.bots.brains.get_mut(&bot)?;
         let (cfg, rule) = (brain.kind.surprise.clone(), brain.kind.hold());
@@ -344,6 +356,38 @@ impl Session {
         places
     }
 
+    /// The most `bot`'s attacks could deal `target` in one go, and the
+    /// quickest any of them cycles, in seconds: what no place to stand can
+    /// beat. `None` when it has none it reads.
+    fn bot_best_attack(&self, bot: OwnerId, target: OwnerId) -> Option<(f32, f32)> {
+        let actor = self.weapons.actor(ActorId(bot))?;
+        let scale = self.peers.get(&bot)?.player.state().scale;
+        let health = self.peers.get(&target)?.combat.health.max(1.0);
+        (0..actor.inventory.len())
+            .filter_map(|slot| {
+                let item = actor.inventory[slot]
+                    .as_ref()
+                    .and_then(|i| self.weapons.pack.items.get(i))?;
+                let image = self.weapons.pack.images.get(&item.image)?;
+                let projectile = image
+                    .projectile
+                    .as_ref()
+                    .and_then(|p| self.weapons.pack.projectiles.get(p));
+                hand_combat::capability(image, projectile, scale)
+            })
+            .map(|cap| {
+                let push = if cap.pushes() {
+                    tactics::PUSH_WORTH
+                } else {
+                    0.0
+                };
+                (
+                    cap.damage(1.0).max(push).min(health),
+                    cap.cadence_ticks as f32 / bri_weapons::TICK_HZ as f32,
+                )
+            })
+            .reduce(|a, b| (a.0.max(b.0), a.1.min(b.1)))
+    }
     /// What the weapon in `owner`'s hand does (a bot's or a player's), read
     /// as the shot chooser reads it; with `empty_hand`, an empty hand reads
     /// as the first item it could attack with, as the chooser takes one up.

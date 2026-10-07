@@ -3031,8 +3031,8 @@ impl Session {
                     // way is open. One that reaches an edge stands there
                     // until the leg is up; one that meets an ally, or is hit
                     // mid-leg, turns the other way at once.
-                    let parted = (hurt_by.is_some() || ally(brain.strafe.0))
-                        && ground(-brain.strafe.0);
+                    let parted =
+                        (hurt_by.is_some() || ally(brain.strafe.0)) && ground(-brain.strafe.0);
                     let side = brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
                     if ground(side) {
                         walk = right * side * 0.7;
