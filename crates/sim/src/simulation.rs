@@ -1064,7 +1064,7 @@ impl Simulation {
     }
     /// Whether `brick` could go into the world now, support aside: no
     /// overlap with another brick, not buried in the map, not stuck in a
-    /// player or vehicle.
+    /// vehicle. Like a plant (v20's), it may go where a player stands.
     pub fn fits(&self, brick: &Brick) -> bool {
         let engine = Actor {
             administrator: true,
@@ -1079,6 +1079,34 @@ impl Simulation {
             brick,
         )
         .is_ok()
+    }
+    /// [`Self::fits`], and clear of every player's and bot's body: what a
+    /// rule asks before placing a brick by itself (a voxel piled on the one
+    /// its placer stands on must not bury them).
+    pub fn fits_clear_of_bodies(&self, brick: &Brick) -> bool {
+        self.fits(brick) && !self.engulfs_character(brick)
+    }
+    /// Whether `brick` would stand inside a player's or a bot's body.
+    fn engulfs_character(&self, brick: &Brick) -> bool {
+        let Ok(definition) = self.definitions.get(brick) else {
+            return true;
+        };
+        let placement = pose(brick);
+        let aabb = definition.shape.compute_aabb(&placement);
+        self.physics
+            .query_pipeline()
+            .intersect_aabb_conservative(aabb)
+            .filter(|(_, body)| is_character(body.user_data))
+            .any(|(_, body)| {
+                rapier3d::parry::query::contact(
+                    &placement,
+                    definition.shape.as_ref(),
+                    body.position(),
+                    body.shape(),
+                    0.0,
+                )
+                .map_or(true, |c| c.is_some_and(|c| c.dist < -0.002))
+            })
     }
     /// Put bricks removed earlier back exactly as they were, owner, name,
     /// events, lights and all: undoing a cut. Each must still fit where it
@@ -2058,18 +2086,31 @@ fn check_placement_support(
     let mut supported = false;
     let mut obstructed_support = false;
     let mut work_left = SUPPORT_QUERY_LIMIT;
-    let mut candidates = grid::QueryCursor::new(bounds.expanded(1));
+    let query = bounds.expanded(1);
+    // The allowance is for the bricks touching this one and their stud
+    // cells. Passing over a bucket's other bricks is one box test each, and
+    // a dense build packs hundreds of them into one bucket: charging them
+    // refused ordinary plants in a 20k-brick city as a brick limit. The
+    // buckets themselves stay bounded, as for a group (`GroupSupport`).
+    let (min, max) = grid::bucket_span(query);
+    let buckets = (0..3).fold(1u64, |n, a| {
+        n.saturating_mul((i64::from(max[a]) - i64::from(min[a]) + 1) as u64)
+    });
+    if buckets > SUPPORT_QUERY_LIMIT as u64 {
+        return Err(PlantFailure::Limit.into());
+    }
+    let mut candidates = grid::QueryCursor::new(query);
     loop {
-        if work_left == 0 {
-            return Err(PlantFailure::Limit.into());
-        }
-        work_left -= 1;
         let Some(candidate) = candidates.step(index) else {
             break;
         };
         let Some(id) = candidate else {
             continue;
         };
+        if work_left == 0 {
+            return Err(PlantFailure::Limit.into());
+        }
+        work_left -= 1;
         let existing = &world.bricks[&id];
         let other = defs.get(existing)?;
         let mut cells = grid::ConnectionCells::new(bounds, index.bounds(id));

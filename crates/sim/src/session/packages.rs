@@ -1836,7 +1836,9 @@ impl Session {
         let chunk = world.chunk_of_voxel(position);
         world.in_bounds(chunk)
             && world.chunks.contains(&chunk)
-            && self.simulation.fits(&world.brick(position, 0))
+            && self
+                .simulation
+                .fits_clear_of_bodies(&world.brick(position, 0))
     }
     /// Remove a brick for good, recording generated voxels as world edits.
     /// A blast breaks it as `killBrick` does; `remove_brick` deletes it

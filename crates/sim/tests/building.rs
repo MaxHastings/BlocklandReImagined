@@ -712,6 +712,43 @@ fn pathological_map_blocked_attachment_query_refuses_with_a_limit_before_publica
     assert_eq!(*sim.state(), before);
 }
 
+/// A dense build (Max's ACM City, about 20k bricks) packs hundreds of
+/// bricks into one eight-unit bucket. Bricks that do not touch the new one
+/// cost nothing to pass over: a plant beside them is not refused as a limit.
+#[test]
+fn a_plant_beside_a_dense_bucket_of_untouched_bricks_is_not_a_limit() {
+    let mut w = world();
+    let mut id = 1;
+    for x in [4.5, 6.5] {
+        for z in [4.25, 5.25, 6.25, 7.25] {
+            for layer in 0..38 {
+                let y = 0.1 + 0.2 * layer as f32;
+                w.bricks.insert(
+                    id,
+                    Brick::new(ContentRef::Resolved("plate".into()), [x, y, z], 1),
+                );
+                id += 1;
+            }
+        }
+    }
+    w.next_brick_id = id;
+    assert!(
+        w.bricks.len() > 256,
+        "more bricks in the bucket than a scan once allowed"
+    );
+    let mut sim = Simulation::new(w, definitions(), vec![floor()]).unwrap();
+    let owner = actor(1);
+    let builder = Builder {
+        actor: &owner,
+        position: Vec3::Y,
+        reach: 50.0,
+    };
+    let planted = sim.plant(&builder, brick(0.1)).unwrap();
+    // And one standing on it: support found among the crowd.
+    sim.plant(&builder, brick(0.3)).unwrap();
+    assert!(sim.state().bricks.contains_key(&planted));
+}
+
 #[test]
 fn ordinary_large_footprints_keep_floor_samples_independent_of_query_overhead() {
     for width in [16, 64] {

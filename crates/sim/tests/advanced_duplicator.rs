@@ -562,6 +562,36 @@ fn a_cut_moves_a_build_and_undo_puts_it_back_as_it_was() {
     assert_eq!(g.bricks().len(), 4);
 }
 
+/// A player standing in the gap a cut left (often the one undoing it)
+/// does not stop the undo: the bricks come back round them, as a plant
+/// goes where a player stands (v20).
+#[test]
+fn undoing_a_cut_puts_it_back_round_a_player_standing_in_the_gap() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let [a, b, c, _] = scene(&mut g, host);
+    let world = g.bricks();
+    let mut original: Vec<Brick> = [a, b, c].iter().map(|id| world[id].clone()).collect();
+    copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
+    assert_eq!(g.s.cut_copy(host).unwrap(), 3);
+    assert_eq!(g.bricks().len(), 1);
+    let _guest =
+        g.s.join("Guest".into(), Vec3::new(-0.5, 0.05, 0.0), false)
+            .unwrap();
+    g.steps(2);
+    g.notices(host);
+    let restored = g.undo(host);
+    assert!(restored.is_some(), "{:?}", prints(&g.notices(host)));
+    let mut back: Vec<Brick> = g
+        .bricks()
+        .into_values()
+        .filter(|b| original.iter().any(|o| o.position == b.position))
+        .collect();
+    back.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    original.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    assert_eq!(back, original);
+}
+
 #[test]
 fn cuts_and_fills_need_full_trust_and_undo_as_one_step() {
     let mut g = Game::new();
