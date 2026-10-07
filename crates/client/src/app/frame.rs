@@ -1137,8 +1137,7 @@ impl App {
                     gesture: threads[3].clone(),
                     body: [threads[0].clone(), threads[1].clone()],
                     dead,
-                    sitting: !dead
-                        && sit_posed(view, &self.vehicle_assets, presented, *owner),
+                    sitting: !dead && sit_posed(view, &self.vehicle_assets, presented, *owner),
                     // Riders hold `root` (`Armor::onMount` sets the action
                     // thread to root and mountThread on thread 0); they do
                     // not run, jump or fall with their mount's motion.

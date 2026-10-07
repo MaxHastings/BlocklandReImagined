@@ -65,8 +65,9 @@ pub(super) enum Completion {
 fn changes_nothing_planned(intent: &Intent) -> bool {
     matches!(
         intent,
-        Intent::Brick(ev::BrickOp::ColorFx(_) | ev::BrickOp::ShapeFx(_) | ev::BrickOp::PlaySound(_))
-            | Intent::Client(ev::ClientOp::Message { .. } | ev::ClientOp::PlaySound(_))
+        Intent::Brick(
+            ev::BrickOp::ColorFx(_) | ev::BrickOp::ShapeFx(_) | ev::BrickOp::PlaySound(_)
+        ) | Intent::Client(ev::ClientOp::Message { .. } | ev::ClientOp::PlaySound(_))
             | Intent::MiniGame(ev::MiniGameOp::Message { .. } | ev::MiniGameOp::RespawnAll)
             | Intent::Rule(RuleOp::Explain)
     )
@@ -1335,7 +1336,12 @@ mod tests {
             .unwrap();
         s.sync_event_programs(&BTreeSet::from([source, foreign]));
         let (_, _, actions, _) = s
-            .objective_snapshot(bot, 0, &Failed::default(), s.rule_desired_state(bot).unwrap())
+            .objective_snapshot(
+                bot,
+                0,
+                &Failed::default(),
+                s.rule_desired_state(bot).unwrap(),
+            )
             .unwrap();
         assert_eq!(
             actions.len(),

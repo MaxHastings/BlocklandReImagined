@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 /// for a moment, drop the weapon in hand, flick the light, or walk up to a
 /// door in sight and click it.
 pub const FLAVOURS: [&str; 12] = [
-    "stare", "emote", "hop", "circle", "detour", "look", "crouch", "spray", "tool", "drop", "light",
-    "door",
+    "stare", "emote", "hop", "circle", "detour", "look", "crouch", "spray", "tool", "drop",
+    "light", "door",
 ];
 /// How often each goof in [`FLAVOURS`] is picked when a kind names no
 /// weight for it: looking and emoting most, the props least.

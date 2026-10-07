@@ -224,8 +224,11 @@ impl Game {
             .bots,
         )
         .unwrap();
-        s.set_event_catalog(bri_events::testing::catalog_extended(), Vec::<String>::new())
-            .unwrap();
+        s.set_event_catalog(
+            bri_events::testing::catalog_extended(),
+            Vec::<String>::new(),
+        )
+        .unwrap();
         s.set_tool_catalog(ToolCatalog {
             items: if ranged_attacker {
                 [bri_weapons::testing::GUN_ITEM.into()].into()

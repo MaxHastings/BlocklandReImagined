@@ -1848,7 +1848,8 @@ impl Options {
             .id(RENDER_SCALE_MENU)
             .and_then(|n| self.view.selected(n))
         {
-            self.draft.set(RENDER_SCALE, scale.clamp(25, 100).to_string());
+            self.draft
+                .set(RENDER_SCALE, scale.clamp(25, 100).to_string());
         }
         if let Some(scale) = self
             .view
@@ -3021,7 +3022,12 @@ mod tests {
         let mut s = Options::new(&ui.core);
         let quality = s.view.id(QUALITY_MENU).unwrap();
         let lighting = s.view.id(LIGHTING_MENU).unwrap();
-        for (preset, mode) in [(0, "Classic"), (1, "Unified"), (2, "Unified"), (3, "Dynamic")] {
+        for (preset, mode) in [
+            (0, "Classic"),
+            (1, "Unified"),
+            (2, "Unified"),
+            (3, "Dynamic"),
+        ] {
             s.view.select(quality, Some(preset));
             change(&mut s, &mut ui, quality);
             assert_eq!(
@@ -3103,7 +3109,10 @@ mod tests {
             button.position[0] + button.extent[0] <= section.extent[0],
             "{button:?} in {section:?}"
         );
-        let menu = &s.view.node(s.view.id("OptGraphicsResolutionMenu").unwrap()).ctrl;
+        let menu = &s
+            .view
+            .node(s.view.id("OptGraphicsResolutionMenu").unwrap())
+            .ctrl;
         assert!(button.position[0] >= menu.position[0] + menu.extent[0]);
     }
 
