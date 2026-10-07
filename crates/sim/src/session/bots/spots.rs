@@ -102,6 +102,7 @@ impl Session {
         &mut self,
         bot: OwnerId,
         seen: Seen,
+        weapon: Weapon,
         threats: &[OwnerId],
         feet: Vec3,
         body: &Body,
@@ -110,6 +111,9 @@ impl Session {
     ) -> Option<Anchor> {
         let brain = self.bots.brains.get_mut(&bot)?;
         let mut anchor = brain.spot;
+        // Where it fights from: where it stood when the fight began, until
+        // it reaches a place it chose.
+        brain.stand.get_or_insert(feet);
         // There, or as near as its route gets: that place is where it
         // stands now.
         if let Some(a) = anchor {
@@ -118,6 +122,7 @@ impl Session {
             let stuck = brain.settled && brain.plan.is_empty() && brain.search.is_none();
             if there || stuck {
                 brain.surprise.arrived(surprise::Domain::Spot, HERE, tick);
+                brain.stand = Some(feet);
                 anchor = None;
             }
         }
@@ -130,13 +135,16 @@ impl Session {
         let walk_speed = peer.player.tuning().forward.max(1.0);
         // The weapon in hand's cycle: how long a place is stood on for one
         // attack when it has no shot from there.
+        // The weapon it fights with's cycle (the one in hand, or the first
+        // the shot chooser would take up with its hands empty): how long a
+        // place is stood on for one attack when it has no shot from there.
         let cycle = self
-            .bot_capability(bot)
+            .bot_capability(bot, true)
             .map(|cap| cap.cadence_ticks as f32 / bri_weapons::TICK_HZ as f32)?;
         // Its weapon's band: it fights from no nearer than its near edge
         // (where a blast or a scatter is its own risk), as the behaviour
         // chooser reads it.
-        let (near, far) = self.bot_weapon(bot)?.band();
+        let (near, far) = weapon.band();
         let places = self.bot_places(seen, feet, body, costs, walk_speed, (near, far));
         // The shot from each place: the chooser's own, on a scratch state
         // and a copy of its mind, under the shared solver budget.
@@ -197,7 +205,7 @@ impl Session {
                 };
                 let to = at + eye;
                 let shoots = self
-                    .bot_capability(threat)
+                    .bot_capability(threat, false)
                     .filter(|cap| (cap.near..=cap.reach).contains(&from.distance(to)));
                 if let Some(cap) = shoots
                     && self
@@ -218,7 +226,7 @@ impl Session {
                 if intent
                     .harm
                     .is_some_and(|line| team::inside(&line, at, body.height))
-                    && let Some(cap) = self.bot_capability(*ally)
+                    && let Some(cap) = self.bot_capability(*ally, false)
                 {
                     rate += tactics::rate(cap, health);
                 }
@@ -341,22 +349,27 @@ impl Session {
     }
 
     /// What the weapon in `owner`'s hand does (a bot's or a player's), read
-    /// as the shot chooser reads it.
-    fn bot_capability(&self, owner: OwnerId) -> Option<tactics::Capability> {
+    /// as the shot chooser reads it; with `empty_hand`, an empty hand reads
+    /// as the first item it could attack with, as the chooser takes one up.
+    fn bot_capability(&self, owner: OwnerId, empty_hand: bool) -> Option<tactics::Capability> {
         let actor = self.weapons.actor(ActorId(owner))?;
-        let item = actor.inventory[actor.selected?]
-            .as_ref()
-            .and_then(|i| self.weapons.pack.items.get(i))?;
-        let image = self.weapons.pack.images.get(&item.image)?;
-        let projectile = image
-            .projectile
-            .as_ref()
-            .and_then(|p| self.weapons.pack.projectiles.get(p));
-        hand_combat::capability(
-            image,
-            projectile,
-            self.peers.get(&owner)?.player.state().scale,
-        )
+        let scale = self.peers.get(&owner)?.player.state().scale;
+        let of = |slot: usize| {
+            let item = actor.inventory[slot]
+                .as_ref()
+                .and_then(|i| self.weapons.pack.items.get(i))?;
+            let image = self.weapons.pack.images.get(&item.image)?;
+            let projectile = image
+                .projectile
+                .as_ref()
+                .and_then(|p| self.weapons.pack.projectiles.get(p));
+            hand_combat::capability(image, projectile, scale)
+        };
+        match actor.selected {
+            Some(slot) => of(slot),
+            None if empty_hand => (0..actor.inventory.len()).find_map(of),
+            None => None,
+        }
     }
 }
 
@@ -490,7 +503,8 @@ mod tests {
             swim: None,
             jets: None,
         };
-        s.bot_stand(bot, seen, &[seen.owner], feet, &body, &costs, tick)
+        let weapon = s.bot_weapon(bot).unwrap();
+        s.bot_stand(bot, seen, weapon, &[seen.owner], feet, &body, &costs, tick)
     }
 
     #[test]

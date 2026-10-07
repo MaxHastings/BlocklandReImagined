@@ -128,9 +128,11 @@ pub(super) enum Domain {
     Spot,
 }
 impl Domain {
-    /// A reflex: how it moves this moment under fire.
-    fn reflex(self) -> bool {
-        matches!(self, Self::Move | Self::Dodge)
+    /// Drawn from the bot's own seed, not the stream: a reflex (how it
+    /// moves this moment under fire) and where it stands to fight, so
+    /// neither shifts its other choices.
+    fn seeded(self) -> bool {
+        matches!(self, Self::Move | Self::Dodge | Self::Spot)
     }
     const ALL: [Domain; 8] = [
         Self::Behaviour,
@@ -410,7 +412,7 @@ pub(super) enum Moment {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Mind {
     rng: u64,
-    /// Whose mind: a reflex (`Domain::reflex`) draws from the bot's own
+    /// Whose mind: a seeded domain (`Domain::seeded`: a reflex, where it stands) draws from the bot's own
     /// cadence seed instead of the stream, so a fight's dodges never shift
     /// its other choices.
     bot: OwnerId,
@@ -444,10 +446,10 @@ impl Mind {
     fn random(&mut self) -> f32 {
         super::perception::draw(&mut self.rng)
     }
-    /// A draw for `option` in `domain` at `step`: a reflex's from the
-    /// bot's seed, anything else's from the stream.
+    /// A draw for `option` in `domain` at `step`: a seeded domain's from
+    /// the bot's seed, anything else's from the stream.
     fn random_in(&mut self, domain: Domain, option: u32, step: u64) -> f32 {
-        if domain.reflex() {
+        if domain.seeded() {
             let at = (domain as u64) << 56 ^ (option as u64) << 32 ^ step;
             cadence::unit(cadence::seed(self.bot, cadence::salt::REFLEX) ^ cadence::mix(at))
         } else {
