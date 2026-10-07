@@ -133,6 +133,7 @@ async fn change_map_runs_the_add_ons_the_host_started_with_and_keeps_their_state
         copies: None,
         game_version: None,
         bot_tuning: None,
+        bot_overrides: None,
     });
     // Start Game's path: the first map's session from the same setup.
     let (game, spawn_points) = setup.session(&setup.hosted("fixture")?, map("fixture"))?;
@@ -202,6 +203,7 @@ fn a_session_from_the_setup_has_everything_the_host_installs() -> Result<()> {
         copies: None,
         game_version: None,
         bot_tuning: None,
+        bot_overrides: None,
     };
     let (session, spawn_points) = setup.session(&setup.hosted("fixture")?, map("fixture"))?;
     assert_eq!(spawn_points, options().spawn_points);

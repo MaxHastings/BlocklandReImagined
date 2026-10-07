@@ -166,6 +166,7 @@ fn the_trench_shovel_digs_dirt_in_a_mini_game_once_the_add_on_is_on() -> Result<
         copies: None,
         game_version: None,
         bot_tuning: None,
+        bot_overrides: None,
     };
     let hosted = setup.hosted(map)?;
     let (s, spawn) = setup.session(&hosted, content.paths.load_map(map, None)?.into_session())?;

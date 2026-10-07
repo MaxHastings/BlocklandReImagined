@@ -141,6 +141,10 @@ impl Session {
     pub fn hold_minigame(&mut self, saved: serde_json::Value) {
         self.held_minigame = Some(saved);
     }
+    /// The mini-game [`Self::hold_minigame`] holds, until its player joins.
+    pub fn held_minigame(&self) -> Option<&serde_json::Value> {
+        self.held_minigame.as_ref()
+    }
 
     pub(in crate::session) fn restore_held_minigame(&mut self, owner: OwnerId) {
         let Some(principal) = self.peers.get(&owner).and_then(|p| p.principal) else {

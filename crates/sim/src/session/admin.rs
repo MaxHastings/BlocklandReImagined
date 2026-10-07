@@ -7,7 +7,6 @@ use bri_admin::{
 use bri_world::OwnerId;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -776,10 +775,7 @@ impl Session {
         is_bot: bool,
         principal: Option<Principal>,
     ) -> Result<Role> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = self.wall_clock();
         self.admin
             .connect(owner, name, trusted_host, is_bot, principal, now)
             .map_err(|error| {

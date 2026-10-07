@@ -57,6 +57,17 @@ pub struct Dedicated {
     pub pending_objects: Vec<String>,
     /// What merging other packages' content skipped, per kind.
     pub merge_notes: Vec<String>,
+    /// What a match recording needs to set this host up again.
+    start: Start,
+}
+
+/// The world and Add-On state a [`Dedicated`] session started from.
+struct Start {
+    world: bri_world::World,
+    /// The map id the session was hosted on.
+    map: String,
+    package_save: Option<Vec<u8>>,
+    map_palette: Vec<[f32; 4]>,
 }
 
 /// Loads the packages `content_root/packages.json` lists (the base game's
@@ -119,6 +130,9 @@ pub fn load_packages(
     let maps = MapContent::from_root(content_root, packages, weapons.clone())?;
     // Change Map paints new worlds with the colors this one starts with.
     let palette = world.palette.clone();
+    // Package worlds grow their ground when the session is built, so a
+    // recording keeps the world as given.
+    let start_world = world.clone();
     let map = maps.load(world)?;
     let merge_notes = weapons
         .pack
@@ -179,7 +193,7 @@ pub fn load_packages(
             mode: None,
             saves: None,
         }),
-        load_map: Some(maps.loader(palette)),
+        load_map: Some(maps.loader(palette.clone())),
         copies: None,
         game_version: None,
         // `/botreload` reads the Add-Ons' bots.json again; a dedicated
@@ -191,11 +205,14 @@ pub fn load_packages(
             }),
             overrides: None,
         }),
+        bot_overrides: None,
     };
     let hosted = setup.hosted(&map.simulation.state().map_id)?;
     let unresolved_items = map.unresolved_items;
     let pending_objects = map.pending_objects.clone();
-    let (session, spawn_points) = setup.session(&hosted, map.into_session())?;
+    let package_save = setup.package_save(&hosted)?;
+    let (session, spawn_points) =
+        setup.session_with(&hosted, map.into_session(), package_save.as_deref())?;
     Ok(Dedicated {
         session,
         setup: std::sync::Arc::new(setup),
@@ -205,10 +222,28 @@ pub fn load_packages(
         unresolved_items,
         pending_objects,
         merge_notes,
+        start: Start {
+            world: start_world,
+            map: hosted.map.clone(),
+            package_save,
+            map_palette: palette,
+        },
     })
 }
 
 impl Dedicated {
+    /// How to set this host up again to replay a match it records; call it
+    /// after [`Self::configure`].
+    pub fn recipe(&self) -> Result<crate::replay::HostRecipe> {
+        let hosted = self.setup.hosted(&self.start.map)?;
+        Ok(self.setup.recipe(
+            &hosted,
+            self.start.world.clone(),
+            self.start.package_save.clone(),
+            self.start.map_palette.clone(),
+        ))
+    }
+
     /// Applies the owner's `server.json` before anyone joins: the admin
     /// passwords and Start Game's Advanced Config.
     pub fn configure(&mut self, config: &ServerConfig) -> Result<()> {
