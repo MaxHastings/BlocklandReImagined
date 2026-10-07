@@ -38,6 +38,9 @@ const MAX_SECONDS: f32 = 30.0;
 /// The most spacings a jet envelope measures up or across before it takes
 /// the rate it has reached as the rate from there on.
 const MAX_SAMPLES: usize = 16;
+/// How long a walk leg goes on jumping at a ledge it lands short of: until
+/// its stall judge has seen two windows go nowhere and plans again.
+const RETRY_SECONDS: f32 = 2.0 * crate::route::Progress::WINDOW;
 /// How close a ledge's measured height is pinned down.
 const LEDGE_TOLERANCE: f32 = 0.01;
 /// How far ahead of the ledge's edge a body standing on it puts its feet:
@@ -263,10 +266,14 @@ fn step(player: &mut Player, physics: &mut PhysicsWorld, direction: Vec3, jump: 
 /// floor.
 fn stand(physics: &mut PhysicsWorld, tuning: &PlayerTuning) -> Option<Player> {
     let mut player = Player::spawn(physics, 1, Vec3::new(0.0, 0.05, 0.0), tuning.clone()).ok()?;
+    // Down onto the floor, within a second.
     for _ in 0..TICKS as usize {
+        if player.state().grounded {
+            return Some(player);
+        }
         step(&mut player, physics, Vec3::ZERO, false, false);
     }
-    player.state().grounded.then_some(player)
+    None
 }
 
 /// A jet leg flown from standing on the floor to a landing `up` high whose
@@ -325,13 +332,26 @@ fn lands_on(tuning: &PlayerTuning, height: f32) -> bool {
     let Some(mut player) = stand(&mut physics, tuning) else {
         return false;
     };
-    for _ in 0..(MAX_SECONDS * TICKS) as usize {
+    // Whether it has jumped and left the floor, and when it first came
+    // down short: a walk leg jumps again each time it lands short, until
+    // its stall judge gives the leg up.
+    let (mut flown, mut short) = (false, None);
+    for tick in 0..(MAX_SECONDS * TICKS) as usize {
         let state = player.state();
         let feet = Vec3::from(state.feet);
         let toward = Vec3::new(0.0, 0.0, top.z - feet.z);
-        // Standing on top, not on the floor below.
-        if state.grounded && feet.y > height - LEDGE_TOLERANCE && toward.z > -ON_LEDGE {
-            return true;
+        if state.grounded {
+            // Standing on top, not on the floor below.
+            if feet.y > height - LEDGE_TOLERANCE && toward.z > -ON_LEDGE {
+                return true;
+            }
+            // Back on the floor short of the top: it tries again for as long
+            // as a walk leg would.
+            if flown && tick - *short.get_or_insert(tick) > (RETRY_SECONDS * TICKS) as usize {
+                return false;
+            }
+        } else {
+            flown = true;
         }
         let jump = state.grounded && toward.length() < crate::route::JUMP_TAKEOFF;
         step(

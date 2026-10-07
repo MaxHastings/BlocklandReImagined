@@ -46,12 +46,19 @@ vehicles only once these prove the seam.
   measurement per tuning, shared.
 - `route.rs` jet tests rewritten for measured legs (energy limits, stop
   before takeoff, climb when sinking).
-- `cargo test -p bri-sim --tests`: all pass. `bri-chaos` bot suites: see
-  the thread for the run.
+- `cargo test -p bri-sim --tests`: all pass. Every `bri-chaos` test binary
+  (36, run one at a time): all pass (the content-dependent ones stay
+  ignored in the cloud).
+- Cost (release, cloud): one stock tuning measures in about 90 ms (ledge
+  about 10 ms, 70 jet legs about 80 ms), once per tuning per process.
 
 ## Not done / next
 
 - Vehicles: measured stopping distance and turning arc (step 4 of the plan).
 - The crossing speed cap and braking (`leg_push_speed`) are still fixed
   numbers inside the controller; measured times include them truthfully.
-- Measuring runs the first time a tuning is asked for, inside a tick.
+- Measuring runs the first time a tuning is asked for, inside a tick: a
+  one-off hitch of about 90 ms when the first bot with a new tuning plans.
+  Warming it when tunings load would hide it, but that is session code the
+  replay thread owns; a background thread would make plans depend on
+  timing, which replay cannot allow.
