@@ -853,6 +853,7 @@ mod tests {
                     scripts: Default::default(),
                     on_fire: None,
                     sport: None,
+                    riding_image: None,
                 },
             );
             items.insert(

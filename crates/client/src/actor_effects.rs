@@ -1405,6 +1405,7 @@ fn teleport_image() -> bri_weapons::Image {
         cook: None,
         on_fire: None,
         sport: None,
+        riding_image: None,
         guard: None,
         rope: None,
         light: None,

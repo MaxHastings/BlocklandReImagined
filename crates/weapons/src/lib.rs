@@ -743,6 +743,11 @@ pub struct Image {
     /// How it throws the sports ball its projectile is ([`Sport`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sport: Option<Sport>,
+    /// The image a ball's catcher holds instead while riding a horse
+    /// (`passBallCheck` mounting `horseBasketballImage` for
+    /// `basketballImage`). Not stable yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub riding_image: Option<String>,
     /// While its holder hangs on a rope (`tether`), each player's game
     /// draws the rope with this: v20 Add-Ons fired a stream of projectiles
     /// whose trails drew it, from the muzzle to the rope's end.
@@ -2718,7 +2723,11 @@ impl Pack {
             .or_else(|| self.damage_types.get("default"))
     }
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema_version == SCHEMA, "Unknown weapon schema");
+        ensure!(
+            self.schema_version == SCHEMA,
+            "Unknown weapon schema {} (this build reads {SCHEMA}): regenerate the packs with              `python tools/bootstrap.py --rebuild weapons --rebuild item_presentation`, which              also rebuilds the bundled Add-Ons",
+            self.schema_version
+        );
         settings::validate(self)?;
         ensure!(
             self.items.len() <= 1024
@@ -3035,6 +3044,12 @@ impl Pack {
                 ensure!(
                     other != id && self.images.contains_key(other),
                     "on_fire of image {id} mounts {other}, which is not another image of this pack"
+                );
+            }
+            if let Some(riding) = &image.riding_image {
+                ensure!(
+                    riding != id && self.images.contains_key(riding),
+                    "riding_image {riding} of image {id} is not another image of this pack"
                 );
             }
             if let Some(sport) = &image.sport {

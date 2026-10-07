@@ -174,6 +174,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 scripts: Default::default(),
                 on_fire: None,
                 sport: None,
+                riding_image: None,
             },
         );
         items.insert(

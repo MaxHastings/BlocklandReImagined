@@ -557,7 +557,7 @@ fn spear_short_charge_cancels_long_charge_releases(fx: &Fx) {
     assert_eq!(shots(&e), 1);
     assert!(
         e.iter()
-            .any(|e| matches!(e,Event::Animation{sequence,..} if sequence=="spearThrow"))
+            .any(|e| matches!(e,Event::Animation{sequence,..} if sequence.eq_ignore_ascii_case("spearThrow")))
     );
 }
 fn sword_and_broom_short_reach_with_distinct_damage(fx: &Fx) {

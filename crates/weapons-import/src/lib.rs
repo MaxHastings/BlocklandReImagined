@@ -561,6 +561,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 // Stock behaviour comes from `stock::declare`.
                 on_fire: None,
                 sport: None,
+                riding_image: None,
                 guard: None,
                 rope: None,
                 paint_picker: false,

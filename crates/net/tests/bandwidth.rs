@@ -91,6 +91,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         states,
         on_fire: None,
         sport: None,
+        riding_image: None,
     };
     let item = bri_weapons::Item {
         id: ROCKET.into(),

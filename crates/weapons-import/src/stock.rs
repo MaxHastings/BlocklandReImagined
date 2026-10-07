@@ -80,6 +80,10 @@ pub fn declare(scripts: &[Script], pack: &mut Pack) {
         }
         image.on_fire = on_fire(&name);
         image.sport = sport(&name);
+        // Item_Sports' `passBallCheck` mounts `"horse" @ %image` on a horse.
+        if image.sport.is_some() {
+            image.riding_image = ids.get(&format!("horse{name}")).cloned();
+        }
     }
     for projectile in pack.projectiles.values_mut() {
         let name = projectile.name.to_ascii_lowercase();

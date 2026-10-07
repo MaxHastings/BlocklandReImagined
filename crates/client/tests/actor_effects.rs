@@ -176,6 +176,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             cook: None,
             on_fire: None,
             sport: None,
+            riding_image: None,
             guard: None,
             rope: None,
             light: None,

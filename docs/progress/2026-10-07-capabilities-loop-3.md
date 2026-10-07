@@ -20,11 +20,16 @@ Branch `claude/project-thread-uoh3ap`, off main after PR #29. Design:
     keys, ball kind).
   - `ProjectileDef::sport_hit: Option<SportHit>` (`KnockOut`, `Catch`) and
     `ProjectileDef::turns_into` (the horse ray's player type).
+  - `Image::riding_image`: the image a ball's catcher holds instead on a
+    horse (`passBallCheck`'s `"horse" @ %image`), which the runtime built
+    from the name before.
   - Existing fields now filled for vanilla: each scripted state's `arm`, and
     `Image::left_image`.
 - A resting sports ball becomes the item that holds its ball's image (the
   pack's own item to image link), not "the football's item, else the soccer
-  ball's".
+  ball's". A pass, lateral, pop, drop, steal or fumble throws the held ball
+  image's own projectile, not a stock projectile by name, so an Add-On ball
+  can be passed and popped.
 - The importer fills the fields (`weapons-import/src/stock.rs`):
   - read from the scripts: the arm move a state's script plays
     (`script_arm`, `playThread(2, X)`) and the left hand `onMount` mounts
@@ -43,12 +48,18 @@ Branch `claude/project-thread-uoh3ap`, off main after PR #29. Design:
 - Client: `Equipment::{Hammer, Wrench, Printer, Wand}` become
   `Equipment::Tool(HostTool)`, read from each tool item's image
   (`ItemAssets::host_tools`, `Building::set_host_tools`). The item-id match
-  is gone. The admin wand now counts as a tool, so it shows non-rendering
-  bricks as v20's `AdminWandImage` (`showBricks = 1`) did.
+  is gone. **For the release notes:** the admin wand now counts as a
+  building tool, so holding it shows non-rendering bricks as box outlines,
+  as v20's `AdminWandImage` (`showBricks = 1`) did.
 - The hammer's bot capability and the host's hammer use named constants
   (`tools::TOOL_RANGE`, `tools::HAMMER_DAMAGE`, from `hammerImage::onFire`
   and `hammerProjectile.directDamage`) instead of bare 5.0 and 10.0. The
   shared `session/tools.rs` change is those constants only.
+- The name ban (`weapons/tests/no_datablock_names.rs`) compares sources
+  without whitespace, so a call split over lines counts, and bans
+  `native_id(` in the runtime outright.
+- A weapons pack of another schema is refused with the bootstrap command
+  that rebuilds it.
 - The synthetic test pack (`bri_weapons::testing`) declares the same data by
   hand, as a port would.
 

@@ -588,6 +588,12 @@ fn declare_scripts(
         }),
     );
     images.get_mut(AKIMBO_IMAGE).expect("akimbo").left_image = Some(LEFT_GUN_IMAGE.into());
+    for (id, riding) in [
+        (DODGEBALL_IMAGE, HORSE_DODGEBALL_IMAGE),
+        (FOOTBALL_IMAGE, HORSE_FOOTBALL_IMAGE),
+    ] {
+        images.get_mut(id).expect("ball").riding_image = Some(riding.into());
+    }
     projectiles
         .get_mut(DODGEBALL_PROJECTILE)
         .expect("dodgeball")

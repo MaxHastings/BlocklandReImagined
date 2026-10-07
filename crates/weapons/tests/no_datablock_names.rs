@@ -13,20 +13,22 @@ fn the_runtime_never_matches_datablock_names() {
             include_str!("../src/runtime/persistence.rs"),
         ),
     ];
+    // Compared without whitespace, so a call split over lines still counts.
     let banned = [
         "name.contains(",
-        "name == \"",
+        "name==\"",
         "name.as_str()",
         "image.contains(",
         "image.to_ascii_lowercase()",
+        "image.rsplit(",
         "projectile.contains(",
         "name.eq_ignore_ascii_case(\"",
-        "== native_id(",
-        "native_id(\"image\"",
-        "native_id(\"weapon\"",
+        "native_id(",
+        "format!(\"horse",
         "Stock::",
     ];
     for (file, source) in sources {
+        let source: String = source.chars().filter(|c| !c.is_whitespace()).collect();
         for pattern in banned {
             assert!(
                 !source.contains(pattern),

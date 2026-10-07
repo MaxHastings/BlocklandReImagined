@@ -1836,6 +1836,7 @@ fn add_launcher(
         paint_picker: false,
         on_fire: None,
         sport: None,
+        riding_image: None,
         scripts: Default::default(),
         hide_nodes: Vec::new(),
         both_arms: false,
