@@ -34,7 +34,7 @@ impl Session {
     /// play at stake, all of it (an unarmed bot closes in, and may find a
     /// body or a vehicle to use). At play: nothing when it cannot hurt them
     /// (`can_hurt`: it has no attack); `HURT`, more than the play, for one
-    /// that hurt it; all of it for one the
+    /// that hurt it (all of it while it carries the play home); all of it for one the
     /// play names or that contests the body it works or stands at it;
     /// `ARMED` for one holding an attack; `UNARMED` for one that holds none.
     pub(super) fn bot_menace(
@@ -51,8 +51,11 @@ impl Session {
         if !can_hurt {
             return 0.0;
         }
+        // One that hurt it is worth more than the play, unless it carries
+        // the play home (`View::committed`): then a fight is worth no more
+        // than at full, below the delivery, and it shoots back on the way.
         if threat.is_some_and(|k| k.subject == seen.owner) {
-            return HURT;
+            return if play.committed { 1.0 } else { HURT };
         }
         let at_the_body = match play.resource {
             Some(Resource::Body { vehicle }) => self

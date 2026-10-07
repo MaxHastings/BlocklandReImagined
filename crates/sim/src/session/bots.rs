@@ -349,6 +349,9 @@ struct Brain {
     /// Where it has been trying to get away from, since when, and when it
     /// last tried (`trapped`).
     pinned: Option<(Vec3, u64, u64)>,
+    /// Where this life began, and whether it began by respawning itself:
+    /// trapped again there, a respawn would only bring it back (`trapped`).
+    life: Option<(Vec3, bool)>,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
     pitch: f32,
@@ -546,6 +549,7 @@ impl Brain {
             acted: Default::default(),
             sweep_from: None,
             pinned: None,
+            life: None,
             yaw: 0.0,
             pitch: 0.0,
             target: None,
@@ -1151,6 +1155,8 @@ impl Session {
             brain.surprise.new_life();
             brain.chase_offset = Vec3::ZERO;
             brain.pinned = None;
+            // A life it ended itself begins where respawning brought it.
+            brain.life = brain.life.filter(|(_, ended)| *ended).map(|_| (Vec3::NAN, true));
         }
         Ok(())
     }
@@ -1968,6 +1974,29 @@ impl Session {
             && self.bot_enemies_about(bot, &self.bots.brains[&bot].kind))
         .then(|| self.bot_explore_target(bot, feet, eye, &body, &intents, tick))
         .flatten();
+        // Whether it may respawn itself, trapped: not while it rides, nor
+        // where a respawn it chose brought it (it would only come back),
+        // and only as the game's rules let a player (`allow_suicide`).
+        let respawn_worth = {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            let (began, ended) = match brain.life {
+                Some((at, ended)) if at.is_finite() => (at, ended),
+                Some((_, ended)) => (feet, ended),
+                None => (feet, false),
+            };
+            let ended = ended && flat(feet - began).length() <= 2.0 * PINNED;
+            brain.life = Some((began, ended));
+            let worth = trapped(brain.pinned);
+            if worth > 0.0
+                && !ended
+                && self.mounted(bot).is_none()
+                && self.package_policy("suicide", bot).is_ok()
+            {
+                worth
+            } else {
+                0.0
+            }
+        };
         let simulation = &self.simulation;
         let clear = move |a: Vec3, b: Vec3| {
             let d = b - a;
@@ -2112,8 +2141,16 @@ impl Session {
             remembers: brain
                 .memory
                 .is_some_and(|m| brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)),
+            // Strayed past where it strolls; while it works a body or a
+            // seat (an interaction, idle play's included) its leash is
+            // the chase's, as for a fight.
             strayed: if brain.tethered() {
-                (away - kind.wander_radius) / STRAY
+                let radius = if opportunity.is_some() {
+                    kind.chase_radius
+                } else {
+                    kind.wander_radius
+                };
+                (away - radius) / STRAY
             } else {
                 0.0
             },
@@ -2124,7 +2161,7 @@ impl Session {
             trapped: if sight.target.is_none() && threat.is_none() && hurt_by.is_none() && !holding
                 && !objective.is_some_and(|view| view.committed)
             {
-                trapped(brain.pinned)
+                respawn_worth
             } else {
                 0.0
             },
@@ -2432,6 +2469,9 @@ impl Session {
         // Respawning: the command a player gives (Ctrl+K), with what it
         // costs them in this game.
         if behaviour == Behaviour::Respawn {
+            if let Some((at, _)) = brain.life {
+                brain.life = Some((at, true));
+            }
             let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
             let _ = self.command(bot, sequence, Command::Suicide);
             return Ok(());
@@ -3165,7 +3205,7 @@ impl Session {
                 }
             }
         }
-        brain.acted.walk = controls.by.filter(|_| direction != Vec3::ZERO);
+        brain.acted.walk = controls.by;
         brain.acted.held_back = vetoed;
         brain.acted.stalls = brain.progress.stalls();
         brain.acted.replans = brain.replans;

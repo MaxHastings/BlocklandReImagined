@@ -1354,13 +1354,17 @@ impl Session {
                         }
                         // Going right up to someone, it takes out what
                         // strikes up close if it has one (a hammer, a
-                        // sword: a whack in the face, harmless where the
-                        // rules let it hurt no one, `hands_goof`).
+                        // sword): a whack in the face, so only one that
+                        // cannot hurt them, as `hands_goof` uses it.
+                        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+                        let harmless = i.target.is_some_and(|t| !self.can_damage_player(bot, t, false));
                         let strikes = |slot: &Option<usize>| {
                             slot.and_then(|s| {
                                 let item = self.weapons.actor(ActorId(bot))?.inventory.get(s)?.clone()?;
+                                let hurts = hand_combat::item_attacks(self, &item, scale);
                                 let item = self.weapons.pack.items.get(&item)?;
-                                Some(self.weapons.pack.images.get(&item.image)?.melee)
+                                let melee = self.weapons.pack.images.get(&item.image)?.melee;
+                                Some(melee && (harmless || !hurts))
                             })
                             .unwrap_or(false)
                         };

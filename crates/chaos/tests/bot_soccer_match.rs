@@ -1075,9 +1075,10 @@ fn never(label: &str, setup: &Setup, r: &Report) -> Vec<String> {
             r.ball_lost == 0.0,
             format!("ball lost {:.1} s", r.ball_lost),
         ),
-        // No fight where weapons cannot hurt: nothing to win by it.
+        // No fight where weapons can neither hurt nor shove: nothing to
+        // win by it. Swords hurt; brooms shove an opponent off the ball.
         (
-            r.combat == 0.0 || setup.kit == Kit::Sword,
+            r.combat == 0.0 || matches!(setup.kit, Kit::Sword | Kit::Broom),
             format!("fought {:.1} bot-s", r.combat),
         ),
         (
@@ -1230,6 +1231,7 @@ fn two_against_two_play_a_clean_match_across_seeds() {
     let mut totals = Totals::default();
     let (mut goof, mut bot_time) = (0.0, 0.0);
     let mut lull = [0.0f32; 4];
+    let mut shoved = None;
     let first: u64 = env("BRI_SOCCER_FIRST", 1);
     for kit in kits {
         for seed in first..=seeds {
@@ -1237,6 +1239,9 @@ fn two_against_two_play_a_clean_match_across_seeds() {
             let r = play(&setup, seconds);
             println!("{kit:?} seed {seed}: {r:?}");
             totals.add(&setup, &r);
+            if kit == Kit::Broom {
+                *shoved.get_or_insert(0.0) += r.combat;
+            }
             goof += r.goof;
             bot_time += 4.0 * r.seconds;
             for (sum, v) in lull
@@ -1250,6 +1255,10 @@ fn two_against_two_play_a_clean_match_across_seeds() {
     }
     println!("{totals:?}");
     failures.extend(totals.problems());
+    // With brooms, bots shove opponents off the ball.
+    if shoved.is_some_and(|s: f32| s <= 0.0) {
+        failures.push("brooms never shoved an opponent".into());
+    }
     // Goofing is one of the bot's options mid-match too (a look, an emote
     // between plays): it happens, and never takes over.
     let goofing = goof / bot_time.max(1.0);

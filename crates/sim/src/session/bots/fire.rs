@@ -221,6 +221,13 @@ impl Session {
             return Some(gun);
         }
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
+        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+        self.image_weapon(image, scale)
+    }
+    /// How a bot handles an image as a weapon (`bot_weapon`): the one
+    /// reader, which `hand_combat::has_possible_attack` asks too, so a bot
+    /// never goes after someone with what it cannot use.
+    pub(super) fn image_weapon(&self, image: &bri_weapons::Image, scale: f32) -> Option<Weapon> {
         let using = image.bot.unwrap_or_default();
         let hold = using.fire == bri_weapons::BotFire::Hold;
         let spread = image_spread(image);
@@ -228,7 +235,6 @@ impl Session {
             .projectile
             .as_ref()
             .and_then(|p| self.weapons.pack.projectiles.get(p));
-        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
         if let Some(cap) = hand_combat::capability(image, projectile, scale) {
             let w = hand_combat::weapon_of(cap, spread);
             return Some(Weapon {

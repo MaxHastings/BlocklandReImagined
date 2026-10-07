@@ -574,12 +574,15 @@ impl Session {
                 continue;
             }
             self.bots.interaction_budget -= 1;
+            let eye = self.peers[&bot].player.eye();
             if self
-                .simulation
-                .sight(
-                    self.peers[&bot].player.eye(),
+                .bot_sees(
+                    bot,
+                    Some(sightlines::Subject::Vehicle(v.id.0)),
+                    eye,
                     at + Vec3::Y,
                     brain.kind.sight,
+                    sightlines::Urgency::Ordinary,
                 )
                 .is_none()
             {

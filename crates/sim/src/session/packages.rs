@@ -2865,9 +2865,6 @@ impl Session {
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };
-        if self.bots.is_bot(owner) {
-            return Ok(());
-        }
         let asked: Vec<String> = host
             .catalog
             .behaviours()

@@ -31,7 +31,20 @@ impl Session {
         {
             return false;
         }
+        // Anyone it may hurt; and in a game, an opponent it can shove even
+        // where nobody can be hurt (a broom moves them off the ball).
         self.can_damage_player(bot, other, false)
+            || self.bot_team_relation(bot, other) == Some(false) && self.bot_can_shove(bot)
+    }
+    /// It holds an attack that pushes a player (`Capability::push`).
+    fn bot_can_shove(&self, bot: OwnerId) -> bool {
+        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
+        self.weapons.actor(ActorId(bot)).is_some_and(|a| {
+            a.inventory
+                .iter()
+                .flatten()
+                .any(|item| hand_combat::item_pushes(self, item, scale))
+        })
     }
     /// Explicit same-game teams are the author's policy, including opposition.
     /// Unassigned creatures retain the original builder/species fallback.

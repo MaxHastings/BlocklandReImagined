@@ -5,10 +5,9 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// The terms a teammate's intent adds to an option's score, and `clear`
-/// (going to knock an opponent off a body a teammate works); a callout
+/// The terms a teammate's intent adds to an option's score; a callout
 /// template may be keyed by each.
-pub const TERMS: [&str; 4] = ["overlap", "uses", "harm", "clear"];
+pub const TERMS: [&str; 3] = ["overlap", "uses", "harm"];
 
 /// What each term is worth at `teamwork` 1, on the 0-1 scale behaviour
 /// scores use. Fixed in code: their ratio is the mechanism, the dial is

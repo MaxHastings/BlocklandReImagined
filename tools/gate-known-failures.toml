@@ -66,11 +66,6 @@ owner = "v0.2.5 bot/test cleanup"
 reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
 
 [[failure]]
-test = "an_idle_bot_near_a_loose_ball_pushes_it"
-owner = "v0.2.6 bot work"
-reason = "Idle ball play outside a game runs its own push (interactions.rs) beside the objective's; the bot reaches the ball but gets it nowhere. v0.2.6 rebuilds it on the one shared push."
-
-[[failure]]
 test = "bedroom_mixed_firefight_survives_spawn_loadout_changes"
 owner = "v0.2.6 bot work"
 reason = "The main checkout's content/addons has no blockhead_bot install, which this content test loads; it passes against regenerated content with the bot Add-Ons installed (checked 2026-10-07 on this lane's content root)."

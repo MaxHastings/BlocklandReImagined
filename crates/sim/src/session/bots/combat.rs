@@ -212,7 +212,7 @@ pub(super) fn capability(
 }
 
 /// Cheap conservative availability for utility arbitration, not an aim or
-/// safety decision. Unknown attack mechanisms retain the ordinary fallback.
+/// safety decision. An unknown mechanism counts only if the bot can fire it.
 pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
     let Some(actor) = session.weapons.actor(ActorId(bot)) else {
         return false;
@@ -242,7 +242,9 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
             .as_ref()
             .and_then(|id| session.weapons.pack.projectiles.get(id));
         if let Some(cap) = capability(image, projectile, scale) {
-            if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 {
+            // One that only pushes (a broom) still moves someone off what
+            // they are after.
+            if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 && cap.push <= 0.0 {
                 continue;
             }
             let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
@@ -256,8 +258,10 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
             continue;
         }
         // Only an explicit manipulation descriptor with no native attack
-        // metadata identifies a noncombat tool. No IDs or command-name guesses.
-        if !known_noncombat_manipulation(image) {
+        // metadata identifies a noncombat tool. No IDs or command-name
+        // guesses. Anything else is an attack only if the bot can use it
+        // as one (`Session::image_weapon`, the reader it fires by).
+        if !known_noncombat_manipulation(image) && session.image_weapon(image, scale).is_some() {
             return true;
         }
     }
@@ -278,6 +282,19 @@ pub(super) fn item_attacks(session: &Session, item: &str, scale: f32) -> bool {
         .and_then(|id| pack.projectiles.get(id));
     capability(image, projectile, scale)
         .is_some_and(|cap| cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.push > 0.0)
+}
+
+/// An item whose attack pushes a player (a broom's shove).
+pub(super) fn item_pushes(session: &Session, item: &str, scale: f32) -> bool {
+    let pack = &session.weapons.pack;
+    let Some(image) = pack.items.get(item).and_then(|i| pack.images.get(&i.image)) else {
+        return false;
+    };
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|id| pack.projectiles.get(id));
+    capability(image, projectile, scale).is_some_and(|cap| cap.push > 0.0)
 }
 
 /// An item that attacks from a distance (not a swing or a stab): one a

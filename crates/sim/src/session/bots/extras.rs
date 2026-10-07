@@ -563,7 +563,10 @@ impl Session {
                 };
                 let centre = (lo + hi) * 0.5;
                 let far = eye.distance(centre);
-                if far > FLAVOUR_REACH * 1.5 || found.is_some_and(|(d, _, _)| d <= far) {
+                if far > FLAVOUR_REACH * 1.5
+                    || found.is_some_and(|(d, _, _)| d <= far)
+                    || !self.bot_spend_rays(bot, 1)
+                {
                     continue;
                 }
                 if let Some((hit, _)) =
@@ -747,8 +750,7 @@ impl Session {
             .collect();
         mates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         let mate = mates.into_iter().take(3).map(|(_, o)| o).find(|o| {
-            self.simulation
-                .sight(eye, self.peers[o].player.eye(), HAND_SIGHT)
+            self.bot_sees_player(bot, *o, eye, HAND_SIGHT, sightlines::Urgency::Ordinary)
                 .is_some()
         });
         if let Some(mate) = mate {
