@@ -107,3 +107,8 @@ For v0.2.7:
   `harm` callout went with the team harm term, and a step out of an ally's
   line is now a choice of place, which has no callout yet.
 - Melee line of fire: a melee bot in an ally's line is not walked out of it.
+- A strafe limit round the place a bot fights from (tried as `Brain::stand`
+  during the gate fixes, taken out): measure first; it changes how far
+  every ranged bot holding position strafes.
+- The `all_dials_on` interference with tests running beside it is CPU
+  contention (one worker per core), not shared dials.

@@ -63,6 +63,33 @@ impl Budget {
     pub(super) fn has_turn(&self, owner: OwnerId, tick: u64) -> bool {
         self.tick == Some(tick) && self.turn == Some(owner)
     }
+    /// The planning fighter's fair share of what is left this tick, for
+    /// weighing other places to stand (`spots`): the allowance over the
+    /// fighters it is shared by, above the reserve the rays keep for
+    /// launches. What it spends is taken back with [`Self::charge`].
+    pub(super) fn share(&self) -> Budget {
+        let fighters = self.owners.len().max(1) as u32;
+        let reserve = CHEAP_RESERVE + PATH_TICKS;
+        Budget {
+            tick: self.tick,
+            owners: self.owners.clone(),
+            cursor: self.cursor,
+            turn: self.turn,
+            solves: self.solves.min(SOLVES_PER_TICK / fighters),
+            rays: self
+                .rays
+                .min(reserve + (RAYS_PER_TICK - reserve) / fighters),
+        }
+    }
+    /// Takes what `share` spent of the `(solves, rays)` it was given.
+    pub(super) fn charge(&mut self, given: (u32, u32), share: &Budget) {
+        self.solves = self.solves.saturating_sub(given.0 - share.solves);
+        self.rays = self.rays.saturating_sub(given.1 - share.rays);
+    }
+    /// What a share was given, for [`Self::charge`].
+    pub(super) fn allowance(&self) -> (u32, u32) {
+        (self.solves, self.rays)
+    }
     fn register(&mut self, owner: OwnerId, tick: u64) -> bool {
         self.begin_tick(tick);
         if let Some(entry) = self.owners.iter_mut().find(|e| e.0 == owner) {

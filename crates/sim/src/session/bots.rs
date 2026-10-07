@@ -393,9 +393,6 @@ struct Brain {
     /// The body its objective works, as of its last think: what an
     /// opponent it shoves off it contests (`contest::shove_worth`).
     contest_body: Option<u64>,
-    /// The place it fights from while it fights (`spots`): its strafe
-    /// keeps within a body's width of it.
-    stand: Option<Vec3>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -585,7 +582,6 @@ impl Brain {
             objective_threat: None,
             spot: None,
             contest_body: None,
-            stand: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -2429,9 +2425,6 @@ impl Session {
         };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         brain.spot = spot;
-        if !(behaviour == Behaviour::Fight && enemy.is_some()) {
-            brain.stand = None;
-        }
 
         // Carrying an objective's delivery that needs only its feet (no
         // tool, trigger, body or seat), it shoots an enemy in sight on the
@@ -3044,21 +3037,13 @@ impl Session {
                             d.dot(right * side) > 0.0 && d.length() < 1.5
                         })
                     };
-                    // Round the place it fights from (`spots`): a step that
-                    // way may not carry it more than a body's width off it.
-                    let stand = brain.stand;
-                    let near_stand = |side: f32| {
-                        stand.is_none_or(|at| {
-                            let off = flat(feet + right * side * 0.9 - at).length();
-                            off <= body.width || off < flat(feet - at).length()
-                        })
-                    };
-                    let ground = |side: f32| floor(side) && !ally(side) && near_stand(side);
+                    let ground = |side: f32| floor(side) && !ally(side);
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
-                    // until the leg is up; one that meets an ally turns
-                    // away from it at once.
-                    let parted = ally(brain.strafe.0) && ground(-brain.strafe.0);
+                    // until the leg is up; one that meets an ally, or is hit
+                    // mid-leg, turns the other way at once.
+                    let parted =
+                        (hurt_by.is_some() || ally(brain.strafe.0)) && ground(-brain.strafe.0);
                     let side = brain.strafe_leg(tick, STRAFE_SECONDS, &ground, parted);
                     if ground(side) {
                         walk = right * side * 0.7;
