@@ -2996,7 +2996,14 @@ impl Session {
         }
         // A jet leg flies itself: climb in the open, cross, land.
         match wanted.map(|w| (w.feet, w.mode)) {
-            Some((to, Mode::Jet { from, apex, seconds })) if driving.is_none() => {
+            Some((
+                to,
+                Mode::Jet {
+                    from,
+                    apex,
+                    seconds,
+                },
+            )) if driving.is_none() => {
                 let leg = brain
                     .jet_leg
                     .get_or_insert(crate::route::JetLeg::start(to, from, tick));
