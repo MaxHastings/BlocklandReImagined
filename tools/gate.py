@@ -61,11 +61,9 @@ LOCK_STALE_SECONDS = 10 * 60
 LOCK_HELD = False
 # Test processes at once: every logical CPU unless --jobs says otherwise.
 TEST_JOBS = os.cpu_count() or 8
-# Each test binary's last wall time, kept in the gate's target dir, so the
-# next run starts the slowest first and splits the longest (`plan_units`).
+# Each test binary's last wall time, kept beside the gate's target dir, so
+# the next run starts the slowest first (`plan_units`).
 TIMINGS_FILE = "gate-timings.json"
-# Longest command line a split may build (Windows allows 32767 characters).
-MAX_COMMAND = 30000
 # Test time over which the gate prints a warning.
 TEST_WARN_SECONDS = 10 * 60
 # A test binary still running after this long is stopped and fails the run.
@@ -655,10 +653,9 @@ def full_gate(sha, root, changed=()):
         clippy_thread.start()
         # Beside the gate's target dir, not in it: target/ gets wiped.
         timings = root / TIMINGS_FILE
-        units = plan_units(binaries, ["--include-ignored", *skip_args], load_timings(timings),
-                           TEST_JOBS, port_bound_targets(worktree), env)
-        say(f"test: {len(units)} test processes for {len(binaries)} binaries, "
-            f"{TEST_JOBS} at a time, slowest first, --include-ignored")
+        units = plan_units(binaries, ["--include-ignored", *skip_args], load_timings(timings))
+        say(f"test: {len(binaries)} test binaries, {TEST_JOBS} at a time, slowest first, "
+            "--include-ignored")
         seconds = run_binaries(units, log, TEST_JOBS, port_bound_targets(worktree), env)
         save_timings(timings, seconds)
         phases["tests"] = time.time() - test_started
@@ -915,53 +912,13 @@ def save_timings(path, seconds):
         pass
 
 
-def list_tests(executable, args, cwd, env=None):
-    """The test names a binary would run with `args` (its skips applied)."""
-    try:
-        result = subprocess.run([executable, *args, "--list"], cwd=cwd, env=env, text=True,
-                                capture_output=True, errors="replace", timeout=120)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode:
-        return None
-    return [line[:-len(": test")] for line in result.stdout.splitlines()
-            if line.endswith(": test")]
-
-
-def split_evenly(names, parts):
-    """`names` dealt into `parts` lists, in sorted order."""
-    return [names[k::parts] for k in range(parts)]
-
-
-def plan_units(binaries, args, timings, jobs, exclusive=(), env=None):
-    """The test processes to run: (label, executable, cwd, header, args,
-    expected seconds), slowest first, with a binary never measured first so it
-    gets measured.
-
-    A binary whose last time is over its share (all recorded time / jobs) runs
-    as several processes, each with an even share of its tests by name
-    (`--exact`), so one long binary no longer sets the wall time. Port-bound
-    binaries stay whole: they run alone anyway."""
-    total = sum(timings.get(label, 0.0) for label, _, _, _ in binaries)
-    share = total / max(1, jobs)
-    units = []
-    for label, executable, cwd, header in binaries:
-        seconds = timings.get(label)
-        parts = 1
-        if seconds and share > 0 and seconds > share and label not in exclusive:
-            names = list_tests(executable, args, cwd, env)
-            if names:
-                parts = min(len(names), -(-int(seconds) // max(1, int(share))))
-                chunks = split_evenly(sorted(names), parts) if parts > 1 else []
-                longest = max((sum(len(n) + 3 for n in c) for c in chunks), default=0)
-                if parts > 1 and len(str(executable)) + longest < MAX_COMMAND:
-                    for chunk in chunks:
-                        units.append((label, executable, cwd, header,
-                                      [*args, "--exact", *chunk], seconds / parts))
-                    continue
-                parts = 1
-        units.append((label, executable, cwd, header, list(args),
-                      float("inf") if seconds is None else seconds))
+def plan_units(binaries, args, timings):
+    """The test processes to run, one per binary: (label, executable, cwd,
+    header, args, expected seconds), slowest first, with a binary never
+    measured first so it gets measured."""
+    units = [(label, executable, cwd, header, list(args),
+              timings.get(label, float("inf")))
+             for label, executable, cwd, header in binaries]
     order = {entry[0]: i for i, entry in enumerate(binaries)}
     return sorted(units, key=lambda u: (-u[5], order[u[0]]))
 
