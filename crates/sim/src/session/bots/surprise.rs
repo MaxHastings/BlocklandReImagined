@@ -1352,6 +1352,21 @@ impl Session {
                         if selected.is_some() {
                             others.push(None);
                         }
+                        // Going right up to someone, it takes out what
+                        // strikes up close if it has one (a hammer, a
+                        // sword: a whack in the face, harmless where the
+                        // rules let it hurt no one, `hands_goof`).
+                        let strikes = |slot: &Option<usize>| {
+                            slot.and_then(|s| {
+                                let item = self.weapons.actor(ActorId(bot))?.inventory.get(s)?.clone()?;
+                                let item = self.weapons.pack.items.get(&item)?;
+                                Some(self.weapons.pack.images.get(&item.image)?.melee)
+                            })
+                            .unwrap_or(false)
+                        };
+                        if i.close && i.target.is_some() && others.iter().any(strikes) {
+                            others.retain(strikes);
+                        }
                         if !others.is_empty() {
                             let slot =
                                 others[(i.roll * others.len() as f32) as usize % others.len()];
