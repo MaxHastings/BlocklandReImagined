@@ -139,27 +139,61 @@ struct DumpJob {
 static DUMPER: std::sync::Mutex<Option<std::sync::mpsc::Sender<DumpJob>>> =
     std::sync::Mutex::new(None);
 
-/// How long a crashing thread waits for its minidump. MiniDumpWriteDump
-/// suspends every other thread, and one of them may hold a lock the dump
-/// needs; under load that hung about one crash in ten. Past this wait the
-/// report is written without the dump and the process exits.
+/// How long a crashing thread waits for its minidump before writing the
+/// report without it. This bounds only waits that happen before the dump
+/// starts (the dump thread blocked on the heap lock below): an in-process
+/// MiniDumpWriteDump suspends every other thread, this waiting one included,
+/// so a dump that deadlocks on a lock held by a suspended thread is not
+/// bounded by it. Hence the dump thread first makes sure no other thread
+/// holds the locks it needs ([`start_thread`], `HeapLock`).
 const DUMP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Start a named thread and return once it is running its body. A new
+/// thread first runs the loader's thread-attach notifications (and the
+/// static C runtime's TLS callbacks) under the loader lock; a minidump that
+/// suspends it there deadlocks, because MiniDumpWriteDump needs that lock.
+/// A crash right after `install` hit exactly that with the tee's reader
+/// thread under heavy load, so `install` waits for its threads to be past it.
+fn start_thread(name: &str, body: impl FnOnce() + Send + 'static) -> io::Result<()> {
+    let (started, running) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let _ = started.send(());
+            body();
+        })?;
+    running
+        .recv()
+        .map_err(|_| io::Error::other(format!("the {name} thread stopped while starting")))
+}
 
 /// The dump thread, started before any crash so the crash filter never has
 /// to write the dump on the crashing thread itself.
 fn start_dumper() -> io::Result<()> {
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapLock, HeapUnlock};
     let (send, receive) = std::sync::mpsc::channel::<DumpJob>();
-    std::thread::Builder::new()
-        .name("bri-dump".into())
-        .spawn(move || {
-            while let Ok(job) = receive.recv() {
-                // SAFETY: the crashing thread keeps `info` alive while it waits.
-                let result = unsafe {
-                    write_minidump(&job.path, job.info as *const EXCEPTION_POINTERS, job.thread)
-                };
-                let _ = job.done.send(result);
+    start_thread("bri-dump", move || {
+        while let Ok(job) = receive.recv() {
+            // MiniDumpWriteDump allocates from the process heap after
+            // suspending every other thread, so one suspended inside a heap
+            // call would deadlock it. Holding the heap's (re-entrant) lock
+            // first waits for any such call to finish; if the crashing thread
+            // itself holds it, this waits and DUMP_WAIT ends the wait.
+            // SAFETY: the process heap is valid for the process's lifetime.
+            let heap = unsafe { GetProcessHeap() };
+            // SAFETY: a valid heap handle; unlocked below on the same thread.
+            let locked = unsafe { HeapLock(heap) } != 0;
+            // SAFETY: the crashing thread keeps `info` alive while it waits.
+            let result = unsafe {
+                write_minidump(&job.path, job.info as *const EXCEPTION_POINTERS, job.thread)
+            };
+            if locked {
+                // SAFETY: locked by this thread above.
+                unsafe { HeapUnlock(heap) };
             }
-        })?;
+            let _ = job.done.send(result);
+        }
+    })?;
     *DUMPER.lock().unwrap_or_else(|e| e.into_inner()) = Some(send);
     Ok(())
 }
@@ -215,22 +249,20 @@ fn tee_stderr(mut log: File) -> io::Result<()> {
         // SAFETY: a valid standard handle; ManuallyDrop keeps it open.
         .then(|| ManuallyDrop::new(unsafe { File::from_raw_handle(original as RawHandle) }));
     let (send, done) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("bri-log".into())
-        .spawn(move || {
-            let mut echo = echo;
-            let mut buffer = [0u8; 8192];
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0 {
-                    break;
-                }
-                let _ = log.write_all(&buffer[..n]);
-                if let Some(echo) = echo.as_mut() {
-                    let _ = echo.write_all(&buffer[..n]);
-                }
+    start_thread("bri-log", move || {
+        let mut echo = echo;
+        let mut buffer = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buffer) {
+            if n == 0 {
+                break;
             }
-            let _ = send.send(log);
-        })?;
+            let _ = log.write_all(&buffer[..n]);
+            if let Some(echo) = echo.as_mut() {
+                let _ = echo.write_all(&buffer[..n]);
+            }
+        }
+        let _ = send.send(log);
+    })?;
     // SAFETY: `write` is the pipe's write end, kept open until `finish`.
     if unsafe { SetStdHandle(STD_ERROR_HANDLE, write) } == 0 {
         return Err(io::Error::last_os_error());

@@ -26,7 +26,7 @@ rapier3d.workspace = true
 imbl.workspace = true
 rmp-serde.workspace = true
 
-[target.'cfg(windows)'.dev-dependencies]
+[target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
-[target.'cfg(unix)'.dev-dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
