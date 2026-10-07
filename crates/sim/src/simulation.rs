@@ -2058,18 +2058,31 @@ fn check_placement_support(
     let mut supported = false;
     let mut obstructed_support = false;
     let mut work_left = SUPPORT_QUERY_LIMIT;
-    let mut candidates = grid::QueryCursor::new(bounds.expanded(1));
+    let query = bounds.expanded(1);
+    // The allowance is for the bricks touching this one and their stud
+    // cells. Passing over a bucket's other bricks is one box test each, and
+    // a dense build packs hundreds of them into one bucket: charging them
+    // refused ordinary plants in a 20k-brick city as a brick limit. The
+    // buckets themselves stay bounded, as for a group (`GroupSupport`).
+    let (min, max) = grid::bucket_span(query);
+    let buckets = (0..3).fold(1u64, |n, a| {
+        n.saturating_mul((i64::from(max[a]) - i64::from(min[a]) + 1) as u64)
+    });
+    if buckets > SUPPORT_QUERY_LIMIT as u64 {
+        return Err(PlantFailure::Limit.into());
+    }
+    let mut candidates = grid::QueryCursor::new(query);
     loop {
-        if work_left == 0 {
-            return Err(PlantFailure::Limit.into());
-        }
-        work_left -= 1;
         let Some(candidate) = candidates.step(index) else {
             break;
         };
         let Some(id) = candidate else {
             continue;
         };
+        if work_left == 0 {
+            return Err(PlantFailure::Limit.into());
+        }
+        work_left -= 1;
         let existing = &world.bricks[&id];
         let other = defs.get(existing)?;
         let mut cells = grid::ConnectionCells::new(bounds, index.bounds(id));
