@@ -240,21 +240,12 @@ impl VehicleAssets {
                 .virtual_path
                 .rsplit_once('/')
                 .map_or(String::new(), |(dir, _)| dir.to_ascii_lowercase());
-            // DTS materials name their texture; resolve beside the model, then
-            // anywhere in the pack, then the blank paint surface.
+            // A material whose texture is nowhere draws as blank paint.
             let images: Vec<SceneImage> = shape
                 .materials
                 .iter()
                 .map(|m| {
-                    let name = m.name.to_ascii_lowercase();
-                    textures
-                        .get(&format!("{folder}/{name}.png"))
-                        .or_else(|| {
-                            textures
-                                .iter()
-                                .find(|(path, _)| path.ends_with(&format!("/{name}.png")))
-                                .map(|(_, image)| image)
-                        })
+                    material_texture(&textures, &folder, &m.name)
                         .cloned()
                         .unwrap_or_else(|| blank.clone())
                 })
@@ -500,6 +491,35 @@ impl VehicleAssets {
             _ => false,
         }
     }
+}
+
+/// What Torque appends to a material's name when it looks for its bitmap;
+/// the name as written comes first.
+const TEXTURE_EXTENSIONS: [&str; 4] = ["", ".png", ".jpg", ".jpeg"];
+
+/// The texture a DTS material names (`textures` by lower-case virtual
+/// path): beside the model, then anywhere in the pack, trying the name as
+/// written and then with each image extension. Some stock vehicles name
+/// theirs with the extension (the Tank turret's `black.png`, the Pirate
+/// Cannon's `Gray.png`); those must not miss and draw as blank paint.
+fn material_texture<'a>(
+    textures: &'a BTreeMap<String, SceneImage>,
+    folder: &str,
+    material: &str,
+) -> Option<&'a SceneImage> {
+    let name = material.to_ascii_lowercase();
+    let files = || TEXTURE_EXTENSIONS.iter().map(|ext| format!("{name}{ext}"));
+    files()
+        .find_map(|file| textures.get(&format!("{folder}/{file}")))
+        .or_else(|| {
+            files().find_map(|file| {
+                let suffix = format!("/{file}");
+                textures
+                    .iter()
+                    .find(|(path, _)| path.ends_with(&suffix))
+                    .map(|(_, image)| image)
+            })
+        })
 }
 
 /// The middle of a model's metal surfaces' bounds, if it has any.
@@ -776,11 +796,15 @@ impl ClientVehicles {
         let frame = self.frames.get(&info.id)?;
         let d = assets.definition(&info.definition)?;
         let s = d.seats.get(seat)?;
-        let mut local = to_transform(
-            Vec3::from(s.transform.position),
-            Quat::from_array(s.transform.rotation),
-        );
-        if d.weapon_seat() == Some(seat) && d.attachment_mount.is_some() {
+        // A broken turret's gunner sits where the host put them, on the
+        // hull's fallback seat (`effective_seat_pose`), not on the turret.
+        let fallback = d
+            .attachment_fallback_seat
+            .as_ref()
+            .filter(|_| info.turret_broken && d.weapon_seat() == Some(seat));
+        let place = fallback.unwrap_or(&s.transform);
+        let mut local = to_transform(Vec3::from(place.position), Quat::from_array(place.rotation));
+        if fallback.is_none() && d.weapon_seat() == Some(seat) && d.attachment_mount.is_some() {
             let pivot = d
                 .attachment_mount
                 .as_ref()
@@ -878,7 +902,10 @@ impl ClientVehicles {
                 let local = wheel_transform(wheel, suspension, spin, frame.steering);
                 push(&wheel.model, body * local, [1.0; 4]);
             }
-            if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount) {
+            // A broken turret flew off as its explosion's debris.
+            if let (Some(model), Some(mount)) = (&d.attachment_model, &d.attachment_mount)
+                && !info.turret_broken
+            {
                 let local =
                     to_transform(Vec3::from(mount.position), Quat::from_array(mount.rotation))
                         * Mat4::from_rotation_y(frame.turret_aim[0]);
@@ -1259,6 +1286,64 @@ pub(crate) mod tests {
     }
     crate::testing::synthetic_and_content!(Gunners: gunner_barrels_follow_the_pitch_to_the_muzzle);
     crate::testing::synthetic_and_content!(Gunners: a_rigged_mount_retains_the_same_portal_split_as_its_motor_and_riders);
+    crate::testing::synthetic_and_content!(Gunners: a_broken_turret_leaves_the_hull_and_its_gunner_sits_on_the_hull);
+    /// Max, v0.2.5: a blown turret flew off as debris while the hull still
+    /// carried it. Once broken it is no longer drawn on the hull, and its
+    /// gunner sits on the hull's fallback seat, where the host put them.
+    fn a_broken_turret_leaves_the_hull_and_its_gunner_sits_on_the_hull(fx: &Gunners) -> Result<()> {
+        let mut assets = VehicleAssets::load(&fx.root)?;
+        let d = fx
+            .gunners
+            .iter()
+            .filter_map(|id| assets.definition(id))
+            .find(|d| d.attachment_model.is_some() && d.attachment_fallback_seat.is_some())
+            .context("a gunner with an attached turret")?
+            .clone();
+        let turret = d.attachment_model.clone().unwrap();
+        let seat = d.weapon_seat().context("the turret's gunner seat")?;
+        let fallback = Vec3::from(d.attachment_fallback_seat.as_ref().unwrap().position);
+        for (destroyed, turret_broken) in [(false, false), (false, true), (true, true)] {
+            let infos = BTreeMap::from([(
+                1,
+                VehicleInfo {
+                    id: 1,
+                    definition: d.id.clone(),
+                    color: None,
+                    occupants: vec![],
+                    destroyed,
+                    turret_broken,
+                    scale: 1.0,
+                },
+            )]);
+            let mut vehicles = ClientVehicles::default();
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, pose(1, 0.0))]),
+                None,
+                None,
+                &Default::default(),
+            );
+            vehicles.prepare(&mut assets, &infos);
+            let drawn: usize = assets
+                .models
+                .iter()
+                .filter(|(key, _)| key.starts_with(&turret))
+                .map(|(_, m)| m.transforms.len())
+                .sum();
+            assert_eq!(
+                drawn > 0,
+                !turret_broken,
+                "turret drawn with destroyed {destroyed}, broken {turret_broken}"
+            );
+            let (gunner, _) = vehicles.seat_transform(&assets, &infos[&1], seat).unwrap();
+            assert_eq!(
+                gunner.distance(fallback) < 1e-4,
+                turret_broken,
+                "gunner at {gunner}, fallback {fallback}"
+            );
+        }
+        Ok(())
+    }
     fn a_rigged_mount_retains_the_same_portal_split_as_its_motor_and_riders(
         fx: &Gunners,
     ) -> Result<()> {
@@ -1318,6 +1403,7 @@ pub(crate) mod tests {
                     color: None,
                     occupants: vec![Some(7)],
                     destroyed: false,
+                    turret_broken: false,
                     scale,
                 },
             )]);
@@ -1420,6 +1506,7 @@ pub(crate) mod tests {
                     color: Some([0.9, 0.1, 0.1, 1.0]),
                     occupants: vec![],
                     destroyed,
+                    turret_broken: false,
                     scale: 1.0,
                 },
             )]);
@@ -1475,6 +1562,7 @@ pub(crate) mod tests {
                 color: Some([1.0, 0.0, 0.0, 1.0]),
                 occupants: vec![Some(7)],
                 destroyed: false,
+                turret_broken: false,
                 scale: 1.0,
             },
         )]);
@@ -1512,6 +1600,7 @@ pub(crate) mod tests {
             color: Some([0.2, 0.4, 0.6, 1.0]),
             occupants: vec![],
             destroyed,
+            turret_broken: false,
             scale: 1.0,
         };
         let (live, dead) = (info(false), info(true));
@@ -1532,6 +1621,41 @@ pub(crate) mod tests {
             ..live.clone()
         };
         assert_eq!(body_tint(&d, &plain), [1.0; 4]);
+    }
+    #[test]
+    fn a_material_named_with_its_extension_finds_its_texture() {
+        let image = |label: &str| SceneImage {
+            label: label.into(),
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+            srgb: false,
+        };
+        let textures: BTreeMap<String, SceneImage> = [
+            "add-ons/vehicle_tank/black.png",
+            "add-ons/vehicle_tank/blank.png",
+            "add-ons/vehicle_jeep/black.png",
+            "add-ons/vehicle_jeep/gray25.png",
+        ]
+        .into_iter()
+        .map(|path| (path.to_string(), image(path)))
+        .collect();
+        let found = |folder: &str, material: &str| {
+            material_texture(&textures, folder, material).map(|i| i.label.as_str())
+        };
+        let tank = "add-ons/vehicle_tank";
+        // The Tank's wreck and turret name `black.png`; its hull `black`.
+        assert_eq!(
+            found(tank, "black.png"),
+            Some("add-ons/vehicle_tank/black.png")
+        );
+        assert_eq!(found(tank, "Black"), Some("add-ons/vehicle_tank/black.png"));
+        // Beside the model first, then anywhere in the pack.
+        assert_eq!(
+            found(tank, "gray25.png"),
+            Some("add-ons/vehicle_jeep/gray25.png")
+        );
+        assert_eq!(found(tank, "missing.png"), None);
     }
     /// A wreck burns with its own `damageEmitter`s, each once: the stand-in
     /// plane names `StandInWreckEmitter` (a base-game name to it) twice; an Add-On's own emitter
@@ -1624,6 +1748,7 @@ pub(crate) mod tests {
                 color: None,
                 occupants: vec![],
                 destroyed: false,
+                turret_broken: false,
                 scale: 1.0,
             },
         )]);
@@ -1721,6 +1846,7 @@ pub(crate) mod tests {
                 color: None,
                 occupants: vec![],
                 destroyed: false,
+                turret_broken: false,
                 scale: 1.0,
             },
         )]);
