@@ -1314,6 +1314,9 @@ impl Session {
                 conservative: true,
                 bottom: (min.y - support).max(0.0),
                 swims: false,
+                // A chassis's own speed is its drive leg's: the search's
+                // seconds only compare its routes with each other.
+                motion: crate::route::Motion::of(&crate::player::PlayerTuning::default()),
             },
         ))
     }

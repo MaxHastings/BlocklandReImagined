@@ -25,6 +25,50 @@ const STOCK_VISCOSITY: f32 = 40.0;
 const TAKEOFF: f32 = 3.0;
 /// Fixed cost of going into deep water, in walking units.
 const WADE_IN: f32 = 1.5;
+
+/// The parts of a body's tuning that say how long its moves take: its
+/// speeds on foot, its jump and gravity, and its jets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Motion {
+    pub forward: f32,
+    pub crouch_forward: f32,
+    pub jump_speed: f32,
+    pub gravity: f32,
+    pub jet_acceleration: f32,
+    pub can_jet: bool,
+}
+impl Motion {
+    pub fn of(tuning: &PlayerTuning) -> Self {
+        Self {
+            forward: tuning.forward,
+            crouch_forward: tuning.crouch_forward,
+            jump_speed: tuning.jump_speed,
+            gravity: tuning.gravity,
+            jet_acceleration: tuning.jet_acceleration,
+            can_jet: tuning.can_jet,
+        }
+    }
+    /// Seconds a hop is in the air until it comes down `rise` above where
+    /// it left the ground (below, for a negative `rise`): up at
+    /// `jump_speed`, its jets (when it fires them) pushing it straight up
+    /// for `jets` seconds more, then back down under `gravity`. The one
+    /// flight model: a hop's landing (`session::bots`) and a jump's time on
+    /// a route (`nav`). A rise above the top of the hop is reached there.
+    pub fn hop(&self, jets: f32, rise: f32) -> f32 {
+        let g = self.gravity.max(f32::EPSILON);
+        let jets = if self.can_jet { jets.max(0.0) } else { 0.0 };
+        // Under thrust it climbs at `jet_acceleration` less gravity.
+        let thrust = self.jet_acceleration - g;
+        let up = self.jump_speed + thrust * jets;
+        let height = self.jump_speed * jets + 0.5 * thrust * jets * jets;
+        let top = height + up.max(0.0).powi(2) / (2.0 * g);
+        jets + up.max(0.0) / g + (2.0 * (top - rise).max(0.0) / g).sqrt()
+    }
+    /// Seconds a body takes to fall `depth` from standing still.
+    pub fn fall(&self, depth: f32) -> f32 {
+        (2.0 * depth.max(0.0) / self.gravity.max(f32::EPSILON)).sqrt()
+    }
+}
 /// How near a jump or crawl waypoint a walking body presses jump or crouch.
 pub const PRESS_NEAR: f32 = 1.6;
 /// Height over the landing a jet leg crosses at.
@@ -84,11 +128,12 @@ impl Jets {
         let flight = jets.flight(up, flat(to - from).length());
         (flight.jetting <= self.seconds).then_some(flight.seconds)
     }
-    /// What a flight of `seconds` costs, in walking units: at least the
-    /// straight distance, so the search's estimate stays a lower bound.
+    /// What a flight of `seconds` costs, in seconds of walking: at least
+    /// walking the straight distance, so the search's estimate stays a
+    /// lower bound.
     pub fn cost(&self, seconds: f32, from: Vec3, to: Vec3) -> f32 {
         let floor = flat(to - from).length() + (to.y - from.y).abs() * 0.5;
-        (seconds * self.walk_speed / self.weight + TAKEOFF).max(floor)
+        (seconds / self.weight + TAKEOFF / self.walk_speed).max(floor / self.walk_speed)
     }
 }
 

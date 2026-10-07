@@ -976,18 +976,9 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
         0.5 + body.step + body.drop,
     )
 }
-/// Seconds a hop from level ground is in the air: up at `jump_speed`,
-/// its jets (when it fires them) pushing it straight up for `jets` seconds
-/// more, then back down under `gravity`.
+/// Seconds a hop from level ground is in the air ([`crate::route::hop_flight`]).
 fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
-    let g = tuning.gravity.max(f32::EPSILON);
-    let jets = if tuning.can_jet { jets.max(0.0) } else { 0.0 };
-    // Under thrust it climbs at `jet_acceleration` less gravity.
-    let thrust = tuning.jet_acceleration - g;
-    let rise = tuning.jump_speed + thrust * jets;
-    let height = tuning.jump_speed * jets + 0.5 * thrust * jets * jets;
-    let top = height + rise.max(0.0).powi(2) / (2.0 * g);
-    jets + rise.max(0.0) / g + (2.0 * top.max(0.0) / g).sqrt()
+    crate::route::Motion::of(tuning).hop(jets, 0.0)
 }
 /// A hop keeps the way it was moving: whether it comes down on floor
 /// (a bot hopping at a deck's edge went off it), after [`hop_flight`]

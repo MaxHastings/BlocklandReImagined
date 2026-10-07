@@ -83,6 +83,9 @@ pub struct Body {
     pub bottom: f32,
     /// Floats and swims in deep water (a player body); a chassis does not.
     pub swims: bool,
+    /// How long its moves take: every move costs the seconds its own
+    /// speeds, jump and gravity take ([`Search`]).
+    pub motion: crate::route::Motion,
 }
 impl Body {
     pub fn of(tuning: &bri_motor::player::PlayerTuning, scale: f32) -> Self {
@@ -104,7 +107,22 @@ impl Body {
             conservative: false,
             bottom: 0.0,
             swims: true,
+            motion: crate::route::Motion::of(tuning),
         }
+    }
+    /// Seconds a body walking `across` on a floor it stands on (crouched:
+    /// `crawl`) takes.
+    fn walk_seconds(&self, across: f32, crawl: bool) -> f32 {
+        let speed = if crawl {
+            self.motion.crouch_forward
+        } else {
+            self.motion.forward
+        };
+        across / speed.max(f32::EPSILON)
+    }
+    /// Seconds of walking a distance is: what the search counts in.
+    fn seconds(&self, distance: f32) -> f32 {
+        self.walk_seconds(distance, false)
     }
     /// The box a clearance test uses: narrower by one cell so a body that
     /// fits a gap passes whichever cell centre it is aligned to, and without
@@ -426,6 +444,9 @@ pub enum Mode {
     Jet { from: Vec3, apex: f32, seconds: f32 },
 }
 
+/// The detour, in units walked, a route takes to keep the whole body off
+/// what it would brush against (`Floor::snug`).
+const SNUG: f32 = 0.6;
 /// Most grid steps a pulled straight walk passes over at once.
 const PULL_REACH: usize = 16;
 /// How far past touching [`Ground::settle`] pushes a body out of what it
@@ -922,6 +943,8 @@ pub struct Search {
     /// Columns a takeoff was considered from, and sweeps spent.
     launches: FxHashSet<(i32, i32)>,
     jet_tests: u32,
+    /// The body's walking speed, once known: the estimate's unit.
+    walk_speed: f32,
 }
 impl Search {
     /// A search on foot and swimming, with no jets.
@@ -945,24 +968,27 @@ impl Search {
             landing: None,
             launches: FxHashSet::default(),
             jet_tests: 0,
+            walk_speed: 1.0,
         }
     }
     /// Whether this search takes swim legs for `body`.
     fn swims(&self, body: &Body) -> bool {
         body.swims && self.costs.swim.is_some()
     }
+    /// A lower bound on the distance from `a` to `b` a body covers.
     fn estimate(a: Vec3, b: Vec3) -> f32 {
         let d = a - b;
         Vec3::new(d.x, 0.0, d.z).length() + d.y.abs() * 0.5
     }
-    /// The estimate to the goal: straight there, or to an opening and on
-    /// from where it lets out, whichever is shorter.
+    /// The estimate to the goal, in seconds of walking: straight there, or
+    /// to an opening and on from where it lets out, whichever is shorter.
     fn h(&self, node: Node) -> f32 {
         let feet = node.feet();
         self.links
             .iter()
             .map(|(entry, _, rest)| Self::estimate(feet, *entry) + rest)
             .fold(Self::estimate(feet, self.goal), f32::min)
+            / self.walk_speed
     }
     fn arrived(&self, node: Node) -> bool {
         let d = node.feet() - self.goal;
@@ -1170,6 +1196,7 @@ impl Search {
         let start = match self.start {
             Some(start) => start,
             None => {
+                self.walk_speed = body.motion.forward.max(f32::EPSILON);
                 let Some(node) = self.first_node(nav, ground, body)? else {
                     return Some(Found::Nowhere);
                 };
@@ -1248,27 +1275,36 @@ impl Search {
                 let d = to.feet() - node.feet();
                 let swim = floor.wet && swims;
                 let flat_d = Vec3::new(d.x, 0.0, d.z).length();
-                // Through an opening it is one step, wherever it lets out;
-                // a swim costs by the swimmer's speed, with no drop.
-                let travel = match through {
-                    Some(_) => CELL,
+                // Every move costs the seconds it takes the body. Through
+                // an opening it is one step, wherever it lets out; a swim
+                // goes at the swimmer's speed; a walk at the walk's, or the
+                // crouched walk's into a crawlspace; a jump is in the air as
+                // long as its hop; walking off a drop adds the fall.
+                let seconds = match through {
+                    Some(_) => body.seconds(CELL),
                     None if swim => {
                         let rate = self.costs.swim.unwrap_or_default();
-                        flat_d * rate.per_unit
-                            + if here.mode == Mode::Swim {
-                                0.0
-                            } else {
-                                rate.entry
-                            }
+                        body.seconds(
+                            flat_d * rate.per_unit
+                                + if here.mode == Mode::Swim {
+                                    0.0
+                                } else {
+                                    rate.entry
+                                },
+                        )
                     }
-                    None => flat_d + (-d.y).max(0.0) * 0.1,
+                    None if jump => body
+                        .motion
+                        .hop(0.0, d.y)
+                        .max(body.walk_seconds(flat_d, floor.low)),
+                    None => {
+                        body.walk_seconds(flat_d, floor.low) + body.motion.fall(-d.y - body.step)
+                    }
                 };
                 let cost = here.cost
-                    + travel
-                    + if jump { 1.0 } else { 0.0 }
-                    + if floor.snug { 0.6 } else { 0.0 }
-                    // Crawling is slow: worth it only to save a detour.
-                    + if floor.low { 1.5 } else { 0.0 };
+                    + seconds
+                    // Keeps paths off walls, through the middle of doors.
+                    + if floor.snug { body.seconds(SNUG) } else { 0.0 };
                 self.relax(
                     to,
                     Came {
@@ -1663,6 +1699,59 @@ mod tests {
         ]);
         let p = path(search(&physics, Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)).0);
         assert!(p.iter().all(|w| !w.crouch), "walked the gap: {p:?}");
+    }
+
+    /// The search with a body of its own.
+    fn search_as(physics: &PhysicsWorld, body: &Body, from: Vec3, to: Vec3) -> Found {
+        let ground = Ground {
+            physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let mut nav = Nav::default();
+        let mut search = Search::new(from, to, 60.0);
+        loop {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, body) {
+                return found;
+            }
+        }
+    }
+
+    /// Every move costs the seconds it takes the body: crawling under a
+    /// slab or walking round through a gap in it is chosen by the body's
+    /// own crouched and upright speeds, with no rate set for crawling.
+    #[test]
+    fn a_crawl_or_a_walk_round_is_chosen_by_the_time_each_takes() {
+        // A slab 2 across, low enough to crawl under, with a door 6 aside.
+        let door = 6.0;
+        let physics = world(&[
+            floor(),
+            (Vec3::new(4.0, 1.6, -40.0), Vec3::new(6.0, 4.0, door - 1.0)),
+            (Vec3::new(4.0, 1.6, door + 1.0), Vec3::new(6.0, 4.0, 40.0)),
+        ]);
+        let crawls = |crouch_forward: f32| {
+            let mut body = body();
+            body.motion.crouch_forward = crouch_forward;
+            let p = path(search_as(
+                &physics,
+                &body,
+                Vec3::ZERO,
+                Vec3::new(10.0, 0.0, 0.0),
+            ));
+            p.iter().any(|w| w.crouch)
+        };
+        let walk = body().motion.forward;
+        // Crawling as fast as walking: straight under, never round.
+        assert!(crawls(walk));
+        // Crawling at a tenth of a walk: round through the door.
+        assert!(!crawls(walk / 10.0));
+        // The stock body: crawling 2 across at its crouched speed takes
+        // less than the 12 more it walks to the door and back.
+        assert!(crawls(body().motion.crouch_forward));
     }
 
     #[test]
