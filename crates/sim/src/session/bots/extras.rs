@@ -383,7 +383,7 @@ impl Session {
         let ways = incoming.map(|(_, _, side)| {
             use super::surprise::{DODGE_HOP, DODGE_JET, DODGE_STRAFE};
             let up = super::hop_lands(&self.simulation, feet, velocity);
-            let fuel = jets.is_some_and(|j| j.seconds >= JET_SECONDS);
+            let fuel = jets.as_ref().is_some_and(|j| j.seconds >= JET_SECONDS);
             let to = feet + side * tuning.forward * STRAFE_TICKS as f32 / 120.0;
             let aside = super::hop_lands(&self.simulation, feet, side * tuning.forward)
                 && !self.bots.claims.intents(tick).any(|(o, i)| {
