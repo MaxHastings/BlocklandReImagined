@@ -13,6 +13,9 @@ use bri_world::authority::trust as level;
 /// muzzle pointing below -0.9).
 pub(super) const TOOL_RANGE: f32 = 5.0;
 const TOOL_RANGE_DOWN: f32 = 5.5;
+/// What a hammer hit takes from a player or object: v20's
+/// `hammerImage::onHitObject` dealt `hammerProjectile.directDamage`, 10.
+pub(super) const HAMMER_DAMAGE: f32 = 10.0;
 /// [`TOOL_RANGE`] or [`TOOL_RANGE_DOWN`] for a swing along `direction`.
 pub(super) fn tool_range(direction: Vec3) -> f32 {
     if direction.y < -0.9 {
@@ -601,7 +604,7 @@ impl Session {
                         if self.can_damage_player(owner, target.0, false) {
                             self.damage_player(
                                 target.0,
-                                10.0,
+                                HAMMER_DAMAGE,
                                 combat::DamageKind::weapon("$DamageType::HammerDirect", true),
                                 Some(owner),
                             )?;
@@ -612,7 +615,7 @@ impl Session {
                     }
                     TargetId::Entity(entity) => self.damage_entity(
                         entity,
-                        10.0,
+                        HAMMER_DAMAGE,
                         Some(owner),
                         "weapon",
                         "$DamageType::HammerDirect",

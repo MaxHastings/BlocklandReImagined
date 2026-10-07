@@ -175,9 +175,7 @@ pub(super) fn capability(
             trigger: tactics::Trigger::default(),
             reach: super::super::tools::TOOL_RANGE * scale,
             near: 0.0,
-            // `hammerImage::onHitObject` deals its projectile's
-            // `directDamage`, unscaled.
-            direct_damage: projectile.map_or(0.0, |p| p.damage),
+            direct_damage: super::super::tools::HAMMER_DAMAGE,
             splash_damage: 0.0,
             splash_radius: 0.0,
             arm_ticks: 0,
