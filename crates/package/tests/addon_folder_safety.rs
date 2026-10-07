@@ -77,6 +77,7 @@ fn run(root: &Path, steps: Vec<Step>) -> Vec<String> {
                     dir,
                     error: None,
                     included: None,
+                    importer: Some("test importer".into()),
                 });
             }
             Step::Included { name, id, stamp } => {
@@ -88,6 +89,7 @@ fn run(root: &Path, steps: Vec<Step>) -> Vec<String> {
                     dir: None,
                     error: None,
                     included: Some(id),
+                    importer: Some("test importer".into()),
                 });
             }
             Step::Remove { name, id, .. } => {
@@ -110,7 +112,11 @@ fn run(root: &Path, steps: Vec<Step>) -> Vec<String> {
 }
 
 fn sync(root: &Path) -> Vec<String> {
-    let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root));
+    let steps = classic::plan(
+        &Library::scan(root).unwrap(),
+        &State::load(root),
+        "test importer",
+    );
     run(root, steps)
 }
 
@@ -180,6 +186,7 @@ fn an_earlier_builds_record_of_a_bundled_add_on_never_removes_it() {
             dir: Some("addons/bot_shark".into()),
             error: None,
             included: None,
+            importer: Some("test importer".into()),
         });
         state.save(&root).unwrap();
         std::fs::remove_file(&zip).unwrap();

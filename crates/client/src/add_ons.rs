@@ -380,6 +380,17 @@ pub fn importer() -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// The pack schemas this game reads, recorded with each Add-On it
+/// converts: one converted for others (an older game's) is converted again
+/// ([`classic::plan`]).
+fn reads() -> String {
+    format!(
+        "weapons {}, vehicles {}",
+        bri_weapons::SCHEMA,
+        bri_vehicles::schema::SCHEMA_VERSION
+    )
+}
+
 /// Progress of [`start_sync`]: a notice for the Add-Ons screen, the last
 /// one with `finished`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,7 +409,7 @@ pub fn start_sync(
     in_game: bool,
 ) -> Result<std::sync::mpsc::Receiver<SyncNote>> {
     let library = Library::scan(root)?;
-    let mut steps = classic::plan(&library, &State::load(root));
+    let mut steps = classic::plan(&library, &State::load(root), &reads());
     let mut waiting = vec![];
     if in_game {
         (steps, waiting) = outside_a_game(&library, steps);
@@ -504,6 +515,9 @@ fn sync(
     send: &std::sync::mpsc::Sender<SyncNote>,
 ) -> String {
     let (mut converted, mut failed, mut removed, mut included) = (vec![], vec![], vec![], vec![]);
+    // Converted again only because an older game made them: they keep
+    // their place, on or off.
+    let mut updated = vec![];
     let mut state = State::load(root);
     for step in steps {
         match step {
@@ -518,6 +532,7 @@ fn sync(
                     dir,
                     error: None,
                     included: None,
+                    importer: None,
                 });
             }
             Step::Included { name, id, stamp } => {
@@ -533,6 +548,7 @@ fn sync(
                     dir: None,
                     error: None,
                     included: Some(id),
+                    importer: None,
                 });
             }
             Step::Remove { name, id, .. } => {
@@ -559,6 +575,10 @@ fn sync(
                     notice: format!("Converting {name}..."),
                     finished: false,
                 });
+                let for_this_version = replaces.is_some()
+                    && state.get(&name).is_some_and(|r| {
+                        r.stamp == stamp && r.importer.as_deref() != Some(&reads())
+                    });
                 let mut record = Record {
                     name: name.clone(),
                     stamp,
@@ -566,12 +586,17 @@ fn sync(
                     dir: None,
                     error: None,
                     included: None,
+                    importer: Some(reads()),
                 };
                 match convert(root, run, &name, &path, replaces.as_deref()) {
                     Ok((id, dir)) => {
                         record.id = Some(id);
                         record.dir = Some(dir);
-                        converted.push(name);
+                        if for_this_version {
+                            updated.push(name);
+                        } else {
+                            converted.push(name);
+                        }
                     }
                     Err(error) => {
                         record.error = Some(format!("{error:#}"));
@@ -604,6 +629,14 @@ fn sync(
         n => notice.push(format!(
             "Converted {n} classic Add-Ons: {}. They start off.",
             list(&converted)
+        )),
+    }
+    match updated.len() {
+        0 => {}
+        1 => notice.push(format!("Updated {} for this version.", updated[0])),
+        n => notice.push(format!(
+            "Updated {n} Add-Ons for this version: {}.",
+            list(&updated)
         )),
     }
     if !failed.is_empty() {
@@ -1031,7 +1064,7 @@ mod tests {
     }
 
     fn sync_now(root: &Path) -> Vec<SyncNote> {
-        let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root));
+        let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root), &reads());
         let (send, receive) = std::sync::mpsc::channel();
         let notice = sync(root, &fake_import, steps, &send);
         drop(send);
@@ -1041,6 +1074,38 @@ mod tests {
             finished: true,
         });
         notes
+    }
+
+    /// An Add-On converted by an older game, its zip unchanged, is
+    /// converted again for this one, stays on, and loads.
+    #[test]
+    fn an_older_games_conversion_is_made_again_and_loads() {
+        let root = std::env::temp_dir().join(format!("bri-add-ons-older-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let drop = classic::folder(&root);
+        std::fs::create_dir_all(&drop).unwrap();
+        std::fs::write(drop.join("Weapon_Gun.zip"), b"PK one").unwrap();
+        sync_now(&root);
+        set_enabled(&root, "weapon_gun", true).unwrap();
+        let mut state = State::load(&root);
+        let mut record = state.get("Weapon_Gun").unwrap().clone();
+        assert_eq!(record.importer, Some(reads()));
+        record.importer = Some("weapons 4, vehicles 7".into());
+        state.set(record);
+        state.save(&root).unwrap();
+        assert_eq!(
+            sync_now(&root).last().unwrap().notice,
+            "Updated Weapon_Gun for this version."
+        );
+        assert_eq!(
+            State::load(&root).get("Weapon_Gun").unwrap().importer,
+            Some(reads())
+        );
+        let library = Library::scan(&root).unwrap();
+        let gun = library.get("weapon_gun").unwrap();
+        assert!(gun.enabled);
+        assert_eq!(sync_now(&root).last().unwrap().notice, "");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1140,7 +1205,7 @@ mod reconvert_tests {
     }
 
     fn sync_bots(root: &Path) -> String {
-        let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root));
+        let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root), &reads());
         let (send, _receive) = std::sync::mpsc::channel();
         sync(root, &fake_bots, steps, &send)
     }
@@ -1252,7 +1317,11 @@ mod in_game_tests {
         }
         set_enabled(&root, "bot_on", true).unwrap();
         set_enabled(&root, "bot_gone", true).unwrap();
-        let steps = classic::plan(&Library::scan(&root).unwrap(), &State::load(&root));
+        let steps = classic::plan(
+            &Library::scan(&root).unwrap(),
+            &State::load(&root),
+            &reads(),
+        );
         let (send, _receive) = std::sync::mpsc::channel();
         sync(&root, &|_: &Path, _: &Path, _: &Path| Ok(()), steps, &send);
         // Two changed, one taken out, one new.
@@ -1262,7 +1331,7 @@ mod in_game_tests {
         std::fs::remove_file(drop.join("Bot_Gone.zip")).unwrap();
         std::fs::write(drop.join("Bot_New.zip"), b"PK").unwrap();
         let library = Library::scan(&root).unwrap();
-        let steps = classic::plan(&library, &State::load(&root));
+        let steps = classic::plan(&library, &State::load(&root), &reads());
         let (now, waiting) = outside_a_game(&library, steps);
         assert_eq!(waiting, ["Bot_Gone", "Bot_On"]);
         let names: Vec<&str> = now
@@ -1295,7 +1364,11 @@ mod in_game_tests {
         );
         set_enabled(&root, "bot_shark", true).unwrap();
         std::fs::write(drop.join("Bot_Shark.zip"), b"PK").unwrap();
-        let steps = classic::plan(&Library::scan(&root).unwrap(), &State::load(&root));
+        let steps = classic::plan(
+            &Library::scan(&root).unwrap(),
+            &State::load(&root),
+            &reads(),
+        );
         let (send, _receive) = std::sync::mpsc::channel();
         let never = |_: &Path, _: &Path, _: &Path| -> Result<()> { panic!("never converted") };
         assert_eq!(
@@ -1313,7 +1386,11 @@ mod in_game_tests {
         );
         // Taken out again: nothing is removed, nothing said.
         std::fs::remove_file(drop.join("Bot_Shark.zip")).unwrap();
-        let steps = classic::plan(&Library::scan(&root).unwrap(), &State::load(&root));
+        let steps = classic::plan(
+            &Library::scan(&root).unwrap(),
+            &State::load(&root),
+            &reads(),
+        );
         assert_eq!(sync(&root, &never, steps, &send), "");
         assert!(root.join("addons/bot_shark/package.json").is_file());
         assert!(
