@@ -3584,7 +3584,7 @@ mod hop_tests {
     /// The motor steps v20's 32 ms ticks inside the 120 Hz steps, so it
     /// stands again up to a few steps after the exact landing: three of its
     /// ticks.
-    const LANDING_SLACK: f32 = 0.1;
+    const LANDING_SLACK: f32 = 3.0 * crate::player::TORQUE_TICK;
 
     #[test]
     fn a_hop_is_judged_over_the_time_a_real_jump_is_in_the_air() {
