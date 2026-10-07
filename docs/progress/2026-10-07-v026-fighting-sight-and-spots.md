@@ -100,3 +100,18 @@ iteration rules keep out of the lane. Per the design it comes out whole:
 
 - The cover case as its own change, with the soccer share before and after.
 - Replay of one of Max's saves on this branch for reproduction.
+
+For v0.2.7:
+
+- Bots no longer call out "Moving!" when an ally's fire moves them: the
+  `harm` callout went with the team harm term, and a step out of an ally's
+  line is now a choice of place, which has no callout yet.
+- Melee line of fire: a melee bot in an ally's line is not walked out of it.
+- A strafe limit round the place a bot fights from (tried as `Brain::stand`
+  during the gate fixes, taken out): measure first; it changes how far
+  every ranged bot holding position strafes.
+- A tighter bound for weapons that push when weighing places to stand:
+  today a pusher's bound is the target's whole health, so with v20 guns
+  (which push) every place is weighed on each planning turn.
+- The `all_dials_on` interference with tests running beside it is CPU
+  contention (one worker per core), not shared dials.

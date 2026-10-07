@@ -62,6 +62,7 @@ pub(super) use perception::Stimulus;
 mod physical_objectives;
 mod planning;
 mod search_memory;
+mod shove;
 mod sight;
 mod sightlines;
 mod spots;
@@ -367,6 +368,10 @@ struct Brain {
     evidence_search: search_memory::State,
     evidence_context: Option<(bri_minigames::GameId, u64, Option<bri_minigames::TeamId>)>,
     fire_down: bool,
+    /// The last tick it was on target while winding up a hand weapon: a
+    /// held wind-up off target is kept for the kind's hold time from here
+    /// ([`charged_control::keeps_wind_up`]).
+    wind_up_on_target: u64,
     /// What it is doing ([`behaviour`]).
     behaviour: Behaviour,
     /// Tick it took up `behaviour`.
@@ -393,6 +398,9 @@ struct Brain {
     /// The place it heads for to fight from (`spots`); none where it
     /// stands.
     spot: Option<spots::Anchor>,
+    /// The body its objective works, as of its last think: what an
+    /// opponent it shoves off it contests (`contest::shove_worth`).
+    contest_body: Option<u64>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -570,6 +578,7 @@ impl Brain {
             evidence_search: Default::default(),
             evidence_context: None,
             fire_down: false,
+            wind_up_on_target: 0,
             behaviour: Behaviour::default(),
             behaviour_since: 0,
             choice_was: ChoiceWas::default(),
@@ -582,6 +591,7 @@ impl Brain {
             objective_tool: false,
             objective_threat: None,
             spot: None,
+            contest_body: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -776,8 +786,10 @@ struct Weapon {
 const SPREAD_BODY: f32 = 3.5;
 /// The nearest a scattering weapon's band ends, however wide its spread.
 const SPREAD_MIN_FAR: f32 = 3.0;
-/// The share of a scattering weapon's spread kept clear of allies: its
-/// pellets fall evenly across the cone, so the outer edge is thin.
+/// The share of a scattering projectile's spread kept clear of allies: it
+/// lands across the cone, rarely at the edge. A shot of several pellets
+/// keeps the whole cone clear (`fire::clear_cone`): one of them may fly
+/// at the edge.
 const SPREAD_CLEAR: f32 = 0.6;
 /// How far above the feet a splash weapon aims.
 const FEET_AIM: f32 = 0.2;
@@ -964,12 +976,30 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
         0.5 + body.step + body.drop,
     )
 }
-/// About how long a hop is in the air, in seconds.
-const HOP_FLIGHT: f32 = 0.8;
+/// Seconds a hop from level ground is in the air: up at `jump_speed`,
+/// its jets (when it fires them) pushing it straight up for `jets` seconds
+/// more, then back down under `gravity`.
+fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
+    let g = tuning.gravity.max(f32::EPSILON);
+    let jets = if tuning.can_jet { jets.max(0.0) } else { 0.0 };
+    // Under thrust it climbs at `jet_acceleration` less gravity.
+    let thrust = tuning.jet_acceleration - g;
+    let rise = tuning.jump_speed + thrust * jets;
+    let height = tuning.jump_speed * jets + 0.5 * thrust * jets * jets;
+    let top = height + rise.max(0.0).powi(2) / (2.0 * g);
+    jets + rise.max(0.0) / g + (2.0 * top.max(0.0) / g).sqrt()
+}
 /// A hop keeps the way it was moving: whether it comes down on floor
-/// (a bot hopping at a deck's edge went off it).
-fn hop_lands(simulation: &crate::simulation::Simulation, feet: Vec3, velocity: Vec3) -> bool {
-    let drift = flat(velocity) * HOP_FLIGHT;
+/// (a bot hopping at a deck's edge went off it), after [`hop_flight`]
+/// with `jets` seconds of jets.
+fn hop_lands(
+    simulation: &crate::simulation::Simulation,
+    feet: Vec3,
+    velocity: Vec3,
+    tuning: &crate::player::PlayerTuning,
+    jets: f32,
+) -> bool {
+    let drift = flat(velocity) * hop_flight(tuning, jets);
     super::admin_players::world_ray(simulation, feet + drift + Vec3::Y * 0.5, Vec3::NEG_Y, 1.5)
         .is_some()
 }
@@ -1338,13 +1368,38 @@ impl Session {
         let mut fire = fire && bite.is_none();
         let mut desired_down = fire && !pulse;
         let last_down = brain.fire_down;
-        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down;
+        // A wind-up off target for a tick is kept while its target still
+        // stands and the kind's hold time since it was last on target has
+        // not run out: a moving enemy is not a reason to start again.
+        if fire && charging {
+            brain.wind_up_on_target = tick;
+        }
+        let winding = !vehicle_weapon
+            && charging
+            && !fire
+            && self
+                .weapons
+                .image_state(ActorId(bot), 0)
+                .is_some_and(|(image, _)| {
+                    charged_control::keeps_wind_up(
+                        last_down,
+                        image,
+                        // Its enemy still in sight, or remembered: a body
+                        // a step away can drop out of view for a tick.
+                        (target.is_some() || brain.memory.is_some_and(|k| tick < k.expires))
+                            && behaviour::paused_hold(
+                                brain.wind_up_on_target,
+                                tick,
+                                brain.kind.hold(),
+                            ),
+                    )
+                });
+        desired_down |= winding;
+        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down && !winding;
         if !matches!(native, hand_combat::Decision::Unsupported) {
             if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
-                let tracking_charge = last_down
-                    && native_choice.is_some()
-                    && image.charges()
-                    && charged_control::release_only(image);
+                let tracking_charge =
+                    charged_control::keeps_wind_up(last_down, image, native_choice.is_some());
                 // The unchanged participant/equipment intent owns this live
                 // wind-up even if range temporarily selected Return/Wander.
                 // Objective tool controls below still cancel/preempt it.
@@ -1375,7 +1430,11 @@ impl Session {
             cancel_hand_charge |= charging && last_down;
         }
         if let Some(down) = goof_trigger {
+            // A goof's click owns the trigger: pressed and let go as a
+            // player fidgets, a wind-up's early release and all, never put
+            // away as a fight's wind-up off target would be.
             desired_down = down;
+            cancel_hand_charge = false;
         }
         brain.acted.trigger = if goof_trigger.is_some() {
             Some(act::Trigger::Goof)
@@ -1924,6 +1983,12 @@ impl Session {
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
+        self.bots.brains.get_mut(&bot).unwrap().contest_body = objective
+            .and_then(|view| view.resource)
+            .and_then(|resource| match resource {
+                claims::Resource::Body { vehicle } => Some(vehicle),
+                claims::Resource::Seat { .. } => None,
+            });
         // How much going after the enemy in sight is worth (`bot_menace`):
         // nothing when it cannot hurt them; with nothing at stake, all of
         // it; more for one that hurt it; at play, all of it for one that
@@ -3454,4 +3519,129 @@ fn team_choices(
         choice.carries = carries;
     }
     c
+}
+
+#[cfg(test)]
+mod hop_tests {
+    use super::*;
+    use crate::player::MoveInput;
+
+    /// A player standing on a deck whose edge is 4 units ahead (+z) of
+    /// the origin.
+    fn deck() -> (Session, OwnerId) {
+        use rapier3d::prelude::*;
+        let world = bri_world::World::new("Hops".into(), "fixture".into(), vec![[1.0; 4]]);
+        let deck =
+            ColliderBuilder::cuboid(20.0, 0.5, 12.0).translation(Vector::new(0.0, -0.5, -8.0));
+        let sim =
+            crate::simulation::Simulation::new(world, crate::testing::definitions(), vec![deck])
+                .unwrap();
+        let mut s = Session::new(sim);
+        let owner = s
+            .join("Hopper".into(), Vec3::new(0.0, 0.05, -10.0), false)
+            .unwrap();
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        (s, owner)
+    }
+
+    /// Seconds a real hop is in the air: from leaving the deck until it
+    /// stands again, its jets held for `jet_ticks`, with a move each tick as
+    /// a client sends them.
+    fn airborne(jet_ticks: u64) -> (f32, crate::player::PlayerTuning) {
+        let (mut s, owner) = deck();
+        let mut left = None;
+        let mut airborne = 0u32;
+        for tick in 0..600u64 {
+            s.movement(
+                owner,
+                tick + 1,
+                MoveInput {
+                    jump: tick == 0,
+                    jet: tick < jet_ticks,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            s.step().unwrap();
+            let grounded = s.peers[&owner].player.state().grounded;
+            match (left, grounded) {
+                (None, false) => left = Some(tick),
+                (Some(_), true) => break,
+                _ => {}
+            }
+            if left.is_some() {
+                airborne += 1;
+            }
+        }
+        (
+            airborne as f32 / 120.0,
+            s.peers[&owner].player.tuning().clone(),
+        )
+    }
+
+    /// The motor steps v20's 32 ms ticks inside the 120 Hz steps, so it
+    /// stands again up to a few steps after the exact landing: three of its
+    /// ticks.
+    const LANDING_SLACK: f32 = 3.0 * crate::player::TORQUE_TICK;
+
+    #[test]
+    fn a_hop_is_judged_over_the_time_a_real_jump_is_in_the_air() {
+        let (measured, tuning) = airborne(0);
+        let flight = hop_flight(&tuning, 0.0);
+        assert!(
+            (measured - flight).abs() < LANDING_SLACK,
+            "a jump is {measured} s in the air, judged {flight} s"
+        );
+        // Moving 4 units from the edge, a little too fast it comes down
+        // past it; a little slow, on the deck.
+        let (mut s, _) = deck();
+        s.step().unwrap();
+        let at = Vec3::ZERO;
+        let speed = 4.0 / flight;
+        assert!(!hop_lands(
+            &s.simulation,
+            at,
+            Vec3::Z * speed * 1.2,
+            &tuning,
+            0.0
+        ));
+        assert!(hop_lands(
+            &s.simulation,
+            at,
+            Vec3::Z * speed * 0.8,
+            &tuning,
+            0.0
+        ));
+    }
+
+    #[test]
+    fn a_hop_that_fires_its_jets_is_judged_over_its_jetted_flight() {
+        let jets = extras::HOP_TICKS;
+        let (measured, tuning) = airborne(jets);
+        let flight = hop_flight(&tuning, jets as f32 / 120.0);
+        assert!(
+            (measured - flight).abs() < LANDING_SLACK,
+            "a jetted hop is {measured} s in the air, judged {flight} s"
+        );
+        assert!(flight > hop_flight(&tuning, 0.0) + LANDING_SLACK);
+        // At a speed the plain hop lands from, the jetted one goes off.
+        let (s, _) = deck();
+        let speed = 4.0 / flight;
+        assert!(hop_lands(
+            &s.simulation,
+            Vec3::ZERO,
+            Vec3::Z * speed,
+            &tuning,
+            0.0
+        ));
+        assert!(!hop_lands(
+            &s.simulation,
+            Vec3::ZERO,
+            Vec3::Z * speed * 1.1,
+            &tuning,
+            jets as f32 / 120.0
+        ));
+    }
 }

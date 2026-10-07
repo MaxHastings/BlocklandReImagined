@@ -25,7 +25,7 @@ const A: ActorId = ActorId(1);
 
 /// A knife: a click jabs, holding for 12 ticks then letting go stabs.
 const KNIFE: &str = r#"{
-    "schema_version": 4,
+    "schema_version": 5,
     "id": "kit",
     "items": { "kit:weapon/knife": { "ui_name": "Knife", "image": "kit:image/knife" } },
     "images": {
@@ -57,7 +57,7 @@ const KNIFE: &str = r#"{
 /// A grenade: the first press pulls the pin (a casing), the second throws
 /// it and the grenade is gone from the holder's tools.
 const GRENADE: &str = r#"{
-    "schema_version": 4,
+    "schema_version": 5,
     "id": "kit",
     "items": { "kit:weapon/grenade": { "ui_name": "Grenade", "image": "kit:image/grenade" } },
     "images": {

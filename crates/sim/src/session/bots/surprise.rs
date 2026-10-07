@@ -300,6 +300,8 @@ pub(super) struct Shot {
     pub spawn: u64,
     pub health: f32,
     pub due: u64,
+    /// Where its push was predicted to put the target (`shove`).
+    pub landing: Option<Vec3>,
     /// The place it fired from (`spots`), judged with the shot.
     pub spot: Option<u32>,
 }
@@ -1157,7 +1159,8 @@ impl Session {
                 .then_some(at)
         })
     }
-    /// Outcomes of shots now due: a hit (it lost health or died) works, a
+    /// Outcomes of shots now due: a hit (it lost health or died, or a push
+    /// put it within a body's width of where it was predicted to) works, a
     /// miss does not, for the weapon, aim and behaviour that fired it.
     pub(super) fn surprise_settle(&mut self, bot: OwnerId, tick: u64) {
         let Some(brain) = self.bots.brains.get_mut(&bot) else {
@@ -1172,6 +1175,13 @@ impl Session {
                 !p.combat.alive
                     || p.combat.spawn_tick != shot.spawn
                     || p.combat.health < shot.health - 0.01
+                    || shot.landing.is_some_and(|at| {
+                        super::shove::landed_as_predicted(
+                            Vec3::from(p.player.state().feet),
+                            at,
+                            p.player.tuning().width * p.player.state().scale,
+                        )
+                    })
             });
             let cfg = &brain.kind.surprise;
             if let Some(slot) = shot.weapon {
@@ -1217,9 +1227,12 @@ impl Session {
         else {
             return;
         };
+        // Judged once the shot has flown, and a shove once its target
+        // has come down.
         let flight = choice
             .and_then(|c| c.aim)
-            .map_or(0.0, |a| a.time_seconds as f32);
+            .map_or(0.0, |a| a.time_seconds as f32)
+            + choice.and_then(|c| c.landing).map_or(0.0, |l| l.seconds);
         let aim = if choice.is_some() {
             brain.surprise.chosen(Domain::Aim).unwrap_or(AIM_TORSO)
         } else {
@@ -1232,6 +1245,7 @@ impl Session {
             spawn,
             health,
             due: tick + ((flight + 0.6) * TICKS) as u64,
+            landing: choice.and_then(|c| c.landing).map(|l| l.at),
             spot: brain.surprise.chosen(Domain::Spot),
         });
     }
@@ -1439,9 +1453,12 @@ impl Session {
                                     .inventory
                                     .get(s)?
                                     .clone()?;
-                                let hurts = hand_combat::item_attacks(self, &item, scale);
                                 let item = self.weapons.pack.items.get(&item)?;
-                                let melee = self.weapons.pack.images.get(&item.image)?.melee;
+                                let image = self.weapons.pack.images.get(&item.image)?;
+                                // Anything it could fire counts, scripted
+                                // weapons too: a goof never risks a hit.
+                                let hurts = hand_combat::attack_of(self, image, scale).is_some();
+                                let melee = image.melee;
                                 Some(melee && (harmless || !hurts))
                             })
                             .unwrap_or(false)
@@ -1645,14 +1662,12 @@ impl Session {
         eye: Vec3,
         tick: u64,
     ) -> Act {
-        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
-        let item = self.weapons.actor(ActorId(bot)).and_then(|a| {
+        let holding = self.weapons.actor(ActorId(bot)).is_some_and(|a| {
             a.selected
-                .and_then(|s| a.inventory.get(s).cloned().flatten())
+                .is_some_and(|s| a.inventory.get(s).is_some_and(Option::is_some))
         });
-        let attacks = item
-            .as_deref()
-            .is_some_and(|item| hand_combat::item_attacks(self, item, scale));
+        // Anything it could fire counts, scripted weapons too.
+        let attacks = hand_combat::holds_attack(self, bot);
         // What can hurt is used only on someone the rules say it cannot.
         let on = close.filter(|_| {
             !attacks
@@ -1727,7 +1742,7 @@ impl Session {
             .is_some_and(|(image, _)| super::super::tools::image_paints(image));
         // Something that paints is held down; anything else clicks.
         let beat = tick.saturating_sub(i.since) % CLICK_TICKS;
-        if item.is_none() && clear && beat == 0 {
+        if !holding && clear && beat == 0 {
             let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
             let _ = self.command(bot, sequence, Command::Activate);
             let _ = self.command(bot, sequence + 1, Command::ActivateRelease);
@@ -1736,7 +1751,7 @@ impl Session {
             aim: Some(aim),
             direction: Some(direction),
             crouch: i.gait == Gait::Crawl && on.is_none(),
-            trigger: item.is_some().then_some(clear && (spray || beat < 4)),
+            trigger: holding.then_some(clear && (spray || beat < 4)),
             ..Default::default()
         }
     }

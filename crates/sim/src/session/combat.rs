@@ -165,6 +165,8 @@ pub(super) struct Combat {
     /// tick of the last emote let through and the quick ones counted.
     pub voice: Option<u64>,
     pub voice_count: u32,
+    /// Who last pushed this body with a weapon's impulse, and the tick.
+    pub pushed: Option<(OwnerId, u64)>,
 }
 
 impl Combat {
@@ -829,6 +831,7 @@ impl Session {
             gun_slow: None,
             voice: None,
             voice_count: 0,
+            pushed: None,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -854,6 +857,11 @@ impl Session {
         }
     }
 
+    /// Who last pushed `owner`'s body with a weapon's impulse, and the tick
+    /// it landed. Not stable until the modding API freeze.
+    pub fn pushed_by(&self, owner: OwnerId) -> Option<(OwnerId, u64)> {
+        self.peers.get(&owner)?.combat.pushed
+    }
     /// The tick `owner`'s current body spawned (`Vitals::spawn_tick`).
     pub fn spawn_tick(&self, owner: OwnerId) -> Option<u64> {
         Some(self.peers.get(&owner)?.combat.spawn_tick)
@@ -1110,6 +1118,7 @@ impl Session {
         {
             peer.combat.last_direct = Some((name.clone(), tick));
         }
+        let lost = amount.min(peer.combat.health);
         peer.combat.health = (peer.combat.health - amount).max(0.0);
         peer.combat.pain_level = if tick.saturating_sub(peer.combat.pain_tick) > PAIN_TICKS {
             amount
@@ -1119,8 +1128,18 @@ impl Session {
         peer.combat.pain_tick = tick;
         let alive = peer.combat.health > 0.0;
         let level = peer.combat.pain_level;
-        self.bots.note_hurt(target, source_observation, tick);
         let feet = peer.player.state().feet;
+        self.bots.note_hurt(target, source_observation, tick);
+        self.observe_damage_result(DamageResult {
+            victim: target,
+            source,
+            amount: lost,
+            projectile: match &kind {
+                DamageKind::Weapon { projectile, .. } => projectile.clone(),
+                _ => None,
+            },
+            tick,
+        });
         self.emote_cue(
             tick,
             crate::presentation::CueKind::Pain {

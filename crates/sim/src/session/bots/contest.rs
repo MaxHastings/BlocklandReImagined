@@ -66,18 +66,7 @@ impl Session {
         if contested || at_the_body || play.enemy == Some(seen.owner) {
             return 1.0;
         }
-        let scale = self
-            .peers
-            .get(&seen.owner)
-            .map_or(1.0, |p| p.player.state().scale);
-        let armed = self
-            .weapons
-            .actor(ActorId(seen.owner))
-            .and_then(|a| {
-                a.selected
-                    .and_then(|s| a.inventory.get(s).cloned().flatten())
-            })
-            .is_some_and(|item| super::hand_combat::item_attacks(self, &item, scale))
+        let armed = super::hand_combat::holds_attack(self, seen.owner)
             || self
                 .bots
                 .brains
@@ -110,6 +99,34 @@ pub(super) fn contested(session: &Session, bot: OwnerId, object: ObjectRef) -> b
             .claims
             .claimants_on(vehicle, tick)
             .any(opponent)
+}
+
+/// What knocking an opponent off a body this bot's objective wants is
+/// worth, in health, when the shove itself would hurt nobody: a broom
+/// moving a player off the ball. The same value every push had before the
+/// fighting lane's consequence worth (`shove`); v0.2.7 replaces it with how
+/// far the landing puts the opponent from the body.
+pub(super) const CONTEST_SHOVE_WORTH: f32 = 10.0;
+
+/// [`CONTEST_SHOVE_WORTH`] while `target` contests the body `bot`'s
+/// objective works (moving it, or claiming it), else nothing.
+pub(super) fn shove_worth(session: &Session, bot: OwnerId, target: OwnerId) -> f32 {
+    let Some(vehicle) = session.bots.brains.get(&bot).and_then(|b| b.contest_body) else {
+        return 0.0;
+    };
+    let tick = session.simulation.state().tick;
+    let moving = session.mover_credit(ObjectRef::Vehicle(vehicle)) == Some(target);
+    if moving
+        || session
+            .bots
+            .claims
+            .claimants_on(vehicle, tick)
+            .any(|o| o == target)
+    {
+        CONTEST_SHOVE_WORTH
+    } else {
+        0.0
+    }
 }
 
 /// Physically at a body an opponent contests: within [`ENGAGE`] of its

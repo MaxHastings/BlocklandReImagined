@@ -85,7 +85,7 @@ fn behaviour() -> Value {
 /// `kit:mode`, an ammo box and a mine nobody holds, and a round.
 fn weapons() -> bri_weapons::Pack {
     let pack = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "id": "kit",
         "items": {
             "kit:weapon/gun": { "ui_name": "Kit Gun", "image": "kit:image/gun" },

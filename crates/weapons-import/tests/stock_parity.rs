@@ -245,4 +245,30 @@ fn vanilla_behaviour_matches_the_old_stock_table() {
         "yellowkeyimage | onPreFire arm | Some(\"shiftleft\") | None",
     ];
     assert_eq!(differences(&pack), expected);
+    // The arms the old name table raised (`scripted_arm_pose`), now read
+    // from the scripts' `playThread(1, ...)`.
+    let old_arms = |name: &str, state: &str| match name {
+        "lefthandedgunimage" | "basketballshootimage" | "dodgeballimage" => Some((true, true)),
+        "basketballimage" => Some((true, false)),
+        "footballimage" if matches!(state, "Charge" | "Armed") => Some((true, false)),
+        _ => None,
+    };
+    let mut arms = Vec::new();
+    for image in pack.images.values() {
+        let name = image.name.to_ascii_lowercase();
+        for state in &image.states {
+            let now = state.raised_arms.or(if image.both_arms {
+                Some((true, true))
+            } else if image.arm_ready {
+                Some((true, false))
+            } else {
+                None
+            });
+            let was = old_arms(&name, &state.name);
+            if was.is_some() && now != was {
+                arms.push(format!("{name} {} | {was:?} | {now:?}", state.name));
+            }
+        }
+    }
+    assert_eq!(arms, Vec::<String>::new());
 }

@@ -29,6 +29,87 @@ pub fn script_arm(body: &str) -> Option<String> {
         .map(|c| c[1].to_ascii_lowercase())
 }
 
+/// What a script body does to the holder's raised arms (animation thread
+/// 1): `Some(Some((right, left)))` for `playThread(1, armReadyRight)`,
+/// `armReadyLeft` or `armReadyBoth`, `Some(None)` for `root` (lowered),
+/// None when it leaves them be.
+pub fn script_raised_arms(body: &str) -> Option<Option<(bool, bool)>> {
+    static RAISE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)playthread\s*\(\s*1\s*,\s*([A-Za-z_]\w*)\s*\)").expect("pattern")
+    });
+    let uncommented = uncommented(body);
+    let sequence = RAISE.captures_iter(&uncommented).last()?[1].to_ascii_lowercase();
+    Some(match sequence.as_str() {
+        "armreadyright" => Some((true, false)),
+        "armreadyleft" => Some((false, true)),
+        "armreadyboth" => Some((true, true)),
+        "root" => None,
+        _ => return None,
+    })
+}
+
+/// Raises `image`'s arms where its scripts do on thread 1: `onMount` for
+/// the whole time it is held (`both_arms`, or `arm_ready` for the right
+/// arm), a state's script for that state and those it leads to that all
+/// come from states with the same arms up, until a script lowers them.
+fn raise_arms(image: &mut Image, bodies: &BTreeMap<String, &str>) {
+    let name = image.name.to_ascii_lowercase();
+    let script = |function: &str| {
+        bodies
+            .get(&format!("{name}::{}", function.to_ascii_lowercase()))
+            .and_then(|body| script_raised_arms(body))
+    };
+    match script("onmount") {
+        Some(Some((true, true))) => image.both_arms = true,
+        Some(Some((true, false))) => image.arm_ready = true,
+        _ => {}
+    }
+    let own: Vec<_> = image
+        .states
+        .iter()
+        .map(|s| (!s.script.is_empty()).then(|| script(&s.script)).flatten())
+        .collect();
+    let mut from: Vec<Vec<usize>> = vec![Vec::new(); image.states.len()];
+    for (i, s) in image.states.iter().enumerate() {
+        for next in [
+            s.timeout,
+            s.down,
+            s.up,
+            s.ammo,
+            s.no_ammo,
+            s.loaded,
+            s.not_loaded,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if next != i && next < from.len() && !from[next].contains(&i) {
+                from[next].push(i);
+            }
+        }
+    }
+    let mut raised: Vec<Option<(bool, bool)>> = vec![None; image.states.len()];
+    // Settles within one pass a state; the bound only guards odd graphs.
+    for _ in 0..=raised.len() {
+        let next: Vec<_> = (0..raised.len())
+            .map(|i| match own[i] {
+                Some(arms) => arms,
+                None => {
+                    let first = from[i].first().and_then(|f| raised[*f]);
+                    first.filter(|arms| from[i].iter().all(|f| raised[*f] == Some(*arms)))
+                }
+            })
+            .collect();
+        if next == raised {
+            break;
+        }
+        raised = next;
+    }
+    for (state, arms) in image.states.iter_mut().zip(raised) {
+        state.raised_arms = arms;
+    }
+}
+
 /// The image an `onMount` body mounts in the left hand
 /// (`%obj.mountImage(LeftHandedGunImage, 1)`), by datablock name.
 pub fn left_hand_image(body: &str) -> Option<String> {
@@ -80,6 +161,7 @@ pub fn declare(scripts: &[Script], pack: &mut Pack) {
                 .and_then(|body| left_hand_image(body))
                 .and_then(|left| ids.get(&left.to_ascii_lowercase()).cloned());
         }
+        raise_arms(image, &bodies);
         image.on_fire = on_fire(&name);
         image.sport = sport(&name);
         // Item_Sports' `passBallCheck` mounts `"horse" @ %image` on a horse.
@@ -165,6 +247,19 @@ mod tests {
         assert_eq!(script_arm("%obj.playThread(1, armReadyRight);"), None);
         assert_eq!(script_arm("// %obj.playThread(2, root);"), None);
         assert_eq!(
+            script_raised_arms("%obj.playThread(1,armReadyRight);"),
+            Some(Some((true, false)))
+        );
+        assert_eq!(script_raised_arms("%obj.playThread(1, root);"), Some(None));
+        assert_eq!(
+            script_raised_arms("//%obj.playThread(1, armReadyBoth);"),
+            None
+        );
+        assert_eq!(
+            script_raised_arms("%obj.playThread(2, armReadyBoth);"),
+            None
+        );
+        assert_eq!(
             left_hand_image(
                 "Parent::onMount(%this,%obj,%slot); %obj.mountImage(LeftHandedGunImage, 1);"
             )
@@ -175,6 +270,61 @@ mod tests {
             left_hand_image("%obj.mountImage(basketballShootImage,0);"),
             None
         );
+    }
+
+    /// The football and Akimbo shapes: `onMount` raises the arms for as long
+    /// as it is held; `onCharge` raises the right arm through the states
+    /// after it until `onFire` lowers it.
+    #[test]
+    fn scripts_raise_arms_for_their_states() {
+        let state = |name: &str, script: &str, timeout, down, up| State {
+            name: name.into(),
+            script: script.into(),
+            timeout,
+            down,
+            up,
+            ..State::authored()
+        };
+        let mut football = Image {
+            name: "footballImage".into(),
+            states: vec![
+                state("Activate", "", Some(1), None, None),
+                state("Ready", "", None, Some(2), None),
+                state("Charge", "onCharge", Some(3), None, Some(4)),
+                state("Armed", "", None, None, Some(5)),
+                state("AbortCharge", "onAbortCharge", Some(1), None, None),
+                state("Fire", "onFire", Some(1), None, None),
+            ],
+            ..Default::default()
+        };
+        let mut akimbo = Image {
+            name: "LeftHandedGunImage".into(),
+            states: vec![state("Ready", "", None, None, None)],
+            ..Default::default()
+        };
+        let bodies: BTreeMap<String, &str> = [
+            (
+                "footballimage::oncharge",
+                "%obj.playThread(1,armReadyRight);",
+            ),
+            ("footballimage::onabortcharge", "%obj.playThread(1,root);"),
+            ("footballimage::onfire", "%obj.playThread(1,root); throw();"),
+            (
+                "lefthandedgunimage::onmount",
+                "%obj.playThread(1, armreadyboth);",
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        raise_arms(&mut football, &bodies);
+        raise_arms(&mut akimbo, &bodies);
+        let arms: Vec<_> = football.states.iter().map(|s| s.raised_arms).collect();
+        let right = Some((true, false));
+        assert_eq!(arms, [None, None, right, right, None, None]);
+        assert!(!football.both_arms && !football.arm_ready);
+        assert!(akimbo.both_arms);
+        assert_eq!(akimbo.states[0].raised_arms, None);
     }
 
     #[test]

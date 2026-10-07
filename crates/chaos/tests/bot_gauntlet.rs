@@ -272,6 +272,8 @@ fn rooftop_brawl_without_rails() {
     let r = b.play(6.0, 60, |_, _| {});
     assert!(r.kills > 0, "a real fight: {}", r.kills);
     sane(&r);
+    // Its own doing only: an enemy's shot that knocks it off is a shove
+    // that worked (`knocked_off`, printed above).
     assert_eq!(r.fell, 0, "no bot strafed off the deck");
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }

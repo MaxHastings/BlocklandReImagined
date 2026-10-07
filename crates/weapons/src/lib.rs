@@ -17,7 +17,7 @@ pub use settings::Binding;
 /// 3 adds explosion vertical impulse and per-type vehicle damage scale.
 /// 4 declares stock script behaviour in data (`Image::on_fire`,
 /// `Image::sport`, `ProjectileDef::sport_hit`, `ProjectileDef::turns_into`).
-pub const SCHEMA: u32 = 4;
+pub const SCHEMA: u32 = 5;
 pub const TICK_HZ: u32 = 120;
 /// Authored DTS object bounds converted offline to native coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -71,22 +71,6 @@ impl ItemBounds {
     }
     pub fn overlaps(&self, other: &Self) -> bool {
         (0..3).all(|a| self.min[a] <= other.max[a] && self.max[a] >= other.min[a])
-    }
-}
-/// Arms (right, left) raised by an image's script instead of its `armReady`
-/// field: `onMount`/`onCharge` calls to `playThread(1, armReady*)` in the
-/// Akimbo Guns and Item_Sports scripts. Other images follow `armReady`.
-pub fn scripted_arm_pose(image: &str, state: &str) -> Option<(bool, bool)> {
-    let name = image
-        .rsplit('.')
-        .next()
-        .unwrap_or(image)
-        .to_ascii_lowercase();
-    match name.as_str() {
-        "lefthandedgunimage" | "basketballshootimage" | "dodgeballimage" => Some((true, true)),
-        "basketballimage" => Some((true, false)),
-        "footballimage" if matches!(state, "Charge" | "Armed") => Some((true, false)),
-        _ => None,
     }
 }
 pub fn native_id(kind: &str, name: &str) -> String {
@@ -171,6 +155,13 @@ pub struct State {
     /// `getImageAmmo` in `onArmed`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub arm_once: bool,
+    /// The arms held up in this state, (right, left), where a script raised
+    /// them on thread 1 and they stay up into the states after (the
+    /// football's `onCharge` plays `playThread(1, armReadyRight)` and its
+    /// `onFire` lowers them). None follows the image's `arm_ready` and
+    /// `both_arms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raised_arms: Option<(bool, bool)>,
     /// The holder's thread-3 animation played on entering the state, as
     /// v20 scripts' `playThread(3, shiftLeft)`: the other arm's move, a
     /// gesture over whatever thread 2 plays; `root` stops it.

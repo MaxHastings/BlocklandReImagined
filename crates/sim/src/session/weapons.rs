@@ -740,10 +740,19 @@ impl Session {
                     )?;
                 }
                 WeaponEvent::Impulse {
+                    source,
                     target: TargetId::Actor(target),
                     impulse,
                     ..
-                } => self.push_player(target.0, impulse),
+                } => {
+                    self.push_player(target.0, impulse);
+                    let tick = self.simulation.state().tick;
+                    if let Some(by) = shooter(source)
+                        && let Some(peer) = self.peers.get_mut(&target.0)
+                    {
+                        peer.combat.pushed = Some((by, tick));
+                    }
+                }
                 WeaponEvent::Recoil { actor, velocity } => {
                     self.push_player(actor.0, velocity * combat::PLAYER_MASS)
                 }

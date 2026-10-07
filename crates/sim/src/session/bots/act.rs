@@ -316,12 +316,13 @@ impl Session {
         if held_back {
             walk = Vec3::ZERO;
         }
+        let tuning = self.peers[&bot].player.tuning();
         let drift = if walk == Vec3::ZERO {
             Vec3::from(state.velocity)
         } else {
-            walk * self.peers[&bot].player.tuning().forward
+            walk * tuning.forward
         };
-        let hop = controls.hop && super::hop_lands(&self.simulation, feet, drift);
+        let hop = controls.hop && super::hop_lands(&self.simulation, feet, drift, tuning, 0.0);
         (walk, held_back, controls.jump || hop)
     }
 }
