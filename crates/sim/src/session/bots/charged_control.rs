@@ -33,6 +33,17 @@ pub(super) fn release_only(image: &Image) -> bool {
             }))
 }
 
+/// Whether a wind-up the bot is holding stays held through a tick it is
+/// not on target: its button is down, the image is a release-only charge,
+/// and the attack it was winding up for still stands (`kept`: the same
+/// target and weapon). A turn or a sidestep is not a reason to throw away a
+/// charge half done; losing the target, or what `kept` rules out, is. One
+/// rule for both of a bot's hand paths (the native chooser's intent and
+/// the scripted weapons it reads only by their states).
+pub(super) fn keeps_wind_up(last_down: bool, image: &Image, kept: bool) -> bool {
+    last_down && kept && image.charges() && release_only(image)
+}
+
 /// Conservative finite reachability with the button up. A recovery state
 /// which can only reach Ready must keep its native cooldown, even if the
 /// next charge's press arrived early. A path into onFire requires cancellation.
