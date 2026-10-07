@@ -603,6 +603,11 @@ impl VehiclesWorld {
             }
         })
     }
+    /// The loaded catalog's fingerprint: a hash of the whole pack, so it
+    /// changes whenever any definition does.
+    pub fn catalog_fingerprint(&self) -> &str {
+        &self.catalog_fingerprint
+    }
     pub fn definition(&self, id: &str) -> Option<&Definition> {
         self.catalog.get(id)
     }
