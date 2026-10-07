@@ -58,3 +58,6 @@ a clean measurement. `HEAVY_JOBS` stays 3 for v0.2.6.
   whatever the pool sizes.
 - A faster gate: measure `HEAVY_JOBS` 4-6 on an otherwise idle PC once the
   heavy tests are cheaper.
+- The release's Add-On check (Zip smoke, add-on-health.json) covers only
+  enabled Add-Ons; 53 bundled ones ship off. Check once more with every
+  bundled Add-On enabled.
