@@ -280,14 +280,18 @@ pub(super) fn shot_harm(
         .map_or(Vec3::ZERO, |c| (c.to - c.from).normalize_or_zero());
     let mut end = chords.last().map_or(origin, |c| c.to);
     let mut seconds = chords.last().map_or(0.0, |c| c.seconds);
+    // The bodies its way meets: priced by the plan whatever they take (a
+    // push's target takes no damage, yet the shot is meant for it).
+    let mut met = Vec::new();
     if let Some(struck) = strike.contact {
         // A swing strikes what the host's own trace says it strikes.
         way.extend_from_slice(chords);
-        if let Some(i) = struck.and_then(|o| bodies.0.iter().position(|b| b.owner == o))
-            && bodies.0[i].direct
-        {
-            harm[i] += strike.direct;
+        if let Some(i) = struck.and_then(|o| bodies.0.iter().position(|b| b.owner == o)) {
+            met.push(bodies.0[i].owner);
             end = bodies.0[i].centre;
+            if bodies.0[i].direct {
+                harm[i] += strike.direct;
+            }
         }
     } else if strike.pellets > 1 && strike.spread > 0.0 {
         // Each pellet flies the spread box; a body takes the share of the
@@ -312,6 +316,9 @@ pub(super) fn shot_harm(
                 continue;
             }
             let share = spread_share(origin, direction, strike.spread, b, &mut shade);
+            if share > 0.0 {
+                met.push(b.owner);
+            }
             if b.direct {
                 harm[i] += strike.direct * strike.pellets as f32 * share;
             }
@@ -332,6 +339,7 @@ pub(super) fn shot_harm(
                     way.push(Chord { to: at, ..*c });
                     end = at;
                     seconds = c.seconds;
+                    met.push(bodies.0[i].owner);
                     if bodies.0[i].direct {
                         harm[i] += strike.direct;
                     }
@@ -365,13 +373,15 @@ pub(super) fn shot_harm(
         (end, radius + danger)
     });
     let mut total = Harm::default();
-    let mut priced = Vec::new();
+    let mut priced = met;
     for (b, h) in bodies.0.iter().zip(harm) {
         let h = h.min(b.health.max(0.0));
         if h <= 0.0 {
             continue;
         }
-        priced.push(b.owner);
+        if !priced.contains(&b.owner) {
+            priced.push(b.owner);
+        }
         match b.side {
             Side::Own => total.own += h,
             Side::Ally => {
@@ -664,5 +674,27 @@ mod tests {
             harm.ally > 0.0 && harm.own > 0.0 && !taken(harm),
             "{harm:?}"
         );
+    }
+
+    #[test]
+    fn the_body_a_push_is_meant_for_is_priced_though_it_takes_no_damage() {
+        // A push: no damage, no blast. The trigger keeps fire only while no
+        // unpriced body is in the shot's way, so its target must be priced.
+        let enemy = body(2, Side::Enemy, Vec3::new(0.0, 0.0, 3.0));
+        let push = Strike {
+            direct: 0.0,
+            pellets: 1,
+            spread: 0.0,
+            blast: None,
+            contact: None,
+        };
+        let (harm, shape) = shot_harm(
+            &Bodies(vec![enemy]),
+            Vec3::ZERO,
+            &straight(Vec3::Z * 6.0),
+            &push,
+        );
+        assert_eq!(harm.enemy, 0.0);
+        assert_eq!(shape.priced, vec![2]);
     }
 }
