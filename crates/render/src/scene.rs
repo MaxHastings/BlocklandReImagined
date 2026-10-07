@@ -3300,14 +3300,10 @@ impl SceneRenderer {
         )));
         queue.write_buffer(&v.camera, 0, bytemuck::bytes_of(camera));
     }
-    /// Whether the player's sun shadows (after `update_camera`) reach
-    /// `point`: a view whose eye is there can read them.
-    pub fn shadows_reach(&self, point: Vec3) -> bool {
-        self.shadows.reach(point)
-    }
     /// Fit sun shadows of `view`'s own to `camera`, drawn by
-    /// `render_view_shadows(view)` before its pass: a view whose eye lies
-    /// past the player's shadows (a window onto a far place) would show
+    /// `render_view_shadows(view)` before its pass: the player's are fitted
+    /// to the player's frustum, so a view showing elsewhere (a window onto
+    /// another place, a mirror's room behind the player) would show few or
     /// none. Only mirror and window planes' views (1 to
     /// `ReflectionSettings::MAX_PLANES`) can; false when it cannot, and it
     /// reads the player's.

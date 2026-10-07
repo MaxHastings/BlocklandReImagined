@@ -39,8 +39,6 @@ pub enum CueKind {
         force: f32,
         radius: f32,
     },
-    HammerHit,
-    WrenchHit,
     WeaponSound {
         profile: String,
     },

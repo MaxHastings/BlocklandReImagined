@@ -51,11 +51,6 @@ reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run 
 target = "bri-client/night_qa"
 
 [[failure]]
-test = "a_bot_jets_over_to_someone_above_it"
-owner = "v0.2.5 bot/test cleanup"
-reason = "The bot's jet climb to the 7-unit deck stalls near 4 units (the planner's flight estimate says it reaches); the search half was fixed in v0.2.5; the climb is parked for after v0.2.5 (bots/next-version.md)."
-
-[[failure]]
 test = "steady_play_builds_and_uploads_nothing_whole::content"
 owner = "v0.2.5 bot/test cleanup"
 reason = "The soak's rocket knocks none of its floating test wall out after the v0.2.4 merge; check the wall against the new brick-damage rules."

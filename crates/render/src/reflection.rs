@@ -762,8 +762,8 @@ pub struct Reflections {
     /// Vertex ranges per pipeline, by coplanar group.
     ranges: [Vec<Range<u32>>; 2],
     plan: Plan,
-    /// Per live plane: whether its view fitted sun shadows of its own (its
-    /// eye is past the player's shadows, or it is seen in a view that did).
+    /// Per live plane: whether its view fitted sun shadows of its own (all
+    /// do while sun shadows are on).
     own_shadows: Vec<bool>,
     camera: Camera,
 }
@@ -1077,9 +1077,13 @@ impl Reflections {
                 screen,
             )),
         );
-        // A view whose eye the player's sun shadows do not reach (a window
-        // onto a far place) fits its own, and so does every view seen in
-        // one: those all draw before the player's shadows (`render_views`).
+        // Every plane fits sun shadows of its own: the player's are fitted
+        // to the player's frustum, and what a plane shows lies elsewhere
+        // (behind the player in a mirror, anywhere through a window), even
+        // when its eye stands inside them. Those all draw before the
+        // player's shadows (`render_views`). Fitting fails for every plane
+        // alike (shadows off, no sun), so a plane seen in one that fitted
+        // its own has its own too.
         self.own_shadows.clear();
         for (i, plane) in self.plan.planes.iter().enumerate() {
             queue.write_buffer(
@@ -1093,11 +1097,6 @@ impl Reflections {
                 ..*camera
             };
             renderer.update_view(queue, 1 + i, &view);
-            let own = plane
-                .parent
-                .checked_sub(1)
-                .is_some_and(|parent| self.own_shadows[parent])
-                || !renderer.shadows_reach(plane.eye);
             // Shadows fit the view's whole frustum: the player's, moved as
             // the plane moves it. The plane's own projection is cut to its
             // window (an oblique near plane, a crop), which leaves no far
@@ -1109,7 +1108,7 @@ impl Reflections {
                 ..view
             };
             self.own_shadows
-                .push(own && renderer.fit_view_shadows(queue, 1 + i, &whole));
+                .push(renderer.fit_view_shadows(queue, 1 + i, &whole));
         }
         // Surfaces by pipeline, then by coplanar group.
         let mut vertices = Vec::new();

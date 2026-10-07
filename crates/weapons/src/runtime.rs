@@ -30,17 +30,36 @@ pub const PRINTER: &str = "v20.weapon.printgun";
 pub const WAND: &str = "v20.weapon.wanditem";
 /// The core tools in their inventory order; name one by its constant.
 pub const CORE_TOOLS: [&str; 4] = [HAMMER, WRENCH, PRINTER, WAND];
-/// Images whose v20 `onFire` is a script that raycasts and acts on the hit
-/// object (`hammerImage::onFire`, `wrenchImage::onFire`, ...) instead of
-/// calling `Parent::onFire`. The runtime reports [`Event::ToolFire`] and the
-/// host performs the hit; no projectile is launched.
-pub const HOST_TOOL_IMAGES: [&str; 5] = [
-    "hammerimage",
-    "wrenchimage",
-    "printgunimage",
-    "wandimage",
-    "adminwandimage",
-];
+/// A building mechanism the host runs when an image fires, instead of
+/// launching a projectile: v20's `hammerImage::onFire`, `wrenchImage::onFire`
+/// and kin raycast and act on what they hit. The runtime reports
+/// [`Event::ToolFire`] with it and the host performs the hit.
+///
+/// Not stable yet: stock images get theirs from [`host_tool`] until images
+/// declare it in data, and the variants may still be renamed before the
+/// modding API freeze.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HostTool {
+    /// Breaks the brick it hits (trust and chain-kill rules permitting),
+    /// strikes a player or object, and knocks a vehicle (the hammer).
+    Break,
+    /// Destroys a trusted brick it hits and launches a player upward (the
+    /// player wand).
+    Destroy,
+    /// An administrator's long reach: destroys any brick and flings players
+    /// (the Destructo Wand).
+    AdminDestroy,
+    /// Opens the brick it hits for inspection and its settings dialog (the
+    /// wrench).
+    Inspect,
+    /// Opens the print picker for the printable brick it hits (the printer).
+    Print,
+}
+/// The building mechanism an image's `onFire` runs, if it is one of the
+/// host's ([`HostTool`]).
+pub fn host_tool(image: &Image) -> Option<HostTool> {
+    Stock::of(image).host_tool
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ActorId(pub u64);
 impl ActorId {
@@ -301,13 +320,17 @@ pub enum Event {
         actor: ActorId,
         hand: u8,
     },
-    /// A [`HOST_TOOL_IMAGES`] image, or an Add-On tool's image with a
-    /// `command`, entered its `onFire` state.
+    /// A [`HostTool`] image, or an Add-On tool's image with a `command`,
+    /// entered its `onFire` state, or an Add-On image's other moment ran a
+    /// command.
     ToolFire {
         actor: ActorId,
         image: String,
         hand: u8,
         command: Option<String>,
+        /// The host's building mechanism to perform, for a [`HostTool`]
+        /// image's `onFire`.
+        tool: Option<HostTool>,
     },
     /// A shot's recoil: add `velocity` to the shooter's own velocity.
     Recoil {
@@ -1220,6 +1243,15 @@ impl WeaponsWorld {
     pub fn set_item_bounds(&mut self, bounds: BTreeMap<String, ItemBounds>) {
         self.item_bounds = bounds;
     }
+    /// An item for building, not fighting: its image runs a [`HostTool`],
+    /// or it is one of the [`CORE_TOOLS`] the engine supplies when the pack
+    /// has none of its own.
+    pub fn building_tool(&self, item: &str) -> bool {
+        match self.pack.items.get(item) {
+            Some(i) => self.pack.images.get(&i.image).and_then(host_tool).is_some(),
+            None => CORE_TOOLS.contains(&item),
+        }
+    }
     pub fn contains_item(&self, item: &str) -> bool {
         self.pack.items.contains_key(item) || CORE_TOOLS.contains(&item)
     }
@@ -1990,6 +2022,7 @@ impl WeaponsWorld {
                 image: image.into(),
                 hand: EMOTE_SLOT,
                 command: Some(command),
+                tool: None,
             });
         }
         Ok(())
@@ -2027,6 +2060,7 @@ impl WeaponsWorld {
                         image: image.id.clone(),
                         hand: EMOTE_SLOT,
                         command: Some(command.clone()),
+                        tool: None,
                     });
                 }
             }
@@ -2121,6 +2155,7 @@ impl WeaponsWorld {
                 image: old.image.clone(),
                 hand: old.hand,
                 command: Some(command),
+                tool: None,
             });
         }
     }
@@ -3074,6 +3109,7 @@ impl WeaponsWorld {
                 image: image.id.clone(),
                 hand: e.hand,
                 command: Some(command.clone()),
+                tool: None,
             });
             if script.eq_ignore_ascii_case("onfire") && image.projectile.is_none() {
                 return true;
@@ -3139,6 +3175,7 @@ impl WeaponsWorld {
                                 image: image.id.clone(),
                                 hand: e.hand,
                                 command: image.command.clone(),
+                                tool: image.command.is_none().then_some(stock.host_tool).flatten(),
                             });
                             return true;
                         }

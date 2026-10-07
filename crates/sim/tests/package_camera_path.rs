@@ -2,7 +2,7 @@
 //! flies the knots while the body stands still, the rules hear each knot
 //! (`on_path_node`), the path replicates in vitals, and control comes back
 //! when the rules let go. Also the small world seams rules use beside it:
-//! `set_brick_color`, `palette()` and `set_zone_period`.
+//! `set_brick_color`, `set_brick_item`, `palette()` and `set_zone_period`.
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
 use bri_sim::{
@@ -49,6 +49,8 @@ fn on_observer(p, button) {
     true
 }
 fn cmd_colours(p) { set("palette", palette().len()); }
+fn cmd_stock(p) { set_brick_item(1, "v20.weapon.gunitem"); }
+fn cmd_foreign(p) { set_brick_item(1, "stranger:weapon/flag"); }
 "#;
 
 struct Root(PathBuf);
@@ -78,7 +80,8 @@ fn add_on(test: &str) -> (Root, Arc<Catalog>) {
         "commands": [
             { "name": "fly" }, { "name": "land" }, { "name": "bad" },
             { "name": "slow" }, { "name": "colours" },
-            { "name": "free" }, { "name": "orbit" }, { "name": "far" }
+            { "name": "free" }, { "name": "orbit" }, { "name": "far" },
+            { "name": "stock" }, { "name": "foreign" }
         ],
         "state": { "global": {
             "heard": { "default": [], "visible": "everyone", "persist": false },
@@ -234,6 +237,30 @@ fn rules_read_the_palette_and_slow_their_zones() {
         "{:?}",
         s.package_diagnostics()
     );
+}
+
+/// Rules may stock a brick with a base-game item, but not with another
+/// package's they do not depend on.
+#[test]
+fn rules_may_hand_out_base_game_items_but_not_a_strangers() {
+    let (_root, add_on) = add_on("stock");
+    let mut s = session();
+    s.install_packages(add_on, None).unwrap();
+    let p = s
+        .join("Rules".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, &[p], 2);
+    let refused = |s: &Session| {
+        s.package_diagnostics()
+            .iter()
+            .any(|d| format!("{d:?}").contains("is not an item of"))
+    };
+    run(&mut s, p, 1, "stock").unwrap();
+    steps(&mut s, &[p], 1);
+    assert!(!refused(&s), "{:?}", s.package_diagnostics());
+    run(&mut s, p, 2, "foreign").unwrap();
+    steps(&mut s, &[p], 1);
+    assert!(refused(&s), "{:?}", s.package_diagnostics());
 }
 
 #[test]
