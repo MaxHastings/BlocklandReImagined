@@ -1115,3 +1115,115 @@ fn a_splash_weapon_aims_low_more_often_than_not() {
     assert!(low + chest >= 6, "only {} rockets", low + chest);
     assert!(low > chest, "aimed low {low} times, at the chest {chest}");
 }
+
+const CANISTER: &str = "tactics:weapon/canister";
+/// The canister's blast radius, as its data below says.
+const BLAST: f32 = 4.0;
+
+/// An unfamiliar fused, bouncing canister that throws out shards when it
+/// goes off: the bouncer's states with a grenade's projectile.
+fn grenade_pack() -> Pack {
+    let mut p = testing::pack();
+    alias(
+        &mut p,
+        testing::BOUNCER_ITEM,
+        testing::BOUNCER_IMAGE,
+        testing::BOUNCER_PROJECTILE,
+        CANISTER,
+    );
+    let shard = bri_weapons::ProjectileDef {
+        id: "tactics:projectile/shard".into(),
+        name: "shard".into(),
+        speed: 8.0,
+        gravity: 1.0,
+        lifetime_ticks: 30,
+        explosion: bri_weapons::Explosion {
+            radius: 1.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let canister = p
+        .projectiles
+        .get_mut("tactics:projectile/canister")
+        .unwrap();
+    canister.speed = 18.0;
+    canister.gravity = 1.0;
+    canister.ballistic = true;
+    canister.elasticity = 0.4;
+    canister.friction = 0.3;
+    canister.rest_speed = 0.0;
+    canister.impulse = 0.0;
+    // Never armed by a hit: it bounces until its life runs out, then goes
+    // off where it lies.
+    canister.arm_ticks = 360;
+    canister.lifetime_ticks = 360;
+    canister.explode_death = true;
+    canister.explosion = bri_weapons::Explosion {
+        damage: 70.0,
+        radius: BLAST,
+        ..Default::default()
+    };
+    canister.children = vec![
+        serde_json::from_value(serde_json::json!({
+            "projectile": "tactics:projectile/shard", "count": 3, "speed": 8.0,
+            "on_explode": true
+        }))
+        .unwrap(),
+    ];
+    p.projectiles.insert(shard.id.clone(), shard);
+    p
+}
+
+/// A bot with only an unfamiliar grenade throws it so it goes off near its
+/// enemy, and never so it goes off near itself. Absolutes only, over
+/// several distances.
+#[test]
+fn a_bot_throws_an_unfamiliar_grenade_that_goes_off_near_its_enemy_not_itself() {
+    let mut near_enemy = 0;
+    let mut thrown = 0;
+    for distance in [9.0, 13.0, 17.0] {
+        let (mut s, human, bot, mut seq) = game(grenade_pack(), &[CANISTER], distance);
+        let mut live: std::collections::BTreeMap<u64, Vec3> = Default::default();
+        for _ in 0..120 * 20 {
+            ticks(&mut s, human, &mut seq, 1);
+            let now: std::collections::BTreeMap<u64, Vec3> = s
+                .weapon_view()
+                .fired()
+                .filter(|p| p.source.0 == bot && p.definition == "tactics:projectile/canister")
+                .map(|p| (p.id, p.position))
+                .collect();
+            for (id, last) in &live {
+                if now.contains_key(id) {
+                    continue;
+                }
+                // Gone: it went off where it last was.
+                thrown += 1;
+                let human_at = feet(&s, human) + Vec3::Y;
+                let bot_at = feet(&s, bot) + Vec3::Y;
+                if last.distance(human_at) <= BLAST + 1.0 {
+                    near_enemy += 1;
+                }
+                assert!(
+                    last.distance(bot_at) > BLAST,
+                    "a canister went off within its blast of the thrower ({distance})"
+                );
+            }
+            live = now;
+            if !s.vitals()[&human].alive {
+                break;
+            }
+        }
+        assert_eq!(
+            s.vitals()[&bot].health,
+            100.0,
+            "the thrower hurt itself ({distance})"
+        );
+    }
+    eprintln!("canisters thrown {thrown}, near the enemy {near_enemy}");
+    assert!(thrown > 0, "no canister was thrown");
+    assert!(
+        near_enemy > 0,
+        "no canister went off near the enemy ({thrown} thrown)"
+    );
+}

@@ -10,25 +10,38 @@ pub(crate) enum FireAdmission {
 }
 
 /// Every onFire entry must require trigger-up. Initial/mixed/fused images
-/// cannot use an indefinite held charge as a harmless aiming wait.
+/// cannot use an indefinite held charge as a harmless aiming wait: a fused
+/// one held to aim would burn its fuse in the hand. A fused image that
+/// throws on the press holds nothing.
 pub(super) fn release_only(image: &Image) -> bool {
-    image.cook.is_none()
-        && (!image.charges()
-            || image
+    !image.charges()
+        || (image.cook.is_none()
+            && image
                 .states
                 .first()
                 .is_none_or(|s| !s.script.eq_ignore_ascii_case("onfire"))
-                && image.states.iter().all(|s| {
-                    [s.timeout, s.down, s.ammo, s.no_ammo, s.loaded, s.not_loaded]
-                        .into_iter()
-                        .flatten()
-                        .all(|to| {
-                            image
-                                .states
-                                .get(to)
-                                .is_none_or(|next| !next.script.eq_ignore_ascii_case("onfire"))
-                        })
-                }))
+            && image.states.iter().all(|s| {
+                [s.timeout, s.down, s.ammo, s.no_ammo, s.loaded, s.not_loaded]
+                    .into_iter()
+                    .flatten()
+                    .all(|to| {
+                        image
+                            .states
+                            .get(to)
+                            .is_none_or(|next| !next.script.eq_ignore_ascii_case("onfire"))
+                    })
+            }))
+}
+
+/// Whether a wind-up the bot is holding stays held through a tick it is
+/// not on target: its button is down, the image is a release-only charge,
+/// and the attack it was winding up for still stands (`kept`: the same
+/// target and weapon). A turn or a sidestep is not a reason to throw away a
+/// charge half done; losing the target, or what `kept` rules out, is. One
+/// rule for both of a bot's hand paths (the native chooser's intent and
+/// the scripted weapons it reads only by their states).
+pub(super) fn keeps_wind_up(last_down: bool, image: &Image, kept: bool) -> bool {
+    last_down && kept && image.charges() && release_only(image)
 }
 
 /// Conservative finite reachability with the button up. A recovery state

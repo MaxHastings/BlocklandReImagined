@@ -367,6 +367,10 @@ struct Brain {
     evidence_search: search_memory::State,
     evidence_context: Option<(bri_minigames::GameId, u64, Option<bri_minigames::TeamId>)>,
     fire_down: bool,
+    /// The last tick it was on target while winding up a hand weapon: a
+    /// held wind-up off target is kept for the kind's hold time from here
+    /// ([`charged_control::keeps_wind_up`]).
+    wind_up_on_target: u64,
     /// What it is doing ([`behaviour`]).
     behaviour: Behaviour,
     /// Tick it took up `behaviour`.
@@ -573,6 +577,7 @@ impl Brain {
             evidence_search: Default::default(),
             evidence_context: None,
             fire_down: false,
+            wind_up_on_target: 0,
             behaviour: Behaviour::default(),
             behaviour_since: 0,
             choice_was: ChoiceWas::default(),
@@ -1344,13 +1349,38 @@ impl Session {
         let mut fire = fire && bite.is_none();
         let mut desired_down = fire && !pulse;
         let last_down = brain.fire_down;
-        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down;
+        // A wind-up off target for a tick is kept while its target still
+        // stands and the kind's hold time since it was last on target has
+        // not run out: a moving enemy is not a reason to start again.
+        if fire && charging {
+            brain.wind_up_on_target = tick;
+        }
+        let winding = !vehicle_weapon
+            && charging
+            && !fire
+            && self
+                .weapons
+                .image_state(ActorId(bot), 0)
+                .is_some_and(|(image, _)| {
+                    charged_control::keeps_wind_up(
+                        last_down,
+                        image,
+                        // Its enemy still in sight, or remembered: a body
+                        // a step away can drop out of view for a tick.
+                        (target.is_some() || brain.memory.is_some_and(|k| tick < k.expires))
+                            && behaviour::paused_hold(
+                                brain.wind_up_on_target,
+                                tick,
+                                brain.kind.hold(),
+                            ),
+                    )
+                });
+        desired_down |= winding;
+        let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down && !winding;
         if !matches!(native, hand_combat::Decision::Unsupported) {
             if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
-                let tracking_charge = last_down
-                    && native_choice.is_some()
-                    && image.charges()
-                    && charged_control::release_only(image);
+                let tracking_charge =
+                    charged_control::keeps_wind_up(last_down, image, native_choice.is_some());
                 // The unchanged participant/equipment intent owns this live
                 // wind-up even if range temporarily selected Return/Wander.
                 // Objective tool controls below still cancel/preempt it.
@@ -1381,7 +1411,11 @@ impl Session {
             cancel_hand_charge |= charging && last_down;
         }
         if let Some(down) = goof_trigger {
+            // A goof's click owns the trigger: pressed and let go as a
+            // player fidgets, a wind-up's early release and all, never put
+            // away as a fight's wind-up off target would be.
             desired_down = down;
+            cancel_hand_charge = false;
         }
         brain.acted.trigger = if goof_trigger.is_some() {
             Some(act::Trigger::Goof)

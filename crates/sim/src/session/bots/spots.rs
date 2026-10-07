@@ -384,7 +384,7 @@ impl Session {
                     .projectile
                     .as_ref()
                     .and_then(|p| self.weapons.pack.projectiles.get(p));
-                hand_combat::capability(image, projectile, scale)
+                hand_combat::capability(image, projectile, scale, &self.weapons.pack.projectiles)
             })
             .map(|cap| {
                 // A push may send them somewhere that takes all they have.
@@ -411,7 +411,7 @@ impl Session {
                 .projectile
                 .as_ref()
                 .and_then(|p| self.weapons.pack.projectiles.get(p));
-            hand_combat::capability(image, projectile, scale)
+            hand_combat::capability(image, projectile, scale, &self.weapons.pack.projectiles)
         };
         match actor.selected {
             Some(slot) => of(slot),
