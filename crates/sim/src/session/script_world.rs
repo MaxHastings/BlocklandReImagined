@@ -225,6 +225,6 @@ impl World for ScriptWorld<'_> {
     fn can_plant(&self, kind: &str, position: [f32; 3], turns: u8) -> bool {
         self.session
             .planted_brick(kind, position, turns, 0, 0)
-            .is_some_and(|b| self.session.simulation.fits(&b))
+            .is_some_and(|b| self.session.simulation.fits_clear_of_bodies(&b))
     }
 }

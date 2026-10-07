@@ -39,13 +39,17 @@ ground puts more than 256 bricks in the buckets round the hole, and
 plants ignore players (v20), nothing else refused a voxel inside its
 placer.
 
-`Simulation::fits` already promised "not stuck in a player"; it now keeps
-that promise by also refusing a brick inside a player's or a bot's body
-(`engulfs_character`). Plants are unchanged: they still go where a player
-stands, as in v20. `fits` serves rule-placed bricks (`can_place_voxel`,
-`can_plant`, package plants) and undo's restore, none of which should bury
-anyone.
+Second review (6233c4b) accepted the cause but not the scope: putting the
+body check in `Simulation::fits` also changed package plants (a Trench dirt
+piece overlapping someone would silently vanish) and undo of a cut (refused
+whole, as "Overlap", when anyone stood in the gap). Both stay as in v0.2.5.
 
-Evidence: the voxel test passes, refusing the first place because the cube
-engulfs the digger and accepting the second; all `bri-sim` tests pass;
-`clippy -p bri-sim --tests -D warnings` clean.
+Fix: `Simulation::fits` is as before (it may go where a player stands, like
+a plant). The new `Simulation::fits_clear_of_bodies` adds the body check, and
+only the two rule queries use it: `can_place_voxel` (`voxel_fits`) and
+`can_plant` (script_world). The choice is by operation, not by Add-On.
+
+Evidence: the voxel test passes. The new test
+`advanced_duplicator::undoing_a_cut_puts_it_back_round_a_player_standing_in_the_gap`
+passes, and fails with 6233c4b's `fits`. All `bri-sim` tests pass, and
+`clippy -p bri-sim --tests -D warnings` is clean.

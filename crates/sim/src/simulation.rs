@@ -1064,9 +1064,7 @@ impl Simulation {
     }
     /// Whether `brick` could go into the world now, support aside: no
     /// overlap with another brick, not buried in the map, not stuck in a
-    /// player or vehicle. A plant goes where a player stands, as v20's
-    /// does; this asks for a rule placing a brick by itself (a voxel piled
-    /// on the one its placer stands on), which must not bury anyone.
+    /// vehicle. Like a plant (v20's), it may go where a player stands.
     pub fn fits(&self, brick: &Brick) -> bool {
         let engine = Actor {
             administrator: true,
@@ -1081,7 +1079,12 @@ impl Simulation {
             brick,
         )
         .is_ok()
-            && !self.engulfs_character(brick)
+    }
+    /// [`Self::fits`], and clear of every player's and bot's body: what a
+    /// rule asks before placing a brick by itself (a voxel piled on the one
+    /// its placer stands on must not bury them).
+    pub fn fits_clear_of_bodies(&self, brick: &Brick) -> bool {
+        self.fits(brick) && !self.engulfs_character(brick)
     }
     /// Whether `brick` would stand inside a player's or a bot's body.
     fn engulfs_character(&self, brick: &Brick) -> bool {
