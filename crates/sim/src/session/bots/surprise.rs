@@ -1648,18 +1648,12 @@ impl Session {
         eye: Vec3,
         tick: u64,
     ) -> Act {
-        let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);
-        let item = self.weapons.actor(ActorId(bot)).and_then(|a| {
+        let holding = self.weapons.actor(ActorId(bot)).is_some_and(|a| {
             a.selected
-                .and_then(|s| a.inventory.get(s).cloned().flatten())
+                .is_some_and(|s| a.inventory.get(s).is_some_and(Option::is_some))
         });
-        // Anything it could fire counts, scripted weapons too
-        // (`hand_combat::attack_of`, the fight code's own reading).
-        let attacks = item
-            .as_deref()
-            .and_then(|item| self.weapons.pack.items.get(item))
-            .and_then(|item| self.weapons.pack.images.get(&item.image))
-            .is_some_and(|image| hand_combat::attack_of(self, image, scale).is_some());
+        // Anything it could fire counts, scripted weapons too.
+        let attacks = hand_combat::holds_attack(self, bot);
         // What can hurt is used only on someone the rules say it cannot.
         let on = close.filter(|_| {
             !attacks
@@ -1734,7 +1728,7 @@ impl Session {
             .is_some_and(|(image, _)| super::super::tools::image_paints(image));
         // Something that paints is held down; anything else clicks.
         let beat = tick.saturating_sub(i.since) % CLICK_TICKS;
-        if item.is_none() && clear && beat == 0 {
+        if !holding && clear && beat == 0 {
             let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
             let _ = self.command(bot, sequence, Command::Activate);
             let _ = self.command(bot, sequence + 1, Command::ActivateRelease);
@@ -1743,7 +1737,7 @@ impl Session {
             aim: Some(aim),
             direction: Some(direction),
             crouch: i.gait == Gait::Crawl && on.is_none(),
-            trigger: item.is_some().then_some(clear && (spray || beat < 4)),
+            trigger: holding.then_some(clear && (spray || beat < 4)),
             ..Default::default()
         }
     }

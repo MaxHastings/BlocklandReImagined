@@ -463,13 +463,7 @@ impl Session {
         let moving = flat(Vec3::from(p.player.state().velocity)).length() > PURPOSE;
         let hand = self.weapons.actor(ActorId(who));
         let firing = hand.is_some_and(|a| a.trigger_held());
-        let attacking = firing
-            && hand.is_some_and(|a| {
-                let scale = p.player.state().scale;
-                a.selected
-                    .and_then(|s| a.inventory.get(s)?.as_deref())
-                    .is_some_and(|item| hand_combat::item_attacks(self, item, scale))
-            });
+        let attacking = firing && hand_combat::holds_attack(self, who);
         let spraying = self
             .weapons
             .image_state(ActorId(who), 0)

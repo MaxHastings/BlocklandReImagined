@@ -343,6 +343,23 @@ pub(super) fn attack_of(
         .then_some(None)
 }
 
+/// Whether `owner` (a bot or a player) holds something it could hurt or
+/// shove someone with, read as a bot reads its own attacks ([`attack_of`]):
+/// a scripted Add-On weapon counts.
+pub(super) fn holds_attack(session: &Session, owner: OwnerId) -> bool {
+    let scale = session
+        .peers
+        .get(&owner)
+        .map_or(1.0, |p| p.player.state().scale);
+    session
+        .weapons
+        .actor(ActorId(owner))
+        .and_then(|a| a.selected.and_then(|s| a.inventory.get(s)?.as_deref()))
+        .and_then(|item| session.weapons.pack.items.get(item))
+        .and_then(|item| session.weapons.pack.images.get(&item.image))
+        .is_some_and(|image| attack_of(session, image, scale).is_some())
+}
+
 /// An item whose image has a native attack that does damage: one worth
 /// picking up to fight with. Unlike `has_possible_attack`, an unknown
 /// mechanism does not count.
@@ -1828,6 +1845,39 @@ mod tests {
         let knife = &session.weapons.pack.images[&knife.id];
         assert!(capability(knife, None, 1.0, &session.weapons.pack.projectiles).is_none());
         assert_eq!(attack_of(&session, knife, 1.0), Some(None));
+    }
+    /// An enemy holding a scripted Add-On weapon reads as armed, as the bot
+    /// reads its own: in hand, not merely carried.
+    #[test]
+    fn an_enemy_holding_a_scripted_weapon_is_armed() {
+        let world = bri_world::World::new("Weapons".into(), "fixture".into(), vec![[1.0; 4]]);
+        let sim = crate::simulation::Simulation::new(world, crate::testing::definitions(), vec![])
+            .unwrap();
+        let mut session = Session::new(sim);
+        let mut pack = bri_weapons::testing::pack();
+        let mut knife = pack.images[bri_weapons::testing::SWORD_IMAGE].clone();
+        knife.id = "stranger:image/knife".into();
+        knife.scripts = serde_json::from_value(serde_json::json!({
+            "onfire": {"arm": "spearthrow", "fire": true}
+        }))
+        .unwrap();
+        let item = bri_weapons::Item {
+            id: "stranger:weapon/knife".into(),
+            name: "knife".into(),
+            ui_name: "Knife".into(),
+            image: knife.id.clone(),
+            ..Default::default()
+        };
+        pack.images.insert(knife.id.clone(), knife);
+        pack.items.insert(item.id.clone(), item.clone());
+        session.set_weapon_pack(pack).unwrap();
+        let enemy = session
+            .join("Enemy".into(), Vec3::new(0.0, 0.05, 0.0), true)
+            .unwrap();
+        let slot = session.weapons.give(ActorId(enemy), &item.id).unwrap();
+        assert!(!holds_attack(&session, enemy), "carried, not in hand");
+        session.weapons.equip(ActorId(enemy), Some(slot)).unwrap();
+        assert!(holds_attack(&session, enemy));
     }
     /// A timed throw spends one ray per chord, and a chord sags no more than
     /// a plate off the real arc: pinned for a known arc in open air.
