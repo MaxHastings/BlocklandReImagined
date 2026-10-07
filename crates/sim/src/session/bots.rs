@@ -379,6 +379,9 @@ struct Brain {
     /// The way a ranged fighter strafes (+1 right, -1 left), and the tick
     /// it turns back.
     strafe: (f32, u64),
+    /// Its strafe leg turned the other way at once (an ally in the way, a
+    /// hit): one such turn a leg, so fire every tick does not jitter it.
+    strafe_parted: bool,
     objective: objectives::State,
     combat: hand_combat::State,
     native_combat_tick: Option<u64>,
@@ -575,6 +578,7 @@ impl Brain {
             choice_was: ChoiceWas::default(),
             arming: Default::default(),
             strafe: (1.0, 0),
+            strafe_parted: false,
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
@@ -623,7 +627,10 @@ impl Brain {
         parted: bool,
     ) -> f32 {
         let (mut side, mut until) = self.strafe;
+        // One turn at once a leg: the next it makes when the leg is up.
+        let parted = parted && !self.strafe_parted;
         if tick >= until || parted {
+            self.strafe_parted = parted;
             // The first leg goes the other way when it can; later legs
             // sometimes keep on.
             let turn = if until == 0 {
@@ -3331,6 +3338,20 @@ mod strafe_tests {
             let kept = sides.windows(2).filter(|w| w[0] == w[1]).count();
             assert!(kept > 40 && kept < 160, "bot {bot} kept on {kept} times");
         }
+    }
+
+    #[test]
+    fn hits_through_a_leg_turn_the_strafe_once() {
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, 5, 0);
+        let side = brain.strafe_leg(0, 3.5, &|_| true, false);
+        // Hit on two ticks running, mid-leg: it turns at the first only.
+        let first = brain.strafe_leg(10, 3.5, &|_| true, true);
+        let second = brain.strafe_leg(11, 3.5, &|_| true, true);
+        assert_eq!((first, second), (-side, -side));
+        // A new leg may turn at once again.
+        let until = brain.strafe.1;
+        let next = brain.strafe_leg(until, 3.5, &|_| true, false);
+        assert_eq!(brain.strafe_leg(until + 1, 3.5, &|_| true, true), -next);
     }
 
     #[test]
