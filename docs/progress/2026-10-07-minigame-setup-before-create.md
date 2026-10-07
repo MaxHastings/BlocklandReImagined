@@ -30,3 +30,17 @@ Evidence:
   ("no wgpu adapter"). They are untouched by this change.
 - Not checked visually: the real window needs the v20 UI pack and a GPU. A
   screenshot on the PC is still owed before calling it done.
+
+## Review fix (host-only settings)
+
+Review of dd0a4b3 failed one item: before Create nothing was greyed, so a
+guest could set a host-only Slayer setting in Setup and the host would refuse
+the whole draft after Create. The client now also publishes
+`addon_locked_new`, the settings the local player could not change in a game
+of their own (the same rule as `addon_locked`, with them as creator). Setup
+greys those before Create, and the draft never sends one, even from a loaded
+favourite. A Setup draft is also dropped on leaving the server.
+
+New test `a_guests_setup_draft_greys_and_never_sends_host_only_settings`; 36
+mini-game screen tests pass; `clippy -p bri-ui -p bri-client --tests -D
+warnings` clean; `bri-client` mini-game unit tests pass.

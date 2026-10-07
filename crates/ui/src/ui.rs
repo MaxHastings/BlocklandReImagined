@@ -559,6 +559,9 @@ impl Core {
         self.report = None;
         self.admin = Default::default();
         self.environment = Default::default();
+        // A Setup draft belongs to the server it was made on.
+        self.minigame_addon_draft = None;
+        self.minigame_draft_created = false;
         self.server_name.clear();
         self.max_players = 0;
         self.center_print = None;
@@ -717,7 +720,10 @@ impl Core {
         let changed = |values: &std::collections::BTreeMap<String, MiniGameSettingValue>| {
             values
                 .iter()
+                // A setting the player may not change in their own game
+                // stays at the host's default (Setup greys it).
                 .filter(|(k, v)| declared(k).is_some_and(|s| s.default != **v))
+                .filter(|(k, _)| !self.minigames.addon_locked_new.contains(k))
                 .map(|(k, v)| (k.clone(), Some(v.clone())))
                 .collect::<Vec<_>>()
         };

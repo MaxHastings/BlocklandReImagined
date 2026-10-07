@@ -613,6 +613,9 @@ impl AddOnSettings {
     }
     /// Whether the local player lacks the level `key` needs in this game.
     fn locked(&self, core: &Core, key: &str) -> bool {
+        if self.draft {
+            return core.minigames.addon_locked_new.iter().any(|k| k == key);
+        }
         self.game.is_some_and(|g| {
             core.minigames
                 .addon_locked
