@@ -193,6 +193,10 @@ fn dump(path: &std::path::Path, info: *const EXCEPTION_POINTERS) -> io::Result<(
         // The dump will not finish: free its snapshot now, which ends the
         // clone, rather than leave a copy of this process's memory alive
         // while Windows Error Reporting keeps the crashed process around.
+        // The dump thread may still be reading the clone; freed under it, it
+        // can fault and leave a second, spurious crash report as the process
+        // exits, and only after a full DUMP_WAIT stall. Dumping from another
+        // process (v0.2.7) removes this.
         free_snapshot();
         Err(io::Error::other("the minidump did not finish in time"))
     })
