@@ -120,6 +120,8 @@ pub struct BotPlannedHarm {
     pub enemy: f32,
     pub ally: f32,
     pub own: f32,
+    /// What its push does to its target (`Harm::push`).
+    pub push: f32,
     pub kills_ally: bool,
 }
 #[derive(Clone, Debug)]

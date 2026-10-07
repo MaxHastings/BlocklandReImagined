@@ -318,7 +318,7 @@ impl Ground<'_> {
         })
     }
     /// The nearest surface along a ray and its normal.
-    fn ray(&self, origin: Vec3, direction: Vec3, reach: f32) -> Option<(f32, Vec3)> {
+    pub(crate) fn ray(&self, origin: Vec3, direction: Vec3, reach: f32) -> Option<(f32, Vec3)> {
         let ray = Ray::new(
             Vector::from_array(origin.to_array()),
             Vector::from_array(direction.to_array()),

@@ -161,6 +161,7 @@ impl Session {
                     enemy: i.choice.harm.enemy,
                     ally: i.choice.harm.ally,
                     own: i.choice.harm.own,
+                    push: i.choice.harm.push,
                     kills_ally: i.choice.harm.kills_ally,
                 }),
             })

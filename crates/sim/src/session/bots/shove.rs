@@ -41,7 +41,8 @@ impl Session {
     /// `push` (along, up) is worth, in the target's health, and where it is
     /// predicted to land. The flight spends `allowance` (motor ticks and
     /// colliders, a share of the shot chooser's budget); `None` for the
-    /// landing when it does not come down within it.
+    /// landing when it does not come down within it, its worth then what it
+    /// will land with at least (`reach::shove_landing`).
     pub(super) fn bot_shove(
         &self,
         bot: OwnerId,
@@ -74,10 +75,11 @@ impl Session {
             bodies: &[],
             motions: &[],
         };
-        let landed = crate::reach::shove_landing(&tuning, feet, velocity, &ground, allowance);
-        let fall = landed.map_or(0.0, |(_, impact)| self.fall_harm(target, impact));
+        let shoved = crate::reach::shove_landing(&tuning, feet, velocity, &ground, allowance);
+        let fall = shoved.map_or(0.0, |s| self.fall_harm(target, s.impact));
+        let landed = shoved.and_then(|s| s.landed);
         let harm = worth(fall, contest::shove_worth(self, bot, target), health);
-        let landing = landed.map(|(at, _)| {
+        let landing = landed.map(|at| {
             let across = Vec3::new(velocity.x, 0.0, velocity.z).length();
             Landing {
                 at,
@@ -200,7 +202,7 @@ mod tests {
             &ground,
             &mut allowance,
         );
-        assert_eq!(landing.map(|l| l.at), flown.map(|(at, _)| at));
+        assert_eq!(landing.map(|l| l.at), flown.and_then(|s| s.landed));
     }
 
     #[test]
@@ -226,7 +228,9 @@ mod tests {
     /// its worth, so it is planned and the fire gate lets it go.
     #[test]
     fn a_push_only_weapon_at_an_enemy_by_a_drop_is_worth_firing_and_fires() {
-        let (mut s, bot, target) = deck_armed(Some(24.0), true);
+        // A drop a fall from kills, longer than the planning turn's share
+        // of the solver budget flies: worth what it falls at by then.
+        let (mut s, bot, target) = deck_armed(Some(30.0), true);
         super::super::harm::one_game(&mut s, bot, target);
         let slot = s.give_item(bot, bri_weapons::testing::BROOM_ITEM).unwrap();
         s.equip_tool(bot, Some(slot)).unwrap();
