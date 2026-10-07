@@ -342,11 +342,7 @@ fn stairs_to_a_deck() {
     let mut b = battle(spec, |_| {});
     let r = b.play(0.0, 60, |_, _| {});
     sane(&r);
-    assert!(
-        r.kills > 0,
-        "the deck was taken: {}",
-        r.kills
-    );
+    assert!(r.kills > 0, "the deck was taken: {}", r.kills);
 }
 
 #[test]
@@ -508,11 +504,7 @@ fn capture_the_flag() {
     let r = flags(spec, NEAR_POSTS, 90);
     sane(&r);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
-    assert!(
-        caps > 0,
-        "flags were run home: {:?}",
-        r.progress
-    );
+    assert!(caps > 0, "flags were run home: {:?}", r.progress);
     assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
 }
 
@@ -536,11 +528,7 @@ fn runners_cross_head_on() {
     let r = flags(spec, NEAR_POSTS, 60);
     sane(&r);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
-    assert!(
-        caps > 0,
-        "both ran it home: {:?}",
-        r.progress
-    );
+    assert!(caps > 0, "both ran it home: {:?}", r.progress);
 }
 
 /// Where each side's flag and base stand: red flag, red base, blue flag,
@@ -583,11 +571,7 @@ fn a_run_longer_than_the_approach_timeout() {
     let r = flags(spec, posts, 120);
     sane(&r);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
-    assert!(
-        caps > 0,
-        "both ran the far flag home: {:?}",
-        r.progress
-    );
+    assert!(caps > 0, "both ran the far flag home: {:?}", r.progress);
 }
 
 /// Capture the flag in `spec`'s layout and arsenal, for `seconds`: each

@@ -61,7 +61,12 @@ impl App {
         }
         let view = self.network_view().context("No active network view")?;
         let archetypes = view.archetypes.clone();
-        let seated = sit_posed(view, &self.vehicle_assets, self.motion.presented(), view.owner);
+        let seated = sit_posed(
+            view,
+            &self.vehicle_assets,
+            self.motion.presented(),
+            view.owner,
+        );
         let mut player = self
             .motion
             .presented()

@@ -249,8 +249,14 @@ impl Session {
                     .map(|(_, o)| o)
                     .filter(|_| !at_stake)
                     .find(|o| {
-                        self.bot_sees_player(bot, *o, eye, MARK_SIGHT, sightlines::Urgency::Ordinary)
-                            .is_some()
+                        self.bot_sees_player(
+                            bot,
+                            *o,
+                            eye,
+                            MARK_SIGHT,
+                            sightlines::Urgency::Ordinary,
+                        )
+                        .is_some()
                     });
                 self.bots.brains.get_mut(&bot)?.extras.mark = Some((mark, tick + MARK_TICKS));
                 mark
@@ -352,9 +358,8 @@ impl Session {
         // crouch or not (a crouch under way lasts while the hits keep
         // coming); a shot predicted to meet it (each judged once), a dodge
         // or not, and which way (`Domain::Dodge`).
-        let crouch_open = on_foot
-            && state.grounded
-            && (scene.holding || scene.behaviour == Behaviour::Fight);
+        let crouch_open =
+            on_foot && state.grounded && (scene.holding || scene.behaviour == Behaviour::Fight);
         let ranged_hit = crouch_open
             && scene
                 .hurt_by
@@ -426,8 +431,10 @@ impl Session {
                 && ways.iter().any(|(_, s)| *s > 0.0)
             {
                 brain.extras.judged = Some(id);
-                if choose(Domain::Move, &[(MOVE_KEEP, KEEP), (MOVE_DODGE, DODGE + HARM * harm)])
-                    == MOVE_DODGE
+                if choose(
+                    Domain::Move,
+                    &[(MOVE_KEEP, KEEP), (MOVE_DODGE, DODGE + HARM * harm)],
+                ) == MOVE_DODGE
                 {
                     let way = choose(Domain::Dodge, &ways);
                     brain.extras.dodge = Some((way, side, tick));
@@ -619,7 +626,10 @@ impl Session {
 
     /// A click it walks up to is still to land.
     pub(super) fn bot_clicking(&self, bot: OwnerId) -> bool {
-        self.bots.brains.get(&bot).is_some_and(|b| b.extras.click.is_some())
+        self.bots
+            .brains
+            .get(&bot)
+            .is_some_and(|b| b.extras.click.is_some())
     }
 
     /// The door goof: walk up to the door in sight and click it, for the

@@ -123,7 +123,11 @@ impl Session {
     /// a mini-game reset): a new brain and a new life for the same player,
     /// so its mini-game membership and team stay as they were set. Only a
     /// missing bot, or one of another kind, is made again.
-    pub(in crate::session) fn respawn_brick_bot(&mut self, brick_id: BrickId, kind: &str) -> Result<()> {
+    pub(in crate::session) fn respawn_brick_bot(
+        &mut self,
+        brick_id: BrickId,
+        kind: &str,
+    ) -> Result<()> {
         let current = self.bots.by_brick.get(&brick_id).copied().filter(|bot| {
             self.peers.contains_key(bot)
                 && self
@@ -300,7 +304,11 @@ impl Session {
         );
         Ok(())
     }
-    pub(in crate::session) fn remove_rules_bot(&mut self, package: &str, bot: OwnerId) -> Result<()> {
+    pub(in crate::session) fn remove_rules_bot(
+        &mut self,
+        package: &str,
+        bot: OwnerId,
+    ) -> Result<()> {
         self.own_bot(package, bot)?;
         self.drop_bot(bot)
     }
@@ -336,7 +344,12 @@ impl Session {
             Ok(true)
         }
     }
-    pub(in crate::session) fn rest_rules_bot(&mut self, package: &str, bot: OwnerId, rest: bool) -> Result<()> {
+    pub(in crate::session) fn rest_rules_bot(
+        &mut self,
+        package: &str,
+        bot: OwnerId,
+        rest: bool,
+    ) -> Result<()> {
         let own_kind = self.bots.brains.get(&bot).is_some_and(|brain| {
             let Some((owner, _)) = brain.kind.id.split_once(':') else {
                 return false;
@@ -408,7 +421,12 @@ impl Session {
     /// another's. Otherwise a first name of its kind no other player goes
     /// by, kept while it lives (`looks`); a kind without a free one gives
     /// its kind and the team its Team choice names ("Blockhead Bot (Red)").
-    pub(super) fn brick_bot_name(&self, kind: &BotKind, brick: BrickId, bot: Option<OwnerId>) -> String {
+    pub(super) fn brick_bot_name(
+        &self,
+        kind: &BotKind,
+        brick: BrickId,
+        bot: Option<OwnerId>,
+    ) -> String {
         let Some(b) = self.simulation.state().bricks.get(&brick) else {
             return kind.name.clone();
         };
@@ -602,7 +620,9 @@ impl Session {
             .get(&bot)
             .map(|brain| brain.kind.id.as_str())
     }
-    pub(in crate::session) fn bot_kind_views(&self) -> Vec<bri_package_runtime::script::BotKindView> {
+    pub(in crate::session) fn bot_kind_views(
+        &self,
+    ) -> Vec<bri_package_runtime::script::BotKindView> {
         self.bots
             .kinds
             .iter()

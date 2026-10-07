@@ -274,7 +274,11 @@ impl BotKind {
         self.behaviours
             .get(name)
             .copied()
-            .unwrap_or(if matches!(name, "interact" | "objective") { 0.0 } else { 1.0 })
+            .unwrap_or(if matches!(name, "interact" | "objective") {
+                0.0
+            } else {
+                1.0
+            })
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(

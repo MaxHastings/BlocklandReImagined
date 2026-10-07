@@ -163,7 +163,10 @@ impl Acted {
             line.push_str("; held at an edge");
         }
         if self.stalls > 0 || self.replans > 0 {
-            line.push_str(&format!("; stalled {}, replanned {}", self.stalls, self.replans));
+            line.push_str(&format!(
+                "; stalled {}, replanned {}",
+                self.stalls, self.replans
+            ));
         }
         line
     }
@@ -358,7 +361,10 @@ mod tests {
             },
         ];
         let c = resolve(&mut ps, Press::default());
-        assert!(!c.jump && !c.crouch && c.jet, "the jet leg sets its buttons");
+        assert!(
+            !c.jump && !c.crouch && c.jet,
+            "the jet leg sets its buttons"
+        );
         let c = resolve(
             &mut ps,
             Press {

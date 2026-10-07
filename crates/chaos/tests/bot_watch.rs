@@ -12,9 +12,9 @@
 //! [BRI_WATCH_MODE=Slayer_TeamDeathmatch] [BRI_WATCH_FILL=4] [BRI_WATCH_HOST=leave|stay]
 //! cargo test --release -p bri-chaos --test bot_watch -- --ignored --nocapture
 use anyhow::{Context, Result};
+use bri_minigames::SettingValue;
 use bri_package::packages::PackageSet;
 use bri_sim::player::MoveInput;
-use bri_minigames::SettingValue;
 use bri_sim::session::{Command, MiniGameRequest, Session, SettingEdit, TeamEdit};
 use bri_world::OwnerId;
 use glam::Vec3;
@@ -184,15 +184,16 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         let other = bri_world::build::decode(&std::fs::read(&from)?)?;
         let mut game = other.minigame.context("that save has no mini-game")?;
         if let Some(mode) = env("BRI_WATCH_MODE") {
-            game = serde_json::from_str(
-                &game.to_string().replace("Slayer_TeamDeathmatch", &mode),
-            )?;
+            game = serde_json::from_str(&game.to_string().replace("Slayer_TeamDeathmatch", &mode))?;
         }
         build.minigame = Some(game);
     }
     if let Some(g) = &build.minigame {
         std::fs::create_dir_all(&out)?;
-        std::fs::write(out.join("saved-minigame.json"), serde_json::to_vec_pretty(g)?)?;
+        std::fs::write(
+            out.join("saved-minigame.json"),
+            serde_json::to_vec_pretty(g)?,
+        )?;
     }
     eprintln!(
         "WATCH save {} map {} bricks {} saved minigame {}",
@@ -306,35 +307,37 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                 value: Some(SettingValue::Text(mode)),
             });
         }
-        let teams_for = |view: &bri_sim::session::MiniGameView| fav["teams"].as_array().map(|teams| {
-            teams
-                .iter()
-                .enumerate()
-                .map(|(i, t)| TeamEdit {
-                    id: view.teams.get(i).map(|v| v.id.0),
-                    name: t["name"].as_str().unwrap_or("Team").into(),
-                    color: t["color"].as_u64().unwrap_or(i as u64) as u8,
-                    settings: t["settings"]
-                        .as_object()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|(k, v)| {
-                            let value = if k.ends_with(":team_bot_fill")
-                                && let Some(f) = fill_override
-                            {
-                                SettingValue::Int(f)
-                            } else {
-                                setting_value(v)?
-                            };
-                            Some(SettingEdit {
-                                key: k.clone(),
-                                value: Some(value),
+        let teams_for = |view: &bri_sim::session::MiniGameView| {
+            fav["teams"].as_array().map(|teams| {
+                teams
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| TeamEdit {
+                        id: view.teams.get(i).map(|v| v.id.0),
+                        name: t["name"].as_str().unwrap_or("Team").into(),
+                        color: t["color"].as_u64().unwrap_or(i as u64) as u8,
+                        settings: t["settings"]
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|(k, v)| {
+                                let value = if k.ends_with(":team_bot_fill")
+                                    && let Some(f) = fill_override
+                                {
+                                    SettingValue::Int(f)
+                                } else {
+                                    setting_value(v)?
+                                };
+                                Some(SettingEdit {
+                                    key: k.clone(),
+                                    value: Some(value),
+                                })
                             })
-                        })
-                        .collect(),
-                })
-                .collect()
-        });
+                            .collect(),
+                    })
+                    .collect()
+            })
+        };
         // Twice: a mode that needs teams is refused until the teams exist.
         for _ in 0..2 {
             let view = s
@@ -357,9 +360,16 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             eprintln!("WATCH settings reply: {reply:?}");
             step(&mut s, 8, &mut seq)?;
             for g in s.minigame_views() {
-                eprintln!("WATCH pass: game {} teams {:?} mode {:?} members {}", g.id,
-                    g.teams.iter().map(|t| (t.id.0, t.name.clone(), t.addon_settings.len())).collect::<Vec<_>>(),
-                    g.addon_settings.get("gamemode_slayer-rules:mode"), g.members.len());
+                eprintln!(
+                    "WATCH pass: game {} teams {:?} mode {:?} members {}",
+                    g.id,
+                    g.teams
+                        .iter()
+                        .map(|t| (t.id.0, t.name.clone(), t.addon_settings.len()))
+                        .collect::<Vec<_>>(),
+                    g.addon_settings.get("gamemode_slayer-rules:mode"),
+                    g.members.len()
+                );
             }
             for (_, n) in s.take_private_notices() {
                 eprintln!("WATCH notice: {n:?}");
@@ -383,7 +393,12 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         "WATCH games {:?}",
         games
             .iter()
-            .map(|g| (g.id, g.members.len(), g.teams.len(), g.addon_settings.get("gamemode_slayer-rules:mode").cloned()))
+            .map(|g| (
+                g.id,
+                g.members.len(),
+                g.teams.len(),
+                g.addon_settings.get("gamemode_slayer-rules:mode").cloned()
+            ))
             .collect::<Vec<_>>()
     );
 
@@ -434,7 +449,10 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         // Opponents alive in the game: work a wandering bot is skipping.
         let enemies_of = |o: &OwnerId| {
             vitals.iter().any(|(e, v)| {
-                e != o && v.alive && v.minigame.is_some() && v.minigame == vitals[o].minigame
+                e != o
+                    && v.alive
+                    && v.minigame.is_some()
+                    && v.minigame == vitals[o].minigame
                     && (v.team.is_none() || v.team != vitals[o].team)
             })
         };
@@ -459,18 +477,55 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             let tr = tracks.entry(*bot).or_default();
             let close = |tr: &mut Track, moments: &mut Vec<Moment>| {
                 for (kind, since, min) in [
-                    ("stuck", tr.stuck_since.take().map(|(t, a, b, n)| (t, a, format!("{b}, next waypoint {n:?}"))), 3.0),
-                    ("circling", tr.circling_since.take().map(|(t, a, b)| (t, a, b.to_string())), 6.0),
-                    ("idle with enemies about", tr.idle_since.take().map(|(t, a)| (t, a, "wander".into())), 6.0),
+                    (
+                        "stuck",
+                        tr.stuck_since
+                            .take()
+                            .map(|(t, a, b, n)| (t, a, format!("{b}, next waypoint {n:?}"))),
+                        3.0,
+                    ),
+                    (
+                        "circling",
+                        tr.circling_since
+                            .take()
+                            .map(|(t, a, b)| (t, a, b.to_string())),
+                        6.0,
+                    ),
+                    (
+                        "idle with enemies about",
+                        tr.idle_since.take().map(|(t, a)| (t, a, "wander".into())),
+                        6.0,
+                    ),
                     ("long goof", tr.goof_since.take(), 8.0),
-                    ("standing inside an ally", tr.clump_since.take().map(|(t, a, o)| (t, a, format!("with #{o}"))), 3.0),
-                    ("standing still in a fight", tr.still_fight_since.take(), 4.0),
-                    ("fighting with a building tool", tr.tool_fight_since.take(), 3.0),
+                    (
+                        "standing inside an ally",
+                        tr.clump_since
+                            .take()
+                            .map(|(t, a, o)| (t, a, format!("with #{o}"))),
+                        3.0,
+                    ),
+                    (
+                        "standing still in a fight",
+                        tr.still_fight_since.take(),
+                        4.0,
+                    ),
+                    (
+                        "fighting with a building tool",
+                        tr.tool_fight_since.take(),
+                        3.0,
+                    ),
                 ] {
                     if let Some((start, at, what)) = since
                         && secs(tick, start) >= min
                     {
-                        moments.push(Moment { kind, bot: *bot, start, end: tick, at, what });
+                        moments.push(Moment {
+                            kind,
+                            bot: *bot,
+                            start,
+                            end: tick,
+                            at,
+                            what,
+                        });
                     }
                 }
             };
@@ -509,21 +564,41 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                 && tr.window.front().unwrap().0.distance(flat) < 0.5;
             if stuck {
                 stuck_ticks += 1;
-                tr.stuck_since.get_or_insert((tick, feet, th.behaviour, th.next));
+                tr.stuck_since
+                    .get_or_insert((tick, feet, th.behaviour, th.next));
             } else if let Some((start, at, b, n)) = tr.stuck_since.take()
                 && secs(tick, start) >= 3.0
             {
                 let life = tr.spawned.map_or(String::new(), |(t, p)| {
-                    format!(", {:.1}s after spawning {:.1} away at ({:.1},{:.1},{:.1})", secs(start, t), p.distance(at), p.x, p.y, p.z)
+                    format!(
+                        ", {:.1}s after spawning {:.1} away at ({:.1},{:.1},{:.1})",
+                        secs(start, t),
+                        p.distance(at),
+                        p.x,
+                        p.y,
+                        p.z
+                    )
                 });
-                moments.push(Moment { kind: "stuck", bot: *bot, start, end: tick, at, what: format!("{b}, next waypoint {n:?}{life}") });
+                moments.push(Moment {
+                    kind: "stuck",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what: format!("{b}, next waypoint {n:?}{life}"),
+                });
             }
             tr.path.push_back(flat);
             if tr.path.len() > 4 * TPS as usize {
                 tr.path.pop_front();
             }
             let circling = tr.path.len() == 4 * TPS as usize && {
-                let length: f32 = tr.path.iter().zip(tr.path.iter().skip(1)).map(|(a, b)| a.distance(*b)).sum();
+                let length: f32 = tr
+                    .path
+                    .iter()
+                    .zip(tr.path.iter().skip(1))
+                    .map(|(a, b)| a.distance(*b))
+                    .sum();
                 length > 6.0 && tr.path.front().unwrap().distance(flat) < 0.2 * length
             };
             if circling {
@@ -532,7 +607,14 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             } else if let Some((start, at, b)) = tr.circling_since.take()
                 && secs(tick, start) >= 6.0
             {
-                moments.push(Moment { kind: "circling", bot: *bot, start, end: tick, at, what: b.into() });
+                moments.push(Moment {
+                    kind: "circling",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what: b.into(),
+                });
             }
             let idle = th.behaviour == "wander" && enemies_of(bot);
             if idle {
@@ -541,7 +623,14 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             } else if let Some((start, at)) = tr.idle_since.take()
                 && secs(tick, start) >= 6.0
             {
-                moments.push(Moment { kind: "idle with enemies about", bot: *bot, start, end: tick, at, what: "wander".into() });
+                moments.push(Moment {
+                    kind: "idle with enemies about",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what: "wander".into(),
+                });
             }
             if let Some(i) = &th.surprise.interrupt {
                 goof_ticks += 1;
@@ -549,10 +638,20 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             } else if let Some((start, at, what)) = tr.goof_since.take()
                 && secs(tick, start) >= 8.0
             {
-                moments.push(Moment { kind: "long goof", bot: *bot, start, end: tick, at, what });
+                moments.push(Moment {
+                    kind: "long goof",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what,
+                });
             }
             let ally = states.iter().find(|(o, p)| {
-                *o != bot && alive(o) && team(o).is_some() && team(o) == team(bot)
+                *o != bot
+                    && alive(o)
+                    && team(o).is_some()
+                    && team(o) == team(bot)
                     && vitals.get(o).is_some_and(|v| v.mounted.is_none())
                     && Vec3::from(p.feet).distance(feet) < 0.9
             });
@@ -561,22 +660,48 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             } else if let Some((start, at, o)) = tr.clump_since.take()
                 && secs(tick, start) >= 3.0
             {
-                moments.push(Moment { kind: "standing inside an ally", bot: *bot, start, end: tick, at, what: format!("with {}", name(&o)) });
+                moments.push(Moment {
+                    kind: "standing inside an ally",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what: format!("with {}", name(&o)),
+                });
             }
             let speed = Vec3::new(st.velocity[0], 0.0, st.velocity[2]).length();
             if th.behaviour == "fight" && speed < 0.3 {
-                tr.still_fight_since.get_or_insert((tick, feet, format!("holding {item}, target {:?}", th.visible.map(|v| name(&v)))));
+                tr.still_fight_since.get_or_insert((
+                    tick,
+                    feet,
+                    format!("holding {item}, target {:?}", th.visible.map(|v| name(&v))),
+                ));
             } else if let Some((start, at, what)) = tr.still_fight_since.take()
                 && secs(tick, start) >= 4.0
             {
-                moments.push(Moment { kind: "standing still in a fight", bot: *bot, start, end: tick, at, what });
+                moments.push(Moment {
+                    kind: "standing still in a fight",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what,
+                });
             }
             if th.behaviour == "fight" && is_tool(&item) {
-                tr.tool_fight_since.get_or_insert((tick, feet, format!("holding {item}")));
+                tr.tool_fight_since
+                    .get_or_insert((tick, feet, format!("holding {item}")));
             } else if let Some((start, at, what)) = tr.tool_fight_since.take()
                 && secs(tick, start) >= 3.0
             {
-                moments.push(Moment { kind: "fighting with a building tool", bot: *bot, start, end: tick, at, what });
+                moments.push(Moment {
+                    kind: "fighting with a building tool",
+                    bot: *bot,
+                    start,
+                    end: tick,
+                    at,
+                    what,
+                });
             }
             if tr.last_behaviour.is_some_and(|b| b != th.behaviour) {
                 tr.switches.push_back((tick, th.behaviour));
@@ -587,7 +712,14 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             if tr.switches.len() >= 8 && tick > tr.flip_reported + 10 * TPS {
                 tr.flip_reported = tick;
                 let seq: Vec<_> = tr.switches.iter().map(|(_, b)| *b).collect();
-                moments.push(Moment { kind: "flip-flopping", bot: *bot, start: tick - 5 * TPS, end: tick, at: feet, what: seq.join(">") });
+                moments.push(Moment {
+                    kind: "flip-flopping",
+                    bot: *bot,
+                    start: tick - 5 * TPS,
+                    end: tick,
+                    at: feet,
+                    what: seq.join(">"),
+                });
             }
             tr.last_behaviour = Some(th.behaviour);
         }
@@ -622,29 +754,67 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             {
                 at_ally += 1;
                 if at_ally % 10 == 1 {
-                    moments.push(Moment { kind: "shooting into an ally", bot: shooter, start: tick, end: tick, at: p.origin, what: format!("{:?} toward {}", p.definition, name(&hit)) });
+                    moments.push(Moment {
+                        kind: "shooting into an ally",
+                        bot: shooter,
+                        start: tick,
+                        end: tick,
+                        at: p.origin,
+                        what: format!("{:?} toward {}", p.definition, name(&hit)),
+                    });
                 }
             }
         }
-        let new: Vec<_> = s.death_results().filter(|d| d.tick > last_death).cloned().collect();
+        let new: Vec<_> = s
+            .death_results()
+            .filter(|d| d.tick > last_death)
+            .cloned()
+            .collect();
         for d in new {
             last_death = last_death.max(d.tick);
             *deaths.entry(d.victim).or_default() += 1;
-            let at = states.get(&d.victim).map_or(Vec3::ZERO, |p| Vec3::from(p.feet));
+            let at = states
+                .get(&d.victim)
+                .map_or(Vec3::ZERO, |p| Vec3::from(p.feet));
             match d.killer {
                 None => {
                     accidents += 1;
                     if s.is_bot(d.victim) {
-                        moments.push(Moment { kind: "died with no killer (fall/void/water)", bot: d.victim, start: d.tick, end: d.tick, at, what: String::new() });
+                        moments.push(Moment {
+                            kind: "died with no killer (fall/void/water)",
+                            bot: d.victim,
+                            start: d.tick,
+                            end: d.tick,
+                            at,
+                            what: String::new(),
+                        });
                     }
                 }
                 Some(k) if k == d.victim => {
                     self_kills += 1;
-                    moments.push(Moment { kind: "killed itself", bot: k, start: d.tick, end: d.tick, at, what: format!("holding {}", held(&view.images, k)) });
+                    moments.push(Moment {
+                        kind: "killed itself",
+                        bot: k,
+                        start: d.tick,
+                        end: d.tick,
+                        at,
+                        what: format!("holding {}", held(&view.images, k)),
+                    });
                 }
                 Some(k) if team(&k).is_some() && team(&k) == team(&d.victim) => {
                     team_kills += 1;
-                    moments.push(Moment { kind: "team kill", bot: k, start: d.tick, end: d.tick, at, what: format!("killed {} holding {}", name(&d.victim), held(&view.images, k)) });
+                    moments.push(Moment {
+                        kind: "team kill",
+                        bot: k,
+                        start: d.tick,
+                        end: d.tick,
+                        at,
+                        what: format!(
+                            "killed {} holding {}",
+                            name(&d.victim),
+                            held(&view.images, k)
+                        ),
+                    });
                 }
                 Some(k) => *kills.entry(k).or_default() += 1,
             }
@@ -659,16 +829,41 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     let end = s.simulation().state().tick;
     for (bot, tr) in tracks.iter_mut() {
         for (kind, since, min) in [
-            ("stuck", tr.stuck_since.take().map(|(t, a, b, n)| (t, a, format!("{b}, next waypoint {n:?}"))), 3.0),
-            ("idle with enemies about", tr.idle_since.take().map(|(t, a)| (t, a, "wander".into())), 6.0),
+            (
+                "stuck",
+                tr.stuck_since
+                    .take()
+                    .map(|(t, a, b, n)| (t, a, format!("{b}, next waypoint {n:?}"))),
+                3.0,
+            ),
+            (
+                "idle with enemies about",
+                tr.idle_since.take().map(|(t, a)| (t, a, "wander".into())),
+                6.0,
+            ),
             ("long goof", tr.goof_since.take(), 8.0),
-            ("standing still in a fight", tr.still_fight_since.take(), 4.0),
-            ("fighting with a building tool", tr.tool_fight_since.take(), 3.0),
+            (
+                "standing still in a fight",
+                tr.still_fight_since.take(),
+                4.0,
+            ),
+            (
+                "fighting with a building tool",
+                tr.tool_fight_since.take(),
+                3.0,
+            ),
         ] {
             if let Some((start, at, what)) = since
                 && secs(end, start) >= min
             {
-                moments.push(Moment { kind, bot: *bot, start, end, at, what: format!("{what} (still at the end)") });
+                moments.push(Moment {
+                    kind,
+                    bot: *bot,
+                    start,
+                    end,
+                    at,
+                    what: format!("{what} (still at the end)"),
+                });
             }
         }
     }
@@ -709,7 +904,10 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         "wall_seconds": wall.elapsed().as_secs_f64(),
         "chat_lines": chat_log.len(),
     });
-    std::fs::write(out.join("summary.json"), serde_json::to_vec_pretty(&summary)?)?;
+    std::fs::write(
+        out.join("summary.json"),
+        serde_json::to_vec_pretty(&summary)?,
+    )?;
     moments.sort_by_key(|m| m.start);
     let moments_json: Vec<Value> = moments
         .iter()
@@ -718,12 +916,12 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                    "start": secs(m.start, t0), "end": secs(m.end, t0), "at": [m.at.x, m.at.y, m.at.z], "what": m.what})
         })
         .collect();
-    std::fs::write(out.join("moments.json"), serde_json::to_vec_pretty(&moments_json)?)?;
-    std::fs::write(out.join("chat.txt"), chat_log.join("\n"))?;
     std::fs::write(
-        out.join("bricks.json"),
-        serde_json::to_vec(&brick_points)?,
+        out.join("moments.json"),
+        serde_json::to_vec_pretty(&moments_json)?,
     )?;
+    std::fs::write(out.join("chat.txt"), chat_log.join("\n"))?;
+    std::fs::write(out.join("bricks.json"), serde_json::to_vec(&brick_points)?)?;
     eprintln!("WATCH {}", serde_json::to_string_pretty(&summary)?);
     Ok(())
 }

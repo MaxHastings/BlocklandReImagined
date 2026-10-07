@@ -155,7 +155,6 @@ fn charge_release_only(image: &Image) -> bool {
     super::charged_control::release_only(image)
 }
 
-
 /// How much a splash aim (feet, or a surface beside the target) is
 /// preferred over the body: a blast at the feet still lands when a dodging
 /// body would have made the shot miss, so players aim rockets low.

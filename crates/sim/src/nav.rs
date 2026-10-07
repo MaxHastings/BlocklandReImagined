@@ -489,7 +489,9 @@ impl Nav {
         }
     }
     fn avoided(&self, x: i32, z: i32) -> bool {
-        self.avoid.get(&(x, z)).is_some_and(|until| self.now < *until)
+        self.avoid
+            .get(&(x, z))
+            .is_some_and(|until| self.now < *until)
     }
     pub fn clear(&mut self) {
         self.floors.clear();

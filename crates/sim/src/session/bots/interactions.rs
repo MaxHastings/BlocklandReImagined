@@ -131,9 +131,11 @@ impl Session {
     /// Fill its useful empty role through the same seat keys players use.
     pub(super) fn promote_bot_seat(&mut self, bot: OwnerId) -> Result<()> {
         if !self.is_alive(bot)
-            || self.bots.brains.get(&bot).is_none_or(|b| {
-                b.resting || b.kind.weight("interact") <= 0.0
-            })
+            || self
+                .bots
+                .brains
+                .get(&bot)
+                .is_none_or(|b| b.resting || b.kind.weight("interact") <= 0.0)
         {
             return Ok(());
         }
@@ -484,11 +486,7 @@ impl Session {
                 // Mass affects expected acceleration, not permission or an invented force.
                 // A heavy body remains useful on a slope, but costs more commitment.
                 let effort = (d.mass / combat::PLAYER_MASS).sqrt().min(5.0) * 0.008;
-                let base = if idle {
-                    IDLE
-                } else {
-                    0.85
-                };
+                let base = if idle { IDLE } else { 0.85 };
                 Some(Opportunity {
                     resource,
                     point,
@@ -508,12 +506,7 @@ impl Session {
         tick: u64,
     ) -> Option<Opportunity> {
         let brain = &self.bots.brains[&bot];
-        if self.seated(bot)
-            || tick < brain.next_interaction
-            || brain
-                .kind
-                .weight("interact")
-                == 0.0
+        if self.seated(bot) || tick < brain.next_interaction || brain.kind.weight("interact") == 0.0
         {
             self.bots.claims.release_owner(bot);
             return None;
@@ -601,9 +594,7 @@ impl Session {
                 if let Some(mut o) =
                     self.bot_opportunity(bot, v, resource, (subject, toward), idle, tick)
                 {
-                    if brain.kind.weight("chase") == 0.0
-                        && feet.distance(o.point) > 2.0
-                    {
+                    if brain.kind.weight("chase") == 0.0 && feet.distance(o.point) > 2.0 {
                         continue;
                     }
                     o.utility -= feet.distance(o.point) * TRAVEL_COST;
