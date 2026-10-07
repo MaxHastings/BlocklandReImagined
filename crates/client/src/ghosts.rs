@@ -526,10 +526,12 @@ fn step(
         let normal = hit.normal.normalize_or_zero();
         match update.bounce {
             Some(bounce) if normal != Vec3::ZERO && body.contacts < MAX_CONTACTS => {
-                let velocity = body.velocity;
-                let reflected = velocity - normal * velocity.dot(normal) * 2.0;
-                let tangent = reflected - normal * reflected.dot(normal);
-                body.velocity = (reflected - tangent * bounce.friction) * bounce.elasticity;
+                body.velocity = bri_weapons::runtime::bounce_velocity(
+                    body.velocity,
+                    normal,
+                    bounce.elasticity,
+                    bounce.friction,
+                );
                 body.position += normal * 0.002;
                 if body.velocity.length() < bounce.rest_speed {
                     body.velocity = Vec3::ZERO;

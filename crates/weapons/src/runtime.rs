@@ -30,6 +30,66 @@ pub const PRINTER: &str = "v20.weapon.printgun";
 pub const WAND: &str = "v20.weapon.wanditem";
 /// The core tools in their inventory order; name one by its constant.
 pub const CORE_TOOLS: [&str; 4] = [HAMMER, WRENCH, PRINTER, WAND];
+/// The velocity a body leaves a surface with: the part along `normal`
+/// turned back, the part along the surface slowed by `friction`, the whole
+/// scaled by `elasticity`. One rule for projectiles on the host
+/// ([`rebound`]), a bot's planned throw and the client's prediction of
+/// both.
+pub fn bounce_velocity(velocity: Vec3, normal: Vec3, elasticity: f32, friction: f32) -> Vec3 {
+    let along_normal = normal * velocity.dot(normal);
+    ((velocity - along_normal) * (1.0 - friction) - along_normal) * elasticity
+}
+
+/// What a projectile does on its own clock at `age` ticks, before it
+/// moves: `Some(true)` goes off (its cooked `fuse` ran out, or its life
+/// ended with `explode_death`), `Some(false)` fades at the end of its life,
+/// None flies on. The fuse is checked first, as the host does.
+pub fn expires(def: &ProjectileDef, age: u32, fuse: Option<u32>) -> Option<bool> {
+    if fuse.is_some_and(|fuse| age >= fuse) {
+        Some(true)
+    } else if age >= def.lifetime_ticks {
+        Some(def.explode_death)
+    } else {
+        None
+    }
+}
+
+/// Whether a projectile `age` ticks old goes off as it hits something: it
+/// is armed, it hit a player and explodes on players, or it is not
+/// ballistic (it never bounces).
+pub fn hit_bursts(def: &ProjectileDef, age: u32, hit_player: bool) -> bool {
+    age >= def.arm_ticks || (def.explode_player && hit_player) || !def.ballistic
+}
+
+/// What an unarmed ballistic projectile does after a hit that did not set
+/// it off ([`hit_bursts`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Rebound {
+    /// It sticks where it hit (fast enough and steep enough).
+    Stuck,
+    /// It bounces off with `velocity`; `bursts` when that was its last
+    /// allowed bounce (`max_bounces`).
+    Bounced { velocity: Vec3, bursts: bool },
+}
+
+/// [`Rebound`] for a projectile hitting a surface with `normal` at
+/// `velocity`, its `bounces` so far not counting this one.
+pub fn rebound(def: &ProjectileDef, velocity: Vec3, normal: Vec3, bounces: u32) -> Rebound {
+    if def.min_stick_speed > 0.0 && velocity.length() >= def.min_stick_speed {
+        let incidence = (-velocity.normalize_or_zero())
+            .dot(normal)
+            .clamped(-1.0, 1.0)
+            .acos()
+            .to_degrees();
+        if incidence < def.bounce_angle / 2.0 {
+            return Rebound::Stuck;
+        }
+    }
+    Rebound::Bounced {
+        velocity: bounce_velocity(velocity, normal, def.elasticity, def.friction),
+        bursts: def.max_bounces > 0 && bounces + 1 >= def.max_bounces,
+    }
+}
 /// The building mechanism an image's `onFire` runs, if it is one of the
 /// host's ([`HostTool`], [`OnFire::Tool`]).
 pub fn host_tool(image: &Image) -> Option<HostTool> {
@@ -3603,14 +3663,8 @@ impl WeaponsWorld {
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let d = self.pack.projectiles[&p.definition].clone();
         p.age += 1;
-        if let Some(fuse) = self.fuses.get(&p.id).copied()
-            && p.age >= fuse
-        {
-            self.explode(p, &d, q, None);
-            return false;
-        }
-        if p.age >= d.lifetime_ticks {
-            if d.explode_death {
+        if let Some(bursts) = expires(&d, p.age, self.fuses.get(&p.id).copied()) {
+            if bursts {
                 self.explode(p, &d, q, None);
             }
             return false;
@@ -3758,10 +3812,7 @@ impl WeaponsWorld {
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
                 self.children(p, c, set);
             }
-            if p.age >= d.arm_ticks
-                || (d.explode_player && matches!(hit.target, TargetId::Actor(_)))
-                || !d.ballistic
-            {
+            if hit_bursts(&d, p.age, matches!(hit.target, TargetId::Actor(_))) {
                 self.explode(p, &d, q, Some(normal));
                 return false;
             }
@@ -3770,27 +3821,21 @@ impl WeaponsWorld {
             if stopped {
                 return false;
             }
-            if d.min_stick_speed > 0.0 && p.velocity.length() >= d.min_stick_speed {
-                let incidence = (-p.velocity.normalize_or_zero())
-                    .dot(normal)
-                    .clamped(-1.0, 1.0)
-                    .acos()
-                    .to_degrees();
-                if incidence < d.bounce_angle / 2.0 {
+            let (velocity, last) = match rebound(&d, p.velocity, normal, p.bounces) {
+                Rebound::Stuck => {
                     p.stuck = true;
                     p.heading = p.velocity.try_normalize();
                     p.velocity = Vec3::ZERO;
                     self.effect(p, &d.stick_effect, Some(normal));
                     return true;
                 }
-            }
-            let normal_velocity = normal * p.velocity.dot(normal);
-            p.velocity = ((p.velocity - normal_velocity) * (1.0 - d.friction) - normal_velocity)
-                * d.elasticity;
+                Rebound::Bounced { velocity, bursts } => (velocity, bursts),
+            };
+            p.velocity = velocity;
             p.position += normal * 0.001;
             p.bounced = true;
             p.bounces += 1;
-            if d.max_bounces > 0 && p.bounces >= d.max_bounces {
+            if last {
                 self.explode(p, &d, q, Some(normal));
                 return false;
             }
