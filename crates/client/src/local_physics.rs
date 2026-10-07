@@ -79,10 +79,13 @@ pub struct Surroundings {
 
 impl Surroundings {
     /// Put the map in (again whenever its solid shapes changed: another
-    /// map, or a shape smashed), and forget nearby bricks when the build
-    /// changed since they were made solid (waking every body, which may
-    /// have lost its support). Call before [`Self::load`].
-    pub fn sync(&mut self, world: &mut PhysicsWorld, building: &Building) {
+    /// map, or a shape smashed), and forget the nearby bricks the build no
+    /// longer has where they were made solid (waking every body, which may
+    /// have lost its support). Bricks that did not change stay: a build
+    /// changing anywhere (a door, a blinking light) neither rebuilds them
+    /// nor wakes resting bodies. Returns whether the build changed, when
+    /// [`Self::load`] should look round resting bodies too. Call before it.
+    pub fn sync(&mut self, world: &mut PhysicsWorld, building: &Building) -> bool {
         if self.map_generation != building.map_generation() {
             for handle in self.map.drain(..) {
                 world.remove_collider(handle);
@@ -94,20 +97,45 @@ impl Surroundings {
             self.map_generation = building.map_generation();
             world.wake_up_all(true);
         }
-        if self.generation != building.query_generation() {
-            self.clear(world);
-            self.generation = building.query_generation();
+        if self.generation == building.query_generation() {
+            return false;
         }
+        self.generation = building.query_generation();
+        let stale: Vec<Static> = self
+            .statics
+            .iter()
+            .filter_map(|(key, handle)| match (key, handle) {
+                (Static::Brick(id), Some(handle)) => {
+                    let collider = &world.colliders[*handle];
+                    let same = building.solid_brick(*id).is_some_and(|(shape, pose)| {
+                        std::sync::Arc::ptr_eq(&shape.0, &collider.shared_shape().0)
+                            && pose == *collider.position()
+                    });
+                    (!same).then_some(*key)
+                }
+                _ => None,
+            })
+            .collect();
+        for key in &stale {
+            if let Some(Some(handle)) = self.statics.remove(key) {
+                world.remove_collider(handle);
+            }
+        }
+        if !stale.is_empty() {
+            world.wake_up_all(true);
+        }
+        true
     }
     /// Make bricks and terrain solid inside each box (low, high), except
-    /// bricks `skip` names.
+    /// bricks `skip` names. Returns how many bricks it made solid.
     pub fn load(
         &mut self,
         world: &mut PhysicsWorld,
         building: &Building,
         boxes: &[(Vec3, Vec3)],
         skip: impl Fn(BrickId) -> bool,
-    ) -> Result<()> {
+    ) -> Result<usize> {
+        let mut added = 0;
         for &(low, high) in boxes {
             for (id, shape, pose) in building.colliding_bricks(low, high)? {
                 if skip(id) || self.statics.contains_key(&Static::Brick(id)) {
@@ -116,6 +144,7 @@ impl Surroundings {
                 let handle =
                     world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
                 self.statics.insert(Static::Brick(id), Some(handle));
+                added += 1;
             }
             let chunk = |v: f32| (v / TERRAIN_CHUNK).floor() as i32;
             for cx in chunk(low.x)..=chunk(high.x) {
@@ -143,7 +172,7 @@ impl Surroundings {
                 }
             }
         }
-        Ok(())
+        Ok(added)
     }
     /// The box round a moving body that must be solid for the next
     /// `seconds` of its motion.
