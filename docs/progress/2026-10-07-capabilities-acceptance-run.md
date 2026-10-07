@@ -23,9 +23,13 @@ runs in parallel, each recorded and replayed tick for tick.
   an enemy, a push fired, a push moving an enemy, the ball entering a zone
   off a bot, a bot seeing an enemy through the glass,
   a bot firing from a spot it chose, a bot pushing an enemy off the drop),
-  and never in any run (a grenade going off by its own side, judged on
-  where allies stood when it threw; a teammate pushed off; a bot walking
-  off on its own; a bot stuck a whole life). Every run replays exactly.
+  and in every run: per team, grenade damage (canister and shards) to its
+  own side, the thrower included, less than to enemies, and no grenade
+  killing a teammate, both read from real damage records
+  (`Session::damage_results`, new, beside `death_results`: bots may trade
+  a chip on an ally for more enemy harm); never a teammate pushed off, a
+  bot walking off on its own, or a bot stuck a whole life. The first second
+  each once-per-variant check held is printed with each run. Every run replays exactly.
   The odd car's handling measures cleanly (its own test).
 
 ## Found and fixed on the way
@@ -53,10 +57,15 @@ four copies at once beside four runaway grep processes holding the CPU at
   enemies in every run; walking someone to the open edge first is fighting's
   ledge pushes (not merged). Red until it lands.
 
+Re-measured once Max cleared the stuck greps: 81 s alone (other lanes
+building), 170-176 s each with four copies at once.
+
 The plinth check is gone: standing at its foot the spot chooser never
 offers its top (no hop or jet place) and rates staying put best every time
 (9 decisions in variant 0, 17 in variant 1, measured), so climbing it is no
-absolute.
+absolute. For v0.2.7: `bot_places` never offers a hop or jet place at the
+plinth, so the odd body's measured reach is never used; that looks like a
+place-generator bug.
 
 A ball kicked off from the plinth's top got no objective plan at all
 ("no grounded objective plan"): delivering an object down off a raised

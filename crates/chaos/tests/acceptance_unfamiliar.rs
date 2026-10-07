@@ -757,7 +757,10 @@ fn session(v: Variant, seed: u64) -> (Session, OwnerId) {
 struct Seen {
     thrown: u32,
     grenade_near_enemy: u32,
-    grenade_near_own: Vec<String>,
+    /// Grenade damage (canister or shard) by thrower's team: to its own
+    /// side, the thrower included, and to enemies; real damage records.
+    grenade_harm: BTreeMap<u32, (f32, f32)>,
+    teammate_grenade_kills: Vec<String>,
     push_fired: u32,
     push_moved_enemy: u32,
     zone_entries: u32,
@@ -767,6 +770,8 @@ struct Seen {
     pushed_teammate_off: Vec<String>,
     walked_off: Vec<String>,
     stuck_lives: Vec<String>,
+    /// The first second each once-per-variant check held.
+    first: BTreeMap<&'static str, f32>,
 }
 
 /// Where a body is at the moment it is a bot's.
@@ -819,13 +824,24 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
     let mut seen = Seen::default();
     let canister = format!("{}:projectile/canister", v.ns());
     let shove = format!("{}:projectile/shove", v.ns());
-    let danger = BLAST + SHARD_SPEED * SHARD_TICKS as f32 / HZ as f32 + SHARD_BLAST;
-    // Live grenades: where the thrower's allies stood as it threw.
-    let mut grenades: BTreeMap<u64, (OwnerId, Vec3, Vec<Vec3>)> = BTreeMap::new();
+    let shard = format!("{}:projectile/shard", v.ns());
+    // Live grenades and who threw each.
+    let mut grenades: BTreeMap<u64, OwnerId> = BTreeMap::new();
     let mut shoves: BTreeMap<u64, (OwnerId, Vec3)> = BTreeMap::new();
     // Where each live grenade was last seen.
     let mut last_seen: BTreeMap<u64, Vec3> = BTreeMap::new();
-    let mut paths: BTreeMap<u64, Vec<(u64, Vec3, Vec3)>> = BTreeMap::new();
+    // Damage records already read.
+    let mut damage_read = 0u64;
+    // The odd body: a shove that ends within a body's reach of its middle
+    // (half its height, and the flight of the tick it stopped in) reached
+    // it; a velocity change in two ticks more than its own acceleration
+    // makes was done to it.
+    let tuning = tuning_of(&odd_tuning());
+    let shove_speed = weapons(v, seed).projectiles[&shove].speed;
+    let shove_reach = tuning.stand_height.max(tuning.width) * 0.5 + shove_speed / HZ as f32;
+    let own_change = tuning.acceleration * 2.0 / HZ as f32;
+    // A spot it chose still stands for its kind's hold time.
+    let hold = (vehicles(v).1[0].hold_seconds * HZ as f32) as u64;
     // The last push or blast that could explain a body leaving the deck.
     let mut struck: BTreeMap<OwnerId, (OwnerId, u64)> = BTreeMap::new();
     // The last push only, for an enemy a push moved.
@@ -860,19 +876,14 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             .map(|p| (p.id, p.position))
             .collect();
         for p in view.fired().filter(|p| p.definition == canister) {
-            if let Some(thrower) = now.get(&p.source.0) {
+            if now.contains_key(&p.source.0) {
                 grenades.entry(p.id).or_insert_with(|| {
                     seen.thrown += 1;
-                    let allies = now
-                        .iter()
-                        .filter(|(o, b)| b.team == thrower.team && **o != p.source.0 && b.alive)
-                        .map(|(_, b)| b.feet + Vec3::Y)
-                        .collect();
-                    (p.source.0, thrower.feet + Vec3::Y, allies)
+                    p.source.0
                 });
             }
         }
-        for (id, (thrower, at_throw, allies)) in grenades.clone() {
+        for (id, thrower) in grenades.clone() {
             if live.contains_key(&id) {
                 continue;
             }
@@ -887,27 +898,6 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             }) {
                 seen.grenade_near_enemy += 1;
             }
-            if last.distance(at_throw) <= danger
-                || allies.iter().any(|a| last.distance(*a) <= danger)
-            {
-                let path: Vec<String> = paths
-                    .get(&id)
-                    .map(|p| {
-                        p.iter()
-                            .step_by(6)
-                            .map(|(t, at, v)| {
-                                format!(
-                                    "{t}:{:.1},{:.1},{:.1}/{:.1},{:.1},{:.1}",
-                                    at.x, at.y, at.z, v.x, v.y, v.z
-                                )
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                seen.grenade_near_own.push(format!(
-                    "tick {tick}: burst {last} thrower {at_throw} allies {allies:?} path {path:?}"
-                ));
-            }
             for (o, b) in &now {
                 if last.distance(b.feet + Vec3::Y) <= BLAST + 1.0 {
                     struck.insert(*o, (thrower, tick));
@@ -915,11 +905,42 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             }
         }
         last_seen.extend(live.iter().map(|(id, at)| (*id, *at)));
-        for p in view.fired().filter(|p| p.definition == canister) {
-            paths
-                .entry(p.id)
-                .or_default()
-                .push((tick, p.position, p.velocity));
+        // Grenade harm, from the real damage records: to its own side and
+        // to enemies, and any teammate it killed.
+        let fresh: Vec<_> = s
+            .damage_results()
+            .filter(|r| r.tick > damage_read)
+            .cloned()
+            .collect();
+        for r in &fresh {
+            damage_read = damage_read.max(r.tick);
+            let grenade = r
+                .projectile
+                .as_ref()
+                .is_some_and(|p| *p == canister || *p == shard);
+            let (Some(by), Some(victim)) =
+                (r.source.and_then(|o| before.get(&o)), before.get(&r.victim))
+            else {
+                continue;
+            };
+            if !grenade {
+                continue;
+            }
+            let harm = seen.grenade_harm.entry(by.team).or_default();
+            if victim.team == by.team {
+                harm.0 += r.amount;
+                if Some(r.victim) != r.source
+                    && s.death_results()
+                        .any(|d| d.victim == r.victim && d.killer == r.source && d.tick >= r.tick)
+                {
+                    seen.teammate_grenade_kills.push(format!(
+                        "bot {} by {:?} at tick {}",
+                        r.victim, r.source, r.tick
+                    ));
+                }
+            } else {
+                harm.1 += r.amount;
+            }
         }
         // Pushes: fired, and an enemy moved by one.
         for p in view.fired().filter(|p| p.definition == shove) {
@@ -933,7 +954,11 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
                 };
                 // Anyone it reaches, a teammate too: a teammate it throws
                 // off counts against it.
-                if *o != p.source.0 && p.position.distance(b.feet + Vec3::Y) < 2.0 {
+                if *o != p.source.0
+                    && p.position
+                        .distance(b.feet + Vec3::Y * tuning.stand_height * 0.5)
+                        <= shove_reach
+                {
                     struck.insert(*o, (p.source.0, tick));
                     if b.team != pusher.team {
                         shoved.insert(*o, (p.source.0, tick));
@@ -946,7 +971,7 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             if *at == tick.saturating_sub(2)
                 && let (Some(b0), Some(b1), Some(pusher)) = (before.get(o), now.get(o), now.get(by))
                 && b1.team != pusher.team
-                && (b1.velocity - b0.velocity).length() > 3.0
+                && (b1.velocity - b0.velocity).with_y(0.0).length() > own_change
             {
                 seen.push_moved_enemy += 1;
             }
@@ -1025,9 +1050,7 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
                 seen.seen_through_glass += 1;
             }
             let chose = t.surprise.decisions.iter().any(|d| {
-                d.domain == "spot"
-                    && d.chosen != "here"
-                    && tick.saturating_sub(d.tick) < 3 * HZ as u64
+                d.domain == "spot" && d.chosen != "here" && tick.saturating_sub(d.tick) <= hold
             });
             let fired = view.fired().any(|p| {
                 p.source.0 == t.bot
@@ -1036,6 +1059,21 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             });
             if chose && fired {
                 seen.fired_from_chosen_spot += 1;
+            }
+        }
+        let second = tick as f32 / HZ as f32;
+        for (what, count) in [
+            ("thrown", seen.thrown),
+            ("near an enemy", seen.grenade_near_enemy),
+            ("push", seen.push_fired),
+            ("moved", seen.push_moved_enemy),
+            ("zone", seen.zone_entries),
+            ("glass", seen.seen_through_glass),
+            ("spot", seen.fired_from_chosen_spot),
+            ("off the drop", seen.pushed_enemy_off),
+        ] {
+            if count > 0 {
+                seen.first.entry(what).or_insert(second);
             }
         }
         before = now;
@@ -1110,9 +1148,16 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
     let mut problems = Vec::new();
     for (v, seed, seen) in &results {
         println!("{v:?} seed {seed}: {seen:?}");
-        for p in &seen.grenade_near_own {
+        for (team, (own, enemy)) in &seen.grenade_harm {
+            if own >= enemy {
+                problems.push(format!(
+                    "{v:?} seed {seed}: team {team}'s grenades hurt its own side {own} against enemies {enemy}"
+                ));
+            }
+        }
+        for p in &seen.teammate_grenade_kills {
             problems.push(format!(
-                "{v:?} seed {seed}: a grenade went off by its own side: {p}"
+                "{v:?} seed {seed}: a grenade killed a teammate: {p}"
             ));
         }
         for p in &seen.pushed_teammate_off {
