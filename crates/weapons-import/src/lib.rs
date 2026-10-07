@@ -9,6 +9,9 @@ use std::{
     io::Read,
     path::Path,
 };
+pub mod stock;
+/// Where the base game's recovered script is said to come from.
+const CORE_SCRIPT: &str = "base/server/scripts/allGameScripts.cs (recovered)";
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -383,6 +386,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             slow: None,
             fixed_damage: false,
             collision_sound: None,
+            sport_hit: None,
+            turns_into: None,
         };
         pack.projectiles.insert(id, p);
     }
@@ -553,6 +558,9 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 last_shot: None,
                 state_shots: Default::default(),
                 cook: None,
+                // Stock behaviour comes from `stock::declare`.
+                on_fire: None,
+                sport: None,
                 guard: None,
                 rope: None,
                 paint_picker: false,
@@ -731,10 +739,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
         }
     }
     // Core dependencies are imported only when explicitly referenced from this closure.
-    let core_defs = parse(
-        &core_text,
-        "base/server/scripts/allGameScripts.cs (recovered)",
-    )?;
+    let core_defs = parse(&core_text, CORE_SCRIPT)?;
     defs.extend(
         core_defs
             .iter()
@@ -793,6 +798,11 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
     }
     let mut pack = lower(defs)?;
     collision_sounds(&scripts, &mut pack);
+    // The building tools' scripts live in the recovered base script.
+    if let Ok(script) = bri_convert::tscript::read(&core_text, CORE_SCRIPT) {
+        scripts.push(script);
+    }
+    stock::declare(&scripts, &mut pack);
     for t in damage {
         // `AddDamageType` refuses a type whose icon file is missing.
         let missing: Vec<_> = t

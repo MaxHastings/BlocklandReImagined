@@ -1834,6 +1834,8 @@ fn add_launcher(
         rope: None,
         light: None,
         paint_picker: false,
+        on_fire: None,
+        sport: None,
         scripts: Default::default(),
         hide_nodes: Vec::new(),
         both_arms: false,
@@ -1904,6 +1906,8 @@ fn add_launcher(
         fixed_damage: false,
         slow: None,
         collision_sound: None,
+        sport_hit: None,
+        turns_into: None,
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);

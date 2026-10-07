@@ -34,7 +34,7 @@ fn on_damage(victim, attacker, amount, info) {
 
 fn weapons() -> bri_weapons::Pack {
     let pack = json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "id": "kit",
         "items": { GUN: { "ui_name": "Kit Gun", "image": "kit:image/gun" } },
         "images": {

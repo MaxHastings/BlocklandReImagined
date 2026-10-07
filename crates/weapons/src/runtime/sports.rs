@@ -104,7 +104,7 @@ impl WeaponsWorld {
         d: &crate::ProjectileDef,
         catcher: ActorId,
     ) {
-        if StockProjectile::of(d) != Some(StockProjectile::Football) || p.bounced {
+        if d.sport_hit != Some(SportHit::Catch) || p.bounced {
             return;
         }
         let delta = self.actors[&catcher].frame.position - p.origin;
@@ -179,12 +179,12 @@ impl WeaponsWorld {
                 240,
             ),
         };
-        let stock = self.pack.images.get(&image.image).map(Stock::of);
+        let sport = self.pack.images.get(&image.image).and_then(|i| i.sport);
         let held = match action {
-            SportAction::BasketballPass => stock.and_then(|s| s.ball) == Some(Ball::Basketball),
-            SportAction::FootballLateral => stock.and_then(|s| s.ball) == Some(Ball::Football),
+            SportAction::BasketballPass => sport.and_then(|s| s.ball) == Some(Ball::Basketball),
+            SportAction::FootballLateral => sport.and_then(|s| s.ball) == Some(Ball::Football),
             SportAction::SoccerPop | SportAction::SoccerDrop => {
-                stock.and_then(|s| s.sport_keys) == Some(SportKeys::Pop)
+                sport.and_then(|s| s.keys) == Some(SportKeys::Pop)
             }
         };
         ensure!(held, "Sport action does not match held ball");
@@ -352,9 +352,9 @@ impl WeaponsWorld {
         }
         Ok(held)
     }
-    /// The stock sports ball `image` is ([`Stock::ball`]).
+    /// The sports ball `image` is ([`crate::Sport::ball`]).
     fn ball(&self, image: &str) -> Option<Ball> {
-        self.pack.images.get(image).and_then(|i| Stock::of(i).ball)
+        self.pack.images.get(image).and_then(|i| i.sport?.ball)
     }
     /// Whether the right hand holds a sports ball image.
     pub fn holds_ball(&self, id: ActorId) -> bool {

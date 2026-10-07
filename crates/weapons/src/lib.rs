@@ -15,7 +15,9 @@ pub mod runtime;
 pub use runtime::*;
 pub use settings::Binding;
 /// 3 adds explosion vertical impulse and per-type vehicle damage scale.
-pub const SCHEMA: u32 = 3;
+/// 4 declares stock script behaviour in data (`Image::on_fire`,
+/// `Image::sport`, `ProjectileDef::sport_hit`, `ProjectileDef::turns_into`).
+pub const SCHEMA: u32 = 4;
 pub const TICK_HZ: u32 = 120;
 /// Authored DTS object bounds converted offline to native coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -494,6 +496,129 @@ pub enum BotManipulation {
         turn: bool,
     },
 }
+/// A building mechanism the host runs when an image fires, instead of
+/// launching a projectile: v20's `hammerImage::onFire`, `wrenchImage::onFire`
+/// and kin raycast and act on what they hit. The runtime reports
+/// [`Event::ToolFire`] with it and the host performs the hit.
+///
+/// Not stable yet: the variants may still be renamed before the modding API
+/// freeze.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostTool {
+    /// Breaks the brick it hits (trust and chain-kill rules permitting),
+    /// strikes a player or object, and knocks a vehicle (the hammer).
+    Break,
+    /// Destroys a trusted brick it hits and launches a player upward (the
+    /// player wand).
+    Destroy,
+    /// An administrator's long reach: destroys any brick and flings players
+    /// (the Destructo Wand).
+    AdminDestroy,
+    /// Opens the brick it hits for inspection and its settings dialog (the
+    /// wrench).
+    Inspect,
+    /// Opens the print picker for the printable brick it hits (the printer).
+    Print,
+}
+/// [`Image::on_fire`]: what an image's `onFire` does instead of launching
+/// its projectile, for scripts that call engine functions no reader can
+/// turn into data. The v20 importer fills it for the stock images; an
+/// Add-On image says it itself.
+///
+/// Not stable yet: may be renamed before the modding API freeze.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnFire {
+    /// Raycasts and runs the host's building mechanism on what it hits.
+    Tool(HostTool),
+    /// Puts the skis on or takes them off (`skiWeaponImage::onFire`).
+    Skis,
+    /// Tries the brick it points at (`keyImage::onFire`).
+    Key,
+    /// Swaps itself for this image in the same hand, which then fires
+    /// (`basketballImage::onFire` mounting `basketballShootImage`). A
+    /// sports ball's trigger keys swap it the same way.
+    Mount(String),
+}
+/// What a held sports ball does with the movement keys
+/// (`WeaponsWorld::sport_trigger`, Item_Sports' `onTrigger`).
+///
+/// Not stable yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SportKeys {
+    /// Jet pressed on foot: a football's lateral.
+    Lateral,
+    /// Jet pressed pops a soccer ball up; any other key drops it.
+    Pop,
+    /// Jet released on foot: a basketball's pass.
+    Pass,
+}
+/// The Item_Sports balls that catches and drops treat differently.
+///
+/// Not stable yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ball {
+    Basketball,
+    Football,
+}
+/// [`Image::sport`]: how an image throws the sports ball it holds, as
+/// Item_Sports' `onFire` scripts did with `spawnBall`.
+///
+/// Not stable yet.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sport {
+    /// Forward speed and upward speed of a throw, before the holder's own
+    /// velocity.
+    pub throw: [f32; 2],
+    /// The throw aims at what the holder looks at (a basketball's).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub aimed_throw: bool,
+    /// Ticks after its holder spawns before it can be thrown (a
+    /// dodgeball's).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub spawn_grace_ticks: u32,
+    /// Its projectile counts as thrown (a football's, which can be caught).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub thrown: bool,
+    /// What the movement keys do while it is held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keys: Option<SportKeys>,
+    /// The ball it is, for the catches and drops that treat one ball
+    /// differently.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ball: Option<Ball>,
+}
+impl Default for Sport {
+    /// `basketballShootImage::onFire`'s throw from the free-throw line
+    /// ("power = 7, lob 7.5"), the one every other ball image used.
+    fn default() -> Self {
+        Self {
+            throw: [7.0, 7.5],
+            aimed_throw: false,
+            spawn_grace_ticks: 0,
+            thrown: false,
+            keys: None,
+            ball: None,
+        }
+    }
+}
+/// [`ProjectileDef::sport_hit`]: what a sports projectile's `onCollision`
+/// script did to a player it hit.
+///
+/// Not stable yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SportHit {
+    /// A hit before it bounces knocks the player out (`dodgeballProjectile`).
+    KnockOut,
+    /// A catch before it bounces scores the throw's distance
+    /// (`footballProjectile`).
+    Catch,
+}
 /// How a bot pulls an image's trigger.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -611,6 +736,13 @@ pub struct Image {
     /// A grenade cooked in the hand ([`Cook`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cook: Option<Cook>,
+    /// What its `onFire` does instead of launching its projectile
+    /// ([`OnFire`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_fire: Option<OnFire>,
+    /// How it throws the sports ball its projectile is ([`Sport`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sport: Option<Sport>,
     /// While its holder hangs on a rope (`tether`), each player's game
     /// draws the rope with this: v20 Add-Ons fired a stream of projectiles
     /// whose trails drew it, from the muzzle to the rope's end.
@@ -2007,6 +2139,14 @@ pub struct ProjectileDef {
     /// something (a sports ball's bounce).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collision_sound: Option<CollisionSound>,
+    /// What it does to a player it hits, as a sports ball ([`SportHit`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sport_hit: Option<SportHit>,
+    /// A player it hits becomes this player type, dismounted, keeping their
+    /// colours (`horseRayProjectile::onCollision`). It does no damage.
+    /// Not stable yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turns_into: Option<String>,
 }
 /// A sound played where a projectile hits something, bounce or not, as
 /// `serverPlay3D(sound, ...)` in its `onCollision` (or a helper it calls)
@@ -2217,6 +2357,8 @@ impl Default for ProjectileDef {
             slow: None,
             fixed_damage: false,
             collision_sound: None,
+            sport_hit: None,
+            turns_into: None,
         }
     }
 }
@@ -2889,6 +3031,19 @@ impl Pack {
                     .validate()
                     .with_context(|| format!("magazine of image {id}"))?;
             }
+            if let Some(OnFire::Mount(other)) = &image.on_fire {
+                ensure!(
+                    other != id && self.images.contains_key(other),
+                    "on_fire of image {id} mounts {other}, which is not another image of this pack"
+                );
+            }
+            if let Some(sport) = &image.sport {
+                ensure!(
+                    sport.throw.iter().all(|v| v.is_finite() && v.abs() <= 1000.0)
+                        && sport.spawn_grace_ticks <= 36_000,
+                    "Invalid sport of image {id}: throw speeds within 1000, spawn_grace_ticks at most 36000"
+                );
+            }
             if let Some(left) = &image.left_image {
                 let held = self
                     .images
@@ -2953,6 +3108,10 @@ impl Pack {
             ensure!(
                 p.max_bounces <= 64,
                 "Invalid max_bounces of projectile {id}: 0 to 64"
+            );
+            ensure!(
+                p.turns_into.as_ref().is_none_or(|t| !t.is_empty() && t.len() <= 128),
+                "Invalid turns_into of projectile {id}: a player type id"
             );
             if let Some(c) = &p.collision_sound {
                 ensure!(

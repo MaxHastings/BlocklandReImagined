@@ -859,6 +859,7 @@ impl App {
             self.motion.install(prepared.mirror);
             let building = self.build.building.as_mut().unwrap();
             building.set_tool_catalog(self.item_ui.catalog())?;
+            building.set_host_tools(self.item_assets.host_tools.clone());
             if let Some(old) = &old {
                 building.carry_over(old);
             }

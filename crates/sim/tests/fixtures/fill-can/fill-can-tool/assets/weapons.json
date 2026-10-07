@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "id": "fill-can-tool",
   "items": {
     "fill-can-tool:weapon/fill-can": {

@@ -124,7 +124,7 @@ fn weapons() -> Value {
         );
     }
     json!({
-        "schema_version": 3, "id": NS,
+        "schema_version": 4, "id": NS,
         "items": {
             SHOVEL: { "ui_name": "Trench Shovel", "image": format!("{NS}:image/trenchshovelimage"),
                 "model": "", "icon": "", "can_drop": true },

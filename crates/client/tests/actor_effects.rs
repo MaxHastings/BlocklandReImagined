@@ -174,6 +174,8 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             last_shot: None,
             state_shots: Default::default(),
             cook: None,
+            on_fire: None,
+            sport: None,
             guard: None,
             rope: None,
             light: None,

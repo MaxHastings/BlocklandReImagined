@@ -55,7 +55,7 @@ impl Query for Field {
 /// a shield that guards while `Ready`, sends shots back and breaks after
 /// two stops.
 const KIT: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "kit",
     "items": {
         "kit:weapon/gun": { "ui_name": "Gun", "image": "kit:image/gun" },

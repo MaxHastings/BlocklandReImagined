@@ -449,7 +449,6 @@ fn scripted(
             .expect("pattern")
     };
     let sound_re = call(r"serverplay3d\s*\(\s*([A-Za-z_]\w*)\s*,");
-    let arm_re = call(r"playthread\s*\(\s*2\s*,\s*([A-Za-z_]\w*)\s*\)");
     let gesture_re = call(r"playthread\s*\(\s*3\s*,\s*([A-Za-z_]\w*)\s*\)");
     let blast_re = call(r"spawnexplosion\s*\(\s*([A-Za-z_]\w*)\s*,");
     // What a script scheduled on the holder or played on its other threads.
@@ -496,9 +495,9 @@ fn scripted(
             any = true;
         }
         if state["arm"].as_str().unwrap_or_default().is_empty()
-            && let Some(arm) = arm_re.captures(&body)
+            && let Some(arm) = bri_weapons_import::stock::script_arm(&body)
         {
-            state["arm"] = json!(arm[1].to_ascii_lowercase());
+            state["arm"] = json!(arm);
             did.push("arm move");
             any = true;
         }
@@ -579,6 +578,24 @@ fn scripted(
     }
     if any {
         patch["states"] = Value::Array(changed);
+    }
+    // The image `onMount` puts in the left hand (an akimbo pair's).
+    if image["left_image"].is_null()
+        && let Some(left) = bodies
+            .get(&format!("{name}::onmount"))
+            .and_then(|body| bri_weapons_import::stock::left_hand_image(body))
+        && let Some((id, _)) = weapons["images"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .find(|(_, i)| i["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&left)))
+    {
+        patch["left_image"] = json!(id);
+        super::handle(
+            handled,
+            &format!("{name}::onmount"),
+            "left_image: the image it mounts in the left hand",
+        );
     }
     patch
 }

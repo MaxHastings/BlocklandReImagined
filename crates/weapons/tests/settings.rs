@@ -27,7 +27,7 @@ impl Query for Air {
 /// A 3-round pistol with a kick, its supply, display time and kick bound
 /// to settings.
 const GUN: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "set",
     "items": {
         "set:weapon/pistol": { "ui_name": "Pistol", "image": "set:image/pistol" }

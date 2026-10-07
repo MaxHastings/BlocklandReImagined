@@ -173,9 +173,11 @@ pub(super) fn capability(
             family: Family::Melee,
             delivery: Delivery::Contact,
             trigger: tactics::Trigger::default(),
-            reach: 5.0 * scale,
+            reach: super::super::tools::TOOL_RANGE * scale,
             near: 0.0,
-            direct_damage: 10.0,
+            // `hammerImage::onHitObject` deals its projectile's
+            // `directDamage`, unscaled.
+            direct_damage: projectile.map_or(0.0, |p| p.damage),
             splash_damage: 0.0,
             splash_radius: 0.0,
             arm_ticks: 0,
