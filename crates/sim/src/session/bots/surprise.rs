@@ -298,6 +298,8 @@ pub(super) struct Shot {
     pub spawn: u64,
     pub health: f32,
     pub due: u64,
+    /// Where its push was predicted to put the target (`shove`).
+    pub landing: Option<Vec3>,
 }
 
 /// Idle things a bot does when it goofs, each an ordinary player action.
@@ -1129,7 +1131,8 @@ impl Session {
                 .then_some(at)
         })
     }
-    /// Outcomes of shots now due: a hit (it lost health or died) works, a
+    /// Outcomes of shots now due: a hit (it lost health or died, or a push
+    /// put it within a body's width of where it was predicted to) works, a
     /// miss does not, for the weapon, aim and behaviour that fired it.
     pub(super) fn surprise_settle(&mut self, bot: OwnerId, tick: u64) {
         let Some(brain) = self.bots.brains.get_mut(&bot) else {
@@ -1144,6 +1147,13 @@ impl Session {
                 !p.combat.alive
                     || p.combat.spawn_tick != shot.spawn
                     || p.combat.health < shot.health - 0.01
+                    || shot.landing.is_some_and(|at| {
+                        super::shove::landed_as_predicted(
+                            Vec3::from(p.player.state().feet),
+                            at,
+                            p.player.tuning().width * p.player.state().scale,
+                        )
+                    })
             });
             let cfg = &brain.kind.surprise;
             if let Some(slot) = shot.weapon {
@@ -1184,9 +1194,12 @@ impl Session {
         else {
             return;
         };
+        // Judged once the shot has flown, and a shove once its target
+        // has come down.
         let flight = choice
             .and_then(|c| c.aim)
-            .map_or(0.0, |a| a.time_seconds as f32);
+            .map_or(0.0, |a| a.time_seconds as f32)
+            + choice.and_then(|c| c.landing).map_or(0.0, |l| l.seconds);
         let aim = if choice.is_some() {
             brain.surprise.chosen(Domain::Aim).unwrap_or(AIM_TORSO)
         } else {
@@ -1199,6 +1212,7 @@ impl Session {
             spawn,
             health,
             due: tick + ((flight + 0.6) * TICKS) as u64,
+            landing: choice.and_then(|c| c.landing).map(|l| l.at),
         });
     }
     /// What playing is worth to the bot now, against which a goof weighs

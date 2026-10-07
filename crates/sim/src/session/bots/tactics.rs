@@ -640,8 +640,7 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
     } else {
         0.0
     };
-    let damage =
-        (weapon.damage(1.0) + pushed).min(context.target_health) * context.hit_probability;
+    let damage = (weapon.damage(1.0) + pushed).min(context.target_health) * context.hit_probability;
     if damage <= 0.0 {
         return Err(Unsuited::NoDamage);
     }

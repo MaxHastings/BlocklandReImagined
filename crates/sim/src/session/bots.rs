@@ -62,6 +62,7 @@ pub(super) use perception::Stimulus;
 mod physical_objectives;
 mod planning;
 mod search_memory;
+mod shove;
 mod sight;
 mod sightlines;
 mod spots;
@@ -389,6 +390,9 @@ struct Brain {
     /// The place it heads for to fight from (`spots`); none where it
     /// stands.
     spot: Option<spots::Anchor>,
+    /// The body its objective works, as of its last think: what an
+    /// opponent it shoves off it contests (`contest::shove_worth`).
+    contest_body: Option<u64>,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -577,6 +581,7 @@ impl Brain {
             objective_tool: false,
             objective_threat: None,
             spot: None,
+            contest_body: None,
             carry: None,
             next_grab: 0,
             next_bite: 0,
@@ -1916,6 +1921,12 @@ impl Session {
         let contest_engaged = objective
             .and_then(|view| view.resource)
             .is_some_and(|resource| contest::engaged(self, bot, resource, feet));
+        self.bots.brains.get_mut(&bot).unwrap().contest_body = objective
+            .and_then(|view| view.resource)
+            .and_then(|resource| match resource {
+                claims::Resource::Body { vehicle } => Some(vehicle),
+                claims::Resource::Seat { .. } => None,
+            });
         // How much going after the enemy in sight is worth (`bot_menace`):
         // nothing when it cannot hurt them; with nothing at stake, all of
         // it; more for one that hurt it; at play, all of it for one that
