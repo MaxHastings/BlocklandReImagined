@@ -30,7 +30,9 @@ impl<K: PartialEq, const N: usize> Cooldowns<K, N> {
     }
     /// Whether `key` is still given up on at `tick`.
     pub(super) fn cooling(&self, key: &K, tick: u64) -> bool {
-        self.entries.iter().any(|(k, until)| k == key && tick < *until)
+        self.entries
+            .iter()
+            .any(|(k, until)| k == key && tick < *until)
     }
     /// Whether `key` is in the memory at all, lapsed or not.
     pub(super) fn holds(&self, key: &K) -> bool {

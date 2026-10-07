@@ -142,8 +142,7 @@ impl Session {
             return Some(to);
         }
         if brain.explore.boxed_in.is_some_and(|(at, when)| {
-            flat(at - feet).length() < RESCAN_MOVE
-                && tick < when + (RESCAN_SECONDS * 120.0) as u64
+            flat(at - feet).length() < RESCAN_MOVE && tick < when + (RESCAN_SECONDS * 120.0) as u64
         }) || !self.bot_spend_rays(bot, SCAN_RAYS)
         {
             return None;
@@ -195,11 +194,10 @@ impl Session {
                 .any(|p| flat(p - at).length() < CELL * 2.0);
             // Farther is more ground opened up, and a walk with a purpose
             // rather than a turn about in the same room.
-            let worth = brain.explore.worth(at, tick)
-                + FAR * open / reach
-                + AHEAD * way.dot(facing)
-                - if crowd { CROWD } else { 0.0 }
-                + variety;
+            let worth =
+                brain.explore.worth(at, tick) + FAR * open / reach + AHEAD * way.dot(facing)
+                    - if crowd { CROWD } else { 0.0 }
+                    + variety;
             if best.is_none_or(|(b, _)| worth > b) {
                 best = Some((worth, at));
             }
@@ -218,7 +216,10 @@ mod tests {
         e.note(Vec3::ZERO, None, 0);
         let here = Vec3::new(1.0, 0.0, 1.0);
         let away = Vec3::new(100.0, 0.0, 100.0);
-        assert!(e.worth(away, 10) > e.worth(here, 10), "new beats just visited");
+        assert!(
+            e.worth(away, 10) > e.worth(here, 10),
+            "new beats just visited"
+        );
         assert!(e.worth(here, 120 * 200) > 0.99, "stale again after a while");
         let lead = Knowledge {
             subject: 9,

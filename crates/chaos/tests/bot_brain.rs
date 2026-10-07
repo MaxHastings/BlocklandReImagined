@@ -1119,19 +1119,32 @@ fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
     for _ in 0..120 * 60 {
         steps(&mut s, &[human], 1, &mut sequence);
         let at = feet(&s, bot);
-        let p = s.snapshot().players.into_iter().find(|p| p.owner == bot).unwrap();
+        let p = s
+            .snapshot()
+            .players
+            .into_iter()
+            .find(|p| p.owner == bot)
+            .unwrap();
         if flat_distance(at, brick) > 3.5 && p.grounded && Vec3::from(p.velocity).length() < 0.1 {
             break;
         }
     }
     let at = feet(&s, bot);
-    assert!(flat_distance(at, brick) > 3.5, "it strolled off its brick: {at}");
+    assert!(
+        flat_distance(at, brick) > 3.5,
+        "it strolled off its brick: {at}"
+    );
     // Walls of 3-unit columns 1.5 off each way, and a plate over them.
     let (cx, cz) = ((at.x * 2.0).round() / 2.0, (at.z * 2.0).round() / 2.0);
     let mut cells = Vec::new();
     for i in -3..=3 {
         let o = i as f32 * 0.5;
-        cells.extend([(cx + o, cz - 1.5), (cx + o, cz + 1.5), (cx - 1.5, cz + o), (cx + 1.5, cz + o)]);
+        cells.extend([
+            (cx + o, cz - 1.5),
+            (cx + o, cz + 1.5),
+            (cx - 1.5, cz + o),
+            (cx + 1.5, cz + o),
+        ]);
     }
     cells.sort_by(|a, b| a.partial_cmp(b).unwrap());
     cells.dedup();

@@ -554,8 +554,8 @@ impl Session {
                         if self.simulation.will_cause_chain_kill(id)? {
                             return Ok(());
                         }
-                        let on_own_stack = owner != 0
-                            && self.simulation.stack_owner(id) == Some(owner);
+                        let on_own_stack =
+                            owner != 0 && self.simulation.stack_owner(id) == Some(owner);
                         if (on_own_stack || self.trusted_brick_edit(owner, id, level::FULL))
                             && !self.tutorial_protects(id)
                         {
@@ -572,7 +572,11 @@ impl Session {
                                 let engine = Actor {
                                     administrator: true,
                                     ..copy_actor(
-                                        &self.peers.get(&owner).context("Unknown connection")?.actor,
+                                        &self
+                                            .peers
+                                            .get(&owner)
+                                            .context("Unknown connection")?
+                                            .actor,
                                     )
                                 };
                                 self.kill_brick(&engine, id)?;

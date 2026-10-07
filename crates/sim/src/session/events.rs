@@ -317,7 +317,10 @@ impl Session {
             match self.validate_event_rows(std::slice::from_ref(row)) {
                 Ok(()) => true,
                 Err(error) => {
-                    refused.push(format!("Event line {line} was left out: {}", error.root_cause()));
+                    refused.push(format!(
+                        "Event line {line} was left out: {}",
+                        error.root_cause()
+                    ));
                     false
                 }
             }

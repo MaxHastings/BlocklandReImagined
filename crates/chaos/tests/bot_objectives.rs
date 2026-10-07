@@ -697,11 +697,22 @@ fn a_build_full_of_light_switches_still_shows_the_goal() {
     let mut bricks = vec![brick(
         [0.25, 0.1, 28.25],
         "goal_panel",
-        vec![row("onActivate", "winRound", Slot::Player, vec![], vec![], 0)],
+        vec![row(
+            "onActivate",
+            "winRound",
+            Slot::Player,
+            vec![],
+            vec![],
+            0,
+        )],
     )];
     for i in 0..120 {
         bricks.push(brick(
-            [-30.25 + (i % 12) as f32 * 2.0, 0.1, -20.25 - (i / 12) as f32 * 2.0],
+            [
+                -30.25 + (i % 12) as f32 * 2.0,
+                0.1,
+                -20.25 - (i / 12) as f32 * 2.0,
+            ],
             &format!("light_{i}"),
             vec![row(
                 "onActivate",

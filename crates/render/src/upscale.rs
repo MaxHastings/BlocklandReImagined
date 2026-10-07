@@ -17,7 +17,12 @@ pub struct Upscale {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// The world's texture, its view, the bind group reading it and its size.
-    target: Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup, (u32, u32))>,
+    target: Option<(
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::BindGroup,
+        (u32, u32),
+    )>,
 }
 
 impl Upscale {

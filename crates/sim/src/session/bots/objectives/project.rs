@@ -23,7 +23,11 @@ impl Session {
             .ok()?;
         Some((player.game?, player.team?))
     }
-    pub(super) fn team_score(&self, game: bri_minigames::GameId, team: bri_minigames::TeamId) -> Option<i64> {
+    pub(super) fn team_score(
+        &self,
+        game: bri_minigames::GameId,
+        team: bri_minigames::TeamId,
+    ) -> Option<i64> {
         self.minigames.team_score(game, team).ok()
     }
     pub(in crate::session::bots) fn objective_fact_key(
