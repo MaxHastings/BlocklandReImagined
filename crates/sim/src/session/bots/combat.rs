@@ -197,6 +197,8 @@ const SPLASH_AIM: f32 = 1.5;
 /// The share of its blast radius a splash aim's burst may land from the
 /// body's middle: inside the edge, where the blast still hurts.
 const SPLASH_REACH: f32 = 0.9;
+/// How far above the feet a splash aim at the feet lands.
+const FEET_AIM: f32 = 0.15;
 
 pub(super) fn capability(
     image: &Image,
@@ -602,9 +604,15 @@ pub(super) fn choose(
         if distance < cap.near || distance > cap.reach {
             continue;
         }
+        // A timed throw goes off where it comes to rest, so it is thrown to
+        // land at the feet rather than into the body it would bounce off.
         let input = Intercept {
             muzzle: origin,
-            target: target_point,
+            target: if matches!(cap.delivery, Delivery::Timed { .. }) {
+                seen.feet + Vec3::Y * FEET_AIM
+            } else {
+                target_point
+            },
             target_velocity,
             shooter_velocity: velocity,
         };
@@ -746,7 +754,7 @@ pub(super) fn choose(
             // A splash weapon may aim at the feet, or at a surface beside
             // the target, where its real blast still hurts.
             if cap.splash_radius > 0.0 && cap.splash_damage > 0.0 {
-                let feet = seen.feet + Vec3::Y * 0.15;
+                let feet = seen.feet + Vec3::Y * FEET_AIM;
                 let centre = target_point;
                 let surface =
                     session.surprise_surface(seen.owner, centre, origin, cap.splash_radius);
@@ -942,11 +950,11 @@ fn fuse_left(session: &Session, bot: OwnerId, image: &Image, fuse: u32) -> Optio
 }
 
 /// The projectile a slot's image throws.
-fn thrown<'a>(
-    session: &'a Session,
+fn thrown(
+    session: &Session,
     bot: OwnerId,
     slot: usize,
-) -> Option<(&'a Image, &'a bri_weapons::ProjectileDef)> {
+) -> Option<(&Image, &bri_weapons::ProjectileDef)> {
     let actor = session.weapons.actor(ActorId(bot))?;
     let item = actor.inventory.get(slot)?.as_ref()?;
     let image = session

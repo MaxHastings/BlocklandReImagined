@@ -10,25 +10,27 @@ pub(crate) enum FireAdmission {
 }
 
 /// Every onFire entry must require trigger-up. Initial/mixed/fused images
-/// cannot use an indefinite held charge as a harmless aiming wait.
+/// cannot use an indefinite held charge as a harmless aiming wait: a fused
+/// one held to aim would burn its fuse in the hand. A fused image that
+/// throws on the press holds nothing.
 pub(super) fn release_only(image: &Image) -> bool {
-    image.cook.is_none()
-        && (!image.charges()
-            || image
+    !image.charges()
+        || (image.cook.is_none()
+            && image
                 .states
                 .first()
                 .is_none_or(|s| !s.script.eq_ignore_ascii_case("onfire"))
-                && image.states.iter().all(|s| {
-                    [s.timeout, s.down, s.ammo, s.no_ammo, s.loaded, s.not_loaded]
-                        .into_iter()
-                        .flatten()
-                        .all(|to| {
-                            image
-                                .states
-                                .get(to)
-                                .is_none_or(|next| !next.script.eq_ignore_ascii_case("onfire"))
-                        })
-                }))
+            && image.states.iter().all(|s| {
+                [s.timeout, s.down, s.ammo, s.no_ammo, s.loaded, s.not_loaded]
+                    .into_iter()
+                    .flatten()
+                    .all(|to| {
+                        image
+                            .states
+                            .get(to)
+                            .is_none_or(|next| !next.script.eq_ignore_ascii_case("onfire"))
+                    })
+            }))
 }
 
 /// Conservative finite reachability with the button up. A recovery state
