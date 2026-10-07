@@ -124,8 +124,17 @@ impl Session {
             let mut budget = std::mem::take(&mut self.bots.combat_budget);
             budget.begin_tick(tick);
             let mut mind = std::mem::take(&mut self.bots.brains.get_mut(&bot).unwrap().surprise);
-            let decision =
-                hand_combat::choose(self, bot, seen, tick, &mut combat, &mut budget, &mut mind);
+            let eye = self.peers[&bot].player.eye();
+            let decision = hand_combat::choose(
+                self,
+                bot,
+                seen,
+                eye,
+                tick,
+                &mut combat,
+                &mut budget,
+                &mut mind,
+            );
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.combat = combat;
             brain.surprise = mind;

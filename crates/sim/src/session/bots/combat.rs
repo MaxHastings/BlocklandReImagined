@@ -423,10 +423,14 @@ pub(super) fn weapon_of(cap: Capability, spread: f32) -> Weapon {
     }
 }
 
+/// The best shot `bot` has at `seen` from `origin` (its eye, or a spot it
+/// weighs standing on).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn choose(
     session: &Session,
     bot: OwnerId,
     seen: Seen,
+    origin: Vec3,
     tick: u64,
     state: &mut State,
     budget: &mut Budget,
@@ -451,7 +455,6 @@ pub(super) fn choose(
     let Some(actor) = session.weapons.actor(ActorId(bot)) else {
         return Decision::Unsupported;
     };
-    let origin = peer.player.eye();
     let velocity = Vec3::from(peer.player.state().velocity);
     // A bot leads by about the target's velocity, a little under or over
     // as its own seeded drift goes, never a perfect intercept.
