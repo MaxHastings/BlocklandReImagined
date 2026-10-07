@@ -33,7 +33,10 @@ turning:
 - Before: up to 444 undrawn pixels of 16,384 per frame at Medium and 260 at
   High. After: at most 44 at Medium and 5 at High, at the vanishing point.
 - `-p bri-render --test mirrors walking_between_facing_mirrors_never_shows_an_undrawn_picture`:
-  fails on main (168 undrawn pixels in frame 3), passes with the fix.
+  on its 12-frame walk main's worst frame shows 444 undrawn pixels and the
+  fix's 3; the bar is 81 (half a percent). Leftover pixels do change from
+  frame to frame: a few, only at the tunnel's far end, mostly while moving
+  fast (0 to 44 per frame at 128x128 on the fast walk).
 - `reflection::tests` (slots after a kept picture) and the whole `mirrors`
   test file pass; `cargo clippy --workspace --tests -- -D warnings` clean.
 

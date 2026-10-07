@@ -718,10 +718,11 @@ const UNDRAWN: wgpu::Color = wgpu::Color {
     b: 1.0,
     a: 1.0,
 };
-/// Pixels of [`UNDRAWN`] a frame of the mirror tunnel may show: a
-/// hundredth of the screen, at its vanishing point. Before the fix, frames
-/// showed two to three times this.
-const MOST_UNDRAWN: usize = (SIZE * SIZE / 100) as usize;
+/// Pixels of [`UNDRAWN`] the worst frame of the walk down the mirror tunnel
+/// may show: half a percent of the screen (81). Measured on this walk,
+/// main's worst frame showed 444 and the fix's 3, at the vanishing point;
+/// the fix's worst over a walk four times as fast was 44.
+const MOST_UNDRAWN: usize = (SIZE * SIZE / 200) as usize;
 /// A closed box of stripes between two facing mirrors (z = 0 and z = 6).
 fn mirror_tunnel() -> (SceneData, [Mirror; 2]) {
     let mut data = SceneData::default();
@@ -778,18 +779,18 @@ fn walking_between_facing_mirrors_never_shows_an_undrawn_picture() -> Result<()>
             .filter(|p| p[0] > 200 && p[1] < 40 && p[2] > 200)
             .count()
     };
-    for (f, pixels) in gpu
+    let missed: Vec<usize> = gpu
         .frames_walking(&cameras, ReflectionSettings::MEDIUM, &data, &mirrors)?
         .iter()
-        .enumerate()
-    {
-        // The tunnel's last few texels, too small to fill, may still miss.
-        let missed = undrawn(pixels);
-        assert!(
-            missed < MOST_UNDRAWN,
-            "{missed} undrawn pixels in frame {f}"
-        );
-    }
+        .map(|pixels| undrawn(pixels))
+        .collect();
+    println!("undrawn pixels per frame: {missed:?}");
+    // The tunnel's last few texels, too small to fill, may still miss.
+    let worst = missed.iter().copied().max().unwrap_or(0);
+    assert!(
+        worst <= MOST_UNDRAWN,
+        "{worst} undrawn pixels in a frame: {missed:?}"
+    );
     Ok(())
 }
 

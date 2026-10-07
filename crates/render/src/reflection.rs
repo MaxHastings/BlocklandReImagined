@@ -1321,6 +1321,12 @@ impl Reflections {
         // layers, so they all go before the player's shadows; every view
         // seen in one has its own too, so each still follows what it shows.
         let own = |i: usize| self.own_shadows.get(i).copied().unwrap_or(false);
+        // Planes draw deepest first in one run either way, which `Plan::slots`
+        // relies on: every plane fits its own sun shadows or none does.
+        debug_assert!(
+            self.own_shadows.windows(2).all(|w| w[0] == w[1]),
+            "some planes fitted sun shadows and others did not"
+        );
         let draw = |encoder: &mut wgpu::CommandEncoder, i: usize| {
             let (plane, Some(target)) = (&self.plan.planes[i], self.targets.get(i)) else {
                 return;
