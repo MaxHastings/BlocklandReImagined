@@ -250,6 +250,23 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
         )
     })
 }
+/// Draw frames until the map's lighting has landed. Its bake finishes on a
+/// worker whenever the machine gets to it, and the next frame drawn after
+/// that is lit differently: on a busy machine it landed between two frames
+/// this test compares (a frame before a GPU reset and one after differed).
+/// Frames are compared only once it has.
+fn settle_lighting(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<()> {
+    wait::until_one(
+        app,
+        "the map's lighting to settle",
+        Duration::from_secs(45),
+        |app, dt| {
+            step(app, dt)?;
+            capture(app, gpu, renderer).map(drop)
+        },
+        |a| a.map_lighting_settled(),
+    )
+}
 fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<Vec<u8>> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let extent = wgpu::Extent3d {
@@ -381,6 +398,7 @@ fn native_core_tools_render_from_eye_and_original_mounts(f: &ContentRoot) -> Res
     let gpu = support::gpu::turn().context("offscreen native held-item renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    settle_lighting(&mut app, &gpu, &mut renderer)?;
 
     let angles = [
         ("front", std::f32::consts::PI, 0.08),
@@ -569,6 +587,7 @@ fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person(f: &ContentRoo
     let gpu = support::gpu::turn().context("offscreen native held-brick renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+    settle_lighting(&mut app, &gpu, &mut renderer)?;
     let (current_yaw, current_pitch) = app.controls.view_angles();
     let yaw = std::f32::consts::PI;
     let yaw_delta = (yaw - current_yaw + std::f32::consts::PI)
