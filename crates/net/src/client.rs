@@ -900,6 +900,11 @@ impl Client {
     pub async fn command(&mut self, command: Command) -> Result<Reply> {
         let sequence = self.request(command).await?;
         let sent = self.replica.tick;
+        // How current this client was when it sent, for the failure: the
+        // newest tick a pose datagram brought (they pass the reliable
+        // stream's backlog) and how many events it had not read yet.
+        let newest_pose = self.replica.poses.values().map(|p| p.tick).max();
+        let unread = self.queued();
         loop {
             let event = tokio::time::timeout(COMMAND_STALL, self.receive())
                 .await
@@ -920,7 +925,8 @@ impl Client {
             let ran = self.replica.tick.saturating_sub(sent);
             ensure!(
                 ran <= COMMAND_TICKS,
-                "The server ran {ran} ticks without answering command {sequence}"
+                "The server ran {ran} ticks without answering command {sequence} \
+                 (sent at update tick {sent}, newest pose tick {newest_pose:?}, {unread} events unread)"
             );
         }
     }

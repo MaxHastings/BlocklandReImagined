@@ -215,7 +215,7 @@ impl Run<'_> {
         let view = self.app.network_view();
         format!(
             "screens {:?}; chat {:?}; conn {:?}; bricks {:?}; images {:?}; vitals {:?}; \
-             shots {:?}; player {:?}; wall {:?}",
+             shots {:?}; player {:?}; wall {:?}; lighting {}",
             self.app.ui.stack(),
             self.app
                 .ui
@@ -247,6 +247,7 @@ impl Run<'_> {
                     },
                 )
             }),
+            self.app.map_lighting_parts(),
         )
     }
     fn use_tool(&mut self, slot: usize) -> Result<()> {
@@ -840,11 +841,26 @@ fn change_map(run: &mut Run) -> Result<()> {
 }
 
 /// Wait for the map's lighting to finish loading (a completed load, not a
-/// span of time).
+/// span of time). Its source and bake load on workers, which a loaded
+/// machine slows while the host ticks on, so game time is no measure of
+/// them: the wait fails only after [`wait::STALL`] (as [`wait::until_done`]).
 fn lighting_settled(run: &mut Run) -> Result<()> {
-    run.until(
-        "the map's lighting to finish loading",
-        Duration::from_secs(120),
-        |a| a.map_lighting_settled(),
-    )
+    let start = Instant::now();
+    let mut previous = start;
+    loop {
+        let now = Instant::now();
+        run.step(now.duration_since(previous))?;
+        previous = now;
+        if run.app.map_lighting_settled() {
+            return Ok(());
+        }
+        if now.duration_since(start) >= wait::STALL {
+            bail!(
+                "Timed out waiting for the map's lighting to finish loading: not done after {:?}; {}",
+                wait::STALL,
+                run.state()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(4));
+    }
 }
