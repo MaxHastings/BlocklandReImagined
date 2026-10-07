@@ -8,6 +8,23 @@ use bri_content::brick_materials::{UNIVERSAL_PRINT_ASPECT, print_fits};
 use bri_weapons::{ActorId, HostTool, TargetId};
 use bri_world::authority::trust as level;
 
+/// How far the hammer and wand reach, times the swinger's height
+/// (`hammerImage::onFire`'s `%range = 5`), and straight down (`5.5`, for a
+/// muzzle pointing below -0.9).
+pub(super) const TOOL_RANGE: f32 = 5.0;
+const TOOL_RANGE_DOWN: f32 = 5.5;
+/// What a hammer hit takes from a player or object: v20's
+/// `hammerImage::onHitObject` dealt `hammerProjectile.directDamage`, 10.
+pub(super) const HAMMER_DAMAGE: f32 = 10.0;
+/// [`TOOL_RANGE`] or [`TOOL_RANGE_DOWN`] for a swing along `direction`.
+pub(super) fn tool_range(direction: Vec3) -> f32 {
+    if direction.y < -0.9 {
+        TOOL_RANGE_DOWN
+    } else {
+        TOOL_RANGE
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectMode {
@@ -525,7 +542,7 @@ impl Session {
         if dir == Vec3::ZERO || !self.peers.contains_key(&owner) {
             return Ok(());
         }
-        let melee_range = if dir.y < -0.9 { 5.5 } else { 5.0 } * scale;
+        let melee_range = tool_range(dir) * scale;
         match tool {
             HostTool::Break => {
                 let Some(hit) = self.tool_ray(owner, start, dir, melee_range, Reach::Melee)? else {
@@ -587,7 +604,7 @@ impl Session {
                         if self.can_damage_player(owner, target.0, false) {
                             self.damage_player(
                                 target.0,
-                                10.0,
+                                HAMMER_DAMAGE,
                                 combat::DamageKind::weapon("$DamageType::HammerDirect", true),
                                 Some(owner),
                             )?;
@@ -598,7 +615,7 @@ impl Session {
                     }
                     TargetId::Entity(entity) => self.damage_entity(
                         entity,
-                        10.0,
+                        HAMMER_DAMAGE,
                         Some(owner),
                         "weapon",
                         "$DamageType::HammerDirect",
@@ -871,7 +888,7 @@ impl Session {
         let Some(peer) = self.peers.get(&owner) else {
             return Ok(None);
         };
-        let range = if direction.y < -0.9 { 5.5 } else { 5.0 } * peer.player.state().scale;
+        let range = tool_range(direction) * peer.player.state().scale;
         Ok(self
             .tool_ray(owner, peer.player.eye(), direction, range, Reach::Melee)?
             .map(|h| h.target))

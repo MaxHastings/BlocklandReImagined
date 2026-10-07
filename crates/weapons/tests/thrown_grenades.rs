@@ -30,7 +30,7 @@ impl Query for Air {
 }
 
 const KIT: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "nade",
     "items": {
         "nade:weapon/grenade": { "ui_name": "Grenade", "image": "nade:image/grenade" },

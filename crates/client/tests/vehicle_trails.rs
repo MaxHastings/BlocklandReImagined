@@ -138,8 +138,14 @@ fn cloud_only() -> Arc<EffectsPack> {
 fn actor_effects(pack: Arc<EffectsPack>, vehicles: &Pack) -> ActorEffects {
     let (pack, notes) = with_vehicle_effects(pack, vehicles).unwrap();
     assert!(notes.is_empty(), "{notes:?}");
-    let weapons =
-        bri_weapons::Pack::from_json(br#"{ "schema_version": 3, "id": "test_plane" }"#).unwrap();
+    let weapons = bri_weapons::Pack::from_json(
+        format!(
+            r#"{{ "schema_version": {}, "id": "test_plane" }}"#,
+            bri_weapons::SCHEMA
+        )
+        .as_bytes(),
+    )
+    .unwrap();
     ActorEffects::new(pack, Arc::new(weapons), Default::default()).unwrap()
 }
 

@@ -8,6 +8,21 @@ import sys
 import gate
 
 
+class CiShards(unittest.TestCase):
+    def test_the_shards_run_each_target_exactly_once(self):
+        labels = [f"crate{i}/t" for i in range(23)]
+        parts = [gate.shard(labels, (k, 4)) for k in range(4)]
+        self.assertEqual(sorted(sum(parts, [])), sorted(labels))
+        self.assertTrue(all(5 <= len(p) <= 6 for p in parts))
+
+    def test_one_shard_is_all_of_them(self):
+        self.assertEqual(gate.shard(["b", "a"], (0, 1)), ["a", "b"])
+
+    def test_a_shard_past_the_count_is_refused(self):
+        with self.assertRaises(Exception):
+            gate.parse_shard("4/4")
+
+
 class GateEnvironment(unittest.TestCase):
     def test_content_backed_tests_get_the_main_content(self):
         env = gate_env_for({"PATH": "x", "CARGO_TARGET_DIR": "elsewhere"})

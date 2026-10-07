@@ -30,35 +30,13 @@ pub const PRINTER: &str = "v20.weapon.printgun";
 pub const WAND: &str = "v20.weapon.wanditem";
 /// The core tools in their inventory order; name one by its constant.
 pub const CORE_TOOLS: [&str; 4] = [HAMMER, WRENCH, PRINTER, WAND];
-/// A building mechanism the host runs when an image fires, instead of
-/// launching a projectile: v20's `hammerImage::onFire`, `wrenchImage::onFire`
-/// and kin raycast and act on what they hit. The runtime reports
-/// [`Event::ToolFire`] with it and the host performs the hit.
-///
-/// Not stable yet: stock images get theirs from [`host_tool`] until images
-/// declare it in data, and the variants may still be renamed before the
-/// modding API freeze.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HostTool {
-    /// Breaks the brick it hits (trust and chain-kill rules permitting),
-    /// strikes a player or object, and knocks a vehicle (the hammer).
-    Break,
-    /// Destroys a trusted brick it hits and launches a player upward (the
-    /// player wand).
-    Destroy,
-    /// An administrator's long reach: destroys any brick and flings players
-    /// (the Destructo Wand).
-    AdminDestroy,
-    /// Opens the brick it hits for inspection and its settings dialog (the
-    /// wrench).
-    Inspect,
-    /// Opens the print picker for the printable brick it hits (the printer).
-    Print,
-}
 /// The building mechanism an image's `onFire` runs, if it is one of the
-/// host's ([`HostTool`]).
+/// host's ([`HostTool`], [`OnFire::Tool`]).
 pub fn host_tool(image: &Image) -> Option<HostTool> {
-    Stock::of(image).host_tool
+    match image.on_fire {
+        Some(OnFire::Tool(tool)) => Some(tool),
+        _ => None,
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ActorId(pub u64);
@@ -1131,22 +1109,25 @@ impl WeaponsWorld {
         self.actors.get_mut(&id).context("Unknown actor")?.bot = bot;
         Ok(())
     }
-    /// A fall or crash's `amount` of hurt to `id`, moving along `toward`
-    /// as it struck: the share a guard they hold and face it with lets
-    /// through ([`crate::Guard::fall_damage`]), with its clang.
-    pub fn guard_fall(&mut self, id: ActorId, amount: f32, toward: Vec3) -> f32 {
-        let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, id) else {
-            return amount;
-        };
-        let Some(share) = guard.fall_damage else {
-            return amount;
-        };
-        if a.frame.direction.dot(toward) <= 0.0 {
-            return amount;
+    /// The share of a fall or crash's hurt to `id`, moving along `toward`
+    /// as it struck, that a guard they hold and face it with lets through
+    /// ([`crate::Guard::fall_damage`]); None when no guard takes any.
+    pub fn guard_fall_share(&self, id: ActorId, toward: Vec3) -> Option<f32> {
+        let (guard, _, a) = guard_held(&self.actors, &self.pack, id)?;
+        let share = guard.fall_damage?;
+        (a.frame.direction.dot(toward) > 0.0).then_some(share)
+    }
+    /// The clang of a guard taking a fall or crash along `toward`
+    /// ([`Self::guard_fall_share`]).
+    pub fn guard_fall_clang(&mut self, id: ActorId, toward: Vec3) {
+        if self.guard_fall_share(id, toward).is_none() {
+            return;
         }
+        let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, id) else {
+            return;
+        };
         let (explosion, middle, scale) = (guard.hit_explosion.clone(), body(a), a.frame.scale);
         self.burst(&explosion, id, middle, scale * 2.0);
-        amount * share
     }
     /// Remove one live projectile without exploding it (`killObjects`).
     pub fn remove_projectile(&mut self, projectile: u64) -> bool {
@@ -1385,15 +1366,9 @@ impl WeaponsWorld {
             self.mount(id, a, &left, 1);
         }
     }
-    /// The image an image brings into the left hand: its `left_image`, or
-    /// for v20's akimbo gun the one `AkimboGunImage::onMount` mounts.
+    /// The image an image brings into the left hand ([`Image::left_image`]).
     fn left_image(&self, image: &str) -> Option<String> {
-        let image = self.pack.images.get(image)?;
-        image.left_image.clone().or_else(|| {
-            Stock::of(image)
-                .left_image
-                .map(|left| native_id("image", left))
-        })
+        self.pack.images.get(image)?.left_image.clone()
     }
     /// The magazine of the gun in the right hand and the key its rounds
     /// are kept under: the tool slot it was drawn from ([`slot_key`]), or
@@ -2189,7 +2164,7 @@ impl WeaponsWorld {
                 .pack
                 .images
                 .get(image)
-                .is_some_and(|i| Stock::of(i).sport_keys == Some(SportKeys::Pass))
+                .is_some_and(|i| i.sport.and_then(|s| s.keys) == Some(SportKeys::Pass))
             {
                 self.events.push(Event::SportMovement {
                     actor: id,
@@ -2329,12 +2304,11 @@ impl WeaponsWorld {
         ensure!(self.events.len() < 8192, "Command event budget");
         ensure!((2..=4).contains(&trigger), "Invalid sport trigger");
         let a = self.actors.get(&id).context("Unknown actor")?;
-        let stock = a.images[0]
+        let held = a.images[0]
             .as_ref()
-            .and_then(|e| self.pack.images.get(&e.image))
-            .map(Stock::of);
+            .and_then(|e| self.pack.images.get(&e.image));
         let jet = trigger == 4 && !a.frame.can_jet;
-        let action = match stock.and_then(|s| s.sport_keys) {
+        let action = match held.and_then(|i| i.sport).and_then(|s| s.keys) {
             Some(SportKeys::Lateral) if jet && down => Some(SportAction::FootballLateral),
             Some(SportKeys::Pop) => Some(if trigger == 4 && down {
                 SportAction::SoccerPop
@@ -2348,9 +2322,15 @@ impl WeaponsWorld {
             self.sport_action(id, action)?;
             return Ok(());
         }
-        if down && stock.is_some_and(|s| s.fire == StockFire::ShootBasketball) {
+        // A ball's other keys swap it as its `onFire` does
+        // (`basketballImage::onBallTrigger`).
+        if down
+            && let Some(OnFire::Mount(next)) = held
+                .filter(|i| i.sport.is_some())
+                .and_then(|i| i.on_fire.clone())
+        {
             let mut a = self.actors.remove(&id).unwrap();
-            self.mount(id, &mut a, &native_id("image", "basketballShootImage"), 0);
+            self.mount(id, &mut a, &next, 0);
             self.actors.insert(id, a);
         }
         Ok(())
@@ -3095,7 +3075,6 @@ impl WeaponsWorld {
         script: &str,
         q: &mut impl Query,
     ) -> bool {
-        let stock = Stock::of(image);
         // An Add-On tool's own moments run its commands, then carry on. A
         // gun's `onFire` command runs and its projectile still flies, as a
         // v20 `Image::onFire` package calling `Parent::onFire` did (a
@@ -3143,18 +3122,11 @@ impl WeaponsWorld {
         } else {
             script.as_str()
         };
+        // The arm move a state's script played (`playThread(2, ...)`) is the
+        // state's own `arm`, played as it was entered.
+        let state_arm = image.states.get(e.state).is_some_and(|s| !s.arm.is_empty());
         match script {
-            "oncharge" => {
-                if let Some(arm) = stock.charge_arm {
-                    self.animation(id, arm);
-                }
-            }
-            "onabortcharge" | "onstopfire" => self.animation(id, "root"),
-            "onprefire" => {
-                if let Some(arm) = stock.prefire_arm {
-                    self.animation(id, arm);
-                }
-            }
+            "onabortcharge" | "onstopfire" if !state_arm => self.animation(id, "root"),
             "onfireakimbo" => {
                 if let Some(left) = &mut a.images[1] {
                     left.trigger = true;
@@ -3162,30 +3134,35 @@ impl WeaponsWorld {
             }
             "onfire" => {
                 if ported.is_none() {
-                    let fire = if image.command.is_some() {
-                        StockFire::HostTool
-                    } else {
-                        stock.fire
-                    };
-                    match fire {
-                        StockFire::Projectile => {}
-                        StockFire::HostTool => {
+                    if image.command.is_some() {
+                        self.events.push(Event::ToolFire {
+                            actor: id,
+                            image: image.id.clone(),
+                            hand: e.hand,
+                            command: image.command.clone(),
+                            tool: None,
+                        });
+                        return true;
+                    }
+                    match &image.on_fire {
+                        None => {}
+                        Some(OnFire::Tool(tool)) => {
                             self.events.push(Event::ToolFire {
                                 actor: id,
                                 image: image.id.clone(),
                                 hand: e.hand,
-                                command: image.command.clone(),
-                                tool: image.command.is_none().then_some(stock.host_tool).flatten(),
+                                command: None,
+                                tool: Some(*tool),
                             });
                             return true;
                         }
-                        StockFire::Skis => return self.fire_skis(id, a),
-                        StockFire::Key => {
+                        Some(OnFire::Skis) => return self.fire_skis(id, a),
+                        Some(OnFire::Key) => {
                             self.fire_key(id, a, image, q);
                             return true;
                         }
-                        StockFire::ShootBasketball => {
-                            self.mount(id, a, &native_id("image", "basketballShootImage"), 0);
+                        Some(OnFire::Mount(next)) => {
+                            self.mount(id, a, next, 0);
                             if let Some(new) = &mut a.images[0] {
                                 new.trigger = e.trigger;
                             }
@@ -3214,8 +3191,8 @@ impl WeaponsWorld {
                 if sport && self.tick < a.ball_ready {
                     return true;
                 }
-                if stock.spawn_grace_ticks > 0 && self.tick < a.spawn_tick + stock.spawn_grace_ticks
-                {
+                let grace = image.sport.map_or(0, |s| u64::from(s.spawn_grace_ticks));
+                if grace > 0 && self.tick < a.spawn_tick + grace {
                     return true;
                 }
                 if a.last_shot
@@ -3294,9 +3271,10 @@ impl WeaponsWorld {
                 }
                 let mut velocity = direction * speed + a.frame.velocity * p.inherit;
                 if sport {
-                    let (power, up) = stock.throw;
+                    let sport = image.sport.unwrap_or_default();
+                    let [power, up] = sport.throw;
                     velocity = direction * power + Vec3::Y * up + a.frame.velocity;
-                    if stock.aimed_throw {
+                    if sport.aimed_throw {
                         let target = q.sweep(
                             a.frame.eye,
                             a.frame.eye + direction * 20.0,
@@ -3471,7 +3449,7 @@ impl WeaponsWorld {
                         return true;
                     }
                     if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
-                        p.was_thrown = stock.thrown;
+                        p.was_thrown = image.sport.is_some_and(|s| s.thrown);
                         p.paint = e.paint;
                     }
                     // A cooked grenade flies with what is left of its fuse.
@@ -3524,16 +3502,10 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                if ported.is_some() {
-                    // The port played its own arm animation.
-                } else if let Some(arm) = stock.throw_arm {
-                    self.animation(id, arm);
-                } else if image.states.get(e.state).is_some_and(|s| !s.arm.is_empty()) {
-                    // The state played the arm's own animation already.
+                if ported.is_some() || state_arm {
+                    // The port or the state played the arm's own animation.
                 } else if e.hand == 1 {
                     self.animation(id, "leftrecoil");
-                } else if let Some(arm) = stock.recoil_arm {
-                    self.animation(id, arm);
                 }
                 if sport {
                     self.ball_released(id, a.frame.eye);
@@ -3755,7 +3727,7 @@ impl WeaponsWorld {
                     });
                 }
                 if let TargetId::Actor(target) = hit.target {
-                    let dodge = StockProjectile::of(&d) == Some(StockProjectile::Dodgeball);
+                    let dodge = d.sport_hit == Some(SportHit::KnockOut);
                     if dodge && !p.bounced && allowed {
                         self.events.push(Event::Damage {
                             source: p.source,
@@ -3831,13 +3803,14 @@ impl WeaponsWorld {
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
                 self.children(p, c, set);
             }
-            if d.sport_image.is_some() && d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed {
-                let item = if StockProjectile::of(&d) == Some(StockProjectile::Football) {
-                    "footballItem"
-                } else {
-                    "soccerBallItem"
-                };
-                let item = native_id("weapon", item);
+            // `onRest`: at rest it is the item that holds its ball's image.
+            if let Some(item) = d
+                .sport_image
+                .as_ref()
+                .filter(|_| d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed)
+                .and_then(|image| self.pack.items.iter().find(|(_, it)| &it.image == image))
+                .map(|(id, _)| id.clone())
+            {
                 self.events.push(Event::BallRest {
                     projectile: p.id,
                     item: item.clone(),
@@ -3949,12 +3922,12 @@ impl WeaponsWorld {
         let (hurt, push) = stop
             .as_ref()
             .map_or((1.0, 1.0), |(_, g)| (g.projectile_damage, g.push));
-        if StockProjectile::of(d) == Some(StockProjectile::HorseRay) {
+        if let Some(player_type) = &d.turns_into {
             if let TargetId::Actor(actor) = target {
                 self.events.push(Event::HorseTransform {
                     source: p.source,
                     target: actor,
-                    player_type: "v20.player.horsearmor".into(),
+                    player_type: player_type.clone(),
                     dismount: true,
                     reapply_colors: true,
                 });
@@ -4664,9 +4637,8 @@ pub fn key_matches(key: [f32; 3], brick: [f32; 3]) -> bool {
     diff <= 0.1
 }
 mod sports;
-mod stock;
+
 pub use sports::SportAction;
-use stock::{Ball, SportKeys, Stock, StockFire, StockProjectile};
 
 mod persistence;
 pub use persistence::{SAVE_SCHEMA, WeaponsSave};

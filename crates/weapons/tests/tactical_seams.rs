@@ -72,7 +72,7 @@ impl Query for Range {
 
 /// A pistol whose bullet arrives at once, and a dual pair of them.
 const PISTOLS: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "kit",
     "items": {
         "kit:weapon/pistol": { "ui_name": "Pistol", "image": "kit:image/pistol" },
@@ -387,7 +387,7 @@ fn left_images_and_hitscans_are_checked() {
 /// that sprays sparks in flight, a firebomb that bursts into embers that
 /// burn whatever stands near them.
 const THROWN: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "kit",
     "items": {},
     "images": {},
@@ -623,7 +623,7 @@ fn a_vertical_recoil_pushes_only_up_or_down() {
 /// A rifle whose first round after a pause is a truer one, and a machine
 /// gun whose every pull fires a second, free and tighter round.
 const AUTOMATICS: &str = r#"{
-    "schema_version": 3,
+    "schema_version": 4,
     "id": "kit",
     "items": {
         "kit:weapon/rifle": { "ui_name": "Rifle", "image": "kit:image/rifle" },

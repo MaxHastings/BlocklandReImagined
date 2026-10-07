@@ -416,3 +416,29 @@ fn a_respawned_body_starts_without_its_light() {
     assert!(s.vitals()[&a].alive);
     assert!(!s.vitals()[&a].light);
 }
+
+#[test]
+fn fall_harm_predicts_the_fall_rule_without_hurting() {
+    // The harm a bot reads for a landing is the fall rule step_combat
+    // applies: too soft hurts nothing, a hard landing hurts by its speed,
+    // and with the host's Falling Damage off nothing hurts.
+    for on in [true, false] {
+        let mut s = session();
+        s.set_server_settings(bri_admin::ServerSettings {
+            falling_damage: on,
+            ..Default::default()
+        })
+        .unwrap();
+        let a = s
+            .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        assert_eq!(s.fall_harm(a, Vec3::new(0.0, -1.0, 0.0)), 0.0);
+        let hard = s.fall_harm(a, Vec3::new(0.0, -40.0, 0.0));
+        if on {
+            assert!(hard > 0.0, "a 40 unit/s landing hurts");
+        } else {
+            assert_eq!(hard, 0.0, "Falling Damage off");
+        }
+        assert_eq!(s.vitals()[&a].health, 100.0, "asking hurts nobody");
+    }
+}

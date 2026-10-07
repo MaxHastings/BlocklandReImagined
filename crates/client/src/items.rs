@@ -178,6 +178,9 @@ pub struct ItemAssets {
     drawing: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// Each skinned image's skin and shader (`ItemSkin`).
     skins: BTreeMap<String, (ItemSkin, SkinShader)>,
+    /// The building mechanism each tool item's image runs, by item id
+    /// (the image's declared [`bri_weapons::OnFire::Tool`]).
+    pub host_tools: BTreeMap<String, bri_weapons::HostTool>,
 }
 /// An icon drawn from its model (`crate::item_icon_render`), once it is.
 pub type DrawnIcon = std::sync::Arc<std::sync::OnceLock<SceneImage>>;
@@ -615,6 +618,8 @@ impl ItemAssets {
             32 * 1024 * 1024,
         )?;
         let pack = bri_weapons::Pack::from_json(&weapons)?;
+        let mut host_tools = BTreeMap::new();
+        host_tools_of(&pack, &pack, &mut host_tools);
         ensure!(
             pack.items.keys().all(|id| manifest.items.contains_key(id))
                 && pack
@@ -723,6 +728,7 @@ impl ItemAssets {
                 .with_context(|| format!("Add-On {dir}: weapons.json"))?;
             let part_pack = bri_weapons::Pack::from_json(&weapons)
                 .with_context(|| format!("Add-On {dir}: weapons.json"))?;
+            host_tools_of(&part_pack, &pack, &mut host_tools);
             if abs.join("presentation.json").is_file() {
                 match read_part(&abs, &weapons, &part_pack) {
                     Ok((part, physics)) => merge_part(
@@ -1010,6 +1016,7 @@ impl ItemAssets {
             drawn: BTreeMap::new(),
             drawing: Default::default(),
             skins,
+            host_tools,
         };
         for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
             match assets.icon_request(&item, &dir, spec) {
@@ -1772,6 +1779,24 @@ fn icon_render(
 /// importer copies `iconName`'s PNG to `textures/<hash>.png` and lists the
 /// original path in `resources`. The name without `.png`, as [`own_icon`]
 /// takes it.
+/// Adds `part`'s tool items whose image (its own, else `base`'s) runs a
+/// host building mechanism.
+fn host_tools_of(
+    part: &bri_weapons::Pack,
+    base: &bri_weapons::Pack,
+    out: &mut BTreeMap<String, bri_weapons::HostTool>,
+) {
+    for (id, item) in &part.items {
+        if let Some(tool) = part
+            .images
+            .get(&item.image)
+            .or_else(|| base.images.get(&item.image))
+            .and_then(bri_weapons::host_tool)
+        {
+            out.insert(id.clone(), tool);
+        }
+    }
+}
 fn imported_picture<'a>(pack: &'a bri_weapons::Pack, name: &str) -> Option<&'a str> {
     let path = format!("{}.png", name.replace('\\', "/"));
     pack.resources
@@ -2274,7 +2299,7 @@ mod add_on_icon_tests {
             )?;
         }
         let weapons = json!({
-            "schema_version": 3, "id": "tool",
+            "schema_version": 4, "id": "tool",
             "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
                 "model": "models/tool.shape.json", "icon": "icons/pick", "can_drop": false } },
             "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.shape.json",

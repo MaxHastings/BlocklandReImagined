@@ -30,7 +30,7 @@ const GUN: &str = "t:image/gun";
 fn pack() -> Pack {
     Pack::from_json(
         br#"{
-  "schema_version": 3,
+  "schema_version": 4,
   "id": "t",
   "items": {
     "t:weapon/gun": { "ui_name": "Gun", "image": "t:image/gun" },

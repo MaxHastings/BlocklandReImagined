@@ -89,6 +89,9 @@ fn rocket_pack() -> bri_weapons::Pack {
         paint_picker: false,
         scripts: Default::default(),
         states,
+        on_fire: None,
+        sport: None,
+        riding_image: None,
     };
     let item = bri_weapons::Item {
         id: ROCKET.into(),
@@ -158,6 +161,8 @@ fn rocket_pack() -> bri_weapons::Pack {
         slow: None,
         fixed_damage: false,
         collision_sound: None,
+        sport_hit: None,
+        turns_into: None,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),
