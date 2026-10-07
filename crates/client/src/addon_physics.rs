@@ -923,6 +923,72 @@ mod tests {
         assert!((-2.0..-1.0).contains(&y), "rests on the new map: {y}");
     }
 
+    /// Flat terrain `height` up, over x and z -16..16.
+    fn flat_terrain(height: f32) -> Arc<bri_content::terrain_field::TerrainField> {
+        use bri_content::terrain_field::*;
+        use bri_content::{Terrain, TerrainLayer};
+        let side = 16u32;
+        let count = (side * side) as usize;
+        let terrain = Terrain {
+            schema_version: 1,
+            id: "flat".into(),
+            side,
+            elevations: vec![height; count],
+            primary_layers: vec![0; count],
+            layers: vec![TerrainLayer {
+                slot: 0,
+                material: "t".into(),
+                weights: vec![u8::MAX; count],
+            }],
+        };
+        let instance = TerrainInstance {
+            schema_version: TERRAIN_INSTANCE_SCHEMA,
+            node: 0,
+            terrain: "flat".into(),
+            square_size: 2.0,
+            origin: [-16.0, 0.0, 16.0],
+            repeat: false,
+            repeat_source: RepeatSource::Authored,
+            empty_runs: vec![],
+            detail: None,
+            bump: TerrainBump {
+                texture: None,
+                scale: 1.0,
+                offset: 0.0,
+                zero_scale: 8,
+            },
+            diagnostics: vec![],
+        };
+        Arc::new(TerrainField::new(terrain, &instance).unwrap())
+    }
+
+    #[test]
+    fn after_a_map_change_bodies_feel_only_the_new_maps_bricks_and_terrain() {
+        // A body resting on one map's terrain and brick, then on another map
+        // with neither: it falls to the new map's floor, and nothing of the
+        // old map stays solid.
+        let (mut old, _) = crate::brick_debris::tests::building(&[(7, [4.0, 3.3, 0.0])]);
+        let ground = 3.0;
+        old.attach_terrain(vec![flat_terrain(ground)]);
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.0, ground + 2.0, 0.0), 0),
+        }]);
+        run(&mut physics, &old, 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!(
+            (ground..ground + 1.0).contains(&y),
+            "rests on the old map's terrain: {y}"
+        );
+        assert!(physics.surroundings.len() > 1, "its terrain and brick");
+        let (new, _) = crate::brick_debris::tests::building(&[]);
+        run(&mut physics, &new, 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!((0.0..1.0).contains(&y), "fell to the new map's floor: {y}");
+        assert!(physics.surroundings.is_empty(), "nothing of the old map");
+    }
+
     #[test]
     fn a_ragdoll_slides_down_a_ramp_and_stays_down() {
         // Max, v0.1.8: on some ramps the ragdoll "goes down and then

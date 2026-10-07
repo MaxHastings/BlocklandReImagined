@@ -95,7 +95,8 @@ impl Surroundings {
                 .map(|collider| world.insert_collider(collider.clone(), None))
                 .collect();
             self.map_generation = building.map_generation();
-            world.wake_up_all(true);
+            // Another map: none of the old bricks or terrain belong to it.
+            self.clear(world);
         }
         if self.generation == building.query_generation() {
             return false;
