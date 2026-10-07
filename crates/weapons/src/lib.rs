@@ -2725,7 +2725,7 @@ impl Pack {
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema_version == SCHEMA,
-            "Unknown weapon schema {} (this build reads {SCHEMA}): regenerate the packs with              `python tools/bootstrap.py --rebuild weapons --rebuild item_presentation`, which              also rebuilds the bundled Add-Ons",
+            "Unknown weapon schema {} (this build reads {SCHEMA}): regenerate the packs with `python tools/bootstrap.py --rebuild weapons --rebuild item_presentation`, which also rebuilds the bundled Add-Ons",
             self.schema_version
         );
         settings::validate(self)?;
