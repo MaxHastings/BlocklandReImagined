@@ -787,6 +787,42 @@ fn converging_players_do_not_pass_through_each_other() {
 }
 
 #[test]
+fn living_players_walk_through_a_fresh_corpse() {
+    // Max, v0.2.5: a dead body blocked living players for its five seconds
+    // until it was cleared. v20's dead bodies block nobody.
+    let mut s = session();
+    let a = s
+        .join("A".into(), Vec3::new(-2.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = s
+        .join("B".into(), Vec3::new(2.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    s.command(b, 1, Command::Suicide).unwrap();
+    let corpse = body(&s, b).feet[0];
+    for tick in 0..240 {
+        s.movement(
+            a,
+            tick + 1,
+            MoveInput {
+                right: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    assert!(!s.is_alive(b), "still a corpse");
+    let walked = body(&s, a).feet[0];
+    assert!(
+        walked > corpse + 1.5,
+        "walked past the corpse at x {corpse}: {walked}"
+    );
+}
+
+#[test]
 fn physical_touch_enters_event_scheduler_once() {
     let mut s = session();
     s.set_event_catalog(bri_events::testing::catalog(), Vec::new())

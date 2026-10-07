@@ -241,6 +241,7 @@ pub fn state(
         addon_editable: Vec::new(),
         palette: Vec::new(),
         addon_locked: Vec::new(),
+        addon_locked_new: Vec::new(),
         teams_shown_when: None,
     }
 }
@@ -398,6 +399,12 @@ pub fn with_addon_settings(
             (MiniGameId(g.id), keys)
         })
         .filter(|(_, keys)| !keys.is_empty())
+        .collect();
+    let creator = (local != 0).then_some(local);
+    state.addon_locked_new = settings
+        .iter()
+        .filter(|s| !rank.allows(s.def.editor, creator))
+        .map(AddOnSetting::key)
         .collect();
     state.teams_shown_when = teams_shown_when.map(|w| ui_shown_when(w.setting.clone(), w));
     state.palette = palette

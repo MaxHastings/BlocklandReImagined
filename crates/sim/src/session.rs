@@ -2654,9 +2654,10 @@ impl Session {
             }
         };
         contain("events", self.start_event_tick(tick + 1));
-        let thinking = std::time::Instant::now();
+        let thinking = crate::cpu_time::thread();
         let bots = self.step_bots();
-        self.bots.think_nanos += thinking.elapsed().as_nanos() as u64;
+        self.bots.think_nanos +=
+            (crate::cpu_time::thread().saturating_sub(thinking)).as_nanos() as u64;
         contain("bots", bots);
         let mut touches = Vec::new();
         let mut impacts = Vec::new();

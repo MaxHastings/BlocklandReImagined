@@ -1,0 +1,7 @@
+# Windows releases link the C runtime statically, so bri-client.exe,
+# bri-server.exe and bri-import-addon.exe start on a PC that has never
+# installed the Visual C++ Redistributable (v0.2.5 imported VCRUNTIME140.dll
+# and VCRUNTIME140_1.dll and shipped neither). Setting RUSTFLAGS in the
+# environment replaces this, so CI and tools leave it unset.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

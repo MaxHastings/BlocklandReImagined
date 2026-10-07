@@ -43,10 +43,8 @@ struct Hold {
     velocity: Vec3,
     max_accel: f32,
 }
-/// A push not yet given: an impulse, at a point or through the centre.
-/// Pushes are forces over the next step, which is how a body jointed into
-/// a multibody (a ragdoll's limb) takes them: its velocity is the
-/// multibody's to set.
+/// A push not yet given: an impulse, at a point or through the centre,
+/// given as a force over the next step.
 struct Kick {
     handle: RigidBodyHandle,
     impulse: Vec3,
@@ -55,6 +53,12 @@ struct Kick {
 /// How far ahead (units) soft CCD looks for contacts: one step at the
 /// fastest a body may go (`MAX_SPEED`), so nothing passes through a plate.
 const SOFT_CCD: f32 = bri_client_sandbox::bodies::MAX_SPEED * STEP;
+/// Joint solver passes per step. A ragdoll's joints are impulse joints
+/// (a multibody, solved exactly, cost 1 ms a frame per tumbling Blockhead
+/// on Max's PC, so a few deaths at once put the Ragdoll over its physics
+/// budget and the game stopped it). Four passes keep a thrown Blockhead's
+/// joints within 0.004 of each other, against 0.027 with one.
+const JOINT_PASSES: usize = 4;
 /// How a hold pulls: a spring of this frequency (radians/s), critically
 /// damped, so a held body swings to the target without ringing.
 const HOLD_FREQUENCY: f32 = 18.0;
@@ -107,6 +111,7 @@ impl Default for AddOnPhysics {
                 // limbs apart on landing; bodies use soft CCD instead.
                 let mut world = crate::local_physics::new_world();
                 world.integration_parameters.max_ccd_substeps = 0;
+                world.integration_parameters.num_internal_pgs_iterations = JOINT_PASSES;
                 world
             },
             bodies: BTreeMap::new(),
@@ -184,22 +189,88 @@ impl AddOnPhysics {
             }
         }
     }
-    /// The mass a force on `handle` moves: the whole multibody it is
-    /// jointed into (a ragdoll held by one hand), else its own.
+    /// `handle` and every body jointed to it, directly or through others
+    /// (a whole ragdoll from one limb).
+    fn jointed(&self, handle: RigidBodyHandle) -> std::collections::HashSet<RigidBodyHandle> {
+        let joints = &self.world.impulse_joints;
+        let mut seen = std::collections::HashSet::from([handle]);
+        let mut next = vec![handle];
+        while let Some(body) = next.pop() {
+            for (a, b, _, _) in joints.attached_joints(body) {
+                for other in [a, b] {
+                    if seen.insert(other) {
+                        next.push(other);
+                    }
+                }
+            }
+        }
+        seen
+    }
+    /// The mass a force on `handle` moves: every body jointed to it (a
+    /// ragdoll held by one hand), itself included.
     fn carried_mass(&self, handle: RigidBodyHandle) -> f32 {
-        let joints = &self.world.multibody_joints;
-        joints
-            .rigid_body_link(handle)
-            .and_then(|link| joints.get_multibody(link.multibody))
-            .map_or_else(
-                || self.world.bodies[handle].mass(),
-                |multibody| {
-                    multibody
-                        .links()
-                        .map(|l| self.world.bodies[l.rigid_body_handle()].mass())
-                        .sum()
-                },
-            )
+        self.jointed(handle)
+            .iter()
+            .map(|h| self.world.bodies[*h].mass())
+            .sum()
+    }
+    /// Whether any body of `group` lies on the world (the map, a brick,
+    /// terrain): touching, within the solver's own allowed error, a fixed
+    /// surface flat enough to be a floor by the player's own rule
+    /// ([`bri_sim::player::FLOOR_DOT`]). A wall it leans on holds nothing up.
+    fn lies_on_world(&self, group: &std::collections::HashSet<RigidBodyHandle>) -> bool {
+        let touching = self.world.integration_parameters.allowed_linear_error();
+        let fixed = |c: ColliderHandle| {
+            self.world
+                .colliders
+                .get(c)
+                .is_some_and(|c| c.parent().is_none())
+        };
+        group.iter().any(|h| {
+            self.world.bodies[*h].colliders().iter().any(|c| {
+                self.world.narrow_phase.contact_pairs_with(*c).any(|pair| {
+                    // The normal points from the first collider to the
+                    // second; turned here to point from the surface into
+                    // the body it touches.
+                    let (other, up) = if pair.collider1 == *c {
+                        (pair.collider2, -1.0)
+                    } else {
+                        (pair.collider1, 1.0)
+                    };
+                    fixed(other)
+                        && pair
+                            .find_deepest_contact()
+                            .is_some_and(|(manifold, point)| {
+                                point.dist <= touching
+                                    && manifold.data.normal.y * up > bri_sim::player::FLOOR_DOT
+                            })
+                })
+            })
+        })
+    }
+    /// Lay the oldest moving body that lies on the world still, with
+    /// everything jointed to it (the oldest ragdoll down on the floor), so
+    /// the next frames cost less: the game calls this when simulating the
+    /// Add-On's bodies took longer than its budget, and old bodies come to
+    /// rest while new ones keep moving. Bodies in the air are never stopped
+    /// there. A settled body moves again when something hits or holds it.
+    /// Returns whether a group was settled.
+    pub fn settle_oldest(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        for handle in self.bodies.values().map(|b| b.handle) {
+            if seen.contains(&handle) || self.world.bodies[handle].is_sleeping() {
+                continue;
+            }
+            let group = self.jointed(handle);
+            seen.extend(group.iter().copied());
+            if self.lies_on_world(&group) {
+                for handle in group {
+                    self.world.bodies[handle].sleep();
+                }
+                return true;
+            }
+        }
+        false
     }
     /// This step's forces: the pushes waiting (`kicks`, all at once) and
     /// each hold pulling its point toward its target. Returns the bodies
@@ -263,7 +334,7 @@ impl AddOnPhysics {
             .angular_damping(spec.angular_damping)
             // Predictive (soft) CCD: it adds contacts ahead of a fast body
             // instead of moving it back along its sweep, which would pull
-            // one limb of a multibody away from the rest.
+            // one limb away from the rest.
             .soft_ccd_prediction(SOFT_CCD);
         let (handle, _) = self.world.insert(body, collider);
         if let Some(old) = self.bodies.insert(
@@ -301,44 +372,8 @@ impl AddOnPhysics {
             .motor_velocity(JointAxis::AngX, 0.0, spec.friction)
             .motor_velocity(JointAxis::AngY, 0.0, spec.friction)
             .motor_velocity(JointAxis::AngZ, 0.0, spec.friction);
-        let (h1, h2) = (first.handle, second.handle);
-        // A tree of joints (a ragdoll) is solved exactly as one multibody,
-        // so limbs never drift apart however hard they are thrown; impulse
-        // joints stretched a Blockhead's joints by 0.19 on a rocket
-        // landing. A joint that would close a loop is an impulse joint.
-        let joint: GenericJoint = joint.into();
-        // Joining starts a multibody still: it keeps the motion of the body
-        // at its root (a ragdoll's torso, made moving as its corpse was).
-        let root = |world: &PhysicsWorld| {
-            let joints = &world.multibody_joints;
-            joints
-                .rigid_body_link(h1)
-                .and_then(|link| joints.get_multibody(link.multibody))
-                .and_then(|multibody| multibody.link(0))
-                .map_or(h1, |link| link.rigid_body_handle())
-        };
-        let moving = root(&self.world);
-        let (linvel, angvel) = {
-            let rb = &self.world.bodies[moving];
-            (rb.linvel(), rb.angvel())
-        };
-        if self.world.insert_multibody_joint(h1, h2, joint).is_none() {
-            self.world.insert_impulse_joint(h1, h2, joint);
-            return;
-        }
-        let joints = &mut self.world.multibody_joints;
-        if let Some(link) = joints.rigid_body_link(moving).copied()
-            && link.id == 0
-            && let Some(multibody) = joints.get_multibody_mut(link.multibody)
-        {
-            let mut velocity = multibody.generalized_velocity_mut();
-            if velocity.len() >= 6 {
-                for i in 0..3 {
-                    velocity[i] = linvel[i];
-                    velocity[3 + i] = angvel[i];
-                }
-            }
-        }
+        self.world
+            .insert_impulse_joint(first.handle, second.handle, joint);
     }
 
     /// Advance by `dt` seconds with this frame's pushers and shots.
@@ -391,7 +426,25 @@ impl AddOnPhysics {
                 point: Some(strike.point),
             });
         }
-        self.surroundings.sync(&mut self.world, building);
+        let rebuilt = self.surroundings.sync(&mut self.world, building);
+        if rebuilt {
+            // A brick that appeared under or in a resting body wakes it.
+            for body in self.bodies.values() {
+                let rb = &self.world.bodies[body.handle];
+                if !rb.is_sleeping() {
+                    continue;
+                }
+                let around =
+                    Surroundings::reach(vec3(rb.translation()), Vec3::ZERO, body.extent, 0.0);
+                if self
+                    .surroundings
+                    .load(&mut self.world, building, &[around], |_| false)?
+                    > 0
+                {
+                    self.world.wake_up(body.handle, true);
+                }
+            }
+        }
         self.accumulator += dt;
         let mut steps = (self.accumulator / STEP) as u32;
         if steps > MAX_STEPS {
@@ -526,7 +579,7 @@ mod tests {
 
     #[test]
     fn a_body_at_top_speed_stops_on_a_thin_brick() {
-        // Soft CCD (no swept clamping, which tore multibody joints apart)
+        // Soft CCD (no swept clamping, which tore ragdoll joints apart)
         // must still stop the fastest body on one brick high in the air.
         let (building, _) = crate::brick_debris::tests::building(&[(7, [0.0, 5.1, 0.0])]);
         let mut physics = AddOnPhysics::default();
@@ -584,6 +637,217 @@ mod tests {
         let end = physics.snapshot();
         assert!(end[&1].position[1] < 1.5, "fell together: {end:?}");
         assert!(gap(&end) < 0.6, "held by the joint: {}", gap(&end));
+    }
+
+    #[test]
+    fn a_build_change_elsewhere_leaves_resting_bodies_alone() {
+        // Max, v0.2.5: ragdolls stopped working in busy minigames. Any brick
+        // changing anywhere (a door, a blinking light) dropped every brick
+        // round every body and woke them all, so ragdolls never rested and
+        // their physics outran the Add-On's budget, which stops it.
+        let (mut building, mut world) =
+            crate::brick_debris::tests::building(&[(7, [0.0, 5.1, 0.0])]);
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.0, 6.0, 0.0), 0),
+        }]);
+        run(&mut physics, &building, 3.0);
+        assert!(physics.snapshot()[&1].resting, "settled on the brick");
+        let solid = physics.surroundings.len();
+        // A brick far away comes and goes.
+        for _ in 0..4 {
+            if world.bricks.remove(&8).is_none() {
+                world.bricks.insert(
+                    8,
+                    bri_world::Brick::new(
+                        bri_world::ContentRef::Resolved("brick".into()),
+                        [40.0, 0.3, 40.0],
+                        1,
+                    ),
+                );
+            }
+            assert!(building.sync_world(&world).unwrap(), "the build changed");
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            assert!(physics.snapshot()[&1].resting, "left resting");
+            assert_eq!(physics.surroundings.len(), solid, "nothing rebuilt");
+        }
+        // The brick it lies on goes: it falls to the ground.
+        world.bricks.remove(&7);
+        building.sync_world(&world).unwrap();
+        run(&mut physics, &building, 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!(y < 1.0, "fell when its brick went: {y}");
+    }
+
+    #[test]
+    fn a_brick_built_into_a_resting_body_wakes_it() {
+        let (mut building, mut world) = crate::brick_debris::tests::building(&[]);
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.6, 1.0, 0.0), 0),
+        }]);
+        run(&mut physics, &building, 3.0);
+        assert!(physics.snapshot()[&1].resting, "settled on the ground");
+        world.bricks.insert(
+            7,
+            bri_world::Brick::new(
+                bri_world::ContentRef::Resolved("brick".into()),
+                [1.0, 0.3, 0.0],
+                1,
+            ),
+        );
+        building.sync_world(&world).unwrap();
+        let before = physics.snapshot()[&1].position;
+        run(&mut physics, &building, 2.0);
+        let after = physics.snapshot()[&1].position;
+        assert!(
+            after != before,
+            "the brick built into it moved it: {after:?}"
+        );
+    }
+
+    /// Three bodies in a jointed row from `first`, `y` up, group `group`.
+    fn chain(first: u32, y: f32, group: u32) -> Vec<PhysicsCommand> {
+        let mut commands = Vec::new();
+        for (n, x) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+            commands.push(PhysicsCommand::Create {
+                body: first + n as u32,
+                spec: spec(Vec3::new(x, y, group as f32 * 3.0), group),
+            });
+        }
+        for (a, x) in [(first, 0.25), (first + 1, 0.75)] {
+            commands.push(PhysicsCommand::Joint {
+                a,
+                b: a + 1,
+                spec: JointSpec {
+                    anchor: [x, y, group as f32 * 3.0],
+                    axis: [1.0, 0.0, 0.0],
+                    swing: 1.0,
+                    twist: 1.0,
+                    friction: 0.0,
+                },
+            });
+        }
+        commands
+    }
+
+    #[test]
+    fn settling_never_sticks_a_body_to_a_wall() {
+        // A corpse blasted against a wall touches the world but nothing holds
+        // it up: it slides down the wall, never frozen to it.
+        let wall = ColliderBuilder::cuboid(0.5, 20.0, 20.0).translation(Vector::new(2.0, 0.0, 0.0));
+        let definitions = bri_sim::definitions::Definitions {
+            entries: Default::default(),
+        };
+        let building = Building::new(definitions, vec![wall]).unwrap();
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&chain(1, 10.0, 1));
+        let mut touched = false;
+        for _ in 0..30 {
+            // Pressed against it, as a blast holds a body to a wall.
+            for body in 1..=3 {
+                physics.apply(&[PhysicsCommand::Push {
+                    body,
+                    velocity: [1.0, 0.0, 0.0],
+                }]);
+            }
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+            touched |= physics.snapshot()[&3].position[0] > 1.2;
+            assert!(!physics.settle_oldest(), "never frozen to the wall");
+        }
+        assert!(touched, "it reached the wall");
+        let y = physics.snapshot()[&1].position[1];
+        assert!(y < 9.0, "slid down the wall: {y}");
+    }
+
+    #[test]
+    fn settling_lays_the_oldest_ragdoll_on_the_floor_still_never_one_in_the_air() {
+        // Max, v0.2.5 bot match: "Ragdoll stopped: its physics were too
+        // heavy". Over budget, the oldest ragdoll lying on the floor comes to
+        // rest instead; one thrown into the air flies on.
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        // The oldest, high in the air; a newer one sliding along the floor.
+        physics.apply(&chain(1, 8.0, 1));
+        physics.apply(&chain(4, 0.3, 2));
+        for body in 4..=6 {
+            physics.apply(&[PhysicsCommand::Push {
+                body,
+                velocity: [4.0, 0.0, 0.0],
+            }]);
+        }
+        run(&mut physics, &building, 0.1);
+        assert!(physics.settle_oldest(), "the one on the floor settles");
+        let settled = physics.snapshot();
+        run(&mut physics, &building, 0.1);
+        let now = physics.snapshot();
+        for body in 4..=6 {
+            assert_eq!(
+                now[&body].position, settled[&body].position,
+                "{body}, on the floor, lies still"
+            );
+        }
+        for body in 1..=3 {
+            assert!(
+                now[&body].position[1] < settled[&body].position[1] - 0.2,
+                "{body} keeps falling"
+            );
+        }
+        // Only the one in the air is moving: nothing settles in mid-air.
+        assert!(!physics.settle_oldest(), "never stopped in the air");
+        let airborne = physics.snapshot();
+        run(&mut physics, &building, 0.1);
+        assert!(physics.snapshot()[&1].position[1] < airborne[&1].position[1]);
+        // Down on the floor and still tumbling, it settles too.
+        run(&mut physics, &building, 0.8);
+        assert!(physics.settle_oldest(), "landed");
+    }
+
+    #[test]
+    fn a_hold_lifts_everything_jointed_to_the_body_it_holds() {
+        // The Gravity Gun holding a ragdoll by one hand carries the whole
+        // Blockhead, not just the hand's own weight.
+        let building = floor();
+        let mut physics = AddOnPhysics::default();
+        let mut commands = Vec::new();
+        for (n, x) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+            commands.push(PhysicsCommand::Create {
+                body: n as u32 + 1,
+                spec: spec(Vec3::new(x, 0.3, 0.0), 3),
+            });
+        }
+        for (a, x) in [(1, 0.25), (2, 0.75)] {
+            commands.push(PhysicsCommand::Joint {
+                a,
+                b: a + 1,
+                spec: JointSpec {
+                    anchor: [x, 0.3, 0.0],
+                    axis: [1.0, 0.0, 0.0],
+                    swing: 1.0,
+                    twist: 1.0,
+                    friction: 0.0,
+                },
+            });
+        }
+        physics.apply(&commands);
+        let target = Vec3::new(0.0, 3.0, 0.0);
+        for _ in 0..120 {
+            physics.apply(&[PhysicsCommand::Hold {
+                body: 1,
+                point: [0.0; 3],
+                target: target.to_array(),
+                velocity: [0.0; 3],
+                max_accel: 400.0,
+            }]);
+            physics.advance(1.0 / 60.0, &building, &[], &[]).unwrap();
+        }
+        let held = physics.snapshot()[&1];
+        assert!(
+            Vec3::from(held.position).distance(target) < 0.5,
+            "held up with the rest hanging from it: {held:?}"
+        );
     }
 
     #[test]
@@ -822,6 +1086,72 @@ mod tests {
         assert!((-2.0..-1.0).contains(&y), "rests on the new map: {y}");
     }
 
+    /// Flat terrain `height` up, over x and z -16..16.
+    fn flat_terrain(height: f32) -> Arc<bri_content::terrain_field::TerrainField> {
+        use bri_content::terrain_field::*;
+        use bri_content::{Terrain, TerrainLayer};
+        let side = 16u32;
+        let count = (side * side) as usize;
+        let terrain = Terrain {
+            schema_version: 1,
+            id: "flat".into(),
+            side,
+            elevations: vec![height; count],
+            primary_layers: vec![0; count],
+            layers: vec![TerrainLayer {
+                slot: 0,
+                material: "t".into(),
+                weights: vec![u8::MAX; count],
+            }],
+        };
+        let instance = TerrainInstance {
+            schema_version: TERRAIN_INSTANCE_SCHEMA,
+            node: 0,
+            terrain: "flat".into(),
+            square_size: 2.0,
+            origin: [-16.0, 0.0, 16.0],
+            repeat: false,
+            repeat_source: RepeatSource::Authored,
+            empty_runs: vec![],
+            detail: None,
+            bump: TerrainBump {
+                texture: None,
+                scale: 1.0,
+                offset: 0.0,
+                zero_scale: 8,
+            },
+            diagnostics: vec![],
+        };
+        Arc::new(TerrainField::new(terrain, &instance).unwrap())
+    }
+
+    #[test]
+    fn after_a_map_change_bodies_feel_only_the_new_maps_bricks_and_terrain() {
+        // A body resting on one map's terrain and brick, then on another map
+        // with neither: it falls to the new map's floor, and nothing of the
+        // old map stays solid.
+        let (mut old, _) = crate::brick_debris::tests::building(&[(7, [4.0, 3.3, 0.0])]);
+        let ground = 3.0;
+        old.attach_terrain(vec![flat_terrain(ground)]);
+        let mut physics = AddOnPhysics::default();
+        physics.apply(&[PhysicsCommand::Create {
+            body: 1,
+            spec: spec(Vec3::new(0.0, ground + 2.0, 0.0), 0),
+        }]);
+        run(&mut physics, &old, 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!(
+            (ground..ground + 1.0).contains(&y),
+            "rests on the old map's terrain: {y}"
+        );
+        assert!(physics.surroundings.len() > 1, "its terrain and brick");
+        let (new, _) = crate::brick_debris::tests::building(&[]);
+        run(&mut physics, &new, 2.0);
+        let y = physics.snapshot()[&1].position[1];
+        assert!((0.0..1.0).contains(&y), "fell to the new map's floor: {y}");
+        assert!(physics.surroundings.is_empty(), "nothing of the old map");
+    }
+
     #[test]
     fn a_ragdoll_slides_down_a_ramp_and_stays_down() {
         // Max, v0.1.8: on some ramps the ragdoll "goes down and then
@@ -900,8 +1230,7 @@ mod tests {
 
     #[test]
     fn jointed_bodies_keep_the_motion_they_were_made_with() {
-        // Joining makes a multibody, which would start still: a ragdoll
-        // lost its corpse's motion and its pop.
+        // A ragdoll keeps its corpse's motion and its pop once joined.
         let building = floor();
         let mut physics = AddOnPhysics::default();
         let mut commands = Vec::new();

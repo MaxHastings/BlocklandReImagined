@@ -1,7 +1,8 @@
 # Blockland ReImagined on a Mac
 
 This is the same game as the Windows release, built for Apple Silicon Macs
-(M1 and newer). `PLAYTEST.md` covers what to try; this page covers only what
+(M1 and newer). Intel Macs can't run it: macOS says the app isn't supported
+on this Mac. `PLAYTEST.md` covers what to try; this page covers only what
 is different on a Mac.
 
 ## Start
@@ -13,7 +14,8 @@ is different on a Mac.
    **Done**, open System Settings → Privacy & Security, scroll to
    "BlocklandReImagined was blocked" and click **Open Anyway**. On older macOS
    versions, right-click the app, choose **Open** and confirm instead. macOS
-   remembers the choice.
+   remembers the choice. If the game then can't start, it shows an alert
+   saying why, with a button that opens the logs folder.
 3. The first launch of each build copies the game content (about 600 MB) to
    `~/Library/Application Support/BlocklandReImagined/content/<build>` and plays
    from there, because an app must not change itself. It takes a few seconds.

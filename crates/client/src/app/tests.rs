@@ -1617,19 +1617,23 @@ fn a_lost_connection_rejoins_the_address_not_the_server_name() -> anyhow::Result
 fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen()
 -> anyhow::Result<()> {
     use super::*;
+    /// The outer guard: how long loading may take, and the compile is held.
+    const HELD_STALL: Duration = Duration::from_secs(300);
     let f = ContentRoot::synthetic()?;
     let state = f.state()?;
     let mut app = App::load(&f.root, state.path(), (320, 240))?;
     let gpu = bri_ui::gpu::Headless::new()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     app.gpu_ready(&gpu.device, &gpu.queue, format)?;
-    // The compile finishes only when the test says so.
+    // The compile finishes only when the test says so. A frame that waited
+    // on it would never return, so the hold also ends after the stall
+    // guard: that frame then returns with the pipelines built, and fails.
     let (release, held) = std::sync::mpsc::channel::<()>();
     let device = gpu.device.clone();
     app.gpu.renderer = Some(crate::gpu_build::Building::spawn(
         "held scene pipelines",
         move || {
-            let _ = held.recv();
+            let _ = held.recv_timeout(HELD_STALL);
             SceneRenderer::new(&device, format)
         },
     ));
@@ -1649,9 +1653,8 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
     });
     let view = target.create_view(&Default::default());
     let mut ui = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
-    // A frame as the platform draws it; how long it took.
-    let mut frame = |app: &mut App| -> anyhow::Result<(bool, Duration)> {
-        let start = std::time::Instant::now();
+    // A frame as the platform draws it.
+    let mut frame = |app: &mut App| -> anyhow::Result<bool> {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         let drew = app.render_scene(&mut RenderContext {
             device: &gpu.device,
@@ -1663,7 +1666,7 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
             ui_renderer: &mut ui,
         })?;
         gpu.queue.submit([encoder.finish()]);
-        Ok((drew, start.elapsed()))
+        Ok(drew)
     };
     app.ui.core.request(UiAction::HostGame {
         map: f.map.0.clone(),
@@ -1699,10 +1702,10 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
                     "entered before the world's pipelines compiled"
                 );
             }
-            let (drew, took) = frame(&mut app)?;
+            let drew = frame(&mut app)?;
             ensure!(
-                took < Duration::from_secs(2),
-                "a frame waited {took:?} on the compile"
+                !app.scene_pipelines_ready(),
+                "a frame waited on the held compile"
             );
             ensure!(!drew, "drew the world without its pipelines");
             if built {
@@ -1710,6 +1713,15 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
                 if held_frames == 20
                     && let Some(release) = release.take()
                 {
+                    // The loading screen names the wait instead of keeping
+                    // the last network stage's full bar up through it.
+                    let ConnectionState::Loading { status, .. } = &app.ui.core.conn else {
+                        anyhow::bail!("not loading while held: {:?}", app.ui.core.conn);
+                    };
+                    ensure!(
+                        status == "COMPILING SHADERS",
+                        "the held compile shows as {status:?}"
+                    );
                     // Compiled: the game enters and draws.
                     release.send(())?;
                 }
@@ -1718,14 +1730,14 @@ fn a_game_entered_before_the_world_pipelines_compile_waits_on_the_loading_screen
             break;
         }
         ensure!(
-            start.elapsed() < Duration::from_secs(300),
+            start.elapsed() < HELD_STALL,
             "never entered: {:?}",
             app.ui.core.conn
         );
         std::thread::sleep(Duration::from_millis(10));
     }
     let start = std::time::Instant::now();
-    while !frame(&mut app)?.0 {
+    while !frame(&mut app)? {
         ensure!(
             start.elapsed() < Duration::from_secs(60),
             "never drew the world once entered"

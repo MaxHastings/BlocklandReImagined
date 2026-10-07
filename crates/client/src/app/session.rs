@@ -728,6 +728,7 @@ impl App {
             reloading: false,
             progress,
             progress_seen: 0,
+            logged_stage: None,
             saved_revision: None,
             settling: None,
             identity_changed: Default::default(),
@@ -1026,6 +1027,7 @@ impl App {
             reloading: false,
             progress,
             progress_seen: 0,
+            logged_stage: None,
             saved_revision: None,
             settling: None,
             identity_changed,
@@ -1291,6 +1293,19 @@ impl App {
             || (a.entered && !a.reloading && snapshot.stage != bri_progress::Stage::ReceivingWorld)
         {
             return;
+        }
+        // Each stage the loading screen shows goes to the session log with
+        // how long the one before took, so a player's log says where a
+        // slow or stuck load sat.
+        if a.logged_stage
+            .is_none_or(|(stage, _)| stage != snapshot.stage)
+        {
+            let now = std::time::Instant::now();
+            let previous = a.logged_stage.map_or(String::new(), |(_, since)| {
+                format!(" (after {} ms)", now.duration_since(since).as_millis())
+            });
+            bri_console::echo(format!("Loading {map}: {}{previous}", snapshot.status()));
+            a.logged_stage = Some((snapshot.stage, now));
         }
         let preview = self
             .content

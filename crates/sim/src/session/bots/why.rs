@@ -160,9 +160,9 @@ impl Session {
             })
             .collect()
     }
-    /// Wall time this session has spent thinking for its bots
-    /// (`step_bots`), in nanoseconds: a diagnostic for the perf bar, never
-    /// game state.
+    /// CPU time this session's ticking thread has spent thinking for its
+    /// bots (`step_bots`), in nanoseconds ([`crate::cpu_time`]): a
+    /// diagnostic for the perf bar, never game state.
     pub fn bot_think_nanos(&self) -> u64 {
         self.bots.think_nanos
     }

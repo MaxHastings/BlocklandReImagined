@@ -1471,6 +1471,13 @@ impl Building {
             })
             .collect()
     }
+    /// The shape and pose `id` is solid with, as [`Self::colliding_bricks`]
+    /// gives it; `None` when it is gone or no longer solid.
+    pub fn solid_brick(&self, id: BrickId) -> Option<(SharedShape, Pose)> {
+        let brick = self.bricks.get(&id).filter(|b| b.colliding)?;
+        let shape = self.definitions.get(brick).ok()?.shape.clone();
+        Some((shape, brick_pose(brick)))
+    }
 
     pub fn archetypes(&self) -> &bri_sim::archetype::Archetypes {
         &self.archetypes

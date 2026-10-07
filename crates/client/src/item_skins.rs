@@ -88,7 +88,6 @@ pub struct ItemSkins {
     /// This frame's draws: the player's view, then mirrors'.
     frames: [Frame; 2],
     renderers: Option<[LayerRenderer; 2]>,
-    messages: Vec<String>,
 }
 
 impl Default for ItemSkins {
@@ -106,7 +105,6 @@ impl Default for ItemSkins {
             meshes: BTreeMap::new(),
             frames: Default::default(),
             renderers: None,
-            messages: Vec::new(),
         }
     }
 }
@@ -128,7 +126,7 @@ impl ItemSkins {
                     }
                     // Checked when the item was read; kept out if not.
                     Err(error) => {
-                        skins.messages.push(format!("{}: {error}", shader.name));
+                        bri_console::warn(format!("{}: {error}", shader.name));
                         continue;
                     }
                 },
@@ -233,9 +231,7 @@ impl ItemSkins {
             .as_ref()
             .is_some_and(|a| Arc::ptr_eq(a, items.assets()))
         {
-            let messages = std::mem::take(&mut self.messages);
             *self = Self::build(items.assets().clone());
-            self.messages.splice(0..0, messages);
         }
         if self.materials.is_empty() {
             return;
@@ -268,8 +264,7 @@ impl ItemSkins {
             if let Err(reason) =
                 renderer.prepare(device, queue, &mut self.source, frame, camera, [time, 0.])
             {
-                self.messages
-                    .push(format!("Item skins stopped, so items draw plain: {reason}"));
+                bri_console::warn(format!("Item skins stopped, so items draw plain: {reason}"));
                 for frame in &mut self.frames {
                     frame.draws.clear();
                 }
@@ -317,11 +312,6 @@ impl ItemSkins {
     /// The device went away or the pass changed shape: rebuild renderers.
     pub fn gpu_stopped(&mut self) {
         self.renderers = None;
-    }
-
-    /// Lines for the player since the last call.
-    pub fn take_messages(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.messages)
     }
 }
 
