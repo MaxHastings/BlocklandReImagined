@@ -1052,9 +1052,14 @@ impl App {
                         if let Some(image) = image {
                             hidden_nodes.extend(image.hide_nodes.iter().cloned());
                         }
-                        if let Some((right, left)) =
-                            bri_weapons::scripted_arm_pose(&mounted.image, &mounted.state)
-                        {
+                        let raised = image.and_then(|image| {
+                            image
+                                .states
+                                .iter()
+                                .find(|s| s.name == mounted.state)?
+                                .raised_arms
+                        });
+                        if let Some((right, left)) = raised {
                             ready_hands.extend([(0, right), (1, left)]);
                         } else if let Some(image) = image {
                             if image.both_arms {

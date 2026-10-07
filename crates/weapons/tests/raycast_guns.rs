@@ -43,7 +43,7 @@ impl Query for World {
 /// projectile carrying its damage. Its reload is three states, 30 ticks, the rounds arriving as
 /// `Reloaded` (`onReloaded`) is entered.
 const GUNS: &str = r#"{
-    "schema_version": 4,
+    "schema_version": 5,
     "id": "ray",
     "items": {
         "ray:weapon/pistol": { "ui_name": "Pistol", "image": "ray:image/pistol" },
@@ -362,7 +362,7 @@ fn bad_hitscans_and_slowdowns_are_refused() {
 /// stab, a fire state of its own, deals less than its slash (each set the
 /// damage field first).
 const KNIFE: &str = r#"{
-    "schema_version": 4,
+    "schema_version": 5,
     "id": "k",
     "items": { "k:weapon/knife": { "ui_name": "Knife", "image": "k:image/knife" } },
     "images": {
