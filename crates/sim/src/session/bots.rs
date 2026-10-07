@@ -3113,6 +3113,7 @@ impl Session {
             proposals.push(act::Proposal::walk(act::Mover::Stance, walk));
         }
         // A jet leg flies itself: climb in the open, cross, land.
+        let mut missed = None;
         match wanted.map(|w| (w.feet, w.mode)) {
             Some((
                 to,
@@ -3172,6 +3173,7 @@ impl Session {
                 );
                 // Replan from what happened.
                 if leg.failed(feet, state.grounded, body.step, seconds, tick) {
+                    missed = Some((from, to));
                     brain.leap_leg = None;
                     brain.plan.clear();
                     brain.search = None;
@@ -3366,11 +3368,18 @@ impl Session {
         let sequence = brain.sequence;
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
-            // What it walked toward and got nowhere: the grid avoids it a
-            // while, for every body of this size (`Nav::avoid`).
+            // What it walked toward and got nowhere: the grid avoids that
+            // way out of where it stands a while, for every body of this
+            // size (`Nav::avoid_walk`).
             if let Some(next) = wanted.filter(|w| w.through.is_none()) {
-                nav.avoid(next.feet, tick + AVOID_TICKS);
+                nav.avoid_walk(feet, next.feet, tick + AVOID_TICKS);
             }
+        }
+        // A leap that missed: that leap alone is avoided.
+        if let Some((from, to)) = missed
+            && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body)
+        {
+            nav.avoid(from, to, tick + AVOID_TICKS);
         }
         self.bot_act(
             bot,

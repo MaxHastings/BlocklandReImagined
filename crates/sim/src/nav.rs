@@ -39,10 +39,8 @@ use std::collections::BinaryHeap;
 
 /// Grid spacing, in world units: one brick stud.
 pub const CELL: f32 = 0.5;
-/// Cells either side of a place a body got nowhere walking into that the
-/// grid avoids with it (`Nav::avoid`), and how many it keeps at most
-/// before forgetting the lapsed ones.
-const AVOID_REACH: i32 = 1;
+/// Moves the grid avoids (`Nav::avoid`) it keeps at most before
+/// forgetting the lapsed ones.
 const MAX_AVOIDED: usize = 4096;
 /// Farthest (cells) a jet leg's landing moves off a goal someone stands on.
 const LANDING_RING: i32 = 4;
@@ -624,6 +622,21 @@ pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Ve
     pulled
 }
 
+/// A move of the grid: from one cell to another.
+type Move = ((i32, i32), (i32, i32));
+
+/// The eight cells round a cell.
+const NEIGHBOURS: [(i32, i32); 8] = [
+    (1, 0),
+    (-1, 0),
+    (0, 1),
+    (0, -1),
+    (1, 1),
+    (-1, -1),
+    (1, -1),
+    (-1, 1),
+];
+
 /// A step of the grid: the node it reaches, whether that takes a jump, the
 /// floor there, and the point it walks toward through an opening when the
 /// step goes through one.
@@ -643,11 +656,13 @@ pub struct Nav {
     pub sampled: u64,
     /// Floors found only off their cell's centre (settled), for probes.
     pub settled: u64,
-    /// Cells a body was seen to get nowhere walking into, with the tick
-    /// until which no step goes into them (`Nav::avoid`): what the samples
-    /// miss (a rail between cell centres, a lip the motor catches on), the
-    /// grid learns from what really happened.
-    avoid: FxHashMap<(i32, i32), u64>,
+    /// Moves, from one cell to another, a body was seen to fail (get
+    /// nowhere walking, miss a leap), with the tick until which the
+    /// search takes no such move (`Nav::avoid`): what the samples miss (a
+    /// rail between cell centres, a lip the motor catches on, a leap that
+    /// clips), the grid learns from what really happened, for that move
+    /// alone.
+    avoid: FxHashMap<Move, u64>,
     /// The tick, for what it avoids.
     now: u64,
 }
@@ -664,19 +679,29 @@ impl Nav {
             self.avoid.retain(|_, until| tick < *until);
         }
     }
-    /// A body got nowhere walking toward `at`: no step goes into the cells
-    /// round it until `until`, so routes find another way, or none.
-    pub fn avoid(&mut self, at: Vec3, until: u64) {
-        let (x, z) = cell_of(at);
-        for dx in -AVOID_REACH..=AVOID_REACH {
-            for dz in -AVOID_REACH..=AVOID_REACH {
-                self.avoid.insert((x + dx, z + dz), until);
+    /// A body failed the move from `from` to `to` (a leap that missed):
+    /// the search takes no such move until `until`, so routes find another
+    /// way, or none.
+    pub fn avoid(&mut self, from: Vec3, to: Vec3, until: u64) {
+        self.avoid.insert((cell_of(from), cell_of(to)), until);
+    }
+    /// A body standing at `feet` got nowhere walking toward `toward`: the
+    /// steps out of its cell that way (within half a turn of the eight
+    /// either side) are avoided until `until`.
+    pub fn avoid_walk(&mut self, feet: Vec3, toward: Vec3, until: u64) {
+        let from = cell_of(feet);
+        let heading = Vec3::new(toward.x - feet.x, 0.0, toward.z - feet.z).normalize_or_zero();
+        for (dx, dz) in NEIGHBOURS {
+            let step = Vec3::new(dx as f32, 0.0, dz as f32).normalize();
+            if heading != Vec3::ZERO && step.dot(heading) >= std::f32::consts::FRAC_1_SQRT_2 - 1e-3
+            {
+                self.avoid.insert((from, (from.0 + dx, from.1 + dz)), until);
             }
         }
     }
-    fn avoided(&self, x: i32, z: i32) -> bool {
+    fn avoided(&self, from: Node, x: i32, z: i32) -> bool {
         self.avoid
-            .get(&(x, z))
+            .get(&((from.x, from.z), (x, z)))
             .is_some_and(|until| self.now < *until)
     }
     pub fn clear(&mut self) {
@@ -784,7 +809,7 @@ impl Nav {
                 continue;
             }
             let (x, z) = (node.x + dx, node.z + dz);
-            if self.avoided(x, z) {
+            if self.avoided(node, x, z) {
                 continue;
             }
             let floors = self.floor(ground, body, x, z, from)?;
@@ -836,7 +861,7 @@ impl Nav {
             };
             let (dx, dz) = (AXES[a].0, AXES[b].1);
             // Corners are never cut through an opening.
-            if goes_in(dx, dz).is_some() || self.avoided(node.x + dx, node.z + dz) {
+            if goes_in(dx, dz).is_some() || self.avoided(node, node.x + dx, node.z + dz) {
                 continue;
             }
             let floors = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
@@ -1157,16 +1182,7 @@ impl Search {
         // Standing on an edge or a moving thing: try the cells around the
         // feet.
         let (x, z) = cell_of(self.started);
-        for (dx, dz) in [
-            (1, 0),
-            (-1, 0),
-            (0, 1),
-            (0, -1),
-            (1, 1),
-            (-1, -1),
-            (1, -1),
-            (-1, 1),
-        ] {
+        for (dx, dz) in NEIGHBOURS {
             let floor = nav.floor(
                 ground,
                 body,
@@ -1342,7 +1358,7 @@ impl Search {
                 if !take {
                     continue;
                 }
-                if !nav.avoided(x, z) {
+                if !nav.avoided(node, x, z) {
                     for f in floors.iter().filter(|f| !f.wet && !f.low) {
                         let to = Node::on(x, z, f);
                         let feet = to.feet();
@@ -2533,5 +2549,42 @@ mod tests {
         assert!(leaps(&up).len() >= levels, "{up:?}");
         let down = path(search(&physics, deck, bottom).0);
         assert!(leaps(&down).len() >= levels - 1, "{down:?}");
+    }
+
+    /// A leap a body missed is avoided alone: the route leaps the gap
+    /// another way.
+    #[test]
+    fn a_missed_leap_is_avoided_and_nothing_else() {
+        let physics = world(&[
+            column(-8.0, 0.0, -3.0, 3.0, 0.0),
+            column(2.0, 10.0, -3.0, 3.0, 0.0),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let (from, to) = (Vec3::new(-3.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 0.0));
+        let mut nav = Nav::default();
+        let route = |nav: &mut Nav| {
+            let mut search = Search::new(from, to, 60.0);
+            loop {
+                nav.begin_tick();
+                if let Some(found) = search.step(nav, &ground, &body()) {
+                    return path(found);
+                }
+            }
+        };
+        let first = leaps(&route(&mut nav))[0];
+        nav.avoid(first.0, first.1, u64::MAX);
+        let again = route(&mut nav);
+        let second = leaps(&again)[0];
+        assert!(
+            cell_of(second.0) != cell_of(first.0) || cell_of(second.1) != cell_of(first.1),
+            "{first:?} {second:?}"
+        );
     }
 }
