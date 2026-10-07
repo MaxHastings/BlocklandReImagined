@@ -39,8 +39,7 @@ fn old(name: &str) -> Old {
             Some("shiftleft")
         } else if name == "wrenchimage" {
             Some("wrench")
-        } else if has("sword") || matches!(name, "hammerimage" | "wandimage" | "adminwandimage")
-        {
+        } else if has("sword") || matches!(name, "hammerimage" | "wandimage" | "adminwandimage") {
             Some("armattack")
         } else {
             None
@@ -139,16 +138,29 @@ fn differences(pack: &Pack) -> Vec<String> {
         };
         differs("onFire arm", fire_arm, new_fire_arm);
         for script in ["onAbortCharge", "onStopFire"] {
-            differs(&format!("{script} arm"), Some("root"), arm(script).map(|a| a.or(Some("root".into()))));
+            differs(
+                &format!("{script} arm"),
+                Some("root"),
+                arm(script).map(|a| a.or(Some("root".into()))),
+            );
         }
         if o.on_fire != image.on_fire {
-            out.push(format!("{name} | on_fire | {:?} | {:?}", o.on_fire, image.on_fire));
+            out.push(format!(
+                "{name} | on_fire | {:?} | {:?}",
+                o.on_fire, image.on_fire
+            ));
         }
         if o.sport != image.sport.unwrap_or_default() {
-            out.push(format!("{name} | sport | {:?} | {:?}", o.sport, image.sport));
+            out.push(format!(
+                "{name} | sport | {:?} | {:?}",
+                o.sport, image.sport
+            ));
         }
         if o.left_image != image.left_image {
-            out.push(format!("{name} | left_image | {:?} | {:?}", o.left_image, image.left_image));
+            out.push(format!(
+                "{name} | left_image | {:?} | {:?}",
+                o.left_image, image.left_image
+            ));
         }
     }
     for p in pack.projectiles.values() {
@@ -163,7 +175,10 @@ fn differences(pack: &Pack) -> Vec<String> {
         }
         let turns = (name == "horserayprojectile").then(|| "v20.player.horsearmor".to_owned());
         if turns != p.turns_into {
-            out.push(format!("{name} | turns_into | {turns:?} | {:?}", p.turns_into));
+            out.push(format!(
+                "{name} | turns_into | {turns:?} | {:?}",
+                p.turns_into
+            ));
         }
         // A resting ball became the football's item or else the soccer
         // ball's; now the item that holds its ball's image.
@@ -176,7 +191,11 @@ fn differences(pack: &Pack) -> Vec<String> {
                     "soccerBallItem"
                 },
             );
-            let now = pack.items.iter().find(|(_, i)| &i.image == image).map(|(id, _)| id.clone());
+            let now = pack
+                .items
+                .iter()
+                .find(|(_, i)| &i.image == image)
+                .map(|(id, _)| id.clone());
             if Some(&was) != now.as_ref() {
                 out.push(format!("{name} | rest item | {was:?} | {now:?}"));
             }

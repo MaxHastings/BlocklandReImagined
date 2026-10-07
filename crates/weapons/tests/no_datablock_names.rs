@@ -7,7 +7,10 @@
 fn the_runtime_never_matches_datablock_names() {
     let sources = [
         ("runtime.rs", include_str!("../src/runtime.rs")),
-        ("runtime/sports.rs", include_str!("../src/runtime/sports.rs")),
+        (
+            "runtime/sports.rs",
+            include_str!("../src/runtime/sports.rs"),
+        ),
         (
             "runtime/persistence.rs",
             include_str!("../src/runtime/persistence.rs"),

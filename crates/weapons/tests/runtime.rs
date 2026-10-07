@@ -555,10 +555,9 @@ fn spear_short_charge_cancels_long_charge_releases(fx: &Fx) {
     w.trigger(ActorId(1), false).unwrap();
     let e = run(&mut w, 1, &mut q);
     assert_eq!(shots(&e), 1);
-    assert!(
-        e.iter()
-            .any(|e| matches!(e,Event::Animation{sequence,..} if sequence.eq_ignore_ascii_case("spearThrow")))
-    );
+    assert!(e.iter().any(
+        |e| matches!(e,Event::Animation{sequence,..} if sequence.eq_ignore_ascii_case("spearThrow"))
+    ));
 }
 fn sword_and_broom_short_reach_with_distinct_damage(fx: &Fx) {
     let (sword, lift) = (fx.expect.sword_damage, fx.expect.broom_lift);

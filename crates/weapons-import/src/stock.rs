@@ -43,8 +43,10 @@ fn uncommented(body: &str) -> String {
     body.lines()
         .map(|l| l.find("//").map_or(l, |i| &l[..i]))
         .collect::<Vec<_>>()
-        .join("
-")
+        .join(
+            "
+",
+        )
 }
 
 /// Fills the stock images' and projectiles' script behaviour: arms and the
@@ -163,11 +165,16 @@ mod tests {
         assert_eq!(script_arm("%obj.playThread(1, armReadyRight);"), None);
         assert_eq!(script_arm("// %obj.playThread(2, root);"), None);
         assert_eq!(
-            left_hand_image("Parent::onMount(%this,%obj,%slot); %obj.mountImage(LeftHandedGunImage, 1);")
-                .as_deref(),
+            left_hand_image(
+                "Parent::onMount(%this,%obj,%slot); %obj.mountImage(LeftHandedGunImage, 1);"
+            )
+            .as_deref(),
             Some("LeftHandedGunImage")
         );
-        assert_eq!(left_hand_image("%obj.mountImage(basketballShootImage,0);"), None);
+        assert_eq!(
+            left_hand_image("%obj.mountImage(basketballShootImage,0);"),
+            None
+        );
     }
 
     #[test]

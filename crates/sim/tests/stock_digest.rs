@@ -93,7 +93,7 @@ fn session(f: &Fixture, item: &str) -> Session {
 /// the trigger as a change (Some) or left as it is (None).
 fn plan(tick: usize) -> (Option<bool>, bool, bool) {
     let trigger = match tick {
-        140 => Some(true),  // a tap
+        140 => Some(true), // a tap
         148 => Some(false),
         300 => Some(true), // a long hold, a charge
         420 => Some(false),
@@ -101,7 +101,11 @@ fn plan(tick: usize) -> (Option<bool>, bool, bool) {
         900 => Some(false),
         _ => None,
     };
-    (trigger, (700..760).contains(&tick), (800..840).contains(&tick))
+    (
+        trigger,
+        (700..760).contains(&tick),
+        (800..840).contains(&tick),
+    )
 }
 
 #[test]
@@ -156,7 +160,15 @@ fn every_stock_item_plays_the_same() {
                     .map(|i| i.image.clone());
             }
             let p = digester.parts(&s);
-            (p.world, p.players, p.weapons, p.vehicles, p.minigames, p.packages, p.chat)
+            (
+                p.world,
+                p.players,
+                p.weapons,
+                p.vehicles,
+                p.minigames,
+                p.packages,
+                p.chat,
+            )
                 .hash(&mut digest);
         }
         let digest = digest.finish();

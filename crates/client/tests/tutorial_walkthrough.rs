@@ -748,7 +748,10 @@ fn break_down(p: &mut Player, stand: Vec2, x: f32, z: f32, face: f32, floor: f32
 fn hammer(p: &mut Player) -> Result<()> {
     // "Run over the hammer to pick it up", then take it out.
     pick_up(p, "v20.weapon.hammeritem")?;
-    take_out(p, bri_client::building::Equipment::Tool(bri_weapons::HostTool::Break))?;
+    take_out(
+        p,
+        bri_client::building::Equipment::Tool(bri_weapons::HostTool::Break),
+    )?;
     // The hammer only breaks the top of a stack: take down both stacks in
     // the doorway (its lintel leaves no room to stand on a brick).
     let stand = Vec2::new(21.5, 110.6);
@@ -860,7 +863,10 @@ fn ride(p: &mut Player) -> Result<()> {
     // "Run over the wrench to pick it up", take it out and put a horse on
     // the vehicle spawn.
     pick_up(p, "v20.weapon.wrenchitem")?;
-    take_out(p, bri_client::building::Equipment::Tool(bri_weapons::HostTool::Inspect))?;
+    take_out(
+        p,
+        bri_client::building::Equipment::Tool(bri_weapons::HostTool::Inspect),
+    )?;
     p.walk_to(Vec2::new(-5.5, 118.0), 0.3)?;
     wrench_vehicle(p, Vec3::new(-5.5, 94.6, 121.0), "Horse")?;
     p.until("the horse", 5.0, |p| vehicle_at(p, HORSE).is_some())?;
@@ -938,7 +944,10 @@ fn wrench(p: &mut Player) -> Result<()> {
         0.2,
         |_| Ok(()),
     )?;
-    take_out(p, bri_client::building::Equipment::Tool(bri_weapons::HostTool::Inspect))?;
+    take_out(
+        p,
+        bri_client::building::Equipment::Tool(bri_weapons::HostTool::Inspect),
+    )?;
     // Light, then an emitter, then an item on the cone, as each prompt asks.
     let cone = Vec3::new(-38.5, 95.8, 106.0);
     for (asks, menu) in [
@@ -974,7 +983,10 @@ fn print(p: &mut Player) -> Result<()> {
         |_| Ok(()),
     )?;
     pick_up(p, "v20.weapon.printgun")?;
-    take_out(p, bri_client::building::Equipment::Tool(bri_weapons::HostTool::Print))?;
+    take_out(
+        p,
+        bri_client::building::Equipment::Tool(bri_weapons::HostTool::Print),
+    )?;
     // Spell OINKMOO: shoot each print brick and press its letter.
     for (i, letter) in "oinkmoo".chars().enumerate() {
         let name = format!("_TutorialPrintBrick{}", i + 1);

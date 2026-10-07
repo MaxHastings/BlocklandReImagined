@@ -168,10 +168,9 @@ impl WeaponsWorld {
                         },
                 240,
             ),
-            SportAction::SoccerDrop => (
-                forward * 2.0 + a.frame.velocity * 2.0 + Vec3::Y * 5.0,
-                240,
-            ),
+            SportAction::SoccerDrop => {
+                (forward * 2.0 + a.frame.velocity * 2.0 + Vec3::Y * 5.0, 240)
+            }
         };
         let held_image = self.pack.images.get(&image.image);
         let sport = held_image.and_then(|i| i.sport);

@@ -3054,7 +3054,10 @@ impl Pack {
             }
             if let Some(sport) = &image.sport {
                 ensure!(
-                    sport.throw.iter().all(|v| v.is_finite() && v.abs() <= 1000.0)
+                    sport
+                        .throw
+                        .iter()
+                        .all(|v| v.is_finite() && v.abs() <= 1000.0)
                         && sport.spawn_grace_ticks <= 36_000,
                     "Invalid sport of image {id}: throw speeds within 1000, spawn_grace_ticks at most 36000"
                 );
@@ -3125,7 +3128,9 @@ impl Pack {
                 "Invalid max_bounces of projectile {id}: 0 to 64"
             );
             ensure!(
-                p.turns_into.as_ref().is_none_or(|t| !t.is_empty() && t.len() <= 128),
+                p.turns_into
+                    .as_ref()
+                    .is_none_or(|t| !t.is_empty() && t.len() <= 128),
                 "Invalid turns_into of projectile {id}: a player type id"
             );
             if let Some(c) = &p.collision_sound {

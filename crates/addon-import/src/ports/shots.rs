@@ -588,7 +588,11 @@ fn scripted(
             .as_object()
             .into_iter()
             .flatten()
-            .find(|(_, i)| i["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&left)))
+            .find(|(_, i)| {
+                i["name"]
+                    .as_str()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(&left))
+            })
     {
         patch["left_image"] = json!(id);
         super::handle(
