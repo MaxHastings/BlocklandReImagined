@@ -110,5 +110,8 @@ For v0.2.7:
 - A strafe limit round the place a bot fights from (tried as `Brain::stand`
   during the gate fixes, taken out): measure first; it changes how far
   every ranged bot holding position strafes.
+- A tighter bound for weapons that push when weighing places to stand:
+  today a pusher's bound is the target's whole health, so with v20 guns
+  (which push) every place is weighed on each planning turn.
 - The `all_dials_on` interference with tests running beside it is CPU
   contention (one worker per core), not shared dials.
