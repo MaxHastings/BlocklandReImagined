@@ -227,6 +227,17 @@ impl Session {
         // could beat it: no place's shot does more than its hardest-hitting
         // weapon at its quickest cycle, even unseen, after the walk there.
         let best = self.bot_best_attack(bot, seen.owner);
+        // Against what the chooser makes of the scores: here's at its
+        // least after the mind's terms, another's at its most.
+        let (low, high) = {
+            let brain = &self.bots.brains[&bot];
+            brain.surprise.reach(
+                &brain.kind.surprise,
+                brain.kind.team.copy,
+                surprise::Domain::Spot,
+                HERE,
+            )
+        };
         let beaten = |t: Terms| {
             best.is_none_or(|(dealt, fire)| {
                 places
@@ -234,7 +245,7 @@ impl Session {
                     .enumerate()
                     .filter(|(o, _)| *o != HERE as usize)
                     .filter_map(|(_, p)| *p)
-                    .any(|(_, travel)| dealt / (travel + fire) > t.score())
+                    .any(|(_, travel)| dealt / (travel + fire) * high > t.score() * low)
             })
         };
         if anchor.is_some() || terms[HERE as usize].is_none_or(|t| t.score() <= 0.0 || beaten(t)) {
@@ -607,5 +618,40 @@ mod tests {
                 away(anchor.at)
             );
         }
+    }
+
+    #[test]
+    fn a_bot_that_keeps_missing_from_here_is_offered_other_places() {
+        let offered = |s: &Session, bot: OwnerId| {
+            let brain = &s.bots.brains[&bot];
+            brain
+                .surprise
+                .view(&brain.kind.surprise)
+                .decisions
+                .iter()
+                .find(|d| d.domain == "spot")
+                .map_or(0, |d| d.candidates.len())
+        };
+        let (mut s, bot, seen) = fixture(None, bri_weapons::testing::GUN_ITEM, 8.0, 0);
+        let brain = s.bots.brains.get_mut(&bot).unwrap();
+        brain.kind.surprise.strength = 1.0;
+        stand(&mut s, bot, seen, 10);
+        assert_eq!(
+            offered(&s, bot),
+            1,
+            "a clear shot from here: only here is weighed"
+        );
+        let brain = s.bots.brains.get_mut(&bot).unwrap();
+        let cfg = brain.kind.surprise.clone();
+        for tick in 11..15 {
+            brain
+                .surprise
+                .outcome(&cfg, surprise::Domain::Spot, HERE, false, tick);
+        }
+        stand(&mut s, bot, seen, 16);
+        assert!(
+            offered(&s, bot) > 1,
+            "missing from here, it weighs other places"
+        );
     }
 }

@@ -300,6 +300,8 @@ pub(super) struct Shot {
     pub spawn: u64,
     pub health: f32,
     pub due: u64,
+    /// The place it fired from (`spots`), judged with the shot.
+    pub spot: Option<u32>,
 }
 
 /// Idle things a bot does when it goofs, each an ordinary player action.
@@ -675,6 +677,30 @@ impl Mind {
         let d = &mut self.drives[at];
         d.seen = (now + copy * 0.5).min(copy);
         d.seen_at = tick;
+    }
+    /// How far [`Self::pick`] can move scores at `domain`, as shares of the
+    /// plain score: the least `option`'s can come out (its lost
+    /// effectiveness, the band down) and the most any option's can (the
+    /// band up, then a teammate's copy at most `copy`). With the mind off
+    /// both are 1, but for a copy.
+    pub(super) fn reach(
+        &self,
+        cfg: &BotSurprise,
+        copy: f32,
+        domain: Domain,
+        option: u32,
+    ) -> (f32, f32) {
+        let strength = cfg.strength.clamp(0.0, 1.0);
+        let band = BAND * strength;
+        let effectiveness = self
+            .drives
+            .iter()
+            .find(|d| d.domain == domain && d.option == option)
+            .map_or(1.0, |d| d.effectiveness);
+        (
+            (1.0 - strength * (1.0 - effectiveness)) * (1.0 - band),
+            (1.0 + band) * (1.0 + copy.max(0.0)),
+        )
     }
     /// The option chosen at `domain`.
     pub(super) fn chosen(&self, domain: Domain) -> Option<u32> {
@@ -1163,6 +1189,11 @@ impl Session {
             if hit {
                 worked.push((Domain::Aim, shot.aim));
             }
+            // And the place it fired from: one it keeps missing from loses
+            // its pull, so another is weighed (`spots`).
+            if let Some(spot) = shot.spot {
+                brain.surprise.outcome(cfg, Domain::Spot, spot, hit, tick);
+            }
         }
         self.team_copy(bot, &worked, tick);
     }
@@ -1201,6 +1232,7 @@ impl Session {
             spawn,
             health,
             due: tick + ((flight + 0.6) * TICKS) as u64,
+            spot: brain.surprise.chosen(Domain::Spot),
         });
     }
     /// What playing is worth to the bot now, against which a goof weighs
