@@ -669,19 +669,34 @@ impl MiniGameScreen {
             }
         }
         // Which game the button opens: the picked one in the list, else the
-        // player's own.
+        // player's own; before Create, the new game's draft.
         let target = self.addons_target(core);
+        let draft = self.drafts_addons(core);
+        let teams_draft = draft
+            && (core.minigames.teams_shown_when.is_some()
+                || core.minigames.addon_settings.iter().any(|s| s.team));
         if let Some(n) = self.view.id(ADDONS_BUTTON) {
             self.view.set_visible(
                 n,
                 target.is_some() || !core.minigames.addon_settings.is_empty(),
             );
-            self.view.set_active(n, target.is_some());
+            self.view.set_active(n, target.is_some() || draft);
         }
         if let Some(n) = self.view.id(TEAMS_BUTTON) {
-            self.view.set_visible(n, target.is_some());
-            self.view.set_active(n, target.is_some());
+            self.view.set_visible(n, target.is_some() || teams_draft);
+            self.view.set_active(n, target.is_some() || teams_draft);
         }
+    }
+    /// The Create Mini-Game window before its game exists, with Add-On
+    /// settings to set up: Setup and Teams edit a draft that Create sends.
+    fn drafts_addons(&self, core: &Core) -> bool {
+        matches!(self.kind, Kind::Rules)
+            && core.minigames.active_game.is_none()
+            && !core.minigames.addon_settings.is_empty()
+            && core
+                .minigames
+                .can(crate::models::minigames::Operation::Create)
+            && self.request.is_none()
     }
     fn addons_target(&self, core: &Core) -> Option<MiniGameId> {
         match self.kind {
@@ -720,6 +735,10 @@ impl Screen for MiniGameScreen {
         if let Some(id) = self.request.take() {
             core.pending.remove(&id);
         }
+        // Closed without creating: the Setup draft goes with the window.
+        if matches!(self.kind, Kind::Rules) && !core.minigame_draft_created {
+            core.minigame_addon_draft = None;
+        }
     }
     fn on_update(&mut self, core: &mut Core) {
         if matches!(self.kind, Kind::Invite) && core.minigames.invitations.is_empty() {
@@ -742,6 +761,15 @@ impl Screen for MiniGameScreen {
         core.minigames.status = result
             .as_ref()
             .map_or_else(|e| e.clone(), |_| "Mini-game request completed.".into());
+        // The game Create made gets the Setup draft (`Core::send_minigame_draft`).
+        if matches!(self.kind, Kind::Rules)
+            && result.is_ok()
+            && matches!(kind, Some(Pending::MiniGame(MiniGameOperation::Create)))
+            && core.minigame_addon_draft.is_some()
+        {
+            core.minigame_draft_created = true;
+            core.send_minigame_draft();
+        }
         // clientCmdCreateMiniGameSuccess and clickReset close the editor.
         if matches!(self.kind, Kind::Rules) && result.is_ok() {
             core.pop(self.id);
@@ -812,8 +840,10 @@ impl Screen for MiniGameScreen {
         }
         let destination = command_of(&self.view, ev.node);
         if destination == ADDONS_BUTTON || destination == TEAMS_BUTTON {
-            if let Some(game) = self.addons_target(core) {
-                core.minigame_addons = Some(game);
+            let target = self.addons_target(core);
+            if target.is_some() || self.drafts_addons(core) {
+                // No game: the window edits the draft Create sends.
+                core.minigame_addons = target;
                 core.minigame_addons_teams = destination == TEAMS_BUTTON;
                 core.push(ScreenId::MiniGameAddOns);
             }

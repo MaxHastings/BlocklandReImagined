@@ -843,6 +843,151 @@ fn addon_settings_window_edits_settings_and_teams_and_sends_only_changes() {
     );
 }
 
+/// Max: having to create the mini-game before Setup and Teams work. Before
+/// Create they edit a draft, and Create's game gets it with a reset, as
+/// Save & Reset would.
+#[test]
+fn setup_and_teams_work_before_create_and_create_sends_them() {
+    let mut ui = test_ui();
+    let mut fresh = addon_state();
+    fresh.active_game = None;
+    fresh.addon_editable = vec![];
+    ui.apply(UiUpdate::MiniGames(fresh.clone()));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    let active = |ui: &Ui, name: &str| {
+        let v = ui.screen(ScreenId::MiniGameSettings).unwrap().view();
+        let n = v.id(name).unwrap();
+        v.node(n).state.visible && v.node(n).state.active
+    };
+    assert!(active(&ui, "NativeMiniGameAddOns"), "Setup before Create");
+    assert!(active(&ui, "NativeMiniGameTeams"), "Teams before Create");
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::MiniGameAddOns));
+    let shown = |ui: &mut Ui, name: &str| {
+        let v = addon_view(ui);
+        let n = v.id(name).unwrap();
+        v.node(n).state.visible
+    };
+    // Nothing to reset, end or tell yet, and nobody to assign.
+    for name in [
+        "AOS_Reset",
+        "AOS_End",
+        "AOS_ApplyReset",
+        "AOS_Notify",
+        "AOS_Players",
+    ] {
+        assert!(!shown(&mut ui, name), "{name} hidden before Create");
+    }
+    assert!(shown(&mut ui, "AOS_Apply"));
+    let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
+    addon_view(&mut ui).select(mode, Some(1));
+    addon_event(&mut ui, "AOS_S0", EventKind::Changed);
+    addon_event(&mut ui, "AOS_Teams", EventKind::Click);
+    for (t, name) in [(0, "Red"), (1, "Blue")] {
+        addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
+        let field = addon_view(&mut ui).id(&format!("AOS_T{t}_Name")).unwrap();
+        addon_view(&mut ui).set_text(field, name);
+    }
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    ui.update(0);
+    assert!(
+        !ui.is_open(ScreenId::MiniGameAddOns),
+        "Save goes back to Create"
+    );
+    assert!(
+        ui.drain_actions().is_empty(),
+        "nothing goes to the host before Create"
+    );
+    // Setup again shows the kept draft.
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
+    assert_eq!(addon_view(&mut ui).selected(mode), Some(1));
+    addon_event(&mut ui, "AOS_Close", EventKind::Click);
+    ui.update(0);
+
+    click(
+        &mut ui,
+        ScreenId::MiniGameSettings,
+        "CreateMiniGameGui.clickCreate();",
+    );
+    let (id, _) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, a)| matches!(a, UiAction::CreateMiniGame { .. }))
+        .unwrap();
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    ui.update(0);
+    assert!(!ui.is_open(ScreenId::MiniGameSettings));
+    assert!(ui.drain_actions().is_empty(), "the game is not listed yet");
+    // The host lists the new game as this player's.
+    let mut made = fresh;
+    made.revision = 2;
+    made.active_game = Some(MiniGameId(42));
+    made.owns_active_game = true;
+    made.addon_editable = vec![MiniGameId(42)];
+    made.games[0].teams.clear();
+    ui.apply(UiUpdate::MiniGames(made.clone()));
+    let sent: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+    let [
+        UiAction::EditMiniGameAddOns {
+            game,
+            settings,
+            teams,
+            reset,
+            ..
+        },
+    ] = sent.as_slice()
+    else {
+        panic!("Create's game gets the draft: {sent:?}")
+    };
+    assert_eq!(*game, MiniGameId(42));
+    assert!(*reset);
+    assert_eq!(
+        settings,
+        &vec![(
+            "slayer:mode".to_string(),
+            Some(MiniGameSettingValue::Text("ctf".into()))
+        )]
+    );
+    let names: Vec<_> = teams
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|t| (t.id, t.name.as_str()))
+        .collect();
+    assert_eq!(names, vec![(None, "Red"), (None, "Blue")]);
+    // Sent once.
+    made.revision = 3;
+    ui.apply(UiUpdate::MiniGames(made));
+    assert!(ui.drain_actions().is_empty());
+    assert!(ui.core.minigame_addon_draft.is_none());
+}
+
+/// Closing the Create window without creating drops its Setup draft.
+#[test]
+fn a_cancelled_create_forgets_its_setup_draft() {
+    let mut ui = test_ui();
+    let mut fresh = addon_state();
+    fresh.active_game = None;
+    fresh.addon_editable = vec![];
+    ui.apply(UiUpdate::MiniGames(fresh));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    let lives = addon_view(&mut ui).id("AOS_S1").unwrap();
+    addon_view(&mut ui).set_text(lives, "3");
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    ui.update(0);
+    assert!(ui.core.minigame_addon_draft.is_some());
+    ui.core.pop(ScreenId::MiniGameSettings);
+    ui.update(0);
+    assert!(ui.core.minigame_addon_draft.is_none());
+}
+
 #[test]
 fn addon_settings_window_refuses_bad_numbers_and_is_read_only_for_others() {
     let mut ui = test_ui();
