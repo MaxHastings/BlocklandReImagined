@@ -85,8 +85,7 @@ impl GroupSupport {
             sim.state(),
             &sim.definitions,
             &sim.index,
-            &sim.physics,
-            sim.terrain.as_ref(),
+            sim.ground(),
             actor,
             brick,
         )?;
@@ -127,15 +126,11 @@ impl GroupSupport {
                 Ok(true)
             };
         }
-        let is_terrain = |handle| {
-            sim.terrain
-                .as_ref()
-                .is_some_and(|t| t.is_terrain_collider(handle))
-        };
-        let map_surface = |handle, c: &Collider| c.user_data == MAP_TAG && !is_terrain(handle);
+        let ground = sim.ground();
+        let interior = |handle, c: &Collider| ground.interior(handle, c);
         let query = sim
             .physics
-            .query_pipeline_with_filter(QueryFilter::default().predicate(&map_surface));
+            .query_pipeline_with_filter(QueryFilter::default().predicate(&interior));
         loop {
             if self.remaining == 0 {
                 return Ok(true);
@@ -249,6 +244,9 @@ pub struct Simulation {
     holding: bool,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
+    /// The map colliders of static shapes (trees, props), which a plant
+    /// never asks about ([`Ground::interior`]).
+    map_statics: rustc_hash::FxHashSet<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
     /// Collision refreshes run so far (see `collision_refreshes`).
     refreshes: u64,
@@ -397,9 +395,17 @@ impl Simulation {
             }
         }
         let mut physics = bri_physics::new_world();
+        let mut map_statics = rustc_hash::FxHashSet::default();
         let map_handles = map
             .into_iter()
-            .map(|c| physics.insert_collider(c.user_data(MAP_TAG), None))
+            .map(|c| {
+                let shape = c.user_data == crate::map::MapSurface::Static as u128;
+                let handle = physics.insert_collider(c.user_data(MAP_TAG), None);
+                if shape {
+                    map_statics.insert(handle);
+                }
+                handle
+            })
             .collect();
         let mut index = Index::default();
         let mut handles = BTreeMap::new();
@@ -439,6 +445,7 @@ impl Simulation {
             parked: Default::default(),
             holding: false,
             map_handles,
+            map_statics,
             terrain: None,
             refreshes: 0,
             links: Default::default(),
@@ -629,6 +636,14 @@ impl Simulation {
             .map(|(min, max)| (Vec3::from(min), Vec3::from(max)))
             .collect()
     }
+    /// What a plant is judged against besides the bricks.
+    fn ground(&self) -> Ground<'_> {
+        Ground {
+            physics: &self.physics,
+            terrain: self.terrain.as_ref(),
+            statics: &self.map_statics,
+        }
+    }
     /// Stream the map's terrain collision around moving bodies and `anchors`
     /// (authored spawn regions). Replaces any previously attached terrain.
     pub fn attach_terrain(
@@ -816,13 +831,14 @@ impl Simulation {
         let bounds = Bounds::new(&brick, &definition.mesh)?;
         let defs = &self.definitions;
         let index = &self.index;
-        let physics = &self.physics;
-        let terrain = self.terrain.as_ref();
+        let ground = Ground {
+            physics: &self.physics,
+            terrain: self.terrain.as_ref(),
+            statics: &self.map_statics,
+        };
         let passages = self.links.passages();
         let id = self.authority.plant(builder.actor, brick, |world, brick| {
-            validate_placement(
-                world, defs, index, physics, terrain, passages, builder, brick,
-            )
+            validate_placement(world, defs, index, ground, passages, builder, brick)
         })?;
         self.attach(id)?;
         self.note_kind(id);
@@ -859,8 +875,7 @@ impl Simulation {
                 self.authority.state(),
                 &self.definitions,
                 &self.index,
-                &self.physics,
-                self.terrain.as_ref(),
+                self.ground(),
                 actor,
                 brick,
             )?;
@@ -955,8 +970,7 @@ impl Simulation {
             self.authority.state(),
             &self.definitions,
             &self.index,
-            &self.physics,
-            self.terrain.as_ref(),
+            self.ground(),
             actor,
             brick,
         )
@@ -1025,8 +1039,7 @@ impl Simulation {
             self.authority.state(),
             &self.definitions,
             &self.index,
-            &self.physics,
-            self.terrain.as_ref(),
+            self.ground(),
             actor,
             &brick,
         )?;
@@ -1061,8 +1074,7 @@ impl Simulation {
             self.authority.state(),
             &self.definitions,
             &self.index,
-            &self.physics,
-            self.terrain.as_ref(),
+            self.ground(),
             &engine,
             brick,
         )
@@ -1929,13 +1941,30 @@ fn overlaps_world(
         None => Ok(overlap),
     }
 }
-#[allow(clippy::too_many_arguments)]
+/// What a plant is judged against besides the bricks: the collision world,
+/// the map's streamed terrain, and which map colliders are static shapes.
+#[derive(Clone, Copy)]
+struct Ground<'a> {
+    physics: &'a PhysicsWorld,
+    terrain: Option<&'a crate::map::TerrainStream>,
+    statics: &'a rustc_hash::FxHashSet<ColliderHandle>,
+}
+impl Ground<'_> {
+    fn is_terrain(&self, handle: ColliderHandle) -> bool {
+        self.terrain.is_some_and(|t| t.is_terrain_collider(handle))
+    }
+    /// Map collision a plant asks about: v20's `fxDTSBrick::plant` tests
+    /// interiors (`InteriorObjectType`) and terrain, never static shapes
+    /// such as trees and props. Terrain is judged by [`buried_bounded`].
+    fn interior(&self, handle: ColliderHandle, collider: &Collider) -> bool {
+        collider.user_data == MAP_TAG && !self.is_terrain(handle) && !self.statics.contains(&handle)
+    }
+}
 fn validate_placement(
     world: &World,
     defs: &Definitions,
     index: &Index,
-    physics: &PhysicsWorld,
-    terrain: Option<&crate::map::TerrainStream>,
+    ground: Ground<'_>,
     passages: &bri_content::passage::Passages,
     builder: &Builder<'_>,
     brick: &Brick,
@@ -1954,7 +1983,7 @@ fn validate_placement(
         return Err(PlantFailure::TooFar.into());
     }
     let (supported, obstructed) =
-        check_placement_support(world, defs, index, physics, terrain, builder.actor, brick)?;
+        check_placement_support(world, defs, index, ground, builder.actor, brick)?;
     if !supported {
         return Err(if obstructed {
             PlantFailure::Buried
@@ -1967,29 +1996,30 @@ fn validate_placement(
 }
 /// Every plant rule but reach and support: no overlap, no building onto a
 /// brick the actor may not build on, not buried in the map or stuck in a
-/// body. Returns whether something already there holds the brick up (a
+/// vehicle. Returns whether something already there holds the brick up (a
 /// brick it connects to, or the map).
 fn check_placement(
     world: &World,
     defs: &Definitions,
     index: &Index,
-    physics: &PhysicsWorld,
-    terrain: Option<&crate::map::TerrainStream>,
+    ground: Ground<'_>,
     actor: &Actor,
     brick: &Brick,
 ) -> Result<bool> {
-    check_placement_support(world, defs, index, physics, terrain, actor, brick)
+    check_placement_support(world, defs, index, ground, actor, brick)
         .map(|(supported, _)| supported)
 }
 fn check_placement_support(
     world: &World,
     defs: &Definitions,
     index: &Index,
-    physics: &PhysicsWorld,
-    terrain: Option<&crate::map::TerrainStream>,
+    ground: Ground<'_>,
     actor: &Actor,
     brick: &Brick,
 ) -> Result<(bool, bool)> {
+    let Ground {
+        physics, terrain, ..
+    } = ground;
     let definition = defs.get(brick)?;
     let bounds = Bounds::new(brick, &definition.mesh)?;
     if overlaps_world(world, defs, index, brick, &definition.mesh, bounds)? {
@@ -1998,10 +2028,8 @@ fn check_placement_support(
     // A brick cannot provide support through an authored map surface. Test the
     // exact matching stud cells rather than inferring a filled volume from an
     // arbitrary (possibly open or disconnected) triangle mesh.
-    let is_terrain = |handle| terrain.is_some_and(|t| t.is_terrain_collider(handle));
-    let map_surface = |handle, c: &Collider| c.user_data == MAP_TAG && !is_terrain(handle);
-    let support_query =
-        physics.query_pipeline_with_filter(QueryFilter::default().predicate(&map_surface));
+    let interior = |handle, c: &Collider| ground.interior(handle, c);
+    let interiors = physics.query_pipeline_with_filter(QueryFilter::default().predicate(&interior));
     let mut supported = false;
     let mut obstructed_support = false;
     let mut work_left = SUPPORT_QUERY_LIMIT;
@@ -2042,7 +2070,7 @@ fn check_placement_support(
             if !may_build_on(actor, existing) {
                 return Err(PlantFailure::Forbidden.into());
             }
-            if map_connector_clear(&support_query, cell, neighbor) {
+            if map_connector_clear(&interiors, cell, neighbor) {
                 clear = true;
                 break;
             }
@@ -2050,28 +2078,23 @@ fn check_placement_support(
         supported |= clear;
         obstructed_support |= attached && !clear;
     }
+    if buried_in_interiors(&interiors, bounds) {
+        return Err(PlantFailure::Buried.into());
+    }
+    // Players and bots never refuse a brick: v20's plant does not ask about
+    // them, so a brick may go where one stands. Vehicles and other moving
+    // bodies still do, so a plant cannot fling them out of a brick.
     let placement = pose(brick);
-    // Some authored hulls extend below their logical build grid (the stock pine
-    // tree by 0.014544 units). Preserve that hull for physics, but allow its
-    // below-grid extent, plus FLOOR_DIP, at an upward-facing map surface only.
-    // Walls, ceilings and moving entities get no allowance.
-    let local_bottom = definition.shape.compute_local_aabb().mins.y;
-    let authored_below_grid =
-        (-(definition.mesh.height_plates as f32) * 0.1 - local_bottom).max(0.0);
     let aabb = definition.shape.compute_aabb(&placement);
-    let query = physics.query_pipeline();
-    // Terrain is judged by `buried_bounded` below, not by contact: v20 deploys a
-    // ghost aimed at terrain 0.1 into it, and a level brick on a slope dips
-    // into the uphill side, so terrain may reach above a brick's bottom.
     let mut contact_work = SUPPORT_QUERY_LIMIT;
-    for (handle, obstacle) in query.intersect_aabb_conservative(aabb) {
+    for (_, obstacle) in physics.query_pipeline().intersect_aabb_conservative(aabb) {
         probe_spend(&mut contact_work)?;
-        let eligible = (obstacle.user_data == MAP_TAG && !is_terrain(handle))
-            || (!obstacle.is_sensor()
-                && obstacle
-                    .parent()
-                    .is_some_and(|p| !physics.bodies[p].is_fixed()));
-        if !eligible {
+        let moving = !obstacle.is_sensor()
+            && !is_character(obstacle.user_data)
+            && obstacle
+                .parent()
+                .is_some_and(|p| !physics.bodies[p].is_fixed());
+        if !moving {
             continue;
         }
         if let Some(contact) = rapier3d::parry::query::contact(
@@ -2082,20 +2105,9 @@ fn check_placement_support(
             0.0,
         )
         .map_err(|_| anyhow::anyhow!("Unsupported obstacle/brick collision pair"))?
+            && contact.dist < -0.002
         {
-            let allowance = if obstacle.user_data == MAP_TAG && contact.normal2.y > 0.7 {
-                FLOOR_DIP + authored_below_grid
-            } else {
-                0.0
-            };
-            if contact.dist < -0.002 - allowance {
-                return Err(if obstacle.user_data == MAP_TAG {
-                    PlantFailure::Buried
-                } else {
-                    PlantFailure::Stuck
-                }
-                .into());
-            }
+            return Err(PlantFailure::Stuck.into());
         }
     }
     if let Some(t) = terrain {
@@ -2113,6 +2125,68 @@ fn check_placement_support(
         ground_probe(physics, terrain, bounds, Some(&mut floor_work))?
     };
     Ok((supported || grounded, obstructed_support))
+}
+/// A player's or a bot's body: [`bri_motor::player::Player::spawn`]'s tag,
+/// or a package entity's.
+fn is_character(tag: u128) -> bool {
+    let kind = tag >> 64;
+    kind == 1 || kind == crate::session::ENTITY_TAG >> 64
+}
+/// v20's map rule in `fxDTSBrick::plant` (0x53ec40), on the brick's grid
+/// box: an interior refuses it only where it crosses the brick's two centre
+/// lines (along x and along z at mid-height), or where, under one of a few
+/// footprint samples, the first interior surface below the top stands more
+/// than [`FLOOR_DIP`] above the bottom. So a brick may clip a corner of a
+/// wall or a ceiling, or dip into a floor, as in v20. Merely touching is not
+/// crossing: the lines stop just short of the faces, and run just above
+/// mid-height, where a plate sunk the whole [`FLOOR_DIP`] meets the floor.
+fn buried_in_interiors(interiors: &QueryPipeline<'_>, bounds: Bounds) -> bool {
+    const TOUCH: f32 = 0.002;
+    let min = Vec3::from_array(std::array::from_fn(|a| {
+        bounds.min[a] as f32 * grid::CELL[a]
+    }));
+    let size = Vec3::from_array(std::array::from_fn(|a| {
+        bounds.size[a] as f32 * grid::CELL[a]
+    }));
+    let center = min + size * 0.5 + Vec3::Y * TOUCH;
+    let hits = |origin: Vec3, direction: Vec3, length: f32| {
+        length > 0.0
+            && interiors
+                .cast_ray(
+                    &Ray::new(
+                        Vector::from_array(origin.to_array()),
+                        Vector::from_array(direction.to_array()),
+                    ),
+                    length,
+                    true,
+                )
+                .is_some()
+    };
+    for axis in [Vec3::X, Vec3::Z] {
+        let half = size.dot(axis) * 0.5 - TOUCH;
+        if hits(center + axis * half, -axis, 2.0 * half) {
+            return true;
+        }
+    }
+    // floor(width in units) samples a side, 1 to 4, at the centres of an
+    // even split of the footprint.
+    let samples = |width: f32| (width.floor() as usize).clamp(1, 4);
+    let (nx, nz) = (samples(size.x), samples(size.z));
+    let top = min.y + size.y - TOUCH;
+    let reach = top - (min.y - FLOOR_DIP);
+    for i in 0..nx {
+        for k in 0..nz {
+            let x = min.x + (i as f32 + 0.5) * size.x / nx as f32;
+            let z = min.z + (k as f32 + 0.5) * size.z / nz as f32;
+            let surface = interiors
+                .cast_ray(&Ray::new(Vector::new(x, top, z), -Vector::Y), reach, true)
+                .map(|(_, toi)| top - toi);
+            if surface.is_some_and(|y| y > min.y + FLOOR_DIP + TOUCH) {
+                return true;
+            }
+        }
+    }
+    false
 }
 /// A stud pair is a local physical connection, not a volume classification.
 fn map_connector_clear(query: &QueryPipeline<'_>, cell: [i32; 3], neighbor: [i32; 3]) -> bool {

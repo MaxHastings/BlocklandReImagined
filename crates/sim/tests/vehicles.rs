@@ -2159,6 +2159,64 @@ fn a_runover_is_the_drivers_kill_even_when_the_victim_walks_into_it() -> anyhow:
     Ok(())
 }
 
+/// `WheeledVehicleData::onCollision`: a player its builder does not trust
+/// lands on the jeep and is told why it will not seat them ("does not trust
+/// you enough to ride."), and once the builder has left the server, the
+/// jeep is anyone's to ride (trust is asked only of a builder present).
+#[test]
+fn an_untrusted_rider_is_told_why_and_an_absent_builders_jeep_is_anyones() -> anyhow::Result<()> {
+    let f = &Fixture::synthetic();
+    let mut s = session_changing(f, Some("Builder"), |_| {})?;
+    let builder = s.join_verified(
+        "Builder".into(),
+        Vec3::new(8.0, 0.05, 0.0),
+        false,
+        Some(BUILDER),
+    )?;
+    assert_eq!(builder, 1, "the spawn brick's builder");
+    let guest = s.join("Guest".into(), Vec3::new(0.0, 0.05, 0.0), false)?;
+    let mut p = Feeder {
+        owner: guest,
+        sequence: 0,
+    };
+    p.feed(&mut s, MoveInput::default(), 120)?;
+    s.take_private_notices();
+    assert!(p.board(&mut s, 0.0).is_err(), "the builder does not trust them");
+    let notices = s.take_private_notices();
+    assert!(
+        notices.iter().any(|(o, n)| *o == guest
+            && matches!(n, bri_sim::session::Notice::Center { text, .. }
+                if text == "Builder does not trust you enough to ride.")),
+        "{notices:?}"
+    );
+    s.disconnect(builder)?;
+    // Back to wherever the jeep is now, hopping on.
+    for i in 0..120 {
+        let jeep = Vec3::from(s.vehicle_poses()[0].position);
+        let feet = Vec3::from(
+            s.snapshot()
+                .players
+                .into_iter()
+                .find(|p| p.owner == guest)
+                .unwrap()
+                .feet,
+        );
+        let to = jeep - feet;
+        let input = MoveInput {
+            forward: 1.0,
+            jump: i % 3 == 0,
+            yaw: to.x.atan2(-to.z),
+            ..Default::default()
+        };
+        p.feed(&mut s, input, 10)?;
+        if s.mounted(guest).is_some() {
+            break;
+        }
+    }
+    assert!(s.mounted(guest).is_some(), "riding the absent builder's jeep");
+    Ok(())
+}
+
 /// A body that died on a parked jeep and respawns elsewhere jumps there:
 /// it must not sweep through the jeep at the speed of the jump. Its
 /// kinematic body once took the respawn as one step's travel, over 1000

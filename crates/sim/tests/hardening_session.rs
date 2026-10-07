@@ -659,7 +659,9 @@ fn wrench_asset_assignments_must_come_from_the_host_catalog() {
 
 /// Requests: A wrench hit, Tool(Inspect{Events}), then Tool(SetEvents) with
 /// MAX_EVENTS_PER_BRICK + 1 rows, a colour outside the palette, an unknown
-/// output, a delay over five minutes and five parameters.
+/// output, a delay over five minutes and five parameters. Too many rows
+/// refuse the edit; each bad row is left out (`serverCmdAddEvent` takes the
+/// lines one at a time), so none reaches the brick.
 #[test]
 fn event_rows_are_bounded_and_catalog_checked() {
     let mut g = Game::new(tooled());
@@ -696,18 +698,17 @@ fn event_rows_are_bounded_and_catalog_checked() {
             ..color_row(1)
         }],
     ];
-    for events in hostile {
+    for (index, events) in hostile.into_iter().enumerate() {
         let len = events.len();
-        assert!(
-            g.cmd(
-                a,
-                Command::Tool(ToolAction::SetEvents { brick: id, events })
-            )
-            .is_err(),
-            "{len} hostile rows accepted"
+        let reply = g.cmd(
+            a,
+            Command::Tool(ToolAction::SetEvents { brick: id, events }),
         );
+        if index == 0 {
+            assert!(reply.is_err(), "{len} rows accepted");
+        }
+        assert_eq!(g.bricks(), before, "hostile row {index} stored");
     }
-    assert_eq!(g.bricks(), before);
 }
 
 /// v20's `serverCmdAddEvent` raises `fireRelay` rows under 33 ms to 33 ms,

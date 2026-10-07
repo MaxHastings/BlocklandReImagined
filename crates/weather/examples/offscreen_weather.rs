@@ -212,6 +212,8 @@ impl<'a> Probe<'a> {
         );
         let cv = color.create_view(&Default::default());
         let dv = depth.create_view(&Default::default());
+        // A fixture on a fresh device, never one that can be lost mid-run.
+        #[allow(clippy::disallowed_methods)]
         let buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

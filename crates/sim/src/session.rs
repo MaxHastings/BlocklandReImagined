@@ -1922,13 +1922,15 @@ impl Session {
                 "Brick exceeds the native {}-event admission limit",
                 bri_world::MAX_EVENTS_PER_BRICK
             );
-            self.validate_event_rows(rows)?;
         }
         if let Command::Tool(ToolAction::SetEvents {
             brick,
             events: rows,
         }) = &mut command
         {
+            for reason in self.drop_invalid_event_rows(rows)? {
+                self.notify(owner, Notice::Chat(reason));
+            }
             let refused = self.review_event_rows(owner, *brick, rows);
             for reason in refused {
                 self.notify(owner, Notice::Chat(reason));
@@ -2115,12 +2117,13 @@ impl Session {
                 }
                 if name == "sit" {
                     peer.sitting = true;
+                    peer.player.set_seated(true);
                 } else if !peer.combat.emote_allowed(self.simulation.state().tick) {
                     // The others are `Player::emote`, with its spam check.
                     return Ok(Reply::Accepted);
                 }
                 let feet = peer.player.state().feet;
-                let eye = if peer.player.state().crouched {
+                let eye = if peer.player.state().crouched || peer.player.seated() {
                     peer.player.eye()
                 } else {
                     Vec3::from(feet) + Vec3::Y * V20_EYE_NODE
@@ -2247,13 +2250,14 @@ impl Session {
             Command::BrickHand(mut hand) => {
                 // Taking bricks in hand is equipping (an Add-On's packaged
                 // `serverCmdUseInventory`): refused, the client puts them
-                // back.
+                // back and the player is told why, as a refused tool is.
                 if hand.equipped
                     && !self.brick_equipped(owner)
-                    && self.package_policy("equip", owner).is_err()
+                    && let Err(reason) = self.package_policy("equip", owner)
                 {
                     hand.equipped = false;
                     self.notify(owner, Notice::PutAway);
+                    self.center_print(owner, reason.to_string());
                 }
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
@@ -2478,19 +2482,25 @@ impl Session {
                     "activate"
                 };
                 let eye = peer.player.eye();
+                let scale = peer.player.state().scale;
                 self.play_thread(tick, owner, 3, swing);
                 if self.teleport_lockout(owner, admin_players::TELEPORT_PICKUP_LOCK_MS, true) {
                     return Ok(Reply::Activated(None));
                 }
-                // The click reaches through portals as the player sees.
+                // `Player::ActivateStuff`: one 10-unit ray, through portals as
+                // the player sees. A brick on it stops the click, but only
+                // activates within `$Game::BrickActivateRange` (5) times the
+                // player's scale.
                 let hit = self
                     .simulation
-                    .target_through(eye, direction, 5.0)?
+                    .target_through(eye, direction, 10.0)?
                     .and_then(|(hit, _)| Some((hit.brick?, hit.distance)));
                 if self.flip_vehicle(owner, eye, direction, hit.map(|(_, d)| d)) {
                     return Ok(Reply::Activated(None));
                 }
-                let hit = hit.map(|(brick, _)| brick);
+                let hit = hit
+                    .filter(|(_, distance)| *distance <= 5.0 * scale)
+                    .map(|(brick, _)| brick);
                 if let Some(brick) = hit
                     && self.special_activate(owner, brick)?
                 {
@@ -2790,6 +2800,7 @@ impl Session {
                 }
             }
         }
+        self.sync_seated();
         let smashers = match self.smash_breakables(glass_hits) {
             Ok(smashers) => smashers,
             Err(error) => {
@@ -2837,6 +2848,7 @@ impl Session {
         contain("physics", self.simulation.step());
         contain("vehicles", self.vehicle_post_step());
         self.player_mount_contacts();
+        self.sync_seated();
         contain("weapons", self.step_weapons());
         self.step_temp_colors();
         contain("items", self.step_items());

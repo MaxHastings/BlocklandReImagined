@@ -579,6 +579,29 @@ fn allow_equip(who) { !player(who).mounted }"#,
 
     // No tools on horseback, by the rule's policy.
     assert!(g.cmd(rider, Command::EquipTool { slot: None }).is_err());
+    // Nor bricks in hand: they are put back, and the rider is told why.
+    g.s.take_private_notices();
+    g.cmd(
+        rider,
+        Command::BrickHand(bri_sim::session::BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices
+            .iter()
+            .any(|(o, n)| *o == rider && matches!(n, bri_sim::session::Notice::PutAway)),
+        "{notices:?}"
+    );
+    assert!(
+        notices.iter().any(|(o, n)| *o == rider
+            && matches!(n, bri_sim::session::Notice::Center { text, .. } if text.contains("does not allow"))),
+        "{notices:?}"
+    );
     // An empty hand's click is the press; letting go, the release, which
     // takes the rider off.
     g.click(rider);

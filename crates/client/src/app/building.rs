@@ -61,6 +61,7 @@ impl App {
         }
         let view = self.network_view().context("No active network view")?;
         let archetypes = view.archetypes.clone();
+        let seated = sit_posed(view, &self.vehicle_assets, self.motion.presented(), view.owner);
         let mut player = self
             .motion
             .presented()
@@ -84,6 +85,7 @@ impl App {
             .as_mut()
             .context("Building controller not ready")?;
         building.set_archetypes(archetypes);
+        building.set_seated(seated);
         let response = building.ui_action(action, &player)?;
         let Some(response) = response else {
             return Ok(false);
@@ -148,7 +150,7 @@ impl App {
                     .building
                     .as_mut()
                     .unwrap()
-                    .command_finished(id, &command, false)
+                    .command_finished(id, &command, None)
                 {
                     self.ui.apply_session(session, update);
                 }
@@ -160,7 +162,7 @@ impl App {
                     .building
                     .as_mut()
                     .unwrap()
-                    .command_finished(id, &command, false);
+                    .command_finished(id, &command, None);
                 for update in updates {
                     self.ui.apply_session(session, update);
                 }

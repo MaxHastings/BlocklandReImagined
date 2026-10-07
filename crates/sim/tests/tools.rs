@@ -615,7 +615,7 @@ fn aim(s: &mut Session, owner: u64, _seq: u64, target: [f32; 3]) {
         p.yaw
     };
     let facing = bri_sim::player::PlayerState { yaw, ..p.clone() };
-    let d = Vec3::from(target) - facing.eye(&PlayerTuning::default());
+    let d = Vec3::from(target) - facing.eye(&PlayerTuning::default().scaled(p.scale));
     let sequence = move_sequence(s);
     s.movement(
         owner,
@@ -1104,37 +1104,34 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved(f: &Fi
     inspect(&mut s, owner, 2, InspectMode::Events);
     let before = s.snapshot().world;
     assert!(
-        tool(
-            &mut s,
-            owner,
-            3,
-            ToolAction::SetEvents {
-                brick: 1,
-                events: vec![event.clone()]
-            }
-        )
-        .is_err()
-    );
-    assert!(
         s.edit_brick(owner, 1, Edit::Events(vec![event.clone()]))
             .is_err()
     );
     assert_eq!(s.snapshot().world, before);
+    let bad = event.clone();
     let event = EventRow {
         output: "setColor".into(),
         params: vec![EventValue::Color(1)],
         ..event
     };
+    // `serverCmdAddEvent` takes each line alone: the unreadable line is
+    // left out, with word why, and the good one still stands.
+    s.take_private_notices();
     tool(
         &mut s,
         owner,
         5,
         ToolAction::SetEvents {
             brick: 1,
-            events: vec![event.clone()],
+            events: vec![bad, event.clone()],
         },
     )
     .unwrap();
+    assert!(
+        s.take_private_notices().iter().any(|(o, n)| *o == owner
+            && matches!(n, bri_sim::session::Notice::Chat(text)
+                if text.starts_with("Event line 1 was left out"))),
+    );
     assert_eq!(s.simulation().state().bricks[&1].source_records, source);
     assert_eq!(s.simulation().state().bricks[&1].events, vec![event]);
     s.command(owner, 6, Command::Activate).unwrap();
@@ -1868,6 +1865,39 @@ fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused(f: &Fixture) {
 }
 
 on_both! {
+/// `hammerImage::onHitObject` lets a swing through without trust when the
+/// brick stands in the swinger's own stack (`stackBL_ID`): you may clear
+/// what others built on your bricks, though not their own stacks.
+fn the_hammer_breaks_others_bricks_built_on_your_stack(f: &Fixture) {
+    let mut s = session(f, vec![], false);
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
+        .unwrap();
+    // An administrator may build on anyone's bricks.
+    let guest = s
+        .join("Guest".into(), Vec3::new(3.0, 0.05, 1.0), true)
+        .unwrap();
+    let low = plant(&mut s, owner, 1, [0.5, 0.1, -3.25]);
+    let high = plant(&mut s, guest, 1, [0.5, 0.3, -3.25]);
+    let theirs = plant(&mut s, guest, 2, [2.5, 0.1, -3.25]);
+    assert_eq!(s.simulation().stack_owner(high), Some(owner));
+    center_prints(&mut s, owner);
+    aim(&mut s, owner, 3, [0.5, 0.3, -3.01]);
+    swing(&mut s, owner, 4, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low, theirs]);
+    assert!(center_prints(&mut s, owner).is_empty());
+    // The guest's own stack still needs their trust.
+    aim(&mut s, owner, 5, [2.5, 0.1, -3.01]);
+    swing(&mut s, owner, 6, 0).unwrap();
+    assert_eq!(bricks(&s), vec![low, theirs]);
+    assert_eq!(
+        center_prints(&mut s, owner),
+        vec!["Guest does not trust you enough to do that.".to_string()]
+    );
+}
+}
+
+on_both! {
 /// v20's `indestructable` (spawn points, vehicle spawns) only keeps
 /// explosions off a brick: a builder who is not an administrator hammers or
 /// undoes their own like any other (playtest a20).
@@ -2150,5 +2180,105 @@ fn a_joining_player_learns_the_music_the_host_offers(f: &Fixture) {
     next.set_tool_catalog(second).unwrap();
     next.adopt(s, owner).unwrap();
     assert_eq!(offered(&mut next), vec![["music/second".into()].into()]);
+}
+}
+
+on_both! {
+/// `Player::ActivateStuff` reaches bricks within `$Game::BrickActivateRange`
+/// (5) times the player's scale, along a 10-unit ray: a player made bigger
+/// clicks a button a normal one cannot reach.
+fn a_click_reaches_bricks_five_units_times_the_players_scale(f: &Fixture) {
+    let mut s = session(f, vec![], false);
+    s.set_event_catalog(f.events(), Vec::new()).unwrap();
+    let owner = s
+        .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
+        .unwrap();
+    let button = plant(&mut s, owner, 1, [0.5, 0.1, -6.25]);
+    let grow = plant(&mut s, owner, 2, [4.5, 0.1, 0.25]);
+    let row = |input: &str, target, output: &str, params| EventRow {
+        conditions: vec![],
+        preserved: None,
+        enabled: true,
+        input: input.into(),
+        delay_ms: 0,
+        target,
+        output: output.into(),
+        params,
+    };
+    s.edit_brick(
+        owner,
+        button,
+        Edit::Events(vec![row(
+            "onActivate",
+            EventTarget::Slot(bri_events::Slot::SelfBrick),
+            "setColor",
+            vec![EventValue::Color(1)],
+        )]),
+    )
+    .unwrap();
+    s.edit_brick(
+        owner,
+        grow,
+        Edit::Events(vec![row(
+            "onPlayerTouch",
+            EventTarget::Slot(bri_events::Slot::Player),
+            "setPlayerScale",
+            vec![EventValue::Float(2.0)],
+        )]),
+    )
+    .unwrap();
+    let activate = |s: &mut Session, seq| {
+        aim(s, owner, seq, [0.5, 0.1, -6.25]);
+        let reply = s.command(owner, seq, Command::Activate).unwrap();
+        for _ in 0..4 {
+            s.step().unwrap();
+        }
+        reply
+    };
+    // About 6.4 units from a standing eye: past 5, short of the ray's 10.
+    assert_eq!(activate(&mut s, 3), Reply::Activated(None));
+    assert_eq!(s.simulation().state().bricks[&button].color, 0);
+    s.fire_brick_input(grow, "onPlayerTouch", Some(owner));
+    s.step().unwrap();
+    let scale = s.snapshot().players.into_iter().find(|p| p.owner == owner).unwrap().scale;
+    assert_eq!(scale, 2.0, "{:?}", s.take_event_diagnostics());
+    assert_eq!(activate(&mut s, 4), Reply::Activated(Some(button)));
+    assert_eq!(s.simulation().state().bricks[&button].color, 1);
+}
+}
+
+on_both! {
+/// The wrench, events and printer dialogs guard only what they show: a
+/// brick its own events recolour while the dialog is open (a flashing relay
+/// loop) still takes the edit.
+fn a_brick_recoloured_while_its_dialog_is_open_still_takes_the_edit(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
+    inspect(&mut s, owner, 2, InspectMode::Wrench);
+    s.edit_brick(owner, id, Edit::Color(1)).unwrap();
+    tool(
+        &mut s,
+        owner,
+        3,
+        ToolAction::SetWrench {
+            brick: id,
+            properties: properties(),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.simulation().state().bricks[&id].name.as_deref(), Some("lamp"));
+    inspect(&mut s, owner, 4, InspectMode::Wrench);
+    inspect(&mut s, owner, 5, InspectMode::Events);
+    s.edit_brick(owner, id, Edit::Color(0)).unwrap();
+    tool(
+        &mut s,
+        owner,
+        6,
+        ToolAction::SetEvents {
+            brick: id,
+            events: vec![],
+        },
+    )
+    .unwrap();
+    assert_eq!(s.simulation().state().bricks[&id].color, 0);
 }
 }

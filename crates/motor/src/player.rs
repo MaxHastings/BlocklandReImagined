@@ -532,6 +532,17 @@ impl PlayerState {
                 }
             + self.eye_ahead(tuning)
     }
+    /// [`Self::eye`], or with `seated` the `Eye` node of the held `sit`
+    /// pose (`/sit`, a seat whose pose is `sit`): it owns the node over
+    /// crouching, so a seated player sees from the drawn head.
+    pub fn posed_eye(&self, tuning: &PlayerTuning, seated: bool) -> Vec3 {
+        if !seated {
+            return self.eye(tuning);
+        }
+        Vec3::from(self.feet)
+            + Vec3::Y * tuning.sit_eye
+            + Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()) * tuning.sit_eye_forward
+    }
     /// How far the `Eye` node sits ahead of the body along its facing.
     pub fn eye_ahead(&self, tuning: &PlayerTuning) -> Vec3 {
         Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()) * tuning.eye_forward
@@ -574,6 +585,10 @@ pub struct PlayerTuning {
     pub crouch_eye: f32,
     /// How far the eye sits ahead of the box centre, along the facing.
     pub eye_forward: f32,
+    /// Eye height above the feet at the end of the `sit` sequence.
+    pub sit_eye: f32,
+    /// How far that eye sits ahead of the box centre (negative: behind).
+    pub sit_eye_forward: f32,
     pub forward: f32,
     pub backward: f32,
     pub sideways: f32,
@@ -625,8 +640,9 @@ impl Default for PlayerTuning {
         // and runSurfaceAngle: recovered PlayerStandardArmor. Gravity, jet thrust,
         // jet lift and step height (maxStepHeight default): v20 engine constants.
         // Box dimensions: the v20 datablock boxes at 0.25 engine scale. Eyes:
-        // m.dts `Eye` node, standing and at the end of the `crouch` sequence
-        // (Player::getRenderEyeTransform 0x5aafa0 reads the animated node).
+        // m.dts `Eye` node, standing and at the end of the `crouch` and `sit`
+        // sequences (Player::getRenderEyeTransform 0x5aafa0 reads the
+        // animated node).
         // Ground snap remains an adaptation assumption; see
         // docs/player-simulation.md.
         Self {
@@ -639,6 +655,8 @@ impl Default for PlayerTuning {
             stand_eye: 2.156_496_5,
             crouch_eye: 0.626_668_45,
             eye_forward: 0.141_154_87,
+            sit_eye: 1.635_348_9,
+            sit_eye_forward: -0.262_436_76,
             forward: 7.0,
             backward: 4.0,
             sideways: 6.0,
@@ -697,6 +715,8 @@ impl PlayerTuning {
             self.stand_eye *= scale;
             self.crouch_eye *= scale;
             self.eye_forward *= scale;
+            self.sit_eye *= scale;
+            self.sit_eye_forward *= scale;
         }
         self
     }
@@ -727,6 +747,7 @@ impl PlayerTuning {
             self.crouch_height,
             self.stand_eye,
             self.crouch_eye,
+            self.sit_eye,
             self.density,
             self.swim_acceleration,
             self.swim_rise,
@@ -776,6 +797,9 @@ impl PlayerTuning {
                 && self.jump_surface_degrees < 90.0
                 && self.horizontal_resist_speed < self.horizontal_max_speed
                 && self.up_resist_speed < self.up_max_speed
+                && [self.eye_forward, self.sit_eye_forward]
+                    .iter()
+                    .all(|n| n.is_finite() && n.abs() <= 1000.0)
                 && self.turn_rate.is_finite()
                 && (0.0..=20.0).contains(&self.turn_rate)
                 && (self.body == Body::Box
@@ -796,6 +820,9 @@ pub struct Player {
     mount: bool,
     /// v20's crouch thread: the eye follows it, not the crouch flag.
     crouch: crate::crouch::CrouchThread,
+    /// Held in the `sit` pose (`/sit`, or a seat that poses its rider so):
+    /// the eye is the sit's. Set by whoever seats the body.
+    seated: bool,
     /// Jumps the body made without travelling between: server teleports
     /// and openings that carried it to their partner ([`Player::relocations`]).
     relocations: u64,
@@ -935,6 +962,7 @@ impl Player {
             contacts: BTreeSet::new(),
             mount: false,
             crouch: Default::default(),
+            seated: false,
             relocations: 0,
         })
     }
@@ -978,6 +1006,7 @@ impl Player {
             contacts: BTreeSet::new(),
             mount: true,
             crouch: Default::default(),
+            seated: false,
             relocations: 0,
         })
     }
@@ -1032,6 +1061,7 @@ impl Player {
             contacts: BTreeSet::new(),
             mount: false,
             crouch: Default::default(),
+            seated: false,
             relocations: 0,
         };
         player.restore(physics, state, tuning)?;
@@ -1134,10 +1164,20 @@ impl Player {
     /// The eye on the crouch thread, the height the camera shows, and the
     /// `Eye` node's lead ahead of the body (`getEyePoint`).
     pub fn eye(&self) -> Vec3 {
+        if self.seated {
+            return self.state.posed_eye(&self.tuning, true);
+        }
         let fraction = self.crouch.eye_fraction(crate::crouch::CROUCH_SECONDS);
         Vec3::from(self.state.feet)
             + Vec3::Y * self.tuning.eye_height(fraction)
             + self.state.eye_ahead(&self.tuning)
+    }
+    /// Whether the body is held in the `sit` pose, which moves the eye.
+    pub fn set_seated(&mut self, seated: bool) {
+        self.seated = seated;
+    }
+    pub fn seated(&self) -> bool {
+        self.seated
     }
     /// Corpses stop blocking players and weapons; respawn makes them solid.
     pub fn set_solid(&self, physics: &mut PhysicsWorld, solid: bool) {

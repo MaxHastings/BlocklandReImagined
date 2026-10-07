@@ -6,6 +6,14 @@ adds modern safety nets, easy direct-IP hosting and Add-Ons that can go
 much further than v20's. Available for Windows x86-64, Apple Silicon Macs
 and Linux x86-64.
 
+## Video
+
+[![Blockland ReImagined - Showcase](https://img.youtube.com/vi/QeILUBHx8Vw/maxresdefault.jpg)](https://www.youtube.com/watch?v=QeILUBHx8Vw)
+
+## Community
+
+Join the Discord: https://discord.com/invite/J8e4kvndyu
+
 ## What's in it
 
 - **v20 as you remember it.** All 14 maps, the brick selector, paint and

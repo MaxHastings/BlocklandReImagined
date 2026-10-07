@@ -888,6 +888,7 @@ impl App {
         self.ui.core.name_tags = name_tags(
             view,
             self.motion.presented(),
+            &self.vehicle_assets,
             &self.content.weapons.pack,
             self.build.building.as_ref(),
             glam::Mat4::from_cols_array(&camera.view_projection),

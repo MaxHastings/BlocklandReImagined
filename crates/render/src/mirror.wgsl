@@ -15,8 +15,11 @@ struct Frame {
 // reproject: the echoed plane's parent view; sample: mirror_u, then 1
 // live, 2 echo, 0 fallback, then 1 flipped; parent and viewport: the parent
 // view's and the plane's viewports in target pixels; size: the target's.
+// source and plane: an echoed mirror's parent eye (w 1; 0 for a window)
+// and the mirror's plane, to tell where its echo is true (echo_trust).
 struct Slot {
     reproject:mat4x4<f32>, sample:vec4<f32>, parent:vec4<f32>, viewport:vec4<f32>, size:vec4<f32>,
+    source:vec4<f32>, plane:vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> slot:Slot;
 @group(1) @binding(1) var picture:texture_2d<f32>;
@@ -52,25 +55,40 @@ fn echo_uv(world:vec3<f32>)->vec2<f32> {
     let texel=clamp(vec2<f32>(across,y),v.xy+vec2<f32>(0.5),v.xy+v.zw-vec2<f32>(0.5));
     return texel/slot.size.xy;
 }
+// How far an echo may be off before it fades to the fallback colour: the
+// eye's sideways shift along the mirror from the eye the picture was drawn
+// for, per unit of the eye's distance from the mirror. Facing parallel
+// mirrors shift the eye only along the normal (0), so their tunnel echoes
+// fully; a bounce off a side wall shifts it sideways (a square room's
+// corner: about 2), where the picture would show the wrong part of the room.
+const ECHO_TRUE:f32=0.05;
+const ECHO_FALSE:f32=0.25;
+fn echo_trust()->f32 {
+    if slot.source.w<0.5 {return 1.0;}
+    let n=slot.plane.xyz;
+    let shift=frame.eye.xyz-slot.source.xyz;
+    let sideways=length(shift-n*dot(shift,n));
+    let depth=max(abs(dot(frame.eye.xyz,n)+slot.plane.w),1e-3);
+    return 1.0-smoothstep(ECHO_TRUE,ECHO_FALSE,sideways/depth);
+}
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     let screen=v.position.xy/frame.screen.xy;
     var uv=vec2<f32>(select(screen.x,slot.sample.x-screen.x,slot.sample.z>0.5),screen.y);
-    var live=slot.sample.y>0.5;
+    var shown=select(0.0,1.0,slot.sample.y>0.5);
     if slot.sample.y>1.5 {
         uv=echo_uv(v.world);
-        live=uv.x>=0.0;
+        shown=select(0.0,echo_trust(),uv.x>=0.0);
     }
     let stored=textureSampleLevel(picture,picture_sampler,uv,0.0).rgb;
-    if live {
-        // The reflection already went through output_color (fog and
-        // colour-vision assistance included): tint it and store it the same
-        // way, without applying them twice.
-        var display=stored;
-        if OUTPUT_ENCODED==0u {display=display_color(stored);}
-        display*=v.tint.rgb;
-        if OUTPUT_ENCODED==0u {return vec4<f32>(linear_color(display),v.tint.a);}
-        return vec4<f32>(display,v.tint.a);
-    }
+    // The reflection already went through output_color (fog and
+    // colour-vision assistance included): tint it and blend it with the
+    // fallback in display colour, without applying them twice.
+    var picture_display=stored;
+    if OUTPUT_ENCODED==0u {picture_display=display_color(stored);}
     let silver=mix(v.fallback*v.tint.rgb,frame.fog_color.rgb,fog_amount(v.world));
-    return vec4<f32>(output_color(silver),v.tint.a);
+    var silver_display=output_color(silver);
+    if OUTPUT_ENCODED==0u {silver_display=display_color(silver_display);}
+    let display=mix(silver_display,picture_display*v.tint.rgb,shown);
+    if OUTPUT_ENCODED==0u {return vec4<f32>(linear_color(display),v.tint.a);}
+    return vec4<f32>(display,v.tint.a);
 }

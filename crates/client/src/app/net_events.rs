@@ -129,7 +129,7 @@ impl App {
         if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
             && let Some(inventory) = view.tools.get(&view.owner)
         {
-            match building.sync_tools(inventory) {
+            match building.sync_tools(inventory, view.tick) {
                 Ok(updates) => {
                     for update in updates {
                         self.ui.apply_session(a.id, update);
@@ -803,8 +803,9 @@ impl App {
                     request,
                     result,
                     revision,
+                    tick,
                 } => {
-                    self.accept_reply(a, request, result, revision);
+                    self.accept_reply(a, request, result, revision, tick);
                 }
                 network::Event::Failed(reason) => {
                     failed = Some(reason);
