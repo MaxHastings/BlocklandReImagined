@@ -21,6 +21,11 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 use std::sync::{Arc, Mutex};
 
+mod handling;
+pub use handling::Handling;
+#[cfg(test)]
+pub(crate) use handling::test_car;
+
 /// Ticks of the motor a second.
 const TICKS: f32 = 1.0 / FIXED_DT;
 /// Spacing of the heights and distances a jet leg is flown over; between
