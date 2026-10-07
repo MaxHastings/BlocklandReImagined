@@ -386,6 +386,9 @@ struct Track {
     last_heading: Option<(f32, u64)>,
     was_alive: bool,
     fallen: bool,
+    /// The last tick it stood on something: a fall's airborne window starts
+    /// there.
+    grounded_at: u64,
     /// Ticks in a row in a flavour interrupt (`surprise`).
     goofing: u64,
     /// The behaviour a respawned bot's brain still holds from the life it
@@ -417,8 +420,12 @@ pub struct Report {
     /// Deaths with no killer (falls, the void, drowning).
     pub accidents: u64,
     pub deaths: u64,
-    /// Lives that dropped under the floor (fell off the arena).
+    /// Lives that dropped under the floor (fell off the arena) by their own
+    /// doing.
     pub fell: u64,
+    /// Lives knocked off the arena: an enemy's shot reached them within the
+    /// fall's airborne window (a shove that worked).
+    pub knocked_off: u64,
     pub shots: u64,
     /// Shots more than 25 degrees off the shooter's visible target.
     pub off_target: u64,
@@ -476,7 +483,7 @@ impl Report {
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} deaths={} shots={} off_target={} at_ally={} \
+             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} off_target={} at_ally={} \
              progress={:?}",
             self.name,
             self.bots,
@@ -492,6 +499,7 @@ impl Report {
             self.self_kills,
             self.accidents,
             self.fell,
+            self.knocked_off,
             self.deaths,
             self.shots,
             self.off_target,
@@ -557,6 +565,8 @@ pub struct Scorer {
     pub report: Report,
     tracks: BTreeMap<OwnerId, Track>,
     seen_shots: BTreeSet<u64>,
+    /// The tick the latest enemy shot through each body reaches it.
+    struck: BTreeMap<OwnerId, u64>,
     /// Projectiles that hurt nothing (a can's paint): not shots.
     harmless: BTreeSet<String>,
     seen_deaths: usize,
@@ -581,6 +591,7 @@ impl Scorer {
             },
             tracks: BTreeMap::new(),
             seen_shots: BTreeSet::new(),
+            struck: BTreeMap::new(),
             harmless: fixture::synthetic_weapons()
                 .unwrap()
                 .0
@@ -705,9 +716,18 @@ impl Scorer {
             }
             let feet = Vec3::from(state.feet);
             let flat = Vec3::new(feet.x, 0.0, feet.z);
+            if state.grounded {
+                track.grounded_at = tick;
+            }
             if feet.y < self.floor - 2.0 {
                 if !std::mem::replace(&mut track.fallen, true) {
-                    self.report.fell += 1;
+                    // Knocked off when an enemy's shot reached it after it
+                    // last stood on something; otherwise its own doing.
+                    if self.struck.get(bot).is_some_and(|t| *t >= track.grounded_at) {
+                        self.report.knocked_off += 1;
+                    } else {
+                        self.report.fell += 1;
+                    }
                 }
                 track.window.clear();
                 track.path.clear();
@@ -862,6 +882,14 @@ impl Scorer {
                     (miss < 1.0).then_some((along, *o))
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0));
+            // An enemy's shot through a body: when it gets there.
+            if let Some((along, hit)) = nearest
+                && sides.get(&hit) != sides.get(&shooter)
+            {
+                let speed = p.velocity.length().max(f32::MIN_POSITIVE);
+                let flight = (along / speed * TICKS_PER_SECOND as f32).ceil() as u64;
+                self.struck.insert(hit, tick + flight);
+            }
             if let Some((_, hit)) = nearest
                 && sides.get(&hit).is_some()
                 && sides.get(&hit) == sides.get(&shooter)
