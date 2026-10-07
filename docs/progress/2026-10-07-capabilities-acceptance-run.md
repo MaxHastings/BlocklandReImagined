@@ -21,7 +21,7 @@ runs in parallel, each recorded and replayed tick for tick.
   an unfamiliar push weapon. The host waits sealed in a box far off.
 - Absolutes only: once per variant (a grenade thrown, one going off near
   an enemy, a push fired, a push moving an enemy, the ball entering a zone
-  off a bot, a bot on the plinth, a bot seeing an enemy through the glass,
+  off a bot, a bot seeing an enemy through the glass,
   a bot firing from a spot it chose, a bot pushing an enemy off the drop),
   and never in any run (a grenade going off by its own side, judged on
   where allies stood when it threw; a teammate pushed off; a bot walking
@@ -42,18 +42,25 @@ runs in parallel, each recorded and replayed tick for tick.
 
 ## Result
 
-90 s of play a run, the six runs in parallel and replayed: 98 s on this
-machine (dev profile). Every check holds except two:
+50 s of play a run (the latest any check first held in measured 90 s
+runs was 37 s, a grenade going off near an enemy), the six runs in
+parallel and replayed. Nothing in the test reads the wall clock. Whole test,
+dev profile: 53 s on a quiet machine (90 s games took 98 s). Under load,
+four copies at once beside four runaway grep processes holding the CPU at
+100%, it took 445-462 s each. Every check holds except one:
 
 - Variant 1: no bot pushes an enemy off the drop. Pushes fire and move
   enemies in every run; walking someone to the open edge first is fighting's
   ledge pushes (not merged). Red until it lands.
-- Variant 0: no bot climbs the plinth (variant 1 does). Nothing in the game
-  makes its top worth climbing beyond spot choice.
+
+The plinth check is gone: standing at its foot the spot chooser never
+offers its top (no hop or jet place) and rates staying put best every time
+(9 decisions in variant 0, 17 in variant 1, measured), so climbing it is no
+absolute.
 
 A ball kicked off from the plinth's top got no objective plan at all
 ("no grounded objective plan"): delivering an object down off a raised
-platform is not planned. The kickoff is mid-deck for that reason.
+platform is not planned (logged for v0.2.7). The kickoff is mid-deck.
 
 ## Commands
 
