@@ -1206,6 +1206,7 @@ impl Session {
         {
             let peer = self.peers.get_mut(&victim).unwrap();
             peer.combat.alive = false;
+            peer.player.set_corpse(&mut self.simulation.physics, true);
             peer.combat.health = 0.0;
             peer.combat.died_tick = tick;
             // A corpse keeps no laid-on archetypes (`pushDatablock`).
@@ -1355,6 +1356,7 @@ impl Session {
         {
             let peer = self.peers.get_mut(&owner).unwrap();
             peer.combat.alive = false;
+            peer.player.set_corpse(&mut self.simulation.physics, true);
             peer.combat.health = 0.0;
             // Past the corpse timeout: the next step clears the body.
             peer.combat.died_tick = tick.saturating_sub(CORPSE_TICKS);
@@ -2231,6 +2233,7 @@ impl Session {
             peer.combat.gun_slow = None;
             peer.player.set_speed_scale(1.0)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
+            peer.player.set_corpse(&mut self.simulation.physics, false);
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.body += 1;
