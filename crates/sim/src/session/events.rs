@@ -553,7 +553,7 @@ impl Session {
     ) {
         // Bricks edited since the last event phase run their new program.
         self.follow_palette();
-        if self.dirty.contains(&brick) || !self.events.scanned {
+        if self.dirty.unread_by_events(&brick) || !self.events.scanned {
             self.install_program(brick);
         }
         if !self.events.installed.contains(&brick) {

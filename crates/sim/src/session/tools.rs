@@ -48,7 +48,7 @@ pub enum ToolAction {
 
 /// Server-configured bindings, never supplied by a remote player. An empty
 /// catalog permits native colors/flags but denies nonempty content assignments.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCatalog {
     pub lights: BTreeSet<String>,
     pub emitters: BTreeSet<String>,

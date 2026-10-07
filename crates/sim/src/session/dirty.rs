@@ -20,6 +20,10 @@ const READERS: usize = 4;
 pub(super) struct Dirty {
     /// Changed since replication last took them.
     set: BTreeSet<BrickId>,
+    /// Changed since the event phase last read ([`Reader::Events`]): an
+    /// input fired between event phases runs these bricks' new programs.
+    /// Kept apart from `set` so when replication sends never changes play.
+    events_unread: BTreeSet<BrickId>,
     /// Every change in order, repeats included, from log position `base`.
     log: Vec<BrickId>,
     base: u64,
@@ -29,6 +33,7 @@ pub(super) struct Dirty {
 impl Dirty {
     pub fn insert(&mut self, id: BrickId) -> bool {
         self.log.push(id);
+        self.events_unread.insert(id);
         self.set.insert(id)
     }
     pub fn extend(&mut self, ids: impl IntoIterator<Item = BrickId>) {
@@ -36,13 +41,13 @@ impl Dirty {
             self.insert(id);
         }
     }
-    /// Changed since replication last took the set.
-    pub fn contains(&self, id: &BrickId) -> bool {
-        self.set.contains(id)
+    /// Changed since the event phase last read its changes.
+    pub fn unread_by_events(&self, id: &BrickId) -> bool {
+        self.events_unread.contains(id)
     }
-    /// What `contains` holds, in id order.
-    pub fn iter(&self) -> impl Iterator<Item = BrickId> + '_ {
-        self.set.iter().copied()
+    /// What [`Self::unread_by_events`] holds, in id order.
+    pub fn events_unread(&self) -> impl Iterator<Item = BrickId> + '_ {
+        self.events_unread.iter().copied()
     }
     /// Replication's view: everything changed since its last take.
     pub fn take(&mut self) -> BTreeSet<BrickId> {
@@ -58,6 +63,9 @@ impl Dirty {
     /// Mark everything read without looking (the reader has no state yet
     /// and scans the whole world when it starts).
     pub fn skip(&mut self, reader: Reader) {
+        if matches!(reader, Reader::Events) {
+            self.events_unread.clear();
+        }
         self.read[reader as usize] = self.base + self.log.len() as u64;
         let oldest = self.read.iter().copied().min().unwrap_or(self.base);
         if oldest > self.base {
@@ -79,9 +87,7 @@ mod tests {
         dirty.insert(7);
         assert_eq!(dirty.read(Reader::Items), BTreeSet::from([7]));
         assert_eq!(dirty.read(Reader::Events), BTreeSet::from([1, 3, 7]));
-        assert!(dirty.contains(&3));
         assert_eq!(dirty.take(), BTreeSet::from([1, 3, 7]));
-        assert!(!dirty.contains(&3));
         // A change after replication took the set still reaches readers.
         dirty.insert(9);
         assert_eq!(dirty.read(Reader::Vehicles), BTreeSet::from([1, 3, 7, 9]));
@@ -89,5 +95,23 @@ mod tests {
             dirty.skip(reader);
         }
         assert!(dirty.log.is_empty(), "Read changes are dropped");
+    }
+    /// What the event phase has not read yet does not depend on when
+    /// replication takes its set.
+    #[test]
+    fn the_event_phase_unread_set_ignores_replication() {
+        let mut dirty = Dirty::default();
+        dirty.extend([4, 2]);
+        dirty.take();
+        assert!(dirty.unread_by_events(&4));
+        assert_eq!(dirty.events_unread().collect::<Vec<_>>(), [2, 4]);
+        assert_eq!(dirty.read(Reader::Events), BTreeSet::from([2, 4]));
+        assert!(!dirty.unread_by_events(&4));
+        dirty.insert(5);
+        dirty.read(Reader::Items);
+        assert!(
+            dirty.unread_by_events(&5),
+            "only the event phase's read clears it"
+        );
     }
 }

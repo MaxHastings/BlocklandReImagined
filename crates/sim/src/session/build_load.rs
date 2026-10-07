@@ -271,7 +271,11 @@ impl Session {
             self.publish_load_slice(slice);
             published += slice;
             let done = match self.load_pace {
-                LoadPace::Budget => !self.load_clock.spare(),
+                LoadPace::Budget => {
+                    !self
+                        .outside(|| crate::replay::LoadSpare(self.load_clock.spare()))
+                        .0
+                }
                 LoadPace::Bricks(count) => published >= count,
             };
             if done {

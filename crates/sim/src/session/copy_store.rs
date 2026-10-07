@@ -398,7 +398,7 @@ impl Session {
         let Some(store) = self.saved_copies.store.clone() else {
             return;
         };
-        for (id, done) in store.poll() {
+        for (id, done) in self.outside(|| crate::replay::CopyPoll(store.poll())).0 {
             let Some(request) = self.saved_copies.waiting.remove(&id) else {
                 continue;
             };

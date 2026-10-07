@@ -1414,6 +1414,7 @@ fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(fx: &Mounts) -> 
         color: None,
         occupants: vec![Some(1)],
         destroyed: false,
+        turret_broken: false,
         scale: 1.0,
     };
     let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {

@@ -23,6 +23,8 @@ bri-package-runtime = { path = "../package-runtime" }
 glam.workspace = true
 rustc-hash = "2"
 rapier3d.workspace = true
+imbl.workspace = true
+rmp-serde.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }

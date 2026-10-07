@@ -45,6 +45,9 @@ pub struct GameModeInfo {
 }
 
 pub const HOST_COLORSET_PREF: &str = "$Pref::Server::ColorSet";
+/// Whether a hosted game records its match (`bri_net::replay`); off unless
+/// turned on.
+pub const RECORD_MATCHES_PREF: &str = "$Pref::Server::RecordMatches";
 
 /// Local host choices. The client revalidates the selected file before hosting;
 /// the resulting world palette remains authoritative for joined players.

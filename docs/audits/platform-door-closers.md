@@ -110,7 +110,7 @@ And the coordinator's additions:
 | | Addition | Grade | Note | Priority |
 |---|---|---|---|---|
 | a | Humans, bots, agents and mods as attributed principals on one command path | Partial | Humans use `Command`; bots call `movement`/`weapon_trigger` directly; bricks are owned by session numbers | P0 (owner identity), P1 |
-| b | Fixed tick and record/replay | Partial | Fixed tick and seeded RNG exist; no recording; wall clock inside admin commands | P1 |
+| b | Fixed tick and record/replay | Done 2026-10-07 | Fixed tick, seeded RNG, match recording and headless replay (`bri_net::replay`, `bri-replay`); the wall clock and other outside reads go through the recording. Same build and machine only | P1 |
 | c | Data to clients; code only through trust tiers | Changed 2026-09-28 | Sandboxed WebAssembly and WGSL after a per-server trust prompt, elevated capabilities per Add-On, native plugins designed into tier 3 but not built (`docs/architecture/client-sandbox.md`) | Keep the tiers; no silent escalation |
 | d | One schema drives saves, packages, replication, cvars | Missing | `Snapshot`, `Checkpoint` and `Delta` hand-maintain the same concepts | P2 |
 
