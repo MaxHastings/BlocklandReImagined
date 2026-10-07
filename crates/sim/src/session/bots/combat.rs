@@ -529,8 +529,12 @@ pub(super) fn choose(
     let turn = budget.register(bot, tick);
     // Splash aims it may take instead of the body, by slot.
     let mut variants: Vec<(usize, u32, Choice, f32, Shape)> = Vec::new();
-    if seen.way.carry.is_some() || session.mounted(bot).is_some() {
+    if seen.way.carry.is_some() {
         return Decision::Unsupported;
+    }
+    // A gunner fights with its seat's gun, planned as any shot.
+    if let Some(gun) = mounted_gun(session, bot) {
+        return choose_mounted(session, bot, seen, gun, tick, state, budget);
     }
     let Some(peer) = session.peers.get(&bot) else {
         return Decision::Unsafe;
@@ -719,8 +723,14 @@ pub(super) fn choose(
                     &mut chords,
                 ) == Some(true)
             {
-                let (harm, shape) =
-                    assess(session, bot, image, cap, &chords, origin, &bodies, None);
+                let (harm, shape) = assess(
+                    session,
+                    bot,
+                    hand_strike(session, bot, image, cap, None),
+                    &chords,
+                    origin,
+                    &bodies,
+                );
                 if tactics::harm_allows(harm, own_health) {
                     let choice = Choice { harm, ..choice };
                     state.intent = Some(Intent {
@@ -792,7 +802,8 @@ pub(super) fn choose(
             }
             // A swing strikes its target: the check above found it so.
             let contact = (cap.delivery == Delivery::Contact).then_some(Some(seen.owner));
-            let (harm, shape) = assess(session, bot, image, cap, &chords, origin, &bodies, contact);
+            let strike = hand_strike(session, bot, image, cap, contact);
+            let (harm, shape) = assess(session, bot, strike, &chords, origin, &bodies);
             // What its push would do to them (`shove`): flown on the
             // planning turn, on a share of the solver budget no longer
             // than a shot's path, and kept until the next.
@@ -1422,16 +1433,8 @@ fn variant(
         direct_damage: 0.0,
         ..cap
     };
-    let (harm, shape) = assess(
-        session,
-        bot,
-        image,
-        splash,
-        &chords,
-        solve.origin,
-        bodies,
-        None,
-    );
+    let strike = hand_strike(session, bot, image, splash, None);
+    let (harm, shape) = assess(session, bot, strike, &chords, solve.origin, bodies);
     let context = Context {
         aim: Some(aim),
         harm,
@@ -1451,20 +1454,175 @@ fn variant(
     ))
 }
 
-/// What a shot of `cap` from `image` along `chords` from `origin` does to
-/// each side and what it sweeps (`harm`), its way turned by the bot's aim
-/// error, so the shot it will really fire. `contact`: a swing's struck body.
-#[allow(clippy::too_many_arguments)]
-fn assess(
+/// The gun of the seat a bot rides in, as an attack: its capability, the
+/// projectile it fires, where it fires from, the vehicle's motion and size.
+struct MountedGun {
+    cap: Capability,
+    projectile: String,
+    muzzle: Vec3,
+    velocity: Vec3,
+    scale: f32,
+}
+
+/// The gun `bot`'s seat fires, when it sits in a vehicle's gun seat whose
+/// gun is ready to be used (`Session::bot_vehicle_weapon` reads the same
+/// gun for its movement).
+fn mounted_gun(session: &Session, bot: OwnerId) -> Option<MountedGun> {
+    let (vehicle, seat) = session.mounted(bot)?;
+    let world = session.vehicles.world.as_ref()?;
+    let id = bri_vehicles::VehicleId(vehicle);
+    let d = world.definition_of(id)?;
+    if !world.weapon_available(id) || d.weapon_seat() != Some(usize::from(seat)) {
+        return None;
+    }
+    let gun = d.weapon.as_ref()?;
+    let p = session.weapons.pack.projectiles.get(&gun.projectile)?;
+    let v = session.bots.objects.iter().find(|v| v.id.0 == vehicle)?;
+    let speed = gun.speed * f32::from(gun.charge_steps.max(1)) * v.scale;
+    let cap = tactics::vehicle_capability(
+        p,
+        speed,
+        v.scale,
+        u32::try_from(gun.cooldown_ticks.max(1)).unwrap_or(u32::MAX),
+        gun.charge_ticks > 0,
+        &session.weapons.pack.projectiles,
+    )
+    .ok()?;
+    Some(MountedGun {
+        cap,
+        projectile: gun.projectile.clone(),
+        muzzle: session.bot_weapon_origin(bot)?,
+        velocity: Vec3::from(v.velocity),
+        scale: v.scale,
+    })
+}
+
+/// A gunner's shot at `seen` with its seat's `gun`: solved, checked and
+/// priced (`harm::shot_harm`, its crew spared) as a hand weapon's is, and
+/// ready only when its side takes the trade.
+fn choose_mounted(
+    session: &Session,
+    bot: OwnerId,
+    seen: Seen,
+    gun: MountedGun,
+    tick: u64,
+    state: &mut State,
+    budget: &mut Budget,
+) -> Decision {
+    let Some(peer) = session.peers.get(&bot) else {
+        return Decision::Unsafe;
+    };
+    let Some(target) = session.peers.get(&seen.owner).filter(|p| p.combat.alive) else {
+        return Decision::Unsafe;
+    };
+    let cap = gun.cap;
+    let origin = gun.muzzle;
+    state.movement = Some(weapon_of(cap, 0.0));
+    let distance = origin.distance(seen.aim);
+    if distance < cap.near || distance > cap.reach {
+        return Decision::Pending;
+    }
+    let Some(flight) = cap.delivery.flight() else {
+        return Decision::Unsupported;
+    };
+    let input = Intercept {
+        muzzle: origin,
+        target: seen.aim,
+        target_velocity: Vec3::from(target.player.state().velocity) * super::lead(bot, tick),
+        shooter_velocity: gun.velocity,
+    };
+    let Ok(mut search) = tactics::InterceptSearch::new(flight, input) else {
+        return Decision::Unsupported;
+    };
+    let limit = PATH_TICKS.min(flight.lifetime_ticks);
+    while search.result().examined_segments < limit && budget.solves > 0 {
+        let count = 16
+            .min(limit - search.result().examined_segments)
+            .min(budget.solves);
+        budget.solves -= count;
+        search.advance(count);
+        if search.result().low.is_some() {
+            break;
+        }
+    }
+    let Some(aim) = search.result().low else {
+        return Decision::Pending;
+    };
+    let choice = Choice {
+        slot: usize::MAX,
+        weapon: weapon_of(cap, 0.0),
+        capability: cap,
+        direction: aim.direction,
+        aim: Some(aim),
+        surface: false,
+        dealt: 0.0,
+        seconds: 0.0,
+        landing: None,
+        harm: Harm::default(),
+    };
+    let mut chords = Vec::new();
+    match clear_path(
+        session,
+        bot,
+        seen.owner,
+        choice,
+        origin,
+        budget,
+        false,
+        &mut chords,
+    ) {
+        None => return Decision::Pending,
+        Some(false) => return Decision::Unsafe,
+        Some(true) => {}
+    }
+    let bodies = Bodies::of(session, bot, Vec3::ZERO);
+    let def = session.weapons.pack.projectiles.get(&gun.projectile);
+    let strike = Strike::of(cap, def, 1, 0.0, gun.scale);
+    let (harm, shape) = assess(session, bot, strike, &chords, origin, &bodies);
+    let context = Context {
+        distance,
+        target_health: target.combat.health.max(1.0),
+        hit_probability: 1.0,
+        harm,
+        own_health: peer.combat.health,
+        aim: Some(aim),
+        ready_rounds: None,
+        opportunity_cost: 0.0,
+        push_harm: 0.0,
+        switch_seconds: 0.0,
+    };
+    let Ok((dealt, seconds)) = tactics::worth(cap, context) else {
+        return Decision::Unsafe;
+    };
+    let choice = Choice {
+        dealt,
+        seconds,
+        harm,
+        ..choice
+    };
+    state.intent = Some(Intent {
+        choice,
+        seen,
+        tick,
+        image: gun.projectile,
+        shape,
+        release_authorized: true,
+        shooter_spawn: peer.combat.spawn_tick,
+        target_spawn: target.combat.spawn_tick,
+    });
+    Decision::Ready(choice)
+}
+
+/// What a hand weapon's attack `cap` strikes with: the projectile its
+/// `image` launches, that many pellets at its spread, at `bot`'s scale.
+/// `contact`: a swing's struck body.
+fn hand_strike(
     session: &Session,
     bot: OwnerId,
     image: &Image,
     cap: Capability,
-    chords: &[Chord],
-    origin: Vec3,
-    bodies: &Bodies,
     contact: Option<Option<OwnerId>>,
-) -> (Harm, Shape) {
+) -> Strike {
     let def = image
         .projectile
         .as_ref()
@@ -1474,10 +1632,23 @@ fn assess(
         .peers
         .get(&bot)
         .map_or(1.0, |p| p.player.state().scale);
-    let strike = Strike {
+    Strike {
         contact,
         ..Strike::of(cap, def, pellets, super::fire::image_spread(image), scale)
-    };
+    }
+}
+
+/// What `strike` along `chords` from `origin` does to each side and what
+/// it sweeps (`harm`), its way turned by the bot's aim error too, so the
+/// shot it will really fire.
+fn assess(
+    session: &Session,
+    bot: OwnerId,
+    strike: Strike,
+    chords: &[Chord],
+    origin: Vec3,
+    bodies: &Bodies,
+) -> (Harm, Shape) {
     let error = session
         .bots
         .brains
@@ -1749,16 +1920,8 @@ pub(super) fn validate_fire(
     };
     let contact = (choice.capability.delivery == Delivery::Contact).then_some(Some(seen.owner));
     let bodies = Bodies::of(session, bot, Vec3::ZERO);
-    let (harm, _) = assess(
-        session,
-        bot,
-        image,
-        choice.capability,
-        &chords,
-        origin,
-        &bodies,
-        contact,
-    );
+    let strike = hand_strike(session, bot, image, choice.capability, contact);
+    let (harm, _) = assess(session, bot, strike, &chords, origin, &bodies);
     tactics::harm_allows(harm, peer.combat.health) && harm.ally + harm.own < choice.harm.enemy
 }
 

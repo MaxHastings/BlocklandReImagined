@@ -1372,6 +1372,11 @@ impl Session {
         // A body's hit pulls no trigger. Native hand charge releases are
         // authorized only on its fair Ready turn and then validated postmove.
         let mut fire = fire && bite.is_none();
+        // A gun seat fires the shot the chooser planned and found worth it
+        // to its side (`hand_combat::choose`), as a hand weapon does.
+        if vehicle_weapon {
+            fire &= matches!(native, hand_combat::Decision::Ready(_));
+        }
         let mut desired_down = fire && !pulse;
         let last_down = brain.fire_down;
         // A wind-up off target for a tick is kept while its target still
@@ -1402,7 +1407,7 @@ impl Session {
                 });
         desired_down |= winding;
         let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down && !winding;
-        if !matches!(native, hand_combat::Decision::Unsupported) {
+        if !vehicle_weapon && !matches!(native, hand_combat::Decision::Unsupported) {
             if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
                 let tracking_charge =
                     charged_control::keeps_wind_up(last_down, image, native_choice.is_some());

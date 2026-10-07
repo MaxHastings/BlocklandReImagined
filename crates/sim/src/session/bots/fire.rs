@@ -176,7 +176,9 @@ impl Session {
             hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c) => Some(*c),
             _ => None,
         };
+        // A gun seat's shot is not a hand weapon's: no hand fire gate.
         let native_gate = !hold_sequence
+            && !self.vehicles.weapon_seat(bot)
             && (!matches!(native, hand_combat::Decision::Unsupported)
                 || (target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some()));
         self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);

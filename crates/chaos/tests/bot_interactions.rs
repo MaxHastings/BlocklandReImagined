@@ -28,6 +28,8 @@ const TALL_GUNNER: &str = "test:vehicle/elevated-gunner";
 // An unarmed chassis whose contact is harmless, so a long pursuit observes
 // driving rather than ending in the target's death and respawn.
 const PURSUER: &str = "test:vehicle/harmless-pursuer";
+// A gun whose shell bursts: what it would do to its own side counts.
+const BLASTER: &str = "test:vehicle/blast-rover";
 const CHARGE_TICKS: u64 = 24;
 const CHARGE_STEPS: u8 = 3;
 const ENEMY: Vec3 = Vec3::new(-12.0, 0.05, 8.0);
@@ -53,6 +55,7 @@ fn session(interact: f32) -> Session {
         (UNARMED, [2, 1, 0], [2.6, 1.0, 4.8]),
         (TALL_GUNNER, [0, 1, 2], [3.0, 1.4, 5.0]),
         (PURSUER, [2, 1, 0], [2.6, 1.0, 4.8]),
+        (BLASTER, [2, 1, 0], [2.6, 1.0, 4.8]),
     ] {
         let mut d = bri_vehicles::testing::car();
         let seats = bri_vehicles::testing::tank().seats;
@@ -83,6 +86,10 @@ fn session(interact: f32) -> Session {
         weapon.projectile = bri_weapons::testing::GUN_PROJECTILE.into();
         weapon.speed = 100.0;
         weapon.cooldown_ticks = 120;
+        if id == BLASTER {
+            weapon.projectile = bri_weapons::testing::ROCKET_PROJECTILE.into();
+            weapon.speed = 60.0;
+        }
         if id == CHARGED {
             weapon.charge_ticks = CHARGE_TICKS;
             weapon.charge_steps = CHARGE_STEPS;
@@ -115,6 +122,7 @@ fn session(interact: f32) -> Session {
             UNARMED,
             TALL_GUNNER,
             PURSUER,
+            BLASTER,
         ]
         .map(String::from)
         .into(),
@@ -431,6 +439,51 @@ fn unfamiliar_reordered_seats_form_crews_drive_and_fire_their_actual_weapon() {
             "the gunner aimed at the target independently of the chassis in {kind}"
         );
     }
+}
+
+/// A gunner with a bursting shell fires it, but never one that hurts its
+/// crew or another of its side, or one it plans to (`harm::shot_harm`).
+#[test]
+fn a_gunner_never_fires_a_blast_that_hurts_its_crew_or_an_ally() {
+    let mut g = Game::new(BLASTER, 3, 1.0, false);
+    let (_, gunner) = g.crew(2, 0);
+    let side = g.bots();
+    let (mut fired, mut hurt, mut last) = (false, false, None);
+    for _ in 0..120 * 20 {
+        g.steps(1);
+        let tick = g.s.simulation().state().tick;
+        fired |= g.s.weapon_view().fired().any(|p| p.source.0 == gunner);
+        for d in
+            g.s.damage_results()
+                .filter(|d| last.is_none_or(|t| d.tick > t) && d.source == Some(gunner))
+        {
+            assert!(
+                !side.contains(&d.victim),
+                "the gunner hurt its own side: {d:?}"
+            );
+            hurt |= d.victim == g.human;
+        }
+        last = Some(tick);
+        if let Some(p) =
+            g.s.bot_thoughts()
+                .into_iter()
+                .find(|t| t.bot == gunner)
+                .and_then(|t| t.planned)
+        {
+            assert!(
+                !p.kills_ally && (p.ally == 0.0 || p.ally < p.enemy) && p.own == 0.0,
+                "a planned shell that trades its side: {p:?}"
+            );
+        }
+        if fired && hurt {
+            break;
+        }
+    }
+    assert!(
+        fired && hurt,
+        "the gunner fired its shell: {}",
+        g.diagnostics()
+    );
 }
 
 #[test]

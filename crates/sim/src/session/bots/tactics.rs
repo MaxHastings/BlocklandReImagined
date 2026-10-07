@@ -527,6 +527,49 @@ pub fn native_capability(
             r.range * scale
         })
     });
+    projectile_attack(
+        p,
+        scale,
+        delivery,
+        Trigger {
+            hold: using.fire == bri_weapons::BotFire::Hold,
+            charge_on_release: image.charges(),
+        },
+        Reading {
+            reach,
+            near: using.near.unwrap_or(0.0),
+            direct: ray.and_then(|r| r.damage),
+            cadence_ticks: image.min_shot_ticks.max(cadence_ticks),
+            rounds_per_attack: image.magazine.as_ref().map_or(1, |m| m.per_shot),
+            danger,
+        },
+    )
+}
+
+/// What a launcher says about its attack beyond its projectile: how far and
+/// how near it is fought from, a ray's own damage, how often it fires, the
+/// rounds an attack spends and how far past its blast its fragments reach.
+pub(super) struct Reading {
+    pub reach: f32,
+    pub near: f32,
+    pub direct: Option<f32>,
+    pub cadence_ticks: u32,
+    pub rounds_per_attack: u32,
+    pub danger: f32,
+}
+
+/// The attack `p` makes when launched as `delivery`: the one reader of a
+/// projectile's hit, blast, arming and push, for a hand weapon
+/// (`native_capability`) and a vehicle's gun (`vehicle_capability`) alike.
+fn projectile_attack(
+    p: &bri_weapons::ProjectileDef,
+    scale: f32,
+    delivery: Delivery,
+    trigger: Trigger,
+    reading: Reading,
+) -> Result<Capability, DescriptorRequired> {
+    let splash = p.explosion.radius > 0.0 && p.explosion.damage > 0.0;
+    let ray = matches!(delivery, Delivery::Ray);
     let result = Capability {
         family: if splash {
             Family::Splash
@@ -534,22 +577,16 @@ pub fn native_capability(
             Family::Direct
         },
         delivery,
-        trigger: Trigger {
-            hold: using.fire == bri_weapons::BotFire::Hold,
-            charge_on_release: image.charges(),
-        },
-        reach,
-        near: using.near.unwrap_or(0.0),
-        direct_damage: ray
-            .and_then(|r| r.damage)
-            .unwrap_or(p.damage)
-            .clamp(0.0, 100.0)
+        trigger,
+        reach: reading.reach,
+        near: reading.near,
+        direct_damage: reading.direct.unwrap_or(p.damage).clamp(0.0, 100.0)
             * if p.fixed_damage { 1.0 } else { scale },
         splash_damage: p.explosion.damage * scale,
         splash_radius: p.explosion.radius.max(p.explosion.impulse_radius) * scale,
-        danger,
+        danger: reading.danger,
         // A timed throw's arming is part of where it bursts.
-        arm_ticks: if ray.is_some()
+        arm_ticks: if ray
             || !p.ballistic
             || p.explode_player
             || p.explosion.damage == 0.0
@@ -559,8 +596,8 @@ pub fn native_capability(
         } else {
             p.arm_ticks
         },
-        cadence_ticks: image.min_shot_ticks.max(cadence_ticks),
-        rounds_per_attack: image.magazine.as_ref().map_or(1, |m| m.per_shot),
+        cadence_ticks: reading.cadence_ticks,
+        rounds_per_attack: reading.rounds_per_attack,
         push: (p.impulse.max(0.0) * scale, p.vertical.max(0.0) * scale),
     };
     if result.direct_damage <= 0.0 && result.splash_damage <= 0.0 && !result.pushes() {
@@ -570,6 +607,52 @@ pub fn native_capability(
         .validate()
         .map_err(|_| DescriptorRequired::InvalidNativeData)?;
     Ok(result)
+}
+
+/// A vehicle gun's attack: its projectile `p` launched at the gun's
+/// `speed` (a charged gun at full charge), one shot each `cooldown_ticks`,
+/// from a vehicle of `scale`.
+pub fn vehicle_capability(
+    p: &bri_weapons::ProjectileDef,
+    speed: f32,
+    scale: f32,
+    cooldown_ticks: u32,
+    charged: bool,
+    projectiles: &std::collections::BTreeMap<String, bri_weapons::ProjectileDef>,
+) -> Result<Capability, DescriptorRequired> {
+    if p.aura.is_some() {
+        return Err(DescriptorRequired::SecondaryEffects);
+    }
+    if !p.collide_players {
+        return Err(DescriptorRequired::NonActorAttack);
+    }
+    if !scale.is_finite() || !(0.01..=100.0).contains(&scale) || cooldown_ticks == 0 {
+        return Err(DescriptorRequired::InvalidNativeData);
+    }
+    let danger = fragment_reach(p, scale, projectiles)?;
+    let flight = Flight {
+        speed,
+        fall_per_tick: bri_weapons::runtime::fall_per_tick(p),
+        inherit: p.inherit * scale,
+        lifetime_ticks: p.lifetime_ticks,
+    };
+    projectile_attack(
+        p,
+        scale,
+        Delivery::Projectile(flight),
+        Trigger {
+            hold: false,
+            charge_on_release: charged,
+        },
+        Reading {
+            reach: speed * p.lifetime_ticks as f32 / HZ as f32,
+            near: 0.0,
+            direct: None,
+            cadence_ticks: cooldown_ticks,
+            rounds_per_attack: 1,
+            danger,
+        },
+    )
 }
 
 /// How far past its own blast the fragments `p` throws out can hurt: each
