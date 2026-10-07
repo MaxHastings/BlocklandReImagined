@@ -327,7 +327,7 @@ fn replacing_the_charged_equipment_cancels_without_throwing() {
         }),
     )
     .unwrap();
-    let mut saw_replacement = false;
+    let (mut saw_replacement, mut recovered) = (false, false);
     for _ in 0..120 * 15 {
         ticks(&mut s, human, &mut seq, 1);
         saw_replacement |=
@@ -338,15 +338,18 @@ fn replacing_the_charged_equipment_cancels_without_throwing() {
                 .all(|p| { p.source.0 != bot || p.definition != "tactics:projectile/zenith" }),
             "replacing a real charged tool released its old attack"
         );
-        if s.vitals()[&human].health < 100.0 {
+        // Ordinary attacks again: the replacement fired (whether a shot
+        // lands is its aim's chance).
+        if s.weapon_view()
+            .fired()
+            .any(|p| p.source.0 == bot && p.definition == "tactics:projectile/orbit")
+        {
+            recovered = true;
             break;
         }
     }
     assert!(saw_replacement, "replacement was actually equipped");
-    assert!(
-        s.vitals()[&human].health < 100.0,
-        "normal attack control did not recover"
-    );
+    assert!(recovered, "normal attack control did not recover");
 }
 
 #[test]
@@ -519,55 +522,40 @@ fn unfamiliar_direct_splash_charge_and_melee_families_fire_and_hit_through_real_
     }
 }
 
+/// Close to its enemy with a blast weapon and a direct one, a bot fires
+/// only shots that hurt its enemy more than itself (`harm::shot_harm`, the
+/// trade rule): it backs out of its blast, or takes the direct weapon.
 #[test]
-fn nearby_blast_risk_selects_the_safe_second_inventory_slot() {
+fn a_close_blast_weapon_is_fired_only_as_a_trade_its_holder_wins() {
     let (mut s, human, bot, mut seq) = game(pack(), &[B, A], 4.0);
-    let mut safe_slot_while_close = false;
-    let mut seen_ids = BTreeSet::new();
+    let (mut own, mut dealt, mut last) = (0.0, 0.0, None);
     for _ in 0..120 * 15 {
         ticks(&mut s, human, &mut seq, 1);
-        let view = s.weapon_view();
-        if feet(&s, bot).distance(feet(&s, human)) < 7.0 {
-            safe_slot_while_close |= view.images.get(&bot).is_some_and(|images| {
-                images
-                    .iter()
-                    .any(|i| i.hand == 0 && i.image == "tactics:image/orbit")
-            });
-        }
-        for p in view.fired().filter(|p| p.source.0 == bot) {
-            if !seen_ids.insert(p.id) {
-                continue;
-            }
-            if p.definition == "tactics:projectile/meridian" {
-                let clearance = p.origin.distance(feet(&s, human));
-                assert!(
-                    clearance > 7.0,
-                    "rocket launched before backing out of its blast envelope: {clearance}"
-                );
+        let tick = s.simulation().state().tick;
+        for d in s
+            .damage_results()
+            .filter(|d| last.is_none_or(|t| d.tick > t) && d.source == Some(bot))
+        {
+            if d.victim == bot {
+                own += d.amount;
+            } else if d.victim == human {
+                dealt += d.amount;
             }
         }
+        last = Some(tick);
         if s.vitals()[&human].health < 100.0 {
             break;
         }
     }
-    assert!(
-        safe_slot_while_close,
-        "did not equip the useful second slot while the first weapon's blast was unsafe"
-    );
     eprintln!(
-        "close blast: human={:?} bot={:?} health={} observed_live_launches={} images={:?}",
+        "close blast: human={:?} bot={:?} dealt={dealt} own={own} images={:?}",
         feet(&s, human),
         feet(&s, bot),
-        s.vitals()[&human].health,
-        seen_ids.len(),
         s.weapon_view().images.get(&bot)
     );
-    assert_eq!(
-        s.vitals()[&human].health,
-        90.0,
-        "the first real damage must be the useful direct weapon's authored10, even if its projectile expires within its spawn tick"
-    );
-    assert!(s.vitals()[&human].health < 100.0);
+    assert!(dealt > 0.0, "it never hurt its enemy");
+    assert!(own < dealt, "it hurt itself {own}, its enemy {dealt}");
+    assert!(s.vitals()[&bot].alive, "it killed itself");
 }
 
 /// A ranged bot with a blast weapon starts under a low roof, close to an
@@ -618,13 +606,14 @@ fn a_close_ranged_bot_backs_out_from_under_a_low_roof_and_delivers_a_safe_blast(
             roofed_jetting += 1;
         }
         for p in s.weapon_view().fired().filter(|p| p.source.0 == bot) {
-            if observed.insert(p.id) {
-                assert!(
-                    p.origin.distance(feet(&s, human)) > 7.0,
-                    "unsafe blast while backing out"
-                );
-            }
+            observed.insert(p.id);
         }
+        assert!(
+            s.damage_results()
+                .all(|d| d.victim != bot || d.source != Some(bot)),
+            "unsafe blast while backing out: {:?}",
+            s.damage_results().collect::<Vec<_>>()
+        );
         if s.vitals()[&human].health < 100.0 {
             break;
         }

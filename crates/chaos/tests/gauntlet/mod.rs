@@ -431,6 +431,13 @@ pub struct Report {
     pub off_target: u64,
     /// Shots whose line passes nearest an ally.
     pub at_ally: u64,
+    /// Health each side's players took from their own side, and from the
+    /// other sides, over the match.
+    pub team_damage: f32,
+    pub enemy_damage: f32,
+    /// Bot ticks with a planned shot that would hurt its own side as much
+    /// as its enemies, or kill a teammate (`BotThought::planned`).
+    pub bad_plans: u64,
     /// Scenario-specific progress (captures, laps, goals).
     pub progress: BTreeMap<String, i64>,
     /// Bots seen at least once.
@@ -483,7 +490,7 @@ impl Report {
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} off_target={} at_ally={} \
+             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
              progress={:?}",
             self.name,
             self.bots,
@@ -504,6 +511,8 @@ impl Report {
             self.shots,
             self.off_target,
             self.at_ally,
+            self.team_damage,
+            self.enemy_damage,
             self.progress
         );
         let mut top: Vec<_> = self.transitions.iter().collect();
@@ -569,6 +578,8 @@ pub struct Scorer {
     harmless: BTreeSet<String>,
     seen_deaths: usize,
     last_death_tick: u64,
+    /// Damage results already counted: those at or before this tick.
+    last_damage_tick: Option<u64>,
     /// Floor height: under `floor - 2` is fallen.
     floor: f32,
     seen: BTreeSet<OwnerId>,
@@ -599,6 +610,7 @@ impl Scorer {
                 .collect(),
             seen_deaths: 0,
             last_death_tick: 0,
+            last_damage_tick: None,
             floor,
             seen: BTreeSet::new(),
             picks: BTreeSet::new(),
@@ -625,6 +637,13 @@ impl Scorer {
         let thoughts: BTreeMap<OwnerId, bri_sim::session::BotThought> =
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
+        for t in thoughts.values() {
+            if t.planned
+                .is_some_and(|p| p.kills_ally || (p.ally > 0.0 && p.ally >= p.enemy))
+            {
+                self.report.bad_plans += 1;
+            }
+        }
         let trace = std::env::var("BRI_GAUNTLET_TRACE")
             .is_ok_and(|t| self.report.name.contains(&t))
             && tick.is_multiple_of(60);
@@ -924,5 +943,22 @@ impl Scorer {
             }
         }
         self.report.bots = self.seen.len();
+        // Damage between players, by side: the health each new hit took.
+        for d in s
+            .damage_results()
+            .filter(|d| self.last_damage_tick.is_none_or(|t| d.tick > t))
+        {
+            let (Some(by), Some(side)) = (d.source, sides.get(&d.victim)) else {
+                continue;
+            };
+            match sides.get(&by) {
+                Some(theirs) if by != d.victim && theirs == side => {
+                    self.report.team_damage += d.amount
+                }
+                Some(_) if by != d.victim => self.report.enemy_damage += d.amount,
+                _ => {}
+            }
+        }
+        self.last_damage_tick = Some(tick);
     }
 }

@@ -107,22 +107,20 @@ pub(super) struct Opportunity {
 }
 
 /// The space a shot from `origin` at `target` sweeps: on `past` beyond,
-/// `splash` wide, widening by `spread` radians; none for a shot too short
-/// to judge (`Session::bot_fire_clear`).
+/// `radius` wide; none for a shot too short to judge.
 pub(super) fn shot_space(
     origin: Vec3,
     target: Vec3,
-    splash: f32,
+    radius: f32,
     past: f32,
-    spread: f32,
 ) -> Option<super::claims::Space> {
     let delta = target - origin;
     let length = delta.length();
     (length >= 0.01).then(|| super::claims::Space {
         from: origin,
         to: origin + delta / length * (length + past),
-        radius: splash,
-        spread: spread.tan(),
+        radius,
+        spread: 0.0,
     })
 }
 
@@ -1252,34 +1250,6 @@ impl Session {
             Vec3::from(v.transform.position)
                 + glam::Quat::from_array(v.transform.rotation) * local * v.scale,
         )
-    }
-
-    /// No ally stands in the line of fire from `origin` to `target`, nor
-    /// within `past` beyond the target, where a miss carries on. The line
-    /// widens by `spread` radians, how far off its aim may send the shot.
-    pub(super) fn bot_fire_clear(
-        &self,
-        bot: OwnerId,
-        origin: Vec3,
-        target: Vec3,
-        splash: f32,
-        past: f32,
-        spread: f32,
-    ) -> bool {
-        let Some(space) = shot_space(origin, target, splash, past, spread) else {
-            return false;
-        };
-        let mount = self.mounted(bot).map(|(v, _)| v);
-        // The cheap geometry first: the side is looked up only for a body
-        // in the way.
-        !self.peers.iter().any(|(o, p)| {
-            let half = p.player.tuning().stand_height * 0.5;
-            *o != bot
-                && p.combat.alive
-                && space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
-                && !(mount.is_some() && mount == self.mounted(*o).map(|(v, _)| v))
-                && self.bot_allies(bot, *o)
-        })
     }
 
     pub(super) fn bot_vehicle_body(&self, bot: OwnerId) -> Option<(Vec3, Body)> {

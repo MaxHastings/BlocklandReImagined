@@ -199,6 +199,11 @@ fn sane(r: &Report) {
         r.name,
         r.per_bot_minute(r.switches)
     );
+    assert_eq!(
+        r.bad_plans, 0,
+        "{}: no planned shot hurts its side as much as its enemies or kills a teammate",
+        r.name
+    );
 }
 
 #[test]
@@ -214,7 +219,13 @@ fn deathmatch_open_field() {
     // With human aim (`perception`) and dodge hops (`extras`) 41 kills
     // where nearly every shot landing gave 69; 40 is still a fight.
     assert!(r.kills > 0, "a real fight: {}", r.kills);
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    assert!(
+        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
+        "a side hurts its own less than its enemies: {} vs {}",
+        r.team_damage,
+        r.enemy_damage
+    );
     sane(&r);
 }
 
@@ -253,7 +264,13 @@ fn deathmatch_mixed_arsenal() {
     assert!(r.kills > 0, "a real fight: {}", r.kills);
     sane(&r);
     assert_eq!(r.self_kills, 0, "no bot blew itself up");
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    assert!(
+        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
+        "a side hurts its own less than its enemies: {} vs {}",
+        r.team_damage,
+        r.enemy_damage
+    );
 }
 
 #[test]
@@ -275,7 +292,13 @@ fn rooftop_brawl_without_rails() {
     // Its own doing only: an enemy's shot that knocks it off is a shove
     // that worked (`knocked_off`, printed above).
     assert_eq!(r.fell, 0, "no bot strafed off the deck");
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    assert!(
+        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
+        "a side hurts its own less than its enemies: {} vs {}",
+        r.team_damage,
+        r.enemy_damage
+    );
 }
 
 /// A staircase of `steps` bricks rising `rise` each toward +x from `at`.
@@ -492,7 +515,13 @@ fn zombie_survival() {
         r.kills
     );
     sane(&r);
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    assert!(
+        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
+        "a side hurts its own less than its enemies: {} vs {}",
+        r.team_damage,
+        r.enemy_damage
+    );
 }
 
 #[test]
@@ -507,7 +536,13 @@ fn capture_the_flag() {
     sane(&r);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(caps > 0, "flags were run home: {:?}", r.progress);
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    assert!(
+        r.team_damage < r.enemy_damage.max(f32::MIN_POSITIVE),
+        "a side hurts its own less than its enemies: {} vs {}",
+        r.team_damage,
+        r.enemy_damage
+    );
 }
 
 /// Runners and nothing else: no weapon and no fighting, each side's flag
@@ -872,6 +907,23 @@ fn off_switches() {
 #[ignore = "tuning tool: slow"]
 fn dial_sweep() {
     eprintln!("{}", gauntlet::tuning::sweep(SCENARIOS));
+}
+
+/// Over seeds, no bot plans a shot that hurts its side as much as its
+/// enemies, or that would kill a teammate (`sane`), with every kind of
+/// weapon in hand.
+#[test]
+fn no_planned_shot_trades_its_side_for_less_over_seeds() {
+    use gauntlet::tuning::{Setting, run_all};
+    let plain = [Setting {
+        label: "plain".into(),
+        dials: Vec::new(),
+    }];
+    let runs = run_all(&[("mixed", deathmatch_mixed_arsenal)], &plain, 3);
+    assert_eq!(runs.len(), 3);
+    for (_, _, seed, m) in &runs {
+        assert!(m.broken.is_none(), "seed {seed}: {:?}", m.broken);
+    }
 }
 
 /// The tools' plumbing: a dial set for a run reaches the kinds its

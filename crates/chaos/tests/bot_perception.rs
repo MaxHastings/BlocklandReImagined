@@ -262,6 +262,9 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
     kind.perception.strength = reaction;
     kind.perception.relaxed_scale = 3.0;
     kind.perception.away_scale = 1.0;
+    // No goofs: a gesture on sight would hold its fire whatever its
+    // reaction.
+    kind.surprise.strength = 0.0;
     let mut g = Game::new(kind, true);
     // Armed and fighting: it has hurt the human once.
     let mut armed = false;

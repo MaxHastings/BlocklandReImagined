@@ -40,6 +40,17 @@ pub fn bounce_velocity(velocity: Vec3, normal: Vec3, elasticity: f32, friction: 
     ((velocity - along_normal) * (1.0 - friction) - along_normal) * elasticity
 }
 
+/// `ProjectileData::onExplode`'s falloff: the share of a blast's damage or
+/// push a target `distance` from it takes, with no line-of-sight test and
+/// the distance to the target's centre. Quadratic, nothing at `radius`.
+pub fn blast_falloff(distance: f32, radius: f32) -> f32 {
+    if radius > 0.0 {
+        (1.0 - (distance / radius).powi(2)).clamped(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// What a projectile does on its own clock at `age` ticks, before it
 /// moves: `Some(true)` goes off (its cooked `fuse` ran out, or its life
 /// ended with `explode_death`), `Some(false)` fades at the end of its life,
@@ -4586,13 +4597,7 @@ impl WeaponsWorld {
         }
         // `ProjectileData::onExplode`: no line-of-sight test; distance is
         // taken to the target's centre and both falloffs are quadratic.
-        let falloff = |distance: f32, radius: f32| {
-            if radius > 0.0 {
-                (1.0 - (distance / radius).powi(2)).clamped(0.0, 1.0)
-            } else {
-                0.0
-            }
-        };
+        let falloff = blast_falloff;
         for target in targets.into_iter().take(MAX_QUERY_TARGETS) {
             if !target.center.is_finite() || !q.can_affect_radius(p.source, target.target) {
                 continue;

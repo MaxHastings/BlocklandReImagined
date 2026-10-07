@@ -157,6 +157,12 @@ impl Session {
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
                 acted: b.acted.line(),
+                planned: b.combat.intent(tick).map(|i| BotPlannedHarm {
+                    enemy: i.choice.harm.enemy,
+                    ally: i.choice.harm.ally,
+                    own: i.choice.harm.own,
+                    kills_ally: i.choice.harm.kills_ally,
+                }),
             })
             .collect()
     }
@@ -218,6 +224,7 @@ mod tests {
             noticed: None,
             team: Default::default(),
             acted: "Acts: walk route, look route, trigger none".into(),
+            planned: None,
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,

@@ -9,7 +9,7 @@
 //! raises the chance of an idle flavour as nearby bots of either side are
 //! doing one, and of the same one. Nothing here chooses: the brain's
 //! chooser, with its surprise and commitments, still picks.
-use super::claims::{Intent, Sightline, Space, Target};
+use super::claims::{Intent, Sightline, Target};
 use super::*;
 use crate::bot_kind::{BotTeam, FLAVOURS};
 
@@ -58,8 +58,9 @@ pub(super) struct State {
     pub said: Option<String>,
 }
 
-/// Whether a body standing at `feet`, `body` high, is in `space`.
-pub(super) fn inside(space: &Space, feet: Vec3, body: f32) -> bool {
+/// Whether a body standing at `feet`, `body` high, is in what a shot
+/// sweeps.
+pub(super) fn inside(space: &super::claims::Harmed, feet: Vec3, body: f32) -> bool {
     space.holds(feet + Vec3::Y * body * 0.5, body * 0.5)
 }
 

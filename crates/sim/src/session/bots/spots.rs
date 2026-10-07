@@ -506,6 +506,7 @@ mod tests {
         let enemy = s
             .join("Target".into(), Vec3::new(0.0, 0.05, ahead), false)
             .unwrap();
+        super::harm::one_game(&mut s, bot, enemy);
         let slot = s.give_item(bot, item).unwrap();
         s.equip_tool(bot, Some(slot)).unwrap();
         let mut kind = BotKind {
