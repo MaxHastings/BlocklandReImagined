@@ -978,53 +978,75 @@ fn an_armed_bot_passenger_aims_in_world_space_on_a_rotated_stationary_chassis() 
     assert!(g.s.package_diagnostics().is_empty());
 }
 
+/// A rover whose bot driver pursues the human spawned at `target`, and an
+/// ally of the driver's standing far off, once the driver has boarded.
+fn driver_and_ally(target: Vec3) -> (Game, OwnerId, OwnerId) {
+    let mut s = session(1.0);
+    s.install_packages(rules_catalog(), None).unwrap();
+    s.set_spawn_points(vec![target]).unwrap();
+    let mut g = Game::with_session(s, ROVER, 1, false);
+    let bot = g.bots()[0];
+    let friend =
+        g.s.join("Crewmate".into(), Vec3::new(90.0, 0.05, 90.0), true)
+            .unwrap();
+    g.send(g.human, rules_command("teams", vec![]));
+    g.steps(1);
+    let game = g.s.minigame_views()[0].id;
+    let team = g.s.minigame_views()[0].teams[0].id.0;
+    for teammate in [bot, friend] {
+        g.send(
+            g.human,
+            Command::MiniGame(MiniGameRequest::SetTeam {
+                game,
+                target: teammate,
+                team: Some(team),
+            }),
+        );
+    }
+    for _ in 0..120 * 12 {
+        g.steps(1);
+        if g.s.mounted(bot).is_some() {
+            break;
+        }
+    }
+    assert_eq!(g.s.mounted(bot), Some((g.vehicle, 2)), "driver boarded");
+    (g, bot, friend)
+}
+
+fn feet_of(g: &Game, owner: OwnerId) -> Vec3 {
+    Vec3::from(
+        g.s.snapshot()
+            .players
+            .into_iter()
+            .find(|p| p.owner == owner)
+            .unwrap()
+            .feet,
+    )
+}
+
+fn drop_at(g: &mut Game, owner: OwnerId, at: Vec3) {
+    g.send(
+        owner,
+        Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+            eye: [at.x, 1.65, at.z],
+            yaw: 0.0,
+            pitch: 0.0,
+        })),
+    );
+}
+
 #[test]
 fn a_driver_brakes_for_a_grounded_ally_before_forward_or_reverse_contact() {
     for (target, direction) in [
         (ENEMY, Vec3::NEG_Z),
         (Vec3::new(-30.0, 0.05, 55.0), Vec3::Z),
     ] {
-        let mut s = session(1.0);
-        s.install_packages(rules_catalog(), None).unwrap();
-        s.set_spawn_points(vec![target]).unwrap();
-        let mut g = Game::with_session(s, ROVER, 1, false);
-        let bot = g.bots()[0];
-        let friend =
-            g.s.join("Crewmate".into(), Vec3::new(90.0, 0.05, 90.0), true)
-                .unwrap();
-        g.send(g.human, rules_command("teams", vec![]));
-        g.steps(1);
-        let game = g.s.minigame_views()[0].id;
-        let team = g.s.minigame_views()[0].teams[0].id.0;
-        for teammate in [bot, friend] {
-            g.send(
-                g.human,
-                Command::MiniGame(MiniGameRequest::SetTeam {
-                    game,
-                    target: teammate,
-                    team: Some(team),
-                }),
-            );
-        }
-        for _ in 0..120 * 12 {
-            g.steps(1);
-            if g.s.mounted(bot).is_some() {
-                break;
-            }
-        }
-        assert_eq!(g.s.mounted(bot), Some((g.vehicle, 2)), "driver boarded");
+        let (mut g, _, friend) = driver_and_ally(target);
         let initial = g.position();
         let friend_at = initial + direction * 3.2;
         // Drop the human onto the ground outside the hull, rather than on
         // its roof: boarding and physical contact cannot explain a stop.
-        g.send(
-            friend,
-            Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
-                eye: [friend_at.x, 1.65, friend_at.z],
-                yaw: 0.0,
-                pitch: 0.0,
-            })),
-        );
+        drop_at(&mut g, friend, friend_at);
         let mut advance = 0.0f32;
         for _ in 0..60 {
             g.steps(1);
@@ -1039,27 +1061,13 @@ fn a_driver_brakes_for_a_grounded_ally_before_forward_or_reverse_contact() {
             advance < 0.5,
             "driver advanced toward its {direction} ally: {advance}"
         );
-        let friend_now = Vec3::from(
-            g.s.snapshot()
-                .players
-                .into_iter()
-                .find(|p| p.owner == friend)
-                .unwrap()
-                .feet,
-        );
+        let friend_now = feet_of(&g, friend);
         assert!(
             Vec3::new(friend_now.x - friend_at.x, 0.0, friend_now.z - friend_at.z).length() < 0.35,
             "the car stopped before physically pushing its ally"
         );
         assert_eq!(g.s.vitals()[&friend].health, 100.0);
-        g.send(
-            friend,
-            Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
-                eye: [friend_at.x - 20.0, 1.65, friend_at.z],
-                yaw: 0.0,
-                pitch: 0.0,
-            })),
-        );
+        drop_at(&mut g, friend, friend_at - Vec3::X * 20.0);
         let stopped = g.position();
         let mut moved = 0.0f32;
         for _ in 0..120 * 3 {
@@ -1363,8 +1371,9 @@ fn a_crew_pursues_only_the_last_observation_after_its_target_hides() {
 /// A bot from a brick at the origin boards a chassis about 40 units out
 /// and pursues a visible human about 60 units out who then runs away. The
 /// mount's own pursuit leash (`mounted` in the kind) keeps the chase going
-/// past the on-foot chase radius, and a target behind the hull is turned
-/// toward rather than driven at in reverse.
+/// past the on-foot chase radius, and a far target is turned toward rather
+/// than driven at in reverse: it may back up, but only to swing its nose
+/// round toward it.
 #[test]
 fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leash() {
     for (human_at, label) in [
@@ -1414,7 +1423,10 @@ fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leas
         let initial_gap = gap(&g);
         let mut beyond_walking_leash = false;
         let mut reversing = 0usize;
-        let mut far_ticks = 0usize;
+        // Each stretch it drove backwards: how squarely its nose faced the
+        // target when it began, and when it ended.
+        let mut backing: Option<(f32, f32)> = None;
+        let mut backings = Vec::new();
         let mut trace = Vec::new();
         let mut last = g.position();
         for tick in 0..120 * 8 {
@@ -1447,15 +1459,22 @@ fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leas
             let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
             let step = now - last;
             last = now;
-            if gap(&g) > 12.0 {
-                far_ticks += 1;
-                reversing += usize::from(Vec3::new(step.x, 0.0, step.z).dot(forward) < -0.01);
+            let to = human(&g) - now;
+            let facing = Vec3::new(forward.x, 0.0, forward.z)
+                .normalize()
+                .dot(Vec3::new(to.x, 0.0, to.z).normalize());
+            if gap(&g) > 12.0 && Vec3::new(step.x, 0.0, step.z).dot(forward) < -0.01 {
+                reversing += 1;
+                backing.get_or_insert((facing, facing)).1 = facing;
+            } else {
+                backings.extend(backing.take());
             }
         }
+        backings.extend(backing.take());
         let final_gap = gap(&g);
         let retreat = (human(&g) - start_human).dot(away);
         eprintln!(
-            "{label}: human_retreat={retreat:.2} gap {initial_gap:.2}->{final_gap:.2} reversing={reversing}/{far_ticks} chassis {start_chassis}->{}",
+            "{label}: human_retreat={retreat:.2} gap {initial_gap:.2}->{final_gap:.2} reversing={reversing} backings={backings:?} chassis {start_chassis}->{}",
             g.position()
         );
         assert!(
@@ -1471,8 +1490,8 @@ fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leas
             "the chassis closed on its retreating target ({label}): {initial_gap} -> {final_gap}; trace={trace:?}"
         );
         assert!(
-            reversing * 10 <= far_ticks,
-            "a far target is turned toward, not chased in reverse ({label}): {reversing}/{far_ticks}"
+            backings.iter().all(|(began, ended)| ended > began),
+            "a far target is turned toward, not chased in reverse ({label}): {backings:?}; trace={trace:?}"
         );
     }
 }

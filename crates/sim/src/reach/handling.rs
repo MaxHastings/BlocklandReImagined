@@ -27,8 +27,13 @@ const HOLD_SECONDS: f32 = 0.5;
 const READ_SECONDS: f32 = 0.5;
 /// Below this speed it has stopped.
 const STOPPED: f32 = 0.1;
-/// The longest any one run drives for.
-const MAX_SECONDS: f32 = 30.0;
+/// The most simulated time one measurement drives for, all its runs
+/// together: settling, the straight run and every turning run. Past it, the
+/// measurement keeps what it has (the turns it read so far), so an odd
+/// chassis costs a bounded, deterministic amount once. The stock test car
+/// takes about half of it (58 s); a chassis twice as slow to speed up or
+/// stop still measures whole.
+const BUDGET_SECONDS: f32 = 120.0;
 /// The longest it is given to settle on its wheels once dropped.
 const SETTLE_SECONDS: f32 = 2.0;
 /// The shares of its full lock it is measured turning at: the turns
@@ -86,10 +91,14 @@ impl Handling {
 
     /// Measures it, sharing nothing.
     pub fn measure(definition: &Definition, scale: f32) -> Option<Self> {
-        let (top, stops) = straight(definition, scale)?;
+        Self::measure_within(definition, scale, &mut Budget::new())
+    }
+
+    fn measure_within(definition: &Definition, scale: f32, budget: &mut Budget) -> Option<Self> {
+        let (top, stops) = straight(definition, scale, budget)?;
         let mut samples: Vec<(f32, f32)> = LOCKS
             .iter()
-            .filter_map(|&lock| turning(definition, scale, lock))
+            .filter_map(|&lock| turning(definition, scale, lock, budget))
             .flatten()
             .collect();
         let tightest = samples.iter().map(|s| s.0).fold(0.0, f32::max);
@@ -185,7 +194,11 @@ impl Handling {
 }
 
 /// The test floor with the vehicle settled on it and a driver in its seat.
-fn stand(definition: &Definition, scale: f32) -> Option<(VehiclesWorld, PhysicsWorld)> {
+fn stand(
+    definition: &Definition,
+    scale: f32,
+    budget: &mut Budget,
+) -> Option<(VehiclesWorld, PhysicsWorld)> {
     let mut vehicles = VehiclesWorld::new(Pack {
         schema_version: bri_vehicles::schema::SCHEMA_VERSION,
         definitions: vec![definition.clone()],
@@ -238,6 +251,9 @@ fn stand(definition: &Definition, scale: f32) -> Option<(VehiclesWorld, PhysicsW
         .ok()?;
     let mut run = Run::new(vehicles, world)?;
     for _ in 0..ticks(SETTLE_SECONDS) {
+        if !budget.spend() {
+            return None;
+        }
         let state = run.step(Controls::default())?;
         if state.speed < STOPPED && state.velocity.y.abs() < STOPPED {
             break;
@@ -248,6 +264,18 @@ fn stand(definition: &Definition, scale: f32) -> Option<(VehiclesWorld, PhysicsW
 
 fn ticks(seconds: f32) -> usize {
     (seconds / FIXED_DT).ceil() as usize
+}
+
+/// The ticks one measurement has left to drive ([`BUDGET_SECONDS`]).
+struct Budget(usize);
+impl Budget {
+    fn new() -> Self {
+        Self(ticks(BUDGET_SECONDS))
+    }
+    /// Takes one tick; `false` once none are left.
+    fn spend(&mut self) -> bool {
+        self.0.checked_sub(1).map(|left| self.0 = left).is_some()
+    }
 }
 
 /// The chassis as one tick left it.
@@ -297,9 +325,10 @@ impl Run {
     }
     /// A driver's throttle straight ahead until its speed stops rising:
     /// its top speed, unless it tipped over.
-    fn top_speed(&mut self) -> Option<f32> {
-        let mut last_second = 0.0;
-        for tick in 1..=ticks(MAX_SECONDS) {
+    fn top_speed(&mut self, budget: &mut Budget) -> Option<f32> {
+        let (mut last_second, mut tick) = (0.0, 0);
+        while budget.spend() {
+            tick += 1;
             let state = self.step(Controls {
                 throttle: crate::route::DRIVE_THROTTLE,
                 ..Default::default()
@@ -320,13 +349,17 @@ impl Run {
 
 /// Its top speed driving straight, then braking from it: each speed it
 /// fell through and how far it rolled from there to a stop.
-fn straight(definition: &Definition, scale: f32) -> Option<(f32, Vec<(f32, f32)>)> {
-    let (vehicles, world) = stand(definition, scale)?;
+fn straight(
+    definition: &Definition,
+    scale: f32,
+    budget: &mut Budget,
+) -> Option<(f32, Vec<(f32, f32)>)> {
+    let (vehicles, world) = stand(definition, scale, budget)?;
     let mut run = Run::new(vehicles, world)?;
-    let top = run.top_speed()?;
+    let top = run.top_speed(budget)?;
     let mut trail: Vec<(f32, Vec3)> = vec![];
     let mut stopped = None;
-    for _ in 0..ticks(MAX_SECONDS) {
+    while budget.spend() {
         let state = run.step(Controls {
             brake: true,
             ..Default::default()
@@ -358,13 +391,17 @@ fn straight(definition: &Definition, scale: f32) -> Option<(f32, Vec<(f32, f32)>
 /// [`TURN_SPACING`] apart in turn: the curvature of its path once the turn
 /// has settled, as (curvature, speed held). It stops at the first speed it
 /// cannot reach or hold on that lock, or where it tips over.
-fn turning(definition: &Definition, scale: f32, lock: f32) -> Option<Vec<(f32, f32)>> {
-    let (vehicles, world) = stand(definition, scale)?;
+fn turning(
+    definition: &Definition,
+    scale: f32,
+    lock: f32,
+    budget: &mut Budget,
+) -> Option<Vec<(f32, f32)>> {
+    let (vehicles, world) = stand(definition, scale, budget)?;
     let mut run = Run::new(vehicles, world)?;
     let mut look = definition.max_steering * lock;
     let mut samples = vec![];
     let mut speed = 0.0;
-    let mut budget = ticks(MAX_SECONDS);
     let mut target = TURN_SPACING;
     loop {
         // Up to it, unless it stops gaining.
@@ -379,10 +416,9 @@ fn turning(definition: &Definition, scale: f32, lock: f32) -> Option<Vec<(f32, f
             look = 0.0;
             speed = state.speed;
             tick += 1;
-            let Some(left) = budget.checked_sub(1) else {
+            if !budget.spend() {
                 return Some(samples);
-            };
-            budget = left;
+            }
             if !state.upright {
                 return Some(samples);
             }
@@ -408,10 +444,9 @@ fn turning(definition: &Definition, scale: f32, lock: f32) -> Option<Vec<(f32, f
                 ..Default::default()
             })?;
             speed = state.speed;
-            let Some(left) = budget.checked_sub(1) else {
+            if !budget.spend() {
                 return Some(samples);
-            };
-            budget = left;
+            }
             if !state.upright {
                 return Some(samples);
             }
@@ -475,6 +510,23 @@ mod tests {
         assert!((h.stopping_speed(d) - h.top * 0.5).abs() < 0.1);
         assert!(h.arc_speed(h.tightest * 4.0) >= h.manoeuvre_speed(0.0));
         assert!(h.arc_speed(1e6) <= h.top * 1.0001);
+    }
+
+    /// The test car is measured whole (every lock read up to the speed it
+    /// stops holding) well inside the cap, and the cap is what ends a
+    /// measurement given less.
+    #[test]
+    fn a_measurement_drives_no_longer_than_its_budget() {
+        let d = car(|_| {});
+        let budget = &mut Budget::new();
+        let whole = Handling::measure_within(&d, 1.0, budget).expect("it drives");
+        let spent = ticks(BUDGET_SECONDS) - budget.0;
+        assert!(spent * 2 <= ticks(BUDGET_SECONDS), "{spent}");
+        assert_eq!(Handling::measure(&d, 1.0).as_ref(), Some(&whole));
+        let short = &mut Budget(spent / 2);
+        let cut = Handling::measure_within(&d, 1.0, short);
+        assert_eq!(short.0, 0);
+        assert_ne!(cut.as_ref(), Some(&whole));
     }
 
     #[test]
