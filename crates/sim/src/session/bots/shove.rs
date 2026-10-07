@@ -61,11 +61,8 @@ impl Session {
         let velocity = Vec3::from(state.velocity)
             + (direction.normalize_or_zero() * push.0 + Vec3::Y * push.1)
                 / crate::session::combat::PLAYER_MASS;
-        let tuning = if state.scale == 1.0 {
-            peer.player.tuning().clone()
-        } else {
-            peer.player.tuning().clone().scaled(state.scale)
-        };
+        // The tuning a player keeps has its scale in it already.
+        let tuning = peer.player.tuning().clone();
         let simulation = &self.simulation;
         let terrain = |o: Vec3, d: Vec3, r: f32| simulation.terrain_ray(o, d, r);
         let waters = simulation.liquids();
@@ -165,6 +162,37 @@ mod tests {
         assert_eq!(shove(&s, bot, target, Vec3::X).0, 0.0, "falling damage off");
         let (s, bot, target) = deck(None);
         assert_eq!(shove(&s, bot, target, Vec3::X), (0.0, None), "into nothing");
+    }
+
+    #[test]
+    fn a_scaled_target_is_flown_at_its_own_size_once() {
+        let (mut s, bot, target) = deck(Some(30.0));
+        s.set_player_scale(target, 2.0).unwrap();
+        let (_, landing) = shove(&s, bot, target, Vec3::X);
+        // The same shove flown with the tuning the player keeps, which
+        // has its scale in it already.
+        let peer = &s.peers[&target];
+        let velocity = Vec3::from(peer.player.state().velocity) + Vec3::new(8.0, 4.0, 0.0);
+        let simulation = &s.simulation;
+        let terrain = |o: Vec3, d: Vec3, r: f32| simulation.terrain_ray(o, d, r);
+        let waters = simulation.liquids();
+        let ground = Ground {
+            physics: &simulation.physics,
+            terrain: &terrain,
+            passages: simulation.passages(),
+            waters: &waters,
+            bodies: &[],
+            motions: &[],
+        };
+        let mut allowance = 4096;
+        let flown = crate::reach::shove_landing(
+            peer.player.tuning(),
+            Vec3::from(peer.player.state().feet),
+            velocity,
+            &ground,
+            &mut allowance,
+        );
+        assert_eq!(landing.map(|l| l.at), flown.map(|(at, _)| at));
     }
 
     #[test]
