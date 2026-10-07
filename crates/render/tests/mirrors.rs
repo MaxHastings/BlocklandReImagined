@@ -774,8 +774,23 @@ fn a_window_onto_a_far_place_shows_the_shadows_standing_there_would() -> Result<
     // shadows on the far side showed only once he went through. The sun's
     // shadows were fitted around the player alone; a view from far away
     // fits its own.
+    window_shows_the_shadows_standing_there_would(Vec3::new(1000.0, 0.0, 0.0))
+}
+
+#[test]
+fn a_window_onto_a_place_at_the_edge_of_the_players_shadows_shows_them() -> Result<()> {
+    // Max's second report: a partner ahead of the player, near the end of
+    // the player's shadow distance, still showed none. Its eye lies inside
+    // the player's last cascade, but what it looks at lies past the
+    // distance (or where the shadows fade out).
+    let ahead = ShadowSettings::LOW.distance;
+    window_shows_the_shadows_standing_there_would(Vec3::new(0.0, 0.0, -ahead))
+}
+
+/// Through a window whose partner is `far` from it, the floor past the
+/// partner shows the shadow standing there would.
+fn window_shows_the_shadows_standing_there_would(far: Vec3) -> Result<()> {
     let gpu = Gpu::turn()?;
-    let far = Vec3::new(1000.0, 0.0, 0.0);
     let carry = glam::Affine3A::from_translation(far);
     let window = |corners: [Vec3; 4], carry: glam::Affine3A| Mirror {
         corners,

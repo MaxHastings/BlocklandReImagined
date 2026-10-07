@@ -1095,8 +1095,8 @@ impl App {
         );
         item_draws.extend(shared_draws.iter().copied());
         use bri_render::scene::ShadowCasters;
-        // Every view's shadow casters: views whose eye the player's shadows
-        // do not reach (a window onto a far place) draw their own from them.
+        // Every view's shadow casters: mirror and window planes draw their
+        // own sun shadows from them.
         let (bodies, cast_models, blockers, blocking, map, terrain_map) = {
             // Players, vehicles and items (dropped and held) cast, like v20's
             // projected shape shadows; bricks only with the BrickShadows pref,

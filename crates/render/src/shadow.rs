@@ -654,8 +654,6 @@ pub(crate) struct ShadowMaps {
     /// Opaque, alpha-masked and cut opaque occluder pipelines.
     pub occluder_pipelines: [wgpu::RenderPipeline; 3],
     pub cascades: Vec<Cascade>,
-    /// The player's view direction the cascades split along.
-    forward: Vec3,
     /// The player's receiver uniform this frame, which every view starts
     /// from.
     player: ShadowUniform,
@@ -996,7 +994,6 @@ impl ShadowMaps {
                 ),
             ],
             cascades: Vec::new(),
-            forward: Vec3::ZERO,
             player: ShadowUniform::zeroed_disabled(),
             views: vec![(false, Vec::new()); FITTED_VIEWS - 1],
             sun: Vec3::ZERO,
@@ -1027,12 +1024,10 @@ impl ShadowMaps {
         });
         let mut uniform = ShadowUniform::zeroed_disabled();
         self.cascades.clear();
-        self.forward = Vec3::ZERO;
         self.sun = sun.normalize_or_zero();
         if let (Some(settings), Some((cascades, forward))) = (self.settings, fitted) {
             self.write_cascades(queue, 0, &mut uniform, &settings, &cascades, forward, eye);
             self.cascades = cascades;
-            self.forward = forward;
         }
         let previous: Vec<usize> = self.lamps.iter().flatten().map(|l| l.light).collect();
         let mut slots: Vec<Option<Lamp>> = Vec::new();
@@ -1198,26 +1193,9 @@ impl ShadowMaps {
             0.0,
         ];
     }
-    /// Whether the player's cascades hold `point` (as receivers find their
-    /// cascade): a view seen from there can read the player's shadows.
-    pub fn reach(&self, point: Vec3) -> bool {
-        let Some(last) = self.cascades.last() else {
-            return false;
-        };
-        let margin = 3.0 / self.resolution() as f32;
-        let eye = Vec4::from(self.player.origin).truncate();
-        (point - eye).dot(self.forward) < last.far
-            && self.cascades.iter().any(|cascade| {
-                let clip = cascade.view_projection.project_point3(point);
-                let uv = glam::Vec2::new(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
-                uv.cmpgt(glam::Vec2::splat(margin)).all()
-                    && uv.cmplt(glam::Vec2::splat(1.0 - margin)).all()
-                    && (0.0..1.0).contains(&clip.z)
-            })
-    }
     /// Fit cascades of `view`'s own (a live plane, after `update`) to its
-    /// camera, for receivers it draws: its eye lies past the player's
-    /// shadows. Lamps stay the player's. False when `view` cannot have its
+    /// camera, for receivers it draws: what it shows lies outside the
+    /// player's frustum. Lamps stay the player's. False when `view` cannot have its
     /// own (shadows off, or not a plane), and it reads the player's.
     pub fn fit_view(
         &mut self,
