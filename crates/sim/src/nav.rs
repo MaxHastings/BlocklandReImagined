@@ -242,13 +242,63 @@ impl Ground<'_> {
         let samples = (across / (CELL * 0.5)).ceil() as usize;
         (1..samples).all(|i| {
             let at = from.lerp(to, i as f32 / samples as f32);
-            let top = at + Vec3::Y * (body.step + 0.05);
-            self.ray(top, Vec3::NEG_Y, body.step * 2.0 + 0.1)
-                .is_some_and(|(distance, normal)| {
-                    (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
-                })
-                && self.floats(body, at).is_none()
+            self.stands(body, at) && self.floats(body, at).is_none()
         })
+    }
+    /// Whether a floor the body can stand on lies within a step of `at`.
+    fn stands(&self, body: &Body, at: Vec3) -> bool {
+        let top = at + Vec3::Y * (body.step + 0.05);
+        self.ray(top, Vec3::NEG_Y, body.step * 2.0 + 0.1)
+            .is_some_and(|(distance, normal)| {
+                (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
+            })
+    }
+    /// Where the full-width body stands at a grid node's `feet`: there, or
+    /// pushed sideways out of what it overlaps by no more than the half
+    /// cell the grid's narrower clearance box left it (`Body::clearance`),
+    /// onto a floor it stands on. `None` when it fits nowhere in that slack.
+    /// So a route through a gap only just wider than the body crosses where
+    /// the whole body fits, not on the cell line beside it.
+    pub fn settle(&self, body: &Body, feet: Vec3, crouched: bool) -> Option<Vec3> {
+        let (_, lift, tall) = body.clearance(crouched);
+        let shape = SharedShape::cuboid(body.width * 0.5, tall * 0.5, body.width * 0.5);
+        let query = self.physics.query_pipeline_with_filter(Self::filter());
+        // Each push spends some of the half cell on each axis; when that
+        // runs out, it fits nowhere near enough. Every push is at least
+        // `SETTLE_GAP`, so this ends.
+        let (mut at, mut spent) = (feet, Vec3::ZERO);
+        loop {
+            let pose = Pose::translation(at.x, at.y + lift + tall * 0.5, at.z);
+            // The deepest overlap, as the way out and how far.
+            let deepest = query
+                .intersect_shape(pose, shape.as_ref())
+                .filter_map(|(_, other)| {
+                    rapier3d::parry::query::contact(
+                        &pose,
+                        shape.as_ref(),
+                        other.position(),
+                        other.shape(),
+                        0.0,
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .map(|c| (-Vec3::from(c.normal1.to_array()), -c.dist))
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            let Some((out, depth)) = deepest else {
+                return self.stands(body, at).then_some(at);
+            };
+            let sideways = Vec3::new(out.x, 0.0, out.z);
+            if sideways.length() < f32::EPSILON {
+                return None;
+            }
+            let push = sideways.normalize() * (depth.max(0.0) / sideways.length() + SETTLE_GAP);
+            spent += push.abs();
+            if spent.max_element() > CELL * 0.5 {
+                return None;
+            }
+            at += push;
+        }
     }
     /// Whether a straight walk from `from` to `to` passes within reach of a
     /// moving body about (`bodies`), or of where it is going over the next
@@ -378,6 +428,9 @@ pub enum Mode {
 
 /// Most grid steps a pulled straight walk passes over at once.
 const PULL_REACH: usize = 16;
+/// How far past touching [`Ground::settle`] pushes a body out of what it
+/// overlapped, so the standing box it then tests no longer touches it.
+const SETTLE_GAP: f32 = 0.01;
 
 /// A walk route off the grid with its corners pulled straight: from
 /// `from`, each plain walking waypoint (no jump, crawl, opening or other
@@ -1155,7 +1208,7 @@ impl Search {
                 Some(node) => node,
                 None => {
                     let Some(open) = self.open.pop() else {
-                        return Some(self.finish(false));
+                        return Some(self.finish(ground, body, false));
                     };
                     let g = self.came[&open.node].cost;
                     // A stale heap entry for a node since reached cheaper.
@@ -1167,10 +1220,10 @@ impl Search {
             };
             if self.arrived(node) {
                 self.best = Some((node, 0.0));
-                return Some(self.finish(true));
+                return Some(self.finish(ground, body, true));
             }
             if self.expanded >= MAX_EXPANSIONS {
-                return Some(self.finish(false));
+                return Some(self.finish(ground, body, false));
             }
             if nav.expansions == 0 {
                 self.pending = Some(node);
@@ -1233,15 +1286,21 @@ impl Search {
             }
         }
     }
-    fn finish(&self, arrived: bool) -> Found {
+    fn finish(&self, ground: &Ground, body: &Body, arrived: bool) -> Found {
         let Some((mut node, _)) = self.best else {
             return Found::Nowhere;
         };
         let mut steps = Vec::new();
         loop {
             let came = self.came[&node];
+            // A walk node stands the whole body where it fits.
+            let walks = came.mode == Mode::Walk && !came.jump && came.through.is_none();
+            let feet = node.feet();
             steps.push(Waypoint {
-                feet: node.feet(),
+                feet: walks
+                    .then(|| ground.settle(body, feet, came.crouch))
+                    .flatten()
+                    .unwrap_or(feet),
                 jump: came.jump,
                 through: came.through,
                 crouch: came.crouch,
@@ -1854,6 +1913,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A doorway only a little wider than the body, off the cell grid: the
+    /// route crosses where the whole body fits between the jambs.
+    #[test]
+    fn a_route_through_a_tight_doorway_keeps_the_whole_body_clear() {
+        let tall = body().jump + body().height;
+        let physics = world(&[
+            floor(),
+            (Vec3::new(8.0, 0.0, 22.0), Vec3::new(8.5, tall, 29.5)),
+            (Vec3::new(8.0, 0.0, 31.0), Vec3::new(8.5, tall, 38.5)),
+        ]);
+        let ground = open_ground(&physics);
+        let (from, goal) = (Vec3::new(16.0, 0.0, 30.0), Vec3::new(0.5, 0.0, 30.0));
+        let (found, _) = search(&physics, from, goal);
+        let raw = path(found);
+        let pulled = pull(&ground, &body(), from, raw);
+        every_leg_walkable(&ground, from, &pulled);
+        let crossing = std::iter::once(from)
+            .chain(pulled.iter().map(|w| w.feet))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find_map(|s| {
+                let (a, b) = (s[0], s[1]);
+                (a.x > 8.25 && b.x <= 8.25).then(|| a.z + (b.z - a.z) * (8.25 - a.x) / (b.x - a.x))
+            })
+            .expect("crosses the wall");
+        assert!(
+            (crossing - 30.25).abs() <= 0.75 - body().width * 0.5,
+            "{crossing}: {pulled:?}"
+        );
     }
 
     #[test]
