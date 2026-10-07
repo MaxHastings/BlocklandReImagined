@@ -1191,6 +1191,7 @@ impl App {
                 &self.vehicles,
                 view,
                 local,
+                self.motion.local_eye(),
             );
             let synced = self.fx.effects.sync(view.world.clone(), meshes);
             self.cosmetic_faults.absorb("world effects", synced);
