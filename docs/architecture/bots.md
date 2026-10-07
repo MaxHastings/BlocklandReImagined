@@ -187,12 +187,26 @@ Edges are the ways the bot's body can actually move between them now:
 | Edge | Exists when | Costs (seconds of travel, in walking units) |
 |---|---|---|
 | walk, step | the motor steps it (`Body::step`) | distance |
-| jump | a ledge within the body's jump apex | distance + a jump |
+| jump | a ledge no higher than the body was measured to jump onto (`reach::Reach::ledge`) | distance + a jump |
 | crawl | only a crouched body fits | distance + crawling |
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
-| jet | the body can jet (`can_jet`, energy, the kind's `fly` weight above 0), the column up from the launch cell, the crossing at the apex and the descent are clear, and the climb is within the energy | the flight time from the jet's thrust, lift and gravity, plus takeoff |
+| jet | the body's jets lift it (measured), the kind's `fly` weight is above 0, the full-width column up from the launch cell, the crossing at the apex and the descent are clear, and its energy holds the leg's measured jetting | the leg's measured flight time (`reach::JetReach`), plus takeoff |
 | board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk (`route::drive_serves`; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
+
+**Measured reach** (`crate::reach`). What a body can jump onto and how
+long a jet leg takes are not worked out from a formula: they are measured
+once per tuning by running the real player motor on a bare test floor,
+under the same controls a bot uses (walking at a ledge and jumping as the
+walk leg does; flying a jet leg with `route::jet`), and shared by every
+body with that tuning. Jet legs are flown over a grid of climbs and
+crossings until one more step adds the same time as the last, and
+interpolated between; past the grid they take longer at the last rate.
+Gravity, jet strength, jump speed, energy and body size all change the
+result with no bot support of their own. The measurement sees no map:
+ceilings and crowds stay the planner's geometry checks, and a leg that
+goes wrong all the same is given up by what really happens
+(`JetLeg::failed`).
 
 Edge costs come from the body's and vehicle's own numbers (`PlayerTuning`
 speeds, jet acceleration and lift, gravity, energy drain; a vehicle's
@@ -234,12 +248,15 @@ person presses:
   a way out of an ally's line of fire is only taken onto floor.
 - swim: head for the next waypoint across the water, whatever the depth,
   holding jump to rise where the way out is higher.
-- jet: climb straight up at the launch cell until above the landing's
-  height (jets lift hardest with no move), cross at that height (jetting
-  again whenever it sinks to the lip), cut the jets over the landing and
-  brake onto it. A takeoff under a roof cannot happen: the planner only
-  launches where the column up is clear, so a bot under a platform walks
-  out from under it first.
+- jet: walk back onto the launch cell and stand still there (a body that
+  lifts off running drifts on under whatever it climbs beside), climb
+  straight up (jets lift hardest with no move, and let go once it will
+  coast the rest of the way to the crossing height), cross at that height
+  (climbing again whenever it sinks below it), cut the jets over the
+  landing and brake onto it. A takeoff under a roof or an edge cannot
+  happen: the planner only launches where the column up is clear for the
+  full-width body, so a bot under a platform walks out from under it
+  first. A leg taking twice its measured time is given up.
 - drive (`route::gear`, `route::pace`): pure pursuit along the chassis
   path. The chassis's tightest turn is its wheelbase over the tangents of
   its front and rear lock (`route::Chassis`). A point deeper than half the

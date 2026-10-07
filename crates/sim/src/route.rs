@@ -12,8 +12,10 @@
 //! it, swims because water floats it, and a vehicle turns as tightly as its
 //! wheelbase and steering angle let it.
 use crate::nav::Mode;
+use crate::reach::Reach;
 use bri_motor::player::PlayerTuning;
 use glam::Vec3;
+use std::sync::Arc;
 
 /// Viscosity of stock still water (`WaterBlock`'s default), for a swim
 /// speed the search can use before it knows which water it crosses.
@@ -23,9 +25,8 @@ const STOCK_VISCOSITY: f32 = 40.0;
 const TAKEOFF: f32 = 3.0;
 /// Fixed cost of going into deep water, in walking units.
 const WADE_IN: f32 = 1.5;
-/// Farthest across and up a single jet leg reaches.
-pub const JET_RANGE: f32 = 30.0;
-pub const JET_CLIMB: f32 = 32.0;
+/// How near a jump waypoint a walking body presses jump.
+pub const JUMP_TAKEOFF: f32 = 1.6;
 /// Height over the landing a jet leg crosses at.
 pub const JET_CLEARANCE: f32 = 1.0;
 
@@ -33,15 +34,12 @@ fn flat(v: Vec3) -> Vec3 {
     Vec3::new(v.x, 0.0, v.z)
 }
 
-/// What a body's jets can do now, from its tuning and energy.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// What a body's jets can do now: its measured jet legs
+/// ([`crate::reach::JetReach`]) and the energy it holds for them.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Jets {
-    /// Net upward acceleration jetting with no move: thrust less gravity.
-    pub climb: f32,
-    /// Flat acceleration jetting with a move (thrust leans into the move).
-    pub push: f32,
-    /// How fast it sinks jetting with a move: gravity less the thrust's lift.
-    pub sink: f32,
+    /// Jet legs as its motor flies them.
+    pub reach: Arc<Reach>,
     /// Seconds of jetting its energy holds now (no limit without a drain).
     pub seconds: f32,
     /// Its walking speed: seconds become walking units.
@@ -51,46 +49,40 @@ pub struct Jets {
 }
 impl Jets {
     /// The jets of a body with `tuning` holding `energy`, for a kind with
-    /// `weight` on flying; `None` when it cannot lift itself or will not.
+    /// `weight` on flying; `None` when they do not lift it, it will not
+    /// fly, or its energy does not hold even the shortest jet leg.
     pub fn of(tuning: &PlayerTuning, energy: f32, weight: f32) -> Option<Self> {
-        if !tuning.can_jet || weight <= 0.0 || !weight.is_finite() {
+        if weight <= 0.0 || !weight.is_finite() {
             return None;
         }
-        let climb = tuning.jet_acceleration - tuning.gravity;
-        if climb < 0.25 || energy < tuning.min_jet_energy {
-            return None;
-        }
-        let lean = (1.0 + tuning.jet_lift * tuning.jet_lift).sqrt();
+        let reach = Reach::of(tuning);
+        let shortest = reach.jets.as_ref()?.shortest();
         let seconds = if tuning.jet_drain > 0.0 {
             (energy - tuning.min_jet_energy).max(0.0) / tuning.jet_drain
-        } else {
+        } else if energy >= tuning.min_jet_energy {
             f32::INFINITY
+        } else {
+            0.0
         };
-        (seconds >= 0.5).then_some(Self {
-            climb,
-            push: tuning.jet_acceleration / lean,
-            sink: (tuning.gravity - tuning.jet_acceleration * tuning.jet_lift / lean).max(0.0),
+        (seconds >= shortest.jetting).then_some(Self {
+            reach,
             seconds,
             walk_speed: tuning.forward.max(1.0),
             weight,
         })
     }
-    /// Seconds of jetting from feet at `from` up to `apex`, across and down
-    /// onto `to`, if its energy lasts: climbing with no move, then crossing
-    /// with the move (climbing back whatever the crossing sinks).
-    pub fn flight(&self, from: Vec3, to: Vec3, apex: f32) -> Option<f32> {
-        let up = (apex - from.y).max(0.0);
-        let across = flat(to - from).length();
-        if across > JET_RANGE || up > JET_CLIMB {
+    /// Seconds a jet leg takes from feet at `from` onto a landing at `to`,
+    /// crossing [`JET_CLEARANCE`] above it, as measured; `None` when it
+    /// climbs higher than its jets were measured to or its energy does not
+    /// last.
+    pub fn flight(&self, from: Vec3, to: Vec3) -> Option<f32> {
+        let jets = self.reach.jets.as_ref()?;
+        let up = to.y - from.y;
+        if jets.highest().is_some_and(|highest| up > highest) {
             return None;
         }
-        let climb = (2.0 * up / self.climb).sqrt();
-        // Speed up half way, slow down the rest.
-        let cross = 2.0 * (across / self.push).sqrt();
-        let sunk = 0.25 * self.sink * cross * cross;
-        let reclimb = (2.0 * sunk / self.climb).sqrt();
-        let jetting = climb + cross + reclimb;
-        (jetting <= self.seconds).then_some(jetting + 0.5)
+        let flight = jets.flight(up, flat(to - from).length());
+        (flight.jetting <= self.seconds).then_some(flight.seconds)
     }
     /// What a flight of `seconds` costs, in walking units: at least the
     /// straight distance, so the search's estimate stays a lower bound.
@@ -130,7 +122,7 @@ impl Default for Swim {
 }
 
 /// How a search may move a body besides walking: the edge costs.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Costs {
     /// `None`: no swim legs; deep water's bottom is walked as if dry (a
     /// kind that keeps to its water swims there by itself).
@@ -247,20 +239,20 @@ pub struct JetLeg {
     pub since: u64,
     /// Highest it has been: it has climbed to its crossing height.
     pub crossing: bool,
-    /// Where it took off.
+    /// Where it lifts off: the middle of the cell the leg was planned from.
     pub from: Vec3,
     /// The highest it has climbed so far, and when it got there.
     pub risen: Headway<f32>,
 }
 impl JetLeg {
-    /// A leg to `to` starting from `feet` at `tick`.
-    pub fn start(to: Vec3, feet: Vec3, tick: u64) -> Self {
+    /// A leg to `to` lifting off at `from`, started at `tick`.
+    pub fn start(to: Vec3, from: Vec3, tick: u64) -> Self {
         Self {
             to,
             since: tick,
             crossing: false,
-            from: feet,
-            risen: Headway::from(feet.y, tick),
+            from,
+            risen: Headway::from(from.y, tick),
         }
     }
     /// Whether what really happened says to give the leg up at `tick`: it
@@ -294,10 +286,20 @@ pub struct JetControl {
     pub jump: bool,
 }
 
-/// One tick of a jet leg to `to` crossing at `apex`: climb straight up
-/// where it took off (jets lift hardest with no move), cross at the
-/// crossing height (climbing again whenever it sinks to the landing's
-/// lip), and over the landing let the jets go and brake onto it.
+/// Flat speed below which a body counts as standing still.
+const STILL: f32 = 0.6;
+/// How near the middle of the cell it was planned from a jet leg lifts off.
+pub const TAKEOFF_TOLERANCE: f32 = crate::nav::CELL * 0.5;
+/// How far under its crossing height a jet leg counts as up there.
+const CROSSING_BAND: f32 = 0.3;
+
+/// One tick of a jet leg to `to` crossing at `apex`, for a body with
+/// `tuning`: stand still where it takes off, climb straight up there (jets
+/// lift hardest with no move, and let go once it will coast the rest),
+/// cross at the crossing height (climbing again whenever it sinks below
+/// it, as a moving jet does), and over the landing let the jets go and
+/// brake onto it. The leg's measured times ([`crate::reach`]) are this
+/// controller's own, flown from a standing takeoff.
 pub fn jet(
     leg: &mut JetLeg,
     feet: Vec3,
@@ -305,19 +307,20 @@ pub fn jet(
     grounded: bool,
     to: Vec3,
     apex: f32,
+    tuning: &PlayerTuning,
 ) -> JetControl {
     let toward = flat(to - feet);
     let across = toward.length();
     let toward = toward.normalize_or_zero();
     let closing = flat(velocity).dot(toward);
-    if feet.y >= apex - 0.3 {
+    if feet.y >= apex - CROSSING_BAND {
         leg.crossing = true;
     }
+    let drift = flat(velocity);
     // Over the landing: no more thrust, only braking onto it.
     if across < 0.9 && feet.y > to.y - 0.3 {
-        let drift = flat(velocity);
         return JetControl {
-            direction: if drift.length() > 0.6 {
+            direction: if drift.length() > STILL {
                 -drift.normalize()
             } else {
                 Vec3::ZERO
@@ -326,12 +329,40 @@ pub fn jet(
             jump: false,
         };
     }
-    // Below the landing's lip, or not yet up at the crossing height: climb.
-    if !leg.crossing || feet.y < to.y + 0.4 {
+    // Not yet standing still where it lifts off: get there and stop first,
+    // or the climb carries it on under whatever it is climbing beside.
+    let off = flat(leg.from - feet);
+    if grounded && !leg.crossing && (off.length() > TAKEOFF_TOLERANCE || drift.length() > STILL) {
+        // As fast as it can still stop from before the spot: no faster
+        // than it walks, and nothing once there (the motor brakes).
+        let speed = if off.length() > TAKEOFF_TOLERANCE {
+            (2.0 * tuning.acceleration * off.length())
+                .sqrt()
+                .min(tuning.forward)
+        } else {
+            0.0
+        };
+        return JetControl {
+            direction: off.normalize_or_zero() * speed / tuning.forward.max(f32::EPSILON),
+            jet: false,
+            jump: false,
+        };
+    }
+    // Rising fast enough to coast up to the crossing height: let go, or it
+    // overshoots and spends the time coming back down.
+    let coast = |speed: f32| speed.max(0.0).powi(2) / (2.0 * tuning.gravity);
+    let up = apex - CROSSING_BAND - feet.y;
+    if !grounded && !leg.crossing && coast(velocity.y) >= up {
+        return JetControl::default();
+    }
+    // Not yet up at the crossing height, or sinking below it (a moving jet
+    // lifts less than it weighs): climb.
+    if feet.y < apex - CROSSING_BAND || velocity.y < 0.0 && feet.y < apex {
         return JetControl {
             direction: Vec3::ZERO,
             jet: true,
-            jump: grounded,
+            // A jump starts the climb, unless it alone would carry it past.
+            jump: grounded && coast(tuning.jump_speed) <= up,
         };
     }
     // Cross: thrust toward the landing until going as fast as it can still
@@ -340,7 +371,9 @@ pub fn jet(
     let direction = if closing > wanted { -toward } else { toward };
     JetControl {
         direction,
-        jet: feet.y < apex || velocity.y < -1.5,
+        // Up to the crossing height: a body whose moving jets lift more
+        // than it weighs would otherwise climb on as it crosses.
+        jet: feet.y < apex,
         jump: false,
     }
 }
@@ -350,10 +383,15 @@ fn leg_push_speed(across: f32) -> f32 {
     (2.0 * 6.0 * across).sqrt()
 }
 
-/// How long a jet leg of `seconds` (as planned) may take before the bot
+/// How many times its measured time a jet leg may take before it has gone
+/// wrong: something the bare measuring floor did not have (wind from a
+/// blast, a body in the way) is holding it up.
+const PATIENCE: f32 = 2.0;
+
+/// How long a jet leg of `seconds` (as measured) may take before the bot
 /// gives it up and plans again from where it is.
 pub fn jet_patience(seconds: f32) -> u64 {
-    ((seconds * 2.0 + 2.0) * 120.0) as u64
+    (seconds * PATIENCE / bri_physics::FIXED_DT) as u64
 }
 
 /// Sideways acceleration a chassis's tyres hold in a turn, widening its
@@ -576,6 +614,9 @@ pub fn leg_name(mode: Mode) -> &'static str {
 mod tests {
     use super::*;
 
+    /// The standard player.
+    static G: std::sync::LazyLock<PlayerTuning> = std::sync::LazyLock::new(PlayerTuning::default);
+
     #[test]
     fn a_hop_lands_where_its_momentum_carries_it() {
         let g = 20.0;
@@ -732,17 +773,15 @@ mod tests {
     }
 
     #[test]
-    fn standard_jets_climb_slowly_and_cross_fast() {
+    fn standard_jets_fly_measured_legs() {
         let t = PlayerTuning::default();
         let jets = Jets::of(&t, t.max_energy, 1.0).expect("the standard player jets");
-        assert!(jets.climb > 1.0 && jets.climb < 4.0, "{jets:?}");
-        assert!(jets.push > 15.0, "{jets:?}");
-        assert!(jets.sink > 0.0, "a moving jet sinks: {jets:?}");
-        // Eight units straight up takes a few seconds.
-        let up = jets
-            .flight(Vec3::ZERO, Vec3::new(0.0, 8.0, 0.5), 9.0)
-            .unwrap();
-        assert!((2.0..6.0).contains(&up), "{up}");
+        // Eight units up beside where it stands takes a few seconds.
+        let up = jets.flight(Vec3::ZERO, Vec3::new(0.0, 8.0, 2.0)).unwrap();
+        assert!((1.0..6.0).contains(&up), "{up}");
+        // Higher and farther take longer.
+        assert!(jets.flight(Vec3::ZERO, Vec3::new(0.0, 16.0, 2.0)).unwrap() > up);
+        assert!(jets.flight(Vec3::ZERO, Vec3::new(0.0, 8.0, 20.0)).unwrap() > up);
         // A kind that never flies, or a body that cannot lift itself, has none.
         assert!(Jets::of(&t, t.max_energy, 0.0).is_none());
         let heavy = PlayerTuning {
@@ -763,19 +802,20 @@ mod tests {
             jet_drain: 20.0,
             ..PlayerTuning::default()
         };
-        let jets = Jets::of(&t, 100.0, 1.0).unwrap();
-        assert!(
-            jets.flight(Vec3::ZERO, Vec3::new(1.0, 2.0, 0.0), 3.0)
-                .is_some()
-        );
-        assert!(
-            jets.flight(Vec3::ZERO, Vec3::new(1.0, 30.0, 0.0), 31.0)
-                .is_none()
-        );
-        assert!(
-            Jets::of(&t, 5.0, 1.0).is_none(),
-            "a quarter second of jetting"
-        );
+        let jets = |energy: f32| Jets::of(&t, energy, 1.0);
+        let full = jets(t.max_energy).unwrap();
+        let (low, high) = (Vec3::new(0.0, 3.0, 2.0), Vec3::new(0.0, 15.0, 2.0));
+        let needs = |to: Vec3| {
+            let r = full.reach.jets.as_ref().unwrap();
+            r.flight(to.y, flat(to).length()).jetting * t.jet_drain
+        };
+        assert!(needs(low) < needs(high));
+        // Energy for the low leg and not the high one flies only the low one.
+        let between = jets((needs(low) + needs(high)) * 0.5).unwrap();
+        assert!(between.flight(Vec3::ZERO, low).is_some());
+        assert!(between.flight(Vec3::ZERO, high).is_none());
+        // Too little for even the shortest leg: no jets at all.
+        assert!(jets(needs(low) * 0.5).is_none());
     }
 
     #[test]
@@ -788,7 +828,7 @@ mod tests {
     fn a_jet_leg_climbs_first_then_crosses_then_lets_go_over_the_landing() {
         let mut leg = JetLeg::start(Vec3::new(4.0, 8.0, 0.0), Vec3::ZERO, 0);
         let to = Vec3::new(4.0, 8.0, 0.0);
-        let c = jet(&mut leg, Vec3::ZERO, Vec3::ZERO, true, to, 9.0);
+        let c = jet(&mut leg, Vec3::ZERO, Vec3::ZERO, true, to, 9.0, &G);
         assert!(c.jet && c.jump && c.direction == Vec3::ZERO, "{c:?}");
         let c = jet(
             &mut leg,
@@ -797,6 +837,7 @@ mod tests {
             false,
             to,
             9.0,
+            &G,
         );
         assert!(c.jet && c.direction.x > 0.9, "crossing: {c:?}");
         let c = jet(
@@ -806,6 +847,7 @@ mod tests {
             false,
             to,
             9.0,
+            &G,
         );
         assert!(!c.jet && c.direction.x < 0.0, "landing brakes: {c:?}");
         // Sunk below the lip on the way over: climb again.
@@ -816,8 +858,50 @@ mod tests {
             false,
             to,
             9.0,
+            &G,
         );
         assert!(c.jet && c.direction == Vec3::ZERO, "{c:?}");
+        // Up at the crossing height but sinking, as a moving jet does: climb.
+        let c = jet(
+            &mut leg,
+            Vec3::new(2.0, 8.9, 0.0),
+            Vec3::new(3.0, -1.0, 0.0),
+            false,
+            to,
+            9.0,
+            &G,
+        );
+        assert!(c.jet && c.direction == Vec3::ZERO, "{c:?}");
+    }
+
+    #[test]
+    fn a_jet_leg_stops_running_before_it_takes_off() {
+        let to = Vec3::new(4.0, 8.0, 0.0);
+        let mut leg = JetLeg::start(to, Vec3::ZERO, 0);
+        // Running on past it: let go and let the motor brake.
+        let c = jet(
+            &mut leg,
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, 5.0),
+            true,
+            to,
+            9.0,
+            &G,
+        );
+        assert!(!c.jet && !c.jump && c.direction == Vec3::ZERO, "{c:?}");
+        // A step past it: back to it.
+        let c = jet(
+            &mut leg,
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::ZERO,
+            true,
+            to,
+            9.0,
+            &G,
+        );
+        assert!(!c.jet && !c.jump && c.direction.z < 0.0, "{c:?}");
+        let c = jet(&mut leg, Vec3::ZERO, Vec3::ZERO, true, to, 9.0, &G);
+        assert!(c.jet && c.jump, "{c:?}");
     }
 
     #[test]
@@ -831,6 +915,7 @@ mod tests {
             false,
             to,
             9.0,
+            &G,
         );
         assert!(leg.crossing);
         // Standing on another body's head over the landing.

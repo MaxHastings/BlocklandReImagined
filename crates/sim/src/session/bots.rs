@@ -2874,7 +2874,11 @@ impl Session {
         // Along its route, or through the opening it leads through.
         if let Some(next) = wanted {
             proposals.push(act::Proposal {
-                jump: Some(next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded),
+                jump: Some(
+                    next.jump
+                        && flat(next.feet - feet).length() < crate::route::JUMP_TAKEOFF
+                        && state.grounded,
+                ),
                 // Into a crawlspace: crouch on the way in (the body stays
                 // down until it has room to stand).
                 crouch: Some(next.crouch && flat(next.feet - feet).length() < 1.6),
@@ -2993,12 +2997,12 @@ impl Session {
         }
         // A jet leg flies itself: climb in the open, cross, land.
         match wanted.map(|w| (w.feet, w.mode)) {
-            Some((to, Mode::Jet { apex, seconds })) if driving.is_none() => {
+            Some((to, Mode::Jet { from, apex, seconds })) if driving.is_none() => {
                 let leg = brain
                     .jet_leg
-                    .get_or_insert(crate::route::JetLeg::start(to, feet, tick));
+                    .get_or_insert(crate::route::JetLeg::start(to, from, tick));
                 if leg.to != to {
-                    *leg = crate::route::JetLeg::start(to, feet, tick);
+                    *leg = crate::route::JetLeg::start(to, from, tick);
                 }
                 let control = crate::route::jet(
                     leg,
@@ -3007,6 +3011,7 @@ impl Session {
                     state.grounded,
                     to,
                     apex,
+                    self.peers[&bot].player.tuning(),
                 );
                 // Replan from what happened.
                 if leg.failed(feet, state.grounded, body.step, seconds, tick) {

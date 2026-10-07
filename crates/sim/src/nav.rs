@@ -84,14 +84,18 @@ pub struct Body {
 }
 impl Body {
     pub fn of(tuning: &bri_motor::player::PlayerTuning, scale: f32) -> Self {
-        let rise = tuning.jump_speed * tuning.jump_speed / (2.0 * tuning.gravity.max(1.0));
+        let ledge = if scale == 1.0 {
+            crate::reach::Reach::of(tuning).ledge
+        } else {
+            crate::reach::Reach::of(&tuning.clone().scaled(scale)).ledge
+        };
         Self {
             width: tuning.width * scale,
             height: tuning.stand_height * scale,
             crouch_height: tuning.crouch_height * scale,
             step: tuning.step_height,
-            // Leave room for the takeoff: the apex is only brushed.
-            jump: (rise * 0.8).max(tuning.step_height),
+            // As high as its own motor was measured to jump on.
+            jump: ledge.max(tuning.step_height),
             drop: 4.0,
             floor_cos: tuning.slope_degrees.to_radians().cos(),
             conservative: false,
@@ -169,9 +173,13 @@ impl Ground<'_> {
     /// no fixed collision: a flight's climb, crossing or descent.
     pub fn sweep(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
         let (half_width, _, _) = body.clearance(false);
-        let half = Vector::new(half_width, body.height * 0.5, half_width);
+        self.sweep_box(half_width, body.height, from, to)
+    }
+    /// [`Ground::sweep`] for a box `half_width` across and `height` tall.
+    pub fn sweep_box(&self, half_width: f32, height: f32, from: Vec3, to: Vec3) -> bool {
+        let half = Vector::new(half_width, height * 0.5, half_width);
         let shape = Cuboid::new(half);
-        let start = from + Vec3::Y * (body.height * 0.5 + 0.1);
+        let start = from + Vec3::Y * (height * 0.5 + 0.1);
         let pose = Pose::translation(start.x, start.y, start.z);
         let query = self.physics.query_pipeline_with_filter(Self::filter());
         if query.intersect_shape(pose, &shape).next().is_some() {
@@ -359,9 +367,10 @@ pub enum Mode {
     Walk,
     /// Swimming: its floor lies under water that floats the body.
     Swim,
-    /// Jetting from the waypoint before: up to `apex`, over at that height
-    /// and down onto this one, planned to take `seconds`.
-    Jet { apex: f32, seconds: f32 },
+    /// Jetting from the waypoint before (`from`, where it lifts off): up to
+    /// `apex`, over at that height and down onto this one, measured to take
+    /// `seconds`.
+    Jet { from: Vec3, apex: f32, seconds: f32 },
 }
 
 /// Most grid steps a pulled straight walk passes over at once.
@@ -959,7 +968,7 @@ impl Search {
     /// it and the air is clear: straight up where it stands, across at the
     /// crossing height, down onto the landing.
     fn jet_edge(&mut self, ground: &Ground, body: &Body, node: Node) -> Option<(Node, Came)> {
-        let jets = self.costs.jets?;
+        let jets = self.costs.jets.as_ref()?;
         let landing = self.landing.flatten()?;
         let here = *self.came.get(&node)?;
         if landing == node || here.mode == Mode::Swim || !self.launches.insert((node.x, node.z)) {
@@ -970,15 +979,29 @@ impl Search {
             return None;
         }
         let apex = to.y + crate::route::JET_CLEARANCE;
-        let seconds = jets.flight(from, to, apex)?;
-        // Open sky over its head up to the crossing height: a cheap ray
-        // rules out a roofed cell before the sweeps.
+        let seconds = jets.flight(from, to)?;
+        // Straight up, the whole body rises where it lifts off, give or take
+        // how near it stands to it. Open sky over its head and its corners
+        // up to the crossing height: cheap rays rule out a roofed cell, or
+        // one under an edge, before the sweeps.
+        let half_width = body.width * 0.5 + crate::route::TAKEOFF_TOLERANCE;
         let head = from + Vec3::Y * body.height;
-        if self.jet_tests >= MAX_JET_TESTS || ground.ray(head, Vec3::Y, apex - from.y).is_some() {
+        let roofed = [
+            (0.0, 0.0),
+            (-1.0, -1.0),
+            (-1.0, 1.0),
+            (1.0, -1.0),
+            (1.0, 1.0),
+        ]
+        .into_iter()
+        .any(|(x, z)| {
+            let at = head + Vec3::new(x, 0.0, z) * half_width;
+            ground.ray(at, Vec3::Y, apex - from.y).is_some()
+        });
+        if self.jet_tests >= MAX_JET_TESTS || roofed {
             return None;
         }
         // Nor into someone standing over it.
-        let (half_width, _, _) = body.clearance(false);
         let (low, high) = (
             from + Vec3::new(-half_width, 0.1, -half_width),
             Vec3::new(from.x + half_width, apex + body.height, from.z + half_width),
@@ -993,7 +1016,7 @@ impl Search {
         self.jet_tests += 1;
         let top = Vec3::new(from.x, apex, from.z);
         let over = Vec3::new(to.x, apex, to.z);
-        let clear = ground.sweep(body, from, top)
+        let clear = ground.sweep_box(half_width, body.height, from, top)
             && ground.sweep(body, top, over)
             && ground.sweep(body, over, to);
         clear.then(|| {
@@ -1005,7 +1028,11 @@ impl Search {
                     cost: here.cost + jets.cost(seconds, from, to),
                     through: None,
                     crouch: false,
-                    mode: Mode::Jet { apex, seconds },
+                    mode: Mode::Jet {
+                        from,
+                        apex,
+                        seconds,
+                    },
                 },
             )
         })
