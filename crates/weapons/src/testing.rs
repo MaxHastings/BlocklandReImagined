@@ -491,6 +491,116 @@ fn explosion_info(name: &str, sound: &str, seconds: f32) -> (String, ExplosionIn
 }
 
 /// Everything above in one valid pack.
+/// What the v20 scripts these images and projectiles stand in for did,
+/// declared as the importer declares it for the real ones
+/// (`bri_weapons_import::stock`): arm moves on the scripted states, what
+/// `onFire` does instead of launching, the left hand, and the sports balls.
+fn declare_scripts(
+    images: &mut BTreeMap<String, Image>,
+    projectiles: &mut BTreeMap<String, ProjectileDef>,
+) {
+    let mut arm = |id: &str, script: &str, arm: &str| {
+        for state in &mut images.get_mut(id).expect("image").states {
+            if state.script.eq_ignore_ascii_case(script) {
+                state.arm = arm.into();
+            }
+        }
+    };
+    for id in [HAMMER_IMAGE, WAND_IMAGE, ADMIN_WAND_IMAGE, SWORD_IMAGE] {
+        arm(id, "onPreFire", "armattack");
+    }
+    arm(WRENCH_IMAGE, "onPreFire", "wrench");
+    arm(KEY_IMAGE, "onPreFire", "shiftLeft");
+    for id in [GUN_IMAGE, AKIMBO_IMAGE, SHOTGUN_IMAGE, HORSE_RAY_IMAGE] {
+        arm(id, "onFire", "shiftAway");
+    }
+    arm(LEFT_GUN_IMAGE, "onFire", "leftrecoil");
+    arm(BROOM_IMAGE, "onFire", "rotCW");
+    for id in [SPEAR_IMAGE, FOOTBALL_IMAGE, HORSE_FOOTBALL_IMAGE] {
+        arm(id, "onCharge", "spearReady");
+        arm(id, "onFire", "spearThrow");
+    }
+    let mut set = |id: &str, on_fire: Option<OnFire>, sport: Option<Sport>| {
+        let image = images.get_mut(id).expect("image");
+        image.on_fire = on_fire;
+        image.sport = sport;
+    };
+    for (id, tool) in [
+        (HAMMER_IMAGE, HostTool::Break),
+        (WRENCH_IMAGE, HostTool::Inspect),
+        (PRINTER_IMAGE, HostTool::Print),
+        (WAND_IMAGE, HostTool::Destroy),
+        (ADMIN_WAND_IMAGE, HostTool::AdminDestroy),
+    ] {
+        set(id, Some(OnFire::Tool(tool)), None);
+    }
+    set(KEY_IMAGE, Some(OnFire::Key), None);
+    set(SKIS_IMAGE, Some(OnFire::Skis), None);
+    let basketball = Sport {
+        aimed_throw: true,
+        ball: Some(Ball::Basketball),
+        ..Sport::default()
+    };
+    set(
+        BASKETBALL_IMAGE,
+        Some(OnFire::Mount(BASKETBALL_SHOOT_IMAGE.into())),
+        Some(basketball),
+    );
+    set(
+        BASKETBALL_SHOOT_IMAGE,
+        None,
+        Some(Sport {
+            keys: Some(SportKeys::Pass),
+            ..basketball
+        }),
+    );
+    for id in [DODGEBALL_IMAGE, HORSE_DODGEBALL_IMAGE] {
+        set(
+            id,
+            None,
+            Some(Sport {
+                throw: [30.0, 4.0],
+                spawn_grace_ticks: 120,
+                ..Sport::default()
+            }),
+        );
+    }
+    for id in [FOOTBALL_IMAGE, HORSE_FOOTBALL_IMAGE] {
+        set(
+            id,
+            None,
+            Some(Sport {
+                throw: [40.0, 0.0],
+                thrown: true,
+                keys: Some(SportKeys::Lateral),
+                ball: Some(Ball::Football),
+                ..Sport::default()
+            }),
+        );
+    }
+    set(
+        SOCCER_IMAGE,
+        None,
+        Some(Sport {
+            throw: [20.0, 3.0],
+            keys: Some(SportKeys::Pop),
+            ..Sport::default()
+        }),
+    );
+    images.get_mut(AKIMBO_IMAGE).expect("akimbo").left_image = Some(LEFT_GUN_IMAGE.into());
+    projectiles
+        .get_mut(DODGEBALL_PROJECTILE)
+        .expect("dodgeball")
+        .sport_hit = Some(SportHit::KnockOut);
+    projectiles
+        .get_mut(FOOTBALL_PROJECTILE)
+        .expect("football")
+        .sport_hit = Some(SportHit::Catch);
+    projectiles
+        .get_mut(HORSE_RAY_PROJECTILE)
+        .expect("horse ray")
+        .turns_into = Some("v20.player.horsearmor".into());
+}
 pub fn pack() -> Pack {
     let mut items = BTreeMap::new();
     let mut images = BTreeMap::new();
@@ -1156,6 +1266,7 @@ pub fn pack() -> Pack {
         ),
     ];
 
+    declare_scripts(&mut images, &mut projectiles);
     let mut pack = Pack {
         schema_version: SCHEMA,
         id: "test".into(),
