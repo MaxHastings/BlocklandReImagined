@@ -1439,9 +1439,12 @@ impl Session {
                                     .inventory
                                     .get(s)?
                                     .clone()?;
-                                let hurts = hand_combat::item_attacks(self, &item, scale);
                                 let item = self.weapons.pack.items.get(&item)?;
-                                let melee = self.weapons.pack.images.get(&item.image)?.melee;
+                                let image = self.weapons.pack.images.get(&item.image)?;
+                                // Anything it could fire counts, scripted
+                                // weapons too: a goof never risks a hit.
+                                let hurts = hand_combat::attack_of(self, image, scale).is_some();
+                                let melee = image.melee;
                                 Some(melee && (harmless || !hurts))
                             })
                             .unwrap_or(false)
@@ -1650,9 +1653,13 @@ impl Session {
             a.selected
                 .and_then(|s| a.inventory.get(s).cloned().flatten())
         });
+        // Anything it could fire counts, scripted weapons too
+        // (`hand_combat::attack_of`, the fight code's own reading).
         let attacks = item
             .as_deref()
-            .is_some_and(|item| hand_combat::item_attacks(self, item, scale));
+            .and_then(|item| self.weapons.pack.items.get(item))
+            .and_then(|item| self.weapons.pack.images.get(&item.image))
+            .is_some_and(|image| hand_combat::attack_of(self, image, scale).is_some());
         // What can hurt is used only on someone the rules say it cannot.
         let on = close.filter(|_| {
             !attacks

@@ -280,35 +280,49 @@ pub(super) fn has_possible_attack(session: &Session, bot: OwnerId) -> bool {
         else {
             return true;
         };
-        let projectile = image
-            .projectile
-            .as_ref()
-            .and_then(|id| session.weapons.pack.projectiles.get(id));
-        if let Some(cap) = capability(image, projectile, scale, &session.weapons.pack.projectiles) {
-            // One that only pushes (a broom) still moves someone off what
-            // they are after.
-            if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 && !cap.pushes() {
-                continue;
+        match attack_of(session, image, scale) {
+            Some(Some(cap)) => {
+                let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
+                if ammo.as_ref().is_none_or(|a| {
+                    available_rounds(a) >= cap.rounds_per_attack
+                        || matches!(a.reserve, bri_weapons::Reserve::Endless)
+                        || matches!(a.reserve,bri_weapons::Reserve::Rounds(n) if n > 0)
+                }) {
+                    return true;
+                }
             }
-            let ammo = session.weapons.ammo_on_equip(ActorId(bot), slot);
-            if ammo.as_ref().is_none_or(|a| {
-                available_rounds(a) >= cap.rounds_per_attack
-                    || matches!(a.reserve, bri_weapons::Reserve::Endless)
-                    || matches!(a.reserve,bri_weapons::Reserve::Rounds(n) if n > 0)
-            }) {
-                return true;
-            }
-            continue;
-        }
-        // Only an explicit manipulation descriptor with no native attack
-        // metadata identifies a noncombat tool. No IDs or command-name
-        // guesses. Anything else is an attack only if the bot can use it
-        // as one (`Session::image_weapon`, the reader it fires by).
-        if !known_noncombat_manipulation(image) && session.image_weapon(image, scale).is_some() {
-            return true;
+            Some(None) => return true,
+            None => {}
         }
     }
     false
+}
+
+/// What `image` could hurt or shove someone with in a bot's hands, read
+/// cautiously: `Some(Some(cap))` for an attack the bot reads natively that
+/// does damage or pushes (a broom moves someone off what they are after),
+/// `Some(None)` for a mechanism it reads only by its states but can fire,
+/// which counts as one, and None for nothing. The one reader for both
+/// "has it anything to fight with" and "could its idle click hurt".
+pub(super) fn attack_of(
+    session: &Session,
+    image: &Image,
+    scale: f32,
+) -> Option<Option<Capability>> {
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|id| session.weapons.pack.projectiles.get(id));
+    if let Some(cap) = capability(image, projectile, scale, &session.weapons.pack.projectiles) {
+        return (cap.direct_damage > 0.0 || cap.splash_damage > 0.0 || cap.pushes())
+            .then_some(Some(cap));
+    }
+    // Only an explicit manipulation descriptor with no native attack
+    // metadata identifies a noncombat tool. No IDs or command-name
+    // guesses. Anything else is an attack only if the bot can use it as
+    // one (`Session::image_weapon`, the reader it fires by).
+    (!known_noncombat_manipulation(image) && session.image_weapon(image, scale).is_some())
+        .then_some(None)
 }
 
 /// An item whose image has a native attack that does damage: one worth
@@ -1738,6 +1752,31 @@ pub(super) fn trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// What a bot could hurt someone with is read cautiously: a native
+    /// attack by its capability, and a weapon it reads only by its states
+    /// (ported scripts, as an Add-On knife) as one too, so neither the fight
+    /// code nor an idle goof takes it for harmless.
+    #[test]
+    fn a_scripted_weapon_counts_as_one_that_can_hurt() {
+        let world = bri_world::World::new("Weapons".into(), "fixture".into(), vec![[1.0; 4]]);
+        let sim = crate::simulation::Simulation::new(world, crate::testing::definitions(), vec![])
+            .unwrap();
+        let mut session = Session::new(sim);
+        let mut pack = bri_weapons::testing::pack();
+        let mut knife = pack.images[bri_weapons::testing::SWORD_IMAGE].clone();
+        knife.id = "stranger:image/knife".into();
+        knife.scripts = serde_json::from_value(serde_json::json!({
+            "onfire": {"arm": "spearthrow", "fire": true}
+        }))
+        .unwrap();
+        pack.images.insert(knife.id.clone(), knife.clone());
+        session.set_weapon_pack(pack).unwrap();
+        let gun = &session.weapons.pack.images[bri_weapons::testing::GUN_IMAGE];
+        assert!(matches!(attack_of(&session, gun, 1.0), Some(Some(_))));
+        let knife = &session.weapons.pack.images[&knife.id];
+        assert!(capability(knife, None, 1.0, &session.weapons.pack.projectiles).is_none());
+        assert_eq!(attack_of(&session, knife, 1.0), Some(None));
+    }
     /// A timed throw spends one ray per chord, and a chord sags no more than
     /// a plate off the real arc: pinned for a known arc in open air.
     #[test]

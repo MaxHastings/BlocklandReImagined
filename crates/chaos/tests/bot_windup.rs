@@ -281,3 +281,177 @@ fn a_bot_finishes_the_imported_butterfly_knifes_wind_ups() {
         duel(pack.clone(), &item, pace);
     }
 }
+
+/// A server package whose command puts the game in one team with friendly
+/// fire on.
+fn one_team_rules() -> std::sync::Arc<bri_package_runtime::Catalog> {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "bri-windup-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let dir = root.join("windup-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        json!({
+            "schema_version": 1, "id": "windup-test", "version": "1.0.0", "api": 1,
+            "name": "Wind-up test", "license": "CC0-1.0", "capabilities": ["minigame"],
+            "provides": [
+                {"kind": "behaviour", "id": "windup-test:behaviour/main", "file": "behaviour.json"},
+                {"kind": "script", "id": "windup-test:script/main", "file": "main.rhai"}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("behaviour.json"),
+        json!({"schema_version": 1, "script": "main.rhai", "commands": [{"name": "teams", "args": []}]})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.rhai"),
+        "fn cmd_teams(p) {\n    set_teams(player(p).minigame, [#{ name: \"Friends\", color: 0 }], #{ friendly_fire: true });\n}\n",
+    )
+    .unwrap();
+    let catalog = bri_package_runtime::Catalog::load(
+        &root,
+        &PackageSet {
+            schema_version: 1,
+            packages: vec![PackageEntry {
+                id: "windup-test".into(),
+                version: "1.0.0".into(),
+                side: Side::Server,
+                dir: "windup-test".into(),
+                role: None,
+            }],
+        },
+        true,
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    std::sync::Arc::new(catalog)
+}
+
+/// An idle bot fidgets with what it holds, but never at someone it could
+/// hurt: a teammate beside it, with friendly fire on, keeps all its health
+/// while the bot goofs with a wind-up knife (a weapon it reads only by its
+/// states, which counts as one that hurts).
+#[test]
+fn an_idle_bot_never_clicks_a_wind_up_knife_at_a_teammate_it_could_hurt() {
+    let mut s = fixture::synthetic().unwrap().session;
+    s.set_weapon_pack(knife()).unwrap();
+    s.set_tool_catalog(ToolCatalog {
+        items: [
+            KNIFE.to_string(),
+            bri_weapons::testing::GUN_ITEM.to_string(),
+        ]
+        .into(),
+        vehicles: [fixture::BOT.to_string()].into(),
+        vehicle_bricks: [fixture::PLATE.to_string()].into(),
+        ..Default::default()
+    })
+    .unwrap();
+    s.install_packages(one_team_rules(), None).unwrap();
+    // A kind whose idle goofs are all the tool click, so the run sees them.
+    let mut kinds = bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots;
+    kinds[0].surprise.strength = 1.0;
+    kinds[0].surprise.flavours = bri_sim::bot_kind::FLAVOURS
+        .iter()
+        .map(|f| (f.to_string(), if *f == "tool" { 1.0 } else { 0.0 }))
+        .collect();
+    s.set_bot_kinds(kinds).unwrap();
+    let stands = Vec3::new(0.0, 0.05, 10.0);
+    s.set_spawn_points(vec![stands]).unwrap();
+    let player = s.join("Teammate".into(), stands, true).unwrap();
+    let mut sequence = 0;
+    let still = 0.0;
+    steps(&mut s, player, 10, &mut sequence, still);
+    let mut world = World::new("Goof".into(), "chaos/map".into(), vec![[1.0; 4]]);
+    let mut pad = Brick::new(
+        ContentRef::Resolved(fixture::PLATE.into()),
+        [0.25, 0.1, 8.25],
+        player,
+    );
+    pad.vehicle = Some(Box::new(VehicleSpawn {
+        vehicle: ContentRef::Resolved(fixture::BOT.into()),
+        recolor: false,
+        team: None,
+    }));
+    world.bricks.insert(1, pad);
+    world.next_brick_id = 2;
+    let mut command = 100;
+    let mut send = |s: &mut Session, c: Command| {
+        command += 1;
+        s.command(player, command, c).unwrap();
+    };
+    send(
+        &mut s,
+        Command::LoadBuild {
+            build: Box::new(SavedBuild::new(world)),
+            ownership: false,
+        },
+    );
+    send(
+        &mut s,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                // A second weapon, so a goof's swap can take the knife out.
+                loadout: [
+                    Some(bri_weapons::testing::GUN_ITEM.into()),
+                    Some(KNIFE.into()),
+                    None,
+                    None,
+                    None,
+                ],
+                weapon_damage: true,
+                ..Default::default()
+            },
+        }),
+    );
+    send(
+        &mut s,
+        Command::Package(bri_sim::session::PackageCommand {
+            package: "windup-test".into(),
+            command: "teams".into(),
+            args: vec![],
+        }),
+    );
+    steps(&mut s, player, 60, &mut sequence, still);
+    let game = s.minigame_views()[0].id;
+    let team = s.minigame_views()[0].teams[0].id.0;
+    let bot = *s.names().keys().find(|o| s.is_bot(**o)).unwrap();
+    for target in [player, bot] {
+        send(
+            &mut s,
+            Command::MiniGame(MiniGameRequest::SetTeam {
+                game,
+                target,
+                team: Some(team),
+            }),
+        );
+    }
+    let mut goofed = false;
+    for _ in 0..120 * 60 {
+        steps(&mut s, player, 1, &mut sequence, still);
+        goofed |= s
+            .bot_thoughts()
+            .iter()
+            .any(|t| t.bot == bot && t.acted.contains("goof"));
+        assert_eq!(
+            s.vitals()[&player].health,
+            100.0,
+            "the bot's idle click hurt its teammate"
+        );
+    }
+    assert!(goofed, "the bot never goofed beside its teammate");
+}
