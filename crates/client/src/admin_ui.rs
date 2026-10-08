@@ -123,6 +123,8 @@ fn server_quotas(q: &ui::AdminQuotas) -> bri_admin::Quotas {
         vehicles: q.vehicles,
     }
 }
+const _: () =
+    assert!(ui::MOST_BOTS == bri_admin::MOST_BOTS && ui::DEFAULT_BOTS == bri_admin::DEFAULT_BOTS);
 fn options(s: &bri_admin::ServerSettings) -> ui::AdminOptions {
     ui::AdminOptions {
         name: s.name.clone(),
