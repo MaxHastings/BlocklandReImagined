@@ -133,7 +133,8 @@ fn has_pref(view: &View, var: &str) -> Option<NodeId> {
 }
 /// Max bots, which v20 did not have: a row under Max Player Vehicles,
 /// copied from its label and box, with the controls below moved down to
-/// make room.
+/// make room. Containers grow up to the scroll box (or the window when
+/// there is none), so the window keeps v20's size and the list scrolls.
 fn add_max_bots_field(view: &mut View) {
     if has_pref(view, "$Pref::Server::MaxBots").is_some() {
         return;
@@ -153,14 +154,16 @@ fn add_max_bots_field(view: &mut View) {
         .copied()
         .filter(|&c| {
             let c = &view.nodes[c].ctrl;
-            c.class.eq_ignore_ascii_case("GuiTextCtrl")
+            (c.class.eq_ignore_ascii_case("GuiTextCtrl")
+                || c.class.eq_ignore_ascii_case("GuiMLTextCtrl"))
                 && c.position[0] < field.position[0]
                 && (c.position[1] - y).abs() < h
         })
         .max_by_key(|&c| view.nodes[c].ctrl.position[0])
         .map(|c| view.nodes[c].ctrl.clone());
     let step = h + 4;
-    // Everything below the row moves down a row, out to the window.
+    // Everything below the row moves down a row, out to the scroll box
+    // or the window.
     let (mut node, mut below) = (parent, y + h);
     for c in view.nodes[node].children.clone() {
         if view.nodes[c].ctrl.position[1] >= below {
@@ -175,6 +178,13 @@ fn add_max_bots_field(view: &mut View) {
         let Some(up) = view.nodes[node].parent else {
             break;
         };
+        if view.nodes[up]
+            .ctrl
+            .class
+            .eq_ignore_ascii_case("GuiScrollCtrl")
+        {
+            break;
+        }
         below = view.nodes[node].ctrl.position[1] + view.nodes[node].ctrl.extent[1];
         view.nodes[node].ctrl.extent[1] += step;
         for c in view.nodes[up].children.clone() {
@@ -187,7 +197,10 @@ fn add_max_bots_field(view: &mut View) {
     view.nodes[node].ctrl.extent[1] += step;
     if let Some(mut label) = label {
         label.position[1] += step;
-        label.text = Some("Max Bots:".into());
+        // Keep markup such as `<just:right>`; replace the words.
+        let text = label.text.take().unwrap_or_default();
+        let tags = text.rfind('>').map_or("", |i| &text[..=i]);
+        label.text = Some(format!("{tags}Max Bots"));
         label.name = None;
         view.add(parent, label);
     }

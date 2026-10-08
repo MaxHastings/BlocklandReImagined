@@ -19,7 +19,9 @@ was already sized for 32.
   reads the host's value from the snapshot, so Slayer fills to it.
 - Advanced Config and the Admin menu's Server Settings get a Max Bots box
   (`$Pref::Server::MaxBots`), added under Max Player Vehicles in v20's
-  serverConfigGui with the rows below moved down.
+  serverConfigGui with the rows below moved down. The list inside the
+  scroll box grows; the window keeps v20's 480 so it still fits a 480-high
+  screen (`screen_sweep`, which caught a 502 window at 1440p).
 - Wire: `protocol-changes/server-settings-max-bots.md`.
 - `bot_think_time_32` (ignored, release) runs the busiest scenario with 32
   bots against the perf bar scaled from 16.
