@@ -774,10 +774,12 @@ def full_gate(sha, root, changed=()):
         # the binary just built, so a stale copy of an older build's data
         # never fails a content test.
         check_env = dict(env, BRI_INSTALL_DEFAULT_ADD_ONS="1")
+        check_started = time.time()
         if not run_step("content-check", [exe, "--check", worktree / "content", state], worktree, log,
                         check_env):
             print(tail(log, "===== content-check ====="))
             return False
+        phases["content-check"] = time.time() - check_started
         known, skips = known_failures(worktree)
         skip_args = [arg for name in skips for arg in ("--skip", name)]
         test_started = time.time()
@@ -869,7 +871,7 @@ def full_gate(sha, root, changed=()):
             elif f"test {name} ..." not in text:
                 say(f"retry of {key} ran no test named {name}; it still counts as failed")
         phases["retries"] = time.time() - retries_started
-        summary(phases, time.time() - started)
+        summary(phases, time.time() - started, log)
         if unexpected:
             say("new test failures:")
             for key in unexpected:
@@ -1078,11 +1080,18 @@ def plan_units(binaries, args, timings):
     return sorted(units, key=lambda u: (-u[5], order[u[0]]))
 
 
-def summary(phases, total):
-    """One line of where the gate's time went, and a warning past the limit."""
+def summary(phases, total, log=None):
+    """One line of where the gate's time went, also kept in the log, and a
+    warning past the limit."""
     parts = [f"{name} {phases[name]:.0f}s" for name in
-             ("tool-tests", "build", "clippy", "tests", "retries") if name in phases]
-    say(f"phases: {', '.join(parts)}, total {total:.0f}s (clippy ran alongside tests)")
+             ("tool-tests", "build", "content-check", "clippy", "tests", "retries")
+             if name in phases]
+    line = (f"phases: {', '.join(parts)}, total {total:.0f}s, {TEST_JOBS} test jobs "
+            "(clippy ran alongside tests)")
+    say(line)
+    if log:
+        with open(log, "a", encoding="utf-8", errors="replace") as handle:
+            handle.write(f"[gate] {line}\n")
     if phases.get("tests", 0) > TEST_WARN_SECONDS:
         say(f"warning: tests took {phases['tests'] / 60:.1f} minutes, over "
             f"{TEST_WARN_SECONDS // 60}")
