@@ -94,8 +94,10 @@ jobs:
         shell: pwsh
         run: |
           $state = Join-Path $env:RUNNER_TEMP 'bri-check-state'
-          .\target\release\bri-client.exe --check content $state
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # A release bri-client.exe is a windowed program, which PowerShell
+          # starts without waiting for: wait on it and read its exit code.
+          $check = Start-Process -FilePath .\target\release\bri-client.exe -ArgumentList @('--check', 'content', "`"$state`"") -NoNewWindow -Wait -PassThru
+          if ($check.ExitCode -ne 0) { exit $check.ExitCode }
           .\target\release\bri-client.exe --version
 
       - name: Package
@@ -121,8 +123,9 @@ jobs:
           .\tools\package_playtest.ps1 -VerifyPackage $game
           $state = Join-Path $env:RUNNER_TEMP 'bri-zip-state'
           Remove-Item -Recurse -Force $state -ErrorAction SilentlyContinue
-          & (Join-Path $game 'bri-client.exe') --check (Join-Path $game 'content') $state
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Windowed program: wait for it, so its report exists before it is read.
+          $check = Start-Process -FilePath (Join-Path $game 'bri-client.exe') -ArgumentList @('--check', "`"$(Join-Path $game 'content')`"", "`"$state`"") -NoNewWindow -Wait -PassThru
+          if ($check.ExitCode -ne 0) { exit $check.ExitCode }
           # Every Add-On a release ships must load. A bundle imported before a
           # pack schema change is only a warning to --check (v0.2.6 preview
           # fd719c9 left out every bundled brick pack: "Unknown weapon schema
