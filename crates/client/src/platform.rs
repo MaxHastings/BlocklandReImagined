@@ -762,6 +762,7 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         frame_cpu: Duration::ZERO,
         last_present: None,
     };
+    crate::winit_log::install();
     let event_loop = EventLoop::new().context("creating the native event loop")?;
     event_loop
         .run_app(&mut runner)

@@ -73,6 +73,7 @@ pub mod views;
 pub mod weapon_debris;
 pub mod weapon_effects;
 pub mod weather;
+pub mod winit_log;
 pub mod world_chunks;
 pub mod world_items;
 pub mod world_scene;

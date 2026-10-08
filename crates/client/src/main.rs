@@ -170,6 +170,13 @@ fn game() -> Result<()> {
         );
     }
     let result = run(&content, &state);
+    #[cfg(target_os = "linux")]
+    if let Err(error) = &result
+        && let Some(code) = bri_client::system_libraries::relaunch_on_x11(error)
+    {
+        bri_crash::finish();
+        std::process::exit(code);
+    }
     if let Err(error) = &result {
         // Developers find the content regeneration hint in the log.
         bri_console::error(format!("{error:#}"));

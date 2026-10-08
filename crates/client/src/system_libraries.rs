@@ -65,7 +65,7 @@ const WAYLAND: [Library; 1] = [library(
 /// Whether winit will open a Wayland window: it prefers Wayland whenever the
 /// session names a compositor, the same test it makes, and does not fall back
 /// to X11 when Wayland fails (winit 0.30 `platform_impl/linux/mod.rs`).
-fn wayland_session() -> bool {
+pub fn wayland_session() -> bool {
     let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET")
 }
@@ -115,6 +115,36 @@ pub fn check() -> anyhow::Result<()> {
         .collect();
     anyhow::ensure!(missing.is_empty(), missing_message(&missing));
     Ok(())
+}
+
+/// Set on a game relaunched on X11, so it never relaunches again.
+const X11_RELAUNCH: &str = "BRI_X11_RELAUNCH";
+
+/// winit has no X11 fallback once its Wayland connection fails, which it
+/// reports as `ExitFailure(1)` (NVIDIA on CachyOS failed this way right
+/// after the first frame). When that happened and an X server (XWayland) is
+/// available, runs the game again on X11 and returns its exit code.
+pub fn relaunch_on_x11(error: &anyhow::Error) -> Option<i32> {
+    use winit::error::EventLoopError;
+    let failed = error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<EventLoopError>(),
+            Some(EventLoopError::ExitFailure(_))
+        )
+    });
+    let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    if !failed || !wayland_session() || !set("DISPLAY") || set(X11_RELAUNCH) {
+        return None;
+    }
+    bri_console::warn("The Wayland window connection failed; starting again on X11.");
+    let status = std::process::Command::new(std::env::current_exe().ok()?)
+        .args(std::env::args_os().skip(1))
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env(X11_RELAUNCH, "1")
+        .status()
+        .ok()?;
+    Some(status.code().unwrap_or(1))
 }
 
 #[cfg(test)]
