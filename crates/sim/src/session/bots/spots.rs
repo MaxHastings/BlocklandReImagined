@@ -317,7 +317,7 @@ impl Session {
             None => {
                 let mut nav = Nav::default();
                 nav.begin_tick();
-                self.bots.navs.push((*body, nav));
+                self.bots.navs.push((body.clone(), nav));
                 self.bots.navs.len() - 1
             }
         };

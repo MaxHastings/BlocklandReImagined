@@ -1317,7 +1317,7 @@ impl Session {
                 // A chassis's own speed is its drive leg's: the search's
                 // seconds only compare its routes with each other.
                 motion: crate::route::Motion::of(&crate::player::PlayerTuning::default()),
-                leaps: &crate::reach::NO_LEAPS,
+                leaps: crate::reach::Leaps::none(),
             },
         ))
     }

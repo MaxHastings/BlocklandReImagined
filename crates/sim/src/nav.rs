@@ -59,7 +59,7 @@ const HINT_BAND: f32 = 0.25;
 
 /// What the grid is sampled for: a standing player body and what its motor
 /// can climb, jump and drop.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Body {
     pub width: f32,
     pub height: f32,
@@ -85,7 +85,7 @@ pub struct Body {
     /// speeds, jump and gravity take ([`Search`]).
     pub motion: crate::route::Motion,
     /// Its jumps across open air, as its motor was measured to make them.
-    pub leaps: &'static crate::reach::Leaps,
+    pub leaps: std::sync::Arc<crate::reach::Leaps>,
 }
 impl Body {
     pub fn of(tuning: &bri_motor::player::PlayerTuning, scale: f32) -> Self {
@@ -108,7 +108,7 @@ impl Body {
             bottom: 0.0,
             swims: true,
             motion: crate::route::Motion::of(tuning),
-            leaps: &reach.leaps,
+            leaps: reach.leaps.clone(),
         }
     }
     /// Seconds a body walking `across` on a floor it stands on (crouched:

@@ -1638,7 +1638,7 @@ impl Session {
                     None => {
                         let mut nav = Nav::default();
                         nav.begin_tick();
-                        self.bots.navs.push((*body, nav));
+                        self.bots.navs.push((body.clone(), nav));
                         self.bots.navs.len() - 1
                     }
                 };
@@ -1827,7 +1827,9 @@ impl Session {
                 .flatten(),
         };
         let driving = self.bot_vehicle_body(bot);
-        let (feet, body) = driving.unwrap_or((own_feet, Body::of(peer.player.tuning(), 1.0)));
+        let (feet, body) = driving
+            .clone()
+            .unwrap_or_else(|| (own_feet, Body::of(peer.player.tuning(), 1.0)));
         if driving.is_some() {
             let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
             let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -2055,7 +2057,7 @@ impl Session {
         } else {
             None
         };
-        let carries = driving.and_then(|_| self.team_carries(bot, feet));
+        let carries = driving.as_ref().and_then(|_| self.team_carries(bot, feet));
         // Going to find the game (`explore`): a place to look, when it
         // knows of no fight, has no objective, and enemies play.
         let memory = self.bots.brains[&bot].memory;

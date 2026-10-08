@@ -19,7 +19,7 @@ use bri_motor::player::{MoveInput, Player, PlayerTuning};
 use bri_physics::FIXED_DT;
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock, Mutex};
 
 mod handling;
 pub use handling::Handling;
@@ -64,7 +64,7 @@ pub struct Reach {
     /// do not lift it (or it has none).
     pub jets: Option<JetReach>,
     /// Its jumps across open air, from one support onto another.
-    pub leaps: Leaps,
+    pub leaps: Arc<Leaps>,
 }
 
 /// The jumps a body makes across open air, measured: for each rise (up a
@@ -80,15 +80,24 @@ pub struct Leaps {
     /// [`LEAP_SPACING`] apart; empty when it lands none.
     rows: Vec<Vec<(f32, f32)>>,
 }
+/// Tunings whose reach is kept measured at once: a game holds a handful,
+/// and one asked for again after more than this many others is measured
+/// again.
+const MEASURED_KEPT: usize = 64;
 /// Spacing of the rises and distances a leap is measured over: a nav cell,
 /// the grid the planner asks about.
 const LEAP_SPACING: f32 = crate::nav::CELL;
-/// A body that leaps nowhere (a chassis).
-pub static NO_LEAPS: Leaps = Leaps {
-    rises: Vec::new(),
-    rows: Vec::new(),
-};
 impl Leaps {
+    /// A body's that leaps nowhere (a chassis).
+    pub fn none() -> Arc<Self> {
+        static NONE: LazyLock<Arc<Leaps>> = LazyLock::new(|| {
+            Arc::new(Leaps {
+                rises: Vec::new(),
+                rows: Vec::new(),
+            })
+        });
+        NONE.clone()
+    }
     fn measure(tuning: &PlayerTuning) -> Self {
         // From as far down as its jump goes up to the highest ledge it
         // could reach with a step on top.
@@ -174,29 +183,33 @@ pub struct JetReach {
 
 impl Reach {
     /// The measured reach of a body with `tuning`: measured the first time
-    /// any body with that tuning asks, then shared.
-    pub fn of(tuning: &PlayerTuning) -> &'static Self {
-        // A game holds a handful of tunings at most, and every field of one
-        // is mechanical: the same tuning is the same reach, kept for good.
-        static MEASURED: Mutex<Vec<(PlayerTuning, &'static Reach)>> = Mutex::new(Vec::new());
-        let found = |measured: &[(PlayerTuning, &'static Reach)]| {
-            measured
-                .iter()
-                .find(|(t, _)| t == tuning)
-                .map(|(_, reach)| *reach)
+    /// any body with that tuning asks, then shared while it is among the
+    /// [`MEASURED_KEPT`] asked for last.
+    pub fn of(tuning: &PlayerTuning) -> Arc<Self> {
+        // Every field of a tuning is mechanical: the same tuning is the
+        // same reach. Most recently asked last.
+        static MEASURED: Mutex<Vec<(PlayerTuning, Arc<Reach>)>> = Mutex::new(Vec::new());
+        let found = |measured: &mut Vec<(PlayerTuning, Arc<Reach>)>| {
+            let at = measured.iter().position(|(t, _)| t == tuning)?;
+            let entry = measured.remove(at);
+            let reach = entry.1.clone();
+            measured.push(entry);
+            Some(reach)
         };
-        if let Some(reach) = found(&MEASURED.lock().unwrap()) {
+        if let Some(reach) = found(&mut MEASURED.lock().unwrap()) {
             return reach;
         }
         // Measured outside the lock: another tuning's measurement need not
         // wait on this one.
-        let reach = Self::measure(tuning);
+        let reach = Arc::new(Self::measure(tuning));
         let mut measured = MEASURED.lock().unwrap();
-        if let Some(reach) = found(&measured) {
+        if let Some(reach) = found(&mut measured) {
             return reach;
         }
-        let reach: &'static Reach = Box::leak(Box::new(reach));
-        measured.push((tuning.clone(), reach));
+        if measured.len() >= MEASURED_KEPT {
+            measured.remove(0);
+        }
+        measured.push((tuning.clone(), reach.clone()));
         reach
     }
     /// Measures `tuning` afresh.
@@ -205,7 +218,7 @@ impl Reach {
             ledge: ledge(tuning, false),
             crawl_ledge: ledge(tuning, true),
             jets: JetReach::measure(tuning),
-            leaps: Leaps::measure(tuning),
+            leaps: Arc::new(Leaps::measure(tuning)),
         }
     }
 }
@@ -763,7 +776,7 @@ mod tests {
     #[test]
     fn a_tuning_is_measured_once_and_shared() {
         let t = standard();
-        assert!(std::ptr::eq(Reach::of(&t), Reach::of(&t.clone())));
+        assert!(Arc::ptr_eq(&Reach::of(&t), &Reach::of(&t.clone())));
     }
 
     #[test]

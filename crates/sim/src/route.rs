@@ -117,7 +117,7 @@ fn flat(v: Vec3) -> Vec3 {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Jets {
     /// Jet legs as its motor flies them.
-    pub reach: &'static Reach,
+    pub reach: std::sync::Arc<Reach>,
     /// Seconds of jetting its energy holds now (no limit without a drain).
     pub seconds: f32,
     /// Its walking speed: seconds become walking units.
