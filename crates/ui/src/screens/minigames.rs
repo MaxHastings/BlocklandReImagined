@@ -37,6 +37,10 @@ pub struct MiniGameScreen {
     list_columns: Option<String>,
     rules_dirty: bool,
     loaded_game: Option<MiniGameId>,
+    /// Set Favs is on: the next slot button saves the form there
+    /// (`$CMG_SettingFavs`). Kept here, not read back from the helper
+    /// control, so it holds whether or not the layout has one.
+    setting_favs: bool,
 }
 impl MiniGameScreen {
     pub fn list(core: &Core) -> Self {
@@ -69,11 +73,13 @@ impl MiniGameScreen {
             list_columns: None,
             rules_dirty: false,
             loaded_game: None,
+            setting_favs: false,
         };
         // The End blocker greys End out, so it must draw over the button.
         if let Some(n) = s.view.id("CMG_EndBlocker") {
             s.view.push_to_back(n);
         }
+        s.set_favs(false);
         if let Some(n) = s.view.id("JMG_List") {
             s.list_columns = s.view.node(n).ctrl.field("columns").map(str::to_owned);
         }
@@ -412,11 +418,18 @@ impl MiniGameScreen {
         }
         Ok(rules)
     }
+    /// Turn Set Favs on or off, with its helper text where the layout has
+    /// one.
+    fn set_favs(&mut self, on: bool) {
+        self.setting_favs = on;
+        if let Some(n) = self.view.id("CMG_FavsHelper") {
+            self.view.set_visible(n, on);
+        }
+    }
     /// `CreateMiniGameGui::ClickFav`: with Set Favs showing, save the form
     /// in that slot; otherwise fill the form from it.
     fn favorite(&mut self, slot: u8, core: &mut Core) {
-        let helper = self.view.id("CMG_FavsHelper");
-        if helper.is_some_and(|n| self.view.node(n).state.visible) {
+        if self.setting_favs {
             match self.read_rules() {
                 Ok(rules) => {
                     let color = self
@@ -427,9 +440,7 @@ impl MiniGameScreen {
                         .minigame_favorites
                         .insert(slot, MiniGameFavorite { rules, color });
                     core.save_settings();
-                    if let Some(n) = helper {
-                        self.view.set_visible(n, false);
-                    }
+                    self.set_favs(false);
                 }
                 Err(e) => core.minigames.status = e,
             }
@@ -966,10 +977,7 @@ impl Screen for MiniGameScreen {
                 }
                 "createminigamegui.clickcolorlist();" => self.refresh(core),
                 "createminigamegui.clicksetfavs();" => {
-                    if let Some(n) = self.view.id("CMG_FavsHelper") {
-                        let shown = self.view.node(n).state.visible;
-                        self.view.set_visible(n, !shown);
-                    }
+                    self.set_favs(!self.setting_favs);
                 }
                 _ => {
                     if let Some(slot) = cmd

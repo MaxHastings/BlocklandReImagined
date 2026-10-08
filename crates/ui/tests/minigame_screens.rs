@@ -35,6 +35,11 @@ fn layout(children: Vec<Control>) -> Control {
     }
 }
 fn test_ui() -> Ui {
+    test_ui_with(true)
+}
+/// The test windows, with or without Set Favs' helper text in the Create
+/// window's layout.
+fn test_ui_with(favs_helper: bool) -> Ui {
     let mut pack = UiPack::default();
     pack.layouts.insert(
         "joinMiniGameGui".into(),
@@ -205,6 +210,10 @@ fn test_ui() -> Ui {
             ),
         ]),
     );
+    if !favs_helper && let Some(l) = pack.layouts.get_mut("CreateMiniGameGui") {
+        l.children
+            .retain(|c| c.name.as_deref() != Some("CMG_FavsHelper"));
+    }
     Ui::new(
         Rc::new(Pack::from_parts(pack, PathBuf::new())),
         UiConfig {
@@ -482,7 +491,13 @@ fn editor_offers_reset_and_end_only_when_running_and_closes_after_acting() {
 
 #[test]
 fn set_favs_saves_the_form_to_a_slot_and_the_slot_fills_it_again() {
-    let mut ui = test_ui();
+    for helper in [true, false] {
+        set_favs_saves_and_fills(test_ui_with(helper));
+    }
+}
+/// Set Favs then a slot saves, whether or not the layout has the helper
+/// text: it is no longer where Set Favs keeps its state.
+fn set_favs_saves_and_fills(mut ui: Ui) {
     ui.apply(UiUpdate::MiniGames(game_state()));
     ui.core.push(ScreenId::MiniGameSettings);
     ui.update(0);
