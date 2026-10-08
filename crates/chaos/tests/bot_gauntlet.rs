@@ -298,20 +298,38 @@ fn rooftop_brawl_without_rails() {
 /// Lining a push up is v0.2.7.
 #[test]
 fn push_brooms_on_a_high_deck() {
-    let (mut planned, mut fired, mut off) = (0, 0, 0);
+    let (mut planned, mut fired, mut lapsed, mut off) = (0, 0, 0, 0);
+    let mut refused: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut unplanned: BTreeMap<&str, u64> = BTreeMap::new();
     for seed in 0..3 {
         let r = gauntlet::tuning::with_seed(seed, broom_deck);
         assert_eq!(r.team_kills, 0, "seed {seed}: no bot kills a teammate");
         r.each_side_hurts_its_own_less().unwrap();
         planned += r.push_planned;
         fired += r.planned_push_fired;
+        lapsed += r.push_lapsed;
         off += r.knocked_off;
+        for (why, n) in &r.push_refused {
+            *refused.entry(why).or_default() += n;
+        }
+        for (why, n) in &r.push_unplanned {
+            *unplanned.entry(why).or_default() += n;
+        }
     }
-    eprintln!("push brooms: {planned} planned with worth, {fired} fired, {off} knocked off");
+    let refusals: u64 = refused.values().sum();
+    eprintln!(
+        "push brooms: {planned} planned with worth: {fired} fired, refused {refused:?},          {lapsed} lapsed; unplanned pushes {unplanned:?}; {off} knocked off"
+    );
     assert!(planned > 0, "pushes planned with worth: {planned}");
+    // Every plan ends one way; a plan still open when the match ends is
+    // the only one not counted.
     assert!(
-        fired > 0,
-        "of {planned} pushes planned with worth, none fired"
+        planned >= fired + refusals + lapsed && planned <= fired + refusals + lapsed + 6,
+        "every plan accounted for"
+    );
+    assert!(
+        unplanned.is_empty(),
+        "every push fired was planned with worth: {unplanned:?}"
     );
 }
 

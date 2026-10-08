@@ -1958,6 +1958,64 @@ pub(super) fn validate_fire(
     tactics::trade(fired, target_health, peer.combat.health).is_some_and(|net| net > 0.0)
 }
 
+/// A press of `bot`'s held attack that no plan made (an objective's tool
+/// controls, a goof's click), judged where it really goes: allowed only
+/// when it does its own side no harm, since no enemy harm was planned for
+/// it to trade against. `None`: the held image is no attack the bot reads
+/// (a tool that only manipulates), which this does not judge.
+pub(super) fn validate_unplanned(
+    session: &Session,
+    bot: OwnerId,
+    actual_direction: Vec3,
+) -> Option<bool> {
+    let peer = session.peers.get(&bot)?;
+    let (image, _) = session.weapons.image_state(ActorId(bot), 0)?;
+    let projectile = image
+        .projectile
+        .as_ref()
+        .and_then(|p| session.weapons.pack.projectiles.get(p));
+    let scale = peer.player.state().scale;
+    let cap = capability(image, projectile, scale, &session.weapons.pack.projectiles)?;
+    if cap.direct_damage <= 0.0 && cap.splash_damage <= 0.0 && !cap.pushes() {
+        return None;
+    }
+    let origin = peer.player.eye();
+    let direction = actual_direction.normalize_or_zero();
+    // Its way, unstopped by the world (the more bodies it may meet, the
+    // safer the judgement): a ray or swing to its reach, a projectile tick
+    // by tick along its real flight.
+    let mut chords = Vec::new();
+    match cap.delivery.flight() {
+        Some(f) => {
+            let launch = direction * f.speed + Vec3::from(peer.player.state().velocity) * f.inherit;
+            let mut from = origin;
+            for n in 1..=PATH_TICKS.min(f.lifetime_ticks) {
+                let seconds = f64::from(n) / f64::from(bri_weapons::TICK_HZ);
+                let Ok(to) = tactics::flight_position(origin, launch, f.fall_per_tick, seconds)
+                else {
+                    break;
+                };
+                let to = to.as_vec3();
+                chords.push(Chord {
+                    from,
+                    to,
+                    seconds: seconds as f32,
+                });
+                from = to;
+            }
+        }
+        None => chords.push(Chord {
+            from: origin,
+            to: origin + direction * cap.reach,
+            seconds: 0.0,
+        }),
+    }
+    let bodies = Bodies::of(session, bot, Vec3::ZERO);
+    let strike = hand_strike(session, bot, image, cap, None);
+    let (harm, _) = assess(session, bot, strike, &chords, origin, &bodies);
+    Some(!harm.kills_ally && harm.ally <= 0.0 && harm.own <= 0.0)
+}
+
 /// Called after player movement, collision synchronization and frame update.
 /// Bots planned at tick n; Session's physics step advances the launch to n+1.
 /// This does not reset the already shared per-step allowance.
@@ -1967,12 +2025,12 @@ pub(super) fn validate_intent(
     intent: &Intent,
     actual_direction: Vec3,
     budget: &mut Budget,
-) -> FireAdmission {
+) -> (FireAdmission, &'static str) {
     if session.simulation.state().tick != intent.tick.saturating_add(1) {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "stale plan");
     }
     let Some(brain) = session.bots.brains.get(&bot) else {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "no brain");
     };
     if brain.resting
         || !session
@@ -1985,19 +2043,19 @@ pub(super) fn validate_intent(
             .is_some_and(|p| p.combat.alive && p.combat.spawn_tick == intent.target_spawn)
         || !session.bot_enemy(bot, &brain.kind, intent.seen.owner)
     {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "shooter or target changed");
     }
     let Some(actor) = session.weapons.actor(ActorId(bot)) else {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "no weapon actor");
     };
     if actor.selected != Some(intent.choice.slot) {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "weapon put away");
     }
     let Some((image, current)) = session.weapons.image_state(ActorId(bot), 0) else {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "no image");
     };
     if image.id != intent.image {
-        return FireAdmission::Abort;
+        return (FireAdmission::Abort, "image changed");
     }
     let projectile = image
         .projectile
@@ -2010,7 +2068,7 @@ pub(super) fn validate_intent(
         &session.weapons.pack.projectiles,
     ) != Some(intent.choice.capability)
     {
-        return FireAdmission::Abort; // Launch metadata changed after planning.
+        return (FireAdmission::Abort, "launch data changed");
     }
     if let Some(ammo) = session.weapons.ammo(ActorId(bot)) {
         let usable = match (ammo.supply, ammo.reserve) {
@@ -2018,17 +2076,17 @@ pub(super) fn validate_intent(
             _ => ammo.rounds,
         };
         if usable < intent.choice.capability.rounds_per_attack {
-            return FireAdmission::Abort;
+            return (FireAdmission::Abort, "out of ammo");
         }
     }
     // An unauthorized release stays held. A proven harmless recovery can
     // advance normally; indirect trigger-up paths need the same critical
     // trajectory pass as a direct release into Fire.
     if image.charges() && !intent.release_authorized {
-        return FireAdmission::HoldCharge;
+        return (FireAdmission::HoldCharge, "release not authorized");
     }
     if image.charges() && !super::charged_control::release_may_fire(image, current) {
-        return FireAdmission::Allow;
+        return (FireAdmission::Allow, "charge held");
     }
     // Keep aim/movement and proven non-firing charge holds while immunity
     // runs out. Reject only an attack which could spend rounds on no damage.
@@ -2042,15 +2100,17 @@ pub(super) fn validate_intent(
             budget,
         )
     {
-        FireAdmission::Allow
+        (FireAdmission::Allow, "planned shot")
     } else if image.charges() && super::charged_control::release_only(image) && actor.trigger_held()
     {
         // Live participant/equipment remain valid. The actual direction or
         // shared validation allowance is temporarily unsuitable for release;
         // preserve its authored wind-up rather than remounting it.
-        FireAdmission::HoldCharge
+        (FireAdmission::HoldCharge, "shot refused, wind-up kept")
+    } else if session.spawn_protected(intent.seen.owner) {
+        (FireAdmission::Abort, "target spawn protected")
     } else {
-        FireAdmission::Abort
+        (FireAdmission::Abort, "shot refused")
     }
 }
 
@@ -2652,5 +2712,41 @@ mod tests {
             !known_noncombat_manipulation(&image),
             "an opaque command tool needs explicit capability semantics"
         );
+    }
+
+    /// A press no plan made (an objective's tool, a goof's click) is
+    /// judged where it really goes: a rocket into a body a step ahead would
+    /// catch its shooter in the blast and is refused; at one far off it is
+    /// allowed. A tool that is no attack is not judged.
+    #[test]
+    fn an_unplanned_press_fires_only_when_it_spares_its_own_side() {
+        use rapier3d::prelude::*;
+        let at = |ahead: f32| {
+            let world = bri_world::World::new("Press".into(), "fixture".into(), vec![[1.0; 4]]);
+            let floor =
+                ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vector::new(0.0, -0.5, 0.0));
+            let sim = crate::simulation::Simulation::new(
+                world,
+                crate::testing::definitions(),
+                vec![floor],
+            )
+            .unwrap();
+            let mut s = Session::new(sim);
+            s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+            let bot = s
+                .join("Presser".into(), Vec3::new(0.0, 0.05, 0.0), false)
+                .unwrap();
+            let other = s
+                .join("Other".into(), Vec3::new(0.0, 0.05, ahead), false)
+                .unwrap();
+            super::super::harm::one_game(&mut s, bot, other);
+            let slot = s.give_item(bot, bri_weapons::testing::ROCKET_ITEM).unwrap();
+            s.equip_tool(bot, Some(slot)).unwrap();
+            let eye = s.peers[&bot].player.eye();
+            let aim = s.peers[&other].player.eye() - Vec3::Y * 0.5;
+            validate_unplanned(&s, bot, aim - eye)
+        };
+        assert_eq!(at(1.5), Some(false), "its own blast catches it");
+        assert_eq!(at(14.0), Some(true), "far off, its side is spared");
     }
 }

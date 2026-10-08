@@ -114,6 +114,10 @@ pub struct BotThought {
     /// What the shot it planned this tick would do (`harm`): to its
     /// enemies, to its own side, and whether it would kill a teammate.
     pub planned: Option<BotPlannedHarm>,
+    /// What the fire gate last said of a press of its trigger, and the
+    /// tick: allowed as planned, refused and why, or a press no plan made
+    /// (`hand_combat::validate_unplanned`).
+    pub gate: Option<(u64, &'static str)>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BotPlannedHarm {
@@ -407,6 +411,8 @@ struct Brain {
     objective: objectives::State,
     combat: hand_combat::State,
     native_combat_tick: Option<u64>,
+    /// What the fire gate last said of a press of its trigger, and when.
+    gate: Option<(u64, &'static str)>,
     /// The selected objective owns the ordinary hand trigger this tick.
     objective_tool: bool,
     /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
@@ -605,6 +611,7 @@ impl Brain {
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
+            gate: None,
             objective_tool: false,
             objective_threat: None,
             spot: None,

@@ -177,6 +177,7 @@ impl Session {
                             self.peers.get(bot).map_or(0.0, |p| p.combat.health),
                         ),
                     }),
+                gate: b.gate,
             })
             .collect()
     }
@@ -239,6 +240,7 @@ mod tests {
             team: Default::default(),
             acted: "Acts: walk route, look route, trigger none".into(),
             planned: None,
+            gate: None,
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,

@@ -331,28 +331,48 @@ impl Session {
             spread,
         })
     }
-    /// Supported inventory intent is checked at the actual post-movement
-    /// launch frame. None preserves existing package/mounted executors.
+    /// A bot's press of its trigger, checked at the actual post-movement
+    /// launch frame: a planned shot as it was planned
+    /// (`hand_combat::validate_intent`); a press no plan made (an
+    /// objective's tool controls, a goof's click) of an attack it reads, as
+    /// one that must do its own side no harm
+    /// (`hand_combat::validate_unplanned`). None for a press of a tool that
+    /// is no attack (package and mounted executors keep their own).
     pub(in crate::session) fn bot_hand_fire_gate(
         &mut self,
         bot: OwnerId,
         direction: Vec3,
         tick: u64,
+        pressing: bool,
     ) -> Option<FireAdmission> {
         let brain = self.bots.brains.get(&bot)?;
         let plan_tick = tick.checked_sub(1)?;
-        if brain.native_combat_tick != Some(plan_tick) {
-            return None;
+        let (allowed, why) = if brain.native_combat_tick != Some(plan_tick) {
+            if !pressing {
+                return None;
+            }
+            match hand_combat::validate_unplanned(self, bot, direction)? {
+                true => (FireAdmission::Allow, "unplanned, harmless to its side"),
+                false => (FireAdmission::Abort, "unplanned, would hurt its side"),
+            }
+        } else {
+            let intent = brain.combat.intent(plan_tick);
+            // Judged where it believes it aims: its aim error misses for
+            // real (the harm check prices that miss,
+            // `hand_combat::validate_fire`).
+            let direction = perception::believed(&brain.kind.perception, direction, brain.error);
+            let mut budget = std::mem::take(&mut self.bots.combat_budget);
+            let judged = intent
+                .as_ref()
+                .map_or((FireAdmission::Abort, "no plan"), |intent| {
+                    hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
+                });
+            self.bots.combat_budget = budget;
+            judged
+        };
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.gate = Some((tick, why));
         }
-        let intent = brain.combat.intent(plan_tick);
-        // Judged where it believes it aims: its aim error misses for real
-        // (the harm check prices that miss, `hand_combat::validate_fire`).
-        let direction = perception::believed(&brain.kind.perception, direction, brain.error);
-        let mut budget = std::mem::take(&mut self.bots.combat_budget);
-        let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
-            hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
-        });
-        self.bots.combat_budget = budget;
         Some(allowed)
     }
     /// Replace a speculative release with a safe native hold, without a
