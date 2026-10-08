@@ -27,6 +27,11 @@ impl Session {
         Ok(())
     }
     /// Whether a spawn brick choice names a bot kind this server has.
+    /// Bots the server runs at once, from spawn bricks and rules together:
+    /// the host's Max bots. Lowering it keeps the bots already running.
+    pub fn bot_limit(&self) -> usize {
+        (self.admin.settings.max_bots as usize).clamp(1, MAX_BOTS)
+    }
     pub fn is_bot_kind(&self, id: &str) -> bool {
         self.bots.kind(id).is_some()
     }
@@ -78,11 +83,12 @@ impl Session {
         let name = self.brick_bot_name(&kind, brick_id, None);
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
-        if self.bots.brains.len() >= MAX_BOTS {
+        let limit = self.bot_limit();
+        if self.bots.brains.len() >= limit {
             self.notify(
                 builder,
                 Notice::Center {
-                    text: format!("\u{E000}Server is limited to {MAX_BOTS} bots"),
+                    text: format!("\u{E000}Server is limited to {limit} bots"),
                     seconds: 2.0,
                 },
             );
@@ -238,9 +244,10 @@ impl Session {
         kind: &str,
         name: &str,
     ) -> Result<()> {
+        let limit = self.bot_limit();
         ensure!(
-            self.bots.brains.len() < MAX_BOTS,
-            "Server is limited to {MAX_BOTS} bots"
+            self.bots.brains.len() < limit,
+            "Server is limited to {limit} bots"
         );
         let kind = self
             .bots

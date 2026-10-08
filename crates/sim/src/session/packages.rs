@@ -1175,6 +1175,7 @@ impl Session {
                 .map(|(owner, p)| self.player_view(*owner, p))
                 .collect(),
             bot_kinds: self.bot_kind_views(),
+            bot_limit: script::BotLimit(self.bot_limit()),
             entities: host
                 .map(|h| {
                     h.entities

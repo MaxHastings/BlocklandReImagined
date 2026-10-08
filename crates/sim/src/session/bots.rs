@@ -162,7 +162,12 @@ pub enum BotTask {
         deadline: u64,
     },
 }
+/// The most bots any server runs: the ceiling of the host's Max bots.
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
+const _: () = assert!(
+    bri_admin::MOST_BOTS as usize == MAX_BOTS
+        && bri_admin::DEFAULT_BOTS as usize == bri_package_runtime::ops::DEFAULT_BOTS
+);
 const TICK: f32 = 1.0 / 120.0;
 /// Whole ticks in `seconds` (none for less than one, or a negative time).
 fn ticks(seconds: f32) -> u64 {

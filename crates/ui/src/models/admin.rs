@@ -81,6 +81,9 @@ pub struct AdminOptions {
     pub max_chat_length: u32,
     pub physics_vehicles: u32,
     pub player_vehicles: u32,
+    /// Bots the server runs at once (`$Pref::Server::MaxBots`, 1 to 32).
+    #[serde(default = "default_max_bots")]
+    pub max_bots: u32,
     pub random_brick_color: bool,
     pub chat_filter: bool,
     pub falling_damage: bool,
@@ -92,6 +95,9 @@ pub struct AdminOptions {
     /// by `namespace:key` (the Admin menu's Add-On Settings).
     #[serde(default)]
     pub addon_settings: BTreeMap<String, crate::api::MiniGameSettingValue>,
+}
+fn default_max_bots() -> u32 {
+    AdminOptions::default().max_bots
 }
 /// v20's `$Pref::Server::*` defaults, as `bri_admin::ServerSettings::default`.
 impl Default for AdminOptions {
@@ -105,6 +111,7 @@ impl Default for AdminOptions {
             max_chat_length: 120,
             physics_vehicles: 10,
             player_vehicles: 150,
+            max_bots: 16,
             random_brick_color: false,
             chat_filter: true,
             falling_damage: true,
@@ -142,6 +149,7 @@ pub fn option_pairs(o: &AdminOptions) -> Vec<(&'static str, String)> {
         ("MaxChatLen", o.max_chat_length.to_string()),
         ("MaxPhysVehicles_Total", o.physics_vehicles.to_string()),
         ("MaxPlayerVehicles_Total", o.player_vehicles.to_string()),
+        ("MaxBots", o.max_bots.to_string()),
         (
             "RandomBrickColor",
             u8::from(o.random_brick_color).to_string(),
@@ -211,6 +219,12 @@ pub fn set_option(o: &mut AdminOptions, key: &str, value: &str) -> Result<(), St
         "MaxChatLen" => o.max_chat_length = number()?,
         "MaxPhysVehicles_Total" => o.physics_vehicles = number()?,
         "MaxPlayerVehicles_Total" => o.player_vehicles = number()?,
+        "MaxBots" => {
+            o.max_bots = number()
+                .ok()
+                .filter(|n| (1..=32).contains(n))
+                .ok_or("Max bots must be 1–32.")?
+        }
         "RandomBrickColor" => o.random_brick_color = flag(),
         "ETardFilter" => o.chat_filter = flag(),
         "FallingDamage" => o.falling_damage = flag(),

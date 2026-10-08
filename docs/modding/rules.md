@@ -202,7 +202,8 @@ Resting is also available to the bot kind's provider and companions explicitly
 declared by that provider, so a spawn-brick creature's policy can pause its
 brain. A body/model swap does not transfer ownership of its brain. Rules must
 check the authored `bot_kind` before relying on this permission.
-Spawn-brick bots and these share `bot_limit()`, 16 at once.
+Spawn-brick bots and these share `bot_limit()`: the host's Max bots (Server
+Settings, 1 to 32, default 16).
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`

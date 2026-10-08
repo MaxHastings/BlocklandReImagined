@@ -330,6 +330,10 @@ pub struct ServerSettings {
     pub max_chat_length: u32,
     pub physics_vehicles: u32,
     pub player_vehicles: u32,
+    /// Bots the server runs at once, from spawn bricks and mini-game rules
+    /// together, 1 to [`MOST_BOTS`].
+    #[serde(default = "default_max_bots")]
+    pub max_bots: u32,
     pub random_brick_color: bool,
     pub chat_filter: bool,
     pub falling_damage: bool,
@@ -344,6 +348,13 @@ pub struct ServerSettings {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub addon_settings: BTreeMap<String, SettingValue>,
 }
+/// The most a host may set Max bots to: the bot budgets are sized for it.
+pub const MOST_BOTS: u32 = 32;
+/// Max bots before the host changes it.
+pub const DEFAULT_BOTS: u32 = 16;
+fn default_max_bots() -> u32 {
+    DEFAULT_BOTS
+}
 /// Most server-wide Add-On setting values the host keeps.
 pub const MAX_ADDON_SETTINGS: usize = 512;
 impl Default for ServerSettings {
@@ -357,6 +368,7 @@ impl Default for ServerSettings {
             max_chat_length: 120,
             physics_vehicles: 10,
             player_vehicles: 150,
+            max_bots: DEFAULT_BOTS,
             random_brick_color: false,
             chat_filter: true,
             falling_damage: true,
@@ -397,6 +409,7 @@ impl ServerSettings {
             || self.max_chat_length > 4096
             || self.physics_vehicles > 1_000_000
             || self.player_vehicles > 1_000_000
+            || !(1..=MOST_BOTS).contains(&self.max_bots)
             || self.public_domain_timeout_minutes < -1
             || !self.too_far_distance.is_finite()
             || !(0.0..=1_000_000.).contains(&self.too_far_distance)

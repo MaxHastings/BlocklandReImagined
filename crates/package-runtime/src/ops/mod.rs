@@ -484,8 +484,12 @@ pub const MAX_TOOL_SLOTS: usize = 10;
 pub const MAX_RESPAWN_MS: u32 = 999_999;
 /// Longest bot name, in characters (a player name's limit).
 pub const MAX_BOT_NAME_CHARS: usize = 23;
-/// Bots one server runs at once, from spawn bricks and rules together.
-pub const MAX_BOTS: usize = 16;
+/// The most bots a host may let one server run at once, from spawn bricks
+/// and rules together (Server Settings' Max bots; the sight and planning
+/// budgets are sized for it).
+pub const MAX_BOTS: usize = 32;
+/// Max bots before a host changes it: what the bot think-time bar was set at.
+pub const DEFAULT_BOTS: usize = 16;
 /// Mount points a body may have (`mountObject`'s node).
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.

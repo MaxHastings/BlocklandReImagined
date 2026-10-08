@@ -1585,6 +1585,38 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     g.steps(2);
     assert_eq!(count(&g), 0);
 
+    // The host's Max bots sets the limit, for the rules as well.
+    g.s.set_server_settings(bri_admin::ServerSettings {
+        max_bots: 20,
+        ..g.s.server_settings().clone()
+    })
+    .unwrap();
+    g.send(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout: Default::default(),
+                ..Settings::default()
+            },
+        }),
+    )
+    .unwrap();
+    for i in 0..25 {
+        g.run(a, "bot", vec![PackageArg::String(format!("Bot {i}"))]);
+        g.steps(1);
+    }
+    g.steps(2);
+    assert_eq!(g.text("kinds"), "bot.blockhead true 20");
+    assert_eq!(count(&g), 20);
+    assert!(
+        g.diagnostics()
+            .iter()
+            .any(|d| d.contains("limited to 20 bots"))
+    );
+    g.send(a, Command::MiniGame(MiniGameRequest::End)).unwrap();
+    g.steps(2);
+
     // A message box reaches its player.
     g.s.take_private_notices();
     g.run(a, "box", vec![]);

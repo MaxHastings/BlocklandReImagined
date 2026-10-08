@@ -1257,6 +1257,10 @@ fn scenarios() -> Vec<Scenario> {
                     Sent(&["settings.prefs.$Pref::Server::MaxPlayerVehicles_Total"]),
                 ),
                 (
+                    "AdminOption_maxbots",
+                    Sent(&["settings.prefs.$Pref::Server::MaxBots"]),
+                ),
+                (
                     "AdminOption_quota::item",
                     Sent(&["settings.prefs.$Pref::Server::Quota::Item"]),
                 ),
@@ -2104,6 +2108,13 @@ fn scenarios() -> Vec<Scenario> {
                     Sent(&[
                         "actions.Admin.ConfigureHost.options.player_vehicles",
                         "settings.prefs.$Pref::Server::MaxPlayerVehicles_Total",
+                    ]),
+                ),
+                (
+                    "AdminOption_maxbots",
+                    Sent(&[
+                        "actions.Admin.ConfigureHost.options.max_bots",
+                        "settings.prefs.$Pref::Server::MaxBots",
                     ]),
                 ),
                 (

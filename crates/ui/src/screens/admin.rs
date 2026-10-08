@@ -121,7 +121,84 @@ fn name_map_preview(view: &mut View) {
         view.names.insert(MAP_PREVIEW.into(), n);
     }
 }
+/// serverConfigGui's own preference for a field this game adds.
+fn has_pref(view: &View, var: &str) -> Option<NodeId> {
+    view.walk().find(|&n| {
+        view.nodes[n]
+            .ctrl
+            .variable
+            .as_deref()
+            .is_some_and(|v| v.eq_ignore_ascii_case(var))
+    })
+}
+/// Max bots, which v20 did not have: a row under Max Player Vehicles,
+/// copied from its label and box, with the controls below moved down to
+/// make room.
+fn add_max_bots_field(view: &mut View) {
+    if has_pref(view, "$Pref::Server::MaxBots").is_some() {
+        return;
+    }
+    let Some(edit) = has_pref(view, "$Pref::Server::MaxPlayerVehicles_Total") else {
+        return;
+    };
+    let Some(parent) = view.nodes[edit].parent else {
+        return;
+    };
+    let field = view.nodes[edit].ctrl.clone();
+    let (y, h) = (field.position[1], field.extent[1]);
+    // Its label: the text left of it on the same row.
+    let label = view.nodes[parent]
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| {
+            let c = &view.nodes[c].ctrl;
+            c.class.eq_ignore_ascii_case("GuiTextCtrl")
+                && c.position[0] < field.position[0]
+                && (c.position[1] - y).abs() < h
+        })
+        .max_by_key(|&c| view.nodes[c].ctrl.position[0])
+        .map(|c| view.nodes[c].ctrl.clone());
+    let step = h + 4;
+    // Everything below the row moves down a row, out to the window.
+    let (mut node, mut below) = (parent, y + h);
+    for c in view.nodes[node].children.clone() {
+        if view.nodes[c].ctrl.position[1] >= below {
+            view.nodes[c].ctrl.position[1] += step;
+        }
+    }
+    while !view.nodes[node]
+        .ctrl
+        .class
+        .eq_ignore_ascii_case("GuiWindowCtrl")
+    {
+        let Some(up) = view.nodes[node].parent else {
+            break;
+        };
+        below = view.nodes[node].ctrl.position[1] + view.nodes[node].ctrl.extent[1];
+        view.nodes[node].ctrl.extent[1] += step;
+        for c in view.nodes[up].children.clone() {
+            if c != node && view.nodes[c].ctrl.position[1] >= below {
+                view.nodes[c].ctrl.position[1] += step;
+            }
+        }
+        node = up;
+    }
+    view.nodes[node].ctrl.extent[1] += step;
+    if let Some(mut label) = label {
+        label.position[1] += step;
+        label.text = Some("Max Bots:".into());
+        label.name = None;
+        view.add(parent, label);
+    }
+    let mut field = field;
+    field.position[1] += step;
+    field.variable = Some("$Pref::Server::MaxBots".into());
+    field.name = None;
+    view.add(parent, field);
+}
 fn name_option_fields(view: &mut View) {
+    add_max_bots_field(view);
     for n in view.walk().collect::<Vec<_>>() {
         if let Some(var) = view.nodes[n].ctrl.variable.clone()
             && let Some(suffix) = var.to_ascii_lowercase().strip_prefix("$pref::server::")

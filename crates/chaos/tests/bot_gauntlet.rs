@@ -1141,26 +1141,31 @@ fn all_dials_on() {
 }
 
 /// Bot think time (`Session::bot_think_nanos`, the ticking thread's CPU
-/// time, so a loaded machine does not stretch it) per tick with the server's
-/// most bots (16, `MAX_BOTS`) in the busiest scenario (a mixed-arsenal
-/// deathmatch, eight a side) with every dial on, against the bar in
-/// `bot_tuning.json` (`perf`: one for debug builds, one for release).
-/// `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_16 -- --ignored --nocapture`
-#[test]
-#[ignore = "timing; run in release"]
-fn bot_think_time_16() {
+/// time, so a loaded machine does not stretch it) per tick with `bots` bots
+/// in the busiest scenario (a mixed-arsenal deathmatch, half a side) with
+/// every dial on, against the bar in `bot_tuning.json` (`perf`: one for
+/// debug builds, one for release, set for the default 16 bots and scaled
+/// with the count).
+fn bot_think_time(bots: usize) {
     use bri_weapons::testing::*;
     use gauntlet::tuning::{self, Config};
     let config = Config::shipped();
+    let side = bots / 2;
     let us = tuning::with_dials(tuning::all_on(&config), || {
         let spec = Spec::new(
-            "think_time_16",
-            line(-73.0, 0.0, 50.0, 8),
-            line(-37.0, 0.0, 50.0, 8),
+            "think_time",
+            line(-73.0, 0.0, 50.0, side),
+            line(-37.0, 0.0, 50.0, side),
             &[ROCKET_ITEM, SHOTGUN_ITEM, BOW_ITEM, BOUNCER_ITEM, GUN],
         );
-        let mut b = battle(spec, |_| {});
-        assert_eq!(b.sides.len(), bri_package_runtime::ops::MAX_BOTS);
+        let mut b = battle(spec, |a| {
+            a.s.set_server_settings(bri_admin::ServerSettings {
+                max_bots: bots as u32,
+                ..a.s.server_settings().clone()
+            })
+            .unwrap();
+        });
+        assert_eq!(b.sides.len(), bots);
         // Warm up (spawns, first plans), then time 30 s of fighting.
         b.arena.step(5 * TICKS_PER_SECOND);
         let ticks = 30 * TICKS_PER_SECOND;
@@ -1170,8 +1175,8 @@ fn bot_think_time_16() {
         let step_us = started.elapsed().as_secs_f64() * 1e6 / ticks as f64;
         let think = (b.arena.s.bot_think_nanos() - before) as f64 / 1000.0 / ticks as f64;
         eprintln!(
-            "PERF 16 bots, all on: bot think {think:.0} us/tick ({:.1} us a bot), whole step {step_us:.0} us/tick",
-            think / 16.0
+            "PERF {bots} bots, all on: bot think {think:.0} us/tick ({:.1} us a bot), whole step {step_us:.0} us/tick",
+            think / bots as f64
         );
         think
     });
@@ -1179,11 +1184,28 @@ fn bot_think_time_16() {
         config.perf.debug_us
     } else {
         config.perf.release_us
-    };
+    } * bots as f64
+        / bri_package_runtime::ops::DEFAULT_BOTS as f64;
     assert!(
         us <= bar,
         "bot think time {us:.0} us/tick over the bar of {bar:.0} us"
     );
+}
+
+/// [`bot_think_time`] at the default Max bots.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_16 -- --ignored --nocapture`
+#[test]
+#[ignore = "timing; run in release"]
+fn bot_think_time_16() {
+    bot_think_time(bri_package_runtime::ops::DEFAULT_BOTS);
+}
+
+/// [`bot_think_time`] at the most a host may set Max bots to.
+/// `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_32 -- --ignored --nocapture`
+#[test]
+#[ignore = "timing; run in release"]
+fn bot_think_time_32() {
+    bot_think_time(bri_package_runtime::ops::MAX_BOTS);
 }
 
 /// Hits and shots (trigger ticks) in one phase of an engagement.

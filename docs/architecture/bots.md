@@ -719,10 +719,12 @@ report. Every scenario's own checks and every enforced band must hold;
 this is the configuration that gates merges. Ignored by default for its
 length; the push gate runs ignored tests.
 
-**Performance bar** (`bot_think_time_16`): 16 bots (`MAX_BOTS`) in an
-eight-a-side mixed-arsenal deathmatch with every dial on; it measures bot
+**Performance bar** (`bot_think_time_16`, `bot_think_time_32`): the
+default Max bots (16) and the most a host may set (32, `MAX_BOTS`) in a
+mixed-arsenal deathmatch, half a side, with every dial on; it measures bot
 think time per tick (`Session::bot_think_nanos`, wall time in
-`step_bots`) and fails over `perf.debug_us` or `perf.release_us`.
+`step_bots`) and fails over `perf.debug_us` or `perf.release_us`, scaled
+from 16 bots to the run's count.
 
 **Live dials.** An administrator types, in chat or the console:
 

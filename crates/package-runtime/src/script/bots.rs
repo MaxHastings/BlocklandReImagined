@@ -4,7 +4,7 @@
 //! engine's; which kind plays, on which team, is the rules'.
 use super::*;
 use crate::ops;
-use crate::ops::{MAX_BOT_NAME_CHARS, MAX_BOTS};
+use crate::ops::MAX_BOT_NAME_CHARS;
 
 /// A bot kind an enabled Add-On provides, as scripts see it
 /// (`bot_kinds()`).
@@ -102,8 +102,8 @@ pub(super) fn register(engine: &mut Engine) {
         })
     });
     // How many bots the server runs at once, from spawn bricks and rules
-    // together; `bots()` lists those it runs now.
-    engine.register_fn("bot_limit", || MAX_BOTS as i64);
+    // together (the host's Max bots); `bots()` lists those it runs now.
+    engine.register_fn("bot_limit", || with(|i| Ok(i.snapshot.bot_limit.0 as i64)));
     // The most characters a bot's name has; `add_bot` keeps that many of
     // a longer one.
     engine.register_fn("bot_name_limit", || MAX_BOT_NAME_CHARS as i64);

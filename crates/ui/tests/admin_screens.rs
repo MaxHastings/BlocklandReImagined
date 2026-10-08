@@ -15,6 +15,7 @@ fn options() -> AdminOptions {
         max_chat_length: 120,
         physics_vehicles: 8,
         player_vehicles: 4,
+        max_bots: 16,
         random_brick_color: false,
         chat_filter: false,
         falling_damage: false,

@@ -462,6 +462,14 @@ pub struct AimObject {
     pub distance: f32,
     pub movable: bool,
 }
+/// The host's Max bots, [`ops::DEFAULT_BOTS`] until it sets one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotLimit(pub usize);
+impl Default for BotLimit {
+    fn default() -> Self {
+        Self(ops::DEFAULT_BOTS)
+    }
+}
 /// Read-only game facts for one tick.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -478,6 +486,8 @@ pub struct Snapshot {
     pub bots: Vec<PlayerView>,
     /// The bot kinds enabled Add-Ons provide (`bot_kinds()`).
     pub bot_kinds: Vec<bots::BotKindView>,
+    /// How many bots the server runs at once (`bot_limit()`).
+    pub bot_limit: BotLimit,
     pub entities: Vec<EntityView>,
     /// Vehicles and other loose physics bodies, and bots (players without
     /// a connection, `object: player`, `definition` their kind, `owner`
