@@ -778,7 +778,7 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
 /// for one. `None`: no trade at all, it would kill a teammate or the
 /// shooter, with `own_health` left.
 pub fn trade(harm: Harm, target_health: f32, own_health: f32) -> Option<f32> {
-    if harm.kills_ally || harm.own >= own_health {
+    if harm.kills_ally || (harm.own > 0.0 && harm.own >= own_health) {
         return None;
     }
     let enemy = harm.enemy + harm.push.min((target_health - harm.enemy).max(0.0));
