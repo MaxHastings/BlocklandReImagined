@@ -156,5 +156,95 @@ class History(unittest.TestCase):
         self.assertFalse(gate.undoes_on_purpose("Merge teammate damage"))
 
 
+class PassedTrees(unittest.TestCase):
+    """A tree that passed is not gated again: not after a reworded commit
+    message, and not after a change that only touches documentation."""
+
+    def setUp(self):
+        # Git leaves its objects read-only, which Windows refuses to delete.
+        self.folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.folder.cleanup)
+        self.repo = Path(self.folder.name) / "repo"
+        self.repo.mkdir()
+        self.root = Path(self.folder.name) / "gate"
+        self.root.mkdir()
+        previous = os.getcwd()
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, previous)
+        for args in (["init", "-q"], ["config", "user.email", "t@example.com"],
+                     ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"]):
+            gate.git(*args)
+        self.write("src/lib.rs", "fn a() {}\n")
+        self.passed = self.commit("first")
+
+    def write(self, path, text):
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(text, encoding="utf-8")
+
+    def commit(self, message):
+        gate.git("add", "-A")
+        gate.git("commit", "-q", "--allow-empty", "-m", message)
+        return gate.git("rev-parse", "HEAD").strip()
+
+    def test_a_reworded_commit_reuses_the_pass(self):
+        gate.record_pass(self.root, self.passed, "inputs", corpus=False)
+        gate.git("commit", "-q", "--amend", "-m", "first\n\nGate-Allow-Undo: src/lib.rs")
+        reworded = gate.git("rev-parse", "HEAD").strip()
+        self.assertNotEqual(reworded, self.passed)
+        self.assertEqual(gate.reusable_pass(self.root, reworded, "inputs", False),
+                         (self.passed, True))
+
+    def test_documentation_changes_reuse_the_pass(self):
+        gate.record_pass(self.root, self.passed, "inputs", corpus=False)
+        self.write("docs/progress/entry.md", "notes\n")
+        self.write("README.md", "readme\n")
+        docs = self.commit("notes")
+        self.assertEqual(gate.reusable_pass(self.root, docs, "inputs", False),
+                         (self.passed, False))
+
+    def test_code_and_protocol_changes_do_not(self):
+        gate.record_pass(self.root, self.passed, "inputs", corpus=False)
+        self.write("crates/net/protocol-changes/0042-new.md", "a wire change\n")
+        protocol = self.commit("wire")
+        self.assertIsNone(gate.reusable_pass(self.root, protocol, "inputs", False))
+        gate.git("reset", "-q", "--hard", self.passed)
+        self.write("src/lib.rs", "fn b() {}\n")
+        code = self.commit("code")
+        self.assertIsNone(gate.reusable_pass(self.root, code, "inputs", False))
+
+    def test_other_inputs_or_a_missing_corpus_do_not(self):
+        gate.record_pass(self.root, self.passed, "inputs", corpus=False)
+        self.assertIsNone(gate.reusable_pass(self.root, self.passed, "other", False))
+        self.assertIsNone(gate.reusable_pass(self.root, self.passed, None, False))
+        self.assertIsNone(gate.reusable_pass(self.root, self.passed, "inputs", True))
+        gate.record_pass(self.root, self.passed, "inputs", corpus=True)
+        self.assertEqual(gate.reusable_pass(self.root, self.passed, "inputs", True),
+                         (self.passed, True))
+
+    def test_unreadable_inputs_record_nothing(self):
+        gate.record_pass(self.root, self.passed, None, corpus=True)
+        self.assertFalse((self.root / gate.PASSED_TREES).exists())
+
+
+class ContentFingerprint(unittest.TestCase):
+    def test_packs_and_stamps_change_it_but_installed_add_ons_do_not(self):
+        with tempfile.TemporaryDirectory() as folder:
+            content = Path(folder)
+            (content / "bricks-pass-001").mkdir()
+            (content / "bricks-pass-001" / "manifest.json").write_text("{}", encoding="utf-8")
+            (content / "_regeneration" / "stamps").mkdir(parents=True)
+            stamp = content / "_regeneration" / "stamps" / "worlds-pass-006.json"
+            stamp.write_text('{"inputs": "a"}', encoding="utf-8")
+            first = gate.content_fingerprint(content)
+            (content / "addons" / "Tool_Duplicator").mkdir(parents=True)
+            self.assertEqual(gate.content_fingerprint(content), first)
+            stamp.write_text('{"inputs": "b"}', encoding="utf-8")
+            restamped = gate.content_fingerprint(content)
+            self.assertNotEqual(restamped, first)
+            (content / "worlds-pass-007").mkdir()
+            self.assertNotEqual(gate.content_fingerprint(content), restamped)
+        self.assertIsNone(gate.content_fingerprint(Path(folder) / "gone"))
+
+
 if __name__ == "__main__":
     unittest.main()

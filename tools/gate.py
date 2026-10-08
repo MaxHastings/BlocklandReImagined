@@ -36,6 +36,7 @@ is reverting such a revert ("Reapply ..."): both undo a commit on purpose.
 import argparse
 import concurrent.futures
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -101,6 +102,17 @@ SAVE_CORPUS_PATHS = (
     "crates/client/tests/save-corpus.json",
 )
 SAVE_CORPUS_TARGET = "bri-client/save_corpus"
+# Every passed tree is recorded under this folder of the gate root, keyed by
+# the other inputs a result depends on (`gate_inputs`). A commit that only
+# rewords its message, or a rebase that lands on a tree already gated, reuses
+# the pass instead of building and testing it again.
+PASSED_TREES = "passed-trees"
+# How many of the newest recorded passes a tree that differs only in
+# documentation is compared against (`reusable_pass`).
+REUSE_CANDIDATES = 50
+# Top-level content folders the fingerprint leaves out: the content check
+# rewrites addons/ from the build itself, and .downloads/ is a cache.
+CONTENT_DERIVED = {"addons", ".downloads", "_regeneration"}
 SAVE_CORPUS_TEST = "the_fixed_save_corpus_hosts_like_the_game"
 
 
@@ -541,6 +553,124 @@ def trim_target(target):
         shutil.rmtree(target, ignore_errors=True)
 
 
+def documentation_only(paths):
+    """Paths no build or test reads: Markdown outside crates/ (crates/net's
+    build script counts its protocol-changes/*.md)."""
+    return all(path.endswith(DOC_SUFFIXES) and not path.startswith("crates/") for path in paths)
+
+
+def toolchain_id(sha):
+    """rustc and cargo as the tree at sha pins them (rust-toolchain.toml), or
+    None when they cannot be asked."""
+    env = dict(os.environ)
+    try:
+        pinned = tomllib.loads(git("show", f"{sha}:rust-toolchain.toml"))
+        env["RUSTUP_TOOLCHAIN"] = pinned["toolchain"]["channel"]
+    except (GateError, tomllib.TOMLDecodeError, KeyError):
+        pass
+    parts = []
+    for command in (["rustc", "-vV"], ["cargo", "-V"]):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, errors="replace",
+                                    env=env, cwd=main_checkout())
+        except OSError:
+            return None
+        if result.returncode:
+            return None
+        parts.append(result.stdout.strip())
+    return "\n".join(parts)
+
+
+def content_fingerprint(content):
+    """Names, sizes and modification times of the content packs and of what
+    sits directly in each, plus every regeneration stamp. A regenerated or
+    copied-in pack changes it; the installed Add-Ons, which the content check
+    rewrites from each build, do not."""
+    def line(entry, indent=""):
+        stat = entry.stat()
+        size = stat.st_size if entry.is_file() else "-"
+        return f"{indent}{entry.name} {size} {stat.st_mtime_ns}"
+
+    lines = []
+    try:
+        for entry in sorted(os.scandir(content), key=lambda entry: entry.name):
+            if entry.name in CONTENT_DERIVED:
+                continue
+            lines.append(line(entry))
+            if entry.is_dir():
+                children = sorted(os.scandir(entry.path), key=lambda child: child.name)
+                lines.extend(line(child, "  ") for child in children)
+        stamps = Path(content) / "_regeneration" / "stamps"
+        for stamp in sorted(stamps.glob("*.json")):
+            lines.append(f"{stamp.name} {stamp.read_text(encoding='utf-8', errors='replace')}")
+    except OSError:
+        return None
+    return "\n".join(lines)
+
+
+def gate_inputs(sha, content):
+    """A digest of what a gate result depends on besides the tree: the
+    platform, the pinned toolchain and the content the tests load. None when
+    one of them cannot be read, which never matches a recorded pass."""
+    toolchain = toolchain_id(sha)
+    fingerprint = content_fingerprint(content)
+    if toolchain is None or fingerprint is None:
+        return None
+    text = "\n".join([sys.platform, os.environ.get("BRI_CONTENT", ""), toolchain, fingerprint])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def tree_of(sha):
+    return git("rev-parse", f"{sha}^{{tree}}").strip()
+
+
+def record_pass(root, sha, inputs, corpus):
+    """Remember that sha's tree passed with these inputs (`gate_inputs`);
+    `corpus` says whether the fixed save corpus ran too."""
+    if inputs is None:
+        return
+    folder = root / PASSED_TREES
+    folder.mkdir(exist_ok=True)
+    record = {"commit": sha, "corpus": corpus, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    (folder / f"{inputs}-{tree_of(sha)}.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def reusable_pass(root, sha, inputs, needs_corpus):
+    """(commit, same tree) of an earlier pass that covers sha, or None.
+
+    It covers sha when it ran with the same inputs on the same tree, or on a
+    tree that differs only in documentation (`documentation_only`), and also
+    hosted the save corpus whenever this change needs it."""
+    if inputs is None:
+        return None
+    folder = root / PASSED_TREES
+    tree = tree_of(sha)
+    try:
+        candidates = sorted(folder.glob(f"{inputs}-*.json"),
+                            key=lambda path: path.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    exact = folder / f"{inputs}-{tree}.json"
+    if exact in candidates:
+        candidates.remove(exact)
+        candidates.insert(0, exact)
+    for path in candidates[:REUSE_CANDIDATES]:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if needs_corpus and not record.get("corpus"):
+            continue
+        other = path.stem.split("-", 1)[1]
+        if other != tree:
+            result = subprocess.run(["git", "diff", "--name-only", other, tree],
+                                    capture_output=True, text=True, errors="replace")
+            if result.returncode or not documentation_only(result.stdout.split()):
+                continue
+        return record.get("commit", "?"), other == tree
+    return None
+
+
 def touches_saves(changed):
     return any(path.startswith(SAVE_CORPUS_PATHS) for path in changed)
 
@@ -584,19 +714,34 @@ def save_corpus(binaries, log, env=None):
     return ok
 
 
+def already_passed(root, sha, inputs, needs_corpus):
+    if (root / "passed" / sha).exists():
+        say(f"{sha[:9]} already passed the gate")
+        return True
+    earlier = reusable_pass(root, sha, inputs, needs_corpus)
+    if earlier:
+        commit, same_tree = earlier
+        say(f"{sha[:9]} has {'the same tree as' if same_tree else 'only documentation changes over'}"
+            f" {commit[:9]}, which passed the gate with the same toolchain and content")
+        return True
+    return False
+
+
 def full_gate(sha, root, changed=()):
     root.mkdir(parents=True, exist_ok=True)
     passed = root / "passed" / sha
-    if passed.exists():
-        say(f"{sha[:9]} already passed the gate")
+    content = main_checkout() / "content"
+    needs_corpus = touches_saves(changed)
+    inputs = gate_inputs(sha, content)
+    if already_passed(root, sha, inputs, needs_corpus):
         return True
     (root / "logs").mkdir(exist_ok=True)
     log = root / "logs" / f"{sha[:12]}.log"
     log.write_text("", encoding="utf-8")
     label = f"{git('rev-parse', '--show-toplevel').strip()} {sha[:9]}"
     with contextlib.nullcontext() if LOCK_HELD else Lock(root / "gate.lock", label):
-        if passed.exists():
-            say(f"{sha[:9]} already passed the gate")
+        # Another run may have passed this tree while this one waited.
+        if already_passed(root, sha, inputs, needs_corpus):
             return True
         worktree = prepare_worktree(root, sha)
         trim_target(root / "target")
@@ -605,7 +750,7 @@ def full_gate(sha, root, changed=()):
         # The target dir goes on the command line, never in CARGO_TARGET_DIR:
         # sccache hashes every CARGO_* variable, so that variable alone made
         # every gate compile miss the cache the lanes fill.
-        env = gate_env(os.environ, main_checkout() / "content")
+        env = gate_env(os.environ, content)
         target = ["--target-dir", str(root / "target")]
         started = time.time()
         phases = {}
@@ -731,13 +876,16 @@ def full_gate(sha, root, changed=()):
                 print(f"    {key}")
             say(f"full log: {log}")
             return False
-        if touches_saves(changed) and not save_corpus(binaries, log, env):
+        if needs_corpus and not save_corpus(binaries, log, env):
             say(f"full log: {log}")
             return False
         if not tree_intact(worktree, sha):
             return False
         passed.parent.mkdir(exist_ok=True)
         passed.write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+        # Content regenerated during the run leaves the tree unrecorded.
+        if gate_inputs(sha, content) == inputs:
+            record_pass(root, sha, inputs, needs_corpus)
         say(f"PASSED {sha[:9]} in {time.time() - started:.0f}s")
         return True
 
