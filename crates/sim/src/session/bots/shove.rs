@@ -280,5 +280,17 @@ mod tests {
             choice.direction,
             &mut budget
         ));
+        // Played on through the ordinary controls: it fires, and the
+        // target goes off the edge, pushed by it.
+        let mut off = false;
+        for _ in 0..120 * 10 {
+            s.step().unwrap();
+            if s.peers[&target].player.state().feet[1] < -5.0 {
+                off = true;
+                break;
+            }
+        }
+        assert!(off, "the push knocked it off: {:?}", s.bot_thoughts());
+        assert_eq!(s.pushed_by(target).map(|(by, _)| by), Some(bot));
     }
 }

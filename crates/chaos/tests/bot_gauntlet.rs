@@ -288,10 +288,34 @@ fn rooftop_brawl_without_rails() {
 
 /// Push brooms only, on a deck high enough that a fall from it kills, one
 /// side with its back to the edge: a push is the one attack, worth the fall
-/// it sends its target into, so pushes are fired (the acceptance run once
-/// saw none at all) and some knock enemies off.
+/// it sends its target into. Over three seeds, pushes the bots plan with
+/// worth (read from their readout) are fired (the acceptance run once saw
+/// no push fired at all). How many knock an enemy off is printed: the edge
+/// side steps in off its edge within a second, and from then on a push
+/// lands its target on the deck, worth nothing, so few are planned; that a
+/// planned push knocks its target off is `shove`'s
+/// `a_push_only_weapon_at_an_enemy_by_a_drop_is_worth_firing_and_fires`.
+/// Lining a push up is v0.2.7.
 #[test]
 fn push_brooms_on_a_high_deck() {
+    let (mut planned, mut fired, mut off) = (0, 0, 0);
+    for seed in 0..3 {
+        let r = gauntlet::tuning::with_seed(seed, broom_deck);
+        assert_eq!(r.team_kills, 0, "seed {seed}: no bot kills a teammate");
+        r.each_side_hurts_its_own_less().unwrap();
+        planned += r.push_planned;
+        fired += r.planned_push_fired;
+        off += r.knocked_off;
+    }
+    eprintln!("push brooms: {planned} planned with worth, {fired} fired, {off} knocked off");
+    assert!(planned > 0, "pushes planned with worth: {planned}");
+    assert!(
+        fired > 0,
+        "of {planned} pushes planned with worth, none fired"
+    );
+}
+
+fn broom_deck() -> Report {
     const TOP: f32 = 23.0;
     let mut spec = Spec::new(
         "push_brooms_on_a_high_deck",
@@ -304,16 +328,7 @@ fn push_brooms_on_a_high_deck() {
     spec.bricks = floor(Vec3::new(-79.0, 0.0, 40.0), [3, 2], TOP);
     spec.settings.falling_damage = true;
     spec.settings.player_type = NO_JETS.into();
-    let mut b = battle(spec, |_| {});
-    let r = b.play(TOP, 60, |_, _| {});
-    assert!(r.push_fired > 0, "pushes fired: {}", r.push_fired);
-    assert!(
-        r.knocked_off > 0,
-        "a push knocked an enemy off: {}",
-        r.knocked_off
-    );
-    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
-    r.each_side_hurts_its_own_less().unwrap();
+    battle(spec, |_| {}).play(TOP, 60, |_, _| {})
 }
 
 /// A staircase of `steps` bricks rising `rise` each toward +x from `at`.

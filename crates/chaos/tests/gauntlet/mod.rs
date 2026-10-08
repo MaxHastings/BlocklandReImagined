@@ -430,6 +430,10 @@ pub struct Report {
     /// Bots' launches of projectiles that only push (a shove, a push
     /// broom): no damage of their own.
     pub push_fired: u64,
+    /// Pushes a bot planned with worth (`BotPlannedHarm::push` > 0, a
+    /// trade its side takes), and of those, the ones it launched.
+    pub push_planned: u64,
+    pub planned_push_fired: u64,
     /// Shots more than 25 degrees off the shooter's visible target.
     pub off_target: u64,
     /// Shots whose line passes nearest an ally.
@@ -509,7 +513,7 @@ impl Report {
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} push_fired={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
+             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} push_fired={} push_planned={} planned_push_fired={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
              progress={:?}",
             self.name,
             self.bots,
@@ -529,6 +533,8 @@ impl Report {
             self.deaths,
             self.shots,
             self.push_fired,
+            self.push_planned,
+            self.planned_push_fired,
             self.off_target,
             self.at_ally,
             self.team_damage,
@@ -598,6 +604,8 @@ pub struct Scorer {
     harmless: BTreeSet<String>,
     /// Of those, the ones that push a player.
     pushers: BTreeSet<String>,
+    /// The last tick each bot had a push planned with worth.
+    push_plans: BTreeMap<OwnerId, u64>,
     seen_deaths: usize,
     last_death_tick: u64,
     /// Damage results already counted: those at or before this tick.
@@ -630,6 +638,7 @@ impl Scorer {
                 .filter(|p| p.damage <= 0.0 && p.explosion.damage <= 0.0)
                 .map(|p| p.id)
                 .collect(),
+            push_plans: BTreeMap::new(),
             pushers: fixture::synthetic_weapons()
                 .unwrap()
                 .0
@@ -672,6 +681,16 @@ impl Scorer {
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
         for t in thoughts.values() {
+            // A push planned with worth: a new one unless it was planned
+            // a tick ago too.
+            if t.planned
+                .is_some_and(|p| p.push > 0.0 && p.net.is_some_and(|n| n > 0.0))
+            {
+                let last = self.push_plans.insert(t.bot, tick);
+                if last.is_none_or(|t| t + 1 < tick) {
+                    self.report.push_planned += 1;
+                }
+            }
             // By the rule the chooser and the fire gate trade by
             // (`BotPlannedHarm::net`).
             if t.planned
@@ -897,6 +916,14 @@ impl Scorer {
             if self.harmless.contains(&p.definition) {
                 if self.pushers.contains(&p.definition) && thoughts.contains_key(&p.source.0) {
                     self.report.push_fired += 1;
+                    // Planned at a tick, fired at the next one's gate.
+                    if self
+                        .push_plans
+                        .get(&p.source.0)
+                        .is_some_and(|t| t + 1 >= tick)
+                    {
+                        self.report.planned_push_fired += 1;
+                    }
                 }
                 continue;
             }
