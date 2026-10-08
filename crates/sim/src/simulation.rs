@@ -1110,8 +1110,9 @@ impl Simulation {
     }
     /// Put bricks removed earlier back exactly as they were, owner, name,
     /// events, lights and all: undoing a cut. Each must still fit where it
-    /// stood (nothing planted there since, nobody standing in it); support
-    /// is not asked, since they stood there before. All or none.
+    /// stood (nothing planted there since; a player standing in the gap
+    /// does not block it); support is not asked, since they stood there
+    /// before. All or none.
     pub fn restore_group(&mut self, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
         let engine = Actor {
             administrator: true,
