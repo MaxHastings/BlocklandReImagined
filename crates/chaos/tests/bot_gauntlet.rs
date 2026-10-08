@@ -618,25 +618,24 @@ fn capture_the_flag() {
     own_side_report(&r);
 }
 
-/// Harm to a bot's own side and itself over a whole match, printed for
-/// reading against main, not asserted: how a seeded match happens to go
-/// (who steps into whose line of fire) is evidence for a report, not a
-/// test. The mechanisms it rests on are held where they are deterministic:
-/// no planned shot trades its side for less (`sane`'s `bad_plans`, every
-/// tick here), what a shot does to each body (`bots/harm.rs`), the fire
-/// gate sparing its side (`combat.rs`'s
+/// Harm to a bot's own side and itself over a whole match. Team and self
+/// kills are printed for reading against main, not asserted: who steps
+/// into whose line of fire is how a seeded match happens to go. The
+/// mechanisms they rest on are held where they are deterministic: no
+/// planned shot trades its side for less (`sane`'s `bad_plans`, every tick
+/// here), what a shot does to each body (`bots/harm.rs`), the fire gate
+/// sparing its side (`combat.rs`'s
 /// `an_unplanned_press_fires_only_when_it_spares_its_own_side`), and a
-/// blast fired only as a trade its holder wins (`bot_tactics.rs`).
+/// blast fired only as a trade its holder wins (`bot_tactics.rs`). Still
+/// asserted, with a wide margin today: each side hurts its enemies more
+/// than its own, which a mass friendly-fire regression `bad_plans` cannot
+/// see (melee into allies, unplanned presses, aim error) would break.
 fn own_side_report(r: &Report) {
     eprintln!(
-        "{}: {} team kills, {} self kills, team damage {:.0}, {} shots at an ally; own side less than enemies: {:?}",
-        r.name,
-        r.team_kills,
-        r.self_kills,
-        r.team_damage,
-        r.at_ally,
-        r.each_side_hurts_its_own_less()
+        "{}: {} team kills, {} self kills, team damage {:.0}, {} shots at an ally",
+        r.name, r.team_kills, r.self_kills, r.team_damage, r.at_ally,
     );
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 /// Runners and nothing else: no weapon and no fighting, each side's flag

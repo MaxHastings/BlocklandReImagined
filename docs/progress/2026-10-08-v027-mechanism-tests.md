@@ -12,12 +12,15 @@ asserts blocking today. No wider test rewrite.
   (gauntlet/mod.rs, was lines 107 and 182). The seed players now join just
   before the first builder (`Arena::seed_players_join`): they still take the
   first ids and ticks. Test: `a_seeded_run_installs_its_package_before_anyone_joins`.
-- **Own-side harm is a report.** `team_kills == 0`, `self_kills == 0` and
-  `each_side_hurts_its_own_less` over a whole seeded match were how that match
-  happened to go; navigation changed who walks into whose line of fire and
-  they went red in v0.2.6. Every gauntlet scenario now prints them
-  (`own_side_report`). Still asserted, every tick: `sane`'s `bad_plans` (no
-  planned shot trades its side for less or kills a teammate). Deterministic
+- **Team and self kills are a report.** `team_kills == 0` and
+  `self_kills == 0` over a whole seeded match were how that match happened to
+  go; navigation changed who walks into whose line of fire and they went red
+  in v0.2.6. Every gauntlet battle now prints them (`own_side_report`). Still
+  asserted: `sane`'s `bad_plans` every tick (no planned shot trades its side
+  for less or kills a teammate), and `each_side_hurts_its_own_less` in every
+  battle (review: a wide margin today, and it catches a mass friendly-fire
+  regression `bad_plans` cannot see, such as melee into allies, unplanned
+  presses or aim error). It is new on swords_four_a_side, which passes it. Deterministic
   coverage: `bots/harm.rs`, `combat.rs`'s
   `an_unplanned_press_fires_only_when_it_spares_its_own_side`,
   `bot_tactics.rs`'s close-blast trade test. The leap/hop arc in ally
