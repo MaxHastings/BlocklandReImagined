@@ -33,10 +33,6 @@ const IN: u32 = 3;
 const OUT: u32 = 4;
 const HOP: u32 = 5;
 const JET: u32 = 6;
-/// A place a body's width aside, which the strafe walks rather than a route.
-pub(super) fn sideways(option: u32) -> bool {
-    option == LEFT || option == RIGHT
-}
 
 /// One place's three quantities: the damage of the best shot from there,
 /// the seconds getting there and firing it take, and the share of its

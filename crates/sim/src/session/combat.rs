@@ -2469,6 +2469,15 @@ impl Session {
             Some(distance) => start + Vec3::NEG_Y * distance + Vec3::Y * SPAWN_LIFT,
             None => base,
         };
+        // Never inside the spawn brick's own collision: v20's spawn pad is
+        // thin enough for Torque to lift a player out of, but a spawn plate
+        // (Slayer's team spawns) would hold feet inside it.
+        let own = simulation
+            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _| other == id)
+            .ok()
+            .flatten()
+            .map(|hit| hit.position.y);
+        let feet = Vec3::new(feet.x, own.map_or(feet.y, |top| feet.y.max(top)), feet.z);
         Some((feet, yaw))
     }
 
@@ -2722,7 +2731,8 @@ mod tests {
     }
 
     /// Spawn feet per `fxDTSBrick::getSpawnPoint`: on the floor brick or
-    /// map floor under the spawn brick, else 1.3 below its centre.
+    /// map floor under the spawn brick, else 1.3 below its centre; never
+    /// inside the spawn brick itself (these test spawns are whole plates).
     #[test]
     fn a_spawn_brick_places_feet_on_what_lies_under_it() -> Result<()> {
         use rapier3d::prelude::*;
@@ -2767,13 +2777,20 @@ mod tests {
         };
         // On a baseplate whose top is at 0.2.
         let feet = spawn_at(true, false, 0.3)?;
-        assert!((feet.y - 0.3).abs() < 1e-3, "on a floor brick: {feet}");
+        assert!(
+            (feet.y - 0.4).abs() < 1e-3,
+            "on its plate, on a floor brick: {feet}"
+        );
         // On the map's floor at 0.
         let feet = spawn_at(false, true, 0.1)?;
-        assert!((feet.y - 0.1).abs() < 1e-3, "on the map floor: {feet}");
-        // Over nothing: on its pad, 1.3 below its centre.
+        assert!(
+            (feet.y - 0.2).abs() < 1e-3,
+            "on its plate, on the map floor: {feet}"
+        );
+        // Over nothing: on top of itself, as the 1.3 drop from its centre
+        // would be inside this whole-plate spawn.
         let feet = spawn_at(false, false, 5.1)?;
-        assert!((feet.y - 3.8).abs() < 1e-3, "over nothing: {feet}");
+        assert!((feet.y - 5.2).abs() < 1e-3, "over nothing: {feet}");
         Ok(())
     }
 
