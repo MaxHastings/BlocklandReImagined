@@ -163,6 +163,13 @@ impl Session {
                     own: i.choice.harm.own,
                     push: i.choice.harm.push,
                     kills_ally: i.choice.harm.kills_ally,
+                    net: super::tactics::trade(
+                        i.choice.harm,
+                        self.peers
+                            .get(&i.seen.owner)
+                            .map_or(0.0, |p| p.combat.health.max(1.0)),
+                        self.peers.get(bot).map_or(0.0, |p| p.combat.health),
+                    ),
                 }),
             })
             .collect()

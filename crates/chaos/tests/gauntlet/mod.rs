@@ -672,11 +672,11 @@ impl Scorer {
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
         for t in thoughts.values() {
-            // As the fire gate judges it: its side's harm, its own
-            // included, under its enemies'.
-            if t.planned.is_some_and(|p| {
-                p.kills_ally || (p.ally + p.own > 0.0 && p.ally + p.own >= p.enemy)
-            }) {
+            // By the rule the chooser and the fire gate trade by
+            // (`BotPlannedHarm::net`).
+            if t.planned
+                .is_some_and(|p| p.net.is_none_or(|net| net <= 0.0))
+            {
                 self.report.bad_plans += 1;
             }
         }

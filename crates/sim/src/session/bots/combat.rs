@@ -748,7 +748,7 @@ pub(super) fn choose(
                     origin,
                     &bodies,
                 );
-                if tactics::harm_allows(harm, own_health) {
+                if tactics::trade(harm, target.combat.health.max(1.0), own_health).is_some() {
                     let choice = Choice { harm, ..choice };
                     state.intent = Some(Intent {
                         choice,
@@ -1943,10 +1943,19 @@ pub(super) fn validate_fire(
     let bodies = Bodies::of(session, bot, Vec3::ZERO);
     let strike = hand_strike(session, bot, image, choice.capability, contact);
     let (harm, _) = assess(session, bot, strike, &chords, origin, &bodies);
-    // Its push, judged as planned (`Session::bot_shove` flies it on the
-    // planning turn), counts with its enemies' harm.
-    tactics::harm_allows(harm, peer.combat.health)
-        && harm.ally + harm.own < choice.harm.enemy + choice.harm.push
+    // Its side's harm as really fired, its enemies' and its push's as
+    // planned (`Session::bot_shove` flies the push on the planning turn),
+    // traded by the chooser's own rule.
+    let fired = Harm {
+        enemy: choice.harm.enemy,
+        push: choice.harm.push,
+        ..harm
+    };
+    let target_health = session
+        .peers
+        .get(&seen.owner)
+        .map_or(0.0, |p| p.combat.health.max(1.0));
+    tactics::trade(fired, target_health, peer.combat.health).is_some_and(|net| net > 0.0)
 }
 
 /// Called after player movement, collision synchronization and frame update.

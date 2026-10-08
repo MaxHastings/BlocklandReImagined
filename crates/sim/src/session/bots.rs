@@ -123,6 +123,10 @@ pub struct BotPlannedHarm {
     /// What its push does to its target (`Harm::push`).
     pub push: f32,
     pub kills_ally: bool,
+    /// The trade it makes for its side, by the rule the chooser and the
+    /// fire gate use (`tactics::trade`); `None` when it would kill a
+    /// teammate or the shooter.
+    pub net: Option<f32>,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {

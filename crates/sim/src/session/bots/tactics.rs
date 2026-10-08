@@ -771,10 +771,18 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
     Ok(score)
 }
 
-/// Whether an attack doing `harm` may be taken at all by a shooter with
-/// `own_health` left: never one expected to kill a teammate, or itself.
-pub fn harm_allows(harm: Harm, own_health: f32) -> bool {
-    !harm.kills_ally && harm.own < own_health
+/// The trade an attack doing `harm` makes for its side, the one rule the
+/// shot chooser, the fire gate and the gauntlet all judge by: what it does
+/// to its enemies (its push's outcome added, the target losing no more than
+/// the `target_health` it has left), less what it does to its own side, one
+/// for one. `None`: no trade at all, it would kill a teammate or the
+/// shooter, with `own_health` left.
+pub fn trade(harm: Harm, target_health: f32, own_health: f32) -> Option<f32> {
+    if harm.kills_ally || harm.own >= own_health {
+        return None;
+    }
+    let enemy = harm.enemy + harm.push.min((target_health - harm.enemy).max(0.0));
+    Some(enemy - harm.ally - harm.own)
 }
 
 /// [`suitability`]'s two halves: the expected capped damage of one attack,
@@ -827,19 +835,11 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
     } else {
         0.0
     };
-    // Never a shot expected to kill a teammate, or the shooter itself.
-    let harm = context.harm;
-    if !harm_allows(harm, context.own_health) {
-        return Err(Unsuited::Kills);
-    }
-    // What it does to its enemies, the harm of where its push sends the
-    // target (`Harm::push`) included, less what it does to its own side,
-    // one for one.
-    let pushed = if weapon.pushes() { harm.push } else { 0.0 };
-    // The push adds to what it does to its target, which loses no more
-    // than the health it has left.
-    let enemy = harm.enemy + pushed.min((context.target_health - harm.enemy).max(0.0));
-    let damage = (enemy - harm.ally - harm.own) * context.hit_probability;
+    // Never a shot expected to kill a teammate, or the shooter itself; else
+    // its trade for its side ([`trade`]), at its chance of landing.
+    let net =
+        trade(context.harm, context.target_health, context.own_health).ok_or(Unsuited::Kills)?;
+    let damage = net * context.hit_probability;
     if damage <= 0.0 {
         return Err(Unsuited::NoDamage);
     }

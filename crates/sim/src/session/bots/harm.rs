@@ -605,7 +605,7 @@ mod tests {
     /// never a teammate's death or its own, and more harm to its enemies
     /// than to its side.
     fn taken(harm: Harm) -> bool {
-        super::super::tactics::harm_allows(harm, 100.0) && harm.enemy - harm.ally - harm.own > 0.0
+        super::super::tactics::trade(harm, 100.0, 100.0).is_some_and(|net| net > 0.0)
     }
 
     #[test]
