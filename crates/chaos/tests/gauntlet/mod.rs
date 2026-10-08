@@ -39,6 +39,9 @@ pub struct Arena {
     pub moves: BTreeMap<OwnerId, MoveInput>,
     seq: u64,
     cmd: u64,
+    /// Seed players still to join (`tuning::seed`): they join just before
+    /// the first builder, so a package installs before anyone joins.
+    seed_players: u64,
 }
 
 impl Arena {
@@ -100,19 +103,25 @@ impl Arena {
             moves: BTreeMap::new(),
             seq: 1 << 40,
             cmd: 1000,
+            // A tuning seed other than 0 plays the same scenario on other
+            // random streams: bots' generators follow their ids and the
+            // tick, and these players take the first ids and ticks.
+            seed_players: tuning::seed(),
         };
         arena.catalog(&[], vehicle_kinds);
-        // A tuning seed other than 0 plays the same scenario on other
-        // random streams: bots' generators follow their ids and the tick.
-        let seed = tuning::seed();
+        arena
+    }
+
+    /// The seed players join, once, before the first builder.
+    fn seed_players_join(&mut self) {
+        let seed = std::mem::take(&mut self.seed_players);
         for i in 0..seed {
-            arena.join(
+            self.join(
                 &format!("Seed {i}"),
                 Vec3::new(90.0 - 2.0 * i as f32, 0.05, 92.0),
             );
         }
-        arena.step(seed as usize * 7);
-        arena
+        self.step(seed as usize * 7);
     }
 
     fn catalog(&mut self, kinds: &[String], vehicle_kinds: &[&str]) {
@@ -193,6 +202,7 @@ impl Arena {
 
     /// A builder standing far from the arena, out of every bot's sight.
     pub fn join(&mut self, name: &str, at: Vec3) -> OwnerId {
+        self.seed_players_join();
         let who = self.s.join(name.into(), at, true).unwrap();
         self.humans.push(who);
         self.step(5);
