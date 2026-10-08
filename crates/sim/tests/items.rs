@@ -383,3 +383,42 @@ fn pickups_need_the_player_box_itself_to_touch_the_item() {
         );
     }
 }
+
+/// Close Quarters stocks HE Grenades, which a fresh install's default Add-On
+/// choices leave off. The save loads without them instead of refusing.
+#[test]
+fn a_saved_item_whose_add_on_is_off_is_left_out_and_the_world_still_loads() {
+    let missing = "addon.weapon_hegrenade.item";
+    let mut off = brick();
+    off.item_spawn.item = Some(ContentRef::Resolved(missing.into()));
+    let mut world = World::new("Items".into(), "test".into(), vec![[1.; 4]]);
+    world.bricks.insert(1, brick());
+    world.bricks.insert(2, {
+        let mut b = off.clone();
+        b.position = [4., 0.1, 0.];
+        b
+    });
+    world.next_brick_id = 3;
+    let simulation = Simulation::new(world.clone(), definitions(), vec![]).unwrap();
+    let mut s = Session::new(simulation);
+    s.set_item_bounds(bounds()).unwrap();
+    s.step().unwrap();
+    let items = s.weapon_view().static_items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].brick, 1);
+
+    let spawners = ItemSpawners::new(bounds());
+    assert!(spawners.validate_append(&world, [&off]).is_ok());
+    // A wrench Send that leaves the brick's item alone passes; choosing an
+    // item this server doesn't have does not.
+    let properties = bri_world::authority::WrenchProperties {
+        item_spawn: off.item_spawn.clone(),
+        raycast: true,
+        colliding: true,
+        visible: true,
+        ..Default::default()
+    };
+    let edit = bri_world::authority::Edit::Properties(properties);
+    assert!(spawners.validate_edit(&world, 2, &edit).is_ok());
+    assert!(spawners.validate_edit(&world, 1, &edit).is_err());
+}

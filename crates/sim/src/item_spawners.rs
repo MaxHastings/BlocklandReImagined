@@ -101,8 +101,14 @@ impl ItemSpawners {
         if let bri_world::authority::Edit::Properties(properties) = edit {
             properties.item_spawn.validate()?;
             if let Some(ContentRef::Resolved(item)) = &properties.item_spawn.item {
+                // A brick keeps an item this server leaves out (see
+                // `reconcile`), so a wrench Send that leaves it alone passes.
+                let kept = world
+                    .bricks
+                    .get(&id)
+                    .is_some_and(|b| b.item_spawn.item == properties.item_spawn.item);
                 ensure!(
-                    self.bounds.contains_key(item),
+                    kept || self.bounds.contains_key(item),
                     "Missing authored item bounds: {item}"
                 );
                 let others = world
@@ -126,20 +132,11 @@ impl ItemSpawners {
         if self.bounds.is_empty() {
             return Ok(());
         }
-        let mut count = world
-            .bricks
-            .values()
-            .filter(|b| matches!(b.item_spawn.item, Some(ContentRef::Resolved(_))))
-            .count();
-        for brick in bricks {
-            if let Some(ContentRef::Resolved(item)) = &brick.item_spawn.item {
-                ensure!(
-                    self.bounds.contains_key(item),
-                    "Missing authored item bounds: {item}"
-                );
-                count += 1;
-            }
-        }
+        let spawns = |b: &Brick| matches!(&b.item_spawn.item, Some(ContentRef::Resolved(item)) if self.bounds.contains_key(item));
+        let mut count = world.bricks.values().filter(|b| spawns(b)).count();
+        // An item this server doesn't have (its Add-On is off) is left out
+        // when the brick is placed, as `reconcile` does; the save still loads.
+        count += bricks.into_iter().filter(|b| spawns(b)).count();
         ensure!(count <= MAX_STATIC_ITEMS, "Static item capacity exceeded");
         Ok(())
     }
@@ -171,10 +168,12 @@ impl ItemSpawners {
             self.remove(id);
             return Ok(());
         };
-        let bounds = *self
-            .bounds
-            .get(item)
-            .with_context(|| format!("Missing authored item bounds: {item}"))?;
+        // A saved item whose Add-On is off on this server spawns nothing; the
+        // brick keeps naming it, so it comes back when the Add-On does.
+        let Some(&bounds) = self.bounds.get(item) else {
+            self.remove(id);
+            return Ok(());
+        };
         let definition = definitions.get(brick)?;
         let position = placement(brick, &definition.mesh, bounds)?;
         ensure!(
