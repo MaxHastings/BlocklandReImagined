@@ -2592,6 +2592,21 @@ impl Session {
             _ => None,
         };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
+        // A place a step aside is the strafe's to walk, not the route's:
+        // one sideways mover, so the two never pull it opposite ways. The
+        // chooser picks the side; the leg it is on keeps its length.
+        let spot = match spot {
+            Some(a) if spots::sideways(a.option) => {
+                let right = Vec3::new(brain.yaw.cos(), 0.0, brain.yaw.sin());
+                let side = if (a.at - feet).dot(right) < 0.0 { -1.0 } else { 1.0 };
+                if brain.strafe.0 != side {
+                    let u = brain.random();
+                    brain.strafe = (side, tick + ticks(leg(u, STRAFE_SECONDS)));
+                }
+                None
+            }
+            other => other,
+        };
         brain.spot = spot;
 
         // Carrying an objective's delivery that needs only its feet (no
