@@ -245,8 +245,7 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
         assert!(std::time::Instant::now() < deadline, "no snapshot taken");
         std::thread::yield_now();
     }
-    // The crash gives up on the dump, frees the snapshot and writes its
-    // report.
+    // The crash gives up on the dump and writes its report.
     let reports = loop {
         let reports = files(dir.path(), "crash-", ".txt");
         if reports
@@ -259,10 +258,9 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
         assert!(std::time::Instant::now() < deadline, "no report written");
         std::thread::yield_now();
     };
-    // Freeing the snapshot ends its clone; Windows tears the process down
-    // after, later on a loaded machine. Wait for it to go, and it must not
-    // outlive the crashed process. (This does not show the free itself: the
-    // test passes with the frees removed. Proving that is v0.2.7.)
+    // The clone ends with the crashed process (the stalled dump keeps its
+    // snapshot); Windows tears it down after, later on a loaded machine.
+    // Wait for it to go, and it must not outlive the crashed process.
     let released = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
     while !processes::children(child.id()).is_empty() {
         assert!(
