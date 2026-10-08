@@ -246,7 +246,12 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                 if (Vec3::from(b.position) - c).abs().max_element() < 3.0 {
                     eprintln!(
                         "PROBE {c:?}: {:?} at {:?} turns {} collide {} ray {} visible {}",
-                        b.definition, b.position, b.quarter_turns, b.colliding, b.raycast, b.visible
+                        b.definition,
+                        b.position,
+                        b.quarter_turns,
+                        b.colliding,
+                        b.raycast,
+                        b.visible
                     );
                 }
             }

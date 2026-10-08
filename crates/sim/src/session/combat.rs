@@ -789,6 +789,15 @@ pub(super) fn color_code(n: u32) -> char {
     char::from_u32(0xE000 + n).unwrap_or(' ')
 }
 
+/// `fxDTSBrick::getSpawnPoint`: feet this far below a spawn brick's centre,
+/// on its pad, when nothing else is in the way.
+const SPAWN_DROP: f32 = 1.3;
+/// `fxDTSBrick::getSpawnPoint`: the ray down to that point starts this far
+/// above it.
+const SPAWN_RAY: f32 = 2.8;
+/// `fxDTSBrick::getSpawnPoint`: feet this far above what the ray meets.
+const SPAWN_LIFT: f32 = 0.1;
+
 impl Session {
     /// Map spawn points (feet positions) for respawns outside spawn bricks.
     pub fn set_spawn_points(&mut self, points: Vec<Vec3>) -> Result<()> {
@@ -2416,28 +2425,49 @@ impl Session {
         self.brick_spawn_point(chosen?)
     }
 
-    /// `fxDTSBrick::getSpawnPoint`: feet 1.3 below the brick's centre (on
-    /// its pad), or 0.1 above the first other brick or terrain a drop from
-    /// 1.5 above the centre meets on the way there.
+    /// `fxDTSBrick::getSpawnPoint`: feet [`SPAWN_DROP`] below the brick's
+    /// centre (on a spawn brick's pad), or [`SPAWN_LIFT`] above the first
+    /// map, terrain or other brick a ray meets going down [`SPAWN_RAY`] from
+    /// [`SPAWN_RAY`] above that point.
     pub(super) fn brick_spawn_point(&self, id: BrickId) -> Option<(Vec3, f32)> {
         let brick = self.simulation.state().bricks.get(&id)?;
         let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;
-        let base = Vec3::from(brick.position) - Vec3::Y * 1.3;
-        let start = base + Vec3::Y * 2.8;
-        let terrain = self
-            .simulation
-            .terrain_ray(start, Vec3::NEG_Y, 2.8)
+        let base = Vec3::from(brick.position) - Vec3::Y * SPAWN_DROP;
+        let start = base + Vec3::Y * SPAWN_RAY;
+        let simulation = &self.simulation;
+        let terrain = simulation
+            .terrain_ray(start, Vec3::NEG_Y, SPAWN_RAY)
             .map(|(distance, _)| distance);
-        let other = self
-            .simulation
-            .brick_ray(start, Vec3::NEG_Y, 2.8, |other, _| other != id)
+        let map = {
+            use rapier3d::prelude::*;
+            let interior =
+                |h: ColliderHandle, _: &Collider| simulation.map_collider_index(h).is_some();
+            simulation
+                .physics
+                .query_pipeline_with_filter(
+                    QueryFilter::default()
+                        .exclude_sensors()
+                        .predicate(&interior),
+                )
+                .cast_ray(
+                    &Ray::new(Vector::from_array(start.to_array()), Vector::NEG_Y),
+                    SPAWN_RAY,
+                    true,
+                )
+                .map(|(_, distance)| distance)
+        };
+        let other = simulation
+            .brick_ray(start, Vec3::NEG_Y, SPAWN_RAY, |other, _| other != id)
             .ok()
             .flatten()
             .map(|hit| hit.distance);
-        let feet = match (terrain, other) {
-            (None, None) => base,
-            (a, b) => start + Vec3::NEG_Y * a.unwrap_or(f32::MAX).min(b.unwrap_or(f32::MAX))
-                + Vec3::Y * 0.1,
+        let feet = match [terrain, map, other]
+            .into_iter()
+            .flatten()
+            .min_by(f32::total_cmp)
+        {
+            Some(distance) => start + Vec3::NEG_Y * distance + Vec3::Y * SPAWN_LIFT,
+            None => base,
         };
         Some((feet, yaw))
     }
@@ -2689,6 +2719,62 @@ mod tests {
             vec![ColliderBuilder::cuboid(100., 0.5, 100.).translation(Vector::new(0., -0.5, 0.))],
         )?;
         Ok(Session::new(simulation))
+    }
+
+    /// Spawn feet per `fxDTSBrick::getSpawnPoint`: on the floor brick or
+    /// map floor under the spawn brick, else 1.3 below its centre.
+    #[test]
+    fn a_spawn_brick_places_feet_on_what_lies_under_it() -> Result<()> {
+        use rapier3d::prelude::*;
+        let spawn_at = |floor_brick: bool, map_floor: bool, y: f32| -> Result<Vec3> {
+            let mut world = bri_world::World::new("Spawn".into(), "test".into(), vec![[1.0; 4]]);
+            let mut next = 1;
+            if floor_brick {
+                world.bricks.insert(
+                    next,
+                    bri_world::Brick::new(
+                        bri_world::ContentRef::Resolved(crate::testing::BASEPLATE.into()),
+                        [0.0, 0.1, 0.0],
+                        1,
+                    ),
+                );
+                next += 1;
+            }
+            let spawn = next;
+            world.bricks.insert(
+                spawn,
+                bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved(crate::testing::SPAWN_POINT.into()),
+                    [0.0, y, 0.0],
+                    1,
+                ),
+            );
+            world.next_brick_id = spawn + 1;
+            let colliders = if map_floor {
+                vec![
+                    ColliderBuilder::cuboid(100., 0.5, 100.).translation(Vector::new(0., -0.5, 0.)),
+                ]
+            } else {
+                Vec::new()
+            };
+            let simulation = crate::simulation::Simulation::new(
+                world,
+                crate::testing::definitions(),
+                colliders,
+            )?;
+            let s = Session::new(simulation);
+            Ok(s.brick_spawn_point(spawn).context("spawn brick")?.0)
+        };
+        // On a baseplate whose top is at 0.2.
+        let feet = spawn_at(true, false, 0.3)?;
+        assert!((feet.y - 0.3).abs() < 1e-3, "on a floor brick: {feet}");
+        // On the map's floor at 0.
+        let feet = spawn_at(false, true, 0.1)?;
+        assert!((feet.y - 0.1).abs() < 1e-3, "on the map floor: {feet}");
+        // Over nothing: on its pad, 1.3 below its centre.
+        let feet = spawn_at(false, false, 5.1)?;
+        assert!((feet.y - 3.8).abs() < 1e-3, "over nothing: {feet}");
+        Ok(())
     }
 
     /// An admin playing in someone else's game manages it through the

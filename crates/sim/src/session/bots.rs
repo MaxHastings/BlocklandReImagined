@@ -712,11 +712,10 @@ impl Brain {
     fn set_goal(&mut self, goal: Option<Goal>) {
         if self.goal != goal {
             self.goal = goal;
-            self.bridge = self
-                .plan
-                .first()
-                .copied()
-                .filter(|w| w.mode == Mode::Walk && w.through.is_none() && !w.jump && !w.crouch);
+            self.bridge =
+                self.plan.first().copied().filter(|w| {
+                    w.mode == Mode::Walk && w.through.is_none() && !w.jump && !w.crouch
+                });
             self.plan.clear();
             self.search = None;
             self.replans = 0;
@@ -2254,7 +2253,9 @@ impl Session {
         // Remember enemies seen, and where a hit came from.
         let memory_ticks = ticks(kind.memory_seconds);
         let mut warn = None;
-        brain.last_sight = seen_now.map(|seen| (seen, tick)).or(brain.last_sight.filter(|_| glimpsed));
+        brain.last_sight = seen_now
+            .map(|seen| (seen, tick))
+            .or(brain.last_sight.filter(|_| glimpsed));
         match sight.target {
             Some(_) if glimpsed => {}
             Some(seen) => {
@@ -2598,7 +2599,11 @@ impl Session {
         let spot = match spot {
             Some(a) if spots::sideways(a.option) => {
                 let right = Vec3::new(brain.yaw.cos(), 0.0, brain.yaw.sin());
-                let side = if (a.at - feet).dot(right) < 0.0 { -1.0 } else { 1.0 };
+                let side = if (a.at - feet).dot(right) < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
                 if brain.strafe.0 != side {
                     let u = brain.random();
                     brain.strafe = (side, tick + ticks(leg(u, STRAFE_SECONDS)));
@@ -3500,7 +3505,12 @@ impl Session {
             // way out of where it stands a while, for every body of this
             // size (`Nav::avoid_walk`).
             if let Some(next) = wanted.filter(|w| w.through.is_none()) {
-                nav.avoid_walk(brain_footing, next.feet, body.width * 0.5, tick + AVOID_TICKS);
+                nav.avoid_walk(
+                    brain_footing,
+                    next.feet,
+                    body.width * 0.5,
+                    tick + AVOID_TICKS,
+                );
             }
         }
         // A leap that missed: that leap alone is avoided.
