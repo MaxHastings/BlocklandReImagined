@@ -423,6 +423,9 @@ struct Brain {
     vehicle_since: Option<(u64, u64)>,
     /// The jet leg of its route it is flying, if any.
     jet_leg: Option<crate::route::JetLeg>,
+    /// Where its feet last stood on something: where a walk it got nowhere
+    /// on was from, though a stall's hop has it in the air.
+    footing: Vec3,
     /// The leap of its route it is taking, if any.
     leap_leg: Option<crate::route::LeapLeg>,
     /// The gear its driving is in (`route::gear`).
@@ -607,6 +610,7 @@ impl Brain {
             vehicle_headway: Default::default(),
             vehicle_since: None,
             jet_leg: None,
+            footing: home,
             leap_leg: None,
             drive_gear: crate::route::Gear::Forward,
             mount_anchor: None,
@@ -979,6 +983,19 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
         0.5 + body.step + body.drop,
     )
 }
+/// Whether a bot with `goal` standing at `feet` is at its work, where
+/// getting nowhere is not a stall: at the body or brick it works, pressing
+/// against it is the work. An item is armed by reaching it, so on the way
+/// there (`routed`: a waypoint still ahead, such as a step up near as it
+/// is across) getting nowhere is a stall.
+fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool) -> bool {
+    match goal {
+        Some(Goal::Objective(p) | Goal::Interact(p)) => flat(p - feet).length() < body.width + 1.0,
+        Some(Goal::Arm(p)) => !routed && flat(p - feet).length() < body.width + 1.0,
+        _ => false,
+    }
+}
+
 /// Seconds a hop from level ground is in the air ([`crate::route::hop_flight`]).
 fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
     crate::route::Motion::of(tuning).hop(jets, 0.0)
@@ -3243,11 +3260,7 @@ impl Session {
             .and_then(|p| p.walk)
             .is_some_and(|walk| walk != Vec3::ZERO);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let at_work = matches!(
-            brain.goal,
-            Some(Goal::Objective(p) | Goal::Interact(p) | Goal::Arm(p))
-                if flat(p - feet).length() < body.width + 1.0
-        );
+        let at_work = at_work(brain.goal, feet, &body, wanted.is_some());
         let walking = driving.is_none()
             && trying
             && pushing.is_none()
@@ -3368,13 +3381,17 @@ impl Session {
         brain.acted.replans = brain.replans;
         brain.sequence += 1;
         let sequence = brain.sequence;
+        if state.grounded {
+            brain.footing = feet;
+        }
+        let brain_footing = brain.footing;
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
             // What it walked toward and got nowhere: the grid avoids that
             // way out of where it stands a while, for every body of this
             // size (`Nav::avoid_walk`).
             if let Some(next) = wanted.filter(|w| w.through.is_none()) {
-                nav.avoid_walk(feet, next.feet, tick + AVOID_TICKS);
+                nav.avoid_walk(brain_footing, next.feet, tick + AVOID_TICKS);
             }
         }
         // A leap that missed: that leap alone is avoided.
@@ -3407,6 +3424,24 @@ impl Session {
                 callout,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::*;
+
+    /// A bot a step below a weapon, near it across, with the step still to
+    /// climb is on its way, not at its work: getting nowhere there is a
+    /// stall (the Afghanistan cubby, where one stood frozen for minutes).
+    /// At a body or brick it works, pressing on is the work.
+    #[test]
+    fn near_a_weapon_with_a_step_still_to_climb_is_not_at_work() {
+        let body = Body::of(&crate::player::PlayerTuning::default(), 1.0);
+        let (feet, item) = (Vec3::new(-84.36, 16.4, 37.5), Vec3::new(-85.5, 17.9, 37.77));
+        assert!(!at_work(Some(Goal::Arm(item)), feet, &body, true));
+        assert!(at_work(Some(Goal::Arm(item)), feet, &body, false));
+        assert!(at_work(Some(Goal::Interact(item)), feet, &body, true));
     }
 }
 
