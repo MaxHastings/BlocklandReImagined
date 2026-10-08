@@ -676,12 +676,8 @@ impl App {
                             .map(|state| state.sound.as_str())
                             .filter(|sound| !sound.is_empty() && self.audio.is_looping(sound));
                         if let Some(sound) = sound {
-                            let eye = Vec3::from(player.feet)
-                                + Vec3::Y
-                                    * view
-                                        .archetypes
-                                        .tuning(player.archetype, player.scale)
-                                        .stand_eye;
+                            let seated = sit_posed(view, &self.vehicle_assets, presented, *owner);
+                            let eye = view.archetypes.posed_eye(player, seated);
                             loops.insert(
                                 (*owner, mounted.hand),
                                 (sound.to_string(), eye.to_array()),

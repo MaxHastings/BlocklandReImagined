@@ -27,7 +27,7 @@ pub(super) struct Mounts {
 /// Whether `owner` is held in the `sit` pose: `/sit`, or a vehicle seat or
 /// a body's mount point whose pose is `sit` (`mountThread`). The host gives
 /// such a body the sit's eye, so its rays and name tag start at the drawn head.
-pub(super) fn sit_posed(
+pub(crate) fn sit_posed(
     view: &network::View,
     vehicle_assets: &crate::vehicles::VehicleAssets,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,

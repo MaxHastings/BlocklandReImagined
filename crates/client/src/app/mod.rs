@@ -47,7 +47,7 @@ mod hud;
 mod lighting;
 mod load;
 mod lobby;
-mod mounts;
+pub(crate) mod mounts;
 mod net_events;
 mod perf;
 mod probes;
@@ -896,6 +896,7 @@ fn camera_segment_near_portal(
 fn camera_eye(
     controls: &Controls,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    seated: &dyn Fn(bri_world::OwnerId) -> bool,
     entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     drawn_offset: Option<Vec3>,
     building: &crate::building::Building,
@@ -933,7 +934,7 @@ fn camera_eye(
         // behind the focus, as a chase camera's does.
         Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_) | ObserverMode::Point(..)) => {
             let focus = controls
-                .orbit_focus(presented, building.archetypes(), entities)
+                .orbit_focus(presented, seated, building.archetypes(), entities)
                 .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye);
             boom(focus, focus, controls.orbit_distance())

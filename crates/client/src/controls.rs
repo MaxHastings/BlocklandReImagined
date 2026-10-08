@@ -700,11 +700,14 @@ impl Controls {
     pub fn orbit_focus(
         &self,
         presented: &BTreeMap<OwnerId, PlayerState>,
+        seated: &dyn Fn(OwnerId) -> bool,
         archetypes: &bri_sim::archetype::Archetypes,
         entities: &BTreeMap<u64, bri_sim::session::EntityInfo>,
     ) -> Option<glam::Vec3> {
         match self.observer?.mode {
-            ObserverMode::Orbit(target) => presented.get(&target).map(|p| archetypes.eye(p)),
+            ObserverMode::Orbit(target) => presented
+                .get(&target)
+                .map(|p| archetypes.posed_eye(p, seated(target))),
             ObserverMode::Drive(entity) => entities
                 .get(&entity)
                 .map(|e| glam::Vec3::from(e.position) + glam::Vec3::Y * 1.5),
@@ -1500,7 +1503,12 @@ mod tests {
             distance: 4.5,
         });
         assert_eq!(
-            c.orbit_focus(&BTreeMap::new(), &Default::default(), &Default::default()),
+            c.orbit_focus(
+                &BTreeMap::new(),
+                &|_| false,
+                &Default::default(),
+                &Default::default()
+            ),
             Some(glam::Vec3::new(3.0, 1.0, 4.0))
         );
         assert_eq!(c.orbit_distance(), 4.5);
@@ -1534,22 +1542,51 @@ mod tests {
         };
         let mut presented = BTreeMap::from([(1, body(1, 0.0)), (7, body(7, 5.0))]);
         assert_eq!(
-            c.orbit_focus(&presented, &Default::default(), &Default::default()),
+            c.orbit_focus(
+                &presented,
+                &|_| false,
+                &Default::default(),
+                &Default::default()
+            ),
             None
         );
         c.follow(ControlObject::Spy(7), 1, None);
         let first = c
-            .orbit_focus(&presented, &Default::default(), &Default::default())
+            .orbit_focus(
+                &presented,
+                &|_| false,
+                &Default::default(),
+                &Default::default(),
+            )
             .unwrap();
         assert_eq!(first.x, 5.0);
         presented.insert(7, body(7, 12.0));
         assert_eq!(
-            c.orbit_focus(&presented, &Default::default(), &Default::default())
-                .unwrap()
-                .x,
+            c.orbit_focus(
+                &presented,
+                &|_| false,
+                &Default::default(),
+                &Default::default()
+            )
+            .unwrap()
+            .x,
             12.0
         );
         assert!(first.y > 1.0, "orbits the eye, not the feet");
+        let archetypes = bri_sim::archetype::Archetypes::default();
+        let seated = c
+            .orbit_focus(
+                &presented,
+                &|owner| owner == 7,
+                &archetypes,
+                &Default::default(),
+            )
+            .unwrap();
+        assert_eq!(seated, archetypes.posed_eye(&presented[&7], true));
+        assert!(
+            seated.y < first.y,
+            "a seated body is orbited at its sit eye"
+        );
     }
     #[test]
     fn driving_an_entity_sends_the_held_controls_steered_by_the_camera() {
@@ -1576,6 +1613,7 @@ mod tests {
         let focus = c
             .orbit_focus(
                 &BTreeMap::new(),
+                &|_| false,
                 &Default::default(),
                 &BTreeMap::from([(9, kart)]),
             )

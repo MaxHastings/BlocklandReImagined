@@ -371,6 +371,7 @@ impl App {
             let (eye, boom) = camera_eye(
                 controls,
                 presented,
+                &|owner| sit_posed(view, assets, presented, owner),
                 &view.entities,
                 drawn_offset,
                 building,
@@ -466,6 +467,7 @@ impl App {
             let (eye, boom) = camera_eye(
                 controls,
                 presented,
+                &|owner| sit_posed(view, assets, presented, owner),
                 &view.entities,
                 drawn_offset,
                 building,
@@ -482,6 +484,7 @@ impl App {
         let (eye, boom) = camera_eye(
             controls,
             presented,
+            &|owner| sit_posed(view, assets, presented, owner),
             &view.entities,
             drawn_offset,
             building,

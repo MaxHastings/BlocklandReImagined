@@ -680,7 +680,13 @@ pub fn world_view(
                 |(_, dead)| !dead,
             ),
             feet: state.feet,
-            eye: view.archetypes.eye(state).to_array(),
+            eye: view
+                .archetypes
+                .posed_eye(
+                    state,
+                    crate::app::mounts::sit_posed(view, assets, players, *owner),
+                )
+                .to_array(),
             look: state.forward().to_array(),
             velocity: state.velocity,
             crouched: state.crouched,
