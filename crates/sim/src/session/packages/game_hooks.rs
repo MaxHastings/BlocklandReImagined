@@ -343,11 +343,8 @@ impl Session {
                 return Some(self.map_spawn());
             }
             if let Ok(brick) = answer.as_int() {
-                match self.simulation.state().bricks.get(&(brick as u64)) {
-                    Some(b) => {
-                        let yaw = -f32::from(b.quarter_turns) * std::f32::consts::FRAC_PI_2;
-                        return Some((Vec3::from(b.position) + Vec3::Y * 0.1, yaw));
-                    }
+                match self.brick_spawn_point(brick as u64) {
+                    Some(spawn) => return Some(spawn),
                     None => {
                         self.hook_warning(
                             &package,

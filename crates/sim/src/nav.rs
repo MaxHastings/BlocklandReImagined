@@ -600,7 +600,13 @@ fn segment_gap(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
         .min(to_segment(b1, a0, a1))
 }
 
-pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Vec<Waypoint> {
+pub fn pull(
+    ground: &Ground,
+    nav: &Nav,
+    body: &Body,
+    from: Vec3,
+    path: Vec<Waypoint>,
+) -> Vec<Waypoint> {
     if body.conservative {
         return path;
     }
@@ -616,6 +622,7 @@ pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Ve
                 && plain(&path[k])
                 && ground.walkable(body, anchor, path[k].feet)
                 && !ground.crowds(body, anchor, path[k].feet)
+                && !nav.line_avoided(anchor, path[k].feet, body)
             {
                 keep = k;
                 // Where the next kind of step starts is kept.
@@ -725,25 +732,63 @@ impl Nav {
             });
     }
     /// A body standing at `feet` got nowhere walking toward `toward`: the
-    /// steps out of its cell that way (within half a turn of the eight
-    /// either side) are avoided until `until`.
-    pub fn avoid_walk(&mut self, feet: Vec3, toward: Vec3, until: u64) {
-        let from = cell_of(feet);
+    /// steps that way (within half a turn of the eight either side) out of
+    /// every cell its body spans across that way (`half`: half its width)
+    /// are avoided until `until`. One cell alone would be stepped round a
+    /// cell aside, which the same body meets the same block from.
+    pub fn avoid_walk(&mut self, feet: Vec3, toward: Vec3, half: f32, until: u64) {
         let heading = Vec3::new(toward.x - feet.x, 0.0, toward.z - feet.z).normalize_or_zero();
-        for (dx, dz) in NEIGHBOURS {
-            let step = Vec3::new(dx as f32, 0.0, dz as f32).normalize();
-            if heading != Vec3::ZERO && step.dot(heading) >= std::f32::consts::FRAC_1_SQRT_2 - 1e-3
-            {
-                self.avoid
-                    .entry((from, (from.0 + dx, from.1 + dz)))
-                    .or_default()
-                    .push(Failed {
-                        from: feet.y,
-                        to: None,
-                        until,
-                    });
+        if heading == Vec3::ZERO {
+            return;
+        }
+        let across = Vec3::new(-heading.z, 0.0, heading.x);
+        let n = (half / CELL).floor() as i32;
+        let mut cells: Vec<(i32, i32)> = (-n..=n)
+            .map(|i| cell_of(feet + across * (i as f32 * CELL)))
+            .collect();
+        cells.dedup();
+        for from in cells {
+            for (dx, dz) in NEIGHBOURS {
+                let step = Vec3::new(dx as f32, 0.0, dz as f32).normalize();
+                if step.dot(heading) >= std::f32::consts::FRAC_1_SQRT_2 - 1e-3 {
+                    self.avoid
+                        .entry((from, (from.0 + dx, from.1 + dz)))
+                        .or_default()
+                        .push(Failed {
+                            from: feet.y,
+                            to: None,
+                            until,
+                        });
+                }
             }
         }
+    }
+    /// Whether a straight walk from `from` to `to` crosses a step of the
+    /// grid avoided now: `pull` does not draw a line back through a way a
+    /// body got nowhere.
+    pub fn line_avoided(&self, from: Vec3, to: Vec3, body: &Body) -> bool {
+        if self.avoid.is_empty() {
+            return false;
+        }
+        let d = Vec3::new(to.x - from.x, 0.0, to.z - from.z);
+        let n = (d.length() / (CELL * 0.5)).ceil().max(1.0) as usize;
+        let same = |a: f32, b: f32| (a - b).abs() < body.crouch_height * 0.5;
+        let mut last = cell_of(from);
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            let at = from + (to - from) * t;
+            let cell = cell_of(at);
+            if cell != last {
+                let y = from.y + (to.y - from.y) * t;
+                if self.avoid.get(&(last, cell)).is_some_and(|failed| {
+                    failed.iter().any(|f| self.now < f.until && same(f.from, y))
+                }) {
+                    return true;
+                }
+                last = cell;
+            }
+        }
+        false
     }
     /// Whether the move from `from` onto the floor at `to` of cell `x, z`
     /// is avoided. Floors of one column are a crouched body's height apart
@@ -2530,7 +2575,7 @@ mod tests {
             let straight = from.distance(end);
             // The grid's eight directions zig-zag a diagonal.
             assert!(walked(from, &raw) > straight * 1.05, "{raw:?}");
-            let pulled = pull(&ground, &body(), from, raw);
+            let pulled = pull(&ground, &Nav::default(), &body(), from, raw);
             assert!(
                 walked(from, &pulled) <= straight * 1.05,
                 "{} of {straight}: {pulled:?}",
@@ -2557,7 +2602,7 @@ mod tests {
         ] {
             let (found, _) = search(&physics, from, goal);
             let raw = path(found);
-            let pulled = pull(&ground, &body(), from, raw.clone());
+            let pulled = pull(&ground, &Nav::default(), &body(), from, raw.clone());
             assert!(pulled.len() <= raw.len());
             assert!((pulled.last().unwrap().feet - raw.last().unwrap().feet).length() < 1e-4);
             every_leg_walkable(&ground, from, &pulled);
@@ -2595,7 +2640,7 @@ mod tests {
         let (from, goal) = (Vec3::new(16.0, 0.0, 30.0), Vec3::new(0.5, 0.0, 30.0));
         let (found, _) = search(&physics, from, goal);
         let raw = path(found);
-        let pulled = pull(&ground, &body(), from, raw);
+        let pulled = pull(&ground, &Nav::default(), &body(), from, raw);
         every_leg_walkable(&ground, from, &pulled);
         let crossing = std::iter::once(from)
             .chain(pulled.iter().map(|w| w.feet))
@@ -2623,7 +2668,7 @@ mod tests {
         let from = Vec3::new(0.0, 0.0, -6.0);
         let (found, _) = search(&physics, from, Vec3::new(7.5, 2.6, 0.0));
         let raw = path(found);
-        let pulled = pull(&ground, &body(), from, raw.clone());
+        let pulled = pull(&ground, &Nav::default(), &body(), from, raw.clone());
         let jumps = |p: &[Waypoint]| {
             p.iter()
                 .filter(|w| w.jump)
@@ -2872,7 +2917,7 @@ mod tests {
         let mut nav = Nav::default();
         let (up, down) = (Vec3::new(0.0, 3.0, 0.0), Vec3::new(0.0, 0.0, 0.0));
         // Got nowhere walking +x on the roof.
-        nav.avoid_walk(up, up + Vec3::X, u64::MAX);
+        nav.avoid_walk(up, up + Vec3::X, 0.0, u64::MAX);
         let steps = |nav: &mut Nav, feet: Vec3| {
             nav.begin_tick();
             let node = nav.node_at(&ground, &body, feet).unwrap().unwrap();

@@ -236,6 +236,22 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         }
         Ok(())
     };
+    // BRI_WATCH_PROBE="x,y,z;...": the bricks within 3 units of each point,
+    // for reading what a bot is stuck on.
+    if let Some(probe) = env("BRI_WATCH_PROBE") {
+        for p in probe.split(';') {
+            let c: Vec<f32> = p.split(',').map(|v| v.trim().parse().unwrap()).collect();
+            let c = Vec3::new(c[0], c[1], c[2]);
+            for b in build.world.bricks.values() {
+                if (Vec3::from(b.position) - c).abs().max_element() < 3.0 {
+                    eprintln!(
+                        "PROBE {c:?}: {:?} at {:?} turns {} collide {} ray {} visible {}",
+                        b.definition, b.position, b.quarter_turns, b.colliding, b.raycast, b.visible
+                    );
+                }
+            }
+        }
+    }
     let bricks_saved = build.world.bricks.len();
     let brick_points: Vec<[f32; 3]> = build.world.bricks.values().map(|b| b.position).collect();
     cmd += 1;
@@ -390,8 +406,10 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         let _ = s.command(host, cmd, Command::MiniGame(MiniGameRequest::Leave));
         step(&mut s, 4, &mut seq)?;
     }
-    // Warm-up: the round's start.
-    step(&mut s, TPS * 2, &mut seq)?;
+    // Warm-up: the round's start. BRI_WATCH_WARMUP (seconds, default 2)
+    // varies it, so one save gives several different matches.
+    let warmup: f32 = env("BRI_WATCH_WARMUP").map_or(2.0, |w| w.parse().unwrap());
+    step(&mut s, (TPS as f32 * warmup) as u64, &mut seq)?;
     let games = s.minigame_views();
     eprintln!(
         "WATCH games {:?}",

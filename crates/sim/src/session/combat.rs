@@ -2413,9 +2413,33 @@ impl Session {
                 (!own.is_empty()).then(|| own[(word % own.len() as u64) as usize])
             }
         });
-        let brick = chosen.and_then(|id| self.simulation.state().bricks.get(&id))?;
+        self.brick_spawn_point(chosen?)
+    }
+
+    /// `fxDTSBrick::getSpawnPoint`: feet 1.3 below the brick's centre (on
+    /// its pad), or 0.1 above the first other brick or terrain a drop from
+    /// 1.5 above the centre meets on the way there.
+    pub(super) fn brick_spawn_point(&self, id: BrickId) -> Option<(Vec3, f32)> {
+        let brick = self.simulation.state().bricks.get(&id)?;
         let yaw = -f32::from(brick.quarter_turns) * std::f32::consts::FRAC_PI_2;
-        Some((Vec3::from(brick.position) + Vec3::Y * 0.1, yaw))
+        let base = Vec3::from(brick.position) - Vec3::Y * 1.3;
+        let start = base + Vec3::Y * 2.8;
+        let terrain = self
+            .simulation
+            .terrain_ray(start, Vec3::NEG_Y, 2.8)
+            .map(|(distance, _)| distance);
+        let other = self
+            .simulation
+            .brick_ray(start, Vec3::NEG_Y, 2.8, |other, _| other != id)
+            .ok()
+            .flatten()
+            .map(|hit| hit.distance);
+        let feet = match (terrain, other) {
+            (None, None) => base,
+            (a, b) => start + Vec3::NEG_Y * a.unwrap_or(f32::MAX).min(b.unwrap_or(f32::MAX))
+                + Vec3::Y * 0.1,
+        };
+        Some((feet, yaw))
     }
 
     /// Every spawn point brick (the base Spawn Point and bricks inheriting

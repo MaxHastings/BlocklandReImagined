@@ -240,6 +240,7 @@ mod tests {
             noticed: None,
             team: Default::default(),
             acted: "Acts: walk route, look route, trigger none".into(),
+            input: MoveInput::default(),
             planned: None,
             gate: None,
             surprise: BotSurpriseView {

@@ -201,6 +201,10 @@ const MAX_REPLANS: u32 = 3;
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
 const GOAL_SLACK: f32 = 0.2;
+/// How long a target out of view a moment is still fought where it was
+/// last seen: the hold time, so a glimpse lost decides nothing a held
+/// choice would not.
+const GLIMPSE_SECONDS: f32 = 0.5;
 /// A ranged fighter strafes one way about this long before turning back.
 /// It stands at a ledge or a wall until then, and turns away from an ally
 /// at once. A melee fighter does not strafe: it closes to its band.
@@ -356,6 +360,10 @@ struct Brain {
     /// Where it is going and how.
     goal: Option<Goal>,
     plan: Vec<Waypoint>,
+    /// The walk it was on when its goal moved: kept while the route to the
+    /// new goal is searched, when it heads that way, so a goal that moves
+    /// on (the next search spot, a chase's runner) never stops it dead.
+    bridge: Option<Waypoint>,
     search: Option<Search>,
     /// The goal's plan is walked (or none exists): no new search until the
     /// goal changes or the bot gets stuck.
@@ -393,6 +401,9 @@ struct Brain {
     target: Option<OwnerId>,
     /// Tick the current target was first seen.
     seen_since: u64,
+    /// The last time it saw its target with its own eyes, and how: what a
+    /// moment out of view still goes by (`GLIMPSE_SECONDS`).
+    last_sight: Option<(Seen, u64)>,
     /// Its aim error now, radians (yaw, pitch): a seeded drift.
     error: (f32, f32),
     /// Where an enemy was last seen or heard, until when.
@@ -594,6 +605,7 @@ impl Brain {
             rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0x9E37_79B9),
             goal: None,
             plan: Vec::new(),
+            bridge: None,
             search: None,
             settled: false,
             partial_route: false,
@@ -613,6 +625,7 @@ impl Brain {
             pitch: 0.0,
             target: None,
             seen_since: 0,
+            last_sight: None,
             error: (0.0, 0.0),
             memory: None,
             evidence_search: Default::default(),
@@ -699,6 +712,11 @@ impl Brain {
     fn set_goal(&mut self, goal: Option<Goal>) {
         if self.goal != goal {
             self.goal = goal;
+            self.bridge = self
+                .plan
+                .first()
+                .copied()
+                .filter(|w| w.mode == Mode::Walk && w.through.is_none() && !w.jump && !w.crouch);
             self.plan.clear();
             self.search = None;
             self.replans = 0;
@@ -1707,7 +1725,7 @@ impl Session {
                             if matches!(brain.goal, Some(Goal::Chase(_))) {
                                 brain.out_of_reach = None;
                             }
-                            brain.plan = crate::nav::pull(&ground, body, feet, path);
+                            brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
                         }
                         Found::Partial(path) if !path.is_empty() => {
                             // The best route to an enemy ends where it cannot
@@ -1724,7 +1742,7 @@ impl Session {
                             }
                             brain.partial_route = true;
                             brain.segment_anchor = feet;
-                            brain.plan = crate::nav::pull(&ground, body, feet, path);
+                            brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
                         }
                         // Already as close as it gets, or nowhere to stand.
                         _ => brain.plan.clear(),
@@ -1798,6 +1816,20 @@ impl Session {
                 }
             }
             wanted = brain.plan.first().copied();
+            // Still searching the way to a goal that just moved: on along
+            // the walk it was on while that heads toward it, as a player
+            // keeps walking while they look where next.
+            if wanted.is_none() && brain.search.is_some() {
+                wanted = brain.bridge.filter(|w| {
+                    let to = flat(w.feet - feet);
+                    to.length() > 0.4
+                        && (w.feet.y - feet.y).abs() < body.step + 0.5
+                        && to.dot(flat(point - feet)) > 0.0
+                });
+            }
+            if wanted.is_none() || !brain.plan.is_empty() {
+                brain.bridge = None;
+            }
             // Standing over a drop's landing, at the very edge or on a body
             // above it (a vehicle's roof, which a route from the floor
             // beneath starts under): heading for the landing itself just
@@ -1913,14 +1945,31 @@ impl Session {
         self.bot_crossed(bot);
         self.surprise_settle(bot, tick);
         let brain = &self.bots.brains[&bot];
-        let sight = self.bot_sight(bot, brain, eye);
+        let mut sight = self.bot_sight(bot, brain, eye);
+        // Its target gone behind a pillar, a corner or another body for a
+        // moment is still the one it fights, where it was last seen: it
+        // does not drop the fight for a search and take it up again a few
+        // ticks later. It holds its fire meanwhile, and nothing it learns
+        // from it is new (no memory renewed, no unseen position read).
+        let mut glimpsed = false;
+        if sight.target.is_none()
+            && let Some((seen, at)) = brain.last_sight
+            && brain.target == Some(seen.owner)
+            && tick.saturating_sub(at) <= ticks(GLIMPSE_SECONDS)
+            && self.peers.get(&seen.owner).is_some_and(|p| p.combat.alive)
+            && self.bot_enemy(bot, &brain.kind, seen.owner)
+        {
+            sight.target = Some(seen);
+            glimpsed = true;
+        }
+        let seen_now = sight.target.filter(|_| !glimpsed);
         // A crossing immediately after direct sight can carry that last
         // observation through the opening. It never reads the hidden body.
         let followed = brain
             .memory
             .filter(|k| {
                 Some(k.subject) == brain.target
-                    && sight.target.is_none()
+                    && seen_now.is_none()
                     && tick < k.expires
                     && self.bot_enemy(bot, &brain.kind, k.subject)
             })
@@ -1933,6 +1982,11 @@ impl Session {
                         ..k
                     })
             });
+        // Followed through an opening, it goes by the crossing instead.
+        if glimpsed && followed.is_some() {
+            sight.target = None;
+            glimpsed = false;
+        }
         let Hand {
             native,
             native_choice,
@@ -2023,7 +2077,7 @@ impl Session {
             mounted_charging,
             charged_ready,
             target_velocity,
-        } = self.bot_shot(bot, weapon, sight.target, eye, tick);
+        } = self.bot_shot(bot, weapon, seen_now, eye, tick);
 
         // A known noncombat body/tool cannot resolve a threat by staring at
         // it. Keep its useful objective; unknown scripted attacks retain their
@@ -2200,7 +2254,9 @@ impl Session {
         // Remember enemies seen, and where a hit came from.
         let memory_ticks = ticks(kind.memory_seconds);
         let mut warn = None;
+        brain.last_sight = seen_now.map(|seen| (seen, tick)).or(brain.last_sight.filter(|_| glimpsed));
         match sight.target {
+            Some(_) if glimpsed => {}
             Some(seen) => {
                 let fresh = brain.target != Some(seen.owner);
                 if fresh {
@@ -2945,6 +3001,7 @@ impl Session {
             let reaction = ticks(kind.reaction_seconds);
             let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
             fire = enemy.is_some()
+                && !glimpsed
                 && (driving.is_none() || vehicle_weapon)
                 && brain
                     .perception
@@ -3428,7 +3485,7 @@ impl Session {
             // way out of where it stands a while, for every body of this
             // size (`Nav::avoid_walk`).
             if let Some(next) = wanted.filter(|w| w.through.is_none()) {
-                nav.avoid_walk(brain_footing, next.feet, tick + AVOID_TICKS);
+                nav.avoid_walk(brain_footing, next.feet, body.width * 0.5, tick + AVOID_TICKS);
             }
         }
         // A leap that missed: that leap alone is avoided.
