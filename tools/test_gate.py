@@ -62,6 +62,24 @@ class CiShards(unittest.TestCase):
             gate.parse_shard("4/4")
 
 
+class CiKnownFailures(unittest.TestCase):
+    known = {"capture_the_flag": {"owner": "someone"}}
+
+    def test_a_listed_failure_is_tolerated_as_the_gate_does(self):
+        output = "test capture_the_flag ... FAILED\ntest other ... ok\n"
+        self.assertTrue(gate.ci_tolerated("bri-chaos/bot_gauntlet", output, self.known))
+
+    def test_an_unlisted_failure_beside_a_listed_one_fails(self):
+        output = "test capture_the_flag ... FAILED\ntest other ... FAILED\n"
+        self.assertFalse(gate.ci_tolerated("bri-chaos/bot_gauntlet", output, self.known))
+
+    def test_a_hang_or_crash_is_never_tolerated(self):
+        for name in ("gate_timeout", "process_exit"):
+            output = f"test bri-chaos/bot_gauntlet::{name} ... FAILED\n"
+            self.assertFalse(gate.ci_tolerated("bri-chaos/bot_gauntlet", output, self.known))
+        self.assertFalse(gate.ci_tolerated("bri-chaos/bot_gauntlet", "", self.known))
+
+
 class GateEnvironment(unittest.TestCase):
     def test_content_backed_tests_get_the_main_content(self):
         env = gate_env_for({"PATH": "x", "CARGO_TARGET_DIR": "elsewhere"})

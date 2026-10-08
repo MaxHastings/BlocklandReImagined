@@ -1178,6 +1178,9 @@ def ci_test(part=(0, 1)):
     if unknown:
         say(f"ci_skip_target entries match no test target: {', '.join(sorted(unknown))}")
         return False
+    known = {entry["test"]: entry for entry in data.get("failure", [])}
+    skip_args = [arg for entry in data.get("skip", []) + data.get("nightly", [])
+                 for arg in ("--skip", entry["test"])]
     failed = []
     mine = set(shard([label for label, _, _, _ in binaries if label not in skipped], part))
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(binaries) - len(skipped)} test targets")
@@ -1188,9 +1191,9 @@ def ci_test(part=(0, 1)):
         if label not in mine:
             continue
         say(f"running {label}")
-        output, code = run_binary(label, executable, [], cwd)
+        output, code = run_binary(label, executable, skip_args, cwd)
         print(output, end="", flush=True)
-        if code:
+        if code and not ci_tolerated(label, output, known):
             failed.append((label, output))
     if failed:
         # The CI log viewer keeps only the end of a long log, so repeat each
@@ -1207,6 +1210,19 @@ def ci_test(part=(0, 1)):
         return False
     say("all content-free test targets passed")
     return True
+
+
+def ci_tolerated(label, output, known):
+    """True when every test that failed in one binary's output is a
+    [[failure]] entry, as the local gate tolerates them. A hang or crash
+    (no failing test named) is never tolerated."""
+    failed = {f"{label}::{name}" for name in re.findall(r"^test (\S+) \.\.\. FAILED", output, re.M)}
+    if not failed or any(whole_process_failure(key.split("::", 1)[1]) for key in failed):
+        return False
+    unexpected = sorted(key for key in failed if not matches(key, known))
+    for key in sorted(failed - set(unexpected)):
+        say(f"known failure (owner: {known[matches(key, known)].get('owner', '?')}): {key}")
+    return not unexpected
 
 
 def hook(stdin):
