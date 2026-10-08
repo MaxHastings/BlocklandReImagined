@@ -214,7 +214,7 @@ impl Session {
         Ok(())
     }
     /// A bot leaves the server, whatever made it.
-    pub(super) fn drop_bot(&mut self, bot: OwnerId) -> Result<()> {
+    pub(in crate::session) fn drop_bot(&mut self, bot: OwnerId) -> Result<()> {
         self.bots.claims.release_owner(bot);
         if self.peers.contains_key(&bot) {
             self.disconnect(bot)?;

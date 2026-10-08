@@ -758,6 +758,19 @@ impl Session {
         let result = runtime.request(self, owner, request, now, persist);
         let retune = runtime.settings.addon_settings != before;
         self.admin = runtime;
+        // A bot has no connection to close: a kicked or banned bot leaves
+        // here, as when its spawn brick or its game lets it go.
+        let bots: Vec<_> = self
+            .admin_disconnects
+            .iter()
+            .copied()
+            .filter(|owner| self.bots.is_bot(*owner))
+            .collect();
+        for bot in bots {
+            self.admin_disconnects.retain(|owner| *owner != bot);
+            self.admin_disconnect_messages.remove(&bot);
+            self.drop_bot(bot)?;
+        }
         // Checked before they were taken, so this derives.
         if retune {
             self.retune_weapons()?;

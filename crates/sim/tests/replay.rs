@@ -585,3 +585,36 @@ fn a_changed_add_on_value_is_caught() {
     let later = divergence.later.expect("a full check follows");
     assert_eq!(later.parts, ["Add-Ons"], "{later:#?}");
 }
+
+#[test]
+fn an_admin_kick_takes_a_bot_off_the_server() {
+    let mut s = session(ADMIN_PASSWORD);
+    let host = s
+        .join_verified("Host".into(), Vec3::ZERO, true, None)
+        .unwrap();
+    while s.names().keys().filter(|o| s.is_bot(**o)).count() < BOTS {
+        s.step().unwrap();
+    }
+    let bot = s
+        .admin_state(host)
+        .unwrap()
+        .players
+        .into_iter()
+        .find(|player| player.bot)
+        .unwrap();
+    let kick = Command::Admin(bri_admin::Request::new(bri_admin::Action::Kick {
+        target: bri_admin::ConnectionId(bot.connection),
+    }));
+    s.command(host, 1, kick).unwrap();
+    s.step().unwrap();
+    assert_eq!(
+        s.names().keys().filter(|o| s.is_bot(**o)).count(),
+        BOTS - 1,
+        "the kicked bot left"
+    );
+    assert!(!s.names().values().any(|name| *name == bot.name));
+    assert!(
+        s.take_admin_disconnects().is_empty(),
+        "a bot has no connection to close"
+    );
+}
