@@ -1223,8 +1223,10 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
         let hit = top - distance;
         // A floor faces up and is not too steep; anything else (a steep
         // face) is passed, and so is where a ray that started inside
-        // something (the plate it just stood on) leaves it underneath.
-        if normal.y >= body.floor_cos && !ground.inside(origin) {
+        // something (the plate it just stood on) leaves it underneath. A
+        // ray that starts right on a floor's top (a chassis's short reach
+        // from its hint) is not inside it: that floor is found.
+        if normal.y >= body.floor_cos && !ground.inside(origin + Vec3::Y * SETTLE_GAP) {
             let centre = Vec3::new(px, hit + 0.01, pz);
             // Upright, or else crouched; at the centre, or else wherever in
             // the cell the body fits.
