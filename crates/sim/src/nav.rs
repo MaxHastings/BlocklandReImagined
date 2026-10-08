@@ -28,6 +28,7 @@
 //! fly from any cell with open sky to the goal's floor. Each waypoint says
 //! which of those legs it belongs to ([`Mode`]); [`crate::route`] costs them
 //! from the body's tuning and turns each leg into controls.
+
 use crate::route::Costs;
 use bri_content::passage::Passages;
 use bri_content::water::Water;
@@ -57,6 +58,9 @@ pub const ARCS_PER_TICK: u32 = 24;
 pub const MAX_EXPANSIONS: u32 = 6000;
 /// Remembered samples before the whole cache starts over.
 const MAX_SAMPLES: usize = 1 << 18;
+/// How far over a body's step a rise still counts as a step: a floor found
+/// by a ray can sit a hair above the brick top it stands for.
+const STEP_SLACK: f32 = 0.05;
 /// Height quantum of a sample's source hint.
 const HINT_BAND: f32 = 0.25;
 
@@ -74,6 +78,8 @@ pub struct Body {
     pub jump: f32,
     /// Highest crawlspace floor a jump then a crouch in the air gets it into.
     pub crawl_jump: f32,
+    /// Highest crawlspace floor it walks up into crouched, without a jump.
+    pub crawl_step: f32,
     /// Deepest drop it walks off.
     pub drop: f32,
     /// Cosine of the steepest floor it stands on.
@@ -105,6 +111,7 @@ impl Body {
             // As high as its own motor was measured to jump on.
             jump: reach.ledge.max(tuning.step_height),
             crawl_jump: reach.crawl_ledge.max(tuning.step_height),
+            crawl_step: reach.crawl_step,
             drop: 4.0,
             floor_cos: tuning.slope_degrees.to_radians().cos(),
             conservative: false,
@@ -298,7 +305,7 @@ impl Ground<'_> {
     }
     /// Whether a floor the body can stand on lies within a step of `at`.
     fn stands(&self, body: &Body, at: Vec3) -> bool {
-        let top = at + Vec3::Y * (body.step + 0.05);
+        let top = at + Vec3::Y * (body.step + STEP_SLACK);
         self.ray(top, Vec3::NEG_Y, body.step * 2.0 + 0.1)
             .is_some_and(|(distance, normal)| {
                 (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
@@ -670,6 +677,8 @@ pub struct Nav {
     /// swept ([`Ground::sweep_arc`]), and how many more it sweeps this
     /// tick.
     arcs: FxHashMap<(Node, Node), bool>,
+    /// The leaps off each node ([`Nav::leaps`]), once searched.
+    leapt: FxHashMap<Node, Leapt>,
     arc_budget: u32,
     /// Arcs swept so far, for tests and probes.
     pub swept: u64,
@@ -754,6 +763,7 @@ impl Nav {
     pub fn clear(&mut self) {
         self.floors.clear();
         self.arcs.clear();
+        self.leapt.clear();
     }
     pub fn len(&self) -> usize {
         self.floors.len()
@@ -777,11 +787,116 @@ impl Nav {
         // the top of its jump and a body over.
         let (min, max) = (min - Vec3::splat(reach), max + Vec3::splat(reach));
         let above = body.motion.apex() + body.height;
+        // A node's leaps reach as far as its farthest leap.
+        let far = Vec3::new(body.leaps.farthest(), above, body.leaps.farthest());
+        self.leapt.retain(|node, _| {
+            let at = node.feet();
+            !((at + far).cmpge(min).all() && (at - far).cmple(max).all())
+        });
         self.arcs.retain(|(a, b), _| {
             let (a, b) = (a.feet(), b.feet());
             let (low, high) = (a.min(b), a.max(b) + Vec3::Y * above);
             !(low.cmple(max).all() && high.cmpge(min).all())
         });
+    }
+    /// Leaps from `node` ([`crate::reach::Leaps`]) off an edge: along each
+    /// of [`LEAP_HEADINGS`] headings where the cell beside it is open air
+    /// or a drop, onto the first support below and, past that, onto the
+    /// far side (level, higher or lower). Onto each floor there it is
+    /// measured to land on, where the whole arc is clear
+    /// ([`Ground::sweep_arc`]). Each with the seconds it takes. `None`
+    /// when the tick's samples or arcs ran out.
+    fn leaps(&mut self, ground: &Ground, body: &Body, node: Node) -> Option<Leapt> {
+        if let Some(found) = self.leapt.get(&node) {
+            return Some(found.clone());
+        }
+        let mut out = Vec::new();
+        let from = node.feet();
+        let farthest = body.leaps.farthest();
+        if farthest <= 0.0 {
+            return Some(Leapt::from(out));
+        }
+        let level = |f: &Floor| !f.low && (f.y - from.y).abs() <= body.step + STEP_SLACK;
+        // No edge round it (every cell beside it walked onto, or a wall):
+        // nothing to leap off.
+        let mut edge = false;
+        for (dx, dz) in NEIGHBOURS {
+            let floors = self.floor(ground, body, node.x + dx, node.z + dz, from.y)?;
+            edge |= !floors.iter().any(level)
+                && floors.first().is_none_or(|f| f.y <= from.y + body.step);
+        }
+        if !edge {
+            return Some(Leapt::from(out));
+        }
+        for k in 0..LEAP_HEADINGS {
+            let angle = k as f32 * std::f32::consts::TAU / LEAP_HEADINGS as f32;
+            let heading = Vec3::new(angle.cos(), 0.0, angle.sin());
+            // Over open air (off the edge beside it): the first support
+            // below, once found.
+            let (mut gap, mut support) = (false, None::<f32>);
+            let mut last = (node.x, node.z);
+            let mut across = CELL;
+            while across <= farthest + CELL * 0.5 {
+                let (x, z) = cell_of(from + heading * across);
+                across += CELL;
+                if (x, z) == last {
+                    continue;
+                }
+                let beside = last == (node.x, node.z);
+                last = (x, z);
+                let floors = self.floor(ground, body, x, z, from.y)?;
+                let highest = floors.first().map(|f| f.y);
+                let take = if !gap {
+                    // Only off an edge: floor at its own level beside it is
+                    // walked on, and a ledge or a wall there jumped onto
+                    // from here or not at all.
+                    if !beside
+                        || floors.iter().any(level)
+                        || highest.is_some_and(|h| h > from.y + body.step)
+                    {
+                        break;
+                    }
+                    gap = true;
+                    highest.is_some()
+                } else {
+                    match (highest, support) {
+                        (None, _) => false,
+                        (Some(_), None) => true,
+                        // The far side rising out of what the first
+                        // support is the bottom of.
+                        (Some(h), Some(s)) => h > s + body.step,
+                    }
+                };
+                if !take {
+                    continue;
+                }
+                for f in floors.iter().filter(|f| !f.wet && !f.low) {
+                    let to = Node::on(x, z, f);
+                    let feet = to.feet();
+                    let d = feet - from;
+                    let Some(seconds) = body.leaps.seconds(d.y, Vec3::new(d.x, 0.0, d.z).length())
+                    else {
+                        continue;
+                    };
+                    if self.arc(ground, body, node, to)? {
+                        out.push((to, seconds));
+                    }
+                }
+                // Onto a ledge, the far side, or past the bottom of the
+                // gap: nothing farther is leapt to.
+                let h = highest.unwrap_or(f32::NEG_INFINITY);
+                if support.is_some() || h >= from.y - body.step {
+                    break;
+                }
+                support = Some(h);
+            }
+        }
+        let found = Leapt::from(out);
+        if self.leapt.len() >= MAX_SAMPLES {
+            self.leapt.clear();
+        }
+        self.leapt.insert(node, found.clone());
+        Some(found)
     }
     /// Whether the arc of a leap from `from` onto `to` is clear
     /// ([`Ground::sweep_arc`]), remembered; `None` when this tick's arcs
@@ -987,7 +1102,7 @@ fn link(body: &Body, swims: bool, from: f32, afloat: Option<f32>, to: Floor) -> 
         // Within the same water it swims; out of it onto a bank level with
         // the bottom it swims out, onto a higher one it climbs from the
         // surface.
-        return if to.wet || to.y - from <= body.step + 0.05 {
+        return if to.wet || to.y - from <= body.step + STEP_SLACK {
             Some(false)
         } else {
             (to.y - level <= body.jump).then_some(true)
@@ -1004,11 +1119,16 @@ fn link(body: &Body, swims: bool, from: f32, afloat: Option<f32>, to: Floor) -> 
 /// `Some(false)` walking, `Some(true)` with a jump.
 fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
     let rise = to.y - from;
-    // Into a crawlspace, a jump crouches in the air.
-    let jump = if to.low { body.crawl_jump } else { body.jump };
+    // Into a crawlspace it steps up crouched, and a jump crouches in the
+    // air, each as high as it was measured to.
+    let (step, jump) = if to.low {
+        (body.crawl_step, body.crawl_jump)
+    } else {
+        (body.step, body.jump)
+    };
     if rise < -body.drop {
         None
-    } else if rise <= body.step + 0.05 {
+    } else if rise <= step + STEP_SLACK {
         Some(false)
     } else if rise <= jump {
         Some(true)
@@ -1018,7 +1138,10 @@ fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
 }
 
 /// The floors of one column a body reaches, highest first.
-type Floors = Vec<Floor>;
+/// Shared: a remembered column is handed out without copying it.
+type Floors = std::sync::Arc<[Floor]>;
+/// The leaps off a node: where each lands and the seconds it takes.
+type Leapt = std::sync::Arc<[(Node, f32)]>;
 
 /// The floors of a column a body coming in at height `from` gets onto:
 /// the one it walks or drops onto (the highest no more than a step above
@@ -1030,7 +1153,7 @@ fn entered<'a>(
     afloat: Option<f32>,
     body: &Body,
 ) -> impl Iterator<Item = Floor> + 'a {
-    let reach = from + body.step + 0.05;
+    let reach = from + body.step + STEP_SLACK;
     let onto = floors
         .iter()
         .map(|f| f.y)
@@ -1088,7 +1211,7 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
     let reach = body.jump.max(body.crawl_jump);
     let mut top = (from + reach).min(ceiling - body.crouch_height) + 0.05;
     let bottom = from - body.drop - 0.1;
-    let mut floors = Floors::new();
+    let mut floors = Vec::new();
     for _ in 0..MAX_LAYERS {
         if top <= bottom {
             break;
@@ -1123,7 +1246,7 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
         }
         top = hit - 0.02;
     }
-    floors
+    floors.into()
 }
 
 /// Surfaces one column's sample looks through, top to bottom.
@@ -1333,7 +1456,7 @@ impl Search {
             return None;
         }
         let (from, to) = (node.feet(), landing.feet());
-        if to.y - from.y <= body.step + 0.05 {
+        if to.y - from.y <= body.step + STEP_SLACK {
             return None;
         }
         let apex = to.y + crate::route::JET_CLEARANCE;
@@ -1395,13 +1518,8 @@ impl Search {
             )
         })
     }
-    /// Leaps from `node` ([`crate::reach::Leaps`]) off an edge: along each
-    /// of [`LEAP_HEADINGS`] headings where the cell beside it is open air
-    /// or a drop, onto the first support below and, past that, onto the
-    /// far side (level, higher or lower). Onto each floor there it is
-    /// measured to land on, where the whole arc is clear
-    /// ([`Ground::sweep_arc`]). Each with the seconds it takes. `None`
-    /// when the tick's samples or arcs ran out.
+    /// The leaps from `node` ([`Nav::leaps`]) but those avoided; none
+    /// for a swimmer. `None` when the tick's samples or arcs ran out.
     fn leaps(
         &self,
         nav: &mut Nav,
@@ -1409,81 +1527,17 @@ impl Search {
         body: &Body,
         node: Node,
     ) -> Option<Vec<(Node, f32)>> {
-        let mut out = Vec::new();
-        let from = node.feet();
-        let farthest = body.leaps.farthest();
         let swum = self.came.get(&node).is_none_or(|c| c.mode == Mode::Swim);
-        if farthest <= 0.0 || swum || ground.floats(body, from).is_some() {
-            return Some(out);
+        if swum || ground.floats(body, node.feet()).is_some() {
+            return Some(Vec::new());
         }
-        let level = |f: &Floor| !f.low && (f.y - from.y).abs() <= body.step + 0.05;
-        for k in 0..LEAP_HEADINGS {
-            let angle = k as f32 * std::f32::consts::TAU / LEAP_HEADINGS as f32;
-            let heading = Vec3::new(angle.cos(), 0.0, angle.sin());
-            // Over open air (off the edge beside it): the first support
-            // below, once found.
-            let (mut gap, mut support) = (false, None::<f32>);
-            let mut last = (node.x, node.z);
-            let mut across = CELL;
-            while across <= farthest + CELL * 0.5 {
-                let (x, z) = cell_of(from + heading * across);
-                across += CELL;
-                if (x, z) == last {
-                    continue;
-                }
-                let beside = last == (node.x, node.z);
-                last = (x, z);
-                let floors = nav.floor(ground, body, x, z, from.y)?;
-                let highest = floors.first().map(|f| f.y);
-                let take = if !gap {
-                    // Only off an edge: floor at its own level beside it is
-                    // walked on, and a ledge or a wall there jumped onto
-                    // from here or not at all.
-                    if !beside
-                        || floors.iter().any(level)
-                        || highest.is_some_and(|h| h > from.y + body.step)
-                    {
-                        break;
-                    }
-                    gap = true;
-                    highest.is_some()
-                } else {
-                    match (highest, support) {
-                        (None, _) => false,
-                        (Some(_), None) => true,
-                        // The far side rising out of what the first
-                        // support is the bottom of.
-                        (Some(h), Some(s)) => h > s + body.step,
-                    }
-                };
-                if !take {
-                    continue;
-                }
-                for f in floors.iter().filter(|f| !f.wet && !f.low) {
-                    if nav.avoided(node, x, z, f.y, body) {
-                        continue;
-                    }
-                    let to = Node::on(x, z, f);
-                    let feet = to.feet();
-                    let d = feet - from;
-                    let Some(seconds) = body.leaps.seconds(d.y, Vec3::new(d.x, 0.0, d.z).length())
-                    else {
-                        continue;
-                    };
-                    if nav.arc(ground, body, node, to)? {
-                        out.push((to, seconds));
-                    }
-                }
-                // Onto a ledge, the far side, or past the bottom of the
-                // gap: nothing farther is leapt to.
-                let h = highest.unwrap_or(f32::NEG_INFINITY);
-                if support.is_some() || h >= from.y - body.step {
-                    break;
-                }
-                support = Some(h);
-            }
-        }
-        Some(out)
+        let all = nav.leaps(ground, body, node)?;
+        Some(
+            all.iter()
+                .copied()
+                .filter(|(to, _)| !nav.avoided(node, to.x, to.z, to.feet().y, body))
+                .collect(),
+        )
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {

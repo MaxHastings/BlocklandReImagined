@@ -60,6 +60,9 @@ pub struct Reach {
     /// Highest crawlspace floor (a window up a wall) a jump from a walk,
     /// crouching once off the ground, gets it into.
     pub crawl_ledge: f32,
+    /// Highest crawlspace floor it walks up into, crouched, without a
+    /// jump (the step it climbs with its head under a roof).
+    pub crawl_step: f32,
     /// What its jets do with an endless supply of energy; `None` when they
     /// do not lift it (or it has none).
     pub jets: Option<JetReach>,
@@ -217,6 +220,7 @@ impl Reach {
         Self {
             ledge: ledge(tuning, false),
             crawl_ledge: ledge(tuning, true),
+            crawl_step: crawl_step(tuning),
             jets: JetReach::measure(tuning),
             leaps: Arc::new(Leaps::measure(tuning)),
         }
@@ -565,6 +569,64 @@ fn lands_on(tuning: &PlayerTuning, height: f32, crawl: bool) -> bool {
     false
 }
 
+/// Whether a body with `tuning` walking crouched, with no jump, gets onto a
+/// ledge `height` high with a roof over it as low as the route grid takes
+/// for a crawlspace: the crouched body's height.
+fn crawls_onto(tuning: &PlayerTuning, height: f32) -> bool {
+    let edge = tuning.forward.max(1.0);
+    let top = Vec3::new(0.0, height, -edge - ON_LEDGE);
+    let far = Vec3::new(50.0, height, -edge);
+    let near = Vec3::new(-50.0, -1.0, -edge - 50.0);
+    let roof = height + tuning.crouch_height + LEDGE_TOLERANCE;
+    let boxes = [
+        (near, far),
+        (
+            Vec3::new(near.x, roof, near.z),
+            Vec3::new(far.x, roof + 50.0, far.z),
+        ),
+    ];
+    let mut physics = world(&boxes);
+    let Some(mut player) = stand(&mut physics, tuning) else {
+        return false;
+    };
+    for _ in 0..(MAX_SECONDS * TICKS) as usize {
+        let state = player.state();
+        let feet = Vec3::from(state.feet);
+        let toward = Vec3::new(0.0, 0.0, top.z - feet.z);
+        if state.grounded && feet.y > height - LEDGE_TOLERANCE && toward.z > -ON_LEDGE {
+            return true;
+        }
+        step(
+            &mut player,
+            &mut physics,
+            toward.normalize_or_zero(),
+            Press {
+                crouch: true,
+                ..Press::default()
+            },
+        );
+    }
+    false
+}
+
+/// The highest crawlspace floor a body with `tuning` walks up into
+/// crouched, no higher than its step.
+fn crawl_step(tuning: &PlayerTuning) -> f32 {
+    let (mut low, mut high) = (0.0, tuning.step_height);
+    if crawls_onto(tuning, high) {
+        return high;
+    }
+    while high - low > LEDGE_TOLERANCE {
+        let mid = (low + high) * 0.5;
+        if crawls_onto(tuning, mid) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
 /// The highest ledge a body with `tuning` jumps onto from a walk, between
 /// what it steps up without jumping and what its jump speed could lift it to
 /// with a step on top.
@@ -836,5 +898,19 @@ mod tests {
             ..t.clone()
         };
         assert!(Reach::measure(&weak).jets.is_none());
+    }
+
+    /// Crouched under a roof it walks up a step no higher than its own,
+    /// and no higher than it was measured to.
+    #[test]
+    fn a_crouched_body_walks_up_into_a_crawlspace_as_high_as_measured() {
+        let t = standard();
+        let reach = Reach::of(&t);
+        eprintln!("crawl step {} (step {})", reach.crawl_step, t.step_height);
+        assert!(reach.crawl_step > 0.0 && reach.crawl_step <= t.step_height);
+        assert!(crawls_onto(&t, reach.crawl_step));
+        if reach.crawl_step < t.step_height {
+            assert!(!crawls_onto(&t, reach.crawl_step + LEDGE_TOLERANCE * 2.0));
+        }
     }
 }
