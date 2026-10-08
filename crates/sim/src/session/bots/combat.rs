@@ -1678,23 +1678,72 @@ fn assess(
     // miss); its side the worse of the aimed shot and the one its aim error
     // sends off.
     let (mut harm, mut shape) = harm::shot_harm(bodies, origin, chords, &strike);
+    let mut ways = vec![(chords.to_vec(), shape.priced.clone())];
     if error != (0.0, 0.0) {
-        let (off, way) = harm::shot_harm(
-            bodies,
-            origin,
-            &harm::turned(origin, chords, error),
-            &strike,
-        );
+        let turned = harm::turned(origin, chords, error);
+        let (off, way) = harm::shot_harm(bodies, origin, &turned, &strike);
         harm.ally = harm.ally.max(off.ally);
         harm.own = harm.own.max(off.own);
         harm.kills_ally |= off.kills_ally;
-        for owner in way.priced {
-            if !shape.priced.contains(&owner) {
-                shape.priced.push(owner);
+        for owner in &way.priced {
+            if !shape.priced.contains(owner) {
+                shape.priced.push(*owner);
             }
         }
+        ways.push((turned, way.priced));
+    }
+    // Either may miss what it meets (a target that steps aside) and fly on
+    // past it, into a teammate behind; up to the first wall that way.
+    for (way, met) in ways {
+        let Some(past) = strike
+            .flies_on
+            .and_then(|reach| harm::past(origin, &way, reach))
+        else {
+            continue;
+        };
+        let mut over = harm::overshoot(bodies, origin, past, &met, &strike);
+        if (over.ally > 0.0 || over.own > 0.0)
+            && let Some(wall) = world_stop(session, bot, past.from, past.to)
+        {
+            over = harm::overshoot(
+                bodies,
+                origin,
+                harm::Chord { to: wall, ..past },
+                &met,
+                &strike,
+            );
+        }
+        harm.ally = harm.ally.max(over.ally);
+        harm.own = harm.own.max(over.own);
+        harm.kills_ally |= over.kills_ally;
     }
     (harm, shape)
+}
+
+/// Where the world first stops a shot from `from` to `to`, if it does.
+fn world_stop(session: &Session, bot: OwnerId, from: Vec3, to: Vec3) -> Option<Vec3> {
+    let shapes = session.tutorial_shape_targets();
+    let mut q = crate::weapon_query::WeaponQuery {
+        simulation: &session.simulation,
+        affect: &|_, _| true,
+        affect_radius: &|_, _| true,
+        ally: &|_, _| false,
+        catch: &|_, _| false,
+        responses: &session.events.projectile_responses,
+        truncated_targets: 0,
+        shapes: &shapes,
+    };
+    q.sweep(
+        from,
+        to,
+        Filter {
+            projectile_age_ticks: None,
+            source: ActorId(bot),
+            players: false,
+            world_only: true,
+        },
+    )
+    .map(|hit| hit.position)
 }
 
 /// Exact free-flight segments match the native semi-implicit projectile step.
