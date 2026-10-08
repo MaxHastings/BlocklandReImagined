@@ -423,6 +423,11 @@ struct Brain {
     vehicle_since: Option<(u64, u64)>,
     /// The jet leg of its route it is flying, if any.
     jet_leg: Option<crate::route::JetLeg>,
+    /// Where its feet last stood on something: where a walk it got nowhere
+    /// on was from, though a stall's hop has it in the air.
+    footing: Vec3,
+    /// The leap of its route it is taking, if any.
+    leap_leg: Option<crate::route::LeapLeg>,
     /// The gear its driving is in (`route::gear`).
     drive_gear: crate::route::Gear,
     /// Where it took a mount's controls (the vehicle and its feet then):
@@ -605,6 +610,8 @@ impl Brain {
             vehicle_headway: Default::default(),
             vehicle_since: None,
             jet_leg: None,
+            footing: home,
+            leap_leg: None,
             drive_gear: crate::route::Gear::Forward,
             mount_anchor: None,
             brick_team: None,
@@ -976,18 +983,22 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
         0.5 + body.step + body.drop,
     )
 }
-/// Seconds a hop from level ground is in the air: up at `jump_speed`,
-/// its jets (when it fires them) pushing it straight up for `jets` seconds
-/// more, then back down under `gravity`.
+/// Whether a bot with `goal` standing at `feet` is at its work, where
+/// getting nowhere is not a stall: at the body or brick it works, pressing
+/// against it is the work. An item is armed by reaching it, so on the way
+/// there (`routed`: a waypoint still ahead, such as a step up near as it
+/// is across) getting nowhere is a stall.
+fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool) -> bool {
+    match goal {
+        Some(Goal::Objective(p) | Goal::Interact(p)) => flat(p - feet).length() < body.width + 1.0,
+        Some(Goal::Arm(p)) => !routed && flat(p - feet).length() < body.width + 1.0,
+        _ => false,
+    }
+}
+
+/// Seconds a hop from level ground is in the air ([`crate::route::hop_flight`]).
 fn hop_flight(tuning: &crate::player::PlayerTuning, jets: f32) -> f32 {
-    let g = tuning.gravity.max(f32::EPSILON);
-    let jets = if tuning.can_jet { jets.max(0.0) } else { 0.0 };
-    // Under thrust it climbs at `jet_acceleration` less gravity.
-    let thrust = tuning.jet_acceleration - g;
-    let rise = tuning.jump_speed + thrust * jets;
-    let height = tuning.jump_speed * jets + 0.5 * thrust * jets * jets;
-    let top = height + rise.max(0.0).powi(2) / (2.0 * g);
-    jets + rise.max(0.0) / g + (2.0 * top.max(0.0) / g).sqrt()
+    crate::route::Motion::of(tuning).hop(jets, 0.0)
 }
 /// A hop keeps the way it was moving: whether it comes down on floor
 /// (a bot hopping at a deck's edge went off it), after [`hop_flight`]
@@ -1644,7 +1655,7 @@ impl Session {
                     None => {
                         let mut nav = Nav::default();
                         nav.begin_tick();
-                        self.bots.navs.push((*body, nav));
+                        self.bots.navs.push((body.clone(), nav));
                         self.bots.navs.len() - 1
                     }
                 };
@@ -1718,7 +1729,7 @@ impl Session {
                             && d.y.abs() < body.step + 0.5
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
-                    Mode::Jet { .. } => {
+                    Mode::Jet { .. } | Mode::Leap { .. } => {
                         state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
                     }
                 };
@@ -1833,7 +1844,9 @@ impl Session {
                 .flatten(),
         };
         let driving = self.bot_vehicle_body(bot);
-        let (feet, body) = driving.unwrap_or((own_feet, Body::of(peer.player.tuning(), 1.0)));
+        let (feet, body) = driving
+            .clone()
+            .unwrap_or_else(|| (own_feet, Body::of(peer.player.tuning(), 1.0)));
         if driving.is_some() {
             let mounted = self.mounted(bot).map(|(vehicle, _)| vehicle);
             let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -2061,7 +2074,7 @@ impl Session {
         } else {
             None
         };
-        let carries = driving.and_then(|_| self.team_carries(bot, feet));
+        let carries = driving.as_ref().and_then(|_| self.team_carries(bot, feet));
         // Going to find the game (`explore`): a place to look, when it
         // knows of no fight, has no objective, and enemies play.
         let memory = self.bots.brains[&bot].memory;
@@ -3119,6 +3132,7 @@ impl Session {
             proposals.push(act::Proposal::walk(act::Mover::Stance, walk));
         }
         // A jet leg flies itself: climb in the open, cross, land.
+        let mut missed = None;
         match wanted.map(|w| (w.feet, w.mode)) {
             Some((
                 to,
@@ -3159,6 +3173,40 @@ impl Session {
                     });
                 }
             }
+            Some((to, Mode::Leap { from, seconds })) if driving.is_none() => {
+                brain.jet_leg = None;
+                let tuning = self.peers[&bot].player.tuning();
+                let leg = brain
+                    .leap_leg
+                    .get_or_insert(crate::route::LeapLeg::start(to, from, feet, tuning, tick));
+                if leg.to != to {
+                    *leg = crate::route::LeapLeg::start(to, from, feet, tuning, tick);
+                }
+                let control = crate::route::leap(
+                    leg,
+                    feet,
+                    Vec3::from(state.velocity),
+                    state.grounded,
+                    tuning,
+                    tick,
+                );
+                // Replan from what happened.
+                if leg.failed(feet, state.grounded, body.step, seconds, tick) {
+                    missed = Some((from, to));
+                    brain.leap_leg = None;
+                    brain.plan.clear();
+                    brain.search = None;
+                    brain.settled = false;
+                    brain.replans += 1;
+                } else {
+                    proposals.push(act::Proposal {
+                        jet: Some(false),
+                        jump: Some(control.jump),
+                        crouch: Some(false),
+                        ..act::Proposal::walk(act::Mover::Leap, control.direction)
+                    });
+                }
+            }
             Some((to, Mode::Swim | Mode::Walk)) if swim.is_none() && wet && !state.grounded => {
                 // Afloat: swim on toward it, rising where the way on (out
                 // onto a higher bank) is higher.
@@ -3171,6 +3219,9 @@ impl Session {
                 }
             }
             _ => brain.jet_leg = None,
+        }
+        if !wanted.is_some_and(|w| matches!(w.mode, Mode::Leap { .. })) {
+            brain.leap_leg = None;
         }
         if swim.is_some() {
             // Up and down as a swimmer does: jump rises, crouch dives.
@@ -3209,11 +3260,7 @@ impl Session {
             .and_then(|p| p.walk)
             .is_some_and(|walk| walk != Vec3::ZERO);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let at_work = matches!(
-            brain.goal,
-            Some(Goal::Objective(p) | Goal::Interact(p) | Goal::Arm(p))
-                if flat(p - feet).length() < body.width + 1.0
-        );
+        let at_work = at_work(brain.goal, feet, &body, wanted.is_some());
         let walking = driving.is_none()
             && trying
             && pushing.is_none()
@@ -3273,7 +3320,8 @@ impl Session {
             act::Ground {
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
-                jet_leg: wanted.is_some_and(|w| matches!(w.mode, Mode::Jet { .. })),
+                air_leg: wanted
+                    .is_some_and(|w| matches!(w.mode, Mode::Jet { .. } | Mode::Leap { .. })),
                 vehicle_detour: driving.is_none() && pushing.is_none(),
             },
             quarry,
@@ -3333,13 +3381,24 @@ impl Session {
         brain.acted.replans = brain.replans;
         brain.sequence += 1;
         let sequence = brain.sequence;
+        if state.grounded {
+            brain.footing = feet;
+        }
+        let brain_footing = brain.footing;
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
-            // What it walked toward and got nowhere: the grid avoids it a
-            // while, for every body of this size (`Nav::avoid`).
+            // What it walked toward and got nowhere: the grid avoids that
+            // way out of where it stands a while, for every body of this
+            // size (`Nav::avoid_walk`).
             if let Some(next) = wanted.filter(|w| w.through.is_none()) {
-                nav.avoid(next.feet, tick + AVOID_TICKS);
+                nav.avoid_walk(brain_footing, next.feet, tick + AVOID_TICKS);
             }
+        }
+        // A leap that missed: that leap alone is avoided.
+        if let Some((from, to)) = missed
+            && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body)
+        {
+            nav.avoid(from, to, tick + AVOID_TICKS);
         }
         self.bot_act(
             bot,
@@ -3365,6 +3424,24 @@ impl Session {
                 callout,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::*;
+
+    /// A bot a step below a weapon, near it across, with the step still to
+    /// climb is on its way, not at its work: getting nowhere there is a
+    /// stall (the Afghanistan cubby, where one stood frozen for minutes).
+    /// At a body or brick it works, pressing on is the work.
+    #[test]
+    fn near_a_weapon_with_a_step_still_to_climb_is_not_at_work() {
+        let body = Body::of(&crate::player::PlayerTuning::default(), 1.0);
+        let (feet, item) = (Vec3::new(-84.36, 16.4, 37.5), Vec3::new(-85.5, 17.9, 37.77));
+        assert!(!at_work(Some(Goal::Arm(item)), feet, &body, true));
+        assert!(at_work(Some(Goal::Arm(item)), feet, &body, false));
+        assert!(at_work(Some(Goal::Interact(item)), feet, &body, true));
     }
 }
 

@@ -15,7 +15,6 @@ use crate::nav::Mode;
 use crate::reach::{Handling, Reach};
 use bri_motor::player::PlayerTuning;
 use glam::Vec3;
-use std::sync::Arc;
 
 /// Viscosity of stock still water (`WaterBlock`'s default), for a swim
 /// speed the search can use before it knows which water it crosses.
@@ -25,6 +24,85 @@ const STOCK_VISCOSITY: f32 = 40.0;
 const TAKEOFF: f32 = 3.0;
 /// Fixed cost of going into deep water, in walking units.
 const WADE_IN: f32 = 1.5;
+
+/// The parts of a body's tuning that say how long its moves take: its
+/// speeds on foot, its jump and gravity, and its jets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Motion {
+    pub forward: f32,
+    pub crouch_forward: f32,
+    pub jump_speed: f32,
+    pub gravity: f32,
+    pub jet_acceleration: f32,
+    pub can_jet: bool,
+    /// How hard it steers in the air: its ground acceleration times its
+    /// air control.
+    pub air_acceleration: f32,
+    /// How hard it speeds up and slows down on its feet.
+    pub acceleration: f32,
+}
+impl Motion {
+    pub fn of(tuning: &PlayerTuning) -> Self {
+        Self {
+            forward: tuning.forward,
+            crouch_forward: tuning.crouch_forward,
+            jump_speed: tuning.jump_speed,
+            gravity: tuning.gravity,
+            jet_acceleration: tuning.jet_acceleration,
+            can_jet: tuning.can_jet,
+            air_acceleration: tuning.acceleration * tuning.air_control,
+            acceleration: tuning.acceleration,
+        }
+    }
+    /// Which way to steer in the air to come down at `target` from `feet`
+    /// moving at `velocity`: toward it, until it would carry on past it
+    /// even braking from now on; then against its drift, so it stops over
+    /// it. How a body jumping onto a small landing (a peg, a tread) comes
+    /// down on it rather than past it.
+    pub fn air_steer(&self, feet: Vec3, velocity: Vec3, target: Vec3) -> Vec3 {
+        let (offset, drift) = (flat(target - feet), flat(velocity));
+        let distance = offset.length();
+        let along = if distance > f32::EPSILON {
+            drift.dot(offset / distance)
+        } else {
+            drift.length()
+        };
+        let stopping = along * along / (2.0 * self.air_acceleration.max(f32::EPSILON));
+        if along > 0.0 && stopping >= distance {
+            -drift.normalize_or_zero()
+        } else {
+            offset.normalize_or_zero()
+        }
+    }
+    /// Seconds a hop is in the air until it comes down `rise` above where
+    /// it left the ground (below, for a negative `rise`): up at
+    /// `jump_speed`, its jets (when it fires them) pushing it straight up
+    /// for `jets` seconds more, then back down under `gravity`. The one
+    /// flight model: a hop's landing (`session::bots`) and a jump's time on
+    /// a route (`nav`). A rise above the top of the hop is reached there.
+    pub fn hop(&self, jets: f32, rise: f32) -> f32 {
+        let g = self.gravity.max(f32::EPSILON);
+        let jets = if self.can_jet { jets.max(0.0) } else { 0.0 };
+        // Under thrust it climbs at `jet_acceleration` less gravity.
+        let thrust = self.jet_acceleration - g;
+        let up = self.jump_speed + thrust * jets;
+        let height = self.jump_speed * jets + 0.5 * thrust * jets * jets;
+        let top = height + up.max(0.0).powi(2) / (2.0 * g);
+        jets + up.max(0.0) / g + (2.0 * (top - rise).max(0.0) / g).sqrt()
+    }
+    /// Seconds it takes to stop from a walk.
+    pub fn stop(&self) -> f32 {
+        self.forward / self.acceleration.max(f32::EPSILON)
+    }
+    /// How high a jump lifts it.
+    pub fn apex(&self) -> f32 {
+        self.jump_speed * self.jump_speed / (2.0 * self.gravity.max(f32::EPSILON))
+    }
+    /// Seconds a body takes to fall `depth` from standing still.
+    pub fn fall(&self, depth: f32) -> f32 {
+        (2.0 * depth.max(0.0) / self.gravity.max(f32::EPSILON)).sqrt()
+    }
+}
 /// How near a jump or crawl waypoint a walking body presses jump or crouch.
 pub const PRESS_NEAR: f32 = 1.6;
 /// Height over the landing a jet leg crosses at.
@@ -39,7 +117,7 @@ fn flat(v: Vec3) -> Vec3 {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Jets {
     /// Jet legs as its motor flies them.
-    pub reach: Arc<Reach>,
+    pub reach: std::sync::Arc<Reach>,
     /// Seconds of jetting its energy holds now (no limit without a drain).
     pub seconds: f32,
     /// Its walking speed: seconds become walking units.
@@ -84,11 +162,12 @@ impl Jets {
         let flight = jets.flight(up, flat(to - from).length());
         (flight.jetting <= self.seconds).then_some(flight.seconds)
     }
-    /// What a flight of `seconds` costs, in walking units: at least the
-    /// straight distance, so the search's estimate stays a lower bound.
+    /// What a flight of `seconds` costs, in seconds of walking: at least
+    /// walking the straight distance, so the search's estimate stays a
+    /// lower bound.
     pub fn cost(&self, seconds: f32, from: Vec3, to: Vec3) -> f32 {
         let floor = flat(to - from).length() + (to.y - from.y).abs() * 0.5;
-        (seconds * self.walk_speed / self.weight + TAKEOFF).max(floor)
+        (seconds / self.weight + TAKEOFF / self.walk_speed).max(floor / self.walk_speed)
     }
 }
 
@@ -269,7 +348,7 @@ impl JetLeg {
         tick: u64,
     ) -> bool {
         self.risen.note(feet.y, tick, |high, y| y > high + 0.2);
-        tick.saturating_sub(self.since) > jet_patience(seconds)
+        tick.saturating_sub(self.since) > patience(seconds)
             || !self.crossing && self.risen.idle(tick) > CLIMB_STALL
             || grounded && self.crossing && (feet.y - self.to.y).abs() > step + 0.5
     }
@@ -378,19 +457,115 @@ pub fn jet(
     }
 }
 
+/// A leap of a route under way: from a standstill at its takeoff, a jump
+/// across open air onto a landing ([`crate::reach::Leaps`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LeapLeg {
+    /// The landing it leaps onto, and where it takes off.
+    pub to: Vec3,
+    pub from: Vec3,
+    /// The tick the leg started, and the seconds it allows for walking to
+    /// the takeoff and stopping there.
+    pub since: u64,
+    approach: f32,
+    /// The tick it jumped.
+    pub jumped: Option<u64>,
+    /// It has left the ground on the jump.
+    pub flown: bool,
+}
+impl LeapLeg {
+    /// A leg onto `to` from `from` for a body at `feet` with `tuning`,
+    /// started at `tick`.
+    pub fn start(to: Vec3, from: Vec3, feet: Vec3, tuning: &PlayerTuning, tick: u64) -> Self {
+        let speed = tuning.forward.max(f32::EPSILON);
+        Self {
+            to,
+            from,
+            since: tick,
+            // Walking there, then braking from a walk to a stop.
+            approach: flat(from - feet).length() / speed + Motion::of(tuning).stop(),
+            jumped: None,
+            flown: false,
+        }
+    }
+    /// Whether what really happened says to give the leg up at `tick`: it
+    /// took longer than the walk to the takeoff or the measured leap
+    /// (`seconds`) allow, or it came down after the jump anywhere but on
+    /// the landing's height.
+    pub fn failed(&self, feet: Vec3, grounded: bool, step: f32, seconds: f32, tick: u64) -> bool {
+        let late = match self.jumped {
+            Some(at) => tick.saturating_sub(at) > patience(seconds),
+            None => tick.saturating_sub(self.since) > patience(self.approach),
+        };
+        late || grounded && self.flown && (feet.y - self.to.y).abs() > step + 0.5
+    }
+}
+
+/// One tick of a leap leg for a body with `tuning`: come down on the
+/// takeoff (still in the air from the move before), stand still on it, as
+/// the leap was measured from ([`crate::reach::Leaps`]), jump, and steer in
+/// the air to come down on the landing ([`Motion::air_steer`]).
+pub fn leap(
+    leg: &mut LeapLeg,
+    feet: Vec3,
+    velocity: Vec3,
+    grounded: bool,
+    tuning: &PlayerTuning,
+    tick: u64,
+) -> JetControl {
+    let motion = Motion::of(tuning);
+    if leg.jumped.is_none() {
+        if !grounded {
+            return JetControl {
+                direction: motion.air_steer(feet, velocity, leg.from),
+                ..JetControl::default()
+            };
+        }
+        let off = flat(leg.from - feet);
+        if off.length() > TAKEOFF_TOLERANCE || flat(velocity).length() > STILL {
+            // To the takeoff, as fast as it can still stop there.
+            let speed = if off.length() > TAKEOFF_TOLERANCE {
+                (2.0 * tuning.acceleration * off.length())
+                    .sqrt()
+                    .min(tuning.forward)
+            } else {
+                0.0
+            };
+            return JetControl {
+                direction: off.normalize_or_zero() * speed / tuning.forward.max(f32::EPSILON),
+                ..JetControl::default()
+            };
+        }
+        leg.jumped = Some(tick);
+    }
+    if !grounded {
+        leg.flown = true;
+    }
+    JetControl {
+        direction: if leg.flown {
+            motion.air_steer(feet, velocity, leg.to)
+        } else {
+            flat(leg.to - feet).normalize_or_zero()
+        },
+        // Held until it leaves the ground.
+        jump: !leg.flown,
+        jet: false,
+    }
+}
+
 /// A crossing speed a jet's push can still stop from within `across`.
 fn leg_push_speed(across: f32) -> f32 {
     (2.0 * 6.0 * across).sqrt()
 }
 
-/// How many times its measured time a jet leg may take before it has gone
+/// How many times its measured time a leg through the air may take before it has gone
 /// wrong: something the bare measuring floor did not have (wind from a
 /// blast, a body in the way) is holding it up.
 const PATIENCE: f32 = 2.0;
 
-/// How long a jet leg of `seconds` (as measured) may take before the bot
-/// gives it up and plans again from where it is.
-pub fn jet_patience(seconds: f32) -> u64 {
+/// How long a leg through the air of `seconds` (as measured) may take
+/// before the bot gives it up and plans again from where it is.
+pub fn patience(seconds: f32) -> u64 {
     (seconds * PATIENCE / bri_physics::FIXED_DT) as u64
 }
 
@@ -545,6 +720,7 @@ pub fn leg_name(mode: Mode) -> &'static str {
         Mode::Walk => "walk",
         Mode::Swim => "swim",
         Mode::Jet { .. } => "jet",
+        Mode::Leap { .. } => "leap",
     }
 }
 

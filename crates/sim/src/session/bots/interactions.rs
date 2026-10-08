@@ -1309,11 +1309,16 @@ impl Session {
                 step: 0.2,
                 jump: 0.2,
                 crawl_jump: 0.2,
+                crawl_step: 0.2,
                 drop: 0.4,
                 floor_cos: 0.85,
                 conservative: true,
                 bottom: (min.y - support).max(0.0),
                 swims: false,
+                // A chassis's own speed is its drive leg's: the search's
+                // seconds only compare its routes with each other.
+                motion: crate::route::Motion::of(&crate::player::PlayerTuning::default()),
+                leaps: crate::reach::Leaps::none(),
             },
         ))
     }

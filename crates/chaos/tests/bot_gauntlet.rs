@@ -453,6 +453,48 @@ fn weapons_lying_on_the_ground() {
     assert!(r.kills > 0, "armed, they fought: {}", r.kills);
 }
 
+/// A gun on a block a step high under a roof low enough that only a
+/// crouched body gets on: the unarmed bots step up crouched to it and arm.
+/// Near the gun across, a bot still on the way up is not yet at it, so if
+/// it gets nowhere it is stuck (hops, plans again), never left standing.
+#[test]
+fn a_weapon_in_a_cubby_a_step_up_is_fetched() {
+    let mut spec = Spec::new(
+        "a_weapon_in_a_cubby_a_step_up_is_fetched",
+        line(-74.0, 0.0, 50.0, 1),
+        line(-46.0, 0.0, 50.0, 1),
+        &[],
+    );
+    let (x, z) = (-60.0, 50.0);
+    let mut bricks = Vec::new();
+    // Five baseplates make the block a step high; one more is the roof,
+    // 2.0 over the block (a crawlspace) and 3.0 over the floor round it.
+    for k in 0..5 {
+        let mut b = brick(fixture::BASEPLATE, Vec3::new(x, 0.1 + k as f32 * 0.2, z));
+        if k == 4 {
+            b.item_spawn.item = Some(bri_world::ContentRef::Resolved(GUN.to_string()));
+        }
+        bricks.push(b);
+    }
+    bricks.push(brick(fixture::BASEPLATE, Vec3::new(x, 3.1, z)));
+    spec.bricks = bricks;
+    let mut b = battle(spec, |_| {});
+    let r = b.play(0.0, 30, |s, report| {
+        let armed = s
+            .tool_inventories()
+            .iter()
+            .filter(|(o, inv)| s.is_bot(**o) && inv.slots.iter().any(|x| x.is_some()))
+            .count() as i64;
+        let best = report.progress.get("armed_bots").copied().unwrap_or(0);
+        report.progress.insert("armed_bots".into(), best.max(armed));
+    });
+    assert!(
+        r.progress["armed_bots"] >= 1,
+        "a bot armed: {:?}",
+        r.progress
+    );
+}
+
 #[test]
 fn zombie_survival() {
     const ZOMBIE: &str = "gauntlet:bot/zombie";
