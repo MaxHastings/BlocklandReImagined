@@ -22,14 +22,17 @@ pub struct Cloud {
 /// Fog, the one atmosphere every pass shares (its shader twin is
 /// `bri-render`'s fog.wgsl). Exponential fog: level with the eye it
 /// thickens from `start` to `FOG_DEPTH` optical depth at `end`; above the
-/// eye it thins with height (`FOG_HEIGHT` units per e-fold), so the sky is
-/// fog-coloured at the horizon and clearer overhead, and thick fog covers
-/// more of it. Geometry ends as fogged as the sky behind it: over the last
-/// quarter of the range it fades to the sky's own fog, so nothing is cut
-/// out against the sky where the world ends. Below the eye the fog stays
-/// level-density, its backdrop the plain fog colour, unless the sky goes on
-/// below the horizon (a bottom face, Skylands' mirrored floor): then the fog
-/// is symmetric about the eye and the floor hazes only toward the horizon.
+/// eye it thins with height (`FOG_HEIGHT` units per e-fold). The sky is the
+/// backdrop at the world's edge, `end` away, and takes the fog of the air
+/// there: fog-coloured at the horizon, clear once its edge is a few
+/// `FOG_HEIGHT` above the eye, so thick fog (a near edge) covers more of it.
+/// Geometry does not fog into the sky: over the last quarter of the range
+/// it fades out into whatever is behind it, and past `end` it is not drawn,
+/// so nothing is cut out against the sky where the world ends. Below the
+/// eye the fog stays level-density, its backdrop the plain fog colour,
+/// unless the sky goes on below the horizon (a bottom face, Skylands'
+/// mirrored floor): then the fog is symmetric about the eye and the floor
+/// hazes only toward the horizon.
 pub const FOG_DEPTH: f32 = 4.0;
 pub const FOG_HEIGHT: f32 = 60.0;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -78,20 +81,27 @@ impl Fog {
             (1.0 - (-x).exp()) / x
         };
         let depth = self.density() * (-rise * self.start).exp() * inside * spread;
+        1.0 - (-depth).exp()
+    }
+    /// How far a point `distance` away has faded out into what lies behind
+    /// it: 0 before the last quarter of the range, 1 from `end` on.
+    pub fn edge(&self, distance: f32) -> f32 {
+        if self.end <= 0.0 {
+            return 0.0;
+        }
         let t = ((distance - self.start - 0.75 * (self.end - self.start))
             / (0.25 * (self.end - self.start)).max(0.001))
         .clamped(0.0, 1.0);
-        let edge = t * t * (3.0 - 2.0 * t);
-        (1.0 - (-depth).exp()).max(edge * self.sky_amount(up, sky_below))
+        t * t * (3.0 - 2.0 * t)
     }
-    /// Fog over the sky along a ray whose direction rises `up` (its y);
-    /// `sky_below`: the sky goes on below the horizon.
+    /// Fog over the sky along a ray whose direction rises `up` (its y):
+    /// the air at the world's edge in front of it. `sky_below`: the sky
+    /// goes on below the horizon.
     pub fn sky_amount(&self, up: f32, sky_below: bool) -> f32 {
         if self.end <= 0.0 {
             return 0.0;
         }
-        let rise = rising(up, sky_below).max(1e-6);
-        1.0 - (-self.density() * (-rise * self.start).exp() / rise).exp()
+        1.0 - (-FOG_DEPTH * (-rising(up, sky_below) * self.end).exp()).exp()
     }
     fn density(&self) -> f32 {
         FOG_DEPTH / (self.end - self.start).max(0.001)

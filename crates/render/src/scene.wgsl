@@ -961,6 +961,10 @@ fn slot_size(slot:u32)->vec2<f32> {
 }
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if v.clip<0.0 {discard;}
+    // The sky (faces, clouds, fog backdrop) is what lies behind the world:
+    // everything else fades out into it toward the visible distance.
+    if material[0].x!=4.0 && material[0].x!=5.0
+        && faded_out(v.position.xy,v.world_position-camera.eye.xyz,camera.atmosphere) {discard;}
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.
@@ -1025,7 +1029,7 @@ fn slot_size(slot:u32)->vec2<f32> {
     if (material[0].x==4.0 || material[0].x==5.0) {
         // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
         // 1 the fog backdrop (the live fog colour). Faces and clouds take the
-        // world's fog toward the horizon, so far geometry meets the sky there.
+        // fog of the world's edge in front of them; far geometry fades into them.
         let along=normalize(v.world_position-camera.eye.xyz);
         if material[1].x==1.0 {
             let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));

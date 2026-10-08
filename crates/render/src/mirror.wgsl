@@ -72,6 +72,7 @@ fn echo_trust()->f32 {
     return 1.0-smoothstep(ECHO_TRUE,ECHO_FALSE,sideways/depth);
 }
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    if faded_out(v.position.xy,v.world-frame.eye.xyz,frame.atmosphere) {discard;}
     let screen=v.position.xy/frame.screen.xy;
     var uv=vec2<f32>(select(screen.x,slot.sample.x-screen.x,slot.sample.z>0.5),screen.y);
     var shown=select(0.0,1.0,slot.sample.y>0.5);

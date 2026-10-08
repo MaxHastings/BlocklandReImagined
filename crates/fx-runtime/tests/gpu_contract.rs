@@ -214,27 +214,34 @@ fn billboard_blends_and_depth_match_the_host_pass() {
         };
         let grey = Vec4::new(1., 1., 1., 1.);
         let red = Vec4::new(1., 0., 0., 0.5);
-        // Fog complete within a unit of the eye, green: past it, blended
-        // sprites take the fog colour and added light fades away.
-        let fog = [0., 1., 0., 1.];
+        // Green fog to 3 units: the sampled pixel, 1.54 units from the eye,
+        // is 87% fogged; blended sprites take the fog colour, added light
+        // fades. Fog to 1 unit: the sprite is past the visible distance and
+        // gone, the background shows.
+        let clear = [0.; 4];
+        let fog = [0., 3., 0., 1.];
+        let past = [0., 1., 0., 1.];
         for (texture, tint, blend, depth_test, fogged, expected) in [
-            (0, red, BlendMode::Alpha, true, false, [0, 0, 255]),
-            (0, red, BlendMode::Alpha, false, false, [128, 0, 128]),
-            (0, red, BlendMode::Additive, false, false, [128, 0, 255]),
+            (0, red, BlendMode::Alpha, true, clear, [0, 0, 255]),
+            (0, red, BlendMode::Alpha, false, clear, [128, 0, 128]),
+            (0, red, BlendMode::Additive, false, clear, [128, 0, 255]),
             (
                 0,
                 red,
                 BlendMode::AdditiveColor,
                 false,
-                false,
+                clear,
                 [255, 0, 255],
             ),
-            (1, grey, BlendMode::Alpha, false, false, [128, 128, 128]),
-            (0, red, BlendMode::Alpha, false, true, [0, 128, 128]),
-            (0, red, BlendMode::Additive, false, true, [0, 0, 255]),
-            (0, red, BlendMode::AdditiveColor, false, true, [0, 0, 255]),
+            (1, grey, BlendMode::Alpha, false, clear, [128, 128, 128]),
+            (0, red, BlendMode::Alpha, false, fog, [16, 111, 128]),
+            (0, red, BlendMode::Additive, false, fog, [16, 0, 255]),
+            (0, red, BlendMode::AdditiveColor, false, fog, [33, 0, 255]),
+            (0, red, BlendMode::Alpha, false, past, [0, 0, 255]),
+            (0, red, BlendMode::Additive, false, past, [0, 0, 255]),
+            (0, red, BlendMode::AdditiveColor, false, past, [0, 0, 255]),
         ] {
-            renderer.set_fog(if fogged { fog } else { [0.; 4] }, [0., 1., 0., 1.]);
+            renderer.set_fog(fogged, [0., 1., 0., 1.]);
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
                     position: Vec3::Z * 0.5,
@@ -315,7 +322,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             for channel in 0..3 {
                 assert!(
                     (i32::from(pixels[256 + 4 + channel]) - expected[channel]).abs() <= 1,
-                    "{blend:?} depth={depth_test} fogged={fogged}: {:?}",
+                    "{blend:?} depth={depth_test} fogged={fogged:?}: {:?}",
                     &pixels[260..264]
                 );
             }

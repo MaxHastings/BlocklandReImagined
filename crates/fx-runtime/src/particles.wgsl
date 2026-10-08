@@ -28,12 +28,14 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
     let uv=clamp(input.uv*size,vec2(0.5),size-vec2(0.5))/layer_size;
     let texel=textureSample(images,image_sampler,uv,i32(input.image.x));
     let own=display_color(texel.rgb)*input.color.rgb;
-    let a=texel.a*input.color.a;
-    // The scene's fog: blended sprites take its colour, added light fades.
-    let fog=fog_along(input.world-camera.position.xyz,camera.atmosphere,camera.fog_color.w);
+    // The scene's fog: blended sprites take its colour, added light fades;
+    // toward the visible distance sprites fade out into what is behind.
+    let offset=input.world-camera.position.xyz;
+    let fog=fog_along(offset,camera.atmosphere,camera.fog_color.w);
+    let kept=1.-fog_edge(offset,camera.atmosphere);
+    let a=texel.a*input.color.a*kept;
     // Premultiplied: alpha blending, additive, additive colour.
     if input.image.w<0.5 {return vec4(output_color(mix(own,camera.fog_color.rgb,fog))*a,a);}
-    let rgb=output_color(own*(1.-fog));
-    if input.image.w<1.5 {return vec4(rgb*a,0.);}
-    return vec4(rgb,0.);
+    if input.image.w<1.5 {return vec4(output_color(own*(1.-fog))*a,0.);}
+    return vec4(output_color(own*(1.-fog)*kept),0.);
 }
