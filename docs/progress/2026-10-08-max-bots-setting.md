@@ -39,3 +39,13 @@ was already sized for 32.
 ## Next
 
 - Max checks the Max Bots box's place in Advanced Config in his playtest.
+
+## Follow-up: Slayer's Bots (free-for-all) stopped at 16
+
+Max raised Max bots to 32 and the Mini-Game window still refused 32 with
+"Bots (free-for-all) must be 0 to 16.": the port's `ffa_bots` setting kept
+its own `max: 16`. It now goes to 32, the most a host may set; the fill
+stops at the host's Max bots (`bot_limit()`) and tells the owner how many
+could not join, as before. `deathmatch_bots_fill_to_the_hosts_max_bots`
+fills 16 at the default and 32 with Max bots at 32. The content pack
+regenerates from the port (`tools/bootstrap.py`).

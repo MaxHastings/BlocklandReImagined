@@ -2667,6 +2667,33 @@ fn deathmatch_bots_fill_the_game_with_everyones_enemies() {
     g.quiet();
 }
 
+/// Bots (free-for-all) goes as high as a host may set Max bots, and the
+/// game fills to the host's Max bots: 16 by default, 32 when raised.
+#[test]
+fn deathmatch_bots_fill_to_the_hosts_max_bots() {
+    let mut g = Game::new("bots-ffa-max");
+    let max = host_alone_in_deathmatch(&mut g);
+    let ffa = key(SLAYER, "ffa_bots");
+    let most = bri_package_runtime::ops::MAX_BOTS;
+    g.set(max, &[(&ffa, Value::Int(most as i64))]);
+    g.steps(4);
+    assert_eq!(free_and_team_bots(&g).0.len(), 16, "the default Max bots");
+    assert!(g.heard("could not join"), "the owner is told");
+    g.s.set_server_settings(bri_admin::ServerSettings {
+        max_bots: most as u32,
+        ..g.s.server_settings().clone()
+    })
+    .unwrap();
+    // A changed setting fills again.
+    g.set(max, &[(&ffa, Value::Int(0))]);
+    g.steps(4);
+    g.set(max, &[(&ffa, Value::Int(most as i64))]);
+    g.steps(4);
+    let (bots, teamed) = free_and_team_bots(&g);
+    assert_eq!((bots.len(), teamed), (most, 0));
+    g.quiet();
+}
+
 /// Teams wanting more bots than the server runs take as many as it has
 /// room for, and whoever runs the game is told how many could not join,
 /// once, not at every fill.
