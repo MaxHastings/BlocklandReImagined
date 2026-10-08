@@ -193,9 +193,9 @@ fn dump(path: &std::path::Path, info: *const EXCEPTION_POINTERS) -> io::Result<(
     // still be reading the clone, and freeing it there could fault and leave
     // a second, spurious crash report. Freeing would not end the clone
     // anyway: measured on the PC (2026-10-07), the clone goes when this
-    // process exits, with or without PssFreeSnapshot, and as a copy-on-write
-    // clone of a frozen process it costs little while Windows Error
-    // Reporting holds the crashed process.
+    // process exits, with or without PssFreeSnapshot. As a copy-on-write
+    // clone of a frozen process it should cost little while Windows Error
+    // Reporting holds the crashed process (inferred, not measured).
     wait.recv_timeout(DUMP_WAIT)
         .unwrap_or_else(|_| Err(io::Error::other("the minidump did not finish in time")))
 }
