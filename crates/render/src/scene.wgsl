@@ -4,11 +4,13 @@
 // light where the sun does not reach (w 1 when set). baked_* are the map's
 // own sun and ambient, as its lightmaps were baked; baked_sun_direction.w
 // is 1 while the live light differs from them, and lightmaps are relit.
+// sky_bands is the authored sky's colour by direction (scene.rs `SkyBands`).
 struct Camera {
     view_projection:mat4x4<f32>, eye:vec4<f32>, sun_direction:vec4<f32>,
     sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,
     sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
+    sky_bands:array<vec4<f32>,128>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
@@ -904,8 +906,34 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
 fn fog_amount(position:vec3<f32>)->f32 {
     return fog_along(position-camera.eye.xyz,camera.atmosphere,camera.fog_color.w);
 }
+// One band of the sky's faces (8 around, 16 up), tinted; the fog backdrop
+// where they leave it uncovered.
+fn sky_band(column:i32,row:i32)->vec3<f32> {
+    let band=camera.sky_bands[u32(row)*8u+u32((column+8)%8)];
+    return mix(camera.fog_color.rgb,band.rgb*camera.sky.rgb,band.a);
+}
+// What geometry at `position` fogs toward: the sky behind it, as the sky
+// faces draw it under the fog of the world's edge (sun flare and clouds
+// aside). Low and level it is the fog colour; high up, more of the sky's
+// own, so tall far terrain meets the sky it fades into instead of standing
+// pale against it.
+fn fog_target(position:vec3<f32>)->vec3<f32> {
+    let offset=position-camera.eye.xyz;
+    let along=offset/max(length(offset),0.0001);
+    let around=(atan2(along.x,along.z)/(2.0*PI)+0.5)*8.0-0.5;
+    let up=clamp((sign(along.y)*sqrt(abs(along.y))*0.5+0.5)*16.0-0.5,0.0,15.0);
+    let column=i32(floor(around));
+    let row=i32(floor(up));
+    let above=min(row+1,15);
+    let wa=around-floor(around);
+    let face=mix(
+        mix(sky_band(column,row),sky_band(column+1,row),wa),
+        mix(sky_band(column,above),sky_band(column+1,above),wa),
+        up-floor(up));
+    return mix(face,camera.fog_color.rgb,sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w));
+}
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
-    return output_color(mix(display,camera.fog_color.rgb,fog_amount(position)));
+    return output_color(mix(display,fog_target(position),fog_amount(position)));
 }
 // Classic TerrainRender frame-buffer passes, evaluated per pixel in display
 // space. material[1]: zero-detail distance, zero-bump distance, detail texture
@@ -917,7 +945,7 @@ fn terrain_passes(lit:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     let fog=fog_amount(position);
     let local=vec2<f32>(position.x-material[3].y,material[3].z-position.z);
     let flags=u32(material[2].w);
-    var color=clamp(mix(lit,camera.fog_color.rgb,fog),vec3<f32>(0.0),vec3<f32>(1.0));
+    var color=clamp(mix(lit,fog_target(position),fog),vec3<f32>(0.0),vec3<f32>(1.0));
     let zero_bump=material[1].y;
     if lighting_mode()!=3 && (flags&2u)!=0u && distance<zero_bump {
         // Halved bump plus halved-inverted bump shifted toward the sun,

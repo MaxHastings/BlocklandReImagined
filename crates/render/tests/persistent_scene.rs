@@ -385,8 +385,12 @@ fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
     );
     camera.apply_environment(&data);
     let fog = gpu.frame(&mut renderer, &[&foreground, &sky], &camera, (64, 64))?;
-    let haze = (255.0 * env.fog.amount(2.0)).round() as u8;
-    for value in &fog[center..center + 3] {
+    // Black geometry fogs toward the sky behind it: the blue -Z face under
+    // the fog of the world's edge, at the horizon nearly all fog.
+    let edge = env.fog.sky_amount(0.0, env.bottom);
+    let behind = [0.0, 0.0, 255.0].map(|c: f32| c * (1.0 - edge) + 255.0 * edge);
+    for (value, behind) in fog[center..center + 3].iter().zip(behind) {
+        let haze = (behind * env.fog.amount(2.0)).round() as u8;
         assert!(
             value.abs_diff(haze) <= 2,
             "Expected {haze} haze halfway through authored range, got {value}"
@@ -476,6 +480,68 @@ fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
     env.fog.start = 5.0;
     env.fog.end = 90.0;
     assert!(env.fog.sky_amount(0.5, env.bottom) > 0.8);
+    Ok(())
+}
+
+/// Far geometry fogs toward the sky behind it, not a flat fog colour: high
+/// up, where the sky is clearer than the air at the eye's level, a far
+/// tower takes the sky's own colour and does not stand pale against it.
+#[test]
+fn tall_far_geometry_fogs_toward_the_sky_behind_it() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let (mut data, mut env) = sky_fixture();
+    env.fog.start = 100.0;
+    env.fog.end = 1000.0;
+    bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
+    // The +Z face is red: its bands are, and nothing covers straight down
+    // but the bottom face.
+    let rising = Vec3::new(0.0, 0.1, 1.0).normalize();
+    let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    // A black wall across the view 700 units out, short of the fade.
+    let centre = rising * 700.0;
+    let right = rising.cross(Vec3::Y).normalize();
+    let up = right.cross(rising);
+    let mut wall = triangle([0.0, 0.0, 0.0, 1.0], 0.0, AlphaMode::Opaque);
+    for (vertex, corner) in wall
+        .vertices
+        .iter_mut()
+        .zip([(-1.0, -1.0), (1.0, -1.0), (0.0, 1.0)])
+    {
+        vertex.position = (centre + (right * corner.0 + up * corner.1) * 200.0).to_array();
+    }
+    wall.materials[0].double_sided = true;
+    wall.batches[0].center = centre.to_array();
+    let wall = renderer.upload(&gpu.device, &gpu.queue, &wall)?;
+    let mut camera = Camera::perspective(
+        [0.0; 3],
+        rising.to_array(),
+        1.0,
+        60_f32.to_radians(),
+        0.05,
+        2000.0,
+    );
+    camera.apply_environment(&data);
+    let frame = gpu.frame(&mut renderer, &[&wall, &sky], &camera, (64, 64))?;
+    let pixel = (32 * 64 + 32) * 4;
+    // The centre pixel's own ray sits half a pixel off the view direction.
+    let half_pixel = 30_f32.to_radians().tan() / 64.0;
+    let ray = (rising + (right - up) * half_pixel).normalize();
+    let hit = ray * (700.0 / ray.dot(rising));
+    let fog = env.fog.amount_along(hit.to_array(), env.bottom);
+    let clear = env.fog.sky_amount(ray.y, env.bottom);
+    let behind = [255.0, 0.0, 0.0].map(|c: f32| c * (1.0 - clear) + 255.0 * clear);
+    let expected = behind.map(|c| (c * fog).round() as u8);
+    for (got, want) in frame[pixel..pixel + 3].iter().zip(expected) {
+        assert!(
+            got.abs_diff(want) <= 3,
+            "Far wall is {:?}, expected {expected:?}",
+            &frame[pixel..pixel + 3]
+        );
+    }
+    // A flat fog colour would have made it grey, paler than the sky.
+    let flat = (255.0 * fog).round() as u8;
+    assert!(expected[1] + 40 < flat, "{expected:?} against {flat}");
     Ok(())
 }
 

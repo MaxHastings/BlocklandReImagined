@@ -353,7 +353,20 @@ pub struct SceneData {
     /// `map_lighting::decompose_sheet`) with the interior's own lightmap it
     /// came from: the authored light alone, which the light fit reads.
     pub lightmap_bases: Vec<(usize, Arc<SceneImage>)>,
+    /// The authored sky's colour by direction, which far geometry fogs
+    /// toward ([`SkyBands`]); all zero where only the fog backdrop shows.
+    pub sky_bands: SkyBands,
 }
+
+/// Directions around the eye the sky's colour is kept for: 8 around
+/// (by `atan2(x, z)`) and 16 up, by `sign(up) * sqrt(|up|)` so the bands
+/// are finest at the horizon, where far geometry stands.
+pub const SKY_AZIMUTHS: usize = 8;
+pub const SKY_ELEVATIONS: usize = 16;
+/// The authored sky faces' average display colour in each direction band,
+/// untinted, with the share of the band they cover in alpha (the rest is
+/// the fog backdrop). Rows are elevations, bottom first.
+pub type SkyBands = [[[f32; 4]; SKY_AZIMUTHS]; SKY_ELEVATIONS];
 impl Default for SceneData {
     fn default() -> Self {
         Self {
@@ -373,6 +386,7 @@ impl Default for SceneData {
             fog: Default::default(),
             sky_below: false,
             lightmap_bases: vec![],
+            sky_bands: Default::default(),
         }
     }
 }
@@ -786,6 +800,8 @@ pub struct Camera {
     pub baked_sun_direction: [f32; 4],
     pub baked_sun_color: [f32; 4],
     pub baked_ambient: [f32; 4],
+    /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
+    pub sky_bands: SkyBands,
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -868,6 +884,7 @@ impl Camera {
         self.atmosphere[0] = scene.fog.start;
         self.atmosphere[1] = scene.fog.end;
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
+        self.sky_bands = scene.sky_bands;
     }
     /// The live environment (`bri_content::atmosphere::resolve`) over the
     /// map's own values, set by [`Camera::apply_environment`] first.
@@ -930,6 +947,7 @@ impl Default for Camera {
             baked_sun_direction: [0.0; 4],
             baked_sun_color: [0.0; 4],
             baked_ambient: [0.0; 4],
+            sky_bands: Default::default(),
         }
     }
 }
