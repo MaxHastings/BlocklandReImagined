@@ -59,3 +59,21 @@ reason = "The soak's rocket knocks none of its floating test wall out after the 
 test = "the_bundled_soccer_field_loads_whole_from_load_bricks"
 owner = "v0.2.5 bot/test cleanup"
 reason = "Passes once the worlds pack is regenerated (worlds recipe 2); the gate reads the main checkout's content, which still has the old pack."
+
+# v0.2.6 shipped with these failing, on Max's call (2026-10-08): the
+# v0.2.7 thread fixes them and removes these entries.
+
+[[failure]]
+test = "capture_the_flag"
+owner = "v0.2.7 bot teamkills"
+reason = "A bot kills one teammate (no bot kills a teammate: 1, 0). Passes on navigation alone (5b4fc664) and ally harm alone (b85d0c66); fails with both merged (e05a1383). v0.2.6 shipped with it as a known issue (rare bot teamkills), on Max's call."
+
+[[failure]]
+test = "zombie_survival"
+owner = "v0.2.7 bot teamkills"
+reason = "A bot kills one teammate (1, 0; team damage 75, 4 shots at an ally). Same as capture_the_flag: only with navigation and ally harm merged. Shipped in v0.2.6 as a known issue."
+
+[[failure]]
+test = "all_dials_on"
+owner = "v0.2.7 bot teamkills"
+reason = "Fails on capture_the_flag's and zombie_survival's teamkill only. Shipped in v0.2.6 as a known issue."
