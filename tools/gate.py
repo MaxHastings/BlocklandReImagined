@@ -555,7 +555,8 @@ def trim_target(target):
 
 def documentation_only(paths):
     """Paths no build or test reads: Markdown outside crates/ (crates/net's
-    build script counts its protocol-changes/*.md)."""
+    build script counts its protocol-changes/*.md). List them with
+    --no-renames, so a file moved into a .md also shows where it came from."""
     return all(path.endswith(DOC_SUFFIXES) and not path.startswith("crates/") for path in paths)
 
 
@@ -663,7 +664,7 @@ def reusable_pass(root, sha, inputs, needs_corpus):
             continue
         other = path.stem.split("-", 1)[1]
         if other != tree:
-            result = subprocess.run(["git", "diff", "--name-only", other, tree],
+            result = subprocess.run(["git", "diff", "--name-only", "--no-renames", other, tree],
                                     capture_output=True, text=True, errors="replace")
             if result.returncode or not documentation_only(result.stdout.split()):
                 continue
@@ -928,8 +929,10 @@ def gate_commit(sha, diff_only):
         return False
     if diff_only:
         return True
-    changed = git("diff", "--name-only", base, sha).split()
-    if changed and all(path.endswith(DOC_SUFFIXES) for path in changed):
+    # --no-renames lists both sides of a move: code renamed into a .md file
+    # is a deleted source file, not documentation.
+    changed = git("diff", "--name-only", "--no-renames", base, sha).split()
+    if changed and documentation_only(changed):
         say(f"only documentation changed ({len(changed)} files); skipping build and tests")
         return True
     return full_gate(sha, gate_root(), changed)

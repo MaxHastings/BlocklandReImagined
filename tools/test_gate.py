@@ -212,6 +212,14 @@ class PassedTrees(unittest.TestCase):
         code = self.commit("code")
         self.assertIsNone(gate.reusable_pass(self.root, code, "inputs", False))
 
+    def test_code_moved_into_a_markdown_file_does_not(self):
+        gate.record_pass(self.root, self.passed, "inputs", corpus=False)
+        (self.repo / "docs").mkdir()
+        gate.git("mv", "src/lib.rs", "docs/lib.md")
+        moved = self.commit("move")
+        self.assertIn("src/lib.rs", gate.git("diff", "--name-only", "--no-renames", self.passed, moved))
+        self.assertIsNone(gate.reusable_pass(self.root, moved, "inputs", False))
+
     def test_other_inputs_or_a_missing_corpus_do_not(self):
         gate.record_pass(self.root, self.passed, "inputs", corpus=False)
         self.assertIsNone(gate.reusable_pass(self.root, self.passed, "other", False))
