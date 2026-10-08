@@ -201,10 +201,6 @@ const MAX_REPLANS: u32 = 3;
 const WEAVE_SECONDS: f32 = 0.75;
 /// A goal that moves less than this keeps its route (`Brain::set_goal_near`).
 const GOAL_SLACK: f32 = 0.2;
-/// How long a target out of view a moment is still fought where it was
-/// last seen: the hold time, so a glimpse lost decides nothing a held
-/// choice would not.
-const GLIMPSE_SECONDS: f32 = 0.5;
 /// A ranged fighter strafes one way about this long before turning back.
 /// It stands at a ledge or a wall until then, and turns away from an ally
 /// at once. A melee fighter does not strafe: it closes to its band.
@@ -401,9 +397,6 @@ struct Brain {
     target: Option<OwnerId>,
     /// Tick the current target was first seen.
     seen_since: u64,
-    /// The last time it saw its target with its own eyes, and how: what a
-    /// moment out of view still goes by (`GLIMPSE_SECONDS`).
-    last_sight: Option<(Seen, u64)>,
     /// Its aim error now, radians (yaw, pitch): a seeded drift.
     error: (f32, f32),
     /// Where an enemy was last seen or heard, until when.
@@ -443,12 +436,6 @@ struct Brain {
     /// The place it heads for to fight from (`spots`); none where it
     /// stands.
     spot: Option<spots::Anchor>,
-    /// Stepped aside for its shot (`spots`, left or right): where the step
-    /// ended and the flat way back to where it came from. Its strafe goes
-    /// either way but never back past that point, behind what it stepped
-    /// out from. Kept while it fights from there; gone with a new place or
-    /// the end of its ranged fight.
-    stepped_out: Option<(Vec3, Vec3)>,
     /// What a goof or an extra asks of its stroll (`Idle`), for the wander
     /// behaviour, the one owner of an idle bot's goal, to take up next tick.
     idle: Option<Idle>,
@@ -634,7 +621,6 @@ impl Brain {
             pitch: 0.0,
             target: None,
             seen_since: 0,
-            last_sight: None,
             error: (0.0, 0.0),
             memory: None,
             evidence_search: Default::default(),
@@ -654,7 +640,6 @@ impl Brain {
             objective_tool: false,
             objective_threat: None,
             spot: None,
-            stepped_out: None,
             idle: None,
             contest_body: None,
             carry: None,
@@ -1974,31 +1959,14 @@ impl Session {
         self.bot_crossed(bot);
         self.surprise_settle(bot, tick);
         let brain = &self.bots.brains[&bot];
-        let mut sight = self.bot_sight(bot, brain, eye);
-        // Its target gone behind a pillar, a corner or another body for a
-        // moment is still the one it fights, where it was last seen: it
-        // does not drop the fight for a search and take it up again a few
-        // ticks later. It holds its fire meanwhile, and nothing it learns
-        // from it is new (no memory renewed, no unseen position read).
-        let mut glimpsed = false;
-        if sight.target.is_none()
-            && let Some((seen, at)) = brain.last_sight
-            && brain.target == Some(seen.owner)
-            && tick.saturating_sub(at) <= ticks(GLIMPSE_SECONDS)
-            && self.peers.get(&seen.owner).is_some_and(|p| p.combat.alive)
-            && self.bot_enemy(bot, &brain.kind, seen.owner)
-        {
-            sight.target = Some(seen);
-            glimpsed = true;
-        }
-        let seen_now = sight.target.filter(|_| !glimpsed);
+        let sight = self.bot_sight(bot, brain, eye);
         // A crossing immediately after direct sight can carry that last
         // observation through the opening. It never reads the hidden body.
         let followed = brain
             .memory
             .filter(|k| {
                 Some(k.subject) == brain.target
-                    && seen_now.is_none()
+                    && sight.target.is_none()
                     && tick < k.expires
                     && self.bot_enemy(bot, &brain.kind, k.subject)
             })
@@ -2011,11 +1979,6 @@ impl Session {
                         ..k
                     })
             });
-        // Followed through an opening, it goes by the crossing instead.
-        if glimpsed && followed.is_some() {
-            sight.target = None;
-            glimpsed = false;
-        }
         let Hand {
             native,
             native_choice,
@@ -2106,7 +2069,7 @@ impl Session {
             mounted_charging,
             charged_ready,
             target_velocity,
-        } = self.bot_shot(bot, weapon, seen_now, eye, tick);
+        } = self.bot_shot(bot, weapon, sight.target, eye, tick);
 
         // A known noncombat body/tool cannot resolve a threat by staring at
         // it. Keep its useful objective; unknown scripted attacks retain their
@@ -2283,11 +2246,7 @@ impl Session {
         // Remember enemies seen, and where a hit came from.
         let memory_ticks = ticks(kind.memory_seconds);
         let mut warn = None;
-        brain.last_sight = seen_now
-            .map(|seen| (seen, tick))
-            .or(brain.last_sight.filter(|_| glimpsed));
         match sight.target {
-            Some(_) if glimpsed => {}
             Some(seen) => {
                 let fresh = brain.target != Some(seen.owner);
                 if fresh {
@@ -2604,11 +2563,6 @@ impl Session {
         // Where it fights from (`spots`): a ranged fighter on its feet
         // weighs a few places to stand, against the enemies it knows of;
         // anything else stands its ground where it is.
-        let ranged = matches!((enemy, weapon), (Some(_), Some(w)) if behaviour == Behaviour::Fight
-            && !w.melee
-            && swim.is_none()
-            && driving.is_none()
-            && !self.seated(bot));
         let spot = match (enemy, weapon) {
             (Some(seen), Some(weapon))
                 if behaviour == Behaviour::Fight
@@ -2628,15 +2582,6 @@ impl Session {
             _ => None,
         };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        // Arrived at a step aside: where it ended, and the way back.
-        brain.stepped_out = match (ranged, spot, brain.spot) {
-            (false, _, _) | (true, Some(_), _) => None,
-            (true, None, Some(a)) if a.aside() => {
-                Some((feet, flat(a.from - a.at).normalize_or_zero()))
-            }
-            (true, None, Some(_)) => None,
-            (true, None, None) => brain.stepped_out,
-        };
         brain.spot = spot;
 
         // Carrying an objective's delivery that needs only its feet (no
@@ -3050,7 +2995,6 @@ impl Session {
             let reaction = ticks(kind.reaction_seconds);
             let in_reach = weapon.is_some_and(|w| at.distance(eye) <= w.reach.max(1.0) * 1.1 + 0.5);
             fire = enemy.is_some()
-                && !glimpsed
                 && (driving.is_none() || vehicle_weapon)
                 && brain
                     .perception
@@ -3238,7 +3182,7 @@ impl Session {
                 } else {
                     // A ranged fighter strafes one way for a while, but
                     // not where the floor ends or a wall or an ally stands
-                    // that way, nor back behind what it stepped out from.
+                    // that way.
                     let floor = |side: f32| {
                         let under = floor_below(&self.simulation, feet + right * side * 0.9, &body);
                         let wall = super::admin_players::world_ray(
@@ -3255,13 +3199,7 @@ impl Session {
                             d.dot(right * side) > 0.0 && d.length() < 1.5
                         })
                     };
-                    let stepped_out = brain.stepped_out;
-                    let out = |side: f32| {
-                        stepped_out.is_none_or(|(at, back)| {
-                            (right * side).dot(back) <= 0.0 || (feet - at).dot(back) < 0.0
-                        })
-                    };
-                    let ground = |side: f32| floor(side) && !ally(side) && out(side);
+                    let ground = |side: f32| floor(side) && !ally(side);
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
                     // until the leg is up; one that meets an ally, or is hit

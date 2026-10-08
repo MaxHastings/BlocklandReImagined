@@ -68,16 +68,6 @@ impl std::fmt::Display for Terms {
 pub(super) struct Anchor {
     pub option: u32,
     pub at: Vec3,
-    /// Where it stood when it chose this place.
-    pub from: Vec3,
-}
-
-impl Anchor {
-    /// A place a body's width aside: stepped out from behind what blocked
-    /// or spoiled its shot where it stood.
-    pub(super) fn aside(&self) -> bool {
-        self.option == LEFT || self.option == RIGHT
-    }
 }
 
 /// What the chooser sees for each place: its score; or, when no place has
@@ -289,11 +279,7 @@ impl Session {
             (HERE, _) => None,
             // Still on its way to the place it chose.
             (option, Some(a)) if a.option == option => Some(a),
-            (option, _) => places[option as usize].map(|(at, _)| Anchor {
-                option,
-                at,
-                from: feet,
-            }),
+            (option, _) => places[option as usize].map(|(at, _)| Anchor { option, at }),
         }
     }
 

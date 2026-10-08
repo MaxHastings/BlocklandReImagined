@@ -14,11 +14,11 @@ Owners after this change:
 - Grenade avoidance: escaping a live blast the bot stands in is an explicit
   Dodge decision in `bot_extras` (`bot_blast_escape`); safety's
   `bot_blast_refuses` only vetoes stepping into one.
-- Strafing: the stance strafe. A cover step-out (left/right fight spot)
-  records where the bot stepped out from (`stepped_out`), and the strafe does
-  not carry the bot back behind that cover. This replaces a sideways-merge
-  attempt, which broke grenade play, and a stand-room bound that left bots
-  standing still.
+- Strafing: the stance strafe, unchanged from main. A sideways-merge
+  attempt, a stand-room bound and a cover step-out ban (`stepped_out`) were
+  each tried and removed: the grenade regression they were aimed at was the
+  glimpse memory (below), and the step-out ban made a bot backing out from
+  under a low roof blast itself (`bot_tactics`).
 - Stuck recovery: `route::Progress::stalled` stays the one judge (hop, then
   replan, then give up); the trapped clock still leads to Respawn.
 - Goals: idle-goal writes from the door goof, hand-offs and surprise goofs go
@@ -26,9 +26,15 @@ Owners after this change:
   setting the goal directly.
 - The vehicle detour is applied to the walk before safety, not inside it.
 
+Removed after the first PC gate (2026-10-08, c8a4f64): the 0.5 s glimpse
+memory, which put a target lost from sight back into sight. The bot then
+reported an unseen enemy as visible (`bot_knowledge` x4, `bot_interactions`),
+a relaxed bot's reaction was cut short (`bot_perception`), and grenade bots
+lost their throws. It also duplicated the hold rule (`Ask::paused`), which
+already owns keeping a fight through a moment out of sight. A flicker fix
+belongs in that rule.
+
 Play polish kept from earlier in the thread:
-- Glimpse memory: a target lost from sight stays the target for 0.5 s (no
-  firing), so a flickering sight line no longer flips fight and search.
 - Route bridge: the old route's first walking leg is kept while a new route
   is searched, if it still heads toward the new goal.
 - Failed steps are avoided across the body's width; string-pulling no longer
@@ -41,24 +47,25 @@ Play polish kept from earlier in the thread:
 
 Loop counts (`bot_watch`, three 2-minute matches per save, 4 bots; saves
 without a mini-game borrow Soccer's), main before this thread (A0) against
-this branch (A5): hand-overs are the clunk counter's per-bot-minute rates
-averaged over the matches, flips and self kills are totals, stuck is the mean.
+this branch without the glimpse and step-out ban (A6): hand-overs are the
+clunk counter's per-bot-minute rates averaged over the matches, flips and
+self kills are totals, stuck is the mean.
 
 | Save | walk hand-overs | look hand-overs | fight/search flips | self kills | stuck |
 |---|---|---|---|---|---|
-| Soccer | 110 → 98 | 7 → 7 | 9 → 2 | 0 → 0 | 1.4% → 0.9% |
-| Close Quarters | 207 → 158 | 165 → 77 | 127 → 66 | 9 → 9 | 10.5% → 5.6% |
-| ACM City | 155 → 143 | 89 → 44 | 74 → 32 | 3 → 0 | 2.6% → 2.5% |
-| Afghanistan | 157 → 101 | 117 → 46 | 86 → 21 | 14 → 12 | 8.6% → 6.9% |
+| Soccer | 110 → 102 | 7 → 9 | 9 → 10 | 0 → 0 | 1.4% → 0.4% |
+| Close Quarters | 207 → 198 | 165 → 133 | 127 → 128 | 9 → 3 | 10.5% → 3.4% |
+| ACM City | 155 → 138 | 89 → 75 | 74 → 78 | 3 → 4 | 2.6% → 3.2% |
+| Afghanistan | 157 → 90 | 117 → 66 | 86 → 59 | 14 → 11 | 8.6% → 5.9% |
 
-The reverted sideways merge had fewer walk hand-overs (route and strafe were
-one mover) but broke grenade play; the remaining hand-overs are the route
-handing over to the stance strafe on arrival, which is the intended split.
+Fight/search flips are back at main's level without the glimpse; that
+flicker is open work for the hold rule.
 
 Evidence (cloud, Linux): `bri-sim` lib 365 passed;
 `bots_play_an_unfamiliar_package_by_its_own_rules` and
-`team_fill_bots_play_slayer_soccer_with_or_without_weapons` pass. The full
-gate runs on the PC before landing.
+`team_fill_bots_play_slayer_soccer_with_or_without_weapons` pass, as do the
+seven tests the first PC gate failed. The full gate runs on the PC before
+landing.
 
-Not done for v0.2.7: head snaps, Close Quarters fall deaths, the jeep driver
+Not done for v0.2.7: fight/search flicker (in the hold rule), head snaps, Close Quarters fall deaths, the jeep driver
 running over teammates.
