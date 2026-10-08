@@ -39,7 +39,8 @@ pub(super) enum Mover {
     Swim,
     /// A goof's walk (a circle, a detour, up to someone).
     Goof,
-    /// A dodge's step aside.
+    /// A dodge: a step aside from a shot, or straight out of a live blast
+    /// it stands in (`bot_extras`).
     Dodge,
     /// Standing still on purpose: a hop straight up, a hand-off, a goof that
     /// stands.
@@ -265,16 +266,14 @@ pub(super) struct Ground {
     /// On a leg of its route through the air (its jets, a leap), which
     /// flies its own way.
     pub air_leg: bool,
-    /// It may step round a vehicle in its way (on foot, not pushing one).
-    pub vehicle_detour: bool,
 }
 
 impl Session {
-    /// Safety, the last word on the walk, which only takes away: never
-    /// through a portal (`passage`) unless its route leads through one, so
-    /// footwork, a goof or a push never stumbles in; round a vehicle in the
-    /// way; never into a live blast that would catch it, and out of one it
-    /// stands in; and never off an edge whose fall would hurt it. What it wants
+    /// Safety, the last word on the walk, which only takes away and never
+    /// steers: never through a portal (`passage`) unless its route leads
+    /// through one, so footwork, a goof or a push never stumbles in; never
+    /// into a live blast that would catch it, nor deeper into one it stands
+    /// in; and never off an edge whose fall would hurt it. What it wants
     /// beyond is not worth the fall: it stands at the edge and gets
     /// nowhere, so it plans again. Off its route on its feet it does not
     /// step down where it could not walk back up; in the air (footwork, a
@@ -282,7 +281,6 @@ impl Session {
     /// route's own way through the air, and its jets, it keeps. A hop
     /// pressed goes only where it comes down on floor along the walk it
     /// takes. The walk, whether an edge held it back, and the jump.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn bot_safe_walk(
         &self,
         bot: OwnerId,
@@ -291,21 +289,18 @@ impl Session {
         state: &crate::player::PlayerState,
         controls: Controls,
         ground: Ground,
-        quarry: Option<OwnerId>,
-        goal: Option<Vec3>,
     ) -> (Vec3, bool, bool) {
         let mut walk = controls.walk;
         // Never into a live blast, a grenade lying where it waits to go off
-        // its own included: it stands until it has; in one, it walks
-        // straight out. Decided first, so the way out meets the same
-        // portal, vehicle and edge checks as any other walk.
-        if !ground.driving && !ground.swimming {
-            let toward = flat(walk).normalize_or_zero();
-            walk = match self.bot_blast_walk(bot, feet, body, toward) {
-                Some(way) if way == toward => walk,
-                Some(way) => way,
-                None => Vec3::ZERO,
-            };
+        // its own included, nor deeper into one: it stands until it has.
+        // The way out of one is the dodge's (`bot_extras`), and meets these
+        // same checks.
+        if !ground.driving
+            && !ground.swimming
+            && walk != Vec3::ZERO
+            && self.bot_blast_refuses(bot, feet, body, flat(walk).normalize_or_zero())
+        {
+            walk = Vec3::ZERO;
         }
         if walk != controls.routed && !ground.driving && walk != Vec3::ZERO {
             let from = feet + Vec3::Y * 0.9;
@@ -313,9 +308,6 @@ impl Session {
             if self.simulation.passages().first(from, to).is_some() {
                 walk = Vec3::ZERO;
             }
-        }
-        if ground.vehicle_detour {
-            walk = self.bot_vehicle_detour(bot, walk, quarry, goal);
         }
         let off_route = walk != controls.routed;
         let held_back = !ground.driving
@@ -394,9 +386,10 @@ mod tests {
     }
 
     /// A live rocket lying ahead of a bot, its blast reaching 5: from
-    /// outside it a step in is not taken and one away is; standing inside
-    /// it, the walk turns straight out. One that cannot hurt it (outside a
-    /// mini-game nothing does) is not avoided.
+    /// outside it safety refuses a step in and lets one away through;
+    /// standing inside it, the way out is straight away from it, and
+    /// safety refuses any walk that goes no further out. One that cannot
+    /// hurt it (outside a mini-game nothing does) is not avoided.
     #[test]
     fn a_bot_keeps_out_of_a_live_blast_and_walks_out_of_one() {
         use rapier3d::prelude::*;
@@ -425,27 +418,29 @@ mod tests {
             .unwrap();
         let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
         let edge = Vec3::ZERO;
-        assert_eq!(
-            s.bot_blast_walk(bot, edge, &body, Vec3::Z),
-            Some(Vec3::Z),
+        assert!(
+            !s.bot_blast_refuses(bot, edge, &body, Vec3::Z),
             "outside a game it cannot hurt"
         );
         super::super::harm::one_game(&mut s, thrower, bot);
-        assert_eq!(s.bot_blast_walk(bot, edge, &body, Vec3::Z), None, "into it");
-        assert_eq!(
-            s.bot_blast_walk(bot, edge, &body, Vec3::NEG_Z),
-            Some(Vec3::NEG_Z),
-            "away"
-        );
+        assert!(s.bot_blast_refuses(bot, edge, &body, Vec3::Z), "into it");
+        assert!(!s.bot_blast_refuses(bot, edge, &body, Vec3::NEG_Z), "away");
+        assert_eq!(s.bot_blast_escape(bot, edge, &body), None, "not in it");
         let inside = Vec3::new(0.0, 0.0, 4.0);
-        let out = s.bot_blast_walk(bot, inside, &body, Vec3::X).unwrap();
+        let out = s.bot_blast_escape(bot, inside, &body).unwrap();
         assert!(out.z < -0.9, "straight out: {out}");
+        assert!(
+            s.bot_blast_refuses(bot, inside, &body, Vec3::X),
+            "no further out"
+        );
+        assert!(!s.bot_blast_refuses(bot, inside, &body, out), "the way out");
     }
 
     /// A live rocket lying 3.5 units in from a bot standing at a deck's
     /// edge, a drop that kills past it: the way out of the blast is over
     /// the edge, which the edge check refuses, so it stands; with floor
-    /// past the edge it walks out.
+    /// past the edge it walks out. The way out is the dodge's walk; safety
+    /// only checks it.
     #[test]
     fn the_way_out_of_a_blast_meets_the_edge_check() {
         use rapier3d::prelude::*;
@@ -490,19 +485,14 @@ mod tests {
                 driving: false,
                 swimming: false,
                 air_leg: false,
-                vehicle_detour: false,
             };
-            s.bot_safe_walk(
-                bot,
-                &body,
-                feet,
-                &state,
-                Controls::default(),
-                ground,
-                None,
-                None,
-            )
-            .0
+            let out = s.bot_blast_escape(bot, feet, &body).expect("in the blast");
+            let controls = Controls {
+                walk: out,
+                ..Controls::default()
+            };
+            s.bot_safe_walk(bot, &body, feet, &state, controls, ground)
+                .0
         };
         assert_eq!(walk_out(true), Vec3::ZERO, "not off the edge");
         assert!(walk_out(false).x > 0.9, "out of the blast onto the floor");

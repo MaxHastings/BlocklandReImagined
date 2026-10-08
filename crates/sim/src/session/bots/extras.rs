@@ -344,6 +344,17 @@ impl Session {
         let on_foot = !self.seated(bot) && !swimming;
         let goal = brain.goal.map(|g| g.point(brain.home));
         let feet = scene.feet;
+        // Standing in a live blast (a grenade lying where it waits to go
+        // off, its own included): straight out of it is all it does, ahead
+        // of any other dodge, stand or extra. Safety checks the way out as
+        // it does any walk.
+        if on_foot
+            && let Some(away) =
+                self.bot_blast_escape(bot, feet, &crate::nav::Body::of(&tuning, state.scale))
+        {
+            extra.direction = Some(away);
+            return Ok(extra);
+        }
         let look = |at: Vec3| {
             let d = at - eye;
             (yaw_to(d), d.y.atan2(flat(d).length()).clamp(-1.5, 1.5))
@@ -648,7 +659,7 @@ impl Session {
         let toward = flat(feet - aim).normalize_or_zero();
         let stand = Vec3::new(aim.x, feet.y, aim.z) + toward * 1.5;
         let brain = self.bots.brains.get_mut(&bot)?;
-        brain.set_goal(Some(Goal::Wander(stand)));
+        brain.idle = Some(Idle::To(stand));
         brain.next_wander = brain.next_wander.max(tick + FLAVOUR_CLICK_TICKS);
         brain.extras.door = None;
         brain.extras.click = Some(Click {
@@ -735,13 +746,10 @@ impl Session {
             };
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             if flat(mate_feet - feet).length() > HAND_NEAR {
-                if !matches!(brain.goal, Some(Goal::Wander(p)) if flat(p - mate_feet).length() < 1.0)
-                {
-                    brain.set_goal(Some(Goal::Wander(mate_feet)));
-                }
+                brain.idle = Some(Idle::To(mate_feet));
                 brain.next_wander = brain.next_wander.max(tick + 120);
             } else {
-                brain.set_goal(None);
+                brain.idle = Some(Idle::Stop);
                 brain.next_wander = brain.next_wander.max(tick + 120);
                 extra.stand = true;
             }

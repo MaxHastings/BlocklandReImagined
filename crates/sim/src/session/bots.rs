@@ -443,6 +443,15 @@ struct Brain {
     /// The place it heads for to fight from (`spots`); none where it
     /// stands.
     spot: Option<spots::Anchor>,
+    /// Stepped aside for its shot (`spots`, left or right): where the step
+    /// ended and the flat way back to where it came from. Its strafe goes
+    /// either way but never back past that point, behind what it stepped
+    /// out from. Kept while it fights from there; gone with a new place or
+    /// the end of its ranged fight.
+    stepped_out: Option<(Vec3, Vec3)>,
+    /// What a goof or an extra asks of its stroll (`Idle`), for the wander
+    /// behaviour, the one owner of an idle bot's goal, to take up next tick.
+    idle: Option<Idle>,
     /// The body its objective works, as of its last think: what an
     /// opponent it shoves off it contests (`contest::shove_worth`).
     contest_body: Option<u64>,
@@ -645,6 +654,8 @@ impl Brain {
             objective_tool: false,
             objective_threat: None,
             spot: None,
+            stepped_out: None,
+            idle: None,
             contest_body: None,
             carry: None,
             next_grab: 0,
@@ -800,6 +811,17 @@ impl Brain {
             // A fight or a carry is over.
             self.set_goal(None);
         }
+        // A goof's or an extra's walk: up to a door, a mate, somewhere new;
+        // or a stop for its moment.
+        match self.idle.take() {
+            Some(Idle::To(to)) => {
+                if !matches!(self.goal, Some(Goal::Wander(at)) if flat(at - to).length() < 1.0) {
+                    self.set_goal(Some(Goal::Wander(to)));
+                }
+            }
+            Some(Idle::Stop) => self.set_goal(None),
+            None => {}
+        }
         if !self.tethered() {
             self.home = feet;
         }
@@ -818,6 +840,14 @@ impl Brain {
             self.next_wander = tick + 240 + (self.random() * 480.0) as u64;
         }
     }
+}
+/// A goof's or an extra's ask of an idle bot's stroll ([`Brain::wander`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Idle {
+    /// Walk up to here.
+    To(Vec3),
+    /// Stop where it is.
+    Stop,
 }
 /// What the held weapon wants: how far it reaches and how its shots fly.
 #[derive(Clone, Copy, Debug)]
@@ -2574,6 +2604,11 @@ impl Session {
         // Where it fights from (`spots`): a ranged fighter on its feet
         // weighs a few places to stand, against the enemies it knows of;
         // anything else stands its ground where it is.
+        let ranged = matches!((enemy, weapon), (Some(_), Some(w)) if behaviour == Behaviour::Fight
+            && !w.melee
+            && swim.is_none()
+            && driving.is_none()
+            && !self.seated(bot));
         let spot = match (enemy, weapon) {
             (Some(seen), Some(weapon))
                 if behaviour == Behaviour::Fight
@@ -2593,6 +2628,15 @@ impl Session {
             _ => None,
         };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
+        // Arrived at a step aside: where it ended, and the way back.
+        brain.stepped_out = match (ranged, spot, brain.spot) {
+            (false, _, _) | (true, Some(_), _) => None,
+            (true, None, Some(a)) if a.aside() => {
+                Some((feet, flat(a.from - a.at).normalize_or_zero()))
+            }
+            (true, None, Some(_)) => None,
+            (true, None, None) => brain.stepped_out,
+        };
         brain.spot = spot;
 
         // Carrying an objective's delivery that needs only its feet (no
@@ -2699,6 +2743,10 @@ impl Session {
                 false
             }
         };
+        // Idle asks are the stroll's; any other behaviour has its own goal.
+        if behaviour != Behaviour::Wander {
+            brain.idle = None;
+        }
         // Respawning: the command a player gives (Ctrl+K), with what it
         // costs them in this game.
         if behaviour == Behaviour::Respawn {
@@ -3190,7 +3238,7 @@ impl Session {
                 } else {
                     // A ranged fighter strafes one way for a while, but
                     // not where the floor ends or a wall or an ally stands
-                    // that way.
+                    // that way, nor back behind what it stepped out from.
                     let floor = |side: f32| {
                         let under = floor_below(&self.simulation, feet + right * side * 0.9, &body);
                         let wall = super::admin_players::world_ray(
@@ -3207,7 +3255,13 @@ impl Session {
                             d.dot(right * side) > 0.0 && d.length() < 1.5
                         })
                     };
-                    let ground = |side: f32| floor(side) && !ally(side);
+                    let stepped_out = brain.stepped_out;
+                    let out = |side: f32| {
+                        stepped_out.is_none_or(|(at, back)| {
+                            (right * side).dot(back) <= 0.0 || (feet - at).dot(back) < 0.0
+                        })
+                    };
+                    let ground = |side: f32| floor(side) && !ally(side) && out(side);
                     // Each leg turns back the other way, unless only this
                     // way is open. One that reaches an edge stands there
                     // until the leg is up; one that meets an ally, or is hit
@@ -3406,6 +3460,16 @@ impl Session {
             },
         );
         (input.crouch, input.jet) = (controls.crouch, controls.jet);
+        // The walk chosen, carried out: on foot, not pushing one, round a
+        // vehicle in its way (the walk grid leaves vehicles out).
+        let controls = act::Controls {
+            walk: if driving.is_none() && pushing.is_none() {
+                self.bot_vehicle_detour(bot, controls.walk, quarry, goal_at)
+            } else {
+                controls.walk
+            },
+            ..controls
+        };
         let (direction, vetoed, jump) = self.bot_safe_walk(
             bot,
             &body,
@@ -3417,10 +3481,7 @@ impl Session {
                 swimming: swim.is_some() || wet,
                 air_leg: wanted
                     .is_some_and(|w| matches!(w.mode, Mode::Jet { .. } | Mode::Leap { .. })),
-                vehicle_detour: driving.is_none() && pushing.is_none(),
             },
-            quarry,
-            goal_at,
         );
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);

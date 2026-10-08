@@ -1406,7 +1406,7 @@ impl Session {
                 if !matches!(i.flavour, Flavour::Detour | Flavour::Light | Flavour::Door)
                     && let Some(b) = self.bots.brains.get_mut(&bot)
                 {
-                    b.set_goal(None);
+                    b.idle = Some(Idle::Stop);
                     b.next_wander = b.next_wander.max(i.until);
                 }
                 match i.flavour {
@@ -1502,7 +1502,7 @@ impl Session {
                                 self.bot_explore_spot(bot, (feet, eye), &body, DETOUR, &[], tick)
                             });
                         if let (Some(to), Some(b)) = (to, self.bots.brains.get_mut(&bot)) {
-                            b.set_goal(Some(Goal::Wander(to)));
+                            b.idle = Some(Idle::To(to));
                         }
                     }
                     _ => {}

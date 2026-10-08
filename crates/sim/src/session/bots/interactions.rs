@@ -940,30 +940,36 @@ impl Session {
             .then_some(p.position)
         })
     }
-    /// Where a step along `toward` from `feet` goes about live blasts
-    /// (`bot_live_blasts`): `None` when it takes `bot` into one or nearer
-    /// one it is in; else the walk, turned straight out of the nearest it
-    /// stands in, so it gets clear before it goes off.
-    pub(super) fn bot_blast_walk(
+    /// The way straight out of the nearest live blast `bot` stands in at
+    /// `feet` (`bot_live_blasts`), if it stands in one: the dodge's to take.
+    pub(super) fn bot_blast_escape(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+    ) -> Option<Vec3> {
+        let centre = feet + Vec3::Y * body.height * 0.5;
+        let at = self
+            .bot_live_blasts(bot, feet, body)
+            .min_by(|a, b| a.distance(centre).total_cmp(&b.distance(centre)))?;
+        Some(flat(centre - at).normalize_or_zero()).filter(|away| *away != Vec3::ZERO)
+    }
+    /// Whether a step along `toward` from `feet` takes `bot` into a live
+    /// blast, or no further out of the one it stands in: safety refuses it.
+    pub(super) fn bot_blast_refuses(
         &self,
         bot: OwnerId,
         feet: Vec3,
         body: &crate::nav::Body,
         toward: Vec3,
-    ) -> Option<Vec3> {
-        let next = feet + toward * body.width;
-        let centre = |f: Vec3| f + Vec3::Y * body.height * 0.5;
-        if let Some(at) = self.bot_live_blasts(bot, feet, body).min_by(|a, b| {
-            a.distance(centre(feet))
-                .total_cmp(&b.distance(centre(feet)))
-        }) {
-            let away = flat(centre(feet) - at).normalize_or_zero();
-            return Some(if toward.dot(away) > 0.0 { toward } else { away });
+    ) -> bool {
+        match self.bot_blast_escape(bot, feet, body) {
+            Some(away) => toward.dot(away) <= 0.0,
+            None => self
+                .bot_live_blasts(bot, feet + toward * body.width, body)
+                .next()
+                .is_some(),
         }
-        self.bot_live_blasts(bot, next, body)
-            .next()
-            .is_none()
-            .then_some(toward)
     }
     pub(super) fn bot_fall_ahead(
         &self,
