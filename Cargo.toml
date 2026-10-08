@@ -52,6 +52,16 @@ debug = false
 [profile.dev.package.bri-render]
 opt-level = 2
 
+# Bots, sessions and their simulation step run in plain Rust in bri-sim;
+# unoptimized, bot_soccer_match passed the gate's 600 s per-binary limit
+# (602 s on the PC, 2026-10-08). Same results on the same seeds on a 4-core
+# Linux container, 2026-10-08: bot_soccer_match 517 s -> 155 s and
+# bot_combined_perf 379 s -> 92 s at opt-level 2 (232 s and 163 s at 1).
+# It costs about 60 s each time bri-sim recompiles (26 s -> 88 s without
+# incremental). Debug assertions and overflow checks stay on.
+[profile.dev.package.bri-sim]
+opt-level = 2
+
 # Line tables make panic backtraces and native crash dumps name files and
 # lines in release builds, at no runtime cost.
 [profile.release]
