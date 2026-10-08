@@ -659,9 +659,12 @@ fn ledge(tuning: &PlayerTuning, crawl: bool) -> f32 {
 /// from the shove until it lands (a wall slammed on the way down, or the
 /// landing), each the vector the session hands its fall rule. `allowance`
 /// is the caller's share of its planning budget: each collider copied for
-/// the flight and each motor tick spends one. `None` when it has not
-/// landed by the time that runs out, which covers a shove off into nothing
-/// and a fall into water deep enough to float it.
+/// the flight and each motor tick spends one. Not landed by the time that
+/// runs out (a long drop, a shove off into nothing), its impact is what it
+/// will land with at least: the hardest so far, or how fast it is falling
+/// by then when there is something below to come down on, since that only
+/// grows while it falls on (water deep enough to float it has slowed it
+/// already). `None` when it cannot be flown at all.
 ///
 /// Not covered: the target steering in the air (it is flown with no input),
 /// other bodies and vehicles in the way, and openings it would pass through.
@@ -671,7 +674,7 @@ pub fn shove_landing(
     velocity: Vec3,
     ground: &crate::nav::Ground,
     allowance: &mut u32,
-) -> Option<(Vec3, Vec3)> {
+) -> Option<Shoved> {
     // As far as the flight can go before the allowance runs out: its own
     // speed and gravity, with no input to add to either.
     let seconds = *allowance as f32 * FIXED_DT;
@@ -711,10 +714,34 @@ pub fn shove_landing(
             hardest = events.impact;
         }
         if events.landed {
-            return Some((Vec3::from(player.state().feet), hardest));
+            return Some(Shoved {
+                landed: Some(Vec3::from(player.state().feet)),
+                impact: hardest,
+            });
         }
     }
-    None
+    // Still falling with something below to come down on: at least that
+    // hard. Into nothing it never lands.
+    let falling = Vec3::from(player.state().velocity);
+    let below = ground
+        .ray(Vec3::from(player.state().feet), Vec3::NEG_Y, f32::MAX)
+        .is_some();
+    Some(Shoved {
+        landed: None,
+        impact: if below && falling.y < 0.0 && falling.length() > hardest.length() {
+            falling
+        } else {
+            hardest
+        },
+    })
+}
+
+/// Where a shoved body comes down (`None`: not within the flight's
+/// allowance) and the impact it lands with (`shove_landing`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shoved {
+    pub landed: Option<Vec3>,
+    pub impact: Vec3,
 }
 
 #[cfg(test)]
@@ -725,7 +752,7 @@ mod tests {
         PlayerTuning::default()
     }
 
-    fn shove(boxes: &[(Vec3, Vec3)], feet: Vec3, velocity: Vec3) -> (Option<(Vec3, Vec3)>, u32) {
+    fn shove(boxes: &[(Vec3, Vec3)], feet: Vec3, velocity: Vec3) -> (Option<Shoved>, u32) {
         let mut physics = bri_physics::new_world();
         for (min, max) in boxes {
             let half = (*max - *min) * 0.5;
@@ -764,13 +791,29 @@ mod tests {
         let below = (Vec3::new(-50.0, -7.0, -50.0), Vec3::new(50.0, -6.0, 50.0));
         let (feet, push) = (Vec3::new(1.5, 0.0, 0.0), Vec3::new(8.0, 4.0, 0.0));
         let (landing, _) = shove(&[ledge, below], feet, push);
-        let (at, impact) = landing.expect("it lands on the floor below");
+        let landing = landing.expect("it is flown");
+        let (at, impact) = (
+            landing.landed.expect("it lands on the floor below"),
+            landing.impact,
+        );
         assert!((at.y + 6.0).abs() < 0.1, "{at}");
         assert!(at.x > 2.0, "{at}");
         assert!(impact.y < 0.0, "{impact}");
         let (landing, left) = shove(&[ledge], feet, push);
-        assert_eq!(landing, None);
+        let landing = landing.expect("it is flown");
+        assert_eq!(landing.landed, None);
         assert_eq!(left, 0);
+        assert_eq!(landing.impact, Vec3::ZERO, "into nothing: no landing");
+        // A floor far below, out of the allowance's reach: it lands at
+        // least as hard as it is falling when that runs out.
+        let deep = (
+            Vec3::new(-50.0, -501.0, -50.0),
+            Vec3::new(50.0, -500.0, 50.0),
+        );
+        let (landing, _) = shove(&[ledge, deep], feet, push);
+        let landing = landing.expect("it is flown");
+        assert_eq!(landing.landed, None);
+        assert!(landing.impact.y < impact.y, "{} {impact}", landing.impact);
     }
 
     /// Shoved hard into a wall beside it, the impact it reports is the
@@ -780,7 +823,11 @@ mod tests {
         let floor = (Vec3::new(-50.0, -1.0, -50.0), Vec3::new(50.0, 0.0, 50.0));
         let wall = (Vec3::new(1.0, 0.0, -5.0), Vec3::new(2.0, 6.0, 5.0));
         let (landing, _) = shove(&[floor, wall], Vec3::ZERO, Vec3::new(12.0, 1.0, 0.0));
-        let (at, impact) = landing.expect("it lands on the floor");
+        let landing = landing.expect("it is flown");
+        let (at, impact) = (
+            landing.landed.expect("it lands on the floor"),
+            landing.impact,
+        );
         assert!(at.x < 1.0 && at.y.abs() < 0.1, "{at}");
         assert!(impact.x > impact.y.abs(), "{impact}");
     }

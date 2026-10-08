@@ -41,7 +41,8 @@ impl Session {
     /// `push` (along, up) is worth, in the target's health, and where it is
     /// predicted to land. The flight spends `allowance` (motor ticks and
     /// colliders, a share of the shot chooser's budget); `None` for the
-    /// landing when it does not come down within it.
+    /// landing when it does not come down within it, its worth then what it
+    /// will land with at least (`reach::shove_landing`).
     pub(super) fn bot_shove(
         &self,
         bot: OwnerId,
@@ -74,10 +75,11 @@ impl Session {
             bodies: &[],
             motions: &[],
         };
-        let landed = crate::reach::shove_landing(&tuning, feet, velocity, &ground, allowance);
-        let fall = landed.map_or(0.0, |(_, impact)| self.fall_harm(target, impact));
+        let shoved = crate::reach::shove_landing(&tuning, feet, velocity, &ground, allowance);
+        let fall = shoved.map_or(0.0, |s| self.fall_harm(target, s.impact));
+        let landed = shoved.and_then(|s| s.landed);
         let harm = worth(fall, contest::shove_worth(self, bot, target), health);
-        let landing = landed.map(|(at, _)| {
+        let landing = landed.map(|at| {
             let across = Vec3::new(velocity.x, 0.0, velocity.z).length();
             Landing {
                 at,
@@ -99,6 +101,11 @@ mod tests {
     /// A target standing at the +x edge of a deck (top at y = 0, ending at
     /// x = 1), above a floor `drop` below it (none for `None`).
     fn deck(drop: Option<f32>) -> (Session, OwnerId, OwnerId) {
+        deck_armed(drop, false)
+    }
+
+    /// [`deck`], with the test weapons loaded when `armed`.
+    fn deck_armed(drop: Option<f32>, armed: bool) -> (Session, OwnerId, OwnerId) {
         use rapier3d::prelude::*;
         let world = bri_world::World::new("Shove".into(), "fixture".into(), vec![[1.0; 4]]);
         let mut colliders = vec![
@@ -106,7 +113,7 @@ mod tests {
         ];
         if let Some(drop) = drop {
             colliders.push(
-                ColliderBuilder::cuboid(40.0, 0.5, 40.0).translation(Vector::new(
+                ColliderBuilder::cuboid(400.0, 0.5, 400.0).translation(Vector::new(
                     0.0,
                     -drop - 0.5,
                     0.0,
@@ -117,6 +124,9 @@ mod tests {
             crate::simulation::Simulation::new(world, crate::testing::definitions(), colliders)
                 .unwrap();
         let mut s = Session::new(sim);
+        if armed {
+            s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+        }
         let bot = s
             .join("Shover".into(), Vec3::new(-2.0, 0.05, 0.0), false)
             .unwrap();
@@ -192,7 +202,7 @@ mod tests {
             &ground,
             &mut allowance,
         );
-        assert_eq!(landing.map(|l| l.at), flown.map(|(at, _)| at));
+        assert_eq!(landing.map(|l| l.at), flown.and_then(|s| s.landed));
     }
 
     #[test]
@@ -211,5 +221,76 @@ mod tests {
         let at = Vec3::new(5.0, -30.0, 0.0);
         assert!(landed_as_predicted(Vec3::new(5.5, -30.0, 0.3), at, 1.25));
         assert!(!landed_as_predicted(Vec3::new(1.0, 0.0, 0.0), at, 1.25));
+    }
+
+    /// A push-only weapon (a push broom: no damage of its own) at an enemy
+    /// on the edge of a deck above a drop that hurts: the push's landing is
+    /// its worth, so it is planned and the fire gate lets it go.
+    #[test]
+    fn a_push_only_weapon_at_an_enemy_by_a_drop_is_worth_firing_and_fires() {
+        // A drop a fall from kills, longer than the planning turn's share
+        // of the solver budget flies: worth what it falls at by then.
+        let (mut s, bot, target) = deck_armed(Some(30.0), true);
+        super::super::harm::one_game(&mut s, bot, target);
+        let slot = s.give_item(bot, bri_weapons::testing::BROOM_ITEM).unwrap();
+        s.equip_tool(bot, Some(slot)).unwrap();
+        let mut kind = crate::bot_kind::BotKind {
+            id: "pusher".into(),
+            ..Default::default()
+        };
+        kind.surprise.strength = 0.0;
+        s.bots
+            .brains
+            .insert(bot, Brain::new(None, kind, Vec3::ZERO, bot, 0));
+        let p = &s.peers[&target].player;
+        let (eye, feet) = (p.eye(), Vec3::from(p.state().feet));
+        let from = s.peers[&bot].player.eye();
+        let seen = Seen {
+            owner: target,
+            eye,
+            feet,
+            aim: sightlines::aim_point(eye, p.state().scale),
+            real: feet,
+            way: bri_content::passage::Way {
+                aim: eye,
+                carry: None,
+                length: from.distance(eye),
+            },
+        };
+        let mut budget = hand_combat::Budget::default();
+        budget.begin_tick(10);
+        let mut state = hand_combat::State::default();
+        let mut mind = s.bots.brains[&bot].surprise.clone();
+        let decision =
+            hand_combat::choose(&s, bot, seen, from, 10, &mut state, &mut budget, &mut mind);
+        let hand_combat::Decision::Ready(choice) = decision else {
+            panic!("a push off the deck is planned");
+        };
+        assert_eq!(choice.capability.direct_damage, 0.0, "it only pushes");
+        assert!(
+            choice.harm.push > 0.0 && choice.dealt > 0.0,
+            "{:?}",
+            choice.harm
+        );
+        assert!(hand_combat::validate_fire(
+            &s,
+            bot,
+            seen,
+            choice,
+            choice.direction,
+            &mut budget
+        ));
+        // Played on through the ordinary controls: it fires, and the
+        // target goes off the edge, pushed by it.
+        let mut off = false;
+        for _ in 0..120 * 10 {
+            s.step().unwrap();
+            if s.peers[&target].player.state().feet[1] < -5.0 {
+                off = true;
+                break;
+            }
+        }
+        assert!(off, "the push knocked it off: {:?}", s.bot_thoughts());
+        assert_eq!(s.pushed_by(target).map(|(by, _)| by), Some(bot));
     }
 }

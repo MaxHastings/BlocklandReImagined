@@ -90,7 +90,8 @@ bot does through the same code.
    (leading shots by the projectile's speed and drop, with the kind's aim
    error shrinking as it tracks), the path when there is none, and Carry
    steers its own. It fires once its reaction time has passed and the aim
-   is on, its weapon can reach, and allies do not obstruct the shot. Mounted
+   is on, its weapon can reach, and no body the plan did not price has
+   stepped into what the shot sweeps (`harm::Shape`). Mounted
    weapons use their actual projectile, speed, charge state and muzzle. Lost
    targets cancel a held charge without firing it. A driver steers the
    chassis independently of the gunner's world aim; an armed passenger's world
@@ -354,8 +355,8 @@ the plain linear turn and the old fire gate.
   target is missed by about the same distance at any range and a still one
   is hit as before. The native fire gate judges a shot by where the bot believes it
   aims (its look without its error), so the error misses for real instead
-  of holding the shot back; a shot whose actual line passes within 1.2
-  units of a living ally (60 units ahead) is still withheld. With the fair metric the Blockhead's steady hit
+  of holding the shot back. What the actual shot would do to its own side,
+  error and all, is judged again there (`harm::shot_harm`, below). With the fair metric the Blockhead's steady hit
   rate falls as `strength` rises and sits inside the 15-60% band at 1.
   A spawn-protected target is watched but not
   reacted to: the clock starts when it can be hurt. Damage still
@@ -488,9 +489,23 @@ on its way) or is urgent (under 30% health, or hurt by an enemy within 8
 units in the last 1.5 s): the plain scores, through the same hold rule.
 Only options scored above zero are options.
 
+**Harm to its side.** One mechanism, `harm::shot_harm`, says what a shot
+would do: it follows the shot's way (a ray to its reach, a projectile chord
+by chord, a timed throw through its bounces to its burst, a swing to the
+body the hammer finds), ends it at the first body it meets (bodies grown by
+their motion), applies the direct hit there, shares pellets out by v20's
+spread box with nearer bodies shading farther ones, and applies the blast
+with the host's own falloff (`runtime::blast_falloff`). Each body counts
+only where the rules let the shooter hurt it (friendly fire, self damage,
+radius damage, spawn protection), and at most its health left. Its worth is
+the enemies' harm less its allies' and its own, one for one; a shot is no
+option when that is not positive, when it would take the shooter's own
+health left, or when it would kill a teammate. The trigger keeps the swept
+shape with the plan and fires only while no unpriced body has stepped in.
+
 **Splash aims** are solved and checked like any shot: an intercept for
-the aimed point, the blast clear of itself and allies (`safe_blast`), the
-path clear. A surface aim counts its path clear when it reaches that
+the aimed point, what the shot would do to each side priced like any shot
+(`harm::shot_harm`), the path clear. A surface aim counts its path clear when it reaches that
 surface, and at the firing gate its impact must lie within the splash
 radius of the body rather than inside it.
 

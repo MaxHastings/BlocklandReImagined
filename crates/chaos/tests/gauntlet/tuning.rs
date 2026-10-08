@@ -51,6 +51,13 @@ pub fn with_dials<T>(dials: Vec<(String, f64)>, run: impl FnOnce() -> T) -> T {
     DIALS.with(|d| *d.borrow_mut() = old);
     out
 }
+/// `run` with this thread's seed set to `seed`.
+pub fn with_seed<T>(seed: u64, run: impl FnOnce() -> T) -> T {
+    let old = SEED.with(|s| s.replace(seed));
+    let out = run();
+    SEED.with(|s| s.set(old));
+    out
+}
 /// This thread's seed: 0 plays the gauntlet as its tests do.
 pub fn seed() -> u64 {
     SEED.with(Cell::get)

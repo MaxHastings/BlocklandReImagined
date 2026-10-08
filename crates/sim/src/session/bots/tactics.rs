@@ -527,6 +527,49 @@ pub fn native_capability(
             r.range * scale
         })
     });
+    projectile_attack(
+        p,
+        scale,
+        delivery,
+        Trigger {
+            hold: using.fire == bri_weapons::BotFire::Hold,
+            charge_on_release: image.charges(),
+        },
+        Reading {
+            reach,
+            near: using.near.unwrap_or(0.0),
+            direct: ray.and_then(|r| r.damage),
+            cadence_ticks: image.min_shot_ticks.max(cadence_ticks),
+            rounds_per_attack: image.magazine.as_ref().map_or(1, |m| m.per_shot),
+            danger,
+        },
+    )
+}
+
+/// What a launcher says about its attack beyond its projectile: how far and
+/// how near it is fought from, a ray's own damage, how often it fires, the
+/// rounds an attack spends and how far past its blast its fragments reach.
+pub(super) struct Reading {
+    pub reach: f32,
+    pub near: f32,
+    pub direct: Option<f32>,
+    pub cadence_ticks: u32,
+    pub rounds_per_attack: u32,
+    pub danger: f32,
+}
+
+/// The attack `p` makes when launched as `delivery`: the one reader of a
+/// projectile's hit, blast, arming and push, for a hand weapon
+/// (`native_capability`) and a vehicle's gun (`vehicle_capability`) alike.
+fn projectile_attack(
+    p: &bri_weapons::ProjectileDef,
+    scale: f32,
+    delivery: Delivery,
+    trigger: Trigger,
+    reading: Reading,
+) -> Result<Capability, DescriptorRequired> {
+    let splash = p.explosion.radius > 0.0 && p.explosion.damage > 0.0;
+    let ray = matches!(delivery, Delivery::Ray);
     let result = Capability {
         family: if splash {
             Family::Splash
@@ -534,22 +577,16 @@ pub fn native_capability(
             Family::Direct
         },
         delivery,
-        trigger: Trigger {
-            hold: using.fire == bri_weapons::BotFire::Hold,
-            charge_on_release: image.charges(),
-        },
-        reach,
-        near: using.near.unwrap_or(0.0),
-        direct_damage: ray
-            .and_then(|r| r.damage)
-            .unwrap_or(p.damage)
-            .clamp(0.0, 100.0)
+        trigger,
+        reach: reading.reach,
+        near: reading.near,
+        direct_damage: reading.direct.unwrap_or(p.damage).clamp(0.0, 100.0)
             * if p.fixed_damage { 1.0 } else { scale },
         splash_damage: p.explosion.damage * scale,
         splash_radius: p.explosion.radius.max(p.explosion.impulse_radius) * scale,
-        danger,
+        danger: reading.danger,
         // A timed throw's arming is part of where it bursts.
-        arm_ticks: if ray.is_some()
+        arm_ticks: if ray
             || !p.ballistic
             || p.explode_player
             || p.explosion.damage == 0.0
@@ -559,8 +596,8 @@ pub fn native_capability(
         } else {
             p.arm_ticks
         },
-        cadence_ticks: image.min_shot_ticks.max(cadence_ticks),
-        rounds_per_attack: image.magazine.as_ref().map_or(1, |m| m.per_shot),
+        cadence_ticks: reading.cadence_ticks,
+        rounds_per_attack: reading.rounds_per_attack,
         push: (p.impulse.max(0.0) * scale, p.vertical.max(0.0) * scale),
     };
     if result.direct_damage <= 0.0 && result.splash_damage <= 0.0 && !result.pushes() {
@@ -570,6 +607,52 @@ pub fn native_capability(
         .validate()
         .map_err(|_| DescriptorRequired::InvalidNativeData)?;
     Ok(result)
+}
+
+/// A vehicle gun's attack: its projectile `p` launched at the gun's
+/// `speed` (a charged gun at full charge), one shot each `cooldown_ticks`,
+/// from a vehicle of `scale`.
+pub fn vehicle_capability(
+    p: &bri_weapons::ProjectileDef,
+    speed: f32,
+    scale: f32,
+    cooldown_ticks: u32,
+    charged: bool,
+    projectiles: &std::collections::BTreeMap<String, bri_weapons::ProjectileDef>,
+) -> Result<Capability, DescriptorRequired> {
+    if p.aura.is_some() {
+        return Err(DescriptorRequired::SecondaryEffects);
+    }
+    if !p.collide_players {
+        return Err(DescriptorRequired::NonActorAttack);
+    }
+    if !scale.is_finite() || !(0.01..=100.0).contains(&scale) || cooldown_ticks == 0 {
+        return Err(DescriptorRequired::InvalidNativeData);
+    }
+    let danger = fragment_reach(p, scale, projectiles)?;
+    let flight = Flight {
+        speed,
+        fall_per_tick: bri_weapons::runtime::fall_per_tick(p),
+        inherit: p.inherit * scale,
+        lifetime_ticks: p.lifetime_ticks,
+    };
+    projectile_attack(
+        p,
+        scale,
+        Delivery::Projectile(flight),
+        Trigger {
+            hold: false,
+            charge_on_release: charged,
+        },
+        Reading {
+            reach: speed * p.lifetime_ticks as f32 / HZ as f32,
+            near: 0.0,
+            direct: None,
+            cadence_ticks: cooldown_ticks,
+            rounds_per_attack: 1,
+            danger,
+        },
+    )
 }
 
 /// How far past its own blast the fragments `p` throws out can hurt: each
@@ -607,25 +690,47 @@ fn fragment_reach(
     Ok(reach)
 }
 
+/// What one attack would do to each side, in health points: the shooter's
+/// prediction of where it goes and what it does there (`harm`). Each body's
+/// share is at most the health it has left.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Harm {
+    pub enemy: f32,
+    pub ally: f32,
+    pub own: f32,
+    /// What its push does to its target, in health: the harm where the
+    /// push would land it, or what knocking it off a contested body is
+    /// worth (`combat::choose`, from `Session::bot_shove`). Counted with the
+    /// enemies' harm; a push's harm to allies is not priced yet (v0.2.7).
+    pub push: f32,
+    /// It is expected to kill an ally: the harm to one ally reaches the
+    /// health that ally has left.
+    pub kills_ally: bool,
+}
+impl Harm {
+    fn finite(self) -> bool {
+        [self.enemy, self.ally, self.own, self.push]
+            .iter()
+            .all(|v| v.is_finite() && *v >= 0.0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Context {
     pub distance: f32,
     pub target_health: f32,
     pub hit_probability: f32,
-    /// Live clearances from predicted impact, including actor bounds and motion.
-    pub self_clearance: f32,
-    pub ally_clearance: Option<f32>,
-    pub blast_margin: f32,
+    /// What the attack would do to each side ([`Harm`]).
+    pub harm: Harm,
+    /// The shooter's own health left: an attack that would take it all is
+    /// no option.
+    pub own_health: f32,
     pub aim: Option<Aim>,
     /// None means unlimited ammo. Some counts currently fireable rounds only.
     pub ready_rounds: Option<u32>,
     /// The adapter's explicit opportunity cost in the same score units.
     pub opportunity_cost: f32,
     pub switch_seconds: f32,
-    /// What its push does to this target, in health: the harm where the
-    /// push would land it, or what knocking it off a contested body is
-    /// worth (`combat::choose`). Added to its own damage.
-    pub push_harm: f32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unsuited {
@@ -634,13 +739,14 @@ pub enum Unsuited {
     Ammo,
     NoIntercept,
     Unarmed,
-    UnsafeBlast,
+    /// It would kill a teammate, or the shooter.
+    Kills,
     NoDamage,
 }
 
 /// What one attack of `weapon` is worth against a body with `health` left,
 /// wherever it is: its capped damage. Where a push sends it is the
-/// shooter's to predict ([`Context::push_harm`]).
+/// shooter's to predict ([`Harm::push`]).
 fn dealt(weapon: Capability, health: f32) -> f32 {
     weapon.damage(1.0).min(health)
 }
@@ -665,6 +771,20 @@ pub fn suitability(weapon: Capability, context: Context) -> Result<f32, Unsuited
     Ok(score)
 }
 
+/// The trade an attack doing `harm` makes for its side, the one rule the
+/// shot chooser, the fire gate and the gauntlet all judge by: what it does
+/// to its enemies (its push's outcome added, the target losing no more than
+/// the `target_health` it has left), less what it does to its own side, one
+/// for one. `None`: no trade at all, it would kill a teammate or the
+/// shooter, with `own_health` left.
+pub fn trade(harm: Harm, target_health: f32, own_health: f32) -> Option<f32> {
+    if harm.kills_ally || (harm.own > 0.0 && harm.own >= own_health) {
+        return None;
+    }
+    let enemy = harm.enemy + harm.push.min((target_health - harm.enemy).max(0.0));
+    Some(enemy - harm.ally - harm.own)
+}
+
 /// [`suitability`]'s two halves: the expected capped damage of one attack,
 /// and the seconds it occupies (its cadence, flight and switch).
 pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuited> {
@@ -673,24 +793,17 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
         context.distance,
         context.target_health,
         context.hit_probability,
-        context.self_clearance,
-        context.blast_margin,
+        context.own_health,
         context.opportunity_cost,
         context.switch_seconds,
-        context.push_harm,
     ])
     .map_err(|_| Unsuited::Invalid)?;
-    if context
-        .ally_clearance
-        .is_some_and(|d| !d.is_finite() || d < 0.0)
+    if !context.harm.finite()
         || context.distance < 0.0
         || context.target_health <= 0.0
         || !(0.0..=1.0).contains(&context.hit_probability)
-        || context.self_clearance < 0.0
-        || context.blast_margin < 0.0
         || context.opportunity_cost < 0.0
         || context.switch_seconds < 0.0
-        || context.push_harm < 0.0
     {
         return Err(Unsuited::Invalid);
     }
@@ -722,20 +835,11 @@ pub fn worth(weapon: Capability, context: Context) -> Result<(f32, f32), Unsuite
     } else {
         0.0
     };
-    if weapon.splash_radius > 0.0 {
-        let safe = weapon.splash_radius + weapon.danger + context.blast_margin;
-        if context.self_clearance <= safe || context.ally_clearance.is_some_and(|d| d <= safe) {
-            return Err(Unsuited::UnsafeBlast);
-        }
-    }
-    // Its own damage and the harm of where its push sends the target
-    // (`Context::push_harm`), together at most what the target has left.
-    let pushed = if weapon.pushes() {
-        context.push_harm
-    } else {
-        0.0
-    };
-    let damage = (weapon.damage(1.0) + pushed).min(context.target_health) * context.hit_probability;
+    // Never a shot expected to kill a teammate, or the shooter itself; else
+    // its trade for its side ([`trade`]), at its chance of landing.
+    let net =
+        trade(context.harm, context.target_health, context.own_health).ok_or(Unsuited::Kills)?;
+    let damage = net * context.hit_probability;
     if damage <= 0.0 {
         return Err(Unsuited::NoDamage);
     }
@@ -1079,26 +1183,37 @@ mod tests {
             distance: 20.0,
             target_health: 100.0,
             hit_probability: 1.0,
-            self_clearance: 20.0,
-            ally_clearance: None,
-            blast_margin: 1.0,
+            harm: Harm {
+                enemy: 20.0,
+                ..Default::default()
+            },
+            own_health: 100.0,
             aim: None,
             ready_rounds: None,
             opportunity_cost: 0.0,
             switch_seconds: 0.0,
-            push_harm: 0.0,
         }
     }
+    /// A candidate whose attack lands on its enemy alone, as its data
+    /// says, unless the context names other harm.
     fn candidate(slot: u8, capability: Capability, context: Context) -> Candidate {
+        let harm = if context.harm.ally > 0.0 || context.harm.own > 0.0 {
+            context.harm
+        } else {
+            Harm {
+                enemy: capability.damage(1.0),
+                ..context.harm
+            }
+        };
         Candidate {
             slot,
             capability,
-            context,
+            context: Context { harm, ..context },
         }
     }
 
     #[test]
-    fn range_ammo_geometry_and_unsafe_blast_are_explicit_rejections() {
+    fn range_ammo_geometry_and_harm_to_its_side_are_explicit_rejections() {
         assert_eq!(
             suitability(
                 ray(),
@@ -1126,27 +1241,35 @@ mod tests {
             splash_damage: 80.0,
             ..ray()
         };
+        let harm = |enemy, ally, own, kills_ally| Context {
+            harm: Harm {
+                enemy,
+                ally,
+                own,
+                push: 0.0,
+                kills_ally,
+            },
+            ..context()
+        };
+        // Its own death, or a teammate's, is never an option.
         assert_eq!(
-            suitability(
-                splash,
-                Context {
-                    self_clearance: 9.0,
-                    ..context()
-                }
-            ),
-            Err(Unsuited::UnsafeBlast)
+            suitability(splash, harm(100.0, 0.0, 100.0, false)),
+            Err(Unsuited::Kills)
         );
         assert_eq!(
-            suitability(
-                splash,
-                Context {
-                    ally_clearance: Some(3.0),
-                    ..context()
-                }
-            ),
-            Err(Unsuited::UnsafeBlast)
+            suitability(splash, harm(100.0, 30.0, 0.0, true)),
+            Err(Unsuited::Kills)
         );
-        assert!(suitability(splash, context()).is_ok());
+        // Harm to its side is traded one for one against its enemies'.
+        assert_eq!(
+            suitability(splash, harm(40.0, 30.0, 10.0, false)),
+            Err(Unsuited::NoDamage)
+        );
+        assert_eq!(
+            worth(splash, harm(60.0, 30.0, 10.0, false)).map(|w| w.0),
+            Ok(20.0)
+        );
+        assert!(suitability(splash, harm(100.0, 0.0, 0.0, false)).is_ok());
     }
 
     #[test]
@@ -1169,7 +1292,6 @@ mod tests {
         };
         let near = Context {
             distance: 2.0,
-            self_clearance: 2.0,
             ..context()
         };
         let scarce = Context {
@@ -1180,7 +1302,19 @@ mod tests {
             select(&[
                 candidate(0, gun, scarce),
                 candidate(1, melee, near),
-                candidate(2, splash, near)
+                // Two units off, its blast would kill the thrower too.
+                candidate(
+                    2,
+                    splash,
+                    Context {
+                        harm: Harm {
+                            enemy: 100.0,
+                            own: 100.0,
+                            ..Default::default()
+                        },
+                        ..near
+                    }
+                )
             ])
             .unwrap()
             .unwrap()
@@ -1198,14 +1332,20 @@ mod tests {
             .slot,
             2
         );
+        // The blast would kill a teammate close by: the gun it is.
         let ally_close = Context {
-            ally_clearance: Some(2.0),
+            harm: Harm {
+                enemy: 100.0,
+                ally: 100.0,
+                kills_ally: true,
+                ..Default::default()
+            },
             ..context()
         };
         assert_eq!(
             select(&[
-                candidate(0, gun, ally_close),
-                candidate(1, melee, ally_close),
+                candidate(0, gun, context()),
+                candidate(1, melee, context()),
                 candidate(2, splash, ally_close)
             ])
             .unwrap()

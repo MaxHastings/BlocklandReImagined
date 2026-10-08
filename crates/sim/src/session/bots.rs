@@ -47,6 +47,7 @@ mod cooldown;
 mod explore;
 mod extras;
 mod fire;
+mod harm;
 use fire::{Hand, Shot};
 #[path = "bots/combat.rs"]
 mod hand_combat;
@@ -110,6 +111,26 @@ pub struct BotThought {
     pub team: BotTeamView,
     /// What the act stage did (`act::Acted::line`).
     pub acted: String,
+    /// What the shot it planned this tick would do (`harm`): to its
+    /// enemies, to its own side, and whether it would kill a teammate.
+    pub planned: Option<BotPlannedHarm>,
+    /// What the fire gate last said of a press of its trigger, and the
+    /// tick: allowed as planned, refused and why, or a press no plan made
+    /// (`hand_combat::validate_unplanned`).
+    pub gate: Option<(u64, &'static str)>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BotPlannedHarm {
+    pub enemy: f32,
+    pub ally: f32,
+    pub own: f32,
+    /// What its push does to its target (`Harm::push`).
+    pub push: f32,
+    pub kills_ally: bool,
+    /// The trade it makes for its side, by the rule the chooser and the
+    /// fire gate use (`tactics::trade`); `None` when it would kill a
+    /// teammate or the shooter.
+    pub net: Option<f32>,
 }
 #[derive(Clone, Debug)]
 pub struct BotObjectiveDetail {
@@ -390,6 +411,8 @@ struct Brain {
     objective: objectives::State,
     combat: hand_combat::State,
     native_combat_tick: Option<u64>,
+    /// What the fire gate last said of a press of its trigger, and when.
+    gate: Option<(u64, &'static str)>,
     /// The selected objective owns the ordinary hand trigger this tick.
     objective_tool: bool,
     /// Actual damage evidence can interrupt a noncombat goal. Merely seeing
@@ -593,6 +616,7 @@ impl Brain {
             objective: objectives::State::default(),
             combat: hand_combat::State::default(),
             native_combat_tick: None,
+            gate: None,
             objective_tool: false,
             objective_threat: None,
             spot: None,
@@ -793,11 +817,6 @@ struct Weapon {
 const SPREAD_BODY: f32 = 3.5;
 /// The nearest a scattering weapon's band ends, however wide its spread.
 const SPREAD_MIN_FAR: f32 = 3.0;
-/// The share of a scattering projectile's spread kept clear of allies: it
-/// lands across the cone, rarely at the edge. A shot of several pellets
-/// keeps the whole cone clear (`fire::clear_cone`): one of them may fly
-/// at the edge.
-const SPREAD_CLEAR: f32 = 0.6;
 /// How far above the feet a splash weapon aims.
 const FEET_AIM: f32 = 0.2;
 /// The share of its reach a melee weapon swings from: inside it, so a
@@ -820,9 +839,7 @@ const RANGED_NEAR_SHARE: f32 = 0.75;
 /// than a scattering one (which needs to close in to land its spread).
 const BAND_ROOM: f32 = 4.0;
 const SPREAD_BAND_ROOM: f32 = 2.0;
-/// Room kept past a weapon's own blast so a near miss does not catch its
-/// holder, and the least standoff for any ranged weapon.
-const BLAST_CLEARANCE: f32 = 3.0;
+/// The least standoff for any ranged weapon.
 const MIN_STANDOFF: f32 = 5.0;
 /// An attack that reaches less than this is a swing or a stab, fought up
 /// close, whatever its image says.
@@ -832,9 +849,11 @@ const MELEE_REACH_LIMIT: f32 = 6.0;
 const MELEE_DEFAULT_REACH: f32 = 3.0;
 impl Weapon {
     /// The nearest a ranged weapon with this blast is fought from, when its
-    /// data does not say.
+    /// data does not say: outside the blast on its target. Whether a shot
+    /// from nearer, or one that goes off short, would hurt its holder is
+    /// each shot's own judgement (`harm::shot_harm`).
     fn standoff(splash: f32) -> f32 {
-        (splash + BLAST_CLEARANCE).max(MIN_STANDOFF)
+        splash.max(MIN_STANDOFF)
     }
     /// Closest and farthest it likes to fight from.
     fn band(&self) -> (f32, f32) {
@@ -1377,6 +1396,11 @@ impl Session {
         // A body's hit pulls no trigger. Native hand charge releases are
         // authorized only on its fair Ready turn and then validated postmove.
         let mut fire = fire && bite.is_none();
+        // A gun seat fires the shot the chooser planned and found worth it
+        // to its side (`hand_combat::choose`), as a hand weapon does.
+        if vehicle_weapon {
+            fire &= matches!(native, hand_combat::Decision::Ready(_));
+        }
         let mut desired_down = fire && !pulse;
         let last_down = brain.fire_down;
         // A wind-up off target for a tick is kept while its target still
@@ -1407,7 +1431,7 @@ impl Session {
                 });
         desired_down |= winding;
         let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down && !winding;
-        if !matches!(native, hand_combat::Decision::Unsupported) {
+        if !vehicle_weapon && !matches!(native, hand_combat::Decision::Unsupported) {
             if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
                 let tracking_charge =
                     charged_control::keeps_wind_up(last_down, image, native_choice.is_some());

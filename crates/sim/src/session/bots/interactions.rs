@@ -107,22 +107,20 @@ pub(super) struct Opportunity {
 }
 
 /// The space a shot from `origin` at `target` sweeps: on `past` beyond,
-/// `splash` wide, widening by `spread` radians; none for a shot too short
-/// to judge (`Session::bot_fire_clear`).
+/// `radius` wide; none for a shot too short to judge.
 pub(super) fn shot_space(
     origin: Vec3,
     target: Vec3,
-    splash: f32,
+    radius: f32,
     past: f32,
-    spread: f32,
 ) -> Option<super::claims::Space> {
     let delta = target - origin;
     let length = delta.length();
     (length >= 0.01).then(|| super::claims::Space {
         from: origin,
         to: origin + delta / length * (length + past),
-        radius: splash,
-        spread: spread.tan(),
+        radius,
+        spread: 0.0,
     })
 }
 
@@ -919,6 +917,54 @@ impl Session {
             * state.scale.max(1.0);
         Some(impact * impact / (2.0 * gravity))
     }
+    /// The live projectiles whose blast would reach a body of `bot`'s
+    /// standing at `feet` (grown by its half width) and could hurt it (its
+    /// own, an ally's or an enemy's; `Session::can_damage_player`): a
+    /// grenade lying where it waits to go off. One flying off away from it
+    /// is not waiting for it.
+    fn bot_live_blasts(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+    ) -> impl Iterator<Item = Vec3> + '_ {
+        let centre = feet + Vec3::Y * body.height * 0.5;
+        let width = body.width;
+        self.weapons.projectiles().filter_map(move |p| {
+            let d = self.weapons.pack.projectiles.get(&p.definition)?;
+            let reach = d.explosion.radius * p.scale + width * 0.5;
+            (d.explosion.damage > 0.0
+                && p.velocity.dot(p.position - centre) <= 0.0
+                && centre.distance(p.position) < reach
+                && self.can_damage_player(p.source.0, bot, true))
+            .then_some(p.position)
+        })
+    }
+    /// Where a step along `toward` from `feet` goes about live blasts
+    /// (`bot_live_blasts`): `None` when it takes `bot` into one or nearer
+    /// one it is in; else the walk, turned straight out of the nearest it
+    /// stands in, so it gets clear before it goes off.
+    pub(super) fn bot_blast_walk(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        toward: Vec3,
+    ) -> Option<Vec3> {
+        let next = feet + toward * body.width;
+        let centre = |f: Vec3| f + Vec3::Y * body.height * 0.5;
+        if let Some(at) = self.bot_live_blasts(bot, feet, body).min_by(|a, b| {
+            a.distance(centre(feet))
+                .total_cmp(&b.distance(centre(feet)))
+        }) {
+            let away = flat(centre(feet) - at).normalize_or_zero();
+            return Some(if toward.dot(away) > 0.0 { toward } else { away });
+        }
+        self.bot_live_blasts(bot, next, body)
+            .next()
+            .is_none()
+            .then_some(toward)
+    }
     pub(super) fn bot_fall_ahead(
         &self,
         bot: OwnerId,
@@ -1252,34 +1298,6 @@ impl Session {
             Vec3::from(v.transform.position)
                 + glam::Quat::from_array(v.transform.rotation) * local * v.scale,
         )
-    }
-
-    /// No ally stands in the line of fire from `origin` to `target`, nor
-    /// within `past` beyond the target, where a miss carries on. The line
-    /// widens by `spread` radians, how far off its aim may send the shot.
-    pub(super) fn bot_fire_clear(
-        &self,
-        bot: OwnerId,
-        origin: Vec3,
-        target: Vec3,
-        splash: f32,
-        past: f32,
-        spread: f32,
-    ) -> bool {
-        let Some(space) = shot_space(origin, target, splash, past, spread) else {
-            return false;
-        };
-        let mount = self.mounted(bot).map(|(v, _)| v);
-        // The cheap geometry first: the side is looked up only for a body
-        // in the way.
-        !self.peers.iter().any(|(o, p)| {
-            let half = p.player.tuning().stand_height * 0.5;
-            *o != bot
-                && p.combat.alive
-                && space.holds(Vec3::from(p.player.state().feet) + Vec3::Y * half, half)
-                && !(mount.is_some() && mount == self.mounted(*o).map(|(v, _)| v))
-                && self.bot_allies(bot, *o)
-        })
     }
 
     pub(super) fn bot_vehicle_body(&self, bot: OwnerId) -> Option<(Vec3, Body)> {

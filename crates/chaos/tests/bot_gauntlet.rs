@@ -199,6 +199,11 @@ fn sane(r: &Report) {
         r.name,
         r.per_bot_minute(r.switches)
     );
+    assert_eq!(
+        r.bad_plans, 0,
+        "{}: no planned shot hurts its side as much as its enemies or kills a teammate",
+        r.name
+    );
 }
 
 #[test]
@@ -214,7 +219,8 @@ fn deathmatch_open_field() {
     // With human aim (`perception`) and dodge hops (`extras`) 41 kills
     // where nearly every shot landing gave 69; 40 is still a fight.
     assert!(r.kills > 0, "a real fight: {}", r.kills);
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    r.each_side_hurts_its_own_less().unwrap();
     sane(&r);
 }
 
@@ -253,7 +259,8 @@ fn deathmatch_mixed_arsenal() {
     assert!(r.kills > 0, "a real fight: {}", r.kills);
     sane(&r);
     assert_eq!(r.self_kills, 0, "no bot blew itself up");
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 #[test]
@@ -275,7 +282,71 @@ fn rooftop_brawl_without_rails() {
     // Its own doing only: an enemy's shot that knocks it off is a shove
     // that worked (`knocked_off`, printed above).
     assert_eq!(r.fell, 0, "no bot strafed off the deck");
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    r.each_side_hurts_its_own_less().unwrap();
+}
+
+/// Push brooms only, on a deck high enough that a fall from it kills, one
+/// side with its back to the edge: a push is the one attack, worth the fall
+/// it sends its target into. Over three seeds, pushes the bots plan with
+/// worth (read from their readout) are fired (the acceptance run once saw
+/// no push fired at all). How many knock an enemy off is printed: the edge
+/// side steps in off its edge within a second, and from then on a push
+/// lands its target on the deck, worth nothing, so few are planned; that a
+/// planned push knocks its target off is `shove`'s
+/// `a_push_only_weapon_at_an_enemy_by_a_drop_is_worth_firing_and_fires`.
+/// Lining a push up is v0.2.7.
+#[test]
+fn push_brooms_on_a_high_deck() {
+    let (mut planned, mut fired, mut lapsed, mut off) = (0, 0, 0, 0);
+    let mut refused: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut unplanned: BTreeMap<&str, u64> = BTreeMap::new();
+    for seed in 0..3 {
+        let r = gauntlet::tuning::with_seed(seed, broom_deck);
+        assert_eq!(r.team_kills, 0, "seed {seed}: no bot kills a teammate");
+        r.each_side_hurts_its_own_less().unwrap();
+        planned += r.push_planned;
+        fired += r.planned_push_fired;
+        lapsed += r.push_lapsed;
+        off += r.knocked_off;
+        for (why, n) in &r.push_refused {
+            *refused.entry(why).or_default() += n;
+        }
+        for (why, n) in &r.push_unplanned {
+            *unplanned.entry(why).or_default() += n;
+        }
+    }
+    let refusals: u64 = refused.values().sum();
+    eprintln!(
+        "push brooms: {planned} planned with worth: {fired} fired, refused {refused:?},          {lapsed} lapsed; unplanned pushes {unplanned:?}; {off} knocked off"
+    );
+    assert!(planned > 0, "pushes planned with worth: {planned}");
+    // Every plan ends one way; a plan still open when the match ends is
+    // the only one not counted.
+    assert!(
+        planned >= fired + refusals + lapsed && planned <= fired + refusals + lapsed + 6,
+        "every plan accounted for"
+    );
+    assert!(
+        unplanned.is_empty(),
+        "every push fired was planned with worth: {unplanned:?}"
+    );
+}
+
+fn broom_deck() -> Report {
+    const TOP: f32 = 23.0;
+    let mut spec = Spec::new(
+        "push_brooms_on_a_high_deck",
+        // One side with its back to the deck's -x edge (at x = -79), the
+        // other a few steps in front of it.
+        line(-78.3, TOP, 48.0, 3),
+        line(-74.0, TOP, 48.0, 3),
+        &[bri_weapons::testing::BROOM_ITEM],
+    );
+    spec.bricks = floor(Vec3::new(-79.0, 0.0, 40.0), [3, 2], TOP);
+    spec.settings.falling_damage = true;
+    spec.settings.player_type = NO_JETS.into();
+    battle(spec, |_| {}).play(TOP, 60, |_, _| {})
 }
 
 /// A staircase of `steps` bricks rising `rise` each toward +x from `at`.
@@ -534,7 +605,8 @@ fn zombie_survival() {
         r.kills
     );
     sane(&r);
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 #[test]
@@ -549,7 +621,8 @@ fn capture_the_flag() {
     sane(&r);
     let caps = r.progress["captures_side0"] + r.progress["captures_side1"];
     assert!(caps > 0, "flags were run home: {:?}", r.progress);
-    assert_eq!(r.team_kills + r.at_ally, 0, "no fire on its own side");
+    assert_eq!(r.team_kills, 0, "no bot kills a teammate");
+    r.each_side_hurts_its_own_less().unwrap();
 }
 
 /// Runners and nothing else: no weapon and no fighting, each side's flag
@@ -914,6 +987,23 @@ fn off_switches() {
 #[ignore = "tuning tool: slow"]
 fn dial_sweep() {
     eprintln!("{}", gauntlet::tuning::sweep(SCENARIOS));
+}
+
+/// Over seeds, no bot plans a shot that hurts its side as much as its
+/// enemies, or that would kill a teammate (`sane`), with every kind of
+/// weapon in hand.
+#[test]
+fn no_planned_shot_trades_its_side_for_less_over_seeds() {
+    use gauntlet::tuning::{Setting, run_all};
+    let plain = [Setting {
+        label: "plain".into(),
+        dials: Vec::new(),
+    }];
+    let runs = run_all(&[("mixed", deathmatch_mixed_arsenal)], &plain, 3);
+    assert_eq!(runs.len(), 3);
+    for (_, _, seed, m) in &runs {
+        assert!(m.broken.is_none(), "seed {seed}: {:?}", m.broken);
+    }
 }
 
 /// The tools' plumbing: a dial set for a run reaches the kinds its

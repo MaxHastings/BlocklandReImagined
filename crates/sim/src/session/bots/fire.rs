@@ -5,10 +5,11 @@ use super::*;
 /// A shot at the bot's target as it stands now ([`Session::bot_shot`]).
 pub(super) struct Shot {
     pub crew_ready: bool,
-    /// No ally in the line (a miss's spread included).
+    /// No body has stepped into what the planned shot sweeps since it was
+    /// planned (`harm::Shape`).
     pub attack_clear: bool,
-    /// Where it will hit, for its side to keep out of (`team`).
-    pub harm: Option<claims::Space>,
+    /// What it will sweep, for its side to keep out of (`team`).
+    pub harm: Option<claims::Harmed>,
     pub mounted_charging: bool,
     pub charged_ready: bool,
     pub target_velocity: Vec3,
@@ -25,6 +26,10 @@ pub(super) struct Hand {
     pub weapon: Option<Weapon>,
 }
 
+/// How wide a shot's way is kept clear for its side (`team`): a bullet's
+/// width and a little.
+const BULLET_WIDTH: f32 = 0.3;
+
 impl Session {
     /// What a shot at `target` would be now: whether the crew is ready,
     /// whether it is clear of its own side (a miss included), where it
@@ -39,42 +44,61 @@ impl Session {
         tick: u64,
     ) -> Shot {
         let crew_ready = self.bot_crew_ready(bot, tick);
-        // A ranged shot that misses carries on to its reach, and goes as
-        // far off as its aim errs now.
         let ranged = weapon.is_some_and(|w| !w.melee);
-        let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
-        // A scattering weapon's shot also fans out by its spread: allies
-        // inside that cone are in the line of fire too.
-        let pellets = self
-            .weapons
-            .image_state(ActorId(bot), 0)
-            .and_then(|(image, _)| image.shot.as_ref().map(|s| s.projectiles))
-            .unwrap_or(1);
-        let aim_off =
-            yaw_error.hypot(pitch_error) + weapon.map_or(0.0, |w| clear_cone(w.spread, pellets));
-        let attack_clear = target.is_none_or(|seen| {
-            self.bot_fire_clear(
-                bot,
-                eye,
-                seen.aim,
-                weapon.map_or(0.0, |w| w.splash),
-                weapon
-                    .filter(|_| ranged)
-                    .map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0)),
-                if ranged { aim_off } else { 0.0 },
-            )
+        // What the shot sweeps: the plan's (`harm`), else, for a weapon the
+        // shot chooser does not plan (a mount's gun, a script's), the line
+        // to its target and its blast there.
+        let shape = target.filter(|_| ranged).map(|seen| {
+            self.bots.brains[&bot]
+                .combat
+                .intent(tick)
+                .filter(|i| i.seen.owner == seen.owner && !i.shape.chords.is_empty())
+                .map_or_else(
+                    || harm::Shape {
+                        chords: vec![harm::Chord {
+                            from: eye,
+                            to: seen.aim,
+                            seconds: 0.0,
+                        }],
+                        burst: weapon
+                            .filter(|w| w.splash > 0.0)
+                            .map(|w| (seen.aim, w.splash)),
+                        priced: vec![seen.owner],
+                    },
+                    |i| i.shape,
+                )
         });
-        // Where its weapon will hit, for its side to keep out of (`team`):
-        // the line the clear-fire check above holds fire for.
-        let harm = target.filter(|_| ranged).map(|seen| {
-            let to = seen.aim;
-            let past = weapon.map_or(0.0, |w| (w.reach - eye.distance(seen.eye)).max(0.0));
-            claims::Space {
-                from: eye,
-                to: to + (to - eye).normalize_or_zero() * past,
-                radius: weapon.map_or(0.0, |w| w.splash).max(0.3),
-                spread: aim_off.tan(),
-            }
+        // Fired only while no body the plan did not count has stepped into
+        // it, the way widened by how far the aim may have wandered since.
+        let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
+        let wander = yaw_error.hypot(pitch_error).tan();
+        let mount = |o: OwnerId| self.mounted(o).map(|(v, _)| v);
+        let attack_clear = shape.as_ref().is_none_or(|shape| {
+            !self.peers.iter().any(|(o, p)| {
+                *o != bot
+                    && p.combat.alive
+                    && !shape.priced.contains(o)
+                    && (mount(*o).is_none() || mount(*o) != mount(bot))
+                    && shape.holds(
+                        Vec3::from(p.player.state().feet)
+                            + Vec3::Y * p.player.tuning().stand_height * 0.5,
+                        p.player.tuning().stand_height * 0.5,
+                        wander,
+                    )
+            })
+        });
+        // What it will sweep, for its side to keep out of (`team`).
+        let harm = shape.and_then(|shape| {
+            let end = shape.end()?;
+            Some(claims::Harmed {
+                way: interactions::shot_space(eye, end, BULLET_WIDTH, 0.0)?,
+                burst: shape.burst.map(|(at, radius)| claims::Space {
+                    from: at,
+                    to: at,
+                    radius,
+                    spread: 0.0,
+                }),
+            })
         });
         let mounted_charging = self
             .mounted(bot)
@@ -152,7 +176,9 @@ impl Session {
             hand_combat::Decision::Ready(c) | hand_combat::Decision::Charging(c) => Some(*c),
             _ => None,
         };
+        // A gun seat's shot is not a hand weapon's: no hand fire gate.
         let native_gate = !hold_sequence
+            && !self.vehicles.weapon_seat(bot)
             && (!matches!(native, hand_combat::Decision::Unsupported)
                 || (target.is_none() && self.bots.brains[&bot].native_combat_tick.is_some()));
         self.bots.brains.get_mut(&bot).unwrap().native_combat_tick = native_gate.then_some(tick);
@@ -305,34 +331,47 @@ impl Session {
             spread,
         })
     }
-    /// Supported inventory intent is checked at the actual post-movement
-    /// launch frame. None preserves existing package/mounted executors.
+    /// A bot's press of its trigger, checked at the actual post-movement
+    /// launch frame: a planned shot as it was planned
+    /// (`hand_combat::validate_intent`); a press no plan made (an
+    /// objective's tool controls, a goof's click) of an attack it reads, as
+    /// one that must do its own side no harm
+    /// (`hand_combat::validate_unplanned`). None for a press of a tool that
+    /// is no attack (package and mounted executors keep their own).
     pub(in crate::session) fn bot_hand_fire_gate(
         &mut self,
         bot: OwnerId,
         direction: Vec3,
         tick: u64,
+        pressing: bool,
     ) -> Option<FireAdmission> {
         let brain = self.bots.brains.get(&bot)?;
         let plan_tick = tick.checked_sub(1)?;
-        if brain.native_combat_tick != Some(plan_tick) {
-            return None;
-        }
-        let intent = brain.combat.intent(plan_tick);
-        // Judged where it believes it aims: its aim error misses for real.
-        // The miss itself must still spare its side.
-        let actual = direction;
-        let direction = perception::believed(&brain.kind.perception, direction, brain.error);
-        let mut budget = std::mem::take(&mut self.bots.combat_budget);
-        let allowed = intent.as_ref().map_or(FireAdmission::Abort, |intent| {
-            hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
-        });
-        self.bots.combat_budget = budget;
-        if allowed == FireAdmission::Allow
-            && actual != direction
-            && !self.bot_miss_spares_allies(bot, actual)
-        {
-            return Some(FireAdmission::Abort);
+        let (allowed, why) = if brain.native_combat_tick != Some(plan_tick) {
+            if !pressing {
+                return None;
+            }
+            match hand_combat::validate_unplanned(self, bot, direction)? {
+                true => (FireAdmission::Allow, "unplanned, harmless to its side"),
+                false => (FireAdmission::Abort, "unplanned, would hurt its side"),
+            }
+        } else {
+            let intent = brain.combat.intent(plan_tick);
+            // Judged where it believes it aims: its aim error misses for
+            // real (the harm check prices that miss,
+            // `hand_combat::validate_fire`).
+            let direction = perception::believed(&brain.kind.perception, direction, brain.error);
+            let mut budget = std::mem::take(&mut self.bots.combat_budget);
+            let judged = intent
+                .as_ref()
+                .map_or((FireAdmission::Abort, "no plan"), |intent| {
+                    hand_combat::validate_intent(self, bot, intent, direction, &mut budget)
+                });
+            self.bots.combat_budget = budget;
+            judged
+        };
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.gate = Some((tick, why));
         }
         Some(allowed)
     }
@@ -476,19 +515,6 @@ impl Session {
     }
 }
 
-/// How far off its aim a shot of `pellets` with `spread` may land an ally
-/// it must spare, in radians: most of the cone for one projectile, all of
-/// it for several, since one of them may fly at its edge. Each pellet
-/// turns by up to the spread about each axis, so the edge is on the
-/// diagonal, √2 of the spread off the line.
-pub(super) fn clear_cone(spread: f32, pellets: u32) -> f32 {
-    if pellets > 1 {
-        spread * std::f32::consts::SQRT_2
-    } else {
-        spread * SPREAD_CLEAR
-    }
-}
-
 /// v20's `%spread`: each projectile turns by up to 5π·spread about each
 /// axis, in radians.
 pub(super) fn image_spread(image: &bri_weapons::Image) -> f32 {
@@ -497,46 +523,4 @@ pub(super) fn image_spread(image: &bri_weapons::Image) -> f32 {
         .as_ref()
         .filter(|s| s.spread > 0.0)
         .map_or(0.0, |s| (5.0 * std::f32::consts::PI * s.spread).min(1.4))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_shot_of_several_pellets_holds_fire_for_an_ally_inside_its_outer_spread() {
-        let spread: f32 = 0.2;
-        let (origin, target) = (Vec3::ZERO, Vec3::Z * 20.0);
-        // An ally ten units out, off the line by 0.8 of the spread's angle:
-        // past most of the cone, inside all of it.
-        let ally = Vec3::new((0.8 * spread).tan() * 10.0, 0.0, 10.0);
-        let in_line = |pellets| {
-            super::super::interactions::shot_space(
-                origin,
-                target,
-                0.0,
-                0.0,
-                clear_cone(spread, pellets),
-            )
-            .unwrap()
-            .holds(ally, 0.0)
-        };
-        assert!(in_line(6), "six pellets: one may fly at the edge");
-        assert!(!in_line(1), "one projectile rarely lands at the edge");
-    }
-
-    #[test]
-    fn a_shot_of_several_pellets_holds_fire_for_an_ally_on_its_spread_diagonal() {
-        let spread: f32 = 0.2;
-        let (origin, target) = (Vec3::ZERO, Vec3::Z * 20.0);
-        // Turned by 0.85 of the spread about both axes: 1.2 of it off the
-        // line, past a cone of the spread itself.
-        let off = (0.85 * spread).tan() * 10.0;
-        let ally = Vec3::new(off, off, 10.0);
-        let held =
-            super::super::interactions::shot_space(origin, target, 0.0, 0.0, clear_cone(spread, 6))
-                .unwrap()
-                .holds(ally, 0.0);
-        assert!(held, "a pellet turned about both axes may fly there");
-    }
 }

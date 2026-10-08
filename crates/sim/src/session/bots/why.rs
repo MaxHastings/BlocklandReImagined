@@ -157,6 +157,27 @@ impl Session {
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
                 acted: b.acted.line(),
+                // Planned in the step that led here: bots plan before the
+                // simulation's tick advances.
+                planned: b
+                    .combat
+                    .intent(tick)
+                    .or_else(|| b.combat.intent(tick.saturating_sub(1)))
+                    .map(|i| BotPlannedHarm {
+                        enemy: i.choice.harm.enemy,
+                        ally: i.choice.harm.ally,
+                        own: i.choice.harm.own,
+                        push: i.choice.harm.push,
+                        kills_ally: i.choice.harm.kills_ally,
+                        net: super::tactics::trade(
+                            i.choice.harm,
+                            self.peers
+                                .get(&i.seen.owner)
+                                .map_or(0.0, |p| p.combat.health.max(1.0)),
+                            self.peers.get(bot).map_or(0.0, |p| p.combat.health),
+                        ),
+                    }),
+                gate: b.gate,
             })
             .collect()
     }
@@ -218,6 +239,8 @@ mod tests {
             noticed: None,
             team: Default::default(),
             acted: "Acts: walk route, look route, trigger none".into(),
+            planned: None,
+            gate: None,
             surprise: BotSurpriseView {
                 strength: 0.6,
                 gate: None,

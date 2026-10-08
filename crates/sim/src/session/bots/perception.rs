@@ -84,10 +84,6 @@ const STEADY_LAG: f32 = 0.5;
 /// 0.3 a close strafer drew shots more than 25 degrees off it (the
 /// gauntlet's off-target bar).
 const STEADY_MOST: f32 = 0.3;
-/// How far ahead, and how near its line, a shot's actual path is checked
-/// for allies (`Session::bot_miss_spares_allies`).
-const MISS_REACH: f32 = 60.0;
-const MISS_CLEARANCE: f32 = 1.2;
 /// Seconds the starting aim error takes to narrow (`bots.rs`' tracking).
 const SETTLE_SECONDS: f32 = 2.0;
 /// A reaction delay varies by up to this share either way.
@@ -668,26 +664,6 @@ impl Brain {
     }
 }
 impl Session {
-    /// Whether a shot from `bot`'s eye along `direction` (where its aim
-    /// actually points, error and all) passes no living ally's body within
-    /// `MISS_REACH`: the fire gate judges the shot where the bot believes
-    /// it aims, and a miss must not go into its own side.
-    pub(super) fn bot_miss_spares_allies(&self, bot: OwnerId, direction: Vec3) -> bool {
-        let Some(me) = self.peers.get(&bot) else {
-            return false;
-        };
-        let (origin, direction) = (me.player.eye(), direction.normalize_or_zero());
-        !self.peers.iter().any(|(o, p)| {
-            if *o == bot || !p.combat.alive {
-                return false;
-            }
-            let centre = Vec3::from(p.player.state().feet) + Vec3::Y;
-            let along = (centre - origin).dot(direction);
-            (0.0..MISS_REACH).contains(&along)
-                && (centre - origin - direction * along).length() < MISS_CLEARANCE
-                && self.bot_allies(bot, *o)
-        })
-    }
     /// Where `bot` glances this tick (`State::glance`). `eligible` is the
     /// caller's: idle, nothing in sight, no objective, nothing held, not
     /// seated or driving.

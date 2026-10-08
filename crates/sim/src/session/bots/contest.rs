@@ -109,19 +109,30 @@ pub(super) fn contested(session: &Session, bot: OwnerId, object: ObjectRef) -> b
 pub(super) const CONTEST_SHOVE_WORTH: f32 = 10.0;
 
 /// [`CONTEST_SHOVE_WORTH`] while `target` contests the body `bot`'s
-/// objective works (moving it, or claiming it), else nothing.
+/// objective works (moving it, or claiming it) from within [`ENGAGE`] of
+/// it, else nothing: a claimant off fighting elsewhere is not knocked off
+/// the body by a push where it stands.
 pub(super) fn shove_worth(session: &Session, bot: OwnerId, target: OwnerId) -> f32 {
     let Some(vehicle) = session.bots.brains.get(&bot).and_then(|b| b.contest_body) else {
         return 0.0;
     };
+    let object = ObjectRef::Vehicle(vehicle);
+    let at_the_body = session
+        .peers
+        .get(&target)
+        .zip(session.object_centre(object))
+        .is_some_and(|(p, centre)| {
+            flat(Vec3::from(p.player.state().feet) - centre).length() <= ENGAGE
+        });
     let tick = session.simulation.state().tick;
-    let moving = session.mover_credit(ObjectRef::Vehicle(vehicle)) == Some(target);
-    if moving
-        || session
-            .bots
-            .claims
-            .claimants_on(vehicle, tick)
-            .any(|o| o == target)
+    let moving = session.mover_credit(object) == Some(target);
+    if at_the_body
+        && (moving
+            || session
+                .bots
+                .claims
+                .claimants_on(vehicle, tick)
+                .any(|o| o == target))
     {
         CONTEST_SHOVE_WORTH
     } else {

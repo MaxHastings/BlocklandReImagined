@@ -427,10 +427,34 @@ pub struct Report {
     /// they last stood on something (a shove that worked).
     pub knocked_off: u64,
     pub shots: u64,
+    /// Bots' launches of projectiles that only push (a shove, a push
+    /// broom): no damage of their own.
+    pub push_fired: u64,
+    /// Pushes a bot planned with worth (`BotPlannedHarm::push` > 0, a
+    /// trade its side takes), and of those, the ones it launched.
+    pub push_planned: u64,
+    /// How each such plan ended at the fire gate: its press allowed as
+    /// planned (`planned_push_fired`), refused (by the gate's reason), or
+    /// lapsed (the plan went with no press: the target out of reach, say).
+    pub planned_push_fired: u64,
+    pub push_refused: BTreeMap<&'static str, u64>,
+    pub push_lapsed: u64,
+    /// Push launches not from a press the gate allowed as planned, by what
+    /// the gate last said of the bot's presses ("not gated": nothing).
+    pub push_unplanned: BTreeMap<&'static str, u64>,
     /// Shots more than 25 degrees off the shooter's visible target.
     pub off_target: u64,
     /// Shots whose line passes nearest an ally.
     pub at_ally: u64,
+    /// Health each side's players took from their own side, and from the
+    /// other sides, over the match.
+    pub team_damage: f32,
+    pub enemy_damage: f32,
+    /// The same by the side that did it: (to its own side, to the others).
+    pub damage_by_side: BTreeMap<u32, (f32, f32)>,
+    /// Bot ticks with a planned shot that would hurt its own side as much
+    /// as its enemies, or kill a teammate (`BotThought::planned`).
+    pub bad_plans: u64,
     /// Scenario-specific progress (captures, laps, goals).
     pub progress: BTreeMap<String, i64>,
     /// Bots seen at least once.
@@ -470,6 +494,20 @@ pub struct Report {
 }
 
 impl Report {
+    /// Each side that hurt its own side hurt its enemies more.
+    pub fn each_side_hurts_its_own_less(&self) -> Result<(), String> {
+        match self
+            .damage_by_side
+            .iter()
+            .find(|(_, (own, enemy))| *own > 0.0 && own >= enemy)
+        {
+            Some((side, (own, enemy))) => Err(format!(
+                "{}: side {side} hurt its own {own} and its enemies {enemy}",
+                self.name
+            )),
+            None => Ok(()),
+        }
+    }
     pub fn share(&self, ticks: u64) -> f32 {
         ticks as f32 / self.bot_ticks.max(1) as f32
     }
@@ -483,7 +521,7 @@ impl Report {
         eprintln!(
             "GAUNTLET {}: bots={} bot-min={:.1} stuck={:.1}% idle={:.1}% circling={:.1}% \
              switches/min={:.1} reversals/min={:.1} clumped={:.1}% kills={} team_kills={} \
-             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} off_target={} at_ally={} \
+             self_kills={} accidents={} fell={} knocked_off={} deaths={} shots={} push_fired={} push_planned={} planned_push_fired={} off_target={} at_ally={}              team_damage={:.0} enemy_damage={:.0} \
              progress={:?}",
             self.name,
             self.bots,
@@ -502,8 +540,13 @@ impl Report {
             self.knocked_off,
             self.deaths,
             self.shots,
+            self.push_fired,
+            self.push_planned,
+            self.planned_push_fired,
             self.off_target,
             self.at_ally,
+            self.team_damage,
+            self.enemy_damage,
             self.progress
         );
         let mut top: Vec<_> = self.transitions.iter().collect();
@@ -567,8 +610,18 @@ pub struct Scorer {
     seen_shots: BTreeSet<u64>,
     /// Projectiles that hurt nothing (a can's paint): not shots.
     harmless: BTreeSet<String>,
+    /// Of those, the ones that push a player.
+    pushers: BTreeSet<String>,
+    /// Each bot's open push planned with worth: the tick it was first and
+    /// last planned.
+    push_plans: BTreeMap<OwnerId, (u64, u64)>,
+    /// Bots whose press the gate allowed as planned, not yet launched (a
+    /// swing launches some ticks after its press).
+    allowed_press: BTreeSet<OwnerId>,
     seen_deaths: usize,
     last_death_tick: u64,
+    /// Damage results already counted: those at or before this tick.
+    last_damage_tick: Option<u64>,
     /// Floor height: under `floor - 2` is fallen.
     floor: f32,
     seen: BTreeSet<OwnerId>,
@@ -597,8 +650,23 @@ impl Scorer {
                 .filter(|p| p.damage <= 0.0 && p.explosion.damage <= 0.0)
                 .map(|p| p.id)
                 .collect(),
+            push_plans: BTreeMap::new(),
+            allowed_press: BTreeSet::new(),
+            pushers: fixture::synthetic_weapons()
+                .unwrap()
+                .0
+                .projectiles
+                .into_values()
+                .filter(|p| {
+                    p.damage <= 0.0
+                        && p.explosion.damage <= 0.0
+                        && (p.impulse > 0.0 || p.vertical > 0.0)
+                })
+                .map(|p| p.id)
+                .collect(),
             seen_deaths: 0,
             last_death_tick: 0,
+            last_damage_tick: None,
             floor,
             seen: BTreeSet::new(),
             picks: BTreeSet::new(),
@@ -625,6 +693,43 @@ impl Scorer {
         let thoughts: BTreeMap<OwnerId, bri_sim::session::BotThought> =
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
+        for t in thoughts.values() {
+            // A push planned with worth: a new one unless it was planned
+            // a tick ago too.
+            if t.planned
+                .is_some_and(|p| p.push > 0.0 && p.net.is_some_and(|n| n > 0.0))
+            {
+                let plan = self.push_plans.entry(t.bot).or_insert_with(|| {
+                    self.report.push_planned += 1;
+                    (tick, tick)
+                });
+                plan.1 = tick;
+            }
+            // The gate's say on a press this tick: an open plan ends at its
+            // first verdict.
+            if let Some((_, why)) = t.gate.filter(|(at, _)| *at == tick) {
+                if why == "planned shot" {
+                    self.allowed_press.insert(t.bot);
+                }
+                if let Some((start, _)) = self.push_plans.get(&t.bot).copied()
+                    && start < tick
+                {
+                    self.push_plans.remove(&t.bot);
+                    if why == "planned shot" {
+                        self.report.planned_push_fired += 1;
+                    } else {
+                        *self.report.push_refused.entry(why).or_default() += 1;
+                    }
+                }
+            }
+            // By the rule the chooser and the fire gate trade by
+            // (`BotPlannedHarm::net`).
+            if t.planned
+                .is_some_and(|p| p.net.is_none_or(|net| net <= 0.0))
+            {
+                self.report.bad_plans += 1;
+            }
+        }
         let trace = std::env::var("BRI_GAUNTLET_TRACE")
             .is_ok_and(|t| self.report.name.contains(&t))
             && tick.is_multiple_of(60);
@@ -836,7 +941,19 @@ impl Scorer {
         // Shots: new projectiles a bot fired.
         let view = s.weapon_view();
         for p in view.fired() {
-            if !self.seen_shots.insert(p.id) || self.harmless.contains(&p.definition) {
+            if !self.seen_shots.insert(p.id) {
+                continue;
+            }
+            if self.harmless.contains(&p.definition) {
+                if self.pushers.contains(&p.definition)
+                    && let Some(t) = thoughts.get(&p.source.0)
+                {
+                    self.report.push_fired += 1;
+                    if !self.allowed_press.remove(&p.source.0) {
+                        let why = t.gate.map_or("not gated", |g| g.1);
+                        *self.report.push_unplanned.entry(why).or_default() += 1;
+                    }
+                }
                 continue;
             }
             let shooter = p.source.0;
@@ -923,6 +1040,32 @@ impl Scorer {
                 Some(_) => self.report.kills += 1,
             }
         }
+        // A push planned with worth, planned no longer with no verdict on
+        // a press: lapsed.
+        let before = self.push_plans.len();
+        self.push_plans.retain(|_, (_, last)| *last == tick);
+        self.report.push_lapsed += (before - self.push_plans.len()) as u64;
         self.report.bots = self.seen.len();
+        // Damage between players, by side: the health each new hit took.
+        for d in s
+            .damage_results()
+            .filter(|d| self.last_damage_tick.is_none_or(|t| d.tick > t))
+        {
+            let (Some(by), Some(side)) = (d.source, sides.get(&d.victim)) else {
+                continue;
+            };
+            let Some(theirs) = sides.get(&by).filter(|_| by != d.victim) else {
+                continue;
+            };
+            let done = self.report.damage_by_side.entry(*theirs).or_default();
+            if theirs == side {
+                self.report.team_damage += d.amount;
+                done.0 += d.amount;
+            } else {
+                self.report.enemy_damage += d.amount;
+                done.1 += d.amount;
+            }
+        }
+        self.last_damage_tick = Some(tick);
     }
 }

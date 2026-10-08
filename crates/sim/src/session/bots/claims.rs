@@ -66,13 +66,27 @@ pub(super) struct Intent {
     pub seats: Option<u64>,
     /// Where its weapon will hit, and the vehicle it rides, whose crew
     /// that does not endanger.
-    pub harm: Option<Space>,
+    pub harm: Option<Harmed>,
     pub mount: Option<u64>,
     /// From a seat it does not drive: the line it needs to what it is after.
     pub sight: Option<Sightline>,
     /// The idle flavour it is doing (`surprise`), if any.
     pub flavour: Option<u8>,
     pub until: u64,
+}
+
+/// What a planned shot sweeps, for its side to keep out of
+/// (`harm::Shape`): its way, and the sphere its blast reaches where it ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Harmed {
+    pub way: Space,
+    pub burst: Option<Space>,
+}
+impl Harmed {
+    /// Whether a body of half-size `margin` centred at `point` is in it.
+    pub(super) fn holds(&self, point: Vec3, margin: f32) -> bool {
+        self.way.holds(point, margin) || self.burst.is_some_and(|b| b.holds(point, margin))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,8 +104,8 @@ pub(super) struct Sightline {
 }
 
 /// A space: within `radius` of the segment from `from` to `to`, widening by
-/// `spread` per unit along it. The one test of whether a body stands in a
-/// line of fire or a blast (`bot_fire_clear`, `team`).
+/// `spread` per unit along it: what a planned shot sweeps
+/// ([`Harmed`]), for its side to keep out of (`team`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Space {
     pub from: Vec3,
