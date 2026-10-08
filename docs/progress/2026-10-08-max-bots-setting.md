@@ -31,8 +31,9 @@ was already sized for 32.
 - `cargo test -p bri-ui --test field_flow`: passes with the Max Bots box in
   both tables.
 - `cargo test -p bri-admin -p bri-package-runtime`: pass.
+- `bot_think_time_16` / `bot_think_time_32` (release, Max's PC): 755 us / 1649 us
+  a tick, both under their bars.
 
 ## Next
 
-- Run `bot_think_time_32` in release on Max's PC and record the number.
 - Max checks the Max Bots box's place in Advanced Config in his playtest.
