@@ -813,9 +813,8 @@ impl Nav {
                 continue;
             }
             let floors = self.floor(ground, body, x, z, from)?;
-            let mut steps: Vec<(Floor, bool)> = floors
-                .iter()
-                .filter_map(|f| Some((*f, link(body, swims, from, afloat, *f)?)))
+            let mut steps: Vec<(Floor, bool)> = entered(&floors, from, afloat, body)
+                .filter_map(|f| Some((f, link(body, swims, from, afloat, f)?)))
                 .collect();
             // Afloat, a bank too high to be found from the bottom is looked
             // for from the surface.
@@ -846,6 +845,23 @@ impl Nav {
                 } {
                     continue;
                 }
+                // A jump is taken only where the body rises clear where it
+                // stands to the height it lands at, then over onto it
+                // (crouched, into a crawlspace): a roof over the takeoff, or
+                // an overhang it would come up under, holds it back.
+                if jump && afloat.is_none() && {
+                    let (half_width, _, _) = body.clearance(f.low);
+                    let height = if f.low {
+                        body.crouch_height
+                    } else {
+                        body.height
+                    };
+                    let up = node.feet().with_y(f.y);
+                    !(ground.sweep_box(half_width, height, node.feet(), up)
+                        && ground.sweep_box(half_width, height, up, next.feet()))
+                } {
+                    continue;
+                }
                 // The way on level ground, for the diagonals beside it.
                 if !jump && straight[i].is_none() {
                     straight[i] = Some((next, jump, f));
@@ -865,7 +881,7 @@ impl Nav {
                 continue;
             }
             let floors = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
-            for f in floors.iter().copied() {
+            for f in entered(&floors, from, afloat, body) {
                 if link(body, swims, from, afloat, f) == Some(false)
                     && (f.wet && fa.wet && fb.wet
                         || (f.y - na.feet().y).abs() <= body.step
@@ -926,6 +942,28 @@ fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
 
 /// The floors of one column a body reaches, highest first.
 type Floors = Vec<Floor>;
+
+/// The floors of a column a body coming in at height `from` gets onto:
+/// the one it walks or drops onto (the highest no more than a step above
+/// its feet) and any higher, jumped onto. One under that is under a floor
+/// it would come down on first. Afloat (`afloat`), it reaches them all.
+fn entered<'a>(
+    floors: &'a [Floor],
+    from: f32,
+    afloat: Option<f32>,
+    body: &Body,
+) -> impl Iterator<Item = Floor> + 'a {
+    let reach = from + body.step + 0.05;
+    let onto = floors
+        .iter()
+        .map(|f| f.y)
+        .filter(|y| *y <= reach)
+        .fold(f32::NEG_INFINITY, f32::max);
+    floors
+        .iter()
+        .copied()
+        .filter(move |f| afloat.is_some() || f.y >= onto)
+}
 
 /// The floor among `floors` a body standing at height `feet` is on: the
 /// nearest within a step (and a little: the hint it was sampled from).
@@ -2572,5 +2610,64 @@ mod tests {
             cell_of(second.0) != cell_of(first.0) || cell_of(second.1) != cell_of(first.1),
             "{first:?} {second:?}"
         );
+    }
+
+    /// Standing on a roof over a room, a route into the room goes off the
+    /// roof's edge and in under it, never down through the roof.
+    #[test]
+    fn a_floor_under_the_one_it_stands_on_is_reached_round_it() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(0.0, 2.8, -4.0), Vec3::new(10.0, 3.0, 4.0)),
+        ]);
+        let p = path(search(&physics, Vec3::new(5.0, 3.0, 0.0), Vec3::new(5.0, 0.0, 0.0)).0);
+        let mut at = Vec3::new(5.0, 3.0, 0.0);
+        for w in &p {
+            // Every way down is off the roof, outside it.
+            if at.y > 2.0 && w.feet.y < 1.0 {
+                let outside = |v: Vec3| v.x < 0.0 || v.x > 10.0 || v.z.abs() > 4.0;
+                assert!(
+                    outside(w.feet),
+                    "down through the roof: {at} -> {}: {p:?}",
+                    w.feet
+                );
+            }
+            at = w.feet;
+        }
+    }
+
+    /// A ledge over a lip it would come up under: no jump onto it from
+    /// beneath the lip, only from where it rises clear.
+    #[test]
+    fn a_ledge_is_not_jumped_onto_from_under_its_lip() {
+        // A block 3 high from x 2; its top overhangs back to x 0.5 as a
+        // plate 2.8..3 over the floor before it (room to stand under),
+        // from z -4 to 1.
+        let physics = world(&[
+            floor(),
+            (Vec3::new(2.0, 0.0, -4.0), Vec3::new(8.0, 3.0, 4.0)),
+            (Vec3::new(0.5, 2.8, -4.0), Vec3::new(2.0, 3.0, 1.0)),
+        ]);
+        let p = path(
+            search(
+                &physics,
+                Vec3::new(-3.0, 0.0, -2.0),
+                Vec3::new(5.0, 3.0, -2.0),
+            )
+            .0,
+        );
+        for (i, w) in p.iter().enumerate() {
+            if w.jump {
+                let before = if i == 0 {
+                    Vec3::new(-3.0, 0.0, -2.0)
+                } else {
+                    p[i - 1].feet
+                };
+                assert!(
+                    !(before.x > 0.5 && before.z > -4.0 && before.z < 1.0),
+                    "jumped from under the lip at {before}: {p:?}"
+                );
+            }
+        }
     }
 }
