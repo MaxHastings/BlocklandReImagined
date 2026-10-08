@@ -291,6 +291,18 @@ impl Session {
         goal: Option<Vec3>,
     ) -> (Vec3, bool, bool) {
         let mut walk = controls.walk;
+        // Never into a live blast, a grenade lying where it waits to go off
+        // its own included: it stands until it has; in one, it walks
+        // straight out. Decided first, so the way out meets the same
+        // portal, vehicle and edge checks as any other walk.
+        if !ground.driving && !ground.swimming {
+            let toward = flat(walk).normalize_or_zero();
+            walk = match self.bot_blast_walk(bot, feet, body, toward) {
+                Some(way) if way == toward => walk,
+                Some(way) => way,
+                None => Vec3::ZERO,
+            };
+        }
         if walk != controls.routed && !ground.driving && walk != Vec3::ZERO {
             let from = feet + Vec3::Y * 0.9;
             let to = from + flat(walk).normalize_or_zero() * PORTAL_REACH;
@@ -316,17 +328,6 @@ impl Session {
             );
         if held_back {
             walk = Vec3::ZERO;
-        }
-        // Nor into a live blast, a grenade lying where it waits to go off
-        // its own included: it stands until it has; in one, it walks
-        // straight out.
-        if !ground.driving && !ground.swimming {
-            let toward = flat(walk).normalize_or_zero();
-            walk = match self.bot_blast_walk(bot, feet, body, toward) {
-                Some(way) if way == toward => walk,
-                Some(way) => way,
-                None => Vec3::ZERO,
-            };
         }
         let tuning = self.peers[&bot].player.tuning();
         let drift = if walk == Vec3::ZERO {
@@ -435,5 +436,71 @@ mod tests {
         let inside = Vec3::new(0.0, 0.0, 4.0);
         let out = s.bot_blast_walk(bot, inside, &body, Vec3::X).unwrap();
         assert!(out.z < -0.9, "straight out: {out}");
+    }
+
+    /// A live rocket lying 3.5 units in from a bot standing at a deck's
+    /// edge, a drop that kills past it: the way out of the blast is over
+    /// the edge, which the edge check refuses, so it stands; with floor
+    /// past the edge it walks out.
+    #[test]
+    fn the_way_out_of_a_blast_meets_the_edge_check() {
+        use rapier3d::prelude::*;
+        let walk_out = |drop: bool| {
+            let world = bri_world::World::new("Ledge".into(), "fixture".into(), vec![[1.0; 4]]);
+            let mut colliders = vec![
+                ColliderBuilder::cuboid(10.0, 0.5, 10.0).translation(Vector::new(-9.0, -0.5, 0.0)),
+            ];
+            colliders.push(if drop {
+                ColliderBuilder::cuboid(40.0, 0.5, 40.0).translation(Vector::new(0.0, -30.5, 0.0))
+            } else {
+                ColliderBuilder::cuboid(40.0, 0.5, 40.0).translation(Vector::new(0.0, -0.5, 0.0))
+            });
+            let sim =
+                crate::simulation::Simulation::new(world, crate::testing::definitions(), colliders)
+                    .unwrap();
+            let mut s = Session::new(sim);
+            s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+            let bot = s
+                .join("Walker".into(), Vec3::new(0.5, 0.05, 0.0), false)
+                .unwrap();
+            let thrower = s
+                .join("Thrower".into(), Vec3::new(-8.0, 0.05, 6.0), false)
+                .unwrap();
+            super::super::harm::one_game(&mut s, thrower, bot);
+            for _ in 0..30 {
+                s.step().unwrap();
+            }
+            s.weapons
+                .spawn(
+                    bri_weapons::testing::ROCKET_PROJECTILE,
+                    bri_weapons::ActorId(thrower),
+                    Vec3::new(-3.0, 0.5, 0.0),
+                    Vec3::ZERO,
+                    1.0,
+                )
+                .unwrap();
+            let state = s.peers[&bot].player.state().clone();
+            let feet = Vec3::from(state.feet);
+            let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
+            let ground = Ground {
+                driving: false,
+                swimming: false,
+                jet_leg: false,
+                vehicle_detour: false,
+            };
+            s.bot_safe_walk(
+                bot,
+                &body,
+                feet,
+                &state,
+                Controls::default(),
+                ground,
+                None,
+                None,
+            )
+            .0
+        };
+        assert_eq!(walk_out(true), Vec3::ZERO, "not off the edge");
+        assert!(walk_out(false).x > 0.9, "out of the blast onto the floor");
     }
 }
