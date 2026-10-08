@@ -495,7 +495,12 @@ by chord, a timed throw through its bounces to its burst, a swing to the
 body the hammer finds), ends it at the first body it meets (bodies grown by
 their motion), applies the direct hit there, shares pellets out by v20's
 spread box with nearer bodies shading farther ones, and applies the blast
-with the host's own falloff (`runtime::blast_falloff`). Each body counts
+with the host's own falloff (`runtime::blast_falloff`). A straight shot
+(a ray, or a projectile that does not fall) may miss what its way meets
+and fly on (`harm::overshoot`): past its way's end out to its reach, cut
+by the first wall, timed by its speed so bodies are met where they walk
+to, its side is priced too, so a teammate behind the target is never a
+free shot. Each body counts
 only where the rules let the shooter hurt it (friendly fire, self damage,
 radius damage, spawn protection), and at most its health left. Its worth is
 the enemies' harm less its allies' and its own, one for one; a shot is no

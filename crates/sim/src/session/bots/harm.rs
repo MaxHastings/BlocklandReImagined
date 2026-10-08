@@ -165,9 +165,10 @@ pub(super) struct Strike {
     /// It bounces off a body it meets (a timed throw), rather than going
     /// off there.
     pub rebounds: bool,
-    /// A straight shot's reach: one that misses where its way ends flies on
-    /// out to it ([`past`]). None for a swing, a throw or a falling arc.
-    pub flies_on: Option<f32>,
+    /// A straight shot's reach and speed (0 for a ray): one that misses
+    /// where its way ends flies on out to it ([`past`]). None for a swing,
+    /// a throw or a falling arc.
+    pub flies_on: Option<(f32, f32)>,
 }
 impl Strike {
     /// The strike of `cap`, whose projectile `def` its image fires `pellets`
@@ -190,9 +191,9 @@ impl Strike {
             contact: None,
             rebounds: matches!(cap.delivery, super::tactics::Delivery::Timed { .. }),
             flies_on: match cap.delivery {
-                super::tactics::Delivery::Ray => Some(cap.reach),
+                super::tactics::Delivery::Ray => Some((cap.reach, 0.0)),
                 super::tactics::Delivery::Projectile(f) if f.fall_per_tick <= 0.0 => {
-                    Some(cap.reach)
+                    Some((cap.reach, f.speed))
                 }
                 _ => None,
             },
@@ -433,17 +434,38 @@ pub(super) fn shot_harm(
 }
 
 /// Where a straight shot flies on if it misses what its way meets: from
-/// the way's end along its last chord out to `reach` from `origin`, at the
-/// same speed. None when the way already reaches that far.
-pub(super) fn past(origin: Vec3, chords: &[Chord], reach: f32) -> Option<Chord> {
-    let last = chords.last()?;
+/// the way's end along its last chord out to `reach` from `origin`, in
+/// pieces timed by how long the shot takes to get there at `speed` (or as
+/// the way is timed), so a body is met where it will have walked to. Empty
+/// when the way already reaches that far.
+pub(super) fn past(origin: Vec3, chords: &[Chord], reach: f32, speed: f32) -> Vec<Chord> {
+    const PIECE: f32 = 4.0;
+    let Some(last) = chords.last() else {
+        return Vec::new();
+    };
     let line = last.to - origin;
     let length = line.length();
-    (length > 1e-3 && reach > length + 1e-3).then(|| Chord {
-        from: last.to,
-        to: origin + line / length * reach,
-        seconds: last.seconds * reach / length,
-    })
+    if length <= 1e-3 || reach <= length + 1e-3 {
+        return Vec::new();
+    }
+    let along = line / length;
+    let pieces = ((reach - length) / PIECE).ceil().min(64.0) as usize;
+    let mut out = Vec::with_capacity(pieces);
+    let mut from = last.to;
+    for n in 1..=pieces {
+        let distance = length + (reach - length) * n as f32 / pieces as f32;
+        let seconds = if last.seconds > 0.0 {
+            last.seconds * distance / length
+        } else if speed > 0.0 {
+            distance / speed
+        } else {
+            0.0
+        };
+        let to = origin + along * distance;
+        out.push(Chord { from, to, seconds });
+        from = to;
+    }
+    out
 }
 
 /// What a shot from `origin` that misses the bodies its way meets
@@ -454,7 +476,7 @@ pub(super) fn past(origin: Vec3, chords: &[Chord], reach: f32) -> Option<Chord> 
 pub(super) fn overshoot(
     bodies: &Bodies,
     origin: Vec3,
-    past: Chord,
+    past: &[Chord],
     skip: &[OwnerId],
     strike: &Strike,
 ) -> Harm {
@@ -466,7 +488,7 @@ pub(super) fn overshoot(
             .copied()
             .collect(),
     );
-    let (harm, _) = shot_harm(&rest, origin, &[past], strike);
+    let (harm, _) = shot_harm(&rest, origin, past, strike);
     Harm {
         ally: harm.ally,
         own: harm.own,
@@ -634,19 +656,19 @@ mod tests {
             blast: None,
             contact: None,
             rebounds: false,
-            flies_on: Some(100.0),
+            flies_on: Some((100.0, 0.0)),
         };
         let enemy = body(2, Side::Enemy, Vec3::new(0.0, 0.0, 10.0));
         let way = straight(Vec3::Z * 10.5);
-        let past = past(Vec3::ZERO, &way, 100.0).unwrap();
-        assert_eq!(past.from, Vec3::Z * 10.5);
-        assert!((past.to - Vec3::Z * 100.0).length() < 1e-4);
+        let instant = past(Vec3::ZERO, &way, 100.0, 0.0);
+        assert_eq!(instant[0].from, Vec3::Z * 10.5);
+        assert!((instant.last().unwrap().to - Vec3::Z * 100.0).length() < 1e-4);
         let fired = |behind: Vec<Body>| {
             let bodies = Bodies([vec![enemy], behind].concat());
             let (mut harm, shape) = shot_harm(&bodies, Vec3::ZERO, &way, &gun);
             // Its way ends at the enemy: a teammate past it is not on it.
             assert_eq!((harm.enemy, harm.ally), (25.0, 0.0));
-            let over = overshoot(&bodies, Vec3::ZERO, past, &shape.priced, &gun);
+            let over = overshoot(&bodies, Vec3::ZERO, &instant, &shape.priced, &gun);
             assert_eq!(over.enemy, 0.0, "a miss is not planned for its enemies");
             harm.ally = harm.ally.max(over.ally);
             harm.kills_ally |= over.kills_ally;
@@ -662,22 +684,26 @@ mod tests {
         // One a step aside of the line: the shot is taken.
         let aside = fired(vec![body(3, Side::Ally, Vec3::new(3.0, 0.0, 25.0))]);
         assert!(aside.ally == 0.0 && taken(aside), "{aside:?}");
-        // Walking into the line by the time the bullet gets there: priced.
+        // Walking into the line by the time a 50 unit/s bullet gets there
+        // (half a second): priced. A ray gets there at once: not.
         let mut walking = body(3, Side::Ally, Vec3::new(3.0, 0.0, 25.0));
         walking.velocity = Vec3::new(-6.0, 0.0, 0.0);
-        let past_timed = Chord {
-            seconds: 0.5,
-            ..past
-        };
         let bodies = Bodies(vec![enemy, walking]);
-        let over = overshoot(&bodies, Vec3::ZERO, past_timed, &[2], &gun);
-        assert_eq!(over.ally, 25.0);
+        let bullet = past(Vec3::ZERO, &way, 100.0, 50.0);
+        assert_eq!(
+            overshoot(&bodies, Vec3::ZERO, &bullet, &[2], &gun).ally,
+            25.0
+        );
+        assert_eq!(
+            overshoot(&bodies, Vec3::ZERO, &instant, &[2], &gun).ally,
+            0.0
+        );
         // Another enemy between them stops the bullet first.
         let shield = body(4, Side::Enemy, Vec3::new(0.0, 0.0, 18.0));
         let shielded = fired(vec![shield, ally]);
         assert!(shielded.ally == 0.0 && taken(shielded), "{shielded:?}");
         // A way already out at its reach flies on nowhere.
-        assert!(super::past(Vec3::ZERO, &straight(Vec3::Z * 100.0), 100.0).is_none());
+        assert!(super::past(Vec3::ZERO, &straight(Vec3::Z * 100.0), 100.0, 0.0).is_empty());
     }
 
     #[test]

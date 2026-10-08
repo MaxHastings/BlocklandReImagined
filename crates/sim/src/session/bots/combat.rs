@@ -1695,23 +1695,23 @@ fn assess(
     // Either may miss what it meets (a target that steps aside) and fly on
     // past it, into a teammate behind; up to the first wall that way.
     for (way, met) in ways {
-        let Some(past) = strike
-            .flies_on
-            .and_then(|reach| harm::past(origin, &way, reach))
-        else {
+        let Some((reach, speed)) = strike.flies_on else {
+            break;
+        };
+        let mut past = harm::past(origin, &way, reach, speed);
+        let (Some(first), Some(last)) = (past.first().copied(), past.last().copied()) else {
             continue;
         };
-        let mut over = harm::overshoot(bodies, origin, past, &met, &strike);
+        let mut over = harm::overshoot(bodies, origin, &past, &met, &strike);
         if (over.ally > 0.0 || over.own > 0.0)
-            && let Some(wall) = world_stop(session, bot, past.from, past.to)
+            && let Some(wall) = world_stop(session, bot, first.from, last.to)
         {
-            over = harm::overshoot(
-                bodies,
-                origin,
-                harm::Chord { to: wall, ..past },
-                &met,
-                &strike,
-            );
+            let stop = origin.distance(wall);
+            past.retain(|c| origin.distance(c.from) < stop);
+            if let Some(c) = past.last_mut() {
+                c.to = wall;
+            }
+            over = harm::overshoot(bodies, origin, &past, &met, &strike);
         }
         harm.ally = harm.ally.max(over.ally);
         harm.own = harm.own.max(over.own);
