@@ -146,5 +146,15 @@ class SaveCorpusResult(unittest.TestCase):
                          (True, "ok (coverage not reported)"))
 
 
+class History(unittest.TestCase):
+    def test_a_revert_and_a_reapply_undo_on_purpose(self):
+        self.assertTrue(gate.undoes_on_purpose('Revert "WIP: bots drive"'))
+        self.assertTrue(gate.undoes_on_purpose('Reapply "WIP: bots drive"'))
+
+    def test_other_commits_do_not(self):
+        self.assertFalse(gate.undoes_on_purpose("Reapplying the old route costs"))
+        self.assertFalse(gate.undoes_on_purpose("Merge teammate damage"))
+
+
 if __name__ == "__main__":
     unittest.main()

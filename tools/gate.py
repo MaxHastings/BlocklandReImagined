@@ -30,7 +30,8 @@ queue instead of doing 25 cold builds at once.
 
 Allowing an intentional undo: add a trailer line to the commit message,
     Gate-Allow-Undo: path/to/file      (repeatable; "*" allows every path)
-Commits made by `git revert` ("Revert ...") are allowed automatically.
+Commits made by `git revert` ("Revert ...") are allowed automatically, and so
+is reverting such a revert ("Reapply ..."): both undo a commit on purpose.
 """
 import argparse
 import concurrent.futures
@@ -247,6 +248,12 @@ def oversized_blobs(base, tip):
     return found
 
 
+def undoes_on_purpose(body):
+    """Whether a commit message says the commit undoes another on purpose:
+    `git revert` ("Revert ...") or a revert of a revert ("Reapply ...")."""
+    return body.startswith(("Revert ", "Reapply "))
+
+
 def history_check(base, tip):
     """Refuse pushed commits that undo most of a recent origin/main commit.
 
@@ -265,7 +272,7 @@ def history_check(base, tip):
     for header, removed, added, status in pushed:
         sha, *parents = header.split()
         body, allowed = trailers(sha)
-        if body.startswith("Revert ") or "*" in allowed or len(parents) != 1:
+        if undoes_on_purpose(body) or "*" in allowed or len(parents) != 1:
             continue
         parent = parents[0]
         moved = set().union(*added.values()) if added else set()
