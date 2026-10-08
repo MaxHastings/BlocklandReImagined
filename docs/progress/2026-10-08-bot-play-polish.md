@@ -39,6 +39,22 @@ Play polish kept from earlier in the thread:
   the spawn plate.
 - `bot_watch` counts jitter from the controls a bot actually pressed.
 
+Loop counts (`bot_watch`, three 2-minute matches per save, 4 bots; saves
+without a mini-game borrow Soccer's), main before this thread (A0) against
+this branch (A5): hand-overs are the clunk counter's per-bot-minute rates
+averaged over the matches, flips and self kills are totals, stuck is the mean.
+
+| Save | walk hand-overs | look hand-overs | fight/search flips | self kills | stuck |
+|---|---|---|---|---|---|
+| Soccer | 110 → 98 | 7 → 7 | 9 → 2 | 0 → 0 | 1.4% → 0.9% |
+| Close Quarters | 207 → 158 | 165 → 77 | 127 → 66 | 9 → 9 | 10.5% → 5.6% |
+| ACM City | 155 → 143 | 89 → 44 | 74 → 32 | 3 → 0 | 2.6% → 2.5% |
+| Afghanistan | 157 → 101 | 117 → 46 | 86 → 21 | 14 → 12 | 8.6% → 6.9% |
+
+The reverted sideways merge had fewer walk hand-overs (route and strafe were
+one mover) but broke grenade play; the remaining hand-overs are the route
+handing over to the stance strafe on arrival, which is the intended split.
+
 Evidence (cloud, Linux): `bri-sim` lib 365 passed;
 `bots_play_an_unfamiliar_package_by_its_own_rules` and
 `team_fill_bots_play_slayer_soccer_with_or_without_weapons` pass. The full
