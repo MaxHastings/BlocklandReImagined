@@ -5,9 +5,9 @@ core flows are blockers: please report them (see `TESTER-GUIDE.md` for what
 to send). The items below are known. Everything v20 had that is still
 missing is listed in `FEATURES.md`.
 
-Use the [v0.2.3 checks](rule-workshop/V0.2.3-PLAYTEST.md) for the current release.
-The [v0.2.2 checks](rule-workshop/V0.2.2-PLAYTEST.md) remain for that older build.
-Focused headless/offscreen checks do not replace your playtest.
+Each release's notes on [GitHub](https://github.com/MaxHastings/BlocklandReImagined/releases) list what changed and its known
+issues; this page keeps the longer-standing ones. Focused headless/offscreen
+checks do not replace your playtest.
 
 - **Unsigned builds:** Windows SmartScreen warns on the first start. The Apple
   silicon Mac app uses an ad-hoc signature; see `PLAYTEST-MAC.md` for opening it.

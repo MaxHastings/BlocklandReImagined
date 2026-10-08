@@ -4,9 +4,9 @@ Blockland ReImagined is Blockland v20 rebuilt from scratch. The goal is
 v20 as you remember it, with its own art, music and sounds, plus Add-Ons
 that can go much further than v20's ever could. This page says what is
 done, what is partly done, and what is still missing. It was checked
-against the game's own code and focused test reports on 2026-10-04. Use the
-[v0.2.3 creator and bot checks](rule-workshop/V0.2.3-PLAYTEST.md) to try the
-current release; [known issues](KNOWN-ISSUES.md) records the remaining limits.
+against the game's own code and focused test reports on 2026-10-04. Each
+release's notes on [GitHub](https://github.com/MaxHastings/BlocklandReImagined/releases) say what changed since;
+[known issues](KNOWN-ISSUES.md) records the remaining limits.
 
 ## v20: what's done
 

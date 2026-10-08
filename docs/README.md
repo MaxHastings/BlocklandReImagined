@@ -6,8 +6,8 @@ Starting points grouped by what you're after. Start at the top of your group.
 
 Release-folder guides and platform notes:
 
-- [v0.2.3 player checks](rule-workshop/V0.2.3-PLAYTEST.md) and
-  [release notes](rule-workshop/V0.2.3-RELEASE-NOTES.md): current changes and focused tests.
+- [Release notes](https://github.com/MaxHastings/BlocklandReImagined/releases): what each version changed and its known issues.
+  Older focused checks are in [rule-workshop/](rule-workshop/).
 
 - [TESTER-GUIDE.md](TESTER-GUIDE.md): install, playing together, what to send.
 - [PLAYTEST-MAC.md](PLAYTEST-MAC.md): Mac startup and file locations; this
