@@ -50,6 +50,9 @@ pub(crate) const ARRIVAL_RADIUS: f32 = CELL * 1.5;
 pub const SAMPLES_PER_TICK: u32 = 96;
 /// Nodes all searches together expand in one tick, remembered ground or not.
 pub const EXPANSIONS_PER_TICK: u32 = 384;
+/// New leap arcs all searches together sweep in one tick, each a handful
+/// of shape casts ([`Ground::sweep_arc`]).
+pub const ARCS_PER_TICK: u32 = 24;
 /// Nodes one search expands before it settles for the closest it reached.
 pub const MAX_EXPANSIONS: u32 = 6000;
 /// Remembered samples before the whole cache starts over.
@@ -625,6 +628,15 @@ pub fn pull(ground: &Ground, body: &Body, from: Vec3, path: Vec<Waypoint>) -> Ve
 /// A move of the grid: from one cell to another.
 type Move = ((i32, i32), (i32, i32));
 
+/// A move a body failed: from the floor at height `from`, onto the floor
+/// at `to` (`None`: any, a way it got nowhere walking), avoided until.
+#[derive(Clone, Copy, Debug)]
+struct Failed {
+    from: f32,
+    to: Option<f32>,
+    until: u64,
+}
+
 /// The eight cells round a cell.
 const NEIGHBOURS: [(i32, i32); 8] = [
     (1, 0),
@@ -654,15 +666,22 @@ pub struct Nav {
     expansions: u32,
     /// Samples taken so far, for tests and probes.
     pub sampled: u64,
+    /// Whether the arc of a leap from one node onto another is clear, as
+    /// swept ([`Ground::sweep_arc`]), and how many more it sweeps this
+    /// tick.
+    arcs: FxHashMap<(Node, Node), bool>,
+    arc_budget: u32,
+    /// Arcs swept so far, for tests and probes.
+    pub swept: u64,
     /// Floors found only off their cell's centre (settled), for probes.
     pub settled: u64,
     /// Moves, from one cell to another, a body was seen to fail (get
-    /// nowhere walking, miss a leap), with the tick until which the
-    /// search takes no such move (`Nav::avoid`): what the samples miss (a
-    /// rail between cell centres, a lip the motor catches on, a leap that
-    /// clips), the grid learns from what really happened, for that move
-    /// alone.
-    avoid: FxHashMap<Move, u64>,
+    /// nowhere walking, miss a leap), each from (and onto) which floor of
+    /// those cells, with the tick until which the search takes no such
+    /// move (`Nav::avoid`): what the samples miss (a rail between cell
+    /// centres, a lip the motor catches on, a leap that clips), the grid
+    /// learns from what really happened, for that move alone.
+    avoid: FxHashMap<Move, Vec<Failed>>,
     /// The tick, for what it avoids.
     now: u64,
 }
@@ -671,19 +690,30 @@ impl Nav {
     pub fn begin_tick(&mut self) {
         self.budget = SAMPLES_PER_TICK;
         self.expansions = EXPANSIONS_PER_TICK;
+        self.arc_budget = ARCS_PER_TICK;
     }
     /// The tick it is: what it avoids lapses by it.
     pub fn set_now(&mut self, tick: u64) {
         self.now = tick;
         if self.avoid.len() > MAX_AVOIDED {
-            self.avoid.retain(|_, until| tick < *until);
+            self.avoid.retain(|_, failed| {
+                failed.retain(|f| tick < f.until);
+                !failed.is_empty()
+            });
         }
     }
     /// A body failed the move from `from` to `to` (a leap that missed):
     /// the search takes no such move until `until`, so routes find another
     /// way, or none.
     pub fn avoid(&mut self, from: Vec3, to: Vec3, until: u64) {
-        self.avoid.insert((cell_of(from), cell_of(to)), until);
+        self.avoid
+            .entry((cell_of(from), cell_of(to)))
+            .or_default()
+            .push(Failed {
+                from: from.y,
+                to: Some(to.y),
+                until,
+            });
     }
     /// A body standing at `feet` got nowhere walking toward `toward`: the
     /// steps out of its cell that way (within half a turn of the eight
@@ -695,17 +725,35 @@ impl Nav {
             let step = Vec3::new(dx as f32, 0.0, dz as f32).normalize();
             if heading != Vec3::ZERO && step.dot(heading) >= std::f32::consts::FRAC_1_SQRT_2 - 1e-3
             {
-                self.avoid.insert((from, (from.0 + dx, from.1 + dz)), until);
+                self.avoid
+                    .entry((from, (from.0 + dx, from.1 + dz)))
+                    .or_default()
+                    .push(Failed {
+                        from: feet.y,
+                        to: None,
+                        until,
+                    });
             }
         }
     }
-    fn avoided(&self, from: Node, x: i32, z: i32) -> bool {
+    /// Whether the move from `from` onto the floor at `to` of cell `x, z`
+    /// is avoided. Floors of one column are a crouched body's height apart
+    /// at least: one within half that is the same floor.
+    fn avoided(&self, from: Node, x: i32, z: i32, to: f32, body: &Body) -> bool {
+        let same = |a: f32, b: f32| (a - b).abs() < body.crouch_height * 0.5;
         self.avoid
             .get(&((from.x, from.z), (x, z)))
-            .is_some_and(|until| self.now < *until)
+            .is_some_and(|failed| {
+                failed.iter().any(|f| {
+                    self.now < f.until
+                        && same(f.from, from.feet().y)
+                        && f.to.is_none_or(|y| same(y, to))
+                })
+            })
     }
     pub fn clear(&mut self) {
         self.floors.clear();
+        self.arcs.clear();
     }
     pub fn len(&self) -> usize {
         self.floors.len()
@@ -725,6 +773,34 @@ impl Nav {
             let hint = *band as f32 * HINT_BAND;
             !((x0..=x1).contains(x) && (z0..=z1).contains(z) && hint >= low && hint <= high)
         });
+        // An arc's box: from its takeoff to its landing, a body wide, up to
+        // the top of its jump and a body over.
+        let (min, max) = (min - Vec3::splat(reach), max + Vec3::splat(reach));
+        let above = body.motion.apex() + body.height;
+        self.arcs.retain(|(a, b), _| {
+            let (a, b) = (a.feet(), b.feet());
+            let (low, high) = (a.min(b), a.max(b) + Vec3::Y * above);
+            !(low.cmple(max).all() && high.cmpge(min).all())
+        });
+    }
+    /// Whether the arc of a leap from `from` onto `to` is clear
+    /// ([`Ground::sweep_arc`]), remembered; `None` when this tick's arcs
+    /// are spent.
+    fn arc(&mut self, ground: &Ground, body: &Body, from: Node, to: Node) -> Option<bool> {
+        if let Some(clear) = self.arcs.get(&(from, to)) {
+            return Some(*clear);
+        }
+        if self.arc_budget == 0 {
+            return None;
+        }
+        self.arc_budget -= 1;
+        self.swept += 1;
+        if self.arcs.len() >= MAX_SAMPLES {
+            self.arcs.clear();
+        }
+        let clear = ground.sweep_arc(body, from.feet(), to.feet());
+        self.arcs.insert((from, to), clear);
+        Some(clear)
     }
     /// The floors of cell `x, z` a body standing at height `from` next to
     /// it could reach, highest first: none for a wall, a hole or a drop too
@@ -809,9 +885,6 @@ impl Nav {
                 continue;
             }
             let (x, z) = (node.x + dx, node.z + dz);
-            if self.avoided(node, x, z) {
-                continue;
-            }
             let floors = self.floor(ground, body, x, z, from)?;
             let mut steps: Vec<(Floor, bool)> = entered(&floors, from, afloat, body)
                 .filter_map(|f| Some((f, link(body, swims, from, afloat, f)?)))
@@ -828,6 +901,9 @@ impl Nav {
                     .collect();
             }
             for (f, jump) in steps {
+                if self.avoided(node, x, z, f.y, body) {
+                    continue;
+                }
                 let next = Node::on(x, z, &f);
                 // A drop is stepped off only where the body clears the way
                 // out over the edge at the height it stands at (crouched,
@@ -877,12 +953,13 @@ impl Nav {
             };
             let (dx, dz) = (AXES[a].0, AXES[b].1);
             // Corners are never cut through an opening.
-            if goes_in(dx, dz).is_some() || self.avoided(node, node.x + dx, node.z + dz) {
+            if goes_in(dx, dz).is_some() {
                 continue;
             }
             let floors = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
             for f in entered(&floors, from, afloat, body) {
                 if link(body, swims, from, afloat, f) == Some(false)
+                    && !self.avoided(node, node.x + dx, node.z + dz, f.y, body)
                     && (f.wet && fa.wet && fb.wet
                         || (f.y - na.feet().y).abs() <= body.step
                             && (f.y - nb.feet().y).abs() <= body.step)
@@ -1324,7 +1401,7 @@ impl Search {
     /// far side (level, higher or lower). Onto each floor there it is
     /// measured to land on, where the whole arc is clear
     /// ([`Ground::sweep_arc`]). Each with the seconds it takes. `None`
-    /// when the sampling budget ran out.
+    /// when the tick's samples or arcs ran out.
     fn leaps(
         &self,
         nav: &mut Nav,
@@ -1382,19 +1459,19 @@ impl Search {
                 if !take {
                     continue;
                 }
-                if !nav.avoided(node, x, z) {
-                    for f in floors.iter().filter(|f| !f.wet && !f.low) {
-                        let to = Node::on(x, z, f);
-                        let feet = to.feet();
-                        let d = feet - from;
-                        let Some(seconds) =
-                            body.leaps.seconds(d.y, Vec3::new(d.x, 0.0, d.z).length())
-                        else {
-                            continue;
-                        };
-                        if ground.sweep_arc(body, from, feet) {
-                            out.push((to, seconds));
-                        }
+                for f in floors.iter().filter(|f| !f.wet && !f.low) {
+                    if nav.avoided(node, x, z, f.y, body) {
+                        continue;
+                    }
+                    let to = Node::on(x, z, f);
+                    let feet = to.feet();
+                    let d = feet - from;
+                    let Some(seconds) = body.leaps.seconds(d.y, Vec3::new(d.x, 0.0, d.z).length())
+                    else {
+                        continue;
+                    };
+                    if nav.arc(ground, body, node, to)? {
+                        out.push((to, seconds));
                     }
                 }
                 // Onto a ledge, the far side, or past the bottom of the
@@ -2669,5 +2746,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A failed move off a roof avoids that move from the roof alone: the
+    /// same step from the floor under the roof stays open.
+    #[test]
+    fn a_failed_move_upstairs_leaves_the_one_below_open() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-4.0, 2.8, -4.0), Vec3::new(4.0, 3.0, 4.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let body = body();
+        let mut nav = Nav::default();
+        let (up, down) = (Vec3::new(0.0, 3.0, 0.0), Vec3::new(0.0, 0.0, 0.0));
+        // Got nowhere walking +x on the roof.
+        nav.avoid_walk(up, up + Vec3::X, u64::MAX);
+        let steps = |nav: &mut Nav, feet: Vec3| {
+            nav.begin_tick();
+            let node = nav.node_at(&ground, &body, feet).unwrap().unwrap();
+            nav.neighbours(&ground, &body, node, true).unwrap()
+        };
+        let east = |steps: Vec<Step>| steps.iter().any(|(n, ..)| n.x == 1 && n.z == 0);
+        assert!(!east(steps(&mut nav, up)));
+        assert!(east(steps(&mut nav, down)));
+    }
+
+    /// Leap arcs are swept within the tick's budget: a search over pegs
+    /// spends no more each tick, and still finds the way.
+    #[test]
+    fn leap_arcs_spend_at_most_the_tick_budget() {
+        let mut boxes = vec![column(-8.0, 0.0, -3.0, 3.0, 0.0)];
+        for k in 1..=4 {
+            let x = k as f32 * 2.0;
+            boxes.push(column(x - 0.5, x, -0.25, 0.25, 0.0));
+        }
+        boxes.push(column(10.5, 16.0, -3.0, 3.0, 0.0));
+        let physics = world(&boxes);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let body = body();
+        let mut nav = Nav::default();
+        let mut search = Search::new(Vec3::new(-3.0, 0.0, 0.0), Vec3::new(13.0, 0.0, 0.0), 60.0);
+        let found = loop {
+            nav.begin_tick();
+            let before = nav.swept;
+            let done = search.step(&mut nav, &ground, &body);
+            assert!(nav.swept - before <= u64::from(ARCS_PER_TICK));
+            if let Some(found) = done {
+                break found;
+            }
+        };
+        assert!(!leaps(&path(found)).is_empty());
+        assert!(nav.swept > 0);
     }
 }
