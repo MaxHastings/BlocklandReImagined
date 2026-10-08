@@ -586,9 +586,12 @@ def content_fingerprint(content):
     """Names, sizes and modification times of the content packs and of what
     sits directly in each, plus every regeneration stamp. A regenerated or
     copied-in pack changes it; the installed Add-Ons, which the content check
-    rewrites from each build, do not."""
+    rewrites from each build, do not. Each entry is stat'ed by its path: on
+    Windows a scandir entry's times are the copy in the parent folder's
+    listing, which NTFS updates lazily, so two reads of an unchanged folder
+    could differ."""
     def line(entry, indent=""):
-        stat = entry.stat()
+        stat = os.stat(entry.path)
         size = stat.st_size if entry.is_file() else "-"
         return f"{indent}{entry.name} {size} {stat.st_mtime_ns}"
 
