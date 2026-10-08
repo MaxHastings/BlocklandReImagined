@@ -1913,6 +1913,54 @@ mod tests {
         );
     }
 
+    /// The v0.2.6 driving regression, as the mechanism it broke: a
+    /// chassis's wheels sink into their suspension, so its feet sit under
+    /// the ground's top, and its short reach (0.2) from that height's hint
+    /// band (-0.25) starts the floor ray exactly on the ground's top. That
+    /// floor is its own cell's: every drive search starts from it.
+    #[test]
+    fn a_chassis_sunk_into_its_suspension_stands_on_the_ground_under_it() {
+        let physics = world(&[floor()]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+        };
+        let mut chassis = body();
+        chassis.width = 3.0;
+        chassis.height = 2.0;
+        chassis.crouch_height = 2.0;
+        chassis.step = 0.2;
+        chassis.jump = 0.2;
+        chassis.crawl_jump = 0.2;
+        chassis.conservative = true;
+        chassis.bottom = 0.7;
+        let feet = Vec3::new(0.0, -0.2, 0.0);
+        let hint = feet.y + chassis.step * 0.5;
+        let from = (hint / HINT_BAND).floor() * HINT_BAND;
+        let reach = chassis.jump.max(chassis.crawl_jump);
+        assert!(
+            (from + reach + 0.05).abs() < 1e-4,
+            "the ray starts on the ground's top"
+        );
+        let mut nav = Nav::default();
+        nav.begin_tick();
+        let node = nav.node_at(&ground, &chassis, feet).unwrap();
+        assert!(node.is_some(), "the chassis's own cell has its floor");
+        let mut search = Search::new(feet, Vec3::new(0.0, 0.0, -12.0), 24.0);
+        for _ in 0..200 {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, &chassis) {
+                assert!(matches!(found, Found::Path(_)), "a drive route: {found:?}");
+                return;
+            }
+        }
+        panic!("search never finished");
+    }
+
     #[test]
     fn a_low_spawn_plate_under_the_hull_does_not_imprison_a_chassis() {
         let physics = world(&[
