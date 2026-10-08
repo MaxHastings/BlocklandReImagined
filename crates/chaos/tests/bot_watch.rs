@@ -23,6 +23,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[path = "watch/clunk.rs"]
+mod clunk;
+
 const TPS: u64 = 120;
 
 fn env(key: &str) -> Option<String> {
@@ -126,6 +129,7 @@ struct Track {
     flip_reported: u64,
     was_alive: bool,
     last_behaviour: Option<&'static str>,
+    clunk: clunk::Clunk,
 }
 
 struct Moment {
@@ -418,7 +422,13 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     let mut at_ally = 0u64;
     let mut chat_after = s.chat().last().map_or(0, |c| c.id);
     let mut chat_log = vec![];
+    let mut clunk_totals = clunk::Totals::default();
     let mut trace = std::io::BufWriter::new(std::fs::File::create(out.join("trace.jsonl"))?);
+    // BRI_WATCH_TICKS=1: every tick of every bot, for reading a jitter
+    // moment's causes (ticks.jsonl).
+    let mut tick_log = env("BRI_WATCH_TICKS")
+        .map(|_| std::fs::File::create(out.join("ticks.jsonl")).map(std::io::BufWriter::new))
+        .transpose()?;
     let floor = brick_points
         .iter()
         .map(|p| p[1])
@@ -471,8 +481,19 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                     "objdiag": th.objective_diagnostic,
                     "mounted": vitals.get(bot).and_then(|v| v.mounted).is_some(),
                     "score": vitals.get(bot).map(|v| v.score),
+                    "acted": th.acted,
                 });
                 writeln!(trace, "{line}")?;
+            }
+            if let Some(log) = tick_log.as_mut() {
+                let line = json!({
+                    "t": tick - t0, "bot": bot, "b": th.behaviour, "acted": th.acted,
+                    "at": [feet.x, feet.y, feet.z], "v": st.velocity, "yaw": st.yaw,
+                    "in": [th.input.forward, th.input.right, th.input.yaw, th.input.jump as u8, th.input.crouch as u8],
+                    "goal": th.goal, "next": th.next, "steps": th.path_steps, "vis": th.visible,
+                    "search": th.search_phase, "spot": th.surprise.decisions.iter().find(|d| d.domain == "spot").map(|d| format!("{} {} {}", d.tick, d.chosen, d.reason)),
+                });
+                writeln!(log, "{line}")?;
             }
             let tr = tracks.entry(*bot).or_default();
             let close = |tr: &mut Track, moments: &mut Vec<Moment>| {
@@ -533,6 +554,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                 tr.window.clear();
                 tr.path.clear();
                 tr.was_alive = false;
+                tr.clunk.reset();
                 close(tr, &mut moments);
                 continue;
             }
@@ -542,6 +564,19 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             }
             tr.was_alive = true;
             bot_ticks += 1;
+            if let Some(what) =
+                tr.clunk
+                    .tick(tick, &th.input, &th.acted, th.behaviour, &mut clunk_totals)
+            {
+                moments.push(Moment {
+                    kind: "jitter",
+                    bot: *bot,
+                    start: tick - 2 * TPS,
+                    end: tick,
+                    at: feet,
+                    what,
+                });
+            }
             *behaviours.entry(th.behaviour).or_default() += 1;
             if !item.is_empty() {
                 *held_ticks.entry(item.clone()).or_default() += 1;
@@ -903,6 +938,8 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         "bot_think_ms_per_tick": think_nanos as f64 / 1e6 / (seconds * TPS) as f64,
         "wall_seconds": wall.elapsed().as_secs_f64(),
         "chat_lines": chat_log.len(),
+        "clunk": clunk_totals.json(),
+        "clunk_per_bot": tracks.iter().map(|(b, t)| (name(b), t.clunk.per_minute())).collect::<BTreeMap<_, _>>(),
     });
     std::fs::write(
         out.join("summary.json"),

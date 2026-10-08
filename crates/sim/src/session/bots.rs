@@ -111,6 +111,9 @@ pub struct BotThought {
     pub team: BotTeamView,
     /// What the act stage did (`act::Acted::line`).
     pub acted: String,
+    /// The controls it pressed last tick (walk, look and buttons), before a
+    /// seat converted them: what a watcher reads for jitter.
+    pub input: MoveInput,
     /// What the shot it planned this tick would do (`harm`): to its
     /// enemies, to its own side, and whether it would kill a teammate.
     pub planned: Option<BotPlannedHarm>,
@@ -373,6 +376,9 @@ struct Brain {
     replans: u32,
     /// What the act stage did last tick (`act::Acted`), for the readout.
     acted: act::Acted,
+    /// The controls it pressed last tick, before a seat converts them
+    /// (`BotThought::input`).
+    pressed: MoveInput,
     /// The way it faced as it began sweeping the spot it searches.
     sweep_from: Option<f32>,
     /// Where it has been trying to get away from, since when, and when it
@@ -599,6 +605,7 @@ impl Brain {
             progress: crate::route::Progress::default(),
             replans: 0,
             acted: Default::default(),
+            pressed: MoveInput::default(),
             sweep_from: None,
             pinned: None,
             life: None,
@@ -1515,6 +1522,7 @@ impl Session {
             input.pitch.sin(),
             -input.yaw.cos() * input.pitch.cos(),
         );
+        self.bots.brains.get_mut(&bot).unwrap().pressed = input;
         let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
         self.movement(bot, sequence, input)?;
         if let Some(line) = callout {

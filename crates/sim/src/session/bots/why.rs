@@ -157,6 +157,7 @@ impl Session {
                 surprise: b.surprise.view(&b.kind.surprise),
                 team: b.team.view(),
                 acted: b.acted.line(),
+                input: b.pressed,
                 // Planned in the step that led here: bots plan before the
                 // simulation's tick advances.
                 planned: b
