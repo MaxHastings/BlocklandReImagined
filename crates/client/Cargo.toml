@@ -37,7 +37,7 @@ rapier3d.workspace = true
 glam.workspace = true
 winit = "0.30"
 # winit_log.rs: winit reports event loop failures through tracing.
-tracing-core = "0.1"
+tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 gilrs = "0.11"
 wgpu.workspace = true
 pollster.workspace = true
