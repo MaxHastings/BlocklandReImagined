@@ -124,6 +124,8 @@ pub(super) fn shot_space(
     })
 }
 
+/// Slower than this a projectile is lying still, waiting to go off.
+const RESTING_SPEED: f32 = 1.0;
 impl Session {
     /// A passenger may have boarded the reachable lower seat of a tall vehicle.
     /// Fill its useful empty role through the same seat keys players use.
@@ -933,8 +935,11 @@ impl Session {
         self.weapons.projectiles().filter_map(move |p| {
             let d = self.weapons.pack.projectiles.get(&p.definition)?;
             let reach = d.explosion.radius * p.scale + width * 0.5;
+            // One lying still counts however its last jitter points (a
+            // resting grenade's velocity flips about zero with gravity).
             (d.explosion.damage > 0.0
-                && p.velocity.dot(p.position - centre) <= 0.0
+                && (p.velocity.length() < RESTING_SPEED
+                    || p.velocity.dot(p.position - centre) <= 0.0)
                 && centre.distance(p.position) < reach
                 && self.can_damage_player(p.source.0, bot, true))
             .then_some(p.position)

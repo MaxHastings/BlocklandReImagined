@@ -73,18 +73,25 @@ impl Session {
         let (yaw_error, pitch_error) = self.bots.brains[&bot].error;
         let wander = yaw_error.hypot(pitch_error).tan();
         let mount = |o: OwnerId| self.mounted(o).map(|(v, _)| v);
+        // A body its blast cannot hurt (a teammate with friendly fire off,
+        // one under spawn protection) is no harm to price: it stops a shot
+        // only by being in the way, not by standing in the blast.
         let attack_clear = shape.as_ref().is_none_or(|shape| {
             !self.peers.iter().any(|(o, p)| {
-                *o != bot
-                    && p.combat.alive
-                    && !shape.priced.contains(o)
-                    && (mount(*o).is_none() || mount(*o) != mount(bot))
-                    && shape.holds(
-                        Vec3::from(p.player.state().feet)
-                            + Vec3::Y * p.player.tuning().stand_height * 0.5,
-                        p.player.tuning().stand_height * 0.5,
-                        wander,
-                    )
+                if *o == bot
+                    || !p.combat.alive
+                    || shape.priced.contains(o)
+                    || (mount(*o).is_some() && mount(*o) == mount(bot))
+                {
+                    return false;
+                }
+                let at = Vec3::from(p.player.state().feet)
+                    + Vec3::Y * p.player.tuning().stand_height * 0.5;
+                let half = p.player.tuning().stand_height * 0.5;
+                shape.on_way(at, half, wander)
+                    || (shape.in_burst(at, half)
+                        && !self.spawn_protected(*o)
+                        && self.can_damage_player(bot, *o, true))
             })
         });
         // What it will sweep, for its side to keep out of (`team`).

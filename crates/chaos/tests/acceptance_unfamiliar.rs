@@ -830,6 +830,8 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
     let mut shoves: BTreeMap<u64, (OwnerId, Vec3)> = BTreeMap::new();
     // Where each live grenade was last seen.
     let mut last_seen: BTreeMap<u64, Vec3> = BTreeMap::new();
+    // How near any living enemy of its thrower came to each live grenade.
+    let mut closest: BTreeMap<u64, f32> = BTreeMap::new();
     // Damage records already read: the last tick, and how many.
     let mut damage_read = s.damage_results().map(|r| r.tick).max().unwrap_or(0);
     let mut damage_count = 0u64;
@@ -895,15 +897,31 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
                 continue;
             };
             let team = before.get(&thrower).map(|b| b.team);
-            if now.iter().any(|(_, b)| {
-                Some(b.team) != team && b.alive && last.distance(b.feet + Vec3::Y) <= BLAST
-            }) {
+            // An enemy that stayed clear of a grenade lying in sight has
+            // dodged it, so it counts as near when an enemy came within
+            // the blast at any point of its life.
+            let came_near = closest.remove(&id).is_some_and(|d| d <= BLAST);
+            if came_near
+                || now.iter().any(|(_, b)| {
+                    Some(b.team) != team && b.alive && last.distance(b.feet + Vec3::Y) <= BLAST
+                })
+            {
                 seen.grenade_near_enemy += 1;
             }
             for (o, b) in &now {
                 if last.distance(b.feet + Vec3::Y) <= BLAST + 1.0 {
                     struck.insert(*o, (thrower, tick));
                 }
+            }
+        }
+        for (id, at) in &live {
+            let Some(team) = grenades.get(id).and_then(|t| now.get(t)).map(|b| b.team) else {
+                continue;
+            };
+            for b in now.values().filter(|b| b.team != team && b.alive) {
+                let d = at.distance(b.feet + Vec3::Y);
+                let c = closest.entry(*id).or_insert(d);
+                *c = c.min(d);
             }
         }
         last_seen.extend(live.iter().map(|(id, at)| (*id, *at)));
