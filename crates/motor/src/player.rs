@@ -382,7 +382,7 @@ fn unit() -> f32 {
 fn full_energy() -> f32 {
     100.0
 }
-/// v20 jump bookkeeping (`Player::canJump` and the jump in `updateMove`).
+/// Jump/contact bookkeeping and the origin of the current airborne motion.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct JumpState {
     /// Ticks left before another jump (`mJumpDelay`).
@@ -395,6 +395,9 @@ pub struct JumpState {
     /// next hit that does not.
     #[serde(default)]
     pub ceiling: bool,
+    /// Accepted jets took over this flight. Persists through release until
+    /// landing or an actual jump, independently of rendered/sample frames.
+    pub jet_flight: bool,
 }
 impl Default for JumpState {
     fn default() -> Self {
@@ -403,6 +406,7 @@ impl Default for JumpState {
             since_contact: JUMP_WINDOW_TICKS,
             normal: [0.0, 1.0, 0.0],
             ceiling: false,
+            jet_flight: false,
         }
     }
 }
@@ -1029,6 +1033,9 @@ impl Player {
         if velocity.is_finite() {
             self.state.velocity = velocity.clamp_length_max(MAX_SPEED).to_array();
             self.state.grounded = grounded;
+            if grounded {
+                self.state.jump.jet_flight = false;
+            }
         }
     }
     pub fn body(&self) -> RigidBodyHandle {
@@ -1224,6 +1231,7 @@ impl Player {
         state.grounded = false;
         state.crouched = false;
         state.jetting = false;
+        state.jump.jet_flight = false;
         state.tether = None;
         self.restore(physics, state, self.tuning.clone())?;
         // A relocation is a jump, not travel: the body is there at once.
@@ -1261,6 +1269,7 @@ impl Player {
         self.state.grounded = true;
         self.state.crouched = false;
         self.state.jetting = false;
+        self.state.jump.jet_flight = false;
         self.state.tether = None;
         self.synchronize_pose(physics);
     }
@@ -1793,6 +1802,12 @@ impl Player {
             && end_contact
                 .normal
                 .is_some_and(|n| velocity.dot(n) > -LANDING_SPEED);
+        // Animation provenance belongs to the simulation: presentation can
+        // skip all the jetting ticks, and pose datagrams can lose them too.
+        // A real jump after release starts new motion, even if no rendered
+        // frame observed the landing (or this is a valid late jump).
+        self.state.jump.jet_flight =
+            input.jet || (self.state.jump.jet_flight && !self.state.grounded && !jumped);
         // Its middle went in through an opening: out of the partner, turned
         // and moving on as it was.
         let (_, passed) = passages.travel(feet + middle, moved.feet + middle);

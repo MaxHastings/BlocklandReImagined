@@ -691,7 +691,6 @@ impl AvatarAssets {
             mode: "root",
             forward: true,
             phase: 0.0,
-            jet_flight: false,
             last_time: None,
             channels: None,
             transition: None,
@@ -773,9 +772,6 @@ pub struct AvatarMesh {
     /// Torque plays the side clip backward to strafe right.
     forward: bool,
     phase: f32,
-    /// Jets have taken over this flight. Their remaining upward momentum
-    /// must not start a fresh jump animation when the jets are released.
-    jet_flight: bool,
     last_time: Option<f64>,
     /// Locomotion channels of the last pose, frozen when a transition starts.
     channels: Option<Channels>,
@@ -1349,7 +1345,6 @@ impl AvatarMesh {
             .map_or(0.0, |last| (time - last).clamped(0.0, 0.25) as f32);
         self.last_time = Some(time);
         let movement = animation_input.tick_state.as_ref().unwrap_or(player);
-        self.jet_flight = movement.jetting || (self.jet_flight && !movement.grounded);
         let scripted = if animation_input.dead {
             Some("death1")
         } else if animation_input.sitting {
@@ -1371,7 +1366,7 @@ impl AvatarMesh {
                     }
                 } else {
                     let mut action = locomotion(movement, animation_input.water_coverage);
-                    if self.jet_flight && action.sequence == "jump" {
+                    if movement.jump.jet_flight && action.sequence == "jump" {
                         action.sequence = if movement.crouched { "crouch" } else { "root" };
                     }
                     action
@@ -1693,7 +1688,6 @@ impl AvatarMesh {
         self.mode = old.mode;
         self.forward = old.forward;
         self.phase = old.phase;
-        self.jet_flight = old.jet_flight;
         self.last_time = old.last_time;
         self.channels.clone_from(&old.channels);
         self.transition.clone_from(&old.transition);
@@ -1711,7 +1705,6 @@ impl AvatarMesh {
             self.mode = "root";
             self.forward = true;
             self.phase = 0.0;
-            self.jet_flight = false;
             self.last_time = None;
             self.channels = None;
             self.transition = None;
@@ -2217,6 +2210,7 @@ mod tests {
         getting_up_eases_out_of_the_sit_over_one_transition,
         jet_release_keeps_the_root_pose_until_landing,
         jets_interrupt_a_jump_without_restarting_it_on_release,
+        jet_history_survives_skipped_poses_and_first_remote_observation,
         free_look_turns_only_the_head_toward_the_camera,
         original_outfits_materials_and_customization_rules,
         ragdoll_on_the_real_blockhead,
@@ -2963,6 +2957,121 @@ mod tests {
         assert!(up.dot(tilt * Vec3::Y) > 0.999, "{up}");
         Ok(())
     }
+    fn jet_history_survives_skipped_poses_and_first_remote_observation(fx: &Avatar) -> Result<()> {
+        use bri_sim::player::{MoveInput, Player, PlayerTuning};
+        use rapier3d::prelude::{ColliderBuilder, Vector};
+
+        let assets = &fx.assets;
+        let mut physics = bri_physics::new_world();
+        physics.insert_collider(
+            ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            None,
+        );
+        physics.detect_collisions(&(), &());
+        let mut motor = Player::spawn(
+            &mut physics,
+            1,
+            Vec3::new(0.0, 0.05, 0.0),
+            PlayerTuning::default(),
+        )?;
+        for _ in 0..10 {
+            motor.torque_tick(&mut physics, MoveInput::default(), &[], 0.032)?;
+        }
+        assert!(motor.state().grounded);
+        let mut local = assets.mesh(assets.package.defaults.clone())?;
+        local.defer_mesh = true;
+        local.pose(assets, motor.state(), 0.0)?;
+        let mut remote = assets.mesh(assets.package.defaults.clone())?;
+        remote.defer_mesh = true;
+        let mut first_seen = assets.mesh(assets.package.defaults.clone())?;
+        first_seen.defer_mesh = true;
+        let ground = bri_net::protocol::RemotePose::of(0, motor.state())
+            .into_pose()
+            .player;
+        remote.pose(assets, &ground, 0.0)?;
+        // Neither avatar is posed during this short jet burst. The remote
+        // also loses every intermediate snapshot containing active jets.
+        for _ in 0..8 {
+            motor.torque_tick(
+                &mut physics,
+                MoveInput {
+                    jet: true,
+                    ..Default::default()
+                },
+                &[],
+                0.032,
+            )?;
+        }
+        motor.torque_tick(&mut physics, MoveInput::default(), &[], 0.032)?;
+        let released = motor.state();
+        assert!(
+            !released.jetting && !released.grounded && released.velocity[1] > 0.5,
+            "released but still rising: {released:?}"
+        );
+        let wire = bri_net::protocol::RemotePose::of(9, released)
+            .into_pose()
+            .player;
+        for (mesh, state) in [
+            (&mut local, released),
+            (&mut remote, &wire),
+            (&mut first_seen, &wire),
+        ] {
+            mesh.pose(assets, state, 0.288)?;
+            assert_eq!(
+                mesh.mode, "root",
+                "an unseen jet burst must not invent a jump"
+            );
+        }
+        let standing = PlayerState {
+            velocity: [0.0; 3],
+            grounded: true,
+            ..released.clone()
+        };
+        let mut reference = assets.mesh(assets.package.defaults.clone())?;
+        reference.defer_mesh = true;
+        reference.pose(assets, &standing, 0.288)?;
+        for name in ["Hip", "Torso", "LeftLeg", "RightLeg"] {
+            let node = assets.node_index[&name.to_ascii_lowercase()];
+            for mesh in [&local, &remote, &first_seen] {
+                assert!(
+                    mesh.posed_nodes[node].abs_diff_eq(reference.posed_nodes[node], 1e-5),
+                    "{name} bends after an unseen jet burst"
+                );
+            }
+        }
+        // Skip presentation through the landing too. History must end in
+        // the motor so the next physical jump works without a grounded pose.
+        for _ in 0..120 {
+            motor.torque_tick(&mut physics, MoveInput::default(), &[], 0.032)?;
+            if motor.state().grounded {
+                break;
+            }
+        }
+        assert!(motor.state().grounded && !motor.state().jump.jet_flight);
+        let event = motor.torque_tick(
+            &mut physics,
+            MoveInput {
+                jump: true,
+                ..Default::default()
+            },
+            &[],
+            0.032,
+        )?;
+        assert!(event.jumped && !motor.state().jump.jet_flight);
+        let wire = bri_net::protocol::RemotePose::of(100, motor.state())
+            .into_pose()
+            .player;
+        for (mesh, state) in [
+            (&mut local, motor.state()),
+            (&mut remote, &wire),
+            (&mut first_seen, &wire),
+        ] {
+            mesh.pose(assets, state, 4.0)?;
+            assert_eq!(mesh.mode, "jump", "a hidden landing re-arms ordinary jumps");
+        }
+        Ok(())
+    }
+
     fn jet_release_keeps_the_root_pose_until_landing(fx: &Avatar) -> Result<()> {
         use bri_sim::player::{MoveInput, Player, PlayerTuning};
         use rapier3d::prelude::{ColliderBuilder, Vector};
@@ -3009,7 +3118,7 @@ mod tests {
                 )?;
                 let p = motor.state();
                 // The normal remote wire path drops jump timers. The fix
-                // must work from the replicated jet/ground flags alone.
+                // must work from the replicated flight-history flag.
                 let wire = bri_net::protocol::RemotePose::of(tick, p)
                     .into_pose()
                     .player;
@@ -3099,6 +3208,7 @@ mod tests {
         mesh.pose(assets, &p, 0.032)?;
         assert_eq!(mesh.mode, "jump", "ordinary floor jump");
         p.jetting = true;
+        p.jump.jet_flight = true;
         let presented = PlayerState {
             jetting: false,
             ..p.clone()
@@ -3133,6 +3243,7 @@ mod tests {
         // A respawn is a new body, not the old body's flight.
         mesh.set_body(1);
         assert!(mesh.set_body(2));
+        p.jump.jet_flight = false;
         mesh.pose(assets, &p, 1.0)?;
         assert_eq!(mesh.mode, "jump", "respawn forgets the previous flight");
         Ok(())
