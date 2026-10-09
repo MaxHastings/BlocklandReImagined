@@ -48,6 +48,7 @@ fn a_changed_environment_relights_the_maps_lightmaps() -> Result<()> {
         flare: ([0.0; 4], 1.0),
         vignette: None,
         enhanced_sky: false,
+        sky_color: [1.0; 3],
     };
     let mut run = |live: Option<&bri_content::atmosphere::Live>| -> Result<[i32; 2]> {
         let mut camera = baked;

@@ -276,6 +276,9 @@ pub struct Live {
     pub vignette: Option<Vignette>,
     /// The host chose the generated sky.
     pub enhanced_sky: bool,
+    /// The host's sky colour alone, `[1; 3]` when unset: the generated sky is
+    /// multiplied by it (`sky_tint` also carries the day's own dimming).
+    pub sky_color: [f32; 3],
 }
 
 /// Direction sunlight travels (native Y-up) for a sun at `azimuth` and
@@ -394,6 +397,7 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
         flare,
         vignette: settings.vignette,
         enhanced_sky: settings.enhanced_sky.unwrap_or(false),
+        sky_color: sky,
     };
     let Some(cycle) = settings.day_cycle else {
         return live;

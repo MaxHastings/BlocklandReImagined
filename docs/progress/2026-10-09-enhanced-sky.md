@@ -23,14 +23,15 @@
   drawn behind it (the October 1 silhouette fix). Off keeps the authored
   `sky_bands`. `fogged()` returns early where fog is 0. There is no map
   special case: a host that wants Skylands' own sky leaves the setting off.
+- The host's `sky_color` tints the generated sky too (multiplied in display
+  colour, like the texture sky; the day's own dimming is not applied twice).
+- Sparse steady stars fade in with the night.
 - Sun and moon discs are drawn by the shader; clouds, where a map has them,
   keep their textures and fog toward the procedural horizon.
 
 ## Not done
 - No change to ambient_at(), AO or the HDR pipeline (the brick-shading thread
   owns those). Metal reflections still sample their own gradient sky.
-- Admin `sky_color` tint does not apply to Enhanced (it multiplied the texture).
-- No stars.
 
 ## Evidence
 - `cargo test -p bri-render --test shader_validation`, `-p bri-content atmosphere`

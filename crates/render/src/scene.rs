@@ -806,6 +806,8 @@ pub struct Camera {
     /// `sun_direction`, which turns to the moon at night); w 1 draws the
     /// procedural Enhanced sky ([`Camera::set_enhanced_sky`]), 0 the map's own.
     pub sky_sun: [f32; 4],
+    /// The host's sky colour, which tints the Enhanced sky.
+    pub sky_color: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -951,6 +953,7 @@ impl Camera {
         self.flare = live.flare.0;
         self.sky_sun[..3].copy_from_slice(&live.sun_toward);
         self.sky_sun[3] = f32::from(u8::from(live.enhanced_sky));
+        self.sky_color = [live.sky_color[0], live.sky_color[1], live.sky_color[2], 1.0];
     }
 }
 impl Default for Camera {
@@ -971,6 +974,7 @@ impl Default for Camera {
             baked_ambient: [0.0; 4],
             sky_bands: Default::default(),
             sky_sun: [0.0, 1.0, 0.0, 0.0],
+            sky_color: [1.0; 4],
         }
     }
 }

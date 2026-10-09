@@ -13,7 +13,7 @@ struct Camera {
     sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
     sky_bands:array<vec4<f32>,128>,
-    sky_sun:vec4<f32>,
+    sky_sun:vec4<f32>, sky_color:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
@@ -948,7 +948,7 @@ fn enhanced_sky(along:vec3<f32>)->vec3<f32> {
     let twilight=smooth_between(-0.32,-0.04,sun.y)*(1.0-smooth_between(0.05,0.3,sun.y));
     color+=vec3<f32>(0.018,0.04,0.12)*twilight*(0.3+0.7*h);
     color+=vec3<f32>(0.004,0.008,0.022)*(1.0-day);
-    return display_color(vec3<f32>(1.0)-exp(-color));
+    return display_color(vec3<f32>(1.0)-exp(-color))*camera.sky_color.rgb;
 }
 // The sun's and moon's discs along `along`, display colour to add after fog.
 fn sky_bodies(along:vec3<f32>)->vec3<f32> {
@@ -963,6 +963,17 @@ fn sky_bodies(along:vec3<f32>)->vec3<f32> {
     let moon_angle=acos(clamp(-mu,-1.0,1.0));
     let moon=(1.0-smooth_between(0.010,0.0125,moon_angle))+0.08*pow(max(1.0-moon_angle/0.12,0.0),3.0);
     color+=vec3<f32>(0.9,0.95,1.1)*moon*seen*(1.0-day);
+    // Stars: sparse, steady points on a cell grid, fading in with the night.
+    if day<0.9 {
+        let cell=floor(along*70.0);
+        let h=fract(sin(dot(cell,vec3<f32>(12.9898,78.233,37.719)))*43758.5453);
+        if h>0.97 {
+            let spot=cell+vec3<f32>(0.5)+0.3*vec3<f32>(fract(h*91.7)-0.5,fract(h*57.3)-0.5,fract(h*33.1)-0.5);
+            let near=length(along*70.0-spot);
+            let twinkle=0.5+0.5*fract(h*13.7);
+            color+=vec3<f32>(0.85,0.9,1.0)*twinkle*(1.0-smooth_between(0.05,0.2,near))*seen*(1.0-smooth_between(0.0,0.9,day))*0.8;
+        }
+    }
     return min(color,vec3<f32>(1.0));
 }
 // The Enhanced sky at the horizon toward `along`: what the world's edge fogs
