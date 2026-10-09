@@ -17,8 +17,8 @@
   and its horizon colour when Enhanced is on, so far terrain still fades into
   what is drawn behind it (the October 1 silhouette fix). Original keeps the
   authored `sky_bands`. `fogged()` now returns early where fog is 0.
-- Maps with a bottom sky face (Skylands) keep it: below the horizon the
-  procedural sky mirrors the one above. Sun and moon discs are drawn by the
+- Maps with a bottom sky face (Skylands) keep their authored sky (Enhanced is off for them); the
+  shader mirrors below the horizon only for tests. Sun and moon discs are drawn by the
   shader; clouds, where a map has them, keep their textures and fog toward
   the procedural horizon.
 
