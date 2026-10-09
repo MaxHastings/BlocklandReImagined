@@ -18,9 +18,18 @@
 //! like players), standing there; `BRI_LAMPS=0` turns lamp shadows off and
 //! `BRI_SUN=0` the sun, to see which light casts what; `BRI_LIGHT_SCALE=k`
 //! scales every light, to see shadows where full light saturates.
-//! Modern Dynamic is checked independently by bri-render
-//! `modern_dynamic_real_maps_without_legacy_preparation`; this probe is
-//! deliberately limited to the compatibility modes.
+//! `BRI_MODES=classic,unified,dynamic` picks the modes to draw (default: classic,
+//! unified, classic again); dynamic loads the map as the client does for
+//! Dynamic (no baked lightmaps) and draws it with a renderer of its own.
+//! `BRI_VARIANTS="name:soft=1,ao=1,original_sky=1,enhanced_sky=1,sun=0.5;..."`
+//! draws every view once per variant as `{view}-{mode}-{name}.png`: soft
+//! (Graphics.soft_shading), ao (Graphics.ambient_occlusion), original_sky
+//! (Graphics.original_sky), enhanced_sky (the host environment's
+//! enhanced_sky), sun (sun height -1..1 on a day cycle; either of the last two
+//! applies a live environment, otherwise the map draws as authored).
+//! `BRI_WIDTH=2560` and `BRI_HEIGHT=1440` set the image size.
+//! `BRI_MSAA=4` the client's default samples (1 otherwise), `BRI_FRAMES=n`,
+//! `BRI_TIME=1` adds the GPU time of each stretch of the frame to the report.
 //! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
 //! or tube does (each "Light shape" line lists its lights); `BRI_BREAK=1`
 //! breaks every bulb and tube by the client's rule. Each recovered light is
@@ -48,11 +57,11 @@ use bri_render::{
     map_lighting::{Bake, MapLighting},
     scene::{
         Camera, GpuInstances, GpuScene, Material, MeshBatch, SceneData, SceneRenderer,
-        SceneTransform, SceneVertex, ShadowCasters,
+        SceneTransform, SceneVertex, ShadowCasters, WorldPass, create_depth_samples,
     },
-    scene_loader::load_map_bundle,
+    scene_loader::{load_map_bundle, load_map_bundle_dynamic},
     shadow::ShadowSettings,
-    terrain_scene::GpuTerrain,
+    terrain_scene::{GpuTerrain, TerrainScene},
 };
 use bri_world::{Brick, ContentRef, World};
 use glam::Vec3;
@@ -385,11 +394,146 @@ fn read_back(
     Ok(pixels)
 }
 
+/// One draw of every view: the graphics choices of `BRI_VARIANTS`.
+struct Variant {
+    name: String,
+    soft: bool,
+    ao: bool,
+    original_sky: bool,
+    /// The host environment's `enhanced_sky`; None leaves it unset.
+    enhanced_sky: Option<bool>,
+    /// Sun height (-1..1) on a day cycle, a host environment setting.
+    sun: Option<f32>,
+}
+
+impl Variant {
+    fn parse(text: Option<&str>) -> Result<Vec<Variant>> {
+        let Some(text) = text else {
+            return Ok(vec![Variant {
+                name: String::new(),
+                soft: false,
+                ao: false,
+                original_sky: false,
+                enhanced_sky: None,
+                sun: None,
+            }]);
+        };
+        text.split(';')
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| {
+                let (name, keys) = v.split_once(':').unwrap_or((v, ""));
+                let mut variant = Variant {
+                    name: name.trim().to_string(),
+                    soft: false,
+                    ao: false,
+                    original_sky: false,
+                    enhanced_sky: None,
+                    sun: None,
+                };
+                for pair in keys.split(',').filter(|k| !k.trim().is_empty()) {
+                    let (key, value) = pair.split_once('=').context("BRI_VARIANTS key=value")?;
+                    let on = value.trim() == "1";
+                    match key.trim() {
+                        "soft" => variant.soft = on,
+                        "ao" => variant.ao = on,
+                        "original_sky" => variant.original_sky = on,
+                        "enhanced_sky" => variant.enhanced_sky = Some(on),
+                        "sun" => variant.sun = Some(value.trim().parse()?),
+                        other => anyhow::bail!("BRI_VARIANTS: unknown key {other:?}"),
+                    }
+                }
+                Ok(variant)
+            })
+            .collect()
+    }
+    fn host_environment(&self) -> bool {
+        self.enhanced_sky.is_some() || self.sun.is_some()
+    }
+}
+
+/// One renderer with the map, bricks, terrain and stand-ins uploaded to it.
+struct Pass {
+    renderer: SceneRenderer,
+    gpu_map: GpuScene,
+    gpu_world: Vec<GpuScene>,
+    terrain: Vec<GpuTerrain>,
+    tower: Option<GpuScene>,
+    player: Option<(GpuScene, GpuInstances)>,
+}
+
+impl Pass {
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        samples: u32,
+        settings: Option<ShadowSettings>,
+        lights: Option<&[bri_render::map_lighting::MapLight]>,
+        scene: &SceneData,
+        terrain: Vec<TerrainScene>,
+        chunks: &[SceneData],
+        palette: &SceneData,
+    ) -> Result<Pass> {
+        let mut renderer = SceneRenderer::with_settings(device, format, samples, settings);
+        if let Some(lights) = lights {
+            renderer.set_dynamic_lights(device, queue, lights)?;
+        }
+        let gpu_map = renderer.upload(device, queue, scene)?;
+        let gpu_palette = renderer.upload(device, queue, palette)?;
+        renderer.reserve_chunks(&chunks.iter().collect::<Vec<_>>())?;
+        let gpu_world = chunks
+            .iter()
+            .map(|chunk| renderer.upload_chunk(device, queue, chunk, &gpu_palette))
+            .collect::<Result<Vec<_>>>()?;
+        let terrain = terrain
+            .into_iter()
+            .map(|t| GpuTerrain::upload(&renderer, device, queue, t.into(), 4000.0))
+            .collect::<Result<Vec<_>>>()?;
+        // Stand-ins, as the client draws them: BRI_TOWER=x,y,z,width,height a
+        // brick tower (a kept, static chunk) standing on x,y,z; BRI_PLAYER=x,y,z
+        // a player-sized box (a moving instance) standing there.
+        let tower = match env_numbers("BRI_TOWER", 5)? {
+            Some(t) => {
+                let half = Vec3::new(t[3] * 0.5, 0.0, t[3] * 0.5);
+                let foot = Vec3::new(t[0], t[1], t[2]);
+                let data = cuboid(foot - half, foot + half + Vec3::Y * t[4]);
+                let palette = renderer.upload(device, queue, &data)?;
+                Some(renderer.upload_chunk(device, queue, &data, &palette)?)
+            }
+            None => None,
+        };
+        let player = match env_numbers("BRI_PLAYER", 3)? {
+            Some(p) => {
+                let body = renderer.upload(
+                    device,
+                    queue,
+                    &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.6, 0.3)),
+                )?;
+                let mut instances = GpuInstances::new(device, 1)?;
+                instances.update(
+                    queue,
+                    &[SceneTransform {
+                        transform: glam::Mat4::from_translation(Vec3::new(p[0], p[1], p[2])),
+                        tint: [1.0; 4],
+                    }],
+                )?;
+                Some((body, instances))
+            }
+            None => None,
+        };
+        Ok(Pass {
+            renderer,
+            gpu_map,
+            gpu_world,
+            terrain,
+            tower,
+            player,
+        })
+    }
+}
+
 fn main() -> Result<()> {
-    ensure!(
-        !std::env::var("BRI_DYNAMIC").is_ok_and(|v| v == "1"),
-        "Use bri-render's modern_dynamic_real_maps_without_legacy_preparation test for modern Dynamic; lighting_probe prepares compatibility lighting only"
-    );
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
         args.len() >= 3,
@@ -1019,11 +1163,8 @@ fn main() -> Result<()> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("lighting probe"),
         required_limits: adapter.limits(),
-        required_features: if timed {
-            stamps
-        } else {
-            wgpu::Features::empty()
-        },
+        required_features: adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
         ..Default::default()
     }))?;
     let queries = timed.then(|| {
@@ -1046,25 +1187,44 @@ fn main() -> Result<()> {
         mapped_at_creation: false,
     });
     let period = f64::from(queue.get_timestamp_period());
-    let (width, height) = (1920u32, 1080u32);
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("probe target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let width: u32 = std::env::var("BRI_WIDTH").map_or(Ok(1920), |v| v.parse())?;
+    let height: u32 = std::env::var("BRI_HEIGHT").map_or(Ok(1080), |v| v.parse())?;
+    ensure!(width > 0 && height > 0, "Probe dimensions must be positive");
+    let samples: u32 = std::env::var("BRI_MSAA")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let frame_count: usize = std::env::var("BRI_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80);
+    let warm = frame_count / 4;
+    let stretch_timing = std::env::var("BRI_TIME").is_ok_and(|v| v == "1");
+    let texture = |samples: u32, usage: wgpu::TextureUsages| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("probe target"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let target = texture(
+        1,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
     let view = target.create_view(&Default::default());
-    let depth =
-        bri_render::scene::create_depth(&device, width, height).create_view(&Default::default());
+    let multisampled = (samples > 1).then(|| {
+        texture(samples, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default())
+    });
+    let depth = create_depth_samples(&device, width, height, samples).create_view(&Default::default());
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
@@ -1080,70 +1240,105 @@ fn main() -> Result<()> {
             u.dynamic.len()
         );
     }
-    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
-    let gpu_map = renderer.upload(&device, &queue, &scene)?;
-    let gpu_palette = renderer.upload(&device, &queue, &palette.scene)?;
-    renderer.reserve_chunks(&chunks.iter().collect::<Vec<_>>())?;
-    let gpu_world = chunks
-        .iter()
-        .map(|chunk| renderer.upload_chunk(&device, &queue, chunk, &gpu_palette))
-        .collect::<Result<Vec<_>>>()?;
-    let mut terrain = map
-        .terrain
-        .into_iter()
-        .map(|t| GpuTerrain::upload(&renderer, &device, &queue, t.into(), 4000.0))
-        .collect::<Result<Vec<_>>>()?;
-    // Stand-ins, as the client draws them: BRI_TOWER=x,y,z,width,height a
-    // brick tower (a kept, static chunk) standing on x,y,z; BRI_PLAYER=x,y,z
-    // a player-sized box (a moving instance) standing there.
-    let tower = match env_numbers("BRI_TOWER", 5)? {
-        Some(t) => {
-            let half = Vec3::new(t[3] * 0.5, 0.0, t[3] * 0.5);
-            let foot = Vec3::new(t[0], t[1], t[2]);
-            let data = cuboid(foot - half, foot + half + Vec3::Y * t[4]);
-            let palette = renderer.upload(&device, &queue, &data)?;
-            Some(renderer.upload_chunk(&device, &queue, &data, &palette)?)
-        }
-        None => None,
+    // Brick Shadows on unless BRI_BRICK_SHADOWS=0 (the client's default is
+    // off: bricks then only stop other casters' shadows). Dynamic always
+    // casts from bricks, as the client does.
+    let brick_shadows = std::env::var("BRI_BRICK_SHADOWS").map_or(true, |v| v != "0");
+    let mode_names = std::env::var("BRI_MODES").ok();
+    let modes: Vec<(u8, String)> = match &mode_names {
+        // Classic runs again last: the first views after upload run on a GPU
+        // still settling its clocks and caches, which alone moved the median
+        // by more than any mode.
+        None => vec![
+            (0, "classic".into()),
+            (2, "unified".into()),
+            (0, "classic-again".into()),
+        ],
+        Some(list) => list
+            .split(',')
+            .map(|m| match m.trim() {
+                "classic" => Ok((0, "classic".to_string())),
+                "unified" => Ok((2, "unified".to_string())),
+                "dynamic" => Ok((3, "dynamic".to_string())),
+                other => Err(anyhow::anyhow!("BRI_MODES: unknown mode {other:?}")),
+            })
+            .collect::<Result<_>>()?,
     };
-    let player = match env_numbers("BRI_PLAYER", 3)? {
-        Some(p) => {
-            let body = renderer.upload(
-                &device,
-                &queue,
-                &cuboid(Vec3::new(-0.5, 0.0, -0.3), Vec3::new(0.5, 2.6, 0.3)),
-            )?;
-            let mut instances = GpuInstances::new(&device, 1)?;
-            instances.update(
-                &queue,
-                &[SceneTransform {
-                    transform: glam::Mat4::from_translation(Vec3::new(p[0], p[1], p[2])),
-                    tint: [1.0; 4],
-                }],
-            )?;
-            Some((body, instances))
+    let variants = Variant::parse(std::env::var("BRI_VARIANTS").ok().as_deref())?;
+    let mut static_pass = None;
+    let mut dynamic_pass = None;
+    let mut dynamic_scene = None;
+    if modes.iter().any(|(m, _)| *m != 3) {
+        static_pass = Some(Pass::build(
+            &device,
+            &queue,
+            format,
+            samples,
+            Some(settings),
+            None,
+            &scene,
+            map.terrain,
+            &chunks,
+            &palette.scene,
+        )?);
+    }
+    if modes.iter().any(|(m, _)| *m == 3) {
+        let modern = load_map_bundle_dynamic(&paths.map_bundle, &map_id)?;
+        let lights = modern
+            .modern_lights
+            .clone()
+            .context("The Dynamic loader gave no map lights")?;
+        dynamic_pass = Some(Pass::build(
+            &device,
+            &queue,
+            format,
+            samples,
+            Some(ShadowSettings {
+                light_cubes: true,
+                ..settings
+            }),
+            Some(&lights),
+            &modern.scene,
+            modern.terrain,
+            &chunks,
+            &palette.scene,
+        )?);
+        dynamic_scene = Some(modern.scene);
+    }
+    if stretch_timing {
+        for pass in static_pass.iter().chain(&dynamic_pass) {
+            pass.renderer.time_passes(&device, &queue, true);
         }
-        None => None,
-    };
-    let models: Vec<(&GpuScene, &GpuInstances)> = player.iter().map(|(b, i)| (b, i)).collect();
+    }
+    let occlusion = bri_render::ambient_occlusion::AmbientOcclusion::new(&device, format, samples);
     let no_sun = std::env::var("BRI_SUN").is_ok_and(|v| v == "0");
     let light_scale: f32 = std::env::var("BRI_LIGHT_SCALE")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0);
-    let mut scenes = vec![&gpu_map];
-    scenes.extend(gpu_world.iter());
-    scenes.extend(tower.iter());
-    // Brick Shadows on unless BRI_BRICK_SHADOWS=0 (the client's default is
-    // off: bricks then only stop other casters' shadows).
-    let brick_shadows = std::env::var("BRI_BRICK_SHADOWS").map_or(true, |v| v != "0");
     let mut report = serde_json::Map::new();
-    // Classic runs again last: the first views after upload run on a GPU
-    // still settling its clocks and caches, which alone moved the median by
-    // more than any mode.
-    let modes: &[(u8, &str)] = &[(0, "classic"), (2, "unified"), (0, "classic-again")];
-    for &(mode, label) in modes {
+    for (mode, label) in &modes {
+        let (mode, label) = (*mode, label.as_str());
+        let pass = if mode == 3 {
+            dynamic_pass.as_mut().expect("built above")
+        } else {
+            static_pass.as_mut().expect("built above")
+        };
+        let Pass {
+            renderer,
+            gpu_map,
+            gpu_world,
+            terrain,
+            tower,
+            player,
+        } = pass;
+        let environment: &SceneData = if mode == 3 {
+            dynamic_scene.as_ref().expect("built above")
+        } else {
+            &scene
+        };
         match (mode, &unified) {
+            (3, _) => {}
             (0, _) => {
                 renderer.set_light_volume(&device, &queue, classic.as_ref())?;
                 renderer.set_map_lighting(&device, &queue, None, false)?;
@@ -1202,126 +1397,240 @@ fn main() -> Result<()> {
                 renderer.set_map_lighting(&device, &queue, None, false)?;
             }
         }
+        let models: Vec<(&GpuScene, &GpuInstances)> = player.iter().map(|(b, i)| (b, i)).collect();
+        let mut scenes = vec![&*gpu_map];
+        scenes.extend(gpu_world.iter());
+        scenes.extend(tower.iter());
+        let bricks_cast = brick_shadows || mode == 3;
         let mut views_out = serde_json::Map::new();
         for (name, eye, look) in &views {
-            for t in &mut terrain {
+            for t in terrain.iter_mut() {
                 t.update(&device, &queue, &[*eye], 4000.0)?;
             }
-            let terrain_draws: Vec<_> = terrain
+            let terrain_only: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
+            let terrain_draws: Vec<_> = terrain_only
                 .iter()
-                .flat_map(GpuTerrain::draws)
+                .copied()
                 .chain(models.iter().copied())
                 .collect();
-            let mut camera = Camera::perspective(
-                eye.to_array(),
-                look.to_array(),
-                width as f32 / height as f32,
-                2.0 * ((45f32.to_radians()).tan() / (width as f32 / height as f32)).atan(),
-                0.05,
-                4000.0,
-            );
-            camera.apply_environment(&scene);
-            camera.ambient[3] = f32::from(mode);
-            if std::env::var("BRI_BRICK_LIGHTS").is_ok_and(|v| v == "1") {
-                let mut near = brick_lights.clone();
-                near.sort_by(|a, b| {
-                    let d = |l: &bri_render::scene::PointLight| {
-                        Vec3::from_slice(&l.position_radius[..3]).distance_squared(*eye)
+            for variant in &variants {
+                let mut camera = Camera::perspective(
+                    eye.to_array(),
+                    look.to_array(),
+                    width as f32 / height as f32,
+                    2.0 * ((45f32.to_radians()).tan() / (width as f32 / height as f32)).atan(),
+                    0.05,
+                    4000.0,
+                );
+                camera.apply_environment(environment);
+                // The host's environment over the map's own, as the client
+                // resolves it; without one the map draws as authored.
+                if variant.host_environment() {
+                    let authored = bri_content::atmosphere::Authored {
+                        sun_direction: environment.sun_direction,
+                        direct_light: environment.sun_color,
+                        ambient_light: environment.ambient,
+                        fog_start: environment.fog.start,
+                        fog_end: environment.fog.end,
+                        fog_color: environment.fog.color,
                     };
-                    d(a).total_cmp(&d(b))
-                });
-                near.truncate(256);
-                renderer.update_lights(&queue, &near)?;
-            }
-            if no_sun {
-                camera.sun_color = [0.0; 4];
-            }
-            for c in 0..3 {
-                camera.sun_color[c] *= light_scale;
-                camera.ambient[c] *= light_scale;
-            }
-            let mut frames = Vec::new();
-            let mut gpu = Vec::new();
-            for i in 0..80 {
-                let t = Instant::now();
-                // Every frame, as the client does (lamp faces kept between
-                // frames redraw only when stale).
-                renderer.update_camera(&queue, &camera);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                if let Some(q) = &queries {
-                    encoder.write_timestamp(q, 0);
+                    let mut host = bri_content::atmosphere::Settings {
+                        enhanced_sky: variant.enhanced_sky,
+                        ..Default::default()
+                    };
+                    if let Some(h) = variant.sun {
+                        let elevation = 70f32;
+                        let angle = (h / elevation.to_radians().sin()).clamp(-1.0, 1.0).acos();
+                        host.day_cycle = Some(bri_content::atmosphere::DayCycle {
+                            length_seconds: 1000.0,
+                            time: 0.5 + angle / std::f32::consts::TAU,
+                            anchor_tick: 0,
+                        });
+                        host.sun_elevation = Some(elevation);
+                    }
+                    camera.apply_atmosphere(&bri_content::atmosphere::resolve(
+                        &authored, &host, 0.0,
+                    ));
                 }
-                // As the client: the map shades objects in the Unified modes.
-                let map: &[&GpuScene] = if mode != 0 { &scenes[..1] } else { &[] };
-                renderer.render_shadows_with_map(
-                    &mut encoder,
-                    ShadowCasters {
-                        scenes: if brick_shadows { &scenes[1..] } else { &[] },
-                        instances: &models,
-                    },
-                    ShadowCasters {
-                        scenes: if brick_shadows { &[] } else { &scenes[1..] },
-                        instances: &[],
-                    },
-                    map,
-                );
-                renderer.render_with_instances(
-                    &mut encoder,
-                    &view,
-                    &depth,
-                    &scenes,
-                    &terrain_draws,
-                    Some(wgpu::Color::BLACK),
-                );
-                if let Some(q) = &queries {
-                    encoder.write_timestamp(q, 1);
-                    encoder.resolve_query_set(q, 0..2, &resolved, 0);
-                    encoder.copy_buffer_to_buffer(&resolved, 0, &readable, 0, 16);
+                camera.ambient[3] = f32::from(mode);
+                if variant.original_sky {
+                    camera.set_enhanced_sky(false);
                 }
-                queue.submit([encoder.finish()]);
-                device.poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })?;
-                if i >= 10 {
-                    frames.push(ms(t.elapsed()));
-                    if queries.is_some() {
-                        readable.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-                        device.poll(wgpu::PollType::Wait {
-                            submission_index: None,
-                            timeout: None,
-                        })?;
-                        let ticks: Vec<u64> = readable
-                            .slice(..)
-                            .get_mapped_range()?
-                            .chunks_exact(8)
-                            .map(|c| u64::from_le_bytes(c.try_into().expect("8 bytes")))
-                            .collect();
-                        readable.unmap();
-                        gpu.push(ticks[1].wrapping_sub(ticks[0]) as f64 * period / 1e6);
+                // Classic stays exactly v20's flat shade.
+                camera.set_sky_ambient(variant.soft && mode != 0);
+                let occlusion_on = variant.ao && mode != 0;
+                if no_sun {
+                    camera.sun_color = [0.0; 4];
+                }
+                for c in 0..3 {
+                    camera.sun_color[c] *= light_scale;
+                    camera.ambient[c] *= light_scale;
+                }
+                let (color, resolve) = match &multisampled {
+                    Some(m) => (m, Some(&view)),
+                    None => (&view, None),
+                };
+                let mut frames = Vec::new();
+                let mut gpu = Vec::new();
+                let mut stretches: BTreeMap<&'static str, Vec<f64>> = BTreeMap::new();
+                let mut totals = Vec::new();
+                for i in 0..frame_count {
+                    let t = Instant::now();
+                    // Every frame, as the client does (lamp faces kept between
+                    // frames redraw only when stale).
+                    renderer.update_camera(&queue, &camera);
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    if let Some(q) = &queries {
+                        encoder.write_timestamp(q, 0);
+                    }
+                    renderer.begin_timing(&mut encoder);
+                    // As the client: the map shades objects in the Unified modes.
+                    let map: &[&GpuScene] = if mode != 0 { &scenes[..1] } else { &[] };
+                    renderer.render_shadows_with_geometry(
+                        &mut encoder,
+                        ShadowCasters {
+                            scenes: if bricks_cast { &scenes[1..] } else { &[] },
+                            instances: &models,
+                        },
+                        ShadowCasters {
+                            scenes: if bricks_cast { &[] } else { &scenes[1..] },
+                            instances: &[],
+                        },
+                        ShadowCasters {
+                            scenes: map,
+                            instances: if mode == 3 { &terrain_only } else { &[] },
+                        },
+                    );
+                    let world = WorldPass {
+                        view: 0,
+                        color,
+                        resolve,
+                        depth: &depth,
+                        viewport: None,
+                        clear: Some(wgpu::Color::BLACK),
+                        after_opaque: None,
+                        after_all: None,
+                    };
+                    if occlusion_on {
+                        let mut between = |encoder: &mut wgpu::CommandEncoder| {
+                            renderer.mark(encoder, "world");
+                            occlusion.render(
+                                &device,
+                                &queue,
+                                encoder,
+                                color,
+                                &depth,
+                                (width, height),
+                                camera.view_projection,
+                                [camera.eye[0], camera.eye[1], camera.eye[2]],
+                                (camera.atmosphere, camera.fog_color[3]),
+                            );
+                            renderer.mark(encoder, "occlusion");
+                        };
+                        renderer.render_world_split(
+                            &mut encoder,
+                            world,
+                            &scenes,
+                            &terrain_draws,
+                            &mut between,
+                        );
+                        renderer.mark(&mut encoder, "world blended");
+                    } else {
+                        renderer.render_world(&mut encoder, world, &scenes, &terrain_draws);
+                        renderer.mark(&mut encoder, "world");
+                    }
+                    renderer.end_timing(&mut encoder, "end");
+                    if let Some(q) = &queries {
+                        encoder.write_timestamp(q, 1);
+                        encoder.resolve_query_set(q, 0..2, &resolved, 0);
+                        encoder.copy_buffer_to_buffer(&resolved, 0, &readable, 0, 16);
+                    }
+                    queue.submit([encoder.finish()]);
+                    device.poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: None,
+                    })?;
+                    if i >= warm {
+                        frames.push(ms(t.elapsed()));
+                        if queries.is_some() {
+                            readable.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+                            device.poll(wgpu::PollType::Wait {
+                                submission_index: None,
+                                timeout: None,
+                            })?;
+                            let ticks: Vec<u64> = readable
+                                .slice(..)
+                                .get_mapped_range()?
+                                .chunks_exact(8)
+                                .map(|c| u64::from_le_bytes(c.try_into().expect("8 bytes")))
+                                .collect();
+                            readable.unmap();
+                            gpu.push(ticks[1].wrapping_sub(ticks[0]) as f64 * period / 1e6);
+                        }
+                    }
+                    if stretch_timing {
+                        // Readbacks arrive a few frames late; the same frame's
+                        // stretches are never counted twice in a row.
+                        if let Some((total, parts)) = renderer.pass_times(&device)
+                            && i >= warm + 8
+                        {
+                            totals.push(total.as_secs_f64() * 1000.0);
+                            for (label, time) in parts {
+                                stretches
+                                    .entry(label)
+                                    .or_default()
+                                    .push(time.as_secs_f64() * 1000.0);
+                            }
+                        }
                     }
                 }
+                frames.sort_by(f64::total_cmp);
+                gpu.sort_by(f64::total_cmp);
+                let median = |v: &mut Vec<f64>| {
+                    v.sort_by(f64::total_cmp);
+                    v.get(v.len() / 2).copied()
+                };
+                let gpu_p50 = gpu.get(gpu.len() / 2).copied();
+                let gpu_min = gpu.first().copied();
+                let stretch_p50: serde_json::Map<String, serde_json::Value> = stretches
+                    .iter_mut()
+                    .map(|(k, v)| (k.to_string(), json!(median(v))))
+                    .collect();
+                let total_p50 = median(&mut totals);
+                let pixels = read_back(&device, &queue, &target)?;
+                let suffix = if variant.name.is_empty() {
+                    String::new()
+                } else {
+                    format!("-{}", variant.name)
+                };
+                let file = out.join(format!("{name}-{label}{suffix}.png"));
+                image::save_buffer(&file, &pixels, width, height, image::ColorType::Rgba8)?;
+                println!(
+                    "{label}{suffix} {name}: wall p50 {:.2} ms (min {:.2}); GPU p50 {:.2} ms (min {:.2}) -> {}",
+                    frames[frames.len() / 2],
+                    frames[0],
+                    gpu_p50.unwrap_or(f64::NAN),
+                    gpu_min.unwrap_or(f64::NAN),
+                    file.display()
+                );
+                if stretch_timing {
+                    println!(
+                        "    stretches p50 (ms): total {:?} {}",
+                        total_p50,
+                        stretch_p50
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                }
+                views_out.insert(
+                    format!("{name}{suffix}"),
+                    json!({"p50_ms": frames[frames.len() / 2], "min_ms": frames[0], "p95_ms": frames[frames.len() * 95 / 100],
+                        "gpu_p50_ms": gpu_p50, "gpu_min_ms": gpu_min, "stretches_p50_ms": stretch_p50, "stretch_total_p50_ms": total_p50,
+                        "eye": eye.to_array(), "look": look.to_array()}),
+                );
             }
-            frames.sort_by(f64::total_cmp);
-            gpu.sort_by(f64::total_cmp);
-            let gpu_p50 = gpu.get(gpu.len() / 2).copied();
-            let gpu_min = gpu.first().copied();
-            let pixels = read_back(&device, &queue, &target)?;
-            let file = out.join(format!("{name}-{label}.png"));
-            image::save_buffer(&file, &pixels, width, height, image::ColorType::Rgba8)?;
-            println!(
-                "{label} {name}: wall p50 {:.2} ms (min {:.2}); GPU p50 {:.2} ms (min {:.2}) -> {}",
-                frames[frames.len() / 2],
-                frames[0],
-                gpu_p50.unwrap_or(f64::NAN),
-                gpu_min.unwrap_or(f64::NAN),
-                file.display()
-            );
-            views_out.insert(
-                name.clone(),
-                json!({"p50_ms": frames[frames.len() / 2], "min_ms": frames[0], "p95_ms": frames[frames.len() * 95 / 100],
-                    "gpu_p50_ms": gpu_p50, "gpu_min_ms": gpu_min, "eye": eye.to_array(), "look": look.to_array()}),
-            );
         }
         report.insert(label.into(), views_out.into());
     }
