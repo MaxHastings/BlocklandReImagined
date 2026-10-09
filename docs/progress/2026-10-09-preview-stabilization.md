@@ -36,9 +36,12 @@ Evidence on Max's PC, with no visible game or interactive input:
 - sky_shading_scene passed both native and synthetic cases (28.18 seconds).
   Native montage inspected: character, Jeep, transparent pane, green Glow,
   magenta particle; ordinary faces/contacts shade while emissive colours stay.
-- Further focused render suites and clippy are running; final results below
-  when complete. The earlier full gate's two Options failures are fixed and
-  rechecked; a full gate rerun is not claimed by these isolated checks.
+- Focused suites passed: lighting_environment 12; mirrors 12 (one existing
+  benchmark ignored by this non-benchmark command); shader_validation 3.
+- `cargo clippy -p bri-client -p bri-render -p bri-ui --all-targets --locked -- -D warnings` passed.
+- The earlier full gate's two Options failures are fixed and rechecked; a
+  full gate rerun is not claimed by these focused checks. No test or watchdog
+  was disabled, and no new known-failure exception was introduced.
 
 Runtime and verification source a4318d758:
 https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37979972281
