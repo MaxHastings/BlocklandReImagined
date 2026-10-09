@@ -4515,6 +4515,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sky_ambient_is_off_unless_asked_and_neutral_in_brightness() {
+        let mut camera = Camera::default();
+        camera.sky_bands = [[[0.4, 0.6, 1.0, 1.0]; SKY_AZIMUTHS]; SKY_ELEVATIONS];
+        camera.set_sky_ambient(false);
+        assert_eq!(camera.shading, [0.0; 4]);
+        camera.set_sky_ambient(true);
+        assert_eq!(camera.shading[0], 1.0);
+        let [_, r, g, b] = camera.shading;
+        // Unit brightness, bluer than neutral.
+        assert!((0.2126 * r + 0.7152 * g + 0.0722 * b - 1.0).abs() < 1e-4);
+        assert!(b > r);
+        // A black sky leaves the flat ambient.
+        camera.sky_bands = Default::default();
+        camera.set_sky_ambient(true);
+        assert_eq!(camera.shading, [0.0; 4]);
+    }
+
+    #[test]
     fn shadowed_light_parameters_reject_tiny_or_equal_near_radii() {
         let mut light = crate::map_lighting::MapLight {
             position: [0.0; 3],

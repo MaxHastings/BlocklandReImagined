@@ -444,8 +444,8 @@ fn ambient_at(reach:f32)->vec3<f32> {
 // Sky-tinted ambient (camera.shading, Unified and Dynamic only): faces turned
 // up take the ambient light in the sky's colour, faces turned down a darker
 // one, level faces about the flat ambient. `normal` is unit length.
-const HEMISPHERE_UP:f32=1.2;
-const HEMISPHERE_DOWN:f32=0.65;
+const HEMISPHERE_UP:f32=1.12;
+const HEMISPHERE_DOWN:f32=0.75;
 fn hemisphere(normal:vec3<f32>)->vec3<f32> {
     if camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
     let up=camera.shading.yzw*HEMISPHERE_UP;

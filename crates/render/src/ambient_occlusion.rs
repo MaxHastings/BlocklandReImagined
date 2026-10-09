@@ -19,7 +19,7 @@ struct Uniform {
 /// enclosed pixel (share of its light removed), and the eye distances it
 /// fades out over.
 pub const RADIUS: f32 = 0.9;
-pub const STRENGTH: f32 = 0.6;
+pub const STRENGTH: f32 = 0.4;
 pub const FADE: (f32, f32) = (40.0, 90.0);
 
 pub struct AmbientOcclusion {

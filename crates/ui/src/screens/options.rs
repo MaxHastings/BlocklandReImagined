@@ -62,10 +62,12 @@ const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Not a v20 setting (v20 shadowed only players, vehicles and items): bricks
 /// cast sun shadows too, off unless turned on.
 const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
-/// Not a v20 setting: sky-tinted shade and ambient occlusion on bricks in
-/// Unified and Dynamic lighting (Classic never draws them), on unless turned
-/// off.
+/// Not a v20 setting: sky-tinted shade in Unified and Dynamic lighting
+/// (Classic never draws it), on unless turned off.
 pub const SOFT_SHADING: &str = "$pref::Video::SoftShading";
+/// Not a v20 setting: ambient occlusion, a contact-shading pass over the
+/// world in Unified and Dynamic lighting, on unless turned off.
+pub const AMBIENT_OCCLUSION: &str = "$pref::Video::AmbientOcclusion";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
 /// v20's Physics Quality radios (0 Best .. 4 Off; the stock default is 1,
 /// High): how many knocked-out bricks tumble as debris at once.
@@ -286,6 +288,7 @@ const DEFAULT_ON: &[&str] = &[
     VEHICLE_MOUSE_INVERT,
     ANTI_ALIASING,
     SOFT_SHADING,
+    AMBIENT_OCCLUSION,
     PRECIPITATION,
     CHECK_FOR_UPDATES,
 ];
@@ -301,6 +304,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     ANTI_ALIASING,
     BRICK_SHADOWS,
     SOFT_SHADING,
+    AMBIENT_OCCLUSION,
     CHECK_FOR_UPDATES,
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
@@ -1429,10 +1433,15 @@ impl Options {
             c.text = Some("Brick Shadows".into());
             c.position[1] += c.extent[1] - 3;
             v.add(parent, c.clone());
-            // Soft Shading (sky-tinted shade and ambient occlusion) follows.
+            // Soft Shading (sky-tinted shade) and Ambient Occlusion follow.
             c.name = Some("OptGraphicsSoftShadingToggle".into());
             c.variable = Some(SOFT_SHADING.into());
             c.text = Some("Soft Shading".into());
+            c.position[1] += c.extent[1] - 3;
+            v.add(parent, c.clone());
+            c.name = Some("OptGraphicsAmbientOcclusionToggle".into());
+            c.variable = Some(AMBIENT_OCCLUSION.into());
+            c.text = Some("Ambient Occlusion".into());
             c.position[1] += c.extent[1] - 3;
             let below = c.position[1] + c.extent[1] + 8;
             v.add(parent, c);
