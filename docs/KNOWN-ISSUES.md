@@ -31,6 +31,9 @@ checks do not replace your playtest.
   coordinated stacking. Complex rule arrangements can exceed the planner's
   finite depth/work limits even when a human can solve them. Resting pauses an
   approach's travel deadline; scheduled event delays keep passing in real time.
+- **HE Grenade bots:** bots still don't throw HE Grenades properly. v0.2.7.1
+  stops them cancelling the wind-up over and over, but their throws are
+  unreliable.
 - **Portals:** Add-On bodies such as ragdolls do not go through portals yet:
   they drop out of the doorway's back. A Steel Ball rolled along the ground
   bumps the doorway's sill and loses speed; one thrown through keeps it.
