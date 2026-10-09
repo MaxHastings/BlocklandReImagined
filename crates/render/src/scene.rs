@@ -4632,15 +4632,6 @@ impl SceneRenderer {
             .unwrap_or(runs.len());
         for (i, (start, end)) in runs.into_iter().enumerate() {
             if i == blended
-                && let Some(after_opaque) = after_opaque.take()
-            {
-                after_opaque(&mut pass);
-                // It bound its own pipeline and groups.
-                binds += bound.binds;
-                bound = Bound::default();
-                pass.set_bind_group(0, &view.group, &[]);
-            }
-            if i == blended
                 && let Some(between) = between.take()
             {
                 drop(pass);
@@ -4655,6 +4646,17 @@ impl SceneRenderer {
                 );
                 binds += bound.binds;
                 bound = Bound::default();
+            }
+            if i == blended
+                && let Some(after_opaque) = after_opaque.take()
+            {
+                // Secondary-view images belong after the main view's AO:
+                // its depth cannot describe the world inside a mirror or
+                // portal. Still compose before transparent world geometry.
+                after_opaque(&mut pass);
+                binds += bound.binds;
+                bound = Bound::default();
+                pass.set_bind_group(0, &view.group, &[]);
             }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
@@ -4703,9 +4705,6 @@ impl SceneRenderer {
                 }
             }
         }
-        if let Some(after_opaque) = after_opaque {
-            after_opaque(&mut pass);
-        }
         if let Some(between) = between {
             drop(pass);
             between(encoder);
@@ -4717,6 +4716,9 @@ impl SceneRenderer {
                 viewport,
                 &view.group,
             );
+        }
+        if let Some(after_opaque) = after_opaque {
+            after_opaque(&mut pass);
         }
         if let Some(after_all) = after_all {
             after_all(&mut pass);

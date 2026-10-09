@@ -1455,6 +1455,7 @@ impl Options {
             c.name = Some("OptGraphicsAmbientOcclusionToggle".into());
             c.variable = Some(AMBIENT_OCCLUSION.into());
             c.text = Some("Ambient Occlusion".into());
+            c.extent[0] = 160;
             c.position[1] += c.extent[1] - 3;
             let below = c.position[1] + c.extent[1] + 8;
             v.add(parent, c);
@@ -1502,7 +1503,9 @@ impl Options {
                     }
                     v.add(parent, l);
                     v.add(parent, m);
-                    y += menu.extent[1] + 6;
+                    // Keep all eight menu rows above Done, including the
+                    // shading toggles. Two pixels still separate controls.
+                    y += menu.extent[1] + 2;
                 }
             }
         }
