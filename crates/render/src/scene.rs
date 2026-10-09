@@ -802,12 +802,6 @@ pub struct Camera {
     pub baked_ambient: [f32; 4],
     /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
     pub sky_bands: SkyBands,
-    /// Unit vector toward the real sun (below the horizon too, unlike
-    /// `sun_direction`, which turns to the moon at night); w 1 draws the
-    /// procedural Enhanced sky ([`Camera::set_enhanced_sky`]), 0 the map's own.
-    pub sky_sun: [f32; 4],
-    /// The host's sky colour, which tints the Enhanced sky.
-    pub sky_color: [f32; 4],
     /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
     /// off, the flat ambient), yzw the sky's colour at unit brightness.
     pub shading: [f32; 4],
@@ -894,22 +888,6 @@ impl Camera {
         self.atmosphere[1] = scene.fog.end;
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
         self.sky_bands = scene.sky_bands;
-        let toward = -Vec3::from(scene.sun_direction).normalize_or_zero();
-        self.sky_sun[..3].copy_from_slice(
-            &if toward == Vec3::ZERO {
-                Vec3::Y
-            } else {
-                toward
-            }
-            .to_array(),
-        );
-    }
-    /// Draw the procedural atmosphere instead of the map's sky textures, and
-    /// fog far geometry toward it ("Sky: Enhanced"). Off keeps v20's sky.
-    /// The host's choice arrives with [`Camera::apply_atmosphere`]; a player
-    /// who wants the original sky calls this with false after it.
-    pub fn set_enhanced_sky(&mut self, on: bool) {
-        self.sky_sun[3] = f32::from(u8::from(on));
     }
     /// The live environment (`bri_content::atmosphere::resolve`) over the
     /// map's own values, set by [`Camera::apply_environment`] first.
@@ -954,9 +932,6 @@ impl Camera {
             live.flare.1,
         ];
         self.flare = live.flare.0;
-        self.sky_sun[..3].copy_from_slice(&live.sun_toward);
-        self.sky_sun[3] = f32::from(u8::from(live.enhanced_sky));
-        self.sky_color = [live.sky_color[0], live.sky_color[1], live.sky_color[2], 1.0];
     }
     /// Turn sky-tinted ambient on or off. On, faces turned up take the
     /// ambient light in the sky's colour and faces turned down a darker one,
@@ -1011,13 +986,12 @@ impl Default for Camera {
             baked_ambient: [0.0; 4],
             shading: [0.0; 4],
             sky_bands: Default::default(),
-            sky_sun: [0.0, 1.0, 0.0, 0.0],
-            sky_color: [1.0; 4],
         }
     }
 }
 
 pub struct GpuScene {
+    sky_revision: Arc<std::sync::atomic::AtomicU64>,
     material_descriptors: Vec<Material>,
     image_signatures: Vec<([u32; 2], bool, [u8; 32])>,
     /// The images' textures, for `patch_images`.
@@ -1229,6 +1203,8 @@ impl GpuScene {
     /// cover nothing, shadows included. A later upload of the scene draws
     /// them again.
     pub fn hide_vertices(&self, queue: &wgpu::Queue, range: Range<u32>) {
+        self.sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         const HIDDEN: SceneVertex = SceneVertex {
             position: [0.; 3],
             normal: [0.; 3],
@@ -1280,6 +1256,8 @@ impl GpuScene {
             queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(vertices));
         }
         self.extent = vertex_extent(vertices);
+        self.sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         for (batch, center) in self.batches.iter_mut().zip(centers) {
             batch.center = *center;
         }
@@ -1299,6 +1277,10 @@ impl GpuScene {
         images: &[SceneImage],
         changed: &[usize],
     ) -> Result<()> {
+        if !changed.is_empty() {
+            self.sky_revision
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         for &index in changed {
             let (Some(image), Some(texture)) = (images.get(index), self.textures.get(index)) else {
                 anyhow::bail!("Patched image {index} is not in the scene");
@@ -1348,6 +1330,7 @@ impl GpuScene {
             .context("Scene batch view out of range")?
             .clone();
         Ok(GpuScene {
+            sky_revision: self.sky_revision.clone(),
             material_descriptors: self.material_descriptors.clone(),
             image_signatures: self.image_signatures.clone(),
             textures: self.textures.clone(),
@@ -1792,6 +1775,7 @@ fn camera_group(
     volume: &VolumeBinding,
     map_lights: &MapLightBinding,
     probe: &crate::environment_probe::ProbeBinding,
+    sky: &crate::sky_exposure::SkyExposure,
 ) -> wgpu::BindGroup {
     let [tiled, clamped, side] = filtering.diffuse_samplers();
     let exact = |address_mode| wgpu::SamplerDescriptor {
@@ -1873,6 +1857,14 @@ fn camera_group(
         wgpu::BindGroupEntry {
             binding: 18,
             resource: probe.uniform.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 19,
+            resource: sky.depths.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 20,
+            resource: sky.receiver.as_entire_binding(),
         },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2362,6 +2354,8 @@ impl<'a> Bound<'a> {
 /// One camera the world is drawn from: the player's view (0), or a
 /// mirror's reflected view.
 struct View {
+    sky: crate::sky_exposure::SkyExposure,
+    sky_on: bool,
     camera: wgpu::Buffer,
     group: wgpu::BindGroup,
     eye: Vec3,
@@ -2567,6 +2561,26 @@ impl SceneRenderer {
                 },
                 sampler_entry(17),
                 wgpu::BindGroupLayoutEntry {
+                    binding: 19,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
                     binding: 18,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -2694,6 +2708,7 @@ impl SceneRenderer {
             &self.volume,
             &self.map_lights,
             &self.probe,
+            &self.views[view].sky,
         )
     }
     /// At least the player's view plus `count - 1` more (mirrors' reflected
@@ -2708,8 +2723,25 @@ impl SceneRenderer {
                 contents: bytemuck::bytes_of(&Camera::default()),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
-            let group = self.view_group(device, self.views.len(), &camera);
+            let sky =
+                crate::sky_exposure::SkyExposure::new(device, &self.shadows.caster_layout, false);
+            let group = camera_group(
+                device,
+                &self.camera_layout,
+                self.views.len(),
+                &camera,
+                &self.light_buffer,
+                &self.light_grid,
+                self.filtering,
+                &self.shadows,
+                &self.volume,
+                &self.map_lights,
+                &self.probe,
+                &sky,
+            );
             self.views.push(View {
+                sky,
+                sky_on: false,
                 camera,
                 group,
                 eye: Vec3::ZERO,
@@ -3060,6 +3092,7 @@ impl SceneRenderer {
             }));
         }
         Ok(GpuScene {
+            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             material_descriptors: data.materials.clone(),
             image_signatures: image_signatures(data),
             textures: Arc::new(textures),
@@ -3187,6 +3220,7 @@ impl SceneRenderer {
         (vertex_count, index_count): (usize, usize),
     ) -> GpuScene {
         GpuScene {
+            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             vertices,
             indices,
             base_vertex: slot.as_ref().map_or(0, |s| s.vertices.start as i32),
@@ -3246,6 +3280,7 @@ impl SceneRenderer {
         // does, because wgpu panics on slicing an empty buffer.
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
+            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             vertices,
             indices,
             materials: base.materials.clone(),
@@ -3403,8 +3438,7 @@ impl SceneRenderer {
         if view >= self.views.len() {
             return;
         }
-        let modern =
-            camera.sky_sun[3] > 0.5 || (camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5);
+        let modern = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
         // Keep main's original shader and uniform prefix when the effects are off.
         // On pipelines cost nothing until first use.
         if modern && self.modern_pipelines.is_empty() {
@@ -3432,7 +3466,18 @@ impl SceneRenderer {
                 true,
             );
         }
+        let sky_on = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
+        if sky_on && !self.views[view].sky.enabled {
+            self.views[view].sky = crate::sky_exposure::SkyExposure::new(
+                &self.device,
+                &self.shadows.caster_layout,
+                true,
+            );
+            self.views[view].group = self.view_group(&self.device, view, &self.views[view].camera);
+        }
         let v = &mut self.views[view];
+        v.sky_on = sky_on;
+        v.sky.prepared.set(false);
         v.modern = modern;
         v.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
         v.frustum = Some(frustum_planes(Mat4::from_cols_array(
@@ -3544,6 +3589,155 @@ impl SceneRenderer {
     )> {
         self.timer.borrow_mut().as_mut()?.collect(device).cloned()
     }
+    /// Render sun shadow casters (bricks, players, vehicles, items; never map
+    /// Measure sky exposure from current occluding geometry for this view.
+    /// Callers can supply the persistent map/build separately from moving
+    /// receivers, keeping the cache steady while characters and cars move.
+    /// All receivers, including secondary views, sample world-space visibility.
+    pub fn render_view_sky_exposure(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: usize,
+        geometry: ShadowCasters<'_>,
+    ) {
+        use std::hash::{Hash, Hasher};
+        let Some(v) = self.views.get(view).filter(|v| v.sky_on) else {
+            return;
+        };
+        let Some(queue) = self.queue.borrow().clone() else {
+            return;
+        };
+        let mut key = Vec::new();
+        let mut bounds: Option<(Vec3, Vec3)> = None;
+        let mut extend = |scene: &GpuScene, model: Mat4| {
+            if let Some((min, max)) = scene.extent {
+                for i in 0..8 {
+                    let p = model.transform_point3(Vec3::new(
+                        if i & 1 == 0 { min.x } else { max.x },
+                        if i & 2 == 0 { min.y } else { max.y },
+                        if i & 4 == 0 { min.z } else { max.z },
+                    ));
+                    bounds = Some(bounds.map_or((p, p), |(a, b)| (a.min(p), b.max(p))));
+                }
+            }
+        };
+        let signature = |scene: &GpuScene| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            (std::ptr::from_ref(scene) as usize).hash(&mut hash);
+            scene
+                .sky_revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .hash(&mut hash);
+            for b in &scene.batches {
+                b.indices.hash(&mut hash);
+            }
+            hash.finish()
+        };
+        for scene in geometry.scenes {
+            key.push(signature(scene));
+            extend(scene, Mat4::IDENTITY);
+        }
+        for (scene, instances) in geometry.instances {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            signature(scene).hash(&mut hash);
+            for t in &instances.transforms {
+                for f in t.transform.to_cols_array().into_iter().chain(t.tint) {
+                    f.to_bits().hash(&mut hash);
+                }
+                extend(scene, t.transform);
+            }
+            for clip in &instances.clips {
+                for f in clip {
+                    f.to_bits().hash(&mut hash);
+                }
+            }
+            key.push(hash.finish());
+        }
+        let Some(matrices) = v.sky.plan(&queue, v.eye, key, bounds) else {
+            return;
+        };
+        for (i, matrix) in matrices.iter().enumerate() {
+            let planes = frustum_planes(*matrix);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sky exposure"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &v.sky.layers[i],
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(
+                0,
+                &v.sky.group,
+                &[crate::sky_exposure::SkyExposure::offset(i)],
+            );
+            let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>, bool)> = geometry
+                .scenes
+                .iter()
+                .map(|scene| (*scene, &self.identity_instance, 0..1, false))
+                .collect();
+            for (scene, instances) in geometry.instances {
+                for (j, t) in instances
+                    .transforms
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.tint[3] == 1.0)
+                {
+                    let _ = t;
+                    items.push((
+                        scene,
+                        &instances.buffer,
+                        j as u32..j as u32 + 1,
+                        instances.clipped(),
+                    ));
+                }
+            }
+            let mut bound = Bound::default();
+            for (scene, instance_buffer, range, cut) in items {
+                if scene.vertex_count == 0
+                    || scene.index_count == 0
+                    || scene.bounds.is_some_and(|b| !aabb_visible(&planes, b))
+                {
+                    continue;
+                }
+                bound.geometry(&mut pass, &scene.vertices, instance_buffer, &scene.indices);
+                for batch in &scene.batches {
+                    let (blend, _, background, masked, _) = scene.material_modes[batch.material];
+                    if blend != 0 || background {
+                        continue;
+                    }
+                    bound.pipeline(
+                        &mut pass,
+                        &self.shadows.pipelines[if masked {
+                            1
+                        } else if cut {
+                            2
+                        } else {
+                            0
+                        }],
+                    );
+                    if masked {
+                        bound.material(&mut pass, &scene.materials[batch.material]);
+                    }
+                    pass.draw_indexed(
+                        scene.index_range(&batch.indices),
+                        scene.base_vertex,
+                        range.clone(),
+                    );
+                }
+            }
+        }
+        v.sky.copy(encoder);
+        self.mark(encoder, "sky exposure");
+    }
+
     /// Render sun shadow casters (bricks, players, vehicles, items; never map
     /// interiors or terrain, see `crate::shadow`) for the camera last passed
     /// to `update_camera`. Only opaque and alpha-masked, non-background
@@ -4372,6 +4566,18 @@ impl SceneRenderer {
         mut between: Option<&mut dyn FnMut(&mut wgpu::CommandEncoder)>,
         mask_only: bool,
     ) {
+        if !mask_only
+            && self
+                .views
+                .get(target.view)
+                .is_some_and(|v| v.sky_on && !v.sky.prepared.get())
+        {
+            self.render_view_sky_exposure(
+                encoder,
+                target.view,
+                ShadowCasters { scenes, instances },
+            );
+        }
         let Some(view) = self.views.get(target.view) else {
             return;
         };

@@ -20,8 +20,8 @@ CASES = {
     "dense": ("Golden Gate Bridge", "map_slate/", []),
     "water": ("synthetic:map_slate/:0", "map_slate_sea_revised/", ["surface=0,10,0,60,-10,60"]),
 }
-OFF = "off:soft=0,ao=0,original_sky=1"
-VARIANTS = OFF + ";soft:soft=1,ao=0,original_sky=1;ao:soft=0,ao=1,original_sky=1;both:soft=1,ao=1,original_sky=1;forced:soft=0,ao=0,original_sky=1,enhanced_sky=1;enhanced:soft=1,ao=1,enhanced_sky=1"
+OFF = "off:soft=0,ao=0"
+VARIANTS = OFF + ";soft:soft=1,ao=0;ao:soft=0,ao=1;both:soft=1,ao=1"
 
 
 def run(probe, content, out, case, variants, modes, samples=1, width=1920, height=1080, frames=16):
@@ -91,7 +91,7 @@ def main():
                             if a.tobytes() != b.tobytes():
                                 raise RuntimeError(f"Original override differs: {case}/{mode}")
         elif args.phase == "looks":
-            variants = VARIANTS + ";sunset:soft=1,ao=1,enhanced_sky=1,sun=0.02;twilight:soft=1,ao=1,enhanced_sky=1,sun=-0.12"
+            variants = VARIANTS + ";sunset:soft=1,ao=1,sun=0.02;twilight:soft=1,ao=1,sun=-0.12"
             run(args.preview, args.content, folder, case, variants, "unified,dynamic", frames=24)
             for original in folder.glob("*-off.png"):
                 with Image.open(original) as a, Image.open(original.with_name(original.name.replace("-off.png", "-soft.png"))) as b:
@@ -110,7 +110,7 @@ def main():
             for width, height in [(1920, 1080), (2560, 1440)]:
                 for samples in [1, 4]:
                     target = folder / f"{width}x{height}-msaa{samples}"
-                    run(args.preview, args.content, target, case, OFF + ";ao:soft=0,ao=1,original_sky=1;both:soft=1,ao=1,original_sky=1", "unified,dynamic", samples, width, height, frames=160)
+                    run(args.preview, args.content, target, case, OFF + ";ao:soft=0,ao=1;both:soft=1,ao=1", "unified,dynamic", samples, width, height, frames=160)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{args.phase}-results.json").write_text(json.dumps(results, indent=2))
     print(f"{args.phase} completed", flush=True)

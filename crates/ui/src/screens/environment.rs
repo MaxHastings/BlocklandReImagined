@@ -94,9 +94,8 @@ enum Row {
     Number(NumberField),
     Color(ColorField),
     VignetteMultiply,
-    EnhancedSky,
 }
-const ROWS: [Row; 17] = [
+const ROWS: [Row; 16] = [
     Row::DayCycle,
     Row::Number(NumberField::DayLength),
     Row::Number(NumberField::TimeOfDay),
@@ -113,7 +112,6 @@ const ROWS: [Row; 17] = [
     Row::Color(ColorField::SkyColor),
     Row::Color(ColorField::Vignette),
     Row::VignetteMultiply,
-    Row::EnhancedSky,
 ];
 const ROW_HEIGHT: i32 = 28;
 const COLOR_FIELDS: [ColorField; 7] = [
@@ -226,7 +224,6 @@ impl Environment {
                 Row::Number(f) => f.label(),
                 Row::Color(f) => f.label(),
                 Row::VignetteMultiply => "Vignette Multiply",
-                Row::EnhancedSky => "Enhanced Sky",
             };
             rows.children
                 .push(text("GuiTextProfile", Rect::new(6, y, 130, 20), label));
@@ -238,10 +235,6 @@ impl Environment {
                 Row::VignetteMultiply => {
                     rows.children
                         .push(check(Rect::new(140, y, 200, 20), "", "EnvVignetteMultiply"))
-                }
-                Row::EnhancedSky => {
-                    rows.children
-                        .push(check(Rect::new(140, y, 200, 20), "", "EnvEnhancedSky"))
                 }
                 Row::Number(f) => {
                     rows.children.push(slider(
@@ -319,9 +312,6 @@ impl Environment {
             if let Some(n) = v.id(name) {
                 v.set_bool(n, cycle);
             }
-        }
-        if let Some(n) = v.id("EnvEnhancedSky") {
-            v.set_bool(n, m.enhanced_sky());
         }
         if let Some(n) = v.id("EnvVignetteMultiply") {
             v.set_bool(n, m.vignette_multiply());
@@ -428,9 +418,6 @@ impl Screen for Environment {
             if matches!(name.as_str(), "EnvDayCycleSimple" | "EnvDayCycleAdvanced") {
                 let on = self.view.bool_value(ev.node);
                 core.environment.set_day_cycle(on);
-            } else if name == "EnvEnhancedSky" {
-                let on = self.view.bool_value(ev.node);
-                core.environment.set_enhanced_sky(on);
             } else if name == "EnvVignetteMultiply" {
                 let on = self.view.bool_value(ev.node);
                 core.environment.set_vignette_multiply(on);

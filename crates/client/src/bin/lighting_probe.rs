@@ -21,11 +21,10 @@
 //! `BRI_MODES=classic,unified,dynamic` picks the modes to draw (default: classic,
 //! unified, classic again); dynamic loads the map as the client does for
 //! Dynamic (no baked lightmaps) and draws it with a renderer of its own.
-//! `BRI_VARIANTS="name:soft=1,ao=1,original_sky=1,enhanced_sky=1,sun=0.5;..."`
+//! `BRI_VARIANTS="name:soft=1,ao=1,sun=0.5;..."`
 //! draws every view once per variant as `{view}-{mode}-{name}.png`: soft
-//! (Graphics.soft_shading), ao (Graphics.ambient_occlusion), original_sky
-//! (Graphics.original_sky), enhanced_sky (the host environment's
-//! enhanced_sky), sun (sun height -1..1 on a day cycle; either of the last two
+//! (Graphics.soft_shading), ao (Graphics.ambient_occlusion),
+//! sun (sun height -1..1 on a day cycle; this
 //! applies a live environment, otherwise the map draws as authored).
 //! `BRI_WIDTH=2560` and `BRI_HEIGHT=1440` set the image size.
 //! `BRI_MSAA=4` the client's default samples (1 otherwise), `BRI_FRAMES=n`,
@@ -399,10 +398,6 @@ struct Variant {
     name: String,
     soft: bool,
     ao: bool,
-    original_sky: bool,
-    /// The host environment's `enhanced_sky`; None leaves it unset.
-    enhanced_sky: Option<bool>,
-    /// Sun height (-1..1) on a day cycle, a host environment setting.
     sun: Option<f32>,
 }
 
@@ -413,8 +408,6 @@ impl Variant {
                 name: String::new(),
                 soft: false,
                 ao: false,
-                original_sky: false,
-                enhanced_sky: None,
                 sun: None,
             }]);
         };
@@ -426,8 +419,6 @@ impl Variant {
                     name: name.trim().to_string(),
                     soft: false,
                     ao: false,
-                    original_sky: false,
-                    enhanced_sky: None,
                     sun: None,
                 };
                 for pair in keys.split(',').filter(|k| !k.trim().is_empty()) {
@@ -436,8 +427,6 @@ impl Variant {
                     match key.trim() {
                         "soft" => variant.soft = on,
                         "ao" => variant.ao = on,
-                        "original_sky" => variant.original_sky = on,
-                        "enhanced_sky" => variant.enhanced_sky = Some(on),
                         "sun" => variant.sun = Some(value.trim().parse()?),
                         other => anyhow::bail!("BRI_VARIANTS: unknown key {other:?}"),
                     }
@@ -447,7 +436,7 @@ impl Variant {
             .collect()
     }
     fn host_environment(&self) -> bool {
-        self.enhanced_sky.is_some() || self.sun.is_some()
+        self.sun.is_some()
     }
 }
 
@@ -1437,7 +1426,6 @@ fn main() -> Result<()> {
                         fog_color: environment.fog.color,
                     };
                     let mut host = bri_content::atmosphere::Settings {
-                        enhanced_sky: variant.enhanced_sky,
                         ..Default::default()
                     };
                     if let Some(h) = variant.sun {
@@ -1454,10 +1442,6 @@ fn main() -> Result<()> {
                         .apply_atmosphere(&bri_content::atmosphere::resolve(&authored, &host, 0.0));
                 }
                 camera.ambient[3] = f32::from(mode);
-                if variant.original_sky {
-                    camera.set_enhanced_sky(false);
-                }
-                // Classic stays exactly v20's flat shade.
                 camera.set_sky_ambient(variant.soft && mode != 0);
                 let occlusion_on = variant.ao && mode != 0;
                 if no_sun {

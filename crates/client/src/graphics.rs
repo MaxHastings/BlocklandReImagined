@@ -10,7 +10,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 pub use bri_ui::screens::options::{
-    AMBIENT_OCCLUSION, LIGHTING, REFLECTIONS, RENDER_SCALE, SKY, SOFT_SHADING,
+    AMBIENT_OCCLUSION, LIGHTING, REFLECTIONS, RENDER_SCALE, SOFT_SHADING,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,9 +36,6 @@ pub struct Graphics {
     /// of the window's width and height (100: every pixel), stretched over
     /// it; the interface always draws at full size.
     pub render_scale: u32,
-    /// Native `$pref::Video::Sky` = 1: always draw the map's own sky, even
-    /// where the host's Environment chose the generated one.
-    pub original_sky: bool,
     /// Native `$pref::Video::SoftShading` (on unless turned off): sky-tinted
     /// ambient in Unified and Dynamic lighting only.
     pub soft_shading: bool,
@@ -107,7 +104,6 @@ impl Graphics {
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
             lighting,
             render_scale: bri_ui::screens::options::render_scale(&prefs),
-            original_sky: bri_ui::screens::options::sky(&prefs) == 1,
             soft_shading: prefs.bool_or(SOFT_SHADING, true),
             ambient_occlusion: prefs.bool_or(AMBIENT_OCCLUSION, true),
         }
@@ -155,10 +151,6 @@ mod tests {
         assert_eq!(graphics(&[(RENDER_SCALE, "70")]).render_scale, 70);
         assert_eq!(graphics(&[(RENDER_SCALE, "5")]).render_scale, 25);
         assert_eq!(graphics(&[(RENDER_SCALE, "400")]).render_scale, 100);
-        // The sky is the server's unless the player forces the original.
-        assert!(!graphics(&[]).original_sky);
-        assert!(graphics(&[(SKY, "1")]).original_sky);
-        assert!(!graphics(&[(SKY, "0")]).original_sky);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);

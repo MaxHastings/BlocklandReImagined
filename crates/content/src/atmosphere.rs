@@ -78,7 +78,7 @@ pub struct Vignette {
 }
 
 /// Every setting's name, as [`Settings::unset`] takes them.
-pub const KEYS: [&str; 13] = [
+pub const KEYS: [&str; 12] = [
     "day_cycle",
     "sun_azimuth",
     "sun_elevation",
@@ -91,7 +91,6 @@ pub const KEYS: [&str; 13] = [
     "fog_color",
     "sky_color",
     "vignette",
-    "enhanced_sky",
 ];
 
 /// What the server set. `None` keeps the map's own value.
@@ -132,11 +131,6 @@ pub struct Settings {
     pub sky_color: Option<[f32; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vignette: Option<Vignette>,
-    /// Draw a generated atmosphere in place of the map's sky textures (v20
-    /// had none); unset keeps the map's own sky. Players can still force
-    /// the original one locally.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enhanced_sky: Option<bool>,
 }
 
 fn unit(c: &[f32]) -> bool {
@@ -209,8 +203,7 @@ impl Settings {
             fog_distance,
             fog_color,
             sky_color,
-            vignette,
-            enhanced_sky
+            vignette
         );
     }
     /// Put setting `name` (a field name, as in [`KEYS`]) back to the map's
@@ -229,7 +222,6 @@ impl Settings {
             "fog_color" => self.fog_color = None,
             "sky_color" => self.sky_color = None,
             "vignette" => self.vignette = None,
-            "enhanced_sky" => self.enhanced_sky = None,
             _ => return false,
         }
         true
@@ -257,9 +249,6 @@ pub struct Authored {
 pub struct Live {
     /// Direction the sunlight (or, at night, the moonlight) travels.
     pub sun_direction: [f32; 3],
-    /// Unit vector toward the sun itself, even below the horizon, where
-    /// `sun_direction` has turned to the moon's light. The moon is opposite.
-    pub sun_toward: [f32; 3],
     pub direct_light: [f32; 3],
     pub ambient_light: [f32; 3],
     /// Light where the sun does not reach; the ambient light when unset.
@@ -274,11 +263,6 @@ pub struct Live {
     /// when the alpha is 0.
     pub flare: ([f32; 4], f32),
     pub vignette: Option<Vignette>,
-    /// The host chose the generated sky.
-    pub enhanced_sky: bool,
-    /// The host's sky colour alone, `[1; 3]` when unset: the generated sky is
-    /// multiplied by it (`sky_tint` also carries the day's own dimming).
-    pub sky_color: [f32; 3],
 }
 
 /// Direction sunlight travels (native Y-up) for a sun at `azimuth` and
@@ -330,14 +314,6 @@ fn mul(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
     a.map(|v| v * s)
 }
-fn normalized(a: [f32; 3]) -> [f32; 3] {
-    let length = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
-    if length <= f32::EPSILON {
-        [0.0, 1.0, 0.0]
-    } else {
-        a.map(|v| v / length)
-    }
-}
 fn clamp01(a: [f32; 3]) -> [f32; 3] {
     a.map(|v| v.clamped(0.0, 1.0))
 }
@@ -379,14 +355,12 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     let flare = settings
         .sun_flare
         .map_or(([0.0; 4], 1.0), |f| (f.color, f.size));
-    let sun_direction = if settings.sun_azimuth.is_some() || settings.sun_elevation.is_some() {
-        light_direction(azimuth, elevation)
-    } else {
-        authored.sun_direction
-    };
     let mut live = Live {
-        sun_direction,
-        sun_toward: normalized(sun_direction.map(|v| -v)),
+        sun_direction: if settings.sun_azimuth.is_some() || settings.sun_elevation.is_some() {
+            light_direction(azimuth, elevation)
+        } else {
+            authored.sun_direction
+        },
         direct_light: direct,
         ambient_light: ambient,
         shadow_color: settings.shadow_color,
@@ -396,17 +370,6 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
         sky_tint: sky,
         flare,
         vignette: settings.vignette,
-        enhanced_sky: settings.enhanced_sky.unwrap_or(false),
-        // Generated radiance keeps the authored map's darkness. Use the
-        // daylight reference before the cycle dims it (the scattering already
-        // follows sun height); explicit host lighting can brighten a dark map.
-        sky_color: scale(
-            sky,
-            (0..3)
-                .map(|c| direct[c] + ambient[c])
-                .fold(0.0f32, f32::max)
-                .clamped(0.0, 1.0),
-        ),
     };
     let Some(cycle) = settings.day_cycle else {
         return live;
@@ -430,7 +393,6 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     let moon = 1.0 - smoothstep(-0.25, -0.05, height);
     let warm = 1.0 - smoothstep(0.0, 0.3, (height - 0.04).abs());
     let tint = mix([1.0; 3], DUSK, warm);
-    live.sun_toward = normalized(native(toward));
     live.sun_direction = if height >= -0.05 {
         native(toward.map(|v| -v))
     } else {
@@ -574,27 +536,6 @@ mod tests {
     }
 
     #[test]
-    fn generated_sky_keeps_a_dark_maps_light_level_and_explicit_host_light() {
-        let dark = Authored {
-            direct_light: [0.0; 3],
-            ambient_light: [0.02; 3],
-            ..map()
-        };
-        let settings = Settings {
-            enhanced_sky: Some(true),
-            ..Default::default()
-        };
-        let live = resolve(&dark, &settings, 0.0);
-        assert_eq!(live.sky_color, [0.02; 3]);
-        assert_eq!(live.sky_tint, [1.0; 3]); // Original sky is untouched.
-        let bright = Settings {
-            ambient_light: Some([1.0; 3]),
-            ..settings
-        };
-        assert_eq!(resolve(&dark, &bright, 0.0).sky_color, [1.0; 3]);
-    }
-
-    #[test]
     fn directions_match_the_scene_sun_and_invert() {
         for (a, e) in [(315.0, 45.0), (0.0, 35.0), (90.0, 10.0), (200.0, 80.0)] {
             let d = crate::scene::sun_direction(a, e, f32::sin, f32::cos);
@@ -679,26 +620,6 @@ mod tests {
         assert!(close(night.direct_light, MOON));
         assert!(night.sky_tint.iter().all(|c| *c < 0.3));
         assert!(night.ambient_light[0] < map().ambient_light[0] * 0.5);
-        // The real sun stays where it is: high at noon, under the ground at
-        // midnight when the light direction has turned to the moon.
-        assert!(noon.sun_toward[1] > 0.8, "{:?}", noon.sun_toward);
-        assert!(night.sun_toward[1] < -0.8, "{:?}", night.sun_toward);
-        assert!(night.sun_direction[1] < -0.3);
-        let length = |v: [f32; 3]| v.iter().map(|c| c * c).sum::<f32>().sqrt();
-        assert!((length(night.sun_toward) - 1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn the_host_opts_in_to_the_generated_sky() {
-        let mut s = Settings::default();
-        assert!(!resolve(&map(), &s, 0.0).enhanced_sky);
-        s.enhanced_sky = Some(true);
-        assert!(resolve(&map(), &s, 0.0).enhanced_sky);
-        let mut merged = Settings::default();
-        merged.merge(&s);
-        assert_eq!(merged.enhanced_sky, Some(true));
-        assert!(merged.unset("enhanced_sky") && merged.is_empty());
-        assert!(KEYS.contains(&"enhanced_sky"));
     }
 
     #[test]

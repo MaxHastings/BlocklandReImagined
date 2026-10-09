@@ -613,9 +613,6 @@ impl App {
             );
         }
         camera.ambient[3] = f32::from(self.lighting.light_volume.mode(self.graphics.lighting));
-        if self.graphics.original_sky {
-            camera.set_enhanced_sky(false);
-        }
         // Classic stays exactly v20's flat shade.
         let modern = camera.ambient[3] >= 0.5;
         camera.set_sky_ambient(self.graphics.soft_shading && modern);
@@ -1161,6 +1158,20 @@ impl App {
             (bodies, models, blockers, blocking, map, terrain_map)
         };
         let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+            let sky_scenes: Vec<_> = self
+                .gpu
+                .gpu_scene
+                .iter()
+                .chain(self.gpu.gpu_chunks.values())
+                .collect();
+            renderer.render_view_sky_exposure(
+                encoder,
+                view,
+                ShadowCasters {
+                    scenes: &sky_scenes,
+                    instances: &terrain_map,
+                },
+            );
             renderer.render_view_shadows(
                 encoder,
                 view,

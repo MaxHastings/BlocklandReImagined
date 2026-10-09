@@ -645,6 +645,7 @@ pub(crate) struct ShadowMaps {
     pub receiver: wgpu::Buffer,
     caster: wgpu::Buffer,
     pub caster_group: wgpu::BindGroup,
+    pub caster_layout: wgpu::BindGroupLayout,
     /// Per cascade: the caster group plus that cascade's caster depth, which
     /// occluders test against.
     pub occluder_groups: Vec<wgpu::BindGroup>,
@@ -966,6 +967,7 @@ impl ShadowMaps {
             receiver,
             caster,
             caster_group,
+            caster_layout,
             occluder_groups,
             pipelines: [
                 pipeline("sun shadow casters", &opaque_layout, None),

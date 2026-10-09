@@ -140,18 +140,6 @@ pub fn lighting(p: &Prefs) -> i64 {
         _ => 3,
     }
 }
-/// Not a v20 setting: 0 draws the sky the server's Environment chose
-/// (`enhanced_sky`; a map's own unless the host opted in), 1 always draws the
-/// map's own sky textures, for players who want v20's look or a lighter
-/// frame. It can only turn the generated sky off. Independent of Lighting and
-/// of the Quality presets. The client's graphics settings read it.
-pub const SKY: &str = "$pref::Video::Sky";
-const SKY_MENU: &str = "OptGraphicsSkyMenu";
-const SKY_CHOICES: [(&str, i64); 2] = [("Server's", 0), ("Original", 1)];
-/// The sky `$pref::Video::Sky` asks for.
-pub fn sky(p: &Prefs) -> i64 {
-    p.i64_or(SKY, 0).clamp(0, 1)
-}
 /// Not a v20 setting: the share of the window's width and height the world
 /// draws at, in percent (100 unless chosen); the interface always draws at
 /// full size. The client's graphics settings read it.
@@ -1208,7 +1196,6 @@ impl Options {
         s.menu(UI_SCALE_MENU, scale_items, scale);
         s.set_reflections(reflections(&core.prefs));
         s.set_lighting(lighting(&core.prefs));
-        s.set_sky(sky(&core.prefs));
         let scale = i64::from(render_scale(&core.prefs));
         let scale_items = RENDER_SCALE_CHOICES
             .iter()
@@ -1476,7 +1463,6 @@ impl Options {
                     (COLOR_VISION_MENU, "Colors:"),
                     (REFLECTIONS_MENU, "Mirrors:"),
                     (LIGHTING_MENU, "Lighting:"),
-                    (SKY_MENU, "Sky:"),
                     (RENDER_SCALE_MENU, "Render Scale:"),
                 ] {
                     let mut m = menu.clone();
@@ -1503,7 +1489,7 @@ impl Options {
                     }
                     v.add(parent, l);
                     v.add(parent, m);
-                    // Keep all eight menu rows above Done, including the
+                    // Keep all seven menu rows above Done, including the
                     // shading toggles. Two pixels still separate controls.
                     y += menu.extent[1] + 2;
                 }
@@ -1698,13 +1684,6 @@ impl Options {
             .collect();
         self.menu(LIGHTING_MENU, items, mode);
     }
-    fn set_sky(&mut self, mode: i64) {
-        let items = SKY_CHOICES
-            .iter()
-            .map(|&(t, mode)| (t.to_string(), mode))
-            .collect();
-        self.menu(SKY_MENU, items, mode);
-    }
     fn set_reflections(&mut self, level: i64) {
         let items = REFLECTIONS_CHOICES
             .iter()
@@ -1887,9 +1866,6 @@ impl Options {
                 .find(|&m| m == mode)
                 .unwrap_or(2);
             self.draft.set(LIGHTING, mode.to_string());
-        }
-        if let Some(mode) = self.view.id(SKY_MENU).and_then(|n| self.view.selected(n)) {
-            self.draft.set(SKY, mode.clamp(0, 1).to_string());
         }
         if let Some(scale) = self
             .view
@@ -3019,42 +2995,6 @@ mod tests {
         let s = Options::new(&ui.core);
         let menu = s.view.id(LIGHTING_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Dynamic"));
-    }
-
-    #[test]
-    fn sky_defaults_to_the_servers_and_saves_a_choice() {
-        let mut ui = fixture();
-        let mut s = Options::new(&ui.core);
-        let menu = s.view.id(SKY_MENU).unwrap();
-        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Server's"));
-        let items: Vec<&str> = s
-            .view
-            .node(menu)
-            .state
-            .items
-            .iter()
-            .map(|(t, _)| t.as_str())
-            .collect();
-        assert_eq!(items, ["Server's", "Original"]);
-        // The row sits under Lighting, inside its section.
-        let parent = s.view.node(menu).parent.unwrap();
-        let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
-        assert!(
-            row.position[1] + row.extent[1] <= section.extent[1],
-            "{row:?} in {section:?}"
-        );
-        let lighting = &s.view.node(s.view.id(LIGHTING_MENU).unwrap()).ctrl;
-        assert!(row.position[1] >= lighting.position[1] + lighting.extent[1]);
-        // The sky is not part of a Quality preset.
-        let quality = s.view.id(QUALITY_MENU).unwrap();
-        s.view.select(menu, Some(1));
-        change(&mut s, &mut ui, menu);
-        assert_eq!(s.view.selected_text(quality).as_deref(), Some("High"));
-        click(&mut s, "done", &mut ui);
-        assert_eq!(sky(&saved_prefs(&mut ui)), 1);
-        let s = Options::new(&ui.core);
-        let menu = s.view.id(SKY_MENU).unwrap();
-        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Original"));
     }
 
     #[test]

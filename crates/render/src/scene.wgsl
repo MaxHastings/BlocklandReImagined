@@ -5,15 +5,13 @@
 // own sun and ambient, as its lightmaps were baked; baked_sun_direction.w
 // is 1 while the live light differs from them, and lightmaps are relit.
 // sky_bands is the authored sky's colour by direction (scene.rs `SkyBands`).
-// sky_sun is the direction toward the real sun (below the horizon too), w 1
-// while the Enhanced sky replaces the authored one.
 struct Camera {
     view_projection:mat4x4<f32>, eye:vec4<f32>, sun_direction:vec4<f32>,
     sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,
     sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
     sky_bands:array<vec4<f32>,128>,
-    sky_sun:vec4<f32>, sky_color:vec4<f32>, shading:vec4<f32>,
+    shading:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
@@ -450,11 +448,51 @@ fn ambient_at(reach:f32)->vec3<f32> {
 // length.
 override MODERN_SKY_SHADING:bool=false;
 const HEMISPHERE_DOWN:f32=0.75;
-fn hemisphere(normal:vec3<f32>)->vec3<f32> {
+struct SkyExposure {
+    matrices:array<mat4x4<f32>,9>, directions:array<vec4<f32>,9>,
+    centre:vec4<f32>, params:vec4<f32>,
+};
+@group(0) @binding(19) var<storage,read> sky_depths:array<f32>;
+@group(0) @binding(20) var<uniform> sky_exposure:SkyExposure;
+// Cosine-weighted visibility of the upper hemisphere, independent of sun
+// direction. Preserve authored ambient beyond this view's measured region.
+fn sky_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
+    if sky_exposure.params.z<0.5 {return 0.0;}
+    let distance=max(max(abs(position.x-sky_exposure.centre.x),abs(position.y-sky_exposure.centre.y)),abs(position.z-sky_exposure.centre.z));
+    let fade=1.0-smoothstep(sky_exposure.centre.w*0.65,sky_exposure.centre.w*0.85,distance);
+    if fade<=0.0 {return 0.0;}
+    let size=i32(sky_exposure.params.x);
+    // A small world-space normal offset avoids self occlusion without moving
+    // a receiver across thin walls or using view-dependent depth.
+    let p=position+normal*0.025;
+    var open=0.0;
+    var weight=0.0;
+    for(var i=0u;i<9u;i+=1u) {
+        let clip=sky_exposure.matrices[i]*vec4<f32>(p,1.0);
+        let uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
+        let pixel=uv*f32(size)-vec2<f32>(0.5);
+        let base=vec2<i32>(floor(pixel));
+        let part=fract(pixel);
+        let share=sky_exposure.directions[i].y;
+        var seen=0.0;
+        for(var y=0;y<2;y+=1) {for(var x=0;x<2;x+=1) {
+            let at=clamp(base+vec2<i32>(x,y),vec2<i32>(0),vec2<i32>(size-1));
+            let index=i*u32(size*size)+u32(at.y*size+at.x);
+            let tap=select(0.0,1.0,clip.z<=sky_depths[index]+0.000001);
+            let wx=select(1.0-part.x,part.x,x==1);
+            let wy=select(1.0-part.y,part.y,y==1);
+            seen+=tap*wx*wy;
+        }}
+        open+=seen*share;
+        weight+=share;
+    }
+    return open/max(weight,0.0001)*fade;
+}
+fn hemisphere(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     if !MODERN_SKY_SHADING || camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
     let tinted=select(mix(vec3<f32>(1.0),vec3<f32>(HEMISPHERE_DOWN),-normal.y),
         mix(vec3<f32>(1.0),camera.shading.yzw,normal.y),normal.y>0.0);
-    return mix(vec3<f32>(1.0),tinted,camera.shading.x);
+    return mix(vec3<f32>(1.0),tinted,camera.shading.x*sky_visibility(position,normal));
 }
 // The live sun reaching a lightmapped texel whose bake let `baked` of the
 // map's own sun through. From the map's baked direction: that share, past
@@ -622,7 +660,7 @@ fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
         return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
             (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
     }
-    return LocalLight(ambient_at(sun)*hemisphere(n)+camera.sun_color.rgb*facing*sun+local.diffuse,
+    return LocalLight(ambient_at(sun)*hemisphere(position,n)+camera.sun_color.rgb*facing*sun+local.diffuse,
         (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
 }
 // A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a
@@ -925,87 +963,6 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
     let glow=pow(max(1.0-angle/(0.2*size),0.0),3.0);
     return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
-// Enhanced sky ("Sky: Enhanced", off in Classic's v20 look): single scattering
-// through a Rayleigh and Mie atmosphere, solved in closed form per ray for the
-// real sun (camera.sky_sun), so a blue zenith, a pale horizon, a warm sunrise
-// and sunset and a blue-purple twilight follow the server's time of day.
-fn enhanced_sky_on()->bool {return MODERN_SKY_SHADING && camera.sky_sun.w>0.5;}
-// Relative air mass along a ray `c` from the zenith (Kasten and Young).
-fn air_mass(c:f32)->f32 {
-    let cc=clamp(c,0.0,1.0);
-    return 1.0/(cc+0.50572*pow(max(96.07995-degrees(acos(cc)),0.001),-1.6364));
-}
-const SKY_RAYLEIGH:vec3<f32>=vec3<f32>(0.05,0.12,0.30);
-const SKY_OZONE:vec3<f32>=vec3<f32>(0.010,0.016,0.003);
-const SKY_MIE:f32=0.012;
-const SKY_MIE_G:f32=0.72;
-fn smooth_between(a:f32,b:f32,x:f32)->f32 {
-    let t=clamp((x-a)/(b-a),0.0,1.0);
-    return t*t*(3.0-2.0*t);
-}
-// Sky radiance along `along` in display colour. Below the horizon it is the
-// horizon's, unless the sky goes on below it (a sky_below map such as
-// Skylands), where it mirrors the sky above.
-fn enhanced_sky(along:vec3<f32>)->vec3<f32> {
-    let sun=camera.sky_sun.xyz;
-    let h=select(max(along.y,0.0),abs(along.y),camera.fog_color.w>0.5);
-    let mu=dot(along,sun);
-    let sun_air=air_mass(max(sun.y,0.0));
-    let ext=SKY_RAYLEIGH+vec3<f32>(SKY_MIE);
-    // Low views look through the thick air the sun's light has crossed; high
-    // ones through a thin, still-blue layer.
-    let reach=clamp(0.12+0.88*(1.0-h),0.0,1.0);
-    let light=exp(-(ext+SKY_OZONE)*sun_air*reach);
-    // Direct atmospheric scattering fades below the horizon; retaining it
-    // until -0.30 made the whole twilight sky red instead of its low edge.
-    let day=smooth_between(-0.16,0.02,sun.y);
-    let rayleigh=0.75*(1.0+mu*mu);
-    let g=SKY_MIE_G;
-    let mie=(1.0-g*g)/pow(1.0+g*g-2.0*g*mu,1.5);
-    let scatter=SKY_RAYLEIGH*rayleigh+vec3<f32>(SKY_MIE*mie);
-    let path=(vec3<f32>(1.0)-exp(-ext*air_mass(h)))/ext;
-    var color=3.2*light*scatter*path*day;
-    let warmth=1.0-smooth_between(0.02,0.25,sun.y);
-    let neutral=dot(color,vec3<f32>(0.2126,0.7152,0.0722));
-    color=mix(color,vec3<f32>(neutral),0.45*warmth);
-    // Twilight: the high air still lit after the sun has set, then the night.
-    let twilight=smooth_between(-0.32,-0.04,sun.y)*(1.0-smooth_between(0.05,0.3,sun.y));
-    color+=vec3<f32>(0.018,0.04,0.12)*twilight*(0.3+0.7*h);
-    color+=vec3<f32>(0.004,0.008,0.022)*(1.0-day);
-    // Desaturate sunlight alone, retaining the blue twilight and night floor.
-    return display_color(vec3<f32>(1.0)-exp(-color))*camera.sky_color.rgb;
-}
-// The sun's and moon's discs along `along`, display colour to add after fog.
-fn sky_bodies(along:vec3<f32>)->vec3<f32> {
-    let sun=camera.sky_sun.xyz;
-    if along.y<=-0.02 {return vec3<f32>(0.0);}
-    let ext=SKY_RAYLEIGH+vec3<f32>(SKY_MIE);
-    let seen=smooth_between(-0.02,0.01,along.y);
-    let day=smooth_between(-0.30,0.02,sun.y);
-    let mu=dot(along,sun);
-    let sun_angle=acos(clamp(mu,-1.0,1.0));
-    var color=exp(-ext*air_mass(max(sun.y,0.0)))*40.0*(1.0-smooth_between(0.014,0.018,sun_angle))*seen*smooth_between(-0.06,0.0,sun.y);
-    let moon_angle=acos(clamp(-mu,-1.0,1.0));
-    let moon=(1.0-smooth_between(0.010,0.0125,moon_angle))+0.08*pow(max(1.0-moon_angle/0.12,0.0),3.0);
-    color+=vec3<f32>(0.9,0.95,1.1)*moon*seen*(1.0-day);
-    // Stars: sparse, steady points on a cell grid, fading in with the night.
-    if day<0.9 {
-        let cell=floor(along*70.0);
-        let h=fract(sin(dot(cell,vec3<f32>(12.9898,78.233,37.719)))*43758.5453);
-        if h>0.97 {
-            let spot=cell+vec3<f32>(0.5)+0.3*vec3<f32>(fract(h*91.7)-0.5,fract(h*57.3)-0.5,fract(h*33.1)-0.5);
-            let near=length(along*70.0-spot);
-            let twinkle=0.5+0.5*fract(h*13.7);
-            color+=vec3<f32>(0.85,0.9,1.0)*twinkle*(1.0-smooth_between(0.05,0.2,near))*seen*(1.0-smooth_between(0.0,0.9,day))*0.8;
-        }
-    }
-    return min(color,vec3<f32>(1.0))*camera.sky_color.rgb;
-}
-// The Enhanced sky at the horizon toward `along`: what the world's edge fogs
-// to, in place of the authored fog colour.
-fn enhanced_horizon(along:vec3<f32>)->vec3<f32> {
-    return enhanced_sky(normalize(vec3<f32>(along.x,0.0,along.z)+vec3<f32>(0.0,0.0,0.00001)));
-}
 fn fog_amount(position:vec3<f32>)->f32 {
     return fog_along(position-camera.eye.xyz,camera.atmosphere,camera.fog_color.w);
 }
@@ -1023,9 +980,6 @@ fn sky_band(column:i32,row:i32)->vec3<f32> {
 fn fog_target(position:vec3<f32>)->vec3<f32> {
     let offset=position-camera.eye.xyz;
     let along=offset/max(length(offset),0.0001);
-    if enhanced_sky_on() {
-        return mix(enhanced_sky(along),enhanced_horizon(along),sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w));
-    }
     let around=(atan2(along.x,along.z)/(2.0*PI)+0.5)*8.0-0.5;
     let up=clamp((sign(along.y)*sqrt(abs(along.y))*0.5+0.5)*16.0-0.5,0.0,15.0);
     let column=i32(floor(around));
@@ -1167,13 +1121,6 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         // 1 the fog backdrop (the live fog colour). Faces and clouds take the
         // fog of the world's edge in front of them; far geometry fades into them.
         let along=normalize(v.world_position-camera.eye.xyz);
-        if enhanced_sky_on() && material[0].x==4.0 {
-            // The faces and the backdrop under them draw the one procedural
-            // sky, under the same fog far geometry fades into.
-            let fog=sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w);
-            let rgb=mix(enhanced_sky(along),enhanced_horizon(along),fog)+sky_bodies(along);
-            return vec4<f32>(output_color(min(rgb,vec3<f32>(1.0))),v.color.a);
-        }
         if material[1].x==1.0 {
             let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));
             return vec4<f32>(output_color(fog),v.color.a);
@@ -1182,7 +1129,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {
             sky=textureSample(layer0,tiled,v.uv);
-            let edge=select(camera.fog_color.rgb,enhanced_horizon(along),enhanced_sky_on());
+            let edge=camera.fog_color.rgb;
             let cloud=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,edge,fog);
             return vec4<f32>(output_color(cloud),sky.a*v.color.a);
         }
@@ -1308,7 +1255,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
             if MODERN_SKY_SHADING && camera.shading.x>0.0 && lighting_mode()!=0 {
-                illumination=ambient_at(sun_share)*hemisphere(normal)+camera.sun_color.rgb*sun+local.diffuse*strength
+                illumination=ambient_at(sun_share)*hemisphere(v.world_position,normal)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
             }
