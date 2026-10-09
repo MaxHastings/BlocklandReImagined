@@ -67,9 +67,13 @@ until he has played it and confirmed each piece by name.
   Verified in the container (release, bot branch head): with the patch the
   test still passes, landed grenades near an enemy per run are 2, 5, 5 on
   variant 0 and 5, 5, 11 on variant 1.
-- Docs PR #33: approved by Max to land through the gate after the bot fix.
-- PR #32 (paint name bar) duplicates `1b26a1d` on the bot branch; close it
-  once that branch is on main.
+- The bot fix landed on main as 3c8ed1f (v0.2.7.2) with the looser grenade
+  check; the preview branch merged it (d40fbd8, no overlapping files).
+- PR #32 closed: its change is on main as 1b26a1d.
+- Docs PR #33: approved by Max to land through the gate. Before landing,
+  update its "Known after v0.2.7.1" bullet (the HE Grenade fix has now
+  landed as 0041b68..3c8ed1f) and its audit line about PR #32 (closed as
+  landed). Landing needs `python tools/gate.py --push` on Max's PC.
 
 ### Landed-only grenade check (proposed patch for acceptance_unfamiliar)
 ```diff
