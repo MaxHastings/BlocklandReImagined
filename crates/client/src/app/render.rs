@@ -613,6 +613,10 @@ impl App {
             );
         }
         camera.ambient[3] = f32::from(self.lighting.light_volume.mode(self.graphics.lighting));
+        // Classic stays exactly v20's flat shade.
+        let modern = camera.ambient[3] >= 0.5;
+        camera.set_sky_ambient(self.graphics.soft_shading && modern);
+        let occlusion_on = self.graphics.ambient_occlusion && modern;
         camera.atmosphere[2] = (self.avatar.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
         // fog start scales with it so the fade keeps its shape.
@@ -1154,6 +1158,27 @@ impl App {
             (bodies, models, blockers, blocking, map, terrain_map)
         };
         let shadows = |encoder: &mut wgpu::CommandEncoder, view: usize| {
+            let sky_scenes: Vec<_> = self
+                .gpu
+                .gpu_scene
+                .iter()
+                .chain(self.gpu.gpu_chunks.values())
+                .collect();
+            let mut sky_moving = cast_models.clone();
+            sky_moving.extend(blocking.iter().copied());
+            let sky_fading: Vec<_> = self.fx.fade_models.scenes().collect();
+            renderer.render_view_sky_exposure_with_moving(
+                encoder,
+                view,
+                ShadowCasters {
+                    scenes: &sky_scenes,
+                    instances: &terrain_map,
+                },
+                ShadowCasters {
+                    scenes: &sky_fading,
+                    instances: &sky_moving,
+                },
+            );
             renderer.render_view_shadows(
                 encoder,
                 view,
@@ -1269,22 +1294,51 @@ impl App {
             );
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
-        renderer.render_world(
-            frame.encoder,
-            bri_render::scene::WorldPass {
-                view: 0,
-                color: world_target,
-                resolve: None,
-                depth: &depth,
-                viewport: None,
-                clear: Some(clear),
-                after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
-                after_all: None,
-            },
-            &scenes,
-            &item_draws,
-        );
-        renderer.mark(frame.encoder, "world");
+        let world_pass = bri_render::scene::WorldPass {
+            view: 0,
+            color: world_target,
+            resolve: None,
+            depth: &depth,
+            viewport: None,
+            clear: Some(clear),
+            after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
+            after_all: None,
+        };
+        match self.gpu.ambient_occlusion.as_ref().filter(|_| occlusion_on) {
+            // Ambient occlusion darkens the opaque world only: water, glass,
+            // see-through bricks and everything drawn later stay as they are.
+            Some(occlusion) => {
+                let (device, queue, size) = (frame.device, frame.queue, frame.size);
+                let mut between = |encoder: &mut wgpu::CommandEncoder| {
+                    renderer.mark(encoder, "world");
+                    occlusion.render(
+                        device,
+                        queue,
+                        encoder,
+                        world_target,
+                        &depth,
+                        size,
+                        camera.view_projection,
+                        [camera.eye[0], camera.eye[1], camera.eye[2]],
+                        (camera.atmosphere, camera.fog_color[3]),
+                        (renderer, &scenes, &item_draws),
+                    );
+                    renderer.mark(encoder, "occlusion");
+                };
+                renderer.render_world_split(
+                    frame.encoder,
+                    world_pass,
+                    &scenes,
+                    &item_draws,
+                    &mut between,
+                );
+                renderer.mark(frame.encoder, "world blended");
+            }
+            None => {
+                renderer.render_world(frame.encoder, world_pass, &scenes, &item_draws);
+                renderer.mark(frame.encoder, "world");
+            }
+        }
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {

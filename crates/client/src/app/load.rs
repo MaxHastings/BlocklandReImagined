@@ -155,6 +155,7 @@ impl App {
                 region_lines: None,
                 region_outlines: Default::default(),
                 vignette: None,
+                ambient_occlusion: None,
                 selection_lines: None,
                 selection_uploaded: None,
                 hidden_uploaded: None,

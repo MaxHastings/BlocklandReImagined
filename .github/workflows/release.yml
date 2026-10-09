@@ -28,6 +28,7 @@ concurrency:
 permissions:
   # Publishing the release, and reading the ci-content draft release.
   contents: write
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -179,3 +180,23 @@ jobs:
           Set-Content -Path notes.md -Value $notes -Encoding utf8
           gh release create $env:BRI_VERSION upload\* --target $env:GITHUB_SHA --title "Blockland ReImagined $env:BRI_VERSION" --notes-file notes.md --generate-notes
           exit $LASTEXITCODE
+
+  preview-mac:
+    needs: release
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true'
+    uses: ./.github/workflows/mac-release-asset.yml
+    with:
+      tag: ${{ github.event.inputs.version }}
+      ref: ${{ github.sha }}
+      windows_run: ${{ github.run_id }}
+      publish: false
+
+  preview-linux:
+    needs: release
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true'
+    uses: ./.github/workflows/linux-release-asset.yml
+    with:
+      tag: ${{ github.event.inputs.version }}
+      ref: ${{ github.sha }}
+      windows_run: ${{ github.run_id }}
+      publish: false

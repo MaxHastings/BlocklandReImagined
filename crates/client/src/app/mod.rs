@@ -1603,6 +1603,9 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.gpu.ambient_occlusion = Some(bri_render::ambient_occlusion::AmbientOcclusion::new(
+            device, format, samples,
+        ));
         self.gpu.vignette = Some(bri_render::vignette::VignetteRenderer::new(
             device,
             format,

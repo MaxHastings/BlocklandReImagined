@@ -62,6 +62,12 @@ const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Not a v20 setting (v20 shadowed only players, vehicles and items): bricks
 /// cast sun shadows too, off unless turned on.
 const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
+/// Not a v20 setting: sky-tinted shade in Unified and Dynamic lighting
+/// (Classic never draws it), on unless turned off.
+pub const SOFT_SHADING: &str = "$pref::Video::SoftShading";
+/// Not a v20 setting: ambient occlusion, a contact-shading pass over the
+/// world in Unified and Dynamic lighting, on unless turned off.
+pub const AMBIENT_OCCLUSION: &str = "$pref::Video::AmbientOcclusion";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
 /// v20's Physics Quality radios (0 Best .. 4 Off; the stock default is 1,
 /// High): how many knocked-out bricks tumble as debris at once.
@@ -281,6 +287,8 @@ const DEFAULT_ON: &[&str] = &[
     "$pref::OpenGL::textureTrilinear",
     VEHICLE_MOUSE_INVERT,
     ANTI_ALIASING,
+    SOFT_SHADING,
+    AMBIENT_OCCLUSION,
     PRECIPITATION,
     CHECK_FOR_UPDATES,
 ];
@@ -295,6 +303,8 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::OpenGL::useGLNearest",
     ANTI_ALIASING,
     BRICK_SHADOWS,
+    SOFT_SHADING,
+    AMBIENT_OCCLUSION,
     CHECK_FOR_UPDATES,
     "$Pref::Audio::PlayMusic",
     "$Pref::Audio::MenuSounds",
@@ -1422,6 +1432,18 @@ impl Options {
             c.variable = Some(BRICK_SHADOWS.into());
             c.text = Some("Brick Shadows".into());
             c.position[1] += c.extent[1] - 3;
+            v.add(parent, c.clone());
+            // Soft Shading (sky-tinted shade) and Ambient Occlusion follow.
+            c.name = Some("OptGraphicsSoftShadingToggle".into());
+            c.variable = Some(SOFT_SHADING.into());
+            c.text = Some("Soft Shading".into());
+            c.position[1] += c.extent[1] - 3;
+            v.add(parent, c.clone());
+            c.name = Some("OptGraphicsAmbientOcclusionToggle".into());
+            c.variable = Some(AMBIENT_OCCLUSION.into());
+            c.text = Some("Ambient Occlusion".into());
+            c.extent[0] = 160;
+            c.position[1] += c.extent[1] - 3;
             let below = c.position[1] + c.extent[1] + 8;
             v.add(parent, c);
             // Quality presets and the frame-rate cap follow as menu rows
@@ -1467,7 +1489,9 @@ impl Options {
                     }
                     v.add(parent, l);
                     v.add(parent, m);
-                    y += menu.extent[1] + 6;
+                    // Keep all seven menu rows above Done, including the
+                    // shading toggles. Two pixels still separate controls.
+                    y += menu.extent[1] + 2;
                 }
             }
         }
@@ -3495,6 +3519,57 @@ mod tests {
             assert!(renderer.missing_textures().next().is_none());
             image::save_buffer(
                 output.join(format!("Options-Screenshots-{}x{}.png", size.0, size.1)),
+                &rgba,
+                size.0,
+                size.1,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_graphics_panel_offscreen() {
+        let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let pack =
+            crate::testing::content_pack(&bri_package::testing::pack_dir(&content, "ui_pack"));
+        let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/ui-native-graphics");
+        std::fs::create_dir_all(&output).unwrap();
+        let gpu = crate::gpu::Headless::new().unwrap();
+        let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+        for size in [(800, 450), (1280, 720)] {
+            let mut ui = Ui::new(
+                pack.clone(),
+                UiConfig {
+                    size,
+                    scale: None,
+                    platform: Platform::Windows,
+                },
+                Settings {
+                    binds: Some(vec![]),
+                    ..Default::default()
+                },
+            );
+            let mut screen = Options::new(&ui.core);
+            screen.pane("Graphics");
+            screen.layout(ui.core.logical.0, ui.core.logical.1, &mut ui.core);
+            let mut list = DrawList::new(Rect::new(0, 0, ui.core.logical.0, ui.core.logical.1));
+            screen.draw(&pack, &mut list, &ui.core);
+            let rgba = gpu
+                .render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &list,
+                    size,
+                    ui.scale(),
+                    [0.15, 0.15, 0.18, 1.0],
+                )
+                .unwrap();
+            assert!(renderer.missing_textures().next().is_none());
+            image::save_buffer(
+                output.join(format!("Options-Graphics-{}x{}.png", size.0, size.1)),
                 &rgba,
                 size.0,
                 size.1,

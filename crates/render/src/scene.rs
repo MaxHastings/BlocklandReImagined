@@ -802,6 +802,9 @@ pub struct Camera {
     pub baked_ambient: [f32; 4],
     /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
     pub sky_bands: SkyBands,
+    /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
+    /// off, the flat ambient), yzw the sky's colour at unit brightness.
+    pub shading: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -930,6 +933,40 @@ impl Camera {
         ];
         self.flare = live.flare.0;
     }
+    /// Turn sky-tinted ambient on or off. On, faces turned up take the
+    /// ambient light in the sky's colour and faces turned down a darker one,
+    /// in Unified and Dynamic lighting (Classic keeps the flat ambient).
+    /// Call after the environment is applied: it reads the sky's upper
+    /// bands, tint and the fog colour behind them.
+    pub fn set_sky_ambient(&mut self, on: bool) {
+        self.shading = [0.0; 4];
+        if !on {
+            return;
+        }
+        let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
+        for row in &self.sky_bands[SKY_ELEVATIONS * 2 / 3..] {
+            for band in row {
+                let share = if band[3] > 1.0 { 1.0 } else { band[3].max(0.0) };
+                for c in 0..3 {
+                    let tinted = band[c] * self.sky[c];
+                    sum[c] += tinted * share + self.fog_color[c] * (1.0 - share);
+                }
+                weight += 1.0;
+            }
+        }
+        if weight <= 0.0 {
+            return;
+        }
+        let colour = sum.map(|c| c / weight);
+        let luma = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
+        if luma.is_nan() || luma <= 0.02 || !colour.iter().all(|c| c.is_finite()) {
+            return;
+        }
+        // A tint may remove light but must not raise any channel: otherwise
+        // clamping saturated paint can make even its perceived brightness rise.
+        let peak = colour.iter().copied().fold(0.0f32, f32::max);
+        self.shading = [1.0, colour[0] / peak, colour[1] / peak, colour[2] / peak];
+    }
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -947,12 +984,14 @@ impl Default for Camera {
             baked_sun_direction: [0.0; 4],
             baked_sun_color: [0.0; 4],
             baked_ambient: [0.0; 4],
+            shading: [0.0; 4],
             sky_bands: Default::default(),
         }
     }
 }
 
 pub struct GpuScene {
+    sky_revision: Arc<std::sync::atomic::AtomicU64>,
     material_descriptors: Vec<Material>,
     image_signatures: Vec<([u32; 2], bool, [u8; 32])>,
     /// The images' textures, for `patch_images`.
@@ -1164,6 +1203,8 @@ impl GpuScene {
     /// cover nothing, shadows included. A later upload of the scene draws
     /// them again.
     pub fn hide_vertices(&self, queue: &wgpu::Queue, range: Range<u32>) {
+        self.sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         const HIDDEN: SceneVertex = SceneVertex {
             position: [0.; 3],
             normal: [0.; 3],
@@ -1215,6 +1256,8 @@ impl GpuScene {
             queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(vertices));
         }
         self.extent = vertex_extent(vertices);
+        self.sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         for (batch, center) in self.batches.iter_mut().zip(centers) {
             batch.center = *center;
         }
@@ -1234,6 +1277,10 @@ impl GpuScene {
         images: &[SceneImage],
         changed: &[usize],
     ) -> Result<()> {
+        if !changed.is_empty() {
+            self.sky_revision
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         for &index in changed {
             let (Some(image), Some(texture)) = (images.get(index), self.textures.get(index)) else {
                 anyhow::bail!("Patched image {index} is not in the scene");
@@ -1283,6 +1330,7 @@ impl GpuScene {
             .context("Scene batch view out of range")?
             .clone();
         Ok(GpuScene {
+            sky_revision: self.sky_revision.clone(),
             material_descriptors: self.material_descriptors.clone(),
             image_signatures: self.image_signatures.clone(),
             textures: self.textures.clone(),
@@ -1727,6 +1775,7 @@ fn camera_group(
     volume: &VolumeBinding,
     map_lights: &MapLightBinding,
     probe: &crate::environment_probe::ProbeBinding,
+    sky: &crate::sky_exposure::SkyExposure,
 ) -> wgpu::BindGroup {
     let [tiled, clamped, side] = filtering.diffuse_samplers();
     let exact = |address_mode| wgpu::SamplerDescriptor {
@@ -1808,6 +1857,14 @@ fn camera_group(
         wgpu::BindGroupEntry {
             binding: 18,
             resource: probe.uniform.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 19,
+            resource: sky.depths.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 20,
+            resource: sky.receiver.as_entire_binding(),
         },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2297,9 +2354,12 @@ impl<'a> Bound<'a> {
 /// One camera the world is drawn from: the player's view (0), or a
 /// mirror's reflected view.
 struct View {
+    sky: crate::sky_exposure::SkyExposure,
+    sky_on: bool,
     camera: wgpu::Buffer,
     group: wgpu::BindGroup,
     eye: Vec3,
+    modern: bool,
     frustum: Option<[glam::Vec4; 6]>,
 }
 
@@ -2318,7 +2378,9 @@ pub struct WorldPass<'a> {
     pub clear: Option<wgpu::Color>,
     /// Records after opaque geometry and before blended geometry, with its
     /// own pipeline and bind groups: surfaces such as mirrors that hide
-    /// what lies behind them but show through glass in front.
+    /// what lies behind them but show through glass in front. In a split
+    /// pass this records after `between`, preserving secondary-view images
+    /// from effects based on the main camera's depth.
     pub after_opaque: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
     /// Records last, over everything the pass drew, with its own pipelines
     /// and bind groups: sprites, plants and weather seen from this view.
@@ -2339,6 +2401,9 @@ pub struct SceneRenderer {
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::RenderPipeline>,
+    modern_pipelines: Vec<wgpu::RenderPipeline>,
+    color_format: wgpu::TextureFormat,
+    occlusion_mask_pipelines: std::cell::RefCell<Vec<wgpu::RenderPipeline>>,
     filtering: TextureFiltering,
     samples: u32,
     shadows: crate::shadow::ShadowMaps,
@@ -2496,6 +2561,26 @@ impl SceneRenderer {
                 },
                 sampler_entry(17),
                 wgpu::BindGroupLayoutEntry {
+                    binding: 19,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
                     binding: 18,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -2542,78 +2627,11 @@ impl SceneRenderer {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world-space scene"),
             source: wgpu::ShaderSource::Wgsl(
-                crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                crate::color::shader_source(include_str!("scene_original.wgsl")).into(),
             ),
         });
-        let mut pipelines = vec![];
-        for background in [false, true] {
-            for blend in 0..3 {
-                let blend_state = match blend {
-                    0 => None,
-                    1 => Some(wgpu::BlendState::ALPHA_BLENDING),
-                    _ => Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                };
-                for double_sided in [false, true] {
-                    pipelines.push(device.create_render_pipeline(
-                        &wgpu::RenderPipelineDescriptor {
-                            label: Some("persistent scene"),
-                            layout: Some(&layout),
-                            vertex: wgpu::VertexState {
-                                module: &shader,
-                                entry_point: Some("vs_main"),
-                                compilation_options: Default::default(),
-                                buffers: &vertex_layouts(),
-                            },
-                            primitive: wgpu::PrimitiveState {
-                                cull_mode: if double_sided {
-                                    None
-                                } else {
-                                    Some(wgpu::Face::Back)
-                                },
-                                ..Default::default()
-                            },
-                            depth_stencil: Some(wgpu::DepthStencilState {
-                                format: DEPTH_FORMAT,
-                                depth_write_enabled: Some(blend == 0 && !background),
-                                depth_compare: Some(DEPTH_NEARER),
-                                stencil: Default::default(),
-                                bias: Default::default(),
-                            }),
-                            multisample: wgpu::MultisampleState {
-                                count: samples,
-                                ..Default::default()
-                            },
-                            fragment: Some(wgpu::FragmentState {
-                                module: &shader,
-                                entry_point: Some("fs_main"),
-                                compilation_options: wgpu::PipelineCompilationOptions {
-                                    constants: &crate::color::output_constants(color_format),
-                                    ..Default::default()
-                                },
-                                targets: &[Some(wgpu::ColorTargetState {
-                                    format: color_format,
-                                    blend: blend_state,
-                                    write_mask: wgpu::ColorWrites::ALL,
-                                })],
-                            }),
-                            multiview_mask: None,
-                            cache: None,
-                        },
-                    ));
-                }
-            }
-        }
+        let pipelines =
+            Self::world_pipelines(device, color_format, samples, &layout, &shader, false);
         let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![
@@ -2650,6 +2668,9 @@ impl SceneRenderer {
             views: Vec::new(),
             material_layout,
             pipelines,
+            modern_pipelines: Vec::new(),
+            color_format,
+            occlusion_mask_pipelines: std::cell::RefCell::new(Vec::new()),
             filtering,
             samples,
             shadows,
@@ -2687,6 +2708,7 @@ impl SceneRenderer {
             &self.volume,
             &self.map_lights,
             &self.probe,
+            &self.views[view].sky,
         )
     }
     /// At least the player's view plus `count - 1` more (mirrors' reflected
@@ -2701,11 +2723,29 @@ impl SceneRenderer {
                 contents: bytemuck::bytes_of(&Camera::default()),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
-            let group = self.view_group(device, self.views.len(), &camera);
+            let sky =
+                crate::sky_exposure::SkyExposure::new(device, &self.shadows.caster_layout, false);
+            let group = camera_group(
+                device,
+                &self.camera_layout,
+                self.views.len(),
+                &camera,
+                &self.light_buffer,
+                &self.light_grid,
+                self.filtering,
+                &self.shadows,
+                &self.volume,
+                &self.map_lights,
+                &self.probe,
+                &sky,
+            );
             self.views.push(View {
+                sky,
+                sky_on: false,
                 camera,
                 group,
                 eye: Vec3::ZERO,
+                modern: false,
                 frustum: None,
             });
         }
@@ -2783,6 +2823,89 @@ impl SceneRenderer {
         queue.write_buffer(&buffer, offset, &bytes);
         *cursor = (offset + bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         Some((buffer, offset))
+    }
+    fn world_pipelines(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        samples: u32,
+        layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        modern: bool,
+    ) -> Vec<wgpu::RenderPipeline> {
+        let mut constants = crate::color::output_constants(color_format).to_vec();
+        if modern {
+            constants.push(("MODERN_SKY_SHADING", 1.0));
+        }
+        let mut pipelines = vec![];
+        for background in [false, true] {
+            for blend in 0..3 {
+                let blend_state = match blend {
+                    0 => None,
+                    1 => Some(wgpu::BlendState::ALPHA_BLENDING),
+                    _ => Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                };
+                for double_sided in [false, true] {
+                    pipelines.push(device.create_render_pipeline(
+                        &wgpu::RenderPipelineDescriptor {
+                            label: Some("persistent scene"),
+                            layout: Some(layout),
+                            vertex: wgpu::VertexState {
+                                module: shader,
+                                entry_point: Some("vs_main"),
+                                compilation_options: Default::default(),
+                                buffers: &vertex_layouts(),
+                            },
+                            primitive: wgpu::PrimitiveState {
+                                cull_mode: if double_sided {
+                                    None
+                                } else {
+                                    Some(wgpu::Face::Back)
+                                },
+                                ..Default::default()
+                            },
+                            depth_stencil: Some(wgpu::DepthStencilState {
+                                format: DEPTH_FORMAT,
+                                depth_write_enabled: Some(blend == 0 && !background),
+                                depth_compare: Some(DEPTH_NEARER),
+                                stencil: Default::default(),
+                                bias: Default::default(),
+                            }),
+                            multisample: wgpu::MultisampleState {
+                                count: samples,
+                                ..Default::default()
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: shader,
+                                entry_point: Some("fs_main"),
+                                compilation_options: wgpu::PipelineCompilationOptions {
+                                    constants: &constants,
+                                    ..Default::default()
+                                },
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format: color_format,
+                                    blend: blend_state,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                            }),
+                            multiview_mask: None,
+                            cache: None,
+                        },
+                    ));
+                }
+            }
+        }
+        pipelines
     }
     /// Counts from the passes recorded since the last `update_camera`.
     pub fn stats(&self) -> RenderStats {
@@ -2969,6 +3092,7 @@ impl SceneRenderer {
             }));
         }
         Ok(GpuScene {
+            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             material_descriptors: data.materials.clone(),
             image_signatures: image_signatures(data),
             textures: Arc::new(textures),
@@ -3096,6 +3220,7 @@ impl SceneRenderer {
         (vertex_count, index_count): (usize, usize),
     ) -> GpuScene {
         GpuScene {
+            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             vertices,
             indices,
             base_vertex: slot.as_ref().map_or(0, |s| s.vertices.start as i32),
@@ -3155,6 +3280,7 @@ impl SceneRenderer {
         // does, because wgpu panics on slicing an empty buffer.
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
         Ok(GpuScene {
+            sky_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             vertices,
             indices,
             materials: base.materials.clone(),
@@ -3309,9 +3435,50 @@ impl SceneRenderer {
     /// `fit_view_shadows` gives it its own). Views past `view_count` are
     /// ignored.
     pub fn update_view(&mut self, queue: &wgpu::Queue, view: usize, camera: &Camera) {
-        let Some(v) = self.views.get_mut(view) else {
+        if view >= self.views.len() {
             return;
-        };
+        }
+        let modern = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
+        // Keep main's original shader and uniform prefix when the effects are off.
+        // On pipelines cost nothing until first use.
+        if modern && self.modern_pipelines.is_empty() {
+            let layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("modern scene"),
+                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
+                    immediate_size: 0,
+                });
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("modern scene"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                    ),
+                });
+            self.modern_pipelines = Self::world_pipelines(
+                &self.device,
+                self.color_format,
+                self.samples,
+                &layout,
+                &shader,
+                true,
+            );
+        }
+        let sky_on = camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5;
+        if sky_on && !self.views[view].sky.enabled {
+            self.views[view].sky = crate::sky_exposure::SkyExposure::new(
+                &self.device,
+                &self.shadows.caster_layout,
+                true,
+            );
+            self.views[view].group = self.view_group(&self.device, view, &self.views[view].camera);
+        }
+        let v = &mut self.views[view];
+        v.sky_on = sky_on;
+        v.sky.prepared.set(false);
+        v.modern = modern;
         v.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
         v.frustum = Some(frustum_planes(Mat4::from_cols_array(
             &camera.view_projection,
@@ -3422,6 +3589,206 @@ impl SceneRenderer {
     )> {
         self.timer.borrow_mut().as_mut()?.collect(device).cloned()
     }
+    /// Measure sky exposure from current occluding geometry for this view.
+    /// Callers can supply the persistent map/build separately from moving
+    /// receivers, keeping the cache steady while characters and cars move.
+    /// All receivers, including secondary views, sample world-space visibility.
+    pub fn render_view_sky_exposure(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: usize,
+        geometry: ShadowCasters<'_>,
+    ) {
+        self.render_view_sky_exposure_with_moving(
+            encoder,
+            view,
+            geometry,
+            ShadowCasters::default(),
+        );
+    }
+
+    /// Keep the map/build cache while overlaying current moving occluders.
+    /// Moving geometry never writes back into the persistent depth maps.
+    pub fn render_view_sky_exposure_with_moving(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: usize,
+        geometry: ShadowCasters<'_>,
+        moving: ShadowCasters<'_>,
+    ) {
+        use std::hash::{Hash, Hasher};
+        let Some(v) = self.views.get(view).filter(|v| v.sky_on) else {
+            return;
+        };
+        let Some(queue) = self.queue.borrow().clone() else {
+            return;
+        };
+        let mut key = Vec::new();
+        let mut bounds: Option<(Vec3, Vec3)> = None;
+        let mut extend = |scene: &GpuScene, model: Mat4| {
+            if let Some((min, max)) = scene.extent {
+                for i in 0..8 {
+                    let p = model.transform_point3(Vec3::new(
+                        if i & 1 == 0 { min.x } else { max.x },
+                        if i & 2 == 0 { min.y } else { max.y },
+                        if i & 4 == 0 { min.z } else { max.z },
+                    ));
+                    bounds = Some(bounds.map_or((p, p), |(a, b)| (a.min(p), b.max(p))));
+                }
+            }
+        };
+        let signature = |scene: &GpuScene| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            (std::ptr::from_ref(scene) as usize).hash(&mut hash);
+            scene
+                .sky_revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .hash(&mut hash);
+            for b in &scene.batches {
+                b.indices.hash(&mut hash);
+            }
+            hash.finish()
+        };
+        for scene in geometry.scenes {
+            key.push(signature(scene));
+            extend(scene, Mat4::IDENTITY);
+        }
+        for (scene, instances) in geometry.instances {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            signature(scene).hash(&mut hash);
+            for t in &instances.transforms {
+                for f in t.transform.to_cols_array().into_iter().chain(t.tint) {
+                    f.to_bits().hash(&mut hash);
+                }
+                extend(scene, t.transform);
+            }
+            for clip in &instances.clips {
+                for f in clip {
+                    f.to_bits().hash(&mut hash);
+                }
+            }
+            key.push(hash.finish());
+        }
+        let changed = v.sky.plan(&queue, v.eye, key, bounds);
+        if let Some(matrices) = changed {
+            self.record_sky_depths(encoder, &v.sky, &v.sky.layers, matrices, geometry, false);
+        }
+        let has_moving = !moving.scenes.is_empty()
+            || moving
+                .instances
+                .iter()
+                .any(|(_, i)| !i.transforms.is_empty());
+        if has_moving {
+            v.sky.merge(encoder);
+            self.record_sky_depths(
+                encoder,
+                &v.sky,
+                &v.sky.working_layers,
+                v.sky.matrices.get(),
+                moving,
+                true,
+            );
+        }
+        if changed.is_some() || has_moving || v.sky.had_moving.get() {
+            v.sky.copy(encoder, has_moving);
+            self.mark(encoder, "sky exposure");
+        }
+        v.sky.had_moving.set(has_moving);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_sky_depths(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        sky: &crate::sky_exposure::SkyExposure,
+        layers: &[wgpu::TextureView],
+        matrices: [Mat4; crate::sky_exposure::DIRECTIONS],
+        geometry: ShadowCasters<'_>,
+        load: bool,
+    ) {
+        for (i, matrix) in matrices.iter().enumerate() {
+            let planes = frustum_planes(*matrix);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sky exposure"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &layers[i],
+                    depth_ops: Some(wgpu::Operations {
+                        load: if load {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(1.0)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(
+                0,
+                &sky.group,
+                &[crate::sky_exposure::SkyExposure::offset(i)],
+            );
+            let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>, bool)> = geometry
+                .scenes
+                .iter()
+                .map(|scene| (*scene, &self.identity_instance, 0..1, false))
+                .collect();
+            for (scene, instances) in geometry.instances {
+                for (j, _) in instances
+                    .transforms
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.tint[3] == 1.0)
+                {
+                    items.push((
+                        scene,
+                        &instances.buffer,
+                        j as u32..j as u32 + 1,
+                        instances.clipped(),
+                    ));
+                }
+            }
+            let mut bound = Bound::default();
+            for (scene, instance_buffer, range, cut) in items {
+                if scene.vertex_count == 0
+                    || scene.index_count == 0
+                    || scene.bounds.is_some_and(|b| !aabb_visible(&planes, b))
+                {
+                    continue;
+                }
+                bound.geometry(&mut pass, &scene.vertices, instance_buffer, &scene.indices);
+                for batch in &scene.batches {
+                    let (blend, _, background, masked, _) = scene.material_modes[batch.material];
+                    if blend != 0 || background {
+                        continue;
+                    }
+                    bound.pipeline(
+                        &mut pass,
+                        &self.shadows.pipelines[if masked {
+                            1
+                        } else if cut {
+                            2
+                        } else {
+                            0
+                        }],
+                    );
+                    if masked {
+                        bound.material(&mut pass, &scene.materials[batch.material]);
+                    }
+                    pass.draw_indexed(
+                        scene.index_range(&batch.indices),
+                        scene.base_vertex,
+                        range.clone(),
+                    );
+                }
+            }
+        }
+    }
+
     /// Render sun shadow casters (bricks, players, vehicles, items; never map
     /// interiors or terrain, see `crate::shadow`) for the camera last passed
     /// to `update_camera`. Only opaque and alpha-masked, non-background
@@ -4143,6 +4510,132 @@ impl SceneRenderer {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
     ) {
+        self.record_world(encoder, target, scenes, instances, None, false);
+    }
+    /// As [`Self::render_world`], but the pass ends once the opaque geometry
+    /// (and `after_opaque`) is drawn, `between` records on the encoder (a
+    /// pass that reads the finished opaque depth, such as ambient
+    /// occlusion), and a second pass loads both attachments and draws the
+    /// blended geometry and `after_all`, so `between` never touches them.
+    pub fn render_world_split(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+        between: &mut dyn FnMut(&mut wgpu::CommandEncoder),
+    ) {
+        self.record_world(encoder, target, scenes, instances, Some(between), false);
+    }
+    /// Visible emissive surfaces excluded from AO. Loads the finished depth;
+    /// never changes it, and follows the same instancing/culling/cut-out rules.
+    pub fn render_occlusion_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+    ) {
+        let mut pipelines = self.occlusion_mask_pipelines.borrow_mut();
+        if pipelines.is_empty() {
+            let layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("occlusion exclusion mask"),
+                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
+                    immediate_size: 0,
+                });
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("occlusion exclusion mask"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                    ),
+                });
+            for double_sided in [false, true] {
+                pipelines.push(self.device.create_render_pipeline(
+                    &wgpu::RenderPipelineDescriptor {
+                        label: Some("occlusion exclusion mask"),
+                        layout: Some(&layout),
+                        vertex: wgpu::VertexState {
+                            module: &shader,
+                            entry_point: Some("vs_main"),
+                            compilation_options: Default::default(),
+                            buffers: &vertex_layouts(),
+                        },
+                        primitive: wgpu::PrimitiveState {
+                            cull_mode: if double_sided {
+                                None
+                            } else {
+                                Some(wgpu::Face::Back)
+                            },
+                            ..Default::default()
+                        },
+                        depth_stencil: Some(wgpu::DepthStencilState {
+                            format: DEPTH_FORMAT,
+                            depth_write_enabled: Some(false),
+                            depth_compare: Some(wgpu::CompareFunction::Equal),
+                            stencil: Default::default(),
+                            bias: Default::default(),
+                        }),
+                        multisample: wgpu::MultisampleState {
+                            count: self.samples,
+                            ..Default::default()
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader,
+                            entry_point: Some("fs_occlusion_mask"),
+                            compilation_options: wgpu::PipelineCompilationOptions {
+                                constants: &crate::color::output_constants(
+                                    wgpu::TextureFormat::R8Unorm,
+                                ),
+                                ..Default::default()
+                            },
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: wgpu::TextureFormat::R8Unorm,
+                                blend: None,
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                        }),
+                        multiview_mask: None,
+                        cache: None,
+                    },
+                ));
+            }
+        }
+        drop(pipelines);
+        self.record_world(encoder, target, scenes, instances, None, true);
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn record_world(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+        mut between: Option<&mut dyn FnMut(&mut wgpu::CommandEncoder)>,
+        mask_only: bool,
+    ) {
+        if !mask_only
+            && self
+                .views
+                .get(target.view)
+                .is_some_and(|v| v.sky_on && !v.sky.prepared.get())
+        {
+            self.render_view_sky_exposure_with_moving(
+                encoder,
+                target.view,
+                ShadowCasters {
+                    scenes,
+                    instances: &[],
+                },
+                ShadowCasters {
+                    scenes: &[],
+                    instances,
+                },
+            );
+        }
         let Some(view) = self.views.get(target.view) else {
             return;
         };
@@ -4303,7 +4796,11 @@ impl SceneRenderer {
                 .into_iter()
                 .filter_map(|i| translucent[i].take()),
         );
-        order.retain(|d| d.scene.vertex_count != 0 && d.scene.index_count != 0);
+        order.retain(|d| {
+            d.scene.vertex_count != 0
+                && d.scene.index_count != 0
+                && (!mask_only || (d.blend == 0 && !d.scene.material_modes[d.batch.material].2))
+        });
         // Runs of pooled chunk batches that bind the same things become one
         // indirect multi-draw each; their arguments upload together.
         let mut runs: Vec<(usize, usize)> = Vec::new();
@@ -4332,37 +4829,62 @@ impl SceneRenderer {
             i = end;
         }
         let uploaded = self.upload_indirect(&args);
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("persistent world scene"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: resolve,
-                ops: wgpu::Operations {
-                    load: clear.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: if clear.is_some() {
-                        wgpu::LoadOp::Clear(DEPTH_CLEAR)
-                    } else {
-                        wgpu::LoadOp::Load
+        fn begin<'e>(
+            encoder: &'e mut wgpu::CommandEncoder,
+            (color, resolve, depth): (
+                &wgpu::TextureView,
+                Option<&wgpu::TextureView>,
+                &wgpu::TextureView,
+            ),
+            clear: Option<wgpu::Color>,
+            mask_only: bool,
+            viewport: Option<[f32; 4]>,
+            group: &wgpu::BindGroup,
+        ) -> wgpu::RenderPass<'e> {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("persistent world scene"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: clear.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
+                        store: wgpu::StoreOp::Store,
                     },
-                    store: wgpu::StoreOp::Store,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if clear.is_some() && !mask_only {
+                            wgpu::LoadOp::Clear(DEPTH_CLEAR)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        if let Some([x, y, w, h]) = viewport {
-            pass.set_viewport(x, y, w, h, 0.0, 1.0);
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some([x, y, w, h]) = viewport {
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
+            pass.set_bind_group(0, group, &[]);
+            pass
         }
-        pass.set_bind_group(0, &view.group, &[]);
+        let mask_pipelines = mask_only.then(|| self.occlusion_mask_pipelines.borrow());
+        // A split pass resolves multisampled colour only in its second half.
+        let first_resolve = if between.is_some() { None } else { resolve };
+        let mut pass = begin(
+            encoder,
+            (color, first_resolve, depth),
+            clear,
+            mask_only,
+            viewport,
+            &view.group,
+        );
         let mut bound = Bound::default();
         let mut binds = 0;
         let mut next_args = 0u64;
@@ -4376,17 +4898,44 @@ impl SceneRenderer {
             .unwrap_or(runs.len());
         for (i, (start, end)) in runs.into_iter().enumerate() {
             if i == blended
+                && let Some(between) = between.take()
+            {
+                drop(pass);
+                between(encoder);
+                pass = begin(
+                    encoder,
+                    (color, resolve, depth),
+                    None,
+                    mask_only,
+                    viewport,
+                    &view.group,
+                );
+                binds += bound.binds;
+                bound = Bound::default();
+            }
+            if i == blended
                 && let Some(after_opaque) = after_opaque.take()
             {
+                // Secondary-view images belong after the main view's AO:
+                // its depth cannot describe the world inside a mirror or
+                // portal. Still compose before transparent world geometry.
                 after_opaque(&mut pass);
-                // It bound its own pipeline and groups.
                 binds += bound.binds;
                 bound = Bound::default();
                 pass.set_bind_group(0, &view.group, &[]);
             }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
-            bound.pipeline(&mut pass, &self.pipelines[pipeline_of(draw)]);
+            bound.pipeline(
+                &mut pass,
+                if mask_only {
+                    &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
+                } else if view.modern {
+                    &self.modern_pipelines[pipeline_of(draw)]
+                } else {
+                    &self.pipelines[pipeline_of(draw)]
+                },
+            );
             bound.material(&mut pass, &scene.materials[batch.material]);
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
             for d in &order[start..end] {
@@ -4422,11 +4971,27 @@ impl SceneRenderer {
                 }
             }
         }
+        if let Some(between) = between {
+            drop(pass);
+            between(encoder);
+            pass = begin(
+                encoder,
+                (color, resolve, depth),
+                None,
+                mask_only,
+                viewport,
+                &view.group,
+            );
+        }
         if let Some(after_opaque) = after_opaque {
             after_opaque(&mut pass);
         }
         if let Some(after_all) = after_all {
             after_all(&mut pass);
+        }
+        drop(pass);
+        if mask_only {
+            return;
         }
         stats.binds += binds + bound.binds;
         let mut total = self.stats.get();
@@ -4469,7 +5034,8 @@ pub fn create_depth_samples(
         sample_count: samples,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // Sampled by the ambient occlusion pass once the world is drawn.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
@@ -4477,6 +5043,26 @@ pub fn create_depth_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sky_ambient_is_off_unless_asked_and_never_adds_light() {
+        let mut camera = Camera {
+            sky_bands: [[[0.4, 0.6, 1.0, 1.0]; SKY_AZIMUTHS]; SKY_ELEVATIONS],
+            ..Default::default()
+        };
+        camera.set_sky_ambient(false);
+        assert_eq!(camera.shading, [0.0; 4]);
+        camera.set_sky_ambient(true);
+        assert_eq!(camera.shading[0], 1.0);
+        let [_, r, g, b] = camera.shading;
+        // Bluer than neutral, without raising any channel.
+        assert!([r, g, b].iter().all(|c| (0.0..=1.0).contains(c)));
+        assert!(b > r);
+        // A black sky leaves the flat ambient.
+        camera.sky_bands = Default::default();
+        camera.set_sky_ambient(true);
+        assert_eq!(camera.shading, [0.0; 4]);
+    }
 
     #[test]
     fn shadowed_light_parameters_reject_tiny_or_equal_near_radii() {

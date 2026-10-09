@@ -4,12 +4,28 @@ use wgpu::naga;
 
 #[test]
 fn scene_shader_validates() {
+    validate(include_str!("../src/scene_original.wgsl"));
     validate(include_str!("../src/scene.wgsl"));
 }
 
 #[test]
 fn vignette_shader_validates() {
     validate(include_str!("../src/vignette.wgsl"));
+}
+
+#[test]
+fn ambient_occlusion_shader_validates() {
+    let own = include_str!("../src/ambient_occlusion.wgsl");
+    for texture in ["texture_depth_2d", "texture_depth_multisampled_2d"] {
+        validate(&own.replace("DEPTH_TEXTURE", texture).replace(
+            "MASK_TEXTURE",
+            if texture.contains("multisampled") {
+                "texture_multisampled_2d<f32>"
+            } else {
+                "texture_2d<f32>"
+            },
+        ));
+    }
 }
 
 fn validate(own: &str) {

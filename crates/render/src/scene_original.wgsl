@@ -11,7 +11,6 @@ struct Camera {
     sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
     sky_bands:array<vec4<f32>,128>,
-    shading:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
@@ -441,59 +440,6 @@ fn ambient_at(reach:f32)->vec3<f32> {
     if camera.shadow_color.w<0.5 {return camera.ambient.rgb;}
     return mix(camera.shadow_color.rgb,camera.ambient.rgb,clamp(reach,0.0,1.0));
 }
-// Sky-tinted ambient (camera.shading, Unified and Dynamic only): faces turned
-// up take the ambient light in the sky's colour at the same brightness, faces
-// turned down a darker one, level faces the flat ambient unchanged. Nothing
-// gets brighter, so enclosed rooms stay as dark as before. `normal` is unit
-// length.
-override MODERN_SKY_SHADING:bool=false;
-const HEMISPHERE_DOWN:f32=0.75;
-struct SkyExposure {
-    matrices:array<mat4x4<f32>,9>, directions:array<vec4<f32>,9>,
-    centre:vec4<f32>, params:vec4<f32>,
-};
-@group(0) @binding(19) var<storage,read> sky_depths:array<f32>;
-@group(0) @binding(20) var<uniform> sky_exposure:SkyExposure;
-// Cosine-weighted visibility of the upper hemisphere, independent of sun
-// direction. Preserve authored ambient beyond this view's measured region.
-fn sky_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
-    if sky_exposure.params.z<0.5 {return 0.0;}
-    let distance=max(max(abs(position.x-sky_exposure.centre.x),abs(position.y-sky_exposure.centre.y)),abs(position.z-sky_exposure.centre.z));
-    let fade=1.0-smoothstep(sky_exposure.centre.w*0.65,sky_exposure.centre.w*0.85,distance);
-    if fade<=0.0 {return 0.0;}
-    let size=i32(sky_exposure.params.x);
-    // A small world-space normal offset avoids self occlusion without moving
-    // a receiver across thin walls or using view-dependent depth.
-    let p=position+normal*0.025;
-    var open=0.0;
-    var weight=0.0;
-    for(var i=0u;i<9u;i+=1u) {
-        let clip=sky_exposure.matrices[i]*vec4<f32>(p,1.0);
-        let uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
-        let pixel=uv*f32(size)-vec2<f32>(0.5);
-        let base=vec2<i32>(floor(pixel));
-        let part=fract(pixel);
-        let share=sky_exposure.directions[i].y;
-        var seen=0.0;
-        for(var y=0;y<2;y+=1) {for(var x=0;x<2;x+=1) {
-            let at=clamp(base+vec2<i32>(x,y),vec2<i32>(0),vec2<i32>(size-1));
-            let index=i*u32(size*size)+u32(at.y*size+at.x);
-            let tap=select(0.0,1.0,clip.z<=sky_depths[index]+0.000001);
-            let wx=select(1.0-part.x,part.x,x==1);
-            let wy=select(1.0-part.y,part.y,y==1);
-            seen+=tap*wx*wy;
-        }}
-        open+=seen*share;
-        weight+=share;
-    }
-    return open/max(weight,0.0001)*fade;
-}
-fn hemisphere(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
-    if !MODERN_SKY_SHADING || camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
-    let tinted=select(mix(vec3<f32>(1.0),vec3<f32>(HEMISPHERE_DOWN),-normal.y),
-        mix(vec3<f32>(1.0),camera.shading.yzw,normal.y),normal.y>0.0);
-    return mix(vec3<f32>(1.0),tinted,camera.shading.x*sky_visibility(position,normal));
-}
 // The live sun reaching a lightmapped texel whose bake let `baked` of the
 // map's own sun through. From the map's baked direction: that share, past
 // live casters. From a new direction: the map's own surfaces in the shadow
@@ -654,13 +600,7 @@ fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
     let sun=dynamic_sun(position,n);
     let local=dynamic_light_sum(position,n,SPECULAR_POWER);
     let eye=normalize(camera.eye.xyz-position);
-    // Preserve main's expression when off. Multiplying ambient by a uniform
-    // one lets the compiler fuse a different multiply-add at half-byte edges.
-    if !MODERN_SKY_SHADING || camera.shading.x<=0.0 || lighting_mode()==0 {
-        return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
-            (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
-    }
-    return LocalLight(ambient_at(sun)*hemisphere(position,n)+camera.sun_color.rgb*facing*sun+local.diffuse,
+    return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
         (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
 }
 // A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a
@@ -993,9 +933,7 @@ fn fog_target(position:vec3<f32>)->vec3<f32> {
     return mix(face,camera.fog_color.rgb,sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w));
 }
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
-    let fog=fog_amount(position);
-    if fog<=0.0 {return output_color(display);}
-    return output_color(mix(display,fog_target(position),fog));
+    return output_color(mix(display,fog_target(position),fog_amount(position)));
 }
 // Classic TerrainRender frame-buffer passes, evaluated per pixel in display
 // space. material[1]: zero-detail distance, zero-bump distance, detail texture
@@ -1049,7 +987,7 @@ fn slot_size(slot:u32)->vec2<f32> {
         default: {return vec2<f32>(textureDimensions(layer0));}
     }
 }
-fn shade_surface(v:VertexOut)->vec4<f32> {
+@fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if v.clip<0.0 {discard;}
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.
@@ -1129,8 +1067,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {
             sky=textureSample(layer0,tiled,v.uv);
-            let edge=camera.fog_color.rgb;
-            let cloud=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,edge,fog);
+            let cloud=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,camera.fog_color.rgb,fog);
             return vec4<f32>(output_color(cloud),sky.a*v.color.a);
         }
         let tinted=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,camera.fog_color.rgb,fog);
@@ -1254,11 +1191,6 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
-            if MODERN_SKY_SHADING && camera.shading.x>0.0 && lighting_mode()!=0 {
-                illumination=ambient_at(sun_share)*hemisphere(v.world_position,normal)+camera.sun_color.rgb*sun+local.diffuse*strength
-                +baked_surroundings(v.world_position,v.normal)
-                +v.point_light*strength;
-            }
             let toward_eye=normalize(camera.eye.xyz-v.world_position);
             specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
                 +local.specular)*SPECULAR_STRENGTH;
@@ -1288,20 +1220,6 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
     display+=specular;
     return vec4<f32>(fogged(display,v.world_position),alpha);
-}
-
-@fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
-    return shade_surface(v);
-}
-// Reuse the surface's cut-out, clip and far-fade rules. Only visible opaque
-// emissive faces write into the AO exclusion mask, under an equal-depth test.
-@fragment fn fs_occlusion_mask(v:VertexOut)->@location(0) vec4<f32> {
-    let glow=v.fx.x==3u && (material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0);
-    let unlit=material[0].x==7.0 || material[0].x==8.0;
-    if !glow && !unlit {discard;}
-    let surface=shade_surface(v);
-    if surface.a<=0.0 {discard;}
-    return vec4<f32>(1.0);
 }
 
 // ---- Bare metal (MaterialKind::Metal) ----

@@ -9,7 +9,9 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Native pref: bricks cast sun shadows too (default off). v20's projected
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
-pub use bri_ui::screens::options::{LIGHTING, REFLECTIONS, RENDER_SCALE};
+pub use bri_ui::screens::options::{
+    AMBIENT_OCCLUSION, LIGHTING, REFLECTIONS, RENDER_SCALE, SOFT_SHADING,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Graphics {
@@ -34,6 +36,12 @@ pub struct Graphics {
     /// of the window's width and height (100: every pixel), stretched over
     /// it; the interface always draws at full size.
     pub render_scale: u32,
+    /// Native `$pref::Video::SoftShading` (on unless turned off): sky-tinted
+    /// ambient in Unified and Dynamic lighting only.
+    pub soft_shading: bool,
+    /// Native `$pref::Video::AmbientOcclusion` (on unless turned off): the
+    /// contact-shading pass, in Unified and Dynamic lighting only.
+    pub ambient_occlusion: bool,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
     match level {
@@ -96,6 +104,8 @@ impl Graphics {
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
             lighting,
             render_scale: bri_ui::screens::options::render_scale(&prefs),
+            soft_shading: prefs.bool_or(SOFT_SHADING, true),
+            ambient_occlusion: prefs.bool_or(AMBIENT_OCCLUSION, true),
         }
     }
 }

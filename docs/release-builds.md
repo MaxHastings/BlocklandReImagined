@@ -174,7 +174,7 @@ git push origin 2026-10-02-a19
 ```
 
 or open Actions, **release**, **Run workflow**, and type the version. That form
-can also build without publishing (the files are then kept on the run for 30
+can also build without publishing (Windows, macOS and Linux zips are then kept on the run for 30
 days) and leave the Stress Lab out.
 
 Tags that start with a date (`YYYY-MM-DD-...`) start the workflow. The version
