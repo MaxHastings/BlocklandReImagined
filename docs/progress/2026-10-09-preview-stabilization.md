@@ -33,6 +33,11 @@ Evidence on Max's PC, with no visible game or interactive input:
   PNGs at 800x450 and 1280x720 visually inspected: labels fit, all eight menus
   including Render Scale sit above Done, no explanatory text was added.
 - main_camera_ao_preserves_mirror_and_portal_images passed (51.92 seconds).
+- Negative regression control: temporarily restoring only the old scene.rs
+  from abd13138 made that same check fail on a reflected image pixel at
+  MSAA 1 (125 became 117). Restoring the committed fix made it pass again
+  (30.78 seconds); source restoration was protected by a finally block and
+  the resulting source diff was empty.
 - sky_shading_scene passed both native and synthetic cases (28.18 seconds).
   Native montage inspected: character, Jeep, transparent pane, green Glow,
   magenta particle; ordinary faces/contacts shade while emissive colours stay.
