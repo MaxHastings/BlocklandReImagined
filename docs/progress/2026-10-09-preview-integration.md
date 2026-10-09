@@ -1,0 +1,84 @@
+# 2026-10-09 Preview integration: Enhanced sky, Soft Shading, Gravity Gun model
+
+Owner: the "Review and merge to main" thread (integrator). Max asked for one
+preview build to playtest all three together; nothing here lands on main
+until he has played it and confirmed each piece by name.
+
+## Branch and PR
+- Integration branch `claude/project-thread-psbgg3`, draft PR #34. Not to be
+  merged as is: after Max approves, each piece lands on main through
+  `python tools/gate.py --push` (squash first; the gate rebases and drops
+  merge commits).
+- Merged in: Enhanced sky (PR #31, `1f05f69`), Soft Shading and AO
+  (`claude/project-thread-5q1fwl`, `ab78990`), Gravity Gun model
+  (`claude/project-thread-mnrxit`, `d3a2709`). The sky and shading threads
+  have stopped and handed their work to this one.
+
+## Changes made here
+- Resolved the sky/shading clash in `crates/client/src/graphics.rs` and
+  `app/render.rs` (both settings kept; Original sky is forced first, then
+  sky-tinted ambient and AO).
+- AO runs between the opaque and blended geometry
+  (`SceneRenderer::render_world_split`), so water, glass and see-through
+  bricks are no longer darkened; it fades with the camera fog
+  (`fog_along`), so fogged creases keep the fog colour.
+- Sky-tinted shade never brightens: up faces get the sky's tint at the same
+  brightness, down faces darken (0.75), level faces are unchanged.
+- Tests: AO shader validates (both depth textures); a render test in
+  `crates/render/tests/lighting_environment.rs` checks the split pass alone
+  draws exactly as before and AO darkens a crease and brightens nothing.
+
+## Verified (cloud container, lavapipe)
+- clippy `-D warnings` on bri-client, bri-render, bri-ui; their tests pass
+  except `bri-client/launch::a_startup_failure_tells_the_player...`, which
+  needs libxkbcommon-x11 the container lacks (environment, not code).
+
+## Not yet verified / open
+- PC session (started 16:38 from this thread) on 4952fd6: off-equals-main
+  pixel check per map and lighting mode, real-map renders, GPU timing, gate
+  check without push. Its report comes back to this thread.
+- Sky PC report (from the sky thread, head b081d4d, RTX 4070 SUPER):
+  Enhanced costs about +0.03 to 0.04 ms a frame. Look issues for Max's
+  playtest: Bedroom Dark shows black silhouettes against a bright generated
+  sky (the sky ignores the map's darkness); strong orange/magenta at
+  sunset/twilight; the sun disc is small. Images:
+  `BlocklandReImagined-worktrees\sky-real\*_montage.png` on Max's PC. Its
+  probe (`sky_probe.rs`) is committed only locally as 26087693 in the
+  `enhanced-sky` worktree.
+- Windows CI: PR #31 hit software-GPU wait timeouts in shards 2 and 3
+  (item_ghost, multiplayer, mirrors past 600 s). Main is also red on
+  `persistent_scene::display_colors_match_on_srgb_and_unorm_output_attachments`
+  (same timeout; seen again on docs PR #33). Not yet known whether the
+  larger scene.wgsl slows the software renderer; next step is timing
+  `cargo test -p bri-render --test mirrors` on main vs the branch.
+- Known AO limitation: Glow bricks (colour FX 3) still get crease shading;
+  excluding them needs a mask the frame does not have yet.
+
+## Other landings the integrator is tracking
+- Bot HE Grenade fix (`claude/v027-bot-play-85fvra`, includes the paint name
+  bar fix): landing through the gate from its own thread, with Max's
+  approval. Its `acceptance_unfamiliar` change counts an enemy within 4
+  units of a grenade at any point of its life; the integrator recommends
+  counting only once the grenade has landed (patch below), as a follow-up.
+- Docs PR #33: approved by Max to land through the gate after the bot fix.
+- PR #32 (paint name bar) duplicates `1b26a1d` on the bot branch; close it
+  once that branch is on main.
+
+### Landed-only grenade check (proposed patch for acceptance_unfamiliar)
+```diff
+diff --git a/crates/chaos/tests/acceptance_unfamiliar.rs b/crates/chaos/tests/acceptance_unfamiliar.rs
+index 03a9914..73faa54 100644
+--- a/crates/chaos/tests/acceptance_unfamiliar.rs
++++ b/crates/chaos/tests/acceptance_unfamiliar.rs
+@@ -915,6 +915,10 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
+             }
+         }
+         for (id, at) in &live {
++            // Only once it has landed: lying still since the last tick.
++            if !last_seen.get(id).is_some_and(|was| was.distance(*at) < 0.05) {
++                continue;
++            }
+             let Some(team) = grenades.get(id).and_then(|t| now.get(t)).map(|b| b.team) else {
+                 continue;
+             };
+```
