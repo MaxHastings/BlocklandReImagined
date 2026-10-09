@@ -464,7 +464,9 @@ fn hud(core: &Core) -> View {
                 WHITE,
             );
         }
-        title_bar(&mut v, Rect::new(px, py - 18, pw + 100, 18), &m.paint_name);
+        // HUD_PaintNameBG spans the swatch columns only, not the can label
+        // (LoadPaint: `%w = %boxWidth`), so the hidden box takes it off screen.
+        title_bar(&mut v, Rect::new(px, py - 18, pw, 18), &m.paint_name);
     }
     if core
         .plant_error
