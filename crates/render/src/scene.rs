@@ -802,6 +802,10 @@ pub struct Camera {
     pub baked_ambient: [f32; 4],
     /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
     pub sky_bands: SkyBands,
+    /// Unit vector toward the real sun (below the horizon too, unlike
+    /// `sun_direction`, which turns to the moon at night); w 1 draws the
+    /// procedural Enhanced sky ([`Camera::set_enhanced_sky`]), 0 the map's own.
+    pub sky_sun: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -885,6 +889,20 @@ impl Camera {
         self.atmosphere[1] = scene.fog.end;
         self.atmosphere[3] = if scene.fog.end > 0.0 { 1.0 } else { 0.0 };
         self.sky_bands = scene.sky_bands;
+        let toward = -Vec3::from(scene.sun_direction).normalize_or_zero();
+        self.sky_sun[..3].copy_from_slice(
+            &if toward == Vec3::ZERO {
+                Vec3::Y
+            } else {
+                toward
+            }
+            .to_array(),
+        );
+    }
+    /// Draw the procedural atmosphere instead of the map's sky textures, and
+    /// fog far geometry toward it ("Sky: Enhanced"). Off keeps v20's sky.
+    pub fn set_enhanced_sky(&mut self, on: bool) {
+        self.sky_sun[3] = f32::from(u8::from(on));
     }
     /// The live environment (`bri_content::atmosphere::resolve`) over the
     /// map's own values, set by [`Camera::apply_environment`] first.
@@ -929,6 +947,7 @@ impl Camera {
             live.flare.1,
         ];
         self.flare = live.flare.0;
+        self.sky_sun[..3].copy_from_slice(&live.sun_toward);
     }
 }
 impl Default for Camera {
@@ -948,6 +967,7 @@ impl Default for Camera {
             baked_sun_color: [0.0; 4],
             baked_ambient: [0.0; 4],
             sky_bands: Default::default(),
+            sky_sun: [0.0, 1.0, 0.0, 0.0],
         }
     }
 }

@@ -37,6 +37,7 @@ fn a_changed_environment_relights_the_maps_lightmaps() -> Result<()> {
     let baked = camera;
     let authored = bri_content::atmosphere::Live {
         sun_direction: sun.to_array(),
+        sun_toward: (-sun).to_array(),
         direct_light: [0.6; 3],
         ambient_light: [0.3; 3],
         shadow_color: None,

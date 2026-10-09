@@ -249,6 +249,9 @@ pub struct Authored {
 pub struct Live {
     /// Direction the sunlight (or, at night, the moonlight) travels.
     pub sun_direction: [f32; 3],
+    /// Unit vector toward the sun itself, even below the horizon, where
+    /// `sun_direction` has turned to the moon's light. The moon is opposite.
+    pub sun_toward: [f32; 3],
     pub direct_light: [f32; 3],
     pub ambient_light: [f32; 3],
     /// Light where the sun does not reach; the ambient light when unset.
@@ -314,6 +317,14 @@ fn mul(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
     a.map(|v| v * s)
 }
+fn normalized(a: [f32; 3]) -> [f32; 3] {
+    let length = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    if length <= f32::EPSILON {
+        [0.0, 1.0, 0.0]
+    } else {
+        a.map(|v| v / length)
+    }
+}
 fn clamp01(a: [f32; 3]) -> [f32; 3] {
     a.map(|v| v.clamped(0.0, 1.0))
 }
@@ -355,12 +366,14 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     let flare = settings
         .sun_flare
         .map_or(([0.0; 4], 1.0), |f| (f.color, f.size));
+    let sun_direction = if settings.sun_azimuth.is_some() || settings.sun_elevation.is_some() {
+        light_direction(azimuth, elevation)
+    } else {
+        authored.sun_direction
+    };
     let mut live = Live {
-        sun_direction: if settings.sun_azimuth.is_some() || settings.sun_elevation.is_some() {
-            light_direction(azimuth, elevation)
-        } else {
-            authored.sun_direction
-        },
+        sun_direction,
+        sun_toward: normalized(sun_direction.map(|v| -v)),
         direct_light: direct,
         ambient_light: ambient,
         shadow_color: settings.shadow_color,
@@ -393,6 +406,7 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
     let moon = 1.0 - smoothstep(-0.25, -0.05, height);
     let warm = 1.0 - smoothstep(0.0, 0.3, (height - 0.04).abs());
     let tint = mix([1.0; 3], DUSK, warm);
+    live.sun_toward = normalized(native(toward));
     live.sun_direction = if height >= -0.05 {
         native(toward.map(|v| -v))
     } else {
@@ -620,6 +634,13 @@ mod tests {
         assert!(close(night.direct_light, MOON));
         assert!(night.sky_tint.iter().all(|c| *c < 0.3));
         assert!(night.ambient_light[0] < map().ambient_light[0] * 0.5);
+        // The real sun stays where it is: high at noon, under the ground at
+        // midnight when the light direction has turned to the moon.
+        assert!(noon.sun_toward[1] > 0.8, "{:?}", noon.sun_toward);
+        assert!(night.sun_toward[1] < -0.8, "{:?}", night.sun_toward);
+        assert!(night.sun_direction[1] < -0.3);
+        let length = |v: [f32; 3]| v.iter().map(|c| c * c).sum::<f32>().sqrt();
+        assert!((length(night.sun_toward) - 1.0).abs() < 1e-4);
     }
 
     #[test]
