@@ -64,6 +64,18 @@ Test changes (old to new):
   blast, so a bot that refuses that throw is right, and the test only passed
   before because the grenade never took the planner's path.
 
+- `acceptance_unfamiliar` (the "a grenade going off near an enemy" check):
+  failed on the PC gate (Variant(1), 0 on all three seeds). Cause: the
+  resting-grenade fix makes every bot, enemies included, keep out of a
+  grenade lying in sight, so fewer grenades go off with an enemy inside
+  (measured on main vs this branch, near-enemy bursts over three seeds:
+  Variant(0) 6 to 1, Variant(1) 7 to 4; with the resting clause switched off
+  the counts return, 7 and 8). Enemies stepping around a live grenade is the
+  right play, so the check now counts a grenade as near an enemy when any
+  living enemy of its thrower came within its blast at any point of its life
+  (was: only at the burst). Harm to enemies against own side is still
+  checked as before.
+
 ## Bot limit
 Checked, no change needed: every bot count (spawn bricks, rule-added bots,
 Slayer fills) reads the host's Max bots via `Session::bot_limit`. The only
