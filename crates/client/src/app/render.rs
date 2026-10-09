@@ -613,6 +613,9 @@ impl App {
             );
         }
         camera.ambient[3] = f32::from(self.lighting.light_volume.mode(self.graphics.lighting));
+        // Classic stays exactly v20's flat shade.
+        let soft_shading = self.graphics.soft_shading && camera.ambient[3] >= 0.5;
+        camera.set_sky_ambient(soft_shading);
         camera.atmosphere[2] = (self.avatar.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
         // fog start scales with it so the fade keeps its shape.
@@ -1285,6 +1288,19 @@ impl App {
             &item_draws,
         );
         renderer.mark(frame.encoder, "world");
+        if soft_shading && let Some(occlusion) = &self.gpu.ambient_occlusion {
+            occlusion.render(
+                frame.device,
+                frame.queue,
+                frame.encoder,
+                world_target,
+                &depth,
+                frame.size,
+                camera.view_projection,
+                [camera.eye[0], camera.eye[1], camera.eye[2]],
+            );
+            renderer.mark(frame.encoder, "occlusion");
+        }
         let mut pass = frame
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {

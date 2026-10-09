@@ -10,6 +10,7 @@ struct Camera {
     sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,
     sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
     baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
+    shading:vec4<f32>,
     sky_bands:array<vec4<f32>,128>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
@@ -440,6 +441,17 @@ fn ambient_at(reach:f32)->vec3<f32> {
     if camera.shadow_color.w<0.5 {return camera.ambient.rgb;}
     return mix(camera.shadow_color.rgb,camera.ambient.rgb,clamp(reach,0.0,1.0));
 }
+// Sky-tinted ambient (camera.shading, Unified and Dynamic only): faces turned
+// up take the ambient light in the sky's colour, faces turned down a darker
+// one, level faces about the flat ambient. `normal` is unit length.
+const HEMISPHERE_UP:f32=1.2;
+const HEMISPHERE_DOWN:f32=0.65;
+fn hemisphere(normal:vec3<f32>)->vec3<f32> {
+    if camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
+    let up=camera.shading.yzw*HEMISPHERE_UP;
+    let tinted=mix(vec3<f32>(HEMISPHERE_DOWN),up,clamp(normal.y*0.5+0.5,0.0,1.0));
+    return mix(vec3<f32>(1.0),tinted,camera.shading.x);
+}
 // The live sun reaching a lightmapped texel whose bake let `baked` of the
 // map's own sun through. From the map's baked direction: that share, past
 // live casters. From a new direction: the map's own surfaces in the shadow
@@ -600,7 +612,7 @@ fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
     let sun=dynamic_sun(position,n);
     let local=dynamic_light_sum(position,n,SPECULAR_POWER);
     let eye=normalize(camera.eye.xyz-position);
-    return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
+    return LocalLight(ambient_at(sun)*hemisphere(n)+camera.sun_color.rgb*facing*sun+local.diffuse,
         (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
 }
 // A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a
@@ -1188,7 +1200,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
             sun=facing*sun_share;
             let local=map_light_sum(v.world_position,normal,vis,true,SPECULAR_POWER);
-            illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
+            illumination=ambient_at(sun_share)*hemisphere(normal)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
             let toward_eye=normalize(camera.eye.xyz-v.world_position);

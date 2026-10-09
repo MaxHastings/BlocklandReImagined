@@ -800,6 +800,9 @@ pub struct Camera {
     pub baked_sun_direction: [f32; 4],
     pub baked_sun_color: [f32; 4],
     pub baked_ambient: [f32; 4],
+    /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
+    /// off, the flat ambient), yzw the sky's colour at unit brightness.
+    pub shading: [f32; 4],
     /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
     pub sky_bands: SkyBands,
 }
@@ -930,6 +933,37 @@ impl Camera {
         ];
         self.flare = live.flare.0;
     }
+    /// Turn sky-tinted ambient on or off. On, faces turned up take the
+    /// ambient light in the sky's colour and faces turned down a darker one,
+    /// in Unified and Dynamic lighting (Classic keeps the flat ambient).
+    /// Call after the environment is applied: it reads the sky's upper
+    /// bands, tint and the fog colour behind them.
+    pub fn set_sky_ambient(&mut self, on: bool) {
+        self.shading = [0.0; 4];
+        if !on {
+            return;
+        }
+        let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
+        for row in &self.sky_bands[SKY_ELEVATIONS * 2 / 3..] {
+            for band in row {
+                let share = band[3].clamp(0.0, 1.0);
+                for c in 0..3 {
+                    let tinted = band[c] * self.sky[c];
+                    sum[c] += tinted * share + self.fog_color[c] * (1.0 - share);
+                }
+                weight += 1.0;
+            }
+        }
+        if weight <= 0.0 {
+            return;
+        }
+        let colour = sum.map(|c| c / weight);
+        let luma = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
+        if !(luma > 0.02) || !colour.iter().all(|c| c.is_finite()) {
+            return;
+        }
+        self.shading = [1.0, colour[0] / luma, colour[1] / luma, colour[2] / luma];
+    }
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -947,6 +981,7 @@ impl Default for Camera {
             baked_sun_direction: [0.0; 4],
             baked_sun_color: [0.0; 4],
             baked_ambient: [0.0; 4],
+            shading: [0.0; 4],
             sky_bands: Default::default(),
         }
     }
@@ -4469,7 +4504,8 @@ pub fn create_depth_samples(
         sample_count: samples,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // Sampled by the ambient occlusion pass once the world is drawn.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
