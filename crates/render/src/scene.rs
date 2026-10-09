@@ -946,7 +946,7 @@ impl Camera {
         let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
         for row in &self.sky_bands[SKY_ELEVATIONS * 2 / 3..] {
             for band in row {
-                let share = band[3].clamp(0.0, 1.0);
+                let share = if band[3] > 1.0 { 1.0 } else { band[3].max(0.0) };
                 for c in 0..3 {
                     let tinted = band[c] * self.sky[c];
                     sum[c] += tinted * share + self.fog_color[c] * (1.0 - share);
@@ -959,7 +959,7 @@ impl Camera {
         }
         let colour = sum.map(|c| c / weight);
         let luma = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
-        if !(luma > 0.02) || !colour.iter().all(|c| c.is_finite()) {
+        if luma.is_nan() || luma <= 0.02 || !colour.iter().all(|c| c.is_finite()) {
             return;
         }
         self.shading = [1.0, colour[0] / luma, colour[1] / luma, colour[2] / luma];
