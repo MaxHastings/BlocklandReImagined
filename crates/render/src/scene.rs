@@ -800,6 +800,9 @@ pub struct Camera {
     pub baked_sun_direction: [f32; 4],
     pub baked_sun_color: [f32; 4],
     pub baked_ambient: [f32; 4],
+    /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
+    /// off, the flat ambient), yzw the sky's colour at unit brightness.
+    pub shading: [f32; 4],
     /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
     pub sky_bands: SkyBands,
     /// Unit vector toward the real sun (below the horizon too, unlike
@@ -955,6 +958,37 @@ impl Camera {
         self.sky_sun[3] = f32::from(u8::from(live.enhanced_sky));
         self.sky_color = [live.sky_color[0], live.sky_color[1], live.sky_color[2], 1.0];
     }
+    /// Turn sky-tinted ambient on or off. On, faces turned up take the
+    /// ambient light in the sky's colour and faces turned down a darker one,
+    /// in Unified and Dynamic lighting (Classic keeps the flat ambient).
+    /// Call after the environment is applied: it reads the sky's upper
+    /// bands, tint and the fog colour behind them.
+    pub fn set_sky_ambient(&mut self, on: bool) {
+        self.shading = [0.0; 4];
+        if !on {
+            return;
+        }
+        let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
+        for row in &self.sky_bands[SKY_ELEVATIONS * 2 / 3..] {
+            for band in row {
+                let share = if band[3] > 1.0 { 1.0 } else { band[3].max(0.0) };
+                for c in 0..3 {
+                    let tinted = band[c] * self.sky[c];
+                    sum[c] += tinted * share + self.fog_color[c] * (1.0 - share);
+                }
+                weight += 1.0;
+            }
+        }
+        if weight <= 0.0 {
+            return;
+        }
+        let colour = sum.map(|c| c / weight);
+        let luma = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
+        if luma.is_nan() || luma <= 0.02 || !colour.iter().all(|c| c.is_finite()) {
+            return;
+        }
+        self.shading = [1.0, colour[0] / luma, colour[1] / luma, colour[2] / luma];
+    }
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -972,6 +1006,7 @@ impl Default for Camera {
             baked_sun_direction: [0.0; 4],
             baked_sun_color: [0.0; 4],
             baked_ambient: [0.0; 4],
+            shading: [0.0; 4],
             sky_bands: Default::default(),
             sky_sun: [0.0, 1.0, 0.0, 0.0],
             sky_color: [1.0; 4],
@@ -4496,7 +4531,8 @@ pub fn create_depth_samples(
         sample_count: samples,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // Sampled by the ambient occlusion pass once the world is drawn.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
@@ -4504,6 +4540,24 @@ pub fn create_depth_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sky_ambient_is_off_unless_asked_and_neutral_in_brightness() {
+        let mut camera = Camera::default();
+        camera.sky_bands = [[[0.4, 0.6, 1.0, 1.0]; SKY_AZIMUTHS]; SKY_ELEVATIONS];
+        camera.set_sky_ambient(false);
+        assert_eq!(camera.shading, [0.0; 4]);
+        camera.set_sky_ambient(true);
+        assert_eq!(camera.shading[0], 1.0);
+        let [_, r, g, b] = camera.shading;
+        // Unit brightness, bluer than neutral.
+        assert!((0.2126 * r + 0.7152 * g + 0.0722 * b - 1.0).abs() < 1e-4);
+        assert!(b > r);
+        // A black sky leaves the flat ambient.
+        camera.sky_bands = Default::default();
+        camera.set_sky_ambient(true);
+        assert_eq!(camera.shading, [0.0; 4]);
+    }
 
     #[test]
     fn shadowed_light_parameters_reject_tiny_or_equal_near_radii() {

@@ -13,6 +13,9 @@ pub(super) struct GpuState {
     pub(super) region_outlines: crate::rule_regions::Outlines,
     /// The Environment window's vignette over the world.
     pub(super) vignette: Option<bri_render::vignette::VignetteRenderer>,
+    /// Screen-space ambient occlusion, drawn after the world while Soft
+    /// Shading is on in Unified or Dynamic lighting.
+    pub(super) ambient_occlusion: Option<bri_render::ambient_occlusion::AmbientOcclusion>,
     /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
     /// last uploaded.
     pub(super) selection_lines: Option<bri_render::lines::LineRenderer>,
