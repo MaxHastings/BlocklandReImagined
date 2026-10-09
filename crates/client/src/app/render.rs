@@ -1303,6 +1303,7 @@ impl App {
                         camera.view_projection,
                         [camera.eye[0], camera.eye[1], camera.eye[2]],
                         (camera.atmosphere, camera.fog_color[3]),
+                        (renderer, &scenes, &item_draws),
                     );
                     renderer.mark(encoder, "occlusion");
                 };

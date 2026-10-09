@@ -397,7 +397,16 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
         flare,
         vignette: settings.vignette,
         enhanced_sky: settings.enhanced_sky.unwrap_or(false),
-        sky_color: sky,
+        // Generated radiance keeps the authored map's darkness. Use the
+        // daylight reference before the cycle dims it (the scattering already
+        // follows sun height); explicit host lighting can brighten a dark map.
+        sky_color: scale(
+            sky,
+            (0..3)
+                .map(|c| direct[c] + ambient[c])
+                .fold(0.0f32, f32::max)
+                .clamped(0.0, 1.0),
+        ),
     };
     let Some(cycle) = settings.day_cycle else {
         return live;
@@ -562,6 +571,27 @@ mod tests {
             fog_end: 400.0,
             fog_color: [0.7, 0.8, 0.9],
         }
+    }
+
+    #[test]
+    fn generated_sky_keeps_a_dark_maps_light_level_and_explicit_host_light() {
+        let dark = Authored {
+            direct_light: [0.0; 3],
+            ambient_light: [0.02; 3],
+            ..map()
+        };
+        let settings = Settings {
+            enhanced_sky: Some(true),
+            ..Default::default()
+        };
+        let live = resolve(&dark, &settings, 0.0);
+        assert_eq!(live.sky_color, [0.02; 3]);
+        assert_eq!(live.sky_tint, [1.0; 3]); // Original sky is untouched.
+        let bright = Settings {
+            ambient_light: Some([1.0; 3]),
+            ..settings
+        };
+        assert_eq!(resolve(&dark, &bright, 0.0).sky_color, [1.0; 3]);
     }
 
     #[test]

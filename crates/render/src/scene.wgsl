@@ -930,7 +930,7 @@ fn air_mass(c:f32)->f32 {
     return 1.0/(cc+0.50572*pow(max(96.07995-degrees(acos(cc)),0.001),-1.6364));
 }
 const SKY_RAYLEIGH:vec3<f32>=vec3<f32>(0.05,0.12,0.30);
-const SKY_OZONE:vec3<f32>=vec3<f32>(0.012,0.035,0.002);
+const SKY_OZONE:vec3<f32>=vec3<f32>(0.010,0.016,0.003);
 const SKY_MIE:f32=0.012;
 const SKY_MIE_G:f32=0.72;
 fn smooth_between(a:f32,b:f32,x:f32)->f32 {
@@ -961,6 +961,11 @@ fn enhanced_sky(along:vec3<f32>)->vec3<f32> {
     let twilight=smooth_between(-0.32,-0.04,sun.y)*(1.0-smooth_between(0.05,0.3,sun.y));
     color+=vec3<f32>(0.018,0.04,0.12)*twilight*(0.3+0.7*h);
     color+=vec3<f32>(0.004,0.008,0.022)*(1.0-day);
+    // Keep a warm horizon without making twilight a saturated orange/pink
+    // band. Desaturate the radiance before display conversion.
+    let warmth=1.0-smooth_between(0.02,0.25,sun.y);
+    let neutral=dot(color,vec3<f32>(0.2126,0.7152,0.0722));
+    color=mix(color,vec3<f32>(neutral),0.35*warmth);
     return display_color(vec3<f32>(1.0)-exp(-color))*camera.sky_color.rgb;
 }
 // The sun's and moon's discs along `along`, display colour to add after fog.
@@ -972,7 +977,7 @@ fn sky_bodies(along:vec3<f32>)->vec3<f32> {
     let day=smooth_between(-0.30,0.02,sun.y);
     let mu=dot(along,sun);
     let sun_angle=acos(clamp(mu,-1.0,1.0));
-    var color=exp(-ext*air_mass(max(sun.y,0.0)))*40.0*(1.0-smooth_between(0.0095,0.0125,sun_angle))*seen*smooth_between(-0.06,0.0,sun.y);
+    var color=exp(-ext*air_mass(max(sun.y,0.0)))*40.0*(1.0-smooth_between(0.014,0.018,sun_angle))*seen*smooth_between(-0.06,0.0,sun.y);
     let moon_angle=acos(clamp(-mu,-1.0,1.0));
     let moon=(1.0-smooth_between(0.010,0.0125,moon_angle))+0.08*pow(max(1.0-moon_angle/0.12,0.0),3.0);
     color+=vec3<f32>(0.9,0.95,1.1)*moon*seen*(1.0-day);
@@ -987,7 +992,7 @@ fn sky_bodies(along:vec3<f32>)->vec3<f32> {
             color+=vec3<f32>(0.85,0.9,1.0)*twinkle*(1.0-smooth_between(0.05,0.2,near))*seen*(1.0-smooth_between(0.0,0.9,day))*0.8;
         }
     }
-    return min(color,vec3<f32>(1.0));
+    return min(color,vec3<f32>(1.0))*camera.sky_color.rgb;
 }
 // The Enhanced sky at the horizon toward `along`: what the world's edge fogs
 // to, in place of the authored fog colour.
@@ -1083,7 +1088,7 @@ fn slot_size(slot:u32)->vec2<f32> {
         default: {return vec2<f32>(textureDimensions(layer0));}
     }
 }
-@fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+fn shade_surface(v:VertexOut)->vec4<f32> {
     if v.clip<0.0 {discard;}
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.
@@ -1324,6 +1329,20 @@ fn slot_size(slot:u32)->vec2<f32> {
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
     display+=specular;
     return vec4<f32>(fogged(display,v.world_position),alpha);
+}
+
+@fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    return shade_surface(v);
+}
+// Reuse the surface's cut-out, clip and far-fade rules. Only visible opaque
+// emissive faces write into the AO exclusion mask, under an equal-depth test.
+@fragment fn fs_occlusion_mask(v:VertexOut)->@location(0) vec4<f32> {
+    let glow=v.fx.x==3u && (material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0);
+    let unlit=material[0].x==7.0 || material[0].x==8.0;
+    if !glow && !unlit {discard;}
+    let surface=shade_surface(v);
+    if surface.a<=0.0 {discard;}
+    return vec4<f32>(1.0);
 }
 
 // ---- Bare metal (MaterialKind::Metal) ----

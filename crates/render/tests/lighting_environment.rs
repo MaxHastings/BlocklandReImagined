@@ -401,16 +401,32 @@ enum Occlusion {
 /// A floor meeting a wall ahead of the camera, with a half-transparent red
 /// pane (drawn after the occlusion) over the left half of the crease.
 fn occlusion_frame(order: Occlusion) -> Result<Vec<u8>> {
+    occlusion_case(order, 1, false, false, false)
+}
+fn occlusion_case(
+    order: Occlusion,
+    samples: u32,
+    glow: bool,
+    fog: bool,
+    soft: bool,
+) -> Result<Vec<u8>> {
     let (device, queue) = gpu()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut renderer = SceneRenderer::with_settings(&device, format, 1, None);
+    let mut renderer = SceneRenderer::with_settings(&device, format, samples, None);
     let target = color_target(&device, format, SIZE.0, SIZE.1);
-    let floor = cuboid(Vec3::new(-20., -1., -2.), Vec3::new(20., 0., 30.));
-    let wall = cuboid(Vec3::new(-20., 0., 8.), Vec3::new(20., 6., 9.));
+    let mut floor = cuboid(Vec3::new(-20., -1., -2.), Vec3::new(20., 0., 30.));
+    let mut wall = cuboid(Vec3::new(-20., 0., 8.), Vec3::new(20., 6., 9.));
     let mut pane = cuboid(Vec3::new(-20., 0., 6.), Vec3::new(0., 3., 6.1));
     pane.materials[0].alpha = AlphaMode::Blend;
     for v in &mut pane.vertices {
         v.color = [1., 0., 0., 0.5];
+    }
+    if glow {
+        for s in [&mut floor, &mut wall] {
+            for v in &mut s.vertices {
+                v.fx[0] = 3.0;
+            }
+        }
     }
     let scenes = [floor, wall, pane]
         .iter()
@@ -418,16 +434,40 @@ fn occlusion_frame(order: Occlusion) -> Result<Vec<u8>> {
         .collect::<Result<Vec<_>>>()?;
     let scenes: Vec<&GpuScene> = scenes.iter().collect();
     let mut camera = Camera::perspective([0., 2., 0.], [0., 0.5, 8.], 1.0, 1.0, 0.1, 200.0);
-    camera.ambient = [0.7, 0.7, 0.7, 0.0];
+    camera.ambient = [0.7, 0.7, 0.7, 1.0];
+    if soft {
+        camera.sky_bands = [[[0.2, 0.5, 0.9, 1.0]; 8]; 16];
+        camera.set_sky_ambient(true);
+    }
+    if fog {
+        camera.atmosphere = [0.0, 0.5, 0.0, 1.0];
+        camera.fog_color = [0.2, 0.3, 0.4, 0.0];
+    }
     renderer.update_camera(&queue, &camera);
-    let occlusion = bri_render::ambient_occlusion::AmbientOcclusion::new(&device, format, 1);
+    let occlusion = bri_render::ambient_occlusion::AmbientOcclusion::new(&device, format, samples);
     let view = target.create_view(&Default::default());
-    let depth = create_depth(&device, SIZE.0, SIZE.1).create_view(&Default::default());
+    let multisampled = (samples > 1).then(|| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("occlusion test MSAA"),
+                size: target.size(),
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    });
+    let color = multisampled.as_ref().unwrap_or(&view);
+    let depth = bri_render::scene::create_depth_samples(&device, SIZE.0, SIZE.1, samples)
+        .create_view(&Default::default());
     let mut encoder = device.create_command_encoder(&Default::default());
     let pass = || WorldPass {
         view: 0,
-        color: &view,
-        resolve: None,
+        color,
+        resolve: multisampled.as_ref().map(|_| &view),
         depth: &depth,
         viewport: None,
         clear: Some(wgpu::Color::BLACK),
@@ -440,12 +480,13 @@ fn occlusion_frame(order: Occlusion) -> Result<Vec<u8>> {
             &device,
             &queue,
             encoder,
-            &view,
+            color,
             &depth,
             SIZE,
             camera.view_projection,
             eye,
             (camera.atmosphere, camera.fog_color[3]),
+            (&renderer, &scenes, &[]),
         )
     };
     match order {
@@ -517,5 +558,32 @@ fn ambient_occlusion_darkens_creases_and_off_draws_as_before() -> Result<()> {
         .fold(1.0f32, f32::min);
     assert!(darkest < 0.95, "the crease darkens: {darkest}");
     assert!(on.iter().zip(&off).all(|(on, off)| on <= off));
+    Ok(())
+}
+
+#[test]
+fn glow_faces_keep_their_light_with_ao_with_and_without_msaa() -> Result<()> {
+    for samples in [1, 4] {
+        assert_eq!(
+            occlusion_case(Occlusion::Off, samples, true, false, false)?,
+            occlusion_case(Occlusion::BeforeBlended, samples, true, false, false)?
+        );
+    }
+    Ok(())
+}
+#[test]
+fn occlusion_disappears_in_complete_fog() -> Result<()> {
+    assert_eq!(
+        occlusion_case(Occlusion::Off, 1, false, true, false)?,
+        occlusion_case(Occlusion::BeforeBlended, 1, false, true, false)?
+    );
+    Ok(())
+}
+#[test]
+fn sky_tinted_floor_and_walls_never_get_brighter() -> Result<()> {
+    let off = occlusion_case(Occlusion::Off, 1, false, false, false)?;
+    let soft = occlusion_case(Occlusion::Off, 1, false, false, true)?;
+    assert!(soft.iter().zip(&off).all(|(a, b)| a <= b));
+    assert_ne!(soft, off);
     Ok(())
 }

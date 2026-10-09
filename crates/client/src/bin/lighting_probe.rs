@@ -1224,7 +1224,8 @@ fn main() -> Result<()> {
     let multisampled = (samples > 1).then(|| {
         texture(samples, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default())
     });
-    let depth = create_depth_samples(&device, width, height, samples).create_view(&Default::default());
+    let depth =
+        create_depth_samples(&device, width, height, samples).create_view(&Default::default());
     // BRI_LAMPS=0: no lamp shadows (the sun's alone); BRI_SUN=0 below: no
     // sun (the lamps' alone).
     let lamps = std::env::var("BRI_LAMPS").map_or(true, |v| v != "0");
@@ -1448,9 +1449,8 @@ fn main() -> Result<()> {
                         });
                         host.sun_elevation = Some(elevation);
                     }
-                    camera.apply_atmosphere(&bri_content::atmosphere::resolve(
-                        &authored, &host, 0.0,
-                    ));
+                    camera
+                        .apply_atmosphere(&bri_content::atmosphere::resolve(&authored, &host, 0.0));
                 }
                 camera.ambient[3] = f32::from(mode);
                 if variant.original_sky {
@@ -1524,6 +1524,7 @@ fn main() -> Result<()> {
                                 camera.view_projection,
                                 [camera.eye[0], camera.eye[1], camera.eye[2]],
                                 (camera.atmosphere, camera.fog_color[3]),
+                                (renderer, &scenes, &terrain_draws),
                             );
                             renderer.mark(encoder, "occlusion");
                         };

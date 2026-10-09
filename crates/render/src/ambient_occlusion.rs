@@ -4,6 +4,8 @@
 //! runs between the world and the particles, UI and sky effects drawn after
 //! it, and only while it is wanted: Classic lighting never draws it.
 use crate::color::{output_constants, shader_source};
+use crate::scene::{GpuInstances, GpuScene, SceneRenderer, WorldPass};
+use std::cell::RefCell;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,6 +29,8 @@ pub struct AmbientOcclusion {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
+    samples: u32,
+    mask: RefCell<Option<((u32, u32), wgpu::TextureView)>>,
 }
 
 impl AmbientOcclusion {
@@ -57,6 +61,16 @@ impl AmbientOcclusion {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled,
+                    },
+                    count: None,
+                },
             ],
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -70,7 +84,16 @@ impl AmbientOcclusion {
         } else {
             "texture_depth_2d"
         };
-        let source = include_str!("ambient_occlusion.wgsl").replace("DEPTH_TEXTURE", texture);
+        let source = include_str!("ambient_occlusion.wgsl")
+            .replace("DEPTH_TEXTURE", texture)
+            .replace(
+                "MASK_TEXTURE",
+                if multisampled {
+                    "texture_multisampled_2d<f32>"
+                } else {
+                    "texture_2d<f32>"
+                },
+            );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ambient occlusion"),
             source: wgpu::ShaderSource::Wgsl(shader_source(&source).into()),
@@ -128,6 +151,8 @@ impl AmbientOcclusion {
             pipeline,
             layout,
             uniform,
+            samples,
+            mask: RefCell::new(None),
         }
     }
     /// Darken `color` (`size` pixels, drawn with `depth`, a view of a
@@ -147,12 +172,52 @@ impl AmbientOcclusion {
         view_projection: [f32; 16],
         eye: [f32; 3],
         (atmosphere, below): ([f32; 4], f32),
+        (renderer, scenes, instances): (
+            &SceneRenderer,
+            &[&GpuScene],
+            &[(&GpuScene, &GpuInstances)],
+        ),
     ) {
         let matrix = glam::Mat4::from_cols_array(&view_projection);
         let inverse = matrix.inverse();
         if !inverse.is_finite() || size.0 == 0 || size.1 == 0 {
             return;
         }
+        let mut cached = self.mask.borrow_mut();
+        if cached.as_ref().is_none_or(|(old, _)| *old != size) {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("occlusion exclusion mask"),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: self.samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            *cached = Some((size, texture.create_view(&Default::default())));
+        }
+        let mask = &cached.as_ref().expect("allocated above").1;
+        renderer.render_occlusion_mask(
+            encoder,
+            WorldPass {
+                view: 0,
+                color: mask,
+                resolve: None,
+                depth,
+                viewport: None,
+                clear: Some(wgpu::Color::BLACK),
+                after_opaque: None,
+                after_all: None,
+            },
+            scenes,
+            instances,
+        );
         let uniform = Uniform {
             view_projection,
             inverse: inverse.to_cols_array(),
@@ -173,6 +238,10 @@ impl AmbientOcclusion {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(mask),
                 },
             ],
         });

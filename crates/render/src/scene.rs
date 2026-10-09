@@ -987,7 +987,10 @@ impl Camera {
         if luma.is_nan() || luma <= 0.02 || !colour.iter().all(|c| c.is_finite()) {
             return;
         }
-        self.shading = [1.0, colour[0] / luma, colour[1] / luma, colour[2] / luma];
+        // A tint may remove light but must not raise any channel: otherwise
+        // clamping saturated paint can make even its perceived brightness rise.
+        let peak = colour.iter().copied().fold(0.0f32, f32::max);
+        self.shading = [1.0, colour[0] / peak, colour[1] / peak, colour[2] / peak];
     }
 }
 impl Default for Camera {
@@ -2401,6 +2404,7 @@ pub struct SceneRenderer {
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::RenderPipeline>,
+    occlusion_mask_pipelines: Vec<wgpu::RenderPipeline>,
     filtering: TextureFiltering,
     samples: u32,
     shadows: crate::shadow::ShadowMaps,
@@ -2608,6 +2612,7 @@ impl SceneRenderer {
             ),
         });
         let mut pipelines = vec![];
+        let mut occlusion_mask_pipelines = vec![];
         for background in [false, true] {
             for blend in 0..3 {
                 let blend_state = match blend {
@@ -2673,6 +2678,52 @@ impl SceneRenderer {
                             cache: None,
                         },
                     ));
+                    occlusion_mask_pipelines.push(device.create_render_pipeline(
+                        &wgpu::RenderPipelineDescriptor {
+                            label: Some("occlusion exclusion mask"),
+                            layout: Some(&layout),
+                            vertex: wgpu::VertexState {
+                                module: &shader,
+                                entry_point: Some("vs_main"),
+                                compilation_options: Default::default(),
+                                buffers: &vertex_layouts(),
+                            },
+                            primitive: wgpu::PrimitiveState {
+                                cull_mode: if double_sided {
+                                    None
+                                } else {
+                                    Some(wgpu::Face::Back)
+                                },
+                                ..Default::default()
+                            },
+                            depth_stencil: Some(wgpu::DepthStencilState {
+                                format: DEPTH_FORMAT,
+                                depth_write_enabled: Some(false),
+                                depth_compare: Some(wgpu::CompareFunction::Equal),
+                                stencil: Default::default(),
+                                bias: Default::default(),
+                            }),
+                            multisample: wgpu::MultisampleState {
+                                count: samples,
+                                ..Default::default()
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: &shader,
+                                entry_point: Some("fs_occlusion_mask"),
+                                compilation_options: wgpu::PipelineCompilationOptions {
+                                    constants: &crate::color::output_constants(color_format),
+                                    ..Default::default()
+                                },
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format: wgpu::TextureFormat::R8Unorm,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                            }),
+                            multiview_mask: None,
+                            cache: None,
+                        },
+                    ));
                 }
             }
         }
@@ -2712,6 +2763,7 @@ impl SceneRenderer {
             views: Vec::new(),
             material_layout,
             pipelines,
+            occlusion_mask_pipelines,
             filtering,
             samples,
             shadows,
@@ -4205,7 +4257,7 @@ impl SceneRenderer {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
     ) {
-        self.record_world(encoder, target, scenes, instances, None);
+        self.record_world(encoder, target, scenes, instances, None, false);
     }
     /// As [`Self::render_world`], but the pass ends once the opaque geometry
     /// (and `after_opaque`) is drawn, `between` records on the encoder (a
@@ -4220,8 +4272,20 @@ impl SceneRenderer {
         instances: &[(&GpuScene, &GpuInstances)],
         between: &mut dyn FnMut(&mut wgpu::CommandEncoder),
     ) {
-        self.record_world(encoder, target, scenes, instances, Some(between));
+        self.record_world(encoder, target, scenes, instances, Some(between), false);
     }
+    /// Visible emissive surfaces excluded from AO. Loads the finished depth;
+    /// never changes it, and follows the same instancing/culling/cut-out rules.
+    pub fn render_occlusion_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+    ) {
+        self.record_world(encoder, target, scenes, instances, None, true);
+    }
+    #[allow(clippy::too_many_arguments)]
     fn record_world(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4229,6 +4293,7 @@ impl SceneRenderer {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
         mut between: Option<&mut dyn FnMut(&mut wgpu::CommandEncoder)>,
+        mask_only: bool,
     ) {
         let Some(view) = self.views.get(target.view) else {
             return;
@@ -4390,7 +4455,11 @@ impl SceneRenderer {
                 .into_iter()
                 .filter_map(|i| translucent[i].take()),
         );
-        order.retain(|d| d.scene.vertex_count != 0 && d.scene.index_count != 0);
+        order.retain(|d| {
+            d.scene.vertex_count != 0
+                && d.scene.index_count != 0
+                && (!mask_only || (d.blend == 0 && !d.scene.material_modes[d.batch.material].2))
+        });
         // Runs of pooled chunk batches that bind the same things become one
         // indirect multi-draw each; their arguments upload together.
         let mut runs: Vec<(usize, usize)> = Vec::new();
@@ -4427,6 +4496,7 @@ impl SceneRenderer {
                 &wgpu::TextureView,
             ),
             clear: Option<wgpu::Color>,
+            mask_only: bool,
             viewport: Option<[f32; 4]>,
             group: &wgpu::BindGroup,
         ) -> wgpu::RenderPass<'e> {
@@ -4444,7 +4514,7 @@ impl SceneRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: if clear.is_some() {
+                        load: if clear.is_some() && !mask_only {
                             wgpu::LoadOp::Clear(DEPTH_CLEAR)
                         } else {
                             wgpu::LoadOp::Load
@@ -4469,6 +4539,7 @@ impl SceneRenderer {
             encoder,
             (color, first_resolve, depth),
             clear,
+            mask_only,
             viewport,
             &view.group,
         );
@@ -4502,6 +4573,7 @@ impl SceneRenderer {
                     encoder,
                     (color, resolve, depth),
                     None,
+                    mask_only,
                     viewport,
                     &view.group,
                 );
@@ -4510,7 +4582,14 @@ impl SceneRenderer {
             }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
-            bound.pipeline(&mut pass, &self.pipelines[pipeline_of(draw)]);
+            bound.pipeline(
+                &mut pass,
+                &if mask_only {
+                    &self.occlusion_mask_pipelines
+                } else {
+                    &self.pipelines
+                }[pipeline_of(draw)],
+            );
             bound.material(&mut pass, &scene.materials[batch.material]);
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
             for d in &order[start..end] {
@@ -4556,6 +4635,7 @@ impl SceneRenderer {
                 encoder,
                 (color, resolve, depth),
                 None,
+                mask_only,
                 viewport,
                 &view.group,
             );
@@ -4564,6 +4644,9 @@ impl SceneRenderer {
             after_all(&mut pass);
         }
         drop(pass);
+        if mask_only {
+            return;
+        }
         stats.binds += binds + bound.binds;
         let mut total = self.stats.get();
         if target.view == 0 {
@@ -4616,7 +4699,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sky_ambient_is_off_unless_asked_and_neutral_in_brightness() {
+    fn sky_ambient_is_off_unless_asked_and_never_adds_light() {
         let mut camera = Camera {
             sky_bands: [[[0.4, 0.6, 1.0, 1.0]; SKY_AZIMUTHS]; SKY_ELEVATIONS],
             ..Default::default()
@@ -4626,8 +4709,8 @@ mod tests {
         camera.set_sky_ambient(true);
         assert_eq!(camera.shading[0], 1.0);
         let [_, r, g, b] = camera.shading;
-        // Unit brightness, bluer than neutral.
-        assert!((0.2126 * r + 0.7152 * g + 0.0722 * b - 1.0).abs() < 1e-4);
+        // Bluer than neutral, without raising any channel.
+        assert!([r, g, b].iter().all(|c| (0.0..=1.0).contains(c)));
         assert!(b > r);
         // A black sky leaves the flat ambient.
         camera.sky_bands = Default::default();
