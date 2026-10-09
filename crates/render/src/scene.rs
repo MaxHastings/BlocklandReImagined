@@ -901,6 +901,8 @@ impl Camera {
     }
     /// Draw the procedural atmosphere instead of the map's sky textures, and
     /// fog far geometry toward it ("Sky: Enhanced"). Off keeps v20's sky.
+    /// The host's choice arrives with [`Camera::apply_atmosphere`]; a player
+    /// who wants the original sky calls this with false after it.
     pub fn set_enhanced_sky(&mut self, on: bool) {
         self.sky_sun[3] = f32::from(u8::from(on));
     }
@@ -948,6 +950,7 @@ impl Camera {
         ];
         self.flare = live.flare.0;
         self.sky_sun[..3].copy_from_slice(&live.sun_toward);
+        self.sky_sun[3] = f32::from(u8::from(live.enhanced_sky));
     }
 }
 impl Default for Camera {

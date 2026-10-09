@@ -78,7 +78,7 @@ pub struct Vignette {
 }
 
 /// Every setting's name, as [`Settings::unset`] takes them.
-pub const KEYS: [&str; 12] = [
+pub const KEYS: [&str; 13] = [
     "day_cycle",
     "sun_azimuth",
     "sun_elevation",
@@ -91,6 +91,7 @@ pub const KEYS: [&str; 12] = [
     "fog_color",
     "sky_color",
     "vignette",
+    "enhanced_sky",
 ];
 
 /// What the server set. `None` keeps the map's own value.
@@ -131,6 +132,11 @@ pub struct Settings {
     pub sky_color: Option<[f32; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vignette: Option<Vignette>,
+    /// Draw a generated atmosphere in place of the map's sky textures (v20
+    /// had none); unset keeps the map's own sky. Players can still force
+    /// the original one locally.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enhanced_sky: Option<bool>,
 }
 
 fn unit(c: &[f32]) -> bool {
@@ -203,7 +209,8 @@ impl Settings {
             fog_distance,
             fog_color,
             sky_color,
-            vignette
+            vignette,
+            enhanced_sky
         );
     }
     /// Put setting `name` (a field name, as in [`KEYS`]) back to the map's
@@ -222,6 +229,7 @@ impl Settings {
             "fog_color" => self.fog_color = None,
             "sky_color" => self.sky_color = None,
             "vignette" => self.vignette = None,
+            "enhanced_sky" => self.enhanced_sky = None,
             _ => return false,
         }
         true
@@ -266,6 +274,8 @@ pub struct Live {
     /// when the alpha is 0.
     pub flare: ([f32; 4], f32),
     pub vignette: Option<Vignette>,
+    /// The host chose the generated sky.
+    pub enhanced_sky: bool,
 }
 
 /// Direction sunlight travels (native Y-up) for a sun at `azimuth` and
@@ -383,6 +393,7 @@ pub fn resolve(authored: &Authored, settings: &Settings, tick: f64) -> Live {
         sky_tint: sky,
         flare,
         vignette: settings.vignette,
+        enhanced_sky: settings.enhanced_sky.unwrap_or(false),
     };
     let Some(cycle) = settings.day_cycle else {
         return live;
@@ -641,6 +652,19 @@ mod tests {
         assert!(night.sun_direction[1] < -0.3);
         let length = |v: [f32; 3]| v.iter().map(|c| c * c).sum::<f32>().sqrt();
         assert!((length(night.sun_toward) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_host_opts_in_to_the_generated_sky() {
+        let mut s = Settings::default();
+        assert!(!resolve(&map(), &s, 0.0).enhanced_sky);
+        s.enhanced_sky = Some(true);
+        assert!(resolve(&map(), &s, 0.0).enhanced_sky);
+        let mut merged = Settings::default();
+        merged.merge(&s);
+        assert_eq!(merged.enhanced_sky, Some(true));
+        assert!(merged.unset("enhanced_sky") && merged.is_empty());
+        assert!(KEYS.contains(&"enhanced_sky"));
     }
 
     #[test]

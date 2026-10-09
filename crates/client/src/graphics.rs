@@ -34,10 +34,9 @@ pub struct Graphics {
     /// of the window's width and height (100: every pixel), stretched over
     /// it; the interface always draws at full size.
     pub render_scale: u32,
-    /// Native `$pref::Video::Sky`: draw the procedural Enhanced sky (its
-    /// scattering follows the server's time of day, and far geometry fogs
-    /// toward it) instead of the map's own sky textures (the default).
-    pub enhanced_sky: bool,
+    /// Native `$pref::Video::Sky` = 1: always draw the map's own sky, even
+    /// where the host's Environment chose the generated one.
+    pub original_sky: bool,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
     match level {
@@ -100,7 +99,7 @@ impl Graphics {
             reflections: reflection_settings(bri_ui::screens::options::reflections(&prefs)),
             lighting,
             render_scale: bri_ui::screens::options::render_scale(&prefs),
-            enhanced_sky: bri_ui::screens::options::sky(&prefs) == 1,
+            original_sky: bri_ui::screens::options::sky(&prefs) == 1,
         }
     }
 }
@@ -146,10 +145,10 @@ mod tests {
         assert_eq!(graphics(&[(RENDER_SCALE, "70")]).render_scale, 70);
         assert_eq!(graphics(&[(RENDER_SCALE, "5")]).render_scale, 25);
         assert_eq!(graphics(&[(RENDER_SCALE, "400")]).render_scale, 100);
-        // The sky is the map's own unless Enhanced is chosen.
-        assert!(!graphics(&[]).enhanced_sky);
-        assert!(graphics(&[(SKY, "1")]).enhanced_sky);
-        assert!(!graphics(&[(SKY, "0")]).enhanced_sky);
+        // The sky is the server's unless the player forces the original.
+        assert!(!graphics(&[]).original_sky);
+        assert!(graphics(&[(SKY, "1")]).original_sky);
+        assert!(!graphics(&[(SKY, "0")]).original_sky);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);

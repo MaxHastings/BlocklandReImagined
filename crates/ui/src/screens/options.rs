@@ -134,13 +134,14 @@ pub fn lighting(p: &Prefs) -> i64 {
         _ => 3,
     }
 }
-/// Not a v20 setting: which sky the world draws, 0 Original (the map's own
-/// sky textures, v20's look; the default) or 1 Enhanced (a procedural
-/// atmosphere that follows the server's time of day). Independent of
-/// Lighting and of the Quality presets. The client's graphics settings read it.
+/// Not a v20 setting: 0 draws the sky the server's Environment chose
+/// (`enhanced_sky`; a map's own unless the host opted in), 1 always draws the
+/// map's own sky textures, for players who want v20's look or a lighter
+/// frame. It can only turn the generated sky off. Independent of Lighting and
+/// of the Quality presets. The client's graphics settings read it.
 pub const SKY: &str = "$pref::Video::Sky";
 const SKY_MENU: &str = "OptGraphicsSkyMenu";
-const SKY_CHOICES: [(&str, i64); 2] = [("Original", 0), ("Enhanced", 1)];
+const SKY_CHOICES: [(&str, i64); 2] = [("Server's", 0), ("Original", 1)];
 /// The sky `$pref::Video::Sky` asks for.
 pub fn sky(p: &Prefs) -> i64 {
     p.i64_or(SKY, 0).clamp(0, 1)
@@ -2997,11 +2998,11 @@ mod tests {
     }
 
     #[test]
-    fn sky_defaults_to_original_and_saves_a_choice() {
+    fn sky_defaults_to_the_servers_and_saves_a_choice() {
         let mut ui = fixture();
         let mut s = Options::new(&ui.core);
         let menu = s.view.id(SKY_MENU).unwrap();
-        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Original"));
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Server's"));
         let items: Vec<&str> = s
             .view
             .node(menu)
@@ -3010,7 +3011,7 @@ mod tests {
             .iter()
             .map(|(t, _)| t.as_str())
             .collect();
-        assert_eq!(items, ["Original", "Enhanced"]);
+        assert_eq!(items, ["Server's", "Original"]);
         // The row sits under Lighting, inside its section.
         let parent = s.view.node(menu).parent.unwrap();
         let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
@@ -3029,7 +3030,7 @@ mod tests {
         assert_eq!(sky(&saved_prefs(&mut ui)), 1);
         let s = Options::new(&ui.core);
         let menu = s.view.id(SKY_MENU).unwrap();
-        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Enhanced"));
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Original"));
     }
 
     #[test]

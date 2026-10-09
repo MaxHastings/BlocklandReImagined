@@ -613,7 +613,9 @@ impl App {
             );
         }
         camera.ambient[3] = f32::from(self.lighting.light_volume.mode(self.graphics.lighting));
-        camera.set_enhanced_sky(self.graphics.enhanced_sky);
+        if self.graphics.original_sky {
+            camera.set_enhanced_sky(false);
+        }
         camera.atmosphere[2] = (self.avatar.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
         // fog start scales with it so the fade keeps its shape.

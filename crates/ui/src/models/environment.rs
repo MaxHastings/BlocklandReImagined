@@ -335,6 +335,14 @@ impl EnvironmentModel {
             anchor_tick: tick,
         }));
     }
+    pub fn enhanced_sky(&self) -> bool {
+        self.settings().enhanced_sky.unwrap_or(false)
+    }
+    pub fn set_enhanced_sky(&mut self, on: bool) {
+        self.revision += 1;
+        let s = self.draft.get_or_insert_with(Settings::default);
+        s.enhanced_sky = on.then_some(true);
+    }
     pub fn vignette_multiply(&self) -> bool {
         self.settings().vignette.is_some_and(|v| v.multiply)
     }

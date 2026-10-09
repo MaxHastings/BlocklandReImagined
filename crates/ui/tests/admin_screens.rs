@@ -930,6 +930,9 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     );
     click(&mut ui, ScreenId::AdminEnvironment, "EnvVignetteMultiply");
     assert!(ui.core.environment.vignette_multiply());
+    assert!(!ui.core.environment.enhanced_sky());
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvEnhancedSky");
+    assert!(ui.core.environment.enhanced_sky());
     ui.core.environment.reset();
     ui.handle_input(InputEvent::Wheel { delta: 10.0 });
     ui.update(16);
