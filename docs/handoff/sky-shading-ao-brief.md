@@ -108,7 +108,10 @@ branch has the full history; add your own progress file per
 7. **Windows CI:** PR #31 and PR #34 hit software-GPU wait timeouts
    (item_ghost, multiplayer, `bri-render/mirrors` past 600 s). Docs-only PR
    #33 hit the same mirrors timeout, so it is probably main's flakiness, not
-   the sky. Confirm by timing `cargo test -p bri-render --test mirrors` on
+   the sky. But PR #34 at f096009 timed out in more tests (three in
+   `persistent_scene`, plus `item_rendering`, `view_jitter`,
+   `showcase_sounds`), so the bigger scene shader may slow the software
+   renderer. Confirm by timing `cargo test -p bri-render --test mirrors` on
    main vs your branch. Fix any real slowdown. Never skip or disable a test;
    a test already failing on main goes in `tools/gate-known-failures.toml`.
 8. Run `python tools/gate.py` (no push) on Max's PC and fix anything it
