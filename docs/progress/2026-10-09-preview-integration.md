@@ -101,3 +101,24 @@ index 03a9914..73faa54 100644
                  continue;
              };
 ```
+
+## Paused (Max, 2026-10-09 17:10)
+Max paused all work except the v0.2.7.2 release. State at the pause:
+- Preview branch `claude/project-thread-psbgg3` (draft PR #34) carries
+  main 3c8ed1f, sky, Soft Shading/AO with fixes, and the gravity gun model.
+  Nothing from it is on main.
+- PC Remote Control session stopped mid-step. On Max's PC it left:
+  worktree `..\BlocklandReImagined-worktrees\preview` at 4952fd6 with an
+  uncommitted `lighting_probe` extension (per-run Classic/Unified/Dynamic
+  modes, Soft Shading, AO, original/enhanced sky, sun height, MSAA, GPU
+  time per stretch), not compiled or pushed; `enhanced-sky` worktree with
+  unpushed commit 26087693 (`sky_probe`); `soft-shading` worktree with
+  unpushed WIP c816e534 plus uncommitted edits. Nothing was deleted.
+- Container: render/client tests on 4952fd6 were stopped part way; the
+  client lib (494) and all completed render test files passed; the only
+  failure was `launch::a_startup_failure...`, which needs libxkbcommon-x11
+  missing from the container.
+- Next on resume: finish the probe and the off-equals-main check, real-map
+  renders and GPU timing on the PC; update and land PR #33 via the PC gate;
+  build the private preview zip (release.yml dispatch, publish=false) and
+  send Max a test list; ask Max per PR before sky and Soft Shading land.
