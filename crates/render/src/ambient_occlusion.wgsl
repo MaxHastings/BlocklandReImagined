@@ -7,11 +7,12 @@
 //
 // view_projection and inverse map to and from clip space (reversed 0..1
 // depth); eye.xyz is the camera; params is radius (world units), strength,
-// fade start and fade end (distance from the eye); size is the target in
-// pixels.
+// fade start and fade end (distance from the eye); size.xy is the target in
+// pixels, size.z the fog's below-horizon flag; atmosphere is the camera's
+// fog (fog.wgsl), which the occlusion fades out under.
 struct Occlusion {
     view_projection:mat4x4<f32>, inverse:mat4x4<f32>,
-    eye:vec4<f32>, params:vec4<f32>, size:vec4<f32>,
+    eye:vec4<f32>, params:vec4<f32>, size:vec4<f32>, atmosphere:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> occlusion:Occlusion;
 @group(0) @binding(1) var depth_texture:DEPTH_TEXTURE;
@@ -45,7 +46,8 @@ fn fs_main(in:VertexOut)->@location(0) vec4<f32> {
     if depth<=0.0 {return vec4<f32>(1.0);}
     let p=world_at(pixel,depth);
     let range=distance(p,occlusion.eye.xyz);
-    let fade=1.0-smoothstep(occlusion.params.z,occlusion.params.w,range);
+    let fog=fog_along(p-occlusion.eye.xyz,occlusion.atmosphere,occlusion.size.z);
+    let fade=(1.0-smoothstep(occlusion.params.z,occlusion.params.w,range))*(1.0-fog);
     if fade<=0.0 {return vec4<f32>(1.0);}
     // The normal from the nearer neighbour on each axis, so an edge does
     // not bend it.

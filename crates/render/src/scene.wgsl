@@ -445,14 +445,15 @@ fn ambient_at(reach:f32)->vec3<f32> {
     return mix(camera.shadow_color.rgb,camera.ambient.rgb,clamp(reach,0.0,1.0));
 }
 // Sky-tinted ambient (camera.shading, Unified and Dynamic only): faces turned
-// up take the ambient light in the sky's colour, faces turned down a darker
-// one, level faces about the flat ambient. `normal` is unit length.
-const HEMISPHERE_UP:f32=1.12;
+// up take the ambient light in the sky's colour at the same brightness, faces
+// turned down a darker one, level faces the flat ambient unchanged. Nothing
+// gets brighter, so enclosed rooms stay as dark as before. `normal` is unit
+// length.
 const HEMISPHERE_DOWN:f32=0.75;
 fn hemisphere(normal:vec3<f32>)->vec3<f32> {
     if camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
-    let up=camera.shading.yzw*HEMISPHERE_UP;
-    let tinted=mix(vec3<f32>(HEMISPHERE_DOWN),up,clamp(normal.y*0.5+0.5,0.0,1.0));
+    let tinted=select(mix(vec3<f32>(1.0),vec3<f32>(HEMISPHERE_DOWN),-normal.y),
+        mix(vec3<f32>(1.0),camera.shading.yzw,normal.y),normal.y>0.0);
     return mix(vec3<f32>(1.0),tinted,camera.shading.x);
 }
 // The live sun reaching a lightmapped texel whose bake let `baked` of the

@@ -13,6 +13,7 @@ struct Uniform {
     eye: [f32; 4],
     params: [f32; 4],
     size: [f32; 4],
+    atmosphere: [f32; 4],
 }
 
 /// How far a crease reaches (world units), the darkest it makes a fully
@@ -131,7 +132,9 @@ impl AmbientOcclusion {
     }
     /// Darken `color` (`size` pixels, drawn with `depth`, a view of a
     /// `TEXTURE_BINDING` depth texture of the same samples) by the
-    /// occlusion seen from the camera `view_projection` and `eye`.
+    /// occlusion seen from the camera `view_projection` and `eye`, fading
+    /// out under the camera's fog (`atmosphere`, and `below`, its
+    /// `fog_color.w`) so fogged creases keep the fog's colour.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -143,6 +146,7 @@ impl AmbientOcclusion {
         size: (u32, u32),
         view_projection: [f32; 16],
         eye: [f32; 3],
+        (atmosphere, below): ([f32; 4], f32),
     ) {
         let matrix = glam::Mat4::from_cols_array(&view_projection);
         let inverse = matrix.inverse();
@@ -154,7 +158,8 @@ impl AmbientOcclusion {
             inverse: inverse.to_cols_array(),
             eye: [eye[0], eye[1], eye[2], 1.0],
             params: [RADIUS, STRENGTH, FADE.0, FADE.1],
-            size: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+            size: [size.0 as f32, size.1 as f32, below, 0.0],
+            atmosphere,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

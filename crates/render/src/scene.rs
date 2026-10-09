@@ -4205,6 +4205,31 @@ impl SceneRenderer {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
     ) {
+        self.record_world(encoder, target, scenes, instances, None);
+    }
+    /// As [`Self::render_world`], but the pass ends once the opaque geometry
+    /// (and `after_opaque`) is drawn, `between` records on the encoder (a
+    /// pass that reads the finished opaque depth, such as ambient
+    /// occlusion), and a second pass loads both attachments and draws the
+    /// blended geometry and `after_all`, so `between` never touches them.
+    pub fn render_world_split(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+        between: &mut dyn FnMut(&mut wgpu::CommandEncoder),
+    ) {
+        self.record_world(encoder, target, scenes, instances, Some(between));
+    }
+    fn record_world(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: WorldPass<'_>,
+        scenes: &[&GpuScene],
+        instances: &[(&GpuScene, &GpuInstances)],
+        mut between: Option<&mut dyn FnMut(&mut wgpu::CommandEncoder)>,
+    ) {
         let Some(view) = self.views.get(target.view) else {
             return;
         };
@@ -4394,37 +4419,59 @@ impl SceneRenderer {
             i = end;
         }
         let uploaded = self.upload_indirect(&args);
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("persistent world scene"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: resolve,
-                ops: wgpu::Operations {
-                    load: clear.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: if clear.is_some() {
-                        wgpu::LoadOp::Clear(DEPTH_CLEAR)
-                    } else {
-                        wgpu::LoadOp::Load
+        fn begin<'e>(
+            encoder: &'e mut wgpu::CommandEncoder,
+            (color, resolve, depth): (
+                &wgpu::TextureView,
+                Option<&wgpu::TextureView>,
+                &wgpu::TextureView,
+            ),
+            clear: Option<wgpu::Color>,
+            viewport: Option<[f32; 4]>,
+            group: &wgpu::BindGroup,
+        ) -> wgpu::RenderPass<'e> {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("persistent world scene"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: clear.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
+                        store: wgpu::StoreOp::Store,
                     },
-                    store: wgpu::StoreOp::Store,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if clear.is_some() {
+                            wgpu::LoadOp::Clear(DEPTH_CLEAR)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        if let Some([x, y, w, h]) = viewport {
-            pass.set_viewport(x, y, w, h, 0.0, 1.0);
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some([x, y, w, h]) = viewport {
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
+            pass.set_bind_group(0, group, &[]);
+            pass
         }
-        pass.set_bind_group(0, &view.group, &[]);
+        // A split pass resolves multisampled colour only in its second half.
+        let first_resolve = if between.is_some() { None } else { resolve };
+        let mut pass = begin(
+            encoder,
+            (color, first_resolve, depth),
+            clear,
+            viewport,
+            &view.group,
+        );
         let mut bound = Bound::default();
         let mut binds = 0;
         let mut next_args = 0u64;
@@ -4445,6 +4492,21 @@ impl SceneRenderer {
                 binds += bound.binds;
                 bound = Bound::default();
                 pass.set_bind_group(0, &view.group, &[]);
+            }
+            if i == blended
+                && let Some(between) = between.take()
+            {
+                drop(pass);
+                between(encoder);
+                pass = begin(
+                    encoder,
+                    (color, resolve, depth),
+                    None,
+                    viewport,
+                    &view.group,
+                );
+                binds += bound.binds;
+                bound = Bound::default();
             }
             let draw = &order[start];
             let (scene, batch) = (draw.scene, draw.batch);
@@ -4487,9 +4549,21 @@ impl SceneRenderer {
         if let Some(after_opaque) = after_opaque {
             after_opaque(&mut pass);
         }
+        if let Some(between) = between {
+            drop(pass);
+            between(encoder);
+            pass = begin(
+                encoder,
+                (color, resolve, depth),
+                None,
+                viewport,
+                &view.group,
+            );
+        }
         if let Some(after_all) = after_all {
             after_all(&mut pass);
         }
+        drop(pass);
         stats.binds += binds + bound.binds;
         let mut total = self.stats.get();
         if target.view == 0 {

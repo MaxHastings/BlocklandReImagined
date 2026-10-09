@@ -387,3 +387,135 @@ fn a_sky_below_the_horizon_is_generated_too() -> Result<()> {
     );
     Ok(())
 }
+
+/// How the occlusion test frame is drawn: the world alone, split around a
+/// pass that does nothing, or split around ambient occlusion (the game's
+/// order, so it never shades the glass drawn after it).
+#[derive(Clone, Copy)]
+enum Occlusion {
+    Off,
+    SplitOnly,
+    BeforeBlended,
+}
+
+/// A floor meeting a wall ahead of the camera, with a half-transparent red
+/// pane (drawn after the occlusion) over the left half of the crease.
+fn occlusion_frame(order: Occlusion) -> Result<Vec<u8>> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, None);
+    let target = color_target(&device, format, SIZE.0, SIZE.1);
+    let floor = cuboid(Vec3::new(-20., -1., -2.), Vec3::new(20., 0., 30.));
+    let wall = cuboid(Vec3::new(-20., 0., 8.), Vec3::new(20., 6., 9.));
+    let mut pane = cuboid(Vec3::new(-20., 0., 6.), Vec3::new(0., 3., 6.1));
+    pane.materials[0].alpha = AlphaMode::Blend;
+    for v in &mut pane.vertices {
+        v.color = [1., 0., 0., 0.5];
+    }
+    let scenes = [floor, wall, pane]
+        .iter()
+        .map(|s| renderer.upload(&device, &queue, s))
+        .collect::<Result<Vec<_>>>()?;
+    let scenes: Vec<&GpuScene> = scenes.iter().collect();
+    let mut camera = Camera::perspective([0., 2., 0.], [0., 0.5, 8.], 1.0, 1.0, 0.1, 200.0);
+    camera.ambient = [0.7, 0.7, 0.7, 0.0];
+    renderer.update_camera(&queue, &camera);
+    let occlusion = bri_render::ambient_occlusion::AmbientOcclusion::new(&device, format, 1);
+    let view = target.create_view(&Default::default());
+    let depth = create_depth(&device, SIZE.0, SIZE.1).create_view(&Default::default());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let pass = || WorldPass {
+        view: 0,
+        color: &view,
+        resolve: None,
+        depth: &depth,
+        viewport: None,
+        clear: Some(wgpu::Color::BLACK),
+        after_opaque: None,
+        after_all: None,
+    };
+    let eye = [camera.eye[0], camera.eye[1], camera.eye[2]];
+    let mut occlude = |encoder: &mut wgpu::CommandEncoder| {
+        occlusion.render(
+            &device,
+            &queue,
+            encoder,
+            &view,
+            &depth,
+            SIZE,
+            camera.view_projection,
+            eye,
+            (camera.atmosphere, camera.fog_color[3]),
+        )
+    };
+    match order {
+        Occlusion::Off => renderer.render_world(&mut encoder, pass(), &scenes, &[]),
+        Occlusion::SplitOnly => {
+            renderer.render_world_split(&mut encoder, pass(), &scenes, &[], &mut |_| {})
+        }
+        Occlusion::BeforeBlended => {
+            renderer.render_world_split(&mut encoder, pass(), &scenes, &[], &mut occlude)
+        }
+    }
+    read_back(&device, &queue, encoder, &target)
+}
+
+fn read_back(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mut encoder: wgpu::CommandEncoder,
+    target: &wgpu::Texture,
+) -> Result<Vec<u8>> {
+    let (width, height) = (target.width(), target.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        target.size(),
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    })?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    Ok(mapped
+        .chunks_exact(row as usize)
+        .flat_map(|line| line[..width as usize * 4].to_vec())
+        .collect())
+}
+
+#[test]
+fn ambient_occlusion_darkens_creases_and_off_draws_as_before() -> Result<()> {
+    let off = occlusion_frame(Occlusion::Off)?;
+    // Splitting the world pass alone changes nothing: with the occlusion
+    // off the picture is the one the game drew before it existed.
+    assert_eq!(off, occlusion_frame(Occlusion::SplitOnly)?);
+    let on = occlusion_frame(Occlusion::BeforeBlended)?;
+    // The crease where the floor meets the wall darkens; nothing brightens.
+    let right = SIZE.0 / 2 + 4..SIZE.0;
+    let darkest = (0..SIZE.1)
+        .flat_map(|y| right.clone().map(move |x| ((y * SIZE.0 + x) * 4) as usize))
+        .map(|i| f32::from(on[i]) / f32::from(off[i]).max(1.0))
+        .fold(1.0f32, f32::min);
+    assert!(darkest < 0.95, "the crease darkens: {darkest}");
+    assert!(on.iter().zip(&off).all(|(on, off)| on <= off));
+    Ok(())
+}

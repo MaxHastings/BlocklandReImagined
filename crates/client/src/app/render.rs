@@ -1276,34 +1276,49 @@ impl App {
             );
         }
         let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
-        renderer.render_world(
-            frame.encoder,
-            bri_render::scene::WorldPass {
-                view: 0,
-                color: world_target,
-                resolve: None,
-                depth: &depth,
-                viewport: None,
-                clear: Some(clear),
-                after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
-                after_all: None,
-            },
-            &scenes,
-            &item_draws,
-        );
-        renderer.mark(frame.encoder, "world");
-        if occlusion_on && let Some(occlusion) = &self.gpu.ambient_occlusion {
-            occlusion.render(
-                frame.device,
-                frame.queue,
-                frame.encoder,
-                world_target,
-                &depth,
-                frame.size,
-                camera.view_projection,
-                [camera.eye[0], camera.eye[1], camera.eye[2]],
-            );
-            renderer.mark(frame.encoder, "occlusion");
+        let world_pass = bri_render::scene::WorldPass {
+            view: 0,
+            color: world_target,
+            resolve: None,
+            depth: &depth,
+            viewport: None,
+            clear: Some(clear),
+            after_opaque: (!mirrors.is_empty()).then_some(&surfaces as _),
+            after_all: None,
+        };
+        match self.gpu.ambient_occlusion.as_ref().filter(|_| occlusion_on) {
+            // Ambient occlusion darkens the opaque world only: water, glass,
+            // see-through bricks and everything drawn later stay as they are.
+            Some(occlusion) => {
+                let (device, queue, size) = (frame.device, frame.queue, frame.size);
+                let mut between = |encoder: &mut wgpu::CommandEncoder| {
+                    renderer.mark(encoder, "world");
+                    occlusion.render(
+                        device,
+                        queue,
+                        encoder,
+                        world_target,
+                        &depth,
+                        size,
+                        camera.view_projection,
+                        [camera.eye[0], camera.eye[1], camera.eye[2]],
+                        (camera.atmosphere, camera.fog_color[3]),
+                    );
+                    renderer.mark(encoder, "occlusion");
+                };
+                renderer.render_world_split(
+                    frame.encoder,
+                    world_pass,
+                    &scenes,
+                    &item_draws,
+                    &mut between,
+                );
+                renderer.mark(frame.encoder, "world blended");
+            }
+            None => {
+                renderer.render_world(frame.encoder, world_pass, &scenes, &item_draws);
+                renderer.mark(frame.encoder, "world");
+            }
         }
         let mut pass = frame
             .encoder
