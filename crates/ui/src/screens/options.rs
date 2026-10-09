@@ -3589,6 +3589,57 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_graphics_panel_offscreen() {
+        let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let pack =
+            crate::testing::content_pack(&bri_package::testing::pack_dir(&content, "ui_pack"));
+        let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/ui-native-graphics");
+        std::fs::create_dir_all(&output).unwrap();
+        let gpu = crate::gpu::Headless::new().unwrap();
+        let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+        for size in [(800, 450), (1280, 720)] {
+            let mut ui = Ui::new(
+                pack.clone(),
+                UiConfig {
+                    size,
+                    scale: None,
+                    platform: Platform::Windows,
+                },
+                Settings {
+                    binds: Some(vec![]),
+                    ..Default::default()
+                },
+            );
+            let mut screen = Options::new(&ui.core);
+            screen.pane("Graphics");
+            screen.layout(ui.core.logical.0, ui.core.logical.1, &mut ui.core);
+            let mut list = DrawList::new(Rect::new(0, 0, ui.core.logical.0, ui.core.logical.1));
+            screen.draw(&pack, &mut list, &ui.core);
+            let rgba = gpu
+                .render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &list,
+                    size,
+                    ui.scale(),
+                    [0.15, 0.15, 0.18, 1.0],
+                )
+                .unwrap();
+            assert!(renderer.missing_textures().next().is_none());
+            image::save_buffer(
+                output.join(format!("Options-Graphics-{}x{}.png", size.0, size.1)),
+                &rgba,
+                size.0,
+                size.1,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
     fn screenshot_format_defaults_and_invalid_values_use_jpeg() {
         let mut prefs = Prefs::default();
         assert_eq!(screenshot_format(&prefs), ScreenshotFormat::Jpeg);
