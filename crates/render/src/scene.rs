@@ -4516,8 +4516,10 @@ mod tests {
 
     #[test]
     fn sky_ambient_is_off_unless_asked_and_neutral_in_brightness() {
-        let mut camera = Camera::default();
-        camera.sky_bands = [[[0.4, 0.6, 1.0, 1.0]; SKY_AZIMUTHS]; SKY_ELEVATIONS];
+        let mut camera = Camera {
+            sky_bands: [[[0.4, 0.6, 1.0, 1.0]; SKY_AZIMUTHS]; SKY_ELEVATIONS],
+            ..Default::default()
+        };
         camera.set_sky_ambient(false);
         assert_eq!(camera.shading, [0.0; 4]);
         camera.set_sky_ambient(true);
