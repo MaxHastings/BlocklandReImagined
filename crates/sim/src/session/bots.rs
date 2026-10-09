@@ -1449,10 +1449,19 @@ impl Session {
         let last_down = brain.fire_down;
         // A wind-up off target for a tick is kept while its target still
         // stands and the kind's hold time since it was last on target has
-        // not run out: a moving enemy is not a reason to start again.
-        if fire && charging {
+        // not run out: a moving enemy is not a reason to start again. On
+        // target is firing, or the native chooser's live intent for it (a
+        // charge it holds until its release is authorized).
+        if charging && (fire || native_choice.is_some()) {
             brain.wind_up_on_target = tick;
         }
+        // The attack a wind-up is for still stands: its enemy still in
+        // sight, or remembered (a body a step away, round a corner or
+        // behind a pillar, drops out of view for a moment), within the
+        // kind's hold time since it was last on target. One rule for both
+        // hand paths, the native chooser's and the scripted weapons'.
+        let attack_stands = (target.is_some() || brain.memory.is_some_and(|k| tick < k.expires))
+            && behaviour::paused_hold(brain.wind_up_on_target, tick, brain.kind.hold());
         let winding = !vehicle_weapon
             && charging
             && !fire
@@ -1460,25 +1469,17 @@ impl Session {
                 .weapons
                 .image_state(ActorId(bot), 0)
                 .is_some_and(|(image, _)| {
-                    charged_control::keeps_wind_up(
-                        last_down,
-                        image,
-                        // Its enemy still in sight, or remembered: a body
-                        // a step away can drop out of view for a tick.
-                        (target.is_some() || brain.memory.is_some_and(|k| tick < k.expires))
-                            && behaviour::paused_hold(
-                                brain.wind_up_on_target,
-                                tick,
-                                brain.kind.hold(),
-                            ),
-                    )
+                    charged_control::keeps_wind_up(last_down, image, attack_stands)
                 });
         desired_down |= winding;
         let mut cancel_hand_charge = !fire && charging && !vehicle_weapon && last_down && !winding;
         if !vehicle_weapon && !matches!(native, hand_combat::Decision::Unsupported) {
             if let Some((image, image_state)) = self.weapons.image_state(ActorId(bot), 0) {
-                let tracking_charge =
-                    charged_control::keeps_wind_up(last_down, image, native_choice.is_some());
+                let tracking_charge = charged_control::keeps_wind_up(
+                    last_down,
+                    image,
+                    native_choice.is_some() || attack_stands,
+                );
                 // The unchanged participant/equipment intent owns this live
                 // wind-up even if range temporarily selected Return/Wander.
                 // Objective tool controls below still cancel/preempt it.

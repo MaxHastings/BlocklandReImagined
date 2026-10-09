@@ -514,7 +514,9 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                     "at": [feet.x, feet.y, feet.z], "v": st.velocity, "yaw": st.yaw,
                     "in": [th.input.forward, th.input.right, th.input.yaw, th.input.jump as u8, th.input.crouch as u8],
                     "goal": th.goal, "next": th.next, "steps": th.path_steps, "vis": th.visible,
-                    "search": th.search_phase, "spot": th.surprise.decisions.iter().find(|d| d.domain == "spot").map(|d| format!("{} {} {}", d.tick, d.chosen, d.reason)),
+                    "search": th.search_phase,
+                    "img": view.images.get(bot).and_then(|v| v.iter().find(|m| m.hand == 0)).map(|m| m.state.clone()),
+                    "spot": th.surprise.decisions.iter().find(|d| d.domain == "spot").map(|d| format!("{} {} {}", d.tick, d.chosen, d.reason)),
                 });
                 writeln!(log, "{line}")?;
             }

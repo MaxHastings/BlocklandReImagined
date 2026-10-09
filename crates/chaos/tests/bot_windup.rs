@@ -225,8 +225,11 @@ fn duel(pack: bri_weapons::Pack, item: &str, pace: f32) {
             if state == last[n] {
                 continue;
             }
+            // A throw used up with its item leaves no Fire state to see,
+            // only its projectile.
+            let threw = s.weapon_view().fired().any(|p| p.source.0 == *bot);
             if let Some(start) = began[n] {
-                if state == name(fire) {
+                if state == name(fire) || threw {
                     strikes += 1;
                     if tick > start + window {
                         broken.push(format!(
@@ -277,6 +280,28 @@ fn a_bot_finishes_the_imported_butterfly_knifes_wind_ups() {
     pack.items.extend(part.items);
     pack.images.extend(part.images);
     pack.projectiles.extend(part.projectiles);
+    for pace in [0.25, 0.5, 1.0] {
+        duel(pack.clone(), &item, pace);
+    }
+}
+
+/// The same with the HE Grenade Add-On as imported: a release-only throw that
+/// a bot winds up must leave its hand, not wind up and cancel over and over.
+#[test]
+#[ignore = "requires generated content with the bundled Add-Ons; set BRI_CONTENT"]
+fn a_bot_throws_the_imported_he_grenades_it_winds_up() {
+    let root = fixture::content_root().expect("set BRI_CONTENT to generated content");
+    let part = bri_weapons::Pack::from_json(
+        &std::fs::read(root.join("addons/weapon_hegrenade/assets/weapons.json")).unwrap(),
+    )
+    .unwrap();
+    let item = part.items.keys().next().unwrap().clone();
+    let mut pack = bri_weapons::testing::pack();
+    pack.items.extend(part.items);
+    pack.images.extend(part.images);
+    pack.projectiles.extend(part.projectiles);
+    pack.damage_types.extend(part.damage_types);
+    pack.explosions.extend(part.explosions);
     for pace in [0.25, 0.5, 1.0] {
         duel(pack.clone(), &item, pace);
     }

@@ -338,25 +338,41 @@ impl Session {
     /// one that must do its own side no harm
     /// (`hand_combat::validate_unplanned`). None for a press of a tool that
     /// is no attack (package and mounted executors keep their own).
+    /// `pressing`: a press this tick; `releasing`: a let-go this tick.
     pub(in crate::session) fn bot_hand_fire_gate(
         &mut self,
         bot: OwnerId,
         direction: Vec3,
         tick: u64,
         pressing: bool,
+        releasing: bool,
     ) -> Option<FireAdmission> {
         let brain = self.bots.brains.get(&bot)?;
         let plan_tick = tick.checked_sub(1)?;
-        let (allowed, why) = if brain.native_combat_tick != Some(plan_tick) {
-            if !pressing {
-                return None;
-            }
+        let planned = brain.native_combat_tick == Some(plan_tick);
+        if !planned && !pressing {
+            return None;
+        }
+        let intent = planned.then(|| brain.combat.intent(plan_tick)).flatten();
+        let (allowed, why) = if planned
+            && intent.is_none()
+            && !releasing
+            && self
+                .weapons
+                .image_state(ActorId(bot), 0)
+                .is_some_and(|(image, _)| image.charges() && charged_control::release_only(image))
+        {
+            // A release-only wind-up held while its target is out of view a
+            // moment fires nothing until it is let go: only its release is an
+            // attack, and that is planned and judged. Cancelling it here would
+            // restart the wind-up every time sight flickers.
+            (FireAdmission::Allow, "wind-up held, fires nothing")
+        } else if !planned {
             match hand_combat::validate_unplanned(self, bot, direction)? {
                 true => (FireAdmission::Allow, "unplanned, harmless to its side"),
                 false => (FireAdmission::Abort, "unplanned, would hurt its side"),
             }
         } else {
-            let intent = brain.combat.intent(plan_tick);
             // Judged where it believes it aims: its aim error misses for
             // real (the harm check prices that miss,
             // `hand_combat::validate_fire`).

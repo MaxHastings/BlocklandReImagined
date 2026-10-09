@@ -373,7 +373,8 @@ impl Session {
         }
         for (owner, expired, trigger, direction) in prepared_triggers {
             let pressing = !expired && trigger.as_ref().is_some_and(|t| t.down);
-            match self.bot_hand_fire_gate(owner, direction, tick, pressing) {
+            let releasing = expired || trigger.as_ref().is_some_and(|t| !t.down);
+            match self.bot_hand_fire_gate(owner, direction, tick, pressing, releasing) {
                 Some(super::bots::FireAdmission::Abort) => {
                     self.weapon_triggers.remove(&owner);
                     self.bot_abort_unsafe_hand_fire(owner)?;

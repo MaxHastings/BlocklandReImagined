@@ -3,7 +3,7 @@
 use bri_chaos::fixture;
 use bri_minigames::Settings;
 use bri_sim::player::MoveInput;
-use bri_sim::session::{Command, MiniGameRequest, Session, ToolCatalog};
+use bri_sim::session::{CameraView, Command, MiniGameRequest, Session, ToolCatalog};
 use bri_weapons::{Pack, testing};
 use bri_world::{Brick, ContentRef, VehicleSpawn, World, build::SavedBuild};
 use glam::Vec3;
@@ -310,6 +310,72 @@ fn a_moving_target_keeps_native_windup_until_a_valid_throw() {
     eprintln!(
         "moving native throw: trace={trace:?} held_armed_ticks={armed_ticks} actual_observed_projectile_ids={fired:?}"
     );
+}
+
+fn drop_human_at(s: &mut Session, human: u64, command: u64, at: Vec3) {
+    s.command(
+        human,
+        command,
+        Command::DropPlayerAtCamera(Some(CameraView {
+            eye: [at.x, at.y + 1.6, at.z],
+            yaw: 0.0,
+            pitch: 0.0,
+        })),
+    )
+    .unwrap();
+}
+
+/// A release-only wind-up (a grenade with no cook) whose target leaves view a
+/// moment is still held: it fires nothing until let go, so losing sight within
+/// the hold must not cancel it and restart the wind-up over and over.
+#[test]
+fn a_target_out_of_sight_a_moment_keeps_the_windup_until_a_throw() {
+    let (mut s, human, bot, mut seq) = charged_scene();
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    let home = feet(&s, human);
+    // Behind the thrower and past its sight: out of view.
+    let from_target = (feet(&s, bot) - home).with_y(0.0).normalize();
+    let away = feet(&s, bot) + from_target * 90.0;
+    drop_human_at(&mut s, human, 900, away);
+    let mut trace = Vec::new();
+    let mut fired = BTreeSet::new();
+    let mut saw_fire = false;
+    let mut hidden = false;
+    for tick in 0..120 * 5 {
+        if tick == 20 {
+            drop_human_at(&mut s, human, 901, home);
+        }
+        ticks(&mut s, human, &mut seq, 1);
+        if tick < 20 && feet(&s, human).distance(feet(&s, bot)) > 80.0 {
+            hidden |= s
+                .bot_thoughts()
+                .iter()
+                .any(|t| t.bot == bot && t.visible.is_none());
+        }
+        let (_, state) = mounted_hand_state(&s, bot).expect("charged image remains mounted");
+        if trace.last().is_none_or(|(_, before)| before != &state) && trace.len() < 16 {
+            trace.push((tick, state.clone()));
+        }
+        for p in s.weapon_view().fired().filter(|p| p.source.0 == bot) {
+            fired.insert(p.id);
+        }
+        saw_fire |= state == "Fire";
+        if saw_fire {
+            break;
+        }
+        assert!(
+            matches!(state.as_str(), "Charge" | "Armed"),
+            "losing sight a moment cancelled the wind-up: {trace:?} thoughts={:?}",
+            s.bot_thoughts()
+        );
+    }
+    assert!(hidden, "the target really left view: {trace:?}");
+    assert!(
+        saw_fire && !fired.is_empty(),
+        "no throw within 5 s: {trace:?} thoughts={:?}",
+        s.bot_thoughts()
+    );
+    eprintln!("held through lost sight: trace={trace:?} projectiles={fired:?}");
 }
 
 #[test]
