@@ -70,7 +70,7 @@ def main():
                 for original in baseline.glob("*-off.png"):
                     name = original.name
                     with Image.open(original) as a, Image.open(preview / name) as b:
-                        equal = ImageChops.difference(a.convert("RGB"), b.convert("RGB")).getbbox() is None
+                        equal = a.tobytes() == b.tobytes()
                     results.append(dict(case=case, samples=samples, image=name, equal=equal))
                     if not equal:
                         raise RuntimeError(f"Off differs from main: {case}/{name}, MSAA {samples}")
@@ -90,8 +90,16 @@ def main():
         elif args.phase == "looks":
             variants = VARIANTS + ";sunset:soft=1,ao=1,enhanced_sky=1,sun=0.02;twilight:soft=1,ao=1,enhanced_sky=1,sun=-0.12"
             run(args.preview, args.content, folder, case, variants, "unified,dynamic", frames=24)
+            for original in folder.glob("*-off.png"):
+                with Image.open(original) as a, Image.open(original.with_name(original.name.replace("-off.png", "-soft.png"))) as b:
+                    # Difference with soft as the minuend: any nonzero channel
+                    # means that surface became brighter, including floors.
+                    brighter = ImageChops.subtract(b.convert("RGB"), a.convert("RGB")).getbbox()
+                results.append(dict(case=case, image=original.name, soft_never_brighter=brighter is None))
+                if brighter is not None:
+                    raise RuntimeError(f"Soft Shading brightens pixels: {case}/{original.name}")
             for mode in ["unified", "dynamic"]:
-                paths = sorted(folder.glob(f"*-{mode}-*.png"))
+                paths = sorted(p for p in folder.glob(f"*-{mode}-*.png") if not p.name.endswith("-montage.png"))
                 for view in sorted({p.stem.split(f"-{mode}-")[0] for p in paths}):
                     montage([p for p in paths if p.stem.startswith(f"{view}-{mode}-")],
                             folder / f"{case}-{view}-{mode}-montage.png")
