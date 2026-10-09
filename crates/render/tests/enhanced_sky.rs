@@ -15,6 +15,11 @@ const SIZE: (u32, u32) = (96, 96);
 
 /// A sky of one flat colour a face, with fog from `fog_start` to 1000.
 fn sky(fog_start: f32) -> SceneData {
+    sky_with(fog_start, false)
+}
+
+/// `bottom`: the sky goes on below the horizon (Skylands' bottom face).
+fn sky_with(fog_start: f32, bottom: bool) -> SceneData {
     let mut out = SceneData::default();
     let mut faces = Vec::new();
     for i in 0..6 {
@@ -41,7 +46,7 @@ fn sky(fog_start: f32) -> SceneData {
         reflection: None,
         clouds: vec![],
         textures: true,
-        bottom: false,
+        bottom,
         horizon_band: false,
         solid_color: [0.3; 3],
         fog: Fog {
@@ -180,5 +185,45 @@ fn the_day_for_a_human_look() -> Result<()> {
             shoot(enhanced, toward(30., elevation), &scene, None)?;
         }
     }
+    Ok(())
+}
+
+/// A map whose sky goes on below the horizon (Skylands) shows the generated
+/// sky there too: looking down is the sky mirrored, not the fog backdrop.
+#[test]
+fn a_sky_below_the_horizon_is_generated_too() -> Result<()> {
+    let scene = sky_with(500.0, true);
+    let sun = toward(30., 40.);
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::LOW));
+    let target = color_target(&device, format, SIZE.0, SIZE.1);
+    let gpu_scene = renderer.upload(&device, &queue, &scene)?;
+    let mut pixels = |pitch: f32| -> Result<Shot> {
+        let mut camera =
+            Camera::perspective([0., 2., 0.], [0., 2. + pitch, 1.], 1.0, 0.4, 0.1, 3000.0);
+        camera.apply_environment(&scene);
+        camera.sky_sun = sun.extend(1.).to_array();
+        renderer.update_camera(&queue, &camera);
+        let pixels = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &target,
+            &[&gpu_scene],
+            &[],
+            &[],
+        )?;
+        Ok(Shot { pixels })
+    };
+    let up = pixels(1.0)?.at(48, 48);
+    let down = pixels(-1.0)?.at(48, 48);
+    // A sky blue, not the authored magenta, and (away from the sun's glow)
+    // a little dimmer than the sky above.
+    assert!(down[2] > down[0] && down[1] > down[0], "{down:?}");
+    assert!(
+        down.iter().sum::<i32>() <= up.iter().sum::<i32>(),
+        "{up:?} {down:?}"
+    );
     Ok(())
 }
