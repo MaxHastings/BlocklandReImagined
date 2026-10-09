@@ -1442,7 +1442,7 @@ fn main() -> Result<()> {
                     };
                     if let Some(h) = variant.sun {
                         let elevation = 70f32;
-                        let angle = (h / elevation.to_radians().sin()).clamp(-1.0, 1.0).acos();
+                        let angle = (h / elevation.to_radians().sin()).clamped(-1.0, 1.0).acos();
                         host.day_cycle = Some(bri_content::atmosphere::DayCycle {
                             length_seconds: 1000.0,
                             time: 0.5 + angle / std::f32::consts::TAU,
