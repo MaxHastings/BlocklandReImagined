@@ -28,6 +28,9 @@ Verification on Max's PC, entirely offscreen:
   covers an open floor, static roof add/remove and moving roof movement/removal
   on the same cached renderer in Unified and Dynamic. Enclosed floor ambient is
   preserved, open floor is tinted, and no channel brightens.
+- `cargo test -p bri-render --test mirrors`: final-source rerun passed all 12
+  ordinary tests in 56.47 seconds, including AO/mirror/portal compositing. One
+  preexisting hardware benchmark is ignored by the default test invocation.
 - No `crates/client/src/items.rs` or Gravity Gun package delta against main.
 - Source search confirms Enhanced Sky controls/settings/render code are gone.
 
@@ -36,11 +39,14 @@ renders of this exposure change, window exposure quality, dense-build exposure
 refresh cost and AO GPU timing at 1080p/1440p with MSAA on/off; strict 4x MSAA
 Bedroom exterior parity (previous preview differed at 12/17/35 pixels); final
 full local gate and Windows CI. Prior r2 mirror/portal, Glow, glass, character,
-vehicle, particle and native GUI regressions passed; final-source mirror tests
-are being rerun. No test was skipped, disabled or waived as a main failure.
+vehicle, particle and native GUI regressions passed. No new test exclusion or
+unproven known-main failure exception was introduced.
 
 The downloaded r2 binary still contains Enhanced Sky and the old global tint;
 it does not represent this source. A new artifact-only preview will be built
-from the pushed branch (`publish=false`). PR remains draft for review and
+from runtime commit `cf45c617` (`publish=false`), version
+`preview-2026-10-09-shading-r3`:
+https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37987081663
+It is building, not yet a downloadable verified zip. PR remains draft for review and
 verification; this entry is not a merge approval. Max performs all interactive
 playtesting. Original content, screenshots and local logs remain uncommitted.
