@@ -58,6 +58,14 @@ until he has played it and confirmed each piece by name.
 - Known AO limitation: Glow bricks (colour FX 3) still get crease shading;
   excluding them needs a mask the frame does not have yet.
 
+## Landing rule (Max, 2026-10-09 17:08)
+- Gravity gun stays off main until Max has tested it; it lives only on its
+  own branch and in the preview zip.
+- Sky (host opt-in, Original by default) and Soft Shading/AO may land once
+  the PC check shows "off" draws exactly like main and CI is green; ask Max
+  per PR, naming what was verified.
+- Docs PR #33 and housekeeping can land.
+
 ## Other landings the integrator is tracking
 - Bot HE Grenade fix (`claude/v027-bot-play-85fvra`, includes the paint name
   bar fix): landing through the gate from its own thread, with Max's
