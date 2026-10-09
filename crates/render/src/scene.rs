@@ -2404,7 +2404,7 @@ pub struct SceneRenderer {
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::RenderPipeline>,
-    occlusion_mask_pipelines: Vec<wgpu::RenderPipeline>,
+    occlusion_mask_pipelines: RefCell<Vec<wgpu::RenderPipeline>>,
     filtering: TextureFiltering,
     samples: u32,
     shadows: crate::shadow::ShadowMaps,
@@ -2612,7 +2612,6 @@ impl SceneRenderer {
             ),
         });
         let mut pipelines = vec![];
-        let mut occlusion_mask_pipelines = vec![];
         for background in [false, true] {
             for blend in 0..3 {
                 let blend_state = match blend {
@@ -2678,52 +2677,6 @@ impl SceneRenderer {
                             cache: None,
                         },
                     ));
-                    occlusion_mask_pipelines.push(device.create_render_pipeline(
-                        &wgpu::RenderPipelineDescriptor {
-                            label: Some("occlusion exclusion mask"),
-                            layout: Some(&layout),
-                            vertex: wgpu::VertexState {
-                                module: &shader,
-                                entry_point: Some("vs_main"),
-                                compilation_options: Default::default(),
-                                buffers: &vertex_layouts(),
-                            },
-                            primitive: wgpu::PrimitiveState {
-                                cull_mode: if double_sided {
-                                    None
-                                } else {
-                                    Some(wgpu::Face::Back)
-                                },
-                                ..Default::default()
-                            },
-                            depth_stencil: Some(wgpu::DepthStencilState {
-                                format: DEPTH_FORMAT,
-                                depth_write_enabled: Some(false),
-                                depth_compare: Some(wgpu::CompareFunction::Equal),
-                                stencil: Default::default(),
-                                bias: Default::default(),
-                            }),
-                            multisample: wgpu::MultisampleState {
-                                count: samples,
-                                ..Default::default()
-                            },
-                            fragment: Some(wgpu::FragmentState {
-                                module: &shader,
-                                entry_point: Some("fs_occlusion_mask"),
-                                compilation_options: wgpu::PipelineCompilationOptions {
-                                    constants: &crate::color::output_constants(color_format),
-                                    ..Default::default()
-                                },
-                                targets: &[Some(wgpu::ColorTargetState {
-                                    format: wgpu::TextureFormat::R8Unorm,
-                                    blend: None,
-                                    write_mask: wgpu::ColorWrites::ALL,
-                                })],
-                            }),
-                            multiview_mask: None,
-                            cache: None,
-                        },
-                    ));
                 }
             }
         }
@@ -2763,7 +2716,7 @@ impl SceneRenderer {
             views: Vec::new(),
             material_layout,
             pipelines,
-            occlusion_mask_pipelines,
+            occlusion_mask_pipelines: RefCell::new(Vec::new()),
             filtering,
             samples,
             shadows,
@@ -4283,6 +4236,75 @@ impl SceneRenderer {
         scenes: &[&GpuScene],
         instances: &[(&GpuScene, &GpuInstances)],
     ) {
+        let mut pipelines = self.occlusion_mask_pipelines.borrow_mut();
+        if pipelines.is_empty() {
+            let layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("occlusion exclusion mask"),
+                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
+                    immediate_size: 0,
+                });
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("occlusion exclusion mask"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                    ),
+                });
+            for double_sided in [false, true] {
+                pipelines.push(self.device.create_render_pipeline(
+                    &wgpu::RenderPipelineDescriptor {
+                        label: Some("occlusion exclusion mask"),
+                        layout: Some(&layout),
+                        vertex: wgpu::VertexState {
+                            module: &shader,
+                            entry_point: Some("vs_main"),
+                            compilation_options: Default::default(),
+                            buffers: &vertex_layouts(),
+                        },
+                        primitive: wgpu::PrimitiveState {
+                            cull_mode: if double_sided {
+                                None
+                            } else {
+                                Some(wgpu::Face::Back)
+                            },
+                            ..Default::default()
+                        },
+                        depth_stencil: Some(wgpu::DepthStencilState {
+                            format: DEPTH_FORMAT,
+                            depth_write_enabled: Some(false),
+                            depth_compare: Some(wgpu::CompareFunction::Equal),
+                            stencil: Default::default(),
+                            bias: Default::default(),
+                        }),
+                        multisample: wgpu::MultisampleState {
+                            count: self.samples,
+                            ..Default::default()
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader,
+                            entry_point: Some("fs_occlusion_mask"),
+                            compilation_options: wgpu::PipelineCompilationOptions {
+                                constants: &crate::color::output_constants(
+                                    wgpu::TextureFormat::R8Unorm,
+                                ),
+                                ..Default::default()
+                            },
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: wgpu::TextureFormat::R8Unorm,
+                                blend: None,
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                        }),
+                        multiview_mask: None,
+                        cache: None,
+                    },
+                ));
+            }
+        }
+        drop(pipelines);
         self.record_world(encoder, target, scenes, instances, None, true);
     }
     #[allow(clippy::too_many_arguments)]
@@ -4533,6 +4555,7 @@ impl SceneRenderer {
             pass.set_bind_group(0, group, &[]);
             pass
         }
+        let mask_pipelines = mask_only.then(|| self.occlusion_mask_pipelines.borrow());
         // A split pass resolves multisampled colour only in its second half.
         let first_resolve = if between.is_some() { None } else { resolve };
         let mut pass = begin(
@@ -4584,11 +4607,11 @@ impl SceneRenderer {
             let (scene, batch) = (draw.scene, draw.batch);
             bound.pipeline(
                 &mut pass,
-                &if mask_only {
-                    &self.occlusion_mask_pipelines
+                if mask_only {
+                    &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
                 } else {
-                    &self.pipelines
-                }[pipeline_of(draw)],
+                    &self.pipelines[pipeline_of(draw)]
+                },
             );
             bound.material(&mut pass, &scene.materials[batch.material]);
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);

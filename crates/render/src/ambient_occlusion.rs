@@ -25,12 +25,14 @@ pub const RADIUS: f32 = 0.9;
 pub const STRENGTH: f32 = 0.4;
 pub const FADE: (f32, f32) = (40.0, 90.0);
 
+type CachedMask = ((u32, u32), wgpu::TextureView);
+
 pub struct AmbientOcclusion {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     samples: u32,
-    mask: RefCell<Option<((u32, u32), wgpu::TextureView)>>,
+    mask: RefCell<Option<CachedMask>>,
 }
 
 impl AmbientOcclusion {
@@ -160,7 +162,7 @@ impl AmbientOcclusion {
     /// occlusion seen from the camera `view_projection` and `eye`, fading
     /// out under the camera's fog (`atmosphere`, and `below`, its
     /// `fog_color.w`) so fogged creases keep the fog's colour.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn render(
         &self,
         device: &wgpu::Device,
