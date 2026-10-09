@@ -192,6 +192,15 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         }
         build.minigame = Some(game);
     }
+    // The loadout override applies to a saved mini-game too, not only to a
+    // preset's rules.
+    if let (Some(l), Some(g)) = (env("BRI_WATCH_LOADOUT"), build.minigame.as_mut()) {
+        let mut slots = vec![Value::Null; 5];
+        for (slot, item) in l.split(',').take(5).enumerate() {
+            slots[slot] = Value::from(item.trim());
+        }
+        g["settings"]["loadout"] = Value::from(slots);
+    }
     if let Some(g) = &build.minigame {
         std::fs::create_dir_all(&out)?;
         std::fs::write(
@@ -515,6 +524,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                     "in": [th.input.forward, th.input.right, th.input.yaw, th.input.jump as u8, th.input.crouch as u8],
                     "goal": th.goal, "next": th.next, "steps": th.path_steps, "vis": th.visible,
                     "search": th.search_phase,
+                    "planned": th.planned.as_ref().map(|p| format!("{p:?}")), "gate": th.gate,
                     "img": view.images.get(bot).and_then(|v| v.iter().find(|m| m.hand == 0)).map(|m| m.state.clone()),
                     "spot": th.surprise.decisions.iter().find(|d| d.domain == "spot").map(|d| format!("{} {} {}", d.tick, d.chosen, d.reason)),
                 });

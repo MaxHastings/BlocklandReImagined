@@ -421,6 +421,24 @@ pub enum DescriptorRequired {
     NonActorAttack,
     InvalidNativeData,
 }
+/// Whether the image's data scripts (`Image::scripts`) do only what the
+/// ordinary shot path already models: arm moves, which are cosmetic; its fire
+/// state's launch of the image's own projectile, as `Parent::onFire` (a thrown
+/// grenade's `onFire`); and using the held item up with that throw. A launch
+/// from another state or of another projectile is a scripted attack it does
+/// not know.
+fn plain_scripts(image: &bri_weapons::Image) -> bool {
+    image.scripts.iter().all(|(script, s)| {
+        if script == "onfire" {
+            s.fire
+                && s.projectile
+                    .as_ref()
+                    .is_none_or(|p| Some(p) == image.projectile.as_ref())
+        } else {
+            !s.fire && !s.use_up
+        }
+    })
+}
 /// Conservative extraction for the ordinary native shot path. The caller must
 /// resolve the actual active projectile and launch scale. More complex native
 /// The positive cadence must come from the validated current image cycle;
@@ -436,7 +454,7 @@ pub fn native_capability(
     cadence_ticks: u32,
     projectiles: &std::collections::BTreeMap<String, bri_weapons::ProjectileDef>,
 ) -> Result<Capability, DescriptorRequired> {
-    if image.command.is_some() || !image.commands.is_empty() || !image.scripts.is_empty() {
+    if image.command.is_some() || !image.commands.is_empty() || !plain_scripts(image) {
         return Err(DescriptorRequired::ScriptedTool);
     }
     if image.melee {
@@ -1600,6 +1618,40 @@ mod tests {
         };
         let cap = native_capability(&image, Some(&dud), 1.0, 60, &Default::default()).unwrap();
         assert!(matches!(cap.delivery, Delivery::Projectile(_)));
+    }
+
+    /// A thrown grenade's data scripts (an arm move, the throw launching
+    /// the image's own projectile, the item used up) are the ordinary throw;
+    /// a launch from any other state, or of another projectile, is a
+    /// scripted attack the planner does not know.
+    #[test]
+    fn a_grenades_plain_scripts_are_an_ordinary_throw() {
+        let scripted = |json: &str| bri_weapons::Image {
+            scripts: serde_json::from_str(json).unwrap(),
+            ..native_image()
+        };
+        let p = native_projectile();
+        let grenade = scripted(
+            r#"{"oncharge":{"arm":"spearReady"},"onabortcharge":{"arm":"root"},
+                "onfire":{"arm":"spearThrow","fire":true,"use_up":true}}"#,
+        );
+        assert!(plain_scripts(&grenade));
+        assert_ne!(
+            native_capability(&grenade, Some(&p), 1.0, 60, &Default::default()),
+            Err(DescriptorRequired::ScriptedTool)
+        );
+        for other in [
+            r#"{"oncharge":{"arm":"x","fire":true},"onfire":{"fire":true}}"#,
+            r#"{"onfire":{"fire":true,"projectile":"stranger:projectile/other"}}"#,
+            r#"{"onfire":{"arm":"x"}}"#,
+        ] {
+            let image = scripted(other);
+            assert_eq!(
+                native_capability(&image, Some(&p), 1.0, 60, &Default::default()),
+                Err(DescriptorRequired::ScriptedTool),
+                "{other}"
+            );
+        }
     }
 
     #[test]

@@ -129,6 +129,10 @@ impl Shape {
     /// Whether a body of half-size `margin` centred at `point` is in it,
     /// the way widened by `spread` per unit from where the shot leaves.
     pub(super) fn holds(&self, point: Vec3, margin: f32, spread: f32) -> bool {
+        self.on_way(point, margin, spread) || self.in_burst(point, margin)
+    }
+    /// Whether the body is on the shot's way (it would meet it and turn it).
+    pub(super) fn on_way(&self, point: Vec3, margin: f32, spread: f32) -> bool {
         let origin = self.chords.first().map(|c| c.from);
         self.chords.iter().any(|c| {
             let line = c.to - c.from;
@@ -137,8 +141,11 @@ impl Shape {
             let at = c.from + line / length * along;
             let out = origin.map_or(0.0, |o| o.distance(at));
             point.distance(at) < margin + out * spread
-        }) || self
-            .burst
+        })
+    }
+    /// Whether the body is in the blast where the way ends.
+    pub(super) fn in_burst(&self, point: Vec3, margin: f32) -> bool {
+        self.burst
             .is_some_and(|(at, radius)| point.distance(at) < radius + margin)
     }
     /// Where the shot ends.

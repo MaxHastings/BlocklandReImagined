@@ -26,8 +26,8 @@ pub(super) const ORDINARY_RAYS: usize = 128;
 /// (eye and chest, each with the vehicle test); beyond them its target
 /// queries count as ordinary.
 pub(super) const TARGET_RAYS: usize = 4;
-/// Bots the target share is sized for (twice the server's 16).
-const MOST_BOTS: usize = 32;
+/// Bots the target share is sized for: the most any server runs.
+const MOST_BOTS: usize = super::MAX_BOTS;
 /// Every ray a tick may cast: the ordinary share and the target reserve.
 pub(super) const SIGHT_RAYS: usize = ORDINARY_RAYS + TARGET_RAYS * MOST_BOTS;
 /// An ordinary answer serves this many ticks...

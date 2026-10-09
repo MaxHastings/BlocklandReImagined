@@ -2244,8 +2244,11 @@ mod tests {
         let mut pack = bri_weapons::testing::pack();
         let mut knife = pack.images[bri_weapons::testing::SWORD_IMAGE].clone();
         knife.id = "stranger:image/knife".into();
+        // A second state that launches too: a second attack the planner does
+        // not know (a lone `onfire` launch is the ordinary shot).
         knife.scripts = serde_json::from_value(serde_json::json!({
-            "onfire": {"arm": "spearthrow", "fire": true}
+            "onfire": {"arm": "spearthrow", "fire": true},
+            "onfire2": {"fire": true}
         }))
         .unwrap();
         pack.images.insert(knife.id.clone(), knife.clone());

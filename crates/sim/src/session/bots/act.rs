@@ -436,6 +436,49 @@ mod tests {
         assert!(!s.bot_blast_refuses(bot, inside, &body, out), "the way out");
     }
 
+    /// A grenade lying still is live however its last jitter points: gravity
+    /// flips a resting body's velocity about zero each tick, and safety must
+    /// not let a bot walk into it on the ticks it points away.
+    #[test]
+    fn a_grenade_lying_still_stays_live_whichever_way_it_jitters() {
+        use rapier3d::prelude::*;
+        // It lies below the bot's centre: a downward nudge points it "away".
+        for nudge in [Vec3::new(0.0, -0.1, 0.0), Vec3::new(0.0, 0.1, 0.0)] {
+            let world = bri_world::World::new("Blast".into(), "fixture".into(), vec![[1.0; 4]]);
+            let floor =
+                ColliderBuilder::cuboid(20.0, 0.5, 20.0).translation(Vector::new(0.0, -0.5, 0.0));
+            let sim = crate::simulation::Simulation::new(
+                world,
+                crate::testing::definitions(),
+                vec![floor],
+            )
+            .unwrap();
+            let mut s = Session::new(sim);
+            s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
+            let bot = s
+                .join("Walker".into(), Vec3::new(0.0, 0.05, 0.0), false)
+                .unwrap();
+            let thrower = s
+                .join("Thrower".into(), Vec3::new(9.0, 0.05, 0.0), false)
+                .unwrap();
+            s.weapons
+                .spawn(
+                    bri_weapons::testing::ROCKET_PROJECTILE,
+                    bri_weapons::ActorId(thrower),
+                    Vec3::new(0.0, 0.5, 6.0),
+                    nudge,
+                    1.0,
+                )
+                .unwrap();
+            super::super::harm::one_game(&mut s, thrower, bot);
+            let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
+            assert!(
+                s.bot_blast_refuses(bot, Vec3::ZERO, &body, Vec3::Z),
+                "into it, nudged {nudge}"
+            );
+        }
+    }
+
     /// A live rocket lying 3.5 units in from a bot standing at a deck's
     /// edge, a drop that kills past it: the way out of the blast is over
     /// the edge, which the edge check refuses, so it stands; with floor
