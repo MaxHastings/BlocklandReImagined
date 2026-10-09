@@ -680,6 +680,7 @@ map starts with none set.
 | `sun_flare_color`, `sun_flare_size` | `[r, g, b, a]` (a is how strong) and 0.1 to 4: a glow around the sun |
 | `visible_distance`, `fog_distance` | units: where fog is complete (20 to 1000) and where it starts (0 to 1000) |
 | `fog_color`, `sky_color` | `[r, g, b]`: the fog, and a tint over the map's sky |
+| `enhanced_sky` | `true` draws a generated atmosphere (blue day, warm sunrise and sunset, dark night, following the sun) in place of the map's sky; `()` or `false` keeps the map's own. A player can still force the original locally |
 | `vignette_color`, `vignette_multiply` | `[r, g, b, a]` darkening the screen's edges; `true` multiplies instead of blending |
 
 `environment()` reads what is set, as the same keys; unset keys are absent,
