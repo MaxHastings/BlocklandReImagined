@@ -4,6 +4,7 @@ use wgpu::naga;
 
 #[test]
 fn scene_shader_validates() {
+    validate(include_str!("../src/scene_original.wgsl"));
     validate(include_str!("../src/scene.wgsl"));
 }
 

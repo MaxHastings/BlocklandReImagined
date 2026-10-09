@@ -800,9 +800,6 @@ pub struct Camera {
     pub baked_sun_direction: [f32; 4],
     pub baked_sun_color: [f32; 4],
     pub baked_ambient: [f32; 4],
-    /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
-    /// off, the flat ambient), yzw the sky's colour at unit brightness.
-    pub shading: [f32; 4],
     /// The map's [`SceneData::sky_bands`], which far geometry fogs toward.
     pub sky_bands: SkyBands,
     /// Unit vector toward the real sun (below the horizon too, unlike
@@ -811,6 +808,9 @@ pub struct Camera {
     pub sky_sun: [f32; 4],
     /// The host's sky colour, which tints the Enhanced sky.
     pub sky_color: [f32; 4],
+    /// Sky-tinted ambient ([`Camera::set_sky_ambient`]): x the strength (0:
+    /// off, the flat ambient), yzw the sky's colour at unit brightness.
+    pub shading: [f32; 4],
 }
 impl Camera {
     /// Native world uses Y up, right-handed coordinates and reversed 0..1
@@ -2611,7 +2611,7 @@ impl SceneRenderer {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world-space scene"),
             source: wgpu::ShaderSource::Wgsl(
-                crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                crate::color::shader_source(include_str!("scene_original.wgsl")).into(),
             ),
         });
         let pipelines =
@@ -2799,7 +2799,9 @@ impl SceneRenderer {
         modern: bool,
     ) -> Vec<wgpu::RenderPipeline> {
         let mut constants = crate::color::output_constants(color_format).to_vec();
-        constants.push(("MODERN_SKY_SHADING", f64::from(u8::from(modern))));
+        if modern {
+            constants.push(("MODERN_SKY_SHADING", 1.0));
+        }
         let mut pipelines = vec![];
         for background in [false, true] {
             for blend in 0..3 {
@@ -3401,8 +3403,8 @@ impl SceneRenderer {
         }
         let modern =
             camera.sky_sun[3] > 0.5 || (camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5);
-        // Specialize the off shader so its arithmetic stays main's, including
-        // multiply-add rounding. On pipelines cost nothing until first use.
+        // Keep main's original shader and uniform prefix when the effects are off.
+        // On pipelines cost nothing until first use.
         if modern && self.modern_pipelines.is_empty() {
             let layout = self
                 .device
