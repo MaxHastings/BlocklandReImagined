@@ -1200,6 +1200,7 @@ fn main() -> Result<()> {
         .unwrap_or(80);
     let warm = frame_count / 4;
     let stretch_timing = std::env::var("BRI_TIME").is_ok_and(|v| v == "1");
+    let format = wgpu::TextureFormat::Rgba8Unorm;
     let texture = |samples: u32, usage: wgpu::TextureUsages| {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("probe target"),
