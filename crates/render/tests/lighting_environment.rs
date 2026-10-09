@@ -401,7 +401,7 @@ enum Occlusion {
 /// A floor meeting a wall ahead of the camera, with a half-transparent red
 /// pane (drawn after the occlusion) over the left half of the crease.
 fn occlusion_frame(order: Occlusion) -> Result<Vec<u8>> {
-    occlusion_case(order, 1, false, false, false)
+    occlusion_case(order, 1, false, false, false, false)
 }
 fn occlusion_case(
     order: Occlusion,
@@ -409,6 +409,7 @@ fn occlusion_case(
     glow: bool,
     fog: bool,
     soft: bool,
+    hidden_glow: bool,
 ) -> Result<Vec<u8>> {
     let (device, queue) = gpu()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -428,7 +429,15 @@ fn occlusion_case(
             }
         }
     }
-    let scenes = [floor, wall, pane]
+    let mut geometry = vec![floor, wall, pane];
+    if hidden_glow {
+        let mut buried = cuboid(Vec3::new(-20., -1.2, -2.), Vec3::new(20., -0.1, 30.));
+        for v in &mut buried.vertices {
+            v.fx[0] = 3.0;
+        }
+        geometry.push(buried);
+    }
+    let scenes = geometry
         .iter()
         .map(|s| renderer.upload(&device, &queue, s))
         .collect::<Result<Vec<_>>>()?;
@@ -565,8 +574,8 @@ fn ambient_occlusion_darkens_creases_and_off_draws_as_before() -> Result<()> {
 fn glow_faces_keep_their_light_with_ao_with_and_without_msaa() -> Result<()> {
     for samples in [1, 4] {
         assert_eq!(
-            occlusion_case(Occlusion::Off, samples, true, false, false)?,
-            occlusion_case(Occlusion::BeforeBlended, samples, true, false, false)?
+            occlusion_case(Occlusion::Off, samples, true, false, false, false)?,
+            occlusion_case(Occlusion::BeforeBlended, samples, true, false, false, false)?
         );
     }
     Ok(())
@@ -574,16 +583,25 @@ fn glow_faces_keep_their_light_with_ao_with_and_without_msaa() -> Result<()> {
 #[test]
 fn occlusion_disappears_in_complete_fog() -> Result<()> {
     assert_eq!(
-        occlusion_case(Occlusion::Off, 1, false, true, false)?,
-        occlusion_case(Occlusion::BeforeBlended, 1, false, true, false)?
+        occlusion_case(Occlusion::Off, 1, false, true, false, false)?,
+        occlusion_case(Occlusion::BeforeBlended, 1, false, true, false, false)?
     );
     Ok(())
 }
 #[test]
 fn sky_tinted_floor_and_walls_never_get_brighter() -> Result<()> {
-    let off = occlusion_case(Occlusion::Off, 1, false, false, false)?;
-    let soft = occlusion_case(Occlusion::Off, 1, false, false, true)?;
+    let off = occlusion_case(Occlusion::Off, 1, false, false, false, false)?;
+    let soft = occlusion_case(Occlusion::Off, 1, false, false, true, false)?;
     assert!(soft.iter().zip(&off).all(|(a, b)| a <= b));
     assert_ne!(soft, off);
+    Ok(())
+}
+
+#[test]
+fn glow_behind_the_floor_does_not_exempt_the_floor_from_ao() -> Result<()> {
+    assert_eq!(
+        occlusion_case(Occlusion::BeforeBlended, 1, false, false, false, false)?,
+        occlusion_case(Occlusion::BeforeBlended, 1, false, false, false, true)?
+    );
     Ok(())
 }
