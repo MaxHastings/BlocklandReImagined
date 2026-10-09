@@ -616,6 +616,12 @@ fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
     let sun=dynamic_sun(position,n);
     let local=dynamic_light_sum(position,n,SPECULAR_POWER);
     let eye=normalize(camera.eye.xyz-position);
+    // Preserve main's expression when off. Multiplying ambient by a uniform
+    // one lets the compiler fuse a different multiply-add at half-byte edges.
+    if camera.shading.x<=0.0 || lighting_mode()==0 {
+        return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
+            (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
+    }
     return LocalLight(ambient_at(sun)*hemisphere(n)+camera.sun_color.rgb*facing*sun+local.diffuse,
         (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
 }
@@ -1298,9 +1304,14 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
             sun=facing*sun_share;
             let local=map_light_sum(v.world_position,normal,vis,true,SPECULAR_POWER);
-            illumination=ambient_at(sun_share)*hemisphere(normal)+camera.sun_color.rgb*sun+local.diffuse*strength
+            illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
+            if camera.shading.x>0.0 && lighting_mode()!=0 {
+                illumination=ambient_at(sun_share)*hemisphere(normal)+camera.sun_color.rgb*sun+local.diffuse*strength
+                +baked_surroundings(v.world_position,v.normal)
+                +v.point_light*strength;
+            }
             let toward_eye=normalize(camera.eye.xyz-v.world_position);
             specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
                 +local.specular)*SPECULAR_STRENGTH;
