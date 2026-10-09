@@ -449,9 +449,10 @@ fn ambient_at(reach:f32)->vec3<f32> {
 // turned down a darker one, level faces the flat ambient unchanged. Nothing
 // gets brighter, so enclosed rooms stay as dark as before. `normal` is unit
 // length.
+override MODERN_SKY_SHADING:bool=false;
 const HEMISPHERE_DOWN:f32=0.75;
 fn hemisphere(normal:vec3<f32>)->vec3<f32> {
-    if camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
+    if !MODERN_SKY_SHADING || camera.shading.x<=0.0 || lighting_mode()==0 {return vec3<f32>(1.0);}
     let tinted=select(mix(vec3<f32>(1.0),vec3<f32>(HEMISPHERE_DOWN),-normal.y),
         mix(vec3<f32>(1.0),camera.shading.yzw,normal.y),normal.y>0.0);
     return mix(vec3<f32>(1.0),tinted,camera.shading.x);
@@ -618,7 +619,7 @@ fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
     let eye=normalize(camera.eye.xyz-position);
     // Preserve main's expression when off. Multiplying ambient by a uniform
     // one lets the compiler fuse a different multiply-add at half-byte edges.
-    if camera.shading.x<=0.0 || lighting_mode()==0 {
+    if !MODERN_SKY_SHADING || camera.shading.x<=0.0 || lighting_mode()==0 {
         return LocalLight(ambient_at(sun)+camera.sun_color.rgb*facing*sun+local.diffuse,
             (camera.sun_color.rgb*sun*select(0.0,highlight(n,toward,eye),facing>0.0)+local.specular)*SPECULAR_STRENGTH);
     }
@@ -929,7 +930,7 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
 // through a Rayleigh and Mie atmosphere, solved in closed form per ray for the
 // real sun (camera.sky_sun), so a blue zenith, a pale horizon, a warm sunrise
 // and sunset and a blue-purple twilight follow the server's time of day.
-fn enhanced_sky_on()->bool {return camera.sky_sun.w>0.5;}
+fn enhanced_sky_on()->bool {return MODERN_SKY_SHADING && camera.sky_sun.w>0.5;}
 // Relative air mass along a ray `c` from the zenith (Kasten and Young).
 fn air_mass(c:f32)->f32 {
     let cc=clamp(c,0.0,1.0);
@@ -1307,7 +1308,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
-            if camera.shading.x>0.0 && lighting_mode()!=0 {
+            if MODERN_SKY_SHADING && camera.shading.x>0.0 && lighting_mode()!=0 {
                 illumination=ambient_at(sun_share)*hemisphere(normal)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;

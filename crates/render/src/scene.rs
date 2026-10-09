@@ -2365,6 +2365,7 @@ struct View {
     camera: wgpu::Buffer,
     group: wgpu::BindGroup,
     eye: Vec3,
+    modern: bool,
     frustum: Option<[glam::Vec4; 6]>,
 }
 
@@ -2404,6 +2405,8 @@ pub struct SceneRenderer {
     views: Vec<View>,
     material_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::RenderPipeline>,
+    modern_pipelines: Vec<wgpu::RenderPipeline>,
+    color_format: wgpu::TextureFormat,
     occlusion_mask_pipelines: std::cell::RefCell<Vec<wgpu::RenderPipeline>>,
     filtering: TextureFiltering,
     samples: u32,
@@ -2611,75 +2614,8 @@ impl SceneRenderer {
                 crate::color::shader_source(include_str!("scene.wgsl")).into(),
             ),
         });
-        let mut pipelines = vec![];
-        for background in [false, true] {
-            for blend in 0..3 {
-                let blend_state = match blend {
-                    0 => None,
-                    1 => Some(wgpu::BlendState::ALPHA_BLENDING),
-                    _ => Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                };
-                for double_sided in [false, true] {
-                    pipelines.push(device.create_render_pipeline(
-                        &wgpu::RenderPipelineDescriptor {
-                            label: Some("persistent scene"),
-                            layout: Some(&layout),
-                            vertex: wgpu::VertexState {
-                                module: &shader,
-                                entry_point: Some("vs_main"),
-                                compilation_options: Default::default(),
-                                buffers: &vertex_layouts(),
-                            },
-                            primitive: wgpu::PrimitiveState {
-                                cull_mode: if double_sided {
-                                    None
-                                } else {
-                                    Some(wgpu::Face::Back)
-                                },
-                                ..Default::default()
-                            },
-                            depth_stencil: Some(wgpu::DepthStencilState {
-                                format: DEPTH_FORMAT,
-                                depth_write_enabled: Some(blend == 0 && !background),
-                                depth_compare: Some(DEPTH_NEARER),
-                                stencil: Default::default(),
-                                bias: Default::default(),
-                            }),
-                            multisample: wgpu::MultisampleState {
-                                count: samples,
-                                ..Default::default()
-                            },
-                            fragment: Some(wgpu::FragmentState {
-                                module: &shader,
-                                entry_point: Some("fs_main"),
-                                compilation_options: wgpu::PipelineCompilationOptions {
-                                    constants: &crate::color::output_constants(color_format),
-                                    ..Default::default()
-                                },
-                                targets: &[Some(wgpu::ColorTargetState {
-                                    format: color_format,
-                                    blend: blend_state,
-                                    write_mask: wgpu::ColorWrites::ALL,
-                                })],
-                            }),
-                            multiview_mask: None,
-                            cache: None,
-                        },
-                    ));
-                }
-            }
-        }
+        let pipelines =
+            Self::world_pipelines(device, color_format, samples, &layout, &shader, false);
         let light_buffer = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native point lights"),
             contents: &vec![
@@ -2716,6 +2652,8 @@ impl SceneRenderer {
             views: Vec::new(),
             material_layout,
             pipelines,
+            modern_pipelines: Vec::new(),
+            color_format,
             occlusion_mask_pipelines: std::cell::RefCell::new(Vec::new()),
             filtering,
             samples,
@@ -2773,6 +2711,7 @@ impl SceneRenderer {
                 camera,
                 group,
                 eye: Vec3::ZERO,
+                modern: false,
                 frustum: None,
             });
         }
@@ -2850,6 +2789,87 @@ impl SceneRenderer {
         queue.write_buffer(&buffer, offset, &bytes);
         *cursor = (offset + bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         Some((buffer, offset))
+    }
+    fn world_pipelines(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        samples: u32,
+        layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        modern: bool,
+    ) -> Vec<wgpu::RenderPipeline> {
+        let mut constants = crate::color::output_constants(color_format).to_vec();
+        constants.push(("MODERN_SKY_SHADING", f64::from(u8::from(modern))));
+        let mut pipelines = vec![];
+        for background in [false, true] {
+            for blend in 0..3 {
+                let blend_state = match blend {
+                    0 => None,
+                    1 => Some(wgpu::BlendState::ALPHA_BLENDING),
+                    _ => Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                };
+                for double_sided in [false, true] {
+                    pipelines.push(device.create_render_pipeline(
+                        &wgpu::RenderPipelineDescriptor {
+                            label: Some("persistent scene"),
+                            layout: Some(layout),
+                            vertex: wgpu::VertexState {
+                                module: shader,
+                                entry_point: Some("vs_main"),
+                                compilation_options: Default::default(),
+                                buffers: &vertex_layouts(),
+                            },
+                            primitive: wgpu::PrimitiveState {
+                                cull_mode: if double_sided {
+                                    None
+                                } else {
+                                    Some(wgpu::Face::Back)
+                                },
+                                ..Default::default()
+                            },
+                            depth_stencil: Some(wgpu::DepthStencilState {
+                                format: DEPTH_FORMAT,
+                                depth_write_enabled: Some(blend == 0 && !background),
+                                depth_compare: Some(DEPTH_NEARER),
+                                stencil: Default::default(),
+                                bias: Default::default(),
+                            }),
+                            multisample: wgpu::MultisampleState {
+                                count: samples,
+                                ..Default::default()
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: shader,
+                                entry_point: Some("fs_main"),
+                                compilation_options: wgpu::PipelineCompilationOptions {
+                                    constants: &constants,
+                                    ..Default::default()
+                                },
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format: color_format,
+                                    blend: blend_state,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                            }),
+                            multiview_mask: None,
+                            cache: None,
+                        },
+                    ));
+                }
+            }
+        }
+        pipelines
     }
     /// Counts from the passes recorded since the last `update_camera`.
     pub fn stats(&self) -> RenderStats {
@@ -3376,9 +3396,40 @@ impl SceneRenderer {
     /// `fit_view_shadows` gives it its own). Views past `view_count` are
     /// ignored.
     pub fn update_view(&mut self, queue: &wgpu::Queue, view: usize, camera: &Camera) {
-        let Some(v) = self.views.get_mut(view) else {
+        if view >= self.views.len() {
             return;
-        };
+        }
+        let modern =
+            camera.sky_sun[3] > 0.5 || (camera.shading[0] > 0.0 && camera.ambient[3] >= 0.5);
+        // Specialize the off shader so its arithmetic stays main's, including
+        // multiply-add rounding. On pipelines cost nothing until first use.
+        if modern && self.modern_pipelines.is_empty() {
+            let layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("modern scene"),
+                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.material_layout)],
+                    immediate_size: 0,
+                });
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("modern scene"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                    ),
+                });
+            self.modern_pipelines = Self::world_pipelines(
+                &self.device,
+                self.color_format,
+                self.samples,
+                &layout,
+                &shader,
+                true,
+            );
+        }
+        let v = &mut self.views[view];
+        v.modern = modern;
         v.eye = Vec3::new(camera.eye[0], camera.eye[1], camera.eye[2]);
         v.frustum = Some(frustum_planes(Mat4::from_cols_array(
             &camera.view_projection,
@@ -4609,6 +4660,8 @@ impl SceneRenderer {
                 &mut pass,
                 if mask_only {
                     &mask_pipelines.as_ref().expect("mask pass")[pipeline_of(draw) % 2]
+                } else if view.modern {
+                    &self.modern_pipelines[pipeline_of(draw)]
                 } else {
                     &self.pipelines[pipeline_of(draw)]
                 },
