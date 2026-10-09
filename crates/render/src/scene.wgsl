@@ -950,22 +950,23 @@ fn enhanced_sky(along:vec3<f32>)->vec3<f32> {
     // ones through a thin, still-blue layer.
     let reach=clamp(0.12+0.88*(1.0-h),0.0,1.0);
     let light=exp(-(ext+SKY_OZONE)*sun_air*reach);
-    let day=smooth_between(-0.30,0.02,sun.y);
+    // Direct atmospheric scattering fades below the horizon; retaining it
+    // until -0.30 made the whole twilight sky red instead of its low edge.
+    let day=smooth_between(-0.16,0.02,sun.y);
     let rayleigh=0.75*(1.0+mu*mu);
     let g=SKY_MIE_G;
     let mie=(1.0-g*g)/pow(1.0+g*g-2.0*g*mu,1.5);
     let scatter=SKY_RAYLEIGH*rayleigh+vec3<f32>(SKY_MIE*mie);
     let path=(vec3<f32>(1.0)-exp(-ext*air_mass(h)))/ext;
     var color=3.2*light*scatter*path*day;
+    let warmth=1.0-smooth_between(0.02,0.25,sun.y);
+    let neutral=dot(color,vec3<f32>(0.2126,0.7152,0.0722));
+    color=mix(color,vec3<f32>(neutral),0.45*warmth);
     // Twilight: the high air still lit after the sun has set, then the night.
     let twilight=smooth_between(-0.32,-0.04,sun.y)*(1.0-smooth_between(0.05,0.3,sun.y));
     color+=vec3<f32>(0.018,0.04,0.12)*twilight*(0.3+0.7*h);
     color+=vec3<f32>(0.004,0.008,0.022)*(1.0-day);
-    // Keep a warm horizon without making twilight a saturated orange/pink
-    // band. Desaturate the radiance before display conversion.
-    let warmth=1.0-smooth_between(0.02,0.25,sun.y);
-    let neutral=dot(color,vec3<f32>(0.2126,0.7152,0.0722));
-    color=mix(color,vec3<f32>(neutral),0.35*warmth);
+    // Desaturate sunlight alone, retaining the blue twilight and night floor.
     return display_color(vec3<f32>(1.0)-exp(-color))*camera.sky_color.rgb;
 }
 // The sun's and moon's discs along `along`, display colour to add after fog.

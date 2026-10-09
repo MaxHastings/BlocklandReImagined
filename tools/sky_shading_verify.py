@@ -14,8 +14,8 @@ from PIL import Image, ImageChops, ImageDraw
 CASES = {
     "skylands": ("synthetic:map_slate/:0", "map_skylands/", ["horizon=0,12,0,100,25,100", "floor=0,30,0,100,-20,100"]),
     "slate": ("synthetic:map_slate/:0", "map_slate/", ["horizon=0,12,0,100,25,100", "floor=0,12,0,20,0,20"]),
-    "bedroom": ("synthetic:map_bedroom/:0", "map_bedroom/", ["window=160,370,145,300,380,145", "outside=400,245,125,185,350,125", "floor=95,290,98,0,278,130"]),
-    "bedroom-dark": ("synthetic:map_bedroom/:0", "map_bedroomdark/", ["window=160,370,145,300,380,145", "outside=400,245,125,185,350,125"]),
+    "bedroom": ("synthetic:map_bedroom/:0", "map_bedroom/", ["window=30,335,195,-100,335,203", "outside=420,400,420,60,350,90", "floor=95,290,98,0,278,130"]),
+    "bedroom-dark": ("synthetic:map_bedroom/:0", "map_bedroomdark/", ["window=30,335,195,-100,335,203", "outside=420,400,420,60,350,90"]),
     "kitchen": ("synthetic:map_kitchen/:0", "map_kitchen/", ["inside=-378,123,166,-430,115,160", "outside=-680,140,100,-400,220,100"]),
     "dense": ("Golden Gate Bridge", "map_slate/", []),
     "water": ("synthetic:map_slate/:0", "map_slate_sea_revised/", ["surface=0,10,0,60,-10,60"]),
@@ -92,7 +92,9 @@ def main():
             run(args.preview, args.content, folder, case, variants, "unified,dynamic", frames=24)
             for mode in ["unified", "dynamic"]:
                 paths = sorted(folder.glob(f"*-{mode}-*.png"))
-                montage(paths, folder / f"{case}-{mode}-montage.png")
+                for view in sorted({p.stem.split(f"-{mode}-")[0] for p in paths}):
+                    montage([p for p in paths if p.stem.startswith(f"{view}-{mode}-")],
+                            folder / f"{case}-{view}-{mode}-montage.png")
         else:
             for width, height in [(1920, 1080), (2560, 1440)]:
                 for samples in [1, 4]:
