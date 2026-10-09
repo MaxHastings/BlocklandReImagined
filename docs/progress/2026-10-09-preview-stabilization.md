@@ -54,6 +54,17 @@ Release dispatched with version preview-2026-10-09-sky-shading-r2 and
 publish=false. Artifact only, no GitHub Release/tag. First preview run
 37974800673 has now succeeded on Windows, Mac and Linux.
 
+Updated Windows handoff: release build, panic capture, content startup check,
+package verification and zip smoke all succeeded on run 37979972281. The
+Windows artifact is 11642266047:
+https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37979972281/artifacts/11642266047
+Downloaded to C:\Users\Maxwell\Downloads\BlocklandReImagined-preview-2026-10-09-r2\BlocklandReImagined-windows.zip
+(148402250 bytes). Checked its single release root, MANIFEST.json version
+preview-2026-10-09-sky-shading-r2 and Launch.cmd. PLAYTEST.txt alongside the
+zip gives the short nine-point visual/FPS checklist. Mac/Linux jobs started
+after Windows and continue in the same artifact-only run. Runtime source is
+the run's a4318d758; subsequent commits only record evidence.
+
 Local evidence: artifacts/ui-native-graphics/ and artifacts/sky-shading-mixed/;
 these original-content renders are ignored and must never be committed.
 No new worktree or shared Cargo target was created. Original installation
