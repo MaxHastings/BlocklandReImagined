@@ -5,6 +5,20 @@
 name: mac-release-asset
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+      windows_run:
+        type: string
+        default: ''
+      publish:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       tag:
@@ -14,14 +28,21 @@ on:
         description: 'Commit or branch to build (the release commit)'
         required: true
         default: main
+      publish:
+        description: 'Attach the zip to the existing release (off: artifact only)'
+        type: boolean
+        default: true
 
 permissions:
   contents: write
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  BRI_VERSION: ${{ github.event.inputs.tag }}
+  BRI_VERSION: ${{ inputs.tag }}
+  WINDOWS_RUN: ${{ inputs.windows_run }}
+  PUBLISH: ${{ inputs.publish }}
   GH_TOKEN: ${{ github.token }}
 
 jobs:
@@ -31,12 +52,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.ref }}
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - name: Take the content from the release's Windows zip
+      - name: Take and verify the Windows package content
         run: |
-          gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-windows.zip' --dir "$RUNNER_TEMP/win"
+          if [ -n "$WINDOWS_RUN" ]; then
+            gh run download "$WINDOWS_RUN" --name "BlocklandReImagined-$BRI_VERSION-windows" --dir "$RUNNER_TEMP/win"
+          else
+            gh release download "$BRI_VERSION" --pattern 'BlocklandReImagined-windows.zip' --dir "$RUNNER_TEMP/win"
+          fi
           unzip -q "$RUNNER_TEMP"/win/*.zip -d "$RUNNER_TEMP/win/x"
           python3 - "$RUNNER_TEMP"/win/x/* <<'PY'
           import hashlib, json, pathlib, shutil, sys
@@ -151,4 +176,5 @@ jobs:
           PY
 
       - name: Attach the zip to the release
+        if: env.PUBLISH == 'true'
         run: gh release upload "$BRI_VERSION" "$MAC_ZIP"
