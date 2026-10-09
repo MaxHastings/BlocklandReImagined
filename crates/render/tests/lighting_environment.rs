@@ -425,7 +425,7 @@ fn occlusion_case(
     if glow {
         for s in [&mut floor, &mut wall] {
             for v in &mut s.vertices {
-                v.fx[0] = 3.0;
+                v.fx = BrickFx::new(3, 0)?.encode([0.; 3], 0, 1)?;
             }
         }
     }
@@ -433,7 +433,7 @@ fn occlusion_case(
     if hidden_glow {
         let mut buried = cuboid(Vec3::new(-20., -1.2, -2.), Vec3::new(20., -0.1, 30.));
         for v in &mut buried.vertices {
-            v.fx[0] = 3.0;
+            v.fx = BrickFx::new(3, 0)?.encode([0.; 3], 0, 1)?;
         }
         geometry.push(buried);
     }
