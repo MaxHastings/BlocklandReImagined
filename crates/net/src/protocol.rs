@@ -425,7 +425,8 @@ pub struct RemotePose {
     pub velocity: [i16; 3],
     /// Yaw, pitch and head turn in ten-thousandths of a radian.
     pub look: [i16; 3],
-    /// [`RemotePose::GROUNDED`], [`RemotePose::CROUCHED`], [`RemotePose::JETTING`].
+    /// [`RemotePose::GROUNDED`], [`RemotePose::CROUCHED`], [`RemotePose::JETTING`],
+    /// [`RemotePose::JET_FLIGHT`].
     pub flags: u8,
     pub archetype: bri_sim::archetype::ArchetypeId,
     /// None for the normal size.
@@ -442,6 +443,7 @@ impl RemotePose {
     pub const GROUNDED: u8 = 1;
     pub const CROUCHED: u8 = 2;
     pub const JETTING: u8 = 4;
+    pub const JET_FLIGHT: u8 = 8;
     pub fn of(tick: u64, p: &PlayerState) -> Self {
         let flag = |on: bool, bit: u8| if on { bit } else { 0 };
         Self {
@@ -454,12 +456,14 @@ impl RemotePose {
             look: [p.yaw, p.pitch, p.head_yaw].map(|a| quantize(a, LOOK_UNITS)),
             flags: flag(p.grounded, Self::GROUNDED)
                 | flag(p.crouched, Self::CROUCHED)
-                | flag(p.jetting, Self::JETTING),
+                | flag(p.jetting, Self::JETTING)
+                | flag(p.jump.jet_flight, Self::JET_FLIGHT),
             archetype: p.archetype,
             scale: (p.scale != 1.0).then_some(p.scale),
         }
     }
-    /// As a pose, with the owner-only state at its defaults.
+    /// As a pose, with owner-only state at its defaults and flight history
+    /// preserved even when the active jetting snapshots were never received.
     pub fn into_pose(self) -> Pose {
         let [yaw, pitch, head_yaw] = self.look.map(|a| f32::from(a) / LOOK_UNITS);
         Pose {
@@ -478,7 +482,10 @@ impl RemotePose {
                 grounded: self.flags & Self::GROUNDED != 0,
                 crouched: self.flags & Self::CROUCHED != 0,
                 jetting: self.flags & Self::JETTING != 0,
-                jump: Default::default(),
+                jump: bri_sim::player::JumpState {
+                    jet_flight: self.flags & Self::JET_FLIGHT != 0,
+                    ..Default::default()
+                },
                 archetype: self.archetype,
                 scale: self.scale.unwrap_or(1.0),
                 energy: bri_sim::player::PlayerTuning::default().max_energy,

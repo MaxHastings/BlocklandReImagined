@@ -166,6 +166,7 @@ fn player_same(a: &PlayerState, b: &PlayerState) -> bool {
         && a.grounded == b.grounded
         && a.crouched == b.crouched
         && a.jetting == b.jetting
+        && a.jump.jet_flight == b.jump.jet_flight
         && a.archetype == b.archetype
         && a.scale == b.scale
         && a.tether == b.tether
@@ -849,6 +850,46 @@ mod tests {
         assert_eq!(
             (back.scale, back.crouched, back.grounded),
             (2.0, true, true)
+        );
+    }
+
+    #[test]
+    fn released_jet_flight_history_round_trips_without_active_jets_or_extra_bytes() {
+        let mut p = pose(1, 100, 0.0);
+        p.player.grounded = false;
+        p.player.velocity[1] = 2.0;
+        let ordinary = RemotePose::of(p.tick, &p.player);
+        let ordinary_bytes =
+            crate::codec::encode_datagram_item(&Datagram::Remote(ordinary)).unwrap();
+        p.player.jump.jet_flight = true;
+        let remote = RemotePose::of(p.tick, &p.player);
+        assert_eq!(remote.flags, RemotePose::JET_FLIGHT);
+        let bytes = crate::codec::encode_datagram_item(&Datagram::Remote(remote)).unwrap();
+        assert_eq!(
+            bytes.len(),
+            ordinary_bytes.len(),
+            "history uses the existing flags byte"
+        );
+        let Datagram::Remote(back) = crate::codec::decode_datagram::<Datagram>(&bytes).unwrap()
+        else {
+            panic!("expected compact remote pose");
+        };
+        let back = back.into_pose().player;
+        assert!(!back.jetting && !back.grounded && back.jump.jet_flight);
+        assert_eq!(back.jump.delay, 0, "owner's jump timer stays private");
+
+        // History alone is a visible pose change, even at the same position.
+        let mut without = p.player.clone();
+        without.jump.jet_flight = false;
+        assert!(!player_same(&without, &p.player));
+        let bytes = crate::codec::encode_datagram_item(&Datagram::Pose(p.clone())).unwrap();
+        let Datagram::Pose(owner) = crate::codec::decode_datagram::<Datagram>(&bytes).unwrap()
+        else {
+            panic!("expected owner pose");
+        };
+        assert_eq!(
+            owner.player, p.player,
+            "authoritative corrections keep history"
         );
     }
 
