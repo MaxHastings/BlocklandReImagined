@@ -64,6 +64,9 @@ until he has played it and confirmed each piece by name.
   approval. Its `acceptance_unfamiliar` change counts an enemy within 4
   units of a grenade at any point of its life; the integrator recommends
   counting only once the grenade has landed (patch below), as a follow-up.
+  Verified in the container (release, bot branch head): with the patch the
+  test still passes, landed grenades near an enemy per run are 2, 5, 5 on
+  variant 0 and 5, 5, 11 on variant 1.
 - Docs PR #33: approved by Max to land through the gate after the bot fix.
 - PR #32 (paint name bar) duplicates `1b26a1d` on the bot branch; close it
   once that branch is on main.
