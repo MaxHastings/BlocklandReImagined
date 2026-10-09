@@ -182,9 +182,28 @@ impl Gpu {
         visible: bool,
         shadows: Option<(ShadowSettings, &SceneData)>,
     ) -> Result<(Vec<u8>, RenderStats)> {
+        self.frame_with_occlusion(
+            camera, samples, settings, data, mirrors, frames, visible, shadows, false,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn frame_with_occlusion(
+        &self,
+        camera: &Camera,
+        samples: u32,
+        settings: ReflectionSettings,
+        data: &SceneData,
+        mirrors: &[Mirror],
+        frames: usize,
+        visible: bool,
+        shadows: Option<(ShadowSettings, &SceneData)>,
+        occlusion: bool,
+    ) -> Result<(Vec<u8>, RenderStats)> {
         let device = &self.device;
         let mut renderer =
             SceneRenderer::with_settings(device, FORMAT, samples, shadows.map(|(s, _)| s));
+        let occlusion = occlusion
+            .then(|| bri_render::ambient_occlusion::AmbientOcclusion::new(device, FORMAT, samples));
         let scene = renderer.upload(device, &self.queue, data)?;
         // What casts sun shadows, drawn in every view too.
         let casters = match shadows {
@@ -277,21 +296,35 @@ impl Gpu {
                 },
             );
             let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
-            renderer.render_world(
-                &mut encoder,
-                WorldPass {
-                    view: 0,
-                    color: multisampled.as_ref().unwrap_or(&view),
-                    resolve: multisampled.as_ref().map(|_| &view),
-                    depth: &depth,
-                    viewport: None,
-                    clear: Some(clear),
-                    after_opaque: Some(&surfaces),
-                    after_all: None,
-                },
-                &scenes,
-                &[],
-            );
+            let target = WorldPass {
+                view: 0,
+                color: multisampled.as_ref().unwrap_or(&view),
+                resolve: multisampled.as_ref().map(|_| &view),
+                depth: &depth,
+                viewport: None,
+                clear: Some(clear),
+                after_opaque: Some(&surfaces),
+                after_all: None,
+            };
+            if let Some(occlusion) = &occlusion {
+                let mut between = |encoder: &mut wgpu::CommandEncoder| {
+                    occlusion.render(
+                        device,
+                        &self.queue,
+                        encoder,
+                        target.color,
+                        &depth,
+                        (SIZE, SIZE),
+                        camera.view_projection,
+                        [camera.eye[0], camera.eye[1], camera.eye[2]],
+                        (camera.atmosphere, camera.fog_color[3]),
+                        (&renderer, &scenes, &[]),
+                    );
+                };
+                renderer.render_world_split(&mut encoder, target, &scenes, &[], &mut between);
+            } else {
+                renderer.render_world(&mut encoder, target, &scenes, &[]);
+            }
         }
         let pixels = self.read(encoder, &target)?;
         Ok((pixels, renderer.stats()))
@@ -1098,5 +1131,87 @@ fn mirror_shadow_cost() -> Result<()> {
         BENCH_SIDE * BENCH_SIDE,
         with - without
     );
+    Ok(())
+}
+
+/// Main-camera AO must not multiply the contents of a reflected or portal
+/// image. Exercise their actual compositor, with MSAA off/on, next to a lit
+/// floor/wall crease where AO demonstrably acts on ordinary geometry.
+#[test]
+fn main_camera_ao_preserves_mirror_and_portal_images() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut data = room();
+    for corners in [
+        [
+            [-6., -1.5, 6.],
+            [6., -1.5, 6.],
+            [6., -1.5, -3.],
+            [-6., -1.5, -3.],
+        ],
+        [
+            [-6., -1.5, -2.],
+            [6., -1.5, -2.],
+            [6., 6., -2.],
+            [-6., 6., -2.],
+        ],
+        [[2., -1.5, -3.], [2., -1.5, 6.], [2., 6., 6.], [2., 6., -3.]],
+    ] {
+        quad(&mut data, corners, [0.7, 0.7, 0.7, 1.], true);
+        data.materials.last_mut().unwrap().kind = MaterialKind::VertexLit;
+    }
+    let mut camera = Camera::perspective([0., 0., 4.], [0.; 3], 1., 1., 0.05, 100.);
+    camera.ambient = [0.7, 0.7, 0.7, 3.];
+    camera.sun_color = [0.; 4];
+    camera.sky_bands = [[[0.3, 0.5, 0.9, 1.]; 8]; 16];
+    camera.set_sky_ambient(true);
+    for looks in [
+        bri_render::reflection::Looks::Reflect,
+        bri_render::reflection::Looks::Through(glam::Mat4::IDENTITY),
+    ] {
+        let plane = Mirror { looks, ..mirror() };
+        for samples in [1, 4] {
+            let draw = |ao| {
+                gpu.frame_with_occlusion(
+                    &camera,
+                    samples,
+                    ReflectionSettings::MEDIUM,
+                    &data,
+                    &[plane],
+                    1,
+                    true,
+                    None,
+                    ao,
+                )
+            };
+            let (off, _) = draw(false)?;
+            let (on, _) = draw(true)?;
+            assert!(
+                off.chunks_exact(4)
+                    .zip(on.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count()
+                    > 10,
+                "AO must actually shade the surrounding opaque world"
+            );
+            let projection = glam::Mat4::from_cols_array(&camera.view_projection);
+            for y in 0..30 {
+                for x in 0..30 {
+                    let p = projection.project_point3(Vec3::new(
+                        -1.45 + x as f32 * 0.1,
+                        -1.45 + y as f32 * 0.1,
+                        0.,
+                    ));
+                    let px = ((p.x * 0.5 + 0.5) * SIZE as f32) as usize;
+                    let py = ((0.5 - p.y * 0.5) * SIZE as f32) as usize;
+                    let i = (py * SIZE as usize + px) * 4;
+                    assert_eq!(
+                        &off[i..i + 4],
+                        &on[i..i + 4],
+                        "{looks:?}, MSAA {samples}, mirror/portal pixel {px},{py}"
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }

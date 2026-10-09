@@ -2384,7 +2384,9 @@ pub struct WorldPass<'a> {
     pub clear: Option<wgpu::Color>,
     /// Records after opaque geometry and before blended geometry, with its
     /// own pipeline and bind groups: surfaces such as mirrors that hide
-    /// what lies behind them but show through glass in front.
+    /// what lies behind them but show through glass in front. In a split
+    /// pass this records after `between`, preserving secondary-view images
+    /// from effects based on the main camera's depth.
     pub after_opaque: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>)>,
     /// Records last, over everything the pass drew, with its own pipelines
     /// and bind groups: sprites, plants and weather seen from this view.
