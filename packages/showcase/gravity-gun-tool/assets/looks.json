@@ -3,8 +3,8 @@
   "images": {
     "gravity-gun-tool:image/gravitygun": {
       "skin": {
-        "shader": "skins/alien.wgsl",
-        "color": [0.3, 0.95, 1.0],
+        "shader": "skins/gravity.wgsl",
+        "color": [0.045, 0.83, 1.0],
         "energy_states": ["Grab"]
       }
     }

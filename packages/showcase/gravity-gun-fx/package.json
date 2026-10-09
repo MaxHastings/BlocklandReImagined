@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Gravity Gun Effects",
-  "description": "The Gravity Gun's effects and sounds on everyone's screen: a beam from its muzzle that bends like a whip to what it holds, a glow and bubble round the held thing, a ragdoll dangling from the limb it grabbed (with the Ragdoll Add-On) and sounds for reaching, grabbing and letting go.",
+  "description": "The Gravity Gun's effects and sounds on everyone's screen: a soft glow in its core at rest; a beam from its muzzle, twisting with energy, that bends like a whip to what it holds; a ring and sparks where it catches; a bubble round the held thing with motes rising through it; a ragdoll dangling from the limb it grabbed (with the Ragdoll Add-On); and sounds for reaching, grabbing, holding and letting go.",
   "authors": [
     "Blockland ReImagined"
   ],
@@ -32,7 +32,8 @@
     "sounds": [
       "client/sounds/grab.wav",
       "client/sounds/drop.wav",
-      "client/sounds/reach.wav"
+      "client/sounds/reach.wav",
+      "client/sounds/hold.wav"
     ]
   }
 }

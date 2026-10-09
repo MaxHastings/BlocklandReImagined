@@ -37,7 +37,7 @@ puffed over its model. Put `looks.json` in `assets/`:
 ```json
 { "schema_version": 1,
   "images": { "gravity-gun-tool:image/gravitygun":
-    { "skin": { "shader": "skins/alien.wgsl", "color": [0.3, 0.95, 1.0],
+    { "skin": { "shader": "skins/gravity.wgsl", "color": [0.045, 0.83, 1.0],
                 "energy_states": ["Grab"] } } } }
 ```
 
@@ -55,7 +55,9 @@ shader that is missing or does not compile is logged, and the item draws
 without it. A skin is WGSL, so it is held to the same trust as Add-On code
 ([What players are asked to trust](trust.md)): a server's skins draw on a joiner's screen only once they
 trust that server's code, and the item draws plain until then.
-`skins/alien.wgsl` in `gravity-gun-tool` is the Gravity Gun's.
+`skins/gravity.wgsl` in `gravity-gun-tool` is the Gravity Gun's: it reads
+which part of the model a face is from the model's texture coordinates
+and makes the seams and core glow and pulse, leaving the rest to the model.
 
 A tool whose image has `"paint_tint": true` (below) is dropped in the
 colour it was held in.
@@ -66,7 +68,7 @@ base game art. Put `<icon>.render.json` beside it:
 
 ```json
 { "schema_version": 1, "pose_like": "v20.weapon.printgun",
-  "look": { "skin": {} } }
+  "look": { "textured": true } }
 ```
 
 `clockwise_quarter_turns` optionally rotates the icon on screen by 0 to 3
@@ -84,7 +86,7 @@ play. `look.base` is its colour, by default the item's colour in play
 (its image's tint); `"textured": true` draws the model's own
 textures and colours instead (times `base`), so a tool of wood and iron
 shows both. The
-optional `skin` is the Gravity Gun's alien shell: a dark `shell` with glowing
+optional `skin` is a dark oily `shell` with glowing
 `veins` (by default the colour of the item's skin in `looks.json`), puffed
 out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.

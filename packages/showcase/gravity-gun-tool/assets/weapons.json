@@ -7,7 +7,7 @@
       "name": "GravityGunItem",
       "ui_name": "Gravity Gun",
       "image": "gravity-gun-tool:image/gravitygun",
-      "model": "base/data/shapes/printGun.dts",
+      "model": "models/gravity-gun.shape.json",
       "icon": "icons/gravity_gun",
       "can_drop": true,
       "sport": false
@@ -17,7 +17,7 @@
     "gravity-gun-tool:image/gravitygun": {
       "id": "gravity-gun-tool:image/gravitygun",
       "name": "GravityGunImage",
-      "model": "base/data/shapes/printGun.dts",
+      "model": "models/gravity-gun.shape.json",
       "projectile": null,
       "mount_point": 0,
       "offset": [
@@ -26,9 +26,9 @@
         0.0
       ],
       "eye_offset": [
-        0.7,
-        -0.55,
-        -1.2
+        0.85,
+        -1.0,
+        -1.6
       ],
       "source_rotation_degrees": [
         0.0,
@@ -38,12 +38,12 @@
       "correct_muzzle": false,
       "melee": false,
       "color": [
-        0.35,
         1.0,
-        0.8,
+        1.0,
+        1.0,
         1.0
       ],
-      "color_shift": true,
+      "color_shift": false,
       "arm_ready": true,
       "casing": "",
       "min_shot_ticks": 0,
@@ -107,7 +107,7 @@
           "ammo": null,
           "no_ammo": null,
           "script": "onGrab",
-          "sequence": "",
+          "sequence": "open",
           "sound": "",
           "emitter": "",
           "emitter_node": "",
@@ -125,7 +125,7 @@
           "ammo": null,
           "no_ammo": null,
           "script": "onRelease",
-          "sequence": "",
+          "sequence": "close",
           "sound": "",
           "emitter": "",
           "emitter_node": "",
@@ -139,6 +139,19 @@
           "onrelease": "gravity-gun:release"
         },
         "wheel": "gravity-gun:reel"
+      },
+      "eye_rotation": [
+        -2.0,
+        -8.0,
+        -6.0
+      ],
+      "light": {
+        "radius": 4.0,
+        "color": [
+          0.2,
+          0.8,
+          1.0
+        ]
       }
     }
   },

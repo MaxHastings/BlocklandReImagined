@@ -6,7 +6,8 @@
 // aim and swings round into the grip point, lets it ripple a little, and
 // turns it to face the camera, so it reads as a solid glowing beam from
 // any side. Drawn twice with additive blending: a wide soft glow and a
-// thin white-hot core.
+// thin white-hot core. Two strands of energy twist round each other down
+// the glow, a turn every half unit or so, running out from the gun.
 //   0: muzzle xyz, width
 //   1: grip xyz, core (1) or glow (0)
 //   2: bend xyz (the curve's pull, on your aim), seed
@@ -15,6 +16,7 @@
 struct Varyings {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) reach: f32,
 };
 
 // The quadratic curve from the muzzle through the bend's pull to the grip.
@@ -64,6 +66,7 @@ fn vs_main(v: BriVertex) -> Varyings {
     var out: Varyings;
     out.clip = bri_frame.view_proj * vec4<f32>(centre + side * (v.uv.x * 2.0 - 1.0) * width, 1.0);
     out.uv = v.uv;
+    out.reach = length(end - start);
     return out;
 }
 
@@ -79,7 +82,13 @@ fn fs_main(in: Varyings) -> @location(0) vec4<f32> {
     let pulses = 0.65 + 0.35 * smoothstep(0.0, 0.2, run) * smoothstep(1.0, 0.45, run);
     let shimmer = 1.0 - mix(0.05, 0.18, core) * (0.5 + 0.5 * sin(in.uv.y * 140.0 - t * 50.0 + across * 4.0));
     let ends = smoothstep(0.0, 0.03, in.uv.y) * smoothstep(1.0, 0.94, in.uv.y);
-    let hot = mix(p[3].rgb, vec3<f32>(0.9, 1.0, 1.0), core * 0.8);
-    let alpha = body * pulses * shimmer * ends * p[3].a;
+    // The swirl: two strands, half a turn apart, seen side-on as waves
+    // crossing the glow. Only in the glow; the core stays a clean line.
+    let twist = in.uv.y * in.reach * 11.0 - t * 16.0 + p[2].w;
+    let s1 = across - 0.55 * sin(twist);
+    let s2 = across + 0.55 * sin(twist);
+    let strands = (exp(-s1 * s1 * 90.0) + exp(-s2 * s2 * 90.0)) * (1.0 - core) * 0.55;
+    let hot = mix(p[3].rgb, vec3<f32>(0.9, 1.0, 1.0), max(core * 0.8, strands * 0.6));
+    let alpha = (body * pulses * shimmer + strands) * ends * p[3].a;
     return vec4<f32>(hot, clamp(alpha, 0.0, 1.0));
 }

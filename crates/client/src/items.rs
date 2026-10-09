@@ -82,7 +82,7 @@ pub struct ImagePresentation {
 /// the game draws it with the Add-On's shader over every copy of the item,
 /// in a hand (first or third person), dropped, on a spawn brick and in a
 /// mirror, so the item looks the same wherever it is (the Gravity Gun's
-/// alien shell). The shader is an Add-On shader (`bri_client_sandbox::
+/// glowing seams). The shader is an Add-On shader (`bri_client_sandbox::
 /// shader`) and gets, per copy: `params[0]` the skin's colour and its
 /// energy (1 in an `energy_states` state of the holder's image, else 0),
 /// `params[1]` the direction sunlight travels and a seed for that copy,
@@ -2340,12 +2340,8 @@ mod add_on_icon_tests {
             &mut added,
             &mut faults,
         );
-        // Without the base game here the Printer it borrows is a stand-in.
-        assert!(
-            faults.iter().all(|f| f.contains("printGun.dts")),
-            "{faults:?}"
-        );
-        faults.clear();
+        // Its own model, beside its weapons.json.
+        assert!(faults.is_empty(), "{faults:?}");
         read_looks(
             "Gravity Gun Tool",
             &abs,
@@ -2359,30 +2355,26 @@ mod add_on_icon_tests {
             "gravity-gun-tool:weapon/gravitygun",
             "gravity-gun-tool:image/gravitygun",
         );
-        for printer in [
-            &mut manifest.images.get_mut(image).unwrap().model,
-            &mut manifest.items.get_mut(gun).unwrap().model,
-        ] {
-            if printer.is_empty() {
-                *printer = "base/data/shapes/printgun.dts".into();
-            }
-        }
+        assert_eq!(
+            manifest.images[image].model,
+            "gravity gun tool/models/gravity-gun.shape.json"
+        );
         let held = manifest.image_appearance(image).expect("held");
         assert_eq!(
             manifest.item_appearance(gun),
             Some(held.clone()),
             "on a spawn brick or dropped, as in the hand"
         );
-        assert_eq!(held.tint, [0.35, 1.0, 0.8, 1.0], "the image's colour shift");
+        assert_eq!(held.tint, [1.0; 4], "its own colours, untinted");
         assert_eq!(
             held.skin.as_deref(),
             Some(image),
-            "its alien skin, wherever it is"
+            "its glowing skin, wherever it is"
         );
         let (skin, shader) = &skins[image];
         assert_eq!(
             (skin.color, &skin.energy_states[..]),
-            ([0.3, 0.95, 1.0], &["Grab".to_string()][..])
+            ([0.045, 0.83, 1.0], &["Grab".to_string()][..])
         );
         assert!(shader.source.contains("fn fs_main"));
         // An item whose own model and colour differ from its image's (the
@@ -2440,7 +2432,7 @@ mod add_on_icon_tests {
         let weapons = std::fs::read(assets.join("weapons.json")).unwrap();
         let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
         let image = "gravity-gun-tool:image/gravitygun";
-        let shader = std::fs::read_to_string(assets.join("skins/alien.wgsl")).unwrap();
+        let shader = std::fs::read_to_string(assets.join("skins/gravity.wgsl")).unwrap();
         let look = |image: &str, shader: &str, color: &str| {
             format!(
                 r#"{{"schema_version": 1, "images": {{"{image}": {{"skin": {{"shader": "{shader}", "color": {color}}}}}}}}}"#
@@ -2449,22 +2441,22 @@ mod add_on_icon_tests {
         let cases = [
             (
                 "good",
-                look(image, "skins/alien.wgsl", "[0.3, 0.95, 1]"),
+                look(image, "skins/gravity.wgsl", "[0.045, 0.83, 1]"),
                 true,
             ),
             (
                 "not its own image",
-                look("v20.image.hammer", "skins/alien.wgsl", "[1, 1, 1]"),
+                look("v20.image.hammer", "skins/gravity.wgsl", "[1, 1, 1]"),
                 false,
             ),
             (
                 "colour out of range",
-                look(image, "skins/alien.wgsl", "[2, 1, 1]"),
+                look(image, "skins/gravity.wgsl", "[2, 1, 1]"),
                 false,
             ),
             (
                 "outside the Add-On",
-                look(image, "../alien.wgsl", "[1, 1, 1]"),
+                look(image, "../gravity.wgsl", "[1, 1, 1]"),
                 false,
             ),
             (
@@ -2491,7 +2483,7 @@ mod add_on_icon_tests {
         for (what, json, good) in cases {
             let dir = tempfile::tempdir().unwrap();
             std::fs::create_dir(dir.path().join("skins")).unwrap();
-            std::fs::write(dir.path().join("skins/alien.wgsl"), &shader).unwrap();
+            std::fs::write(dir.path().join("skins/gravity.wgsl"), &shader).unwrap();
             std::fs::write(dir.path().join("skins/broken.wgsl"), "fn fs_main( {").unwrap();
             std::fs::write(dir.path().join("looks.json"), json).unwrap();
             let mut manifest = empty();
@@ -2850,13 +2842,10 @@ mod add_on_icon_tests {
                 );
             }
         }
-        // Coloured as the gun is in play: its image's tint, its skin's veins.
+        // Coloured as the gun is in play: its own textures, untinted.
         let look = &request.spec.look;
-        assert_eq!(look.base, Some([0.35, 1.0, 0.8]));
-        assert_eq!(
-            look.skin.as_ref().and_then(|s| s.veins),
-            Some([0.3, 0.95, 1.0])
-        );
+        assert_eq!(look.base, Some([1.0; 3]));
+        assert!(look.textured && look.skin.is_none(), "{look:?}");
         let (_, profile, overlap) =
             crate::item_icon_render::fit_pose(&request.reference, &request.icon).unwrap();
         let on_screen = |axes: crate::item_icon_render::Axes, axis: glam::Vec3| {
