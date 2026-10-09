@@ -56,3 +56,28 @@ Dynamic Soft Shading/AO and floor brightness; water/glass/see-through/Glow;
 fog crease fade; all-off and Classic against v0.2.7.2; big-build frame rate.
 Future main landing still requires Max to approve each separate feature PR by
 name, then `python tools/gate.py --push` on this PC.
+
+## Windows preview delivered
+
+Windows release job succeeded: import checks, release panic capture, startup
+validation, packaging and zip smoke all passed. Artifact 11639787221:
+https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37974800673/artifacts/11639787221
+Downloaded `BlocklandReImagined-windows.zip` (148346027 bytes) beside
+`PLAYTEST.txt` in `C:/Users/Maxwell/Downloads/BlocklandReImagined-preview-2026-10-09`.
+The zip manifest version is `preview-2026-10-09-sky-shading`; Launch.cmd is
+present. Mac/Linux jobs took the verified Windows content and are compiling.
+No release/tag was published. Baseline probe modifications were restored;
+its idle target was removed with clean_targets.py, freeing 6 GiB while keeping
+main, preview, soft-shading and gate outputs.
+
+The completed local gate on 9ca5ffd42 is NOT green. Tool tests, workspace
+build, startup/content check and full-workspace clippy passed. The test phase
+finished with two real Options layout failures: UI unit
+`apply_and_render_scale_fit_display_settings` and authored-content
+`options_tabs_fit_short_and_wide_windows`. The added graphics rows place the
+Render Scale control beneath the section / Done boundary. These are open
+preview defects, not known-main exceptions; no test was disabled or added to
+gate-known-failures. A sandbox clock test failed under load and passed alone;
+the gate reported it as flaky. Runtime visual tests are covered above, but this
+combined preview is not cleared for main. Max requested practical delivery;
+he has the playable zip while layout and strict MSAA parity remain open.
