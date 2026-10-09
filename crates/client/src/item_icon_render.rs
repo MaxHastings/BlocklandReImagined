@@ -9,10 +9,9 @@
 //! same angle and size as the stock ones. Nothing is shipped but the
 //! request; the picture is made from the player's own game files.
 //!
-//! The look is the model's own colour or textures, lit, with an optional
-//! veined skin over it: a dark oily shell with glowing veins, a CPU port of
-//! the skin the Gravity Gun wore over the Printer before it had a model of
-//! its own.
+//! The look is the model's own colour, lit, with an optional veined skin
+//! over it: the Gravity Gun's alien shell (`gravity-gun-tool/assets/skins/
+//! alien.wgsl`), ported here so the icon matches the gun as drawn in play.
 //! All CPU, deterministic, and small: icons are 128 pixels or less.
 //!
 //! Drawing one takes a noticeable part of a second (most of it finding the
@@ -851,7 +850,7 @@ fn render_oriented(mesh: &Mesh, pose: &Pose, look: &Look, label: &str, turns: u8
     }
 }
 
-/// The veined skin's `fs_main` at rest, seen from the front (+Z in view
+/// `alien.wgsl`'s `fs_main` at rest, seen from the front (+Z in view
 /// space) under the icon light.
 ///
 /// `pixel` is one icon pixel in model units: the veins are drawn at least

@@ -3,13 +3,10 @@ and generated here, so they carry no one else's rights.
 
 Outputs 16-bit mono WAV at 22050 Hz:
   packages/showcase/gravity-gun-fx/client/sounds/
-    grab.wav    the beam catching something: the claw clacking open over
-                a rising hum with a zing
-    drop.wav    letting go: the claw snapping shut as the hum falls away
+    grab.wav    the beam catching something: a rising hum with a zing
+    drop.wav    letting go: the hum falling away
     reach.wav   the beam reaching with nothing caught: a searching
                 whirr, repeated while the trigger is held
-    hold.wav    holding something: a low, throbbing hum a second long,
-                repeated while it holds
   packages/showcase/steel-ball-fx/client/sounds/
     clank.wav   steel striking something: a bell-like ring of inharmonic partials
     thud.wav    the ball's weight landing: a low knock
@@ -91,26 +88,17 @@ def write(path, samples, peak=0.85):
         w.writeframes(b''.join(struct.pack('<h', int(max(-1, min(1, x * scale)) * 32767)) for x in samples))
 
 
-def clack(seconds, pitch, decay):
-    """A hard little mechanical knock: a click of bright noise over a
-    short resonant thunk."""
-    click = envelope(lowpass(noise(seconds), 6000), 0.0005, 0.006)
-    thunk = envelope(sweep(seconds, pitch, pitch * 0.7), 0.0008, decay)
-    return mix((click, 0.8), (thunk, 1.0))
-
-
-def delayed(samples, seconds):
-    return [0.0] * int(seconds * RATE) + samples
-
-
 def gravity_gun():
     rng.seed(SEED)
     out = ROOT / 'gravity-gun-fx' / 'client' / 'sounds'
     hum = envelope(sweep(0.45, 90, 190), 0.01, 0.16)
     zing = envelope(sweep(0.45, 1300, 2100), 0.005, 0.06)
     crackle = envelope(lowpass(noise(0.45), 3000), 0.002, 0.05)
+    write(out / 'grab.wav', fade_out(mix((hum, 1.0), (zing, 0.25), (crackle, 0.35))))
+
     fall = envelope(sweep(0.35, 230, 75), 0.005, 0.12)
     hiss = envelope(lowpass(noise(0.35), 1500), 0.005, 0.08)
+    write(out / 'drop.wav', fade_out(mix((fall, 1.0), (hiss, 0.3))), peak=0.6)
 
     # Even from start to end, so repeats run together as one whirr.
     whirr = [math.sin(2 * math.pi * (140 * t + 6 * math.sin(2 * math.pi * 4 * t))) for t in
@@ -123,31 +111,6 @@ def gravity_gun():
     for i in range(edge):
         reach[i] *= i / edge
     write(out / 'reach.wav', fade_out(reach, 0.015), peak=0.5)
-
-    # The claw: two knocks as it opens, the arms reaching their stops a
-    # hair apart, and one as it snaps shut.
-    claw = mix((clack(0.08, 420, 0.025), 1.0), (delayed(clack(0.08, 380, 0.02), 0.022), 0.7))
-    write(out / 'grab.wav', fade_out(mix((hum, 1.0), (zing, 0.25), (crackle, 0.35), (claw, 0.55))))
-    shut = clack(0.06, 520, 0.018)
-    write(out / 'drop.wav', fade_out(mix((fall, 1.0), (hiss, 0.3), (shut, 0.5))), peak=0.6)
-
-    # Exactly a second of whole cycles (55, 110 and 165 Hz, a 4 Hz throb
-    # and a 2 Hz drift), so repeats run together as one hum.
-    hold = []
-    for i in range(RATE):
-        t = i / RATE
-        throb = 0.75 + 0.25 * math.sin(2 * math.pi * 4 * t)
-        drift = 1.0 + 0.15 * math.sin(2 * math.pi * 2 * t)
-        hold.append(throb * (math.sin(2 * math.pi * 55 * t)
-                             + 0.6 * drift * math.sin(2 * math.pi * 110 * t + 0.5)
-                             + 0.25 * math.sin(2 * math.pi * 165 * t + 1.1)))
-    sizzle = lowpass(noise(1.0), 1800)
-    sizzle = [x * (0.5 + 0.5 * math.sin(2 * math.pi * 8 * i / RATE)) for i, x in enumerate(sizzle)]
-    hold = mix((hold, 1.0), (sizzle, 0.06))
-    edge = int(0.02 * RATE)
-    for i in range(edge):
-        hold[i] *= i / edge
-    write(out / 'hold.wav', fade_out(hold, 0.02), peak=0.45)
 
 
 def steel_ball():

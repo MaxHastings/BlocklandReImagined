@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Gravity Gun Tool",
-  "description": "The Gravity Gun you hold: its own blocky model, a dark shell cut with glowing seams round a glowing core, whose claw opens as it grabs and whose buttons run the Gravity Gun Add-On. The Gravity Gun Add-On hands it out and does the grabbing and throwing.",
+  "description": "The Gravity Gun you hold: the Printer, reworked into an alien weapon, whose buttons run the Gravity Gun Add-On. The Gravity Gun Add-On hands it out and does the grabbing and throwing.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

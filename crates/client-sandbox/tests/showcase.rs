@@ -254,14 +254,13 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     assert!(first.draws.is_empty());
     assert!(first.log.is_empty(), "{:?}", first.log);
     // The trigger held with nothing caught: a thinner beam (glow and
-    // core) out to where it points, a glow at the muzzle and sparks drawn
-    // into it.
+    // core) out to where it points, and a glow at the muzzle.
     let reaching = draws(
         &mut addon,
         0.05,
         gun_world([0.0, 0.0, 1.0, 8.0], [0.0, 2.0, -25.0]),
     );
-    assert_eq!(reaching.len(), 4, "{reaching:#?}");
+    assert_eq!(reaching.len(), 3, "{reaching:#?}");
     assert!(close(
         &reaching[0].params.unwrap()[1][..3],
         &[0.0, 2.1, -8.0]
@@ -283,16 +282,15 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
         .collect();
     assert_eq!(heard, [1, 0, 0, 1, 0, 1]);
     // Holding the crate, grabbed a unit left of its middle: two beam
-    // passes, the grip glow and the catch's flash, ring and burst, the
-    // muzzle glow, the bubble, the orbiting sparks and the rising motes,
-    // and the grab heard at the crate.
+    // passes, the grip glow and the catch's flash, the muzzle glow, the
+    // bubble, the orbiting sparks, and the grab heard at the crate.
     let grab = [1.0, 7.0, 1.0, 5.0];
     let grabbed = addon
         .frame(frame(0.1, &Arc::new(gun_world(grab, [1.0, 2.1, -5.0]))))
         .unwrap()
         .clone();
     let held = grabbed.draws.clone();
-    assert_eq!(held.len(), 10, "{held:#?}");
+    assert_eq!(held.len(), 7, "{held:#?}");
     assert_eq!(grabbed.sounds.len(), 1);
     assert_eq!(grabbed.sounds[0].name, "client/sounds/grab.wav");
     assert_eq!(grabbed.sounds[0].at, Some([1.0, 2.1, -5.0]));
@@ -313,11 +311,7 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     let mut turned = gun_world(grab, [1.0, 2.1, -5.0]);
     turned.vehicles[0].rotation = [0.0, s, 0.0, c];
     let turned = draws(&mut addon, 0.4, turned);
-    assert_eq!(
-        turned.len(),
-        9,
-        "the flash is over; its ring and burst still fly"
-    );
+    assert_eq!(turned.len(), 6, "the flash is over");
     let beam_params = turned[0].params.unwrap();
     assert!(
         close(&beam_params[1][..3], &[1.0, 2.1, -4.0]),
@@ -441,10 +435,9 @@ fn the_beam_bends_through_a_portal() {
     );
 }
 
-/// The beam leaves the gun where the game draws it. The gun's skin is its
-/// look (the Gravity Gun Tool's `looks.json`), which the game draws on
-/// every copy, so the effects draw no more over the gun itself than the
-/// soft glow of its core at rest.
+/// The beam leaves the gun where the game draws it. The gun's alien skin
+/// is its look (the Gravity Gun Tool's `looks.json`), which the game draws
+/// on every copy, so the effects draw nothing over the gun itself.
 #[test]
 fn the_beam_comes_out_of_the_drawn_guns_muzzle() {
     let (_, mut addon) = start("gravity-gun-fx");
@@ -452,32 +445,15 @@ fn the_beam_comes_out_of_the_drawn_guns_muzzle() {
     let mut world = gun_world([1.0, 7.0, 1.0, 5.0], [0.0, 2.1, -5.0]);
     holding_the_gun(&mut world, muzzle);
     let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
-    assert_eq!(drawn.draws.len(), 10, "the beam and the rest");
+    assert_eq!(drawn.draws.len(), 7, "the beam and the rest");
     let beam_params = drawn.draws[0].params.unwrap();
     assert_eq!(&beam_params[0][..3], &muzzle, "from the muzzle");
-    // At rest, once the beam has snapped back, only the core's glow and
-    // the motes drifting into it, both at the muzzle.
+    // At rest, once the beam has snapped back, nothing is drawn.
     let mut world = gun_world([0.0; 4], [0.0, 2.1, -5.0]);
     holding_the_gun(&mut world, muzzle);
     let world = Arc::new(world);
     addon.frame(frame(0.1, &world)).unwrap();
-    let idle = addon.frame(frame(0.5, &world)).unwrap().draws.clone();
-    assert_eq!(idle.len(), 2, "{idle:#?}");
-    assert!(
-        idle.iter()
-            .all(|d| close(&d.params.unwrap()[0][..3], &muzzle))
-    );
-    // Another tool in the hand glows with nothing.
-    let mut world = gun_world([0.0; 4], [0.0, 2.1, -5.0]);
-    holding_the_gun(&mut world, muzzle);
-    world.players[0].image = "test:image/hammer".into();
-    assert!(
-        addon
-            .frame(frame(0.6, &Arc::new(world)))
-            .unwrap()
-            .draws
-            .is_empty()
-    );
+    assert!(addon.frame(frame(0.5, &world)).unwrap().draws.is_empty());
 }
 
 /// Needs a GPU adapter (software is fine): renders reaching, holding, a swing and letting go to PNGs.
@@ -547,8 +523,8 @@ fn a_held_creature_gets_the_beam_and_bubble_too() {
     let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
     assert_eq!(
         drawn.draws.len(),
-        10,
-        "beam, core, glows, the catch's flash, ring and burst, bubble, sparks and rising motes"
+        7,
+        "beam, core, glows, the catch's flash, bubble and sparks"
     );
     let beam_params = drawn.draws[0].params.unwrap();
     assert_eq!(

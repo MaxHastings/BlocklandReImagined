@@ -7,7 +7,7 @@ the platform splits sides:
 | Add-On | Side | What it is |
 |---|---|---|
 | `gravity-gun` | host | the rule: grab what you point at, drag and swing it, reel it with the wheel, drop or fling it (`physics` operations; the engine's `hold` does the moving) |
-| `gravity-gun-tool` | everyone | the tool in your hand, its own model (`tools/make_gravity_gun_model.py` builds it in Blender) with a glowing skin and a claw that opens as it grabs; its image runs the rule's commands on pressing and letting go of the trigger and on the mouse wheel |
+| `gravity-gun-tool` | everyone | the tool in your hand, the stock Printer by reference; its image runs the rule's commands on pressing and letting go of the trigger and on the mouse wheel |
 | `gravity-gun-fx` | each player | the beam from its muzzle, the grip glow, bubble, sparks, shockwave and sounds, drawn from the rule's public `beam` state; with the Ragdoll Add-On, a held corpse dangles from the limb the beam grabbed |
 | `steel-ball` | host | the rule: /clearballs puts a player's balls away |
 | `steel-ball-kit` | everyone | the ball (a seatless `Ball` vehicle: in minigames only it punches through bricks, kills the players it hits and wrecks vehicles), placed from a vehicle spawn brick, three per player (`per_player`), and its bare-metal model and textures |
