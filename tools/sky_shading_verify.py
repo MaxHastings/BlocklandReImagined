@@ -56,6 +56,8 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--phase", choices=["parity", "looks", "timing"], required=True)
     parser.add_argument("--case", choices=CASES, action="append")
+    parser.add_argument("--reuse-baseline", action="store_true",
+                        help="Reuse completed main probe reports in the same output folder")
     args = parser.parse_args()
     cases = args.case or list(CASES)
     results = []
@@ -65,7 +67,8 @@ def main():
         if args.phase == "parity":
             for samples in [1, 4]:
                 baseline, preview = folder / f"main-msaa{samples}", folder / f"preview-msaa{samples}"
-                run(args.baseline, args.content, baseline, case, OFF, "classic,unified,dynamic", samples=samples)
+                if not (args.reuse_baseline and (baseline / "report.json").is_file()):
+                    run(args.baseline, args.content, baseline, case, OFF, "classic,unified,dynamic", samples=samples)
                 run(args.preview, args.content, preview, case, VARIANTS, "classic,unified,dynamic", samples=samples)
                 for original in baseline.glob("*-off.png"):
                     name = original.name
