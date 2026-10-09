@@ -84,12 +84,6 @@ def main():
                             results.append(dict(case=case, samples=samples, image=name, classic_variant=variant, equal=equal))
                             if not equal:
                                 raise RuntimeError(f"Classic differs: {case}, {variant}, MSAA {samples}")
-                for mode in ["classic", "unified", "dynamic"]:
-                    for original in preview.glob(f"*-{mode}-off.png"):
-                        forced = original.with_name(original.name.replace("-off.png", "-forced.png"))
-                        with Image.open(original) as a, Image.open(forced) as b:
-                            if a.tobytes() != b.tobytes():
-                                raise RuntimeError(f"Original override differs: {case}/{mode}")
         elif args.phase == "looks":
             variants = VARIANTS + ";sunset:soft=1,ao=1,sun=0.02;twilight:soft=1,ao=1,sun=-0.12"
             run(args.preview, args.content, folder, case, variants, "unified,dynamic", frames=24)

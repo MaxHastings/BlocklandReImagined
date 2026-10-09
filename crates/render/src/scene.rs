@@ -3589,7 +3589,6 @@ impl SceneRenderer {
     )> {
         self.timer.borrow_mut().as_mut()?.collect(device).cloned()
     }
-    /// Render sun shadow casters (bricks, players, vehicles, items; never map
     /// Measure sky exposure from current occluding geometry for this view.
     /// Callers can supply the persistent map/build separately from moving
     /// receivers, keeping the cache steady while characters and cars move.
@@ -3599,6 +3598,23 @@ impl SceneRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: usize,
         geometry: ShadowCasters<'_>,
+    ) {
+        self.render_view_sky_exposure_with_moving(
+            encoder,
+            view,
+            geometry,
+            ShadowCasters::default(),
+        );
+    }
+
+    /// Keep the map/build cache while overlaying current moving occluders.
+    /// Moving geometry never writes back into the persistent depth maps.
+    pub fn render_view_sky_exposure_with_moving(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: usize,
+        geometry: ShadowCasters<'_>,
+        moving: ShadowCasters<'_>,
     ) {
         use std::hash::{Hash, Hasher};
         let Some(v) = self.views.get(view).filter(|v| v.sky_on) else {
@@ -3653,18 +3669,56 @@ impl SceneRenderer {
             }
             key.push(hash.finish());
         }
-        let Some(matrices) = v.sky.plan(&queue, v.eye, key, bounds) else {
-            return;
-        };
+        let changed = v.sky.plan(&queue, v.eye, key, bounds);
+        if let Some(matrices) = changed {
+            self.record_sky_depths(encoder, &v.sky, &v.sky.layers, matrices, geometry, false);
+        }
+        let has_moving = !moving.scenes.is_empty()
+            || moving
+                .instances
+                .iter()
+                .any(|(_, i)| !i.transforms.is_empty());
+        if has_moving {
+            v.sky.merge(encoder);
+            self.record_sky_depths(
+                encoder,
+                &v.sky,
+                &v.sky.working_layers,
+                v.sky.matrices.get(),
+                moving,
+                true,
+            );
+        }
+        if changed.is_some() || has_moving || v.sky.had_moving.get() {
+            v.sky.copy(encoder, has_moving);
+            self.mark(encoder, "sky exposure");
+        }
+        v.sky.had_moving.set(has_moving);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_sky_depths(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        sky: &crate::sky_exposure::SkyExposure,
+        layers: &[wgpu::TextureView],
+        matrices: [Mat4; crate::sky_exposure::DIRECTIONS],
+        geometry: ShadowCasters<'_>,
+        load: bool,
+    ) {
         for (i, matrix) in matrices.iter().enumerate() {
             let planes = frustum_planes(*matrix);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sky exposure"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &v.sky.layers[i],
+                    view: &layers[i],
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: if load {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(1.0)
+                        },
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -3675,7 +3729,7 @@ impl SceneRenderer {
             });
             pass.set_bind_group(
                 0,
-                &v.sky.group,
+                &sky.group,
                 &[crate::sky_exposure::SkyExposure::offset(i)],
             );
             let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>, bool)> = geometry
@@ -3684,13 +3738,12 @@ impl SceneRenderer {
                 .map(|scene| (*scene, &self.identity_instance, 0..1, false))
                 .collect();
             for (scene, instances) in geometry.instances {
-                for (j, t) in instances
+                for (j, _) in instances
                     .transforms
                     .iter()
                     .enumerate()
                     .filter(|(_, t)| t.tint[3] == 1.0)
                 {
-                    let _ = t;
                     items.push((
                         scene,
                         &instances.buffer,
@@ -3734,8 +3787,6 @@ impl SceneRenderer {
                 }
             }
         }
-        v.sky.copy(encoder);
-        self.mark(encoder, "sky exposure");
     }
 
     /// Render sun shadow casters (bricks, players, vehicles, items; never map
@@ -4572,10 +4623,17 @@ impl SceneRenderer {
                 .get(target.view)
                 .is_some_and(|v| v.sky_on && !v.sky.prepared.get())
         {
-            self.render_view_sky_exposure(
+            self.render_view_sky_exposure_with_moving(
                 encoder,
                 target.view,
-                ShadowCasters { scenes, instances },
+                ShadowCasters {
+                    scenes,
+                    instances: &[],
+                },
+                ShadowCasters {
+                    scenes: &[],
+                    instances,
+                },
             );
         }
         let Some(view) = self.views.get(target.view) else {

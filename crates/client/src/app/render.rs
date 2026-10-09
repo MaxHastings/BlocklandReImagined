@@ -1164,12 +1164,19 @@ impl App {
                 .iter()
                 .chain(self.gpu.gpu_chunks.values())
                 .collect();
-            renderer.render_view_sky_exposure(
+            let mut sky_moving = cast_models.clone();
+            sky_moving.extend(blocking.iter().copied());
+            let sky_fading: Vec<_> = self.fx.fade_models.scenes().collect();
+            renderer.render_view_sky_exposure_with_moving(
                 encoder,
                 view,
                 ShadowCasters {
                     scenes: &sky_scenes,
                     instances: &terrain_map,
+                },
+                ShadowCasters {
+                    scenes: &sky_fading,
+                    instances: &sky_moving,
                 },
             );
             renderer.render_view_shadows(

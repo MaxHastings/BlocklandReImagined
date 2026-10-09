@@ -24,6 +24,10 @@ struct Receiver {
 pub(crate) struct SkyExposure {
     texture: wgpu::Texture,
     pub layers: Vec<wgpu::TextureView>,
+    working: wgpu::Texture,
+    pub working_layers: Vec<wgpu::TextureView>,
+    pub matrices: std::cell::Cell<[Mat4; DIRECTIONS]>,
+    pub had_moving: std::cell::Cell<bool>,
     pub depths: wgpu::Buffer,
     pub receiver: wgpu::Buffer,
     caster: wgpu::Buffer,
@@ -60,6 +64,28 @@ impl SkyExposure {
                 })
             })
             .collect();
+        let working = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("moving sky exposure depth"),
+            size: texture.size(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let working_layers = (0..DIRECTIONS)
+            .map(|i| {
+                working.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: i as u32,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
         let depths = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sky exposure depths"),
             size: u64::from(size * size) * DIRECTIONS as u64 * 4,
@@ -82,6 +108,7 @@ impl SkyExposure {
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -105,6 +132,10 @@ impl SkyExposure {
         Self {
             texture,
             layers,
+            working,
+            working_layers,
+            matrices: std::cell::Cell::new([Mat4::IDENTITY; DIRECTIONS]),
+            had_moving: std::cell::Cell::new(false),
             depths,
             receiver,
             caster,
@@ -181,6 +212,7 @@ impl SkyExposure {
             );
         }
         *self.cache.borrow_mut() = Some((centre, key));
+        self.matrices.set(matrices);
         Some(matrices)
     }
 
@@ -188,10 +220,18 @@ impl SkyExposure {
         (i as u64 * STRIDE) as u32
     }
 
-    pub fn copy(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn merge(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.copy_texture_to_texture(
+            self.texture.as_image_copy(),
+            self.working.as_image_copy(),
+            self.texture.size(),
+        );
+    }
+
+    pub fn copy(&self, encoder: &mut wgpu::CommandEncoder, moving: bool) {
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
+                texture: if moving { &self.working } else { &self.texture },
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::DepthOnly,

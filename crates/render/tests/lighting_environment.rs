@@ -483,3 +483,110 @@ fn glow_behind_the_floor_does_not_exempt_the_floor_from_ao() -> Result<()> {
     );
     Ok(())
 }
+
+/// Actual geometry, rather than the sun or a map-name flag, determines whether
+/// sky colour reaches a floor. Cover/uncover it with both a build and a moving
+/// roof while retaining the same renderer and persistent exposure cache.
+#[test]
+fn roofs_block_sky_tint_and_moving_roofs_do_not_leave_cached_shade() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = color_target(&device, format, 128, 128);
+    for mode in [1.0, 3.0] {
+        let mut renderer = SceneRenderer::new(&device, format);
+        let floor = renderer.upload(
+            &device,
+            &queue,
+            &cuboid(Vec3::new(-20., -1., -20.), Vec3::new(20., 0., 20.)),
+        )?;
+        let roof = renderer.upload(
+            &device,
+            &queue,
+            &cuboid(Vec3::new(-30., 6., -30.), Vec3::new(30., 7., 30.)),
+        )?;
+        let mut camera = Camera::perspective([0., 4., 8.], [0., 0., 0.], 1., 1.2, 0.05, 400.);
+        camera.ambient = [0.6, 0.6, 0.6, mode];
+        camera.sun_color = [0.; 4];
+        camera.sky_bands = [[[0.2, 0.5, 0.9, 1.0]; 8]; 16];
+        let mut moving = GpuInstances::new(&device, 1)?;
+        let mut frame = |soft: bool, covered: bool, moving: &GpuInstances| -> Result<Vec<u8>> {
+            camera.set_sky_ambient(soft);
+            renderer.update_camera(&queue, &camera);
+            let persistent = if covered {
+                vec![&floor, &roof]
+            } else {
+                vec![&floor]
+            };
+            let instances = [(&roof, moving)];
+            let mut encoder = device.create_command_encoder(&Default::default());
+            renderer.render_view_sky_exposure_with_moving(
+                &mut encoder,
+                0,
+                ShadowCasters {
+                    scenes: &persistent,
+                    instances: &[],
+                },
+                ShadowCasters {
+                    scenes: &[],
+                    instances: &instances,
+                },
+            );
+            let view = target.create_view(&Default::default());
+            let depth = create_depth(&device, 128, 128).create_view(&Default::default());
+            renderer.render(
+                &mut encoder,
+                &view,
+                &depth,
+                &[&floor],
+                Some(wgpu::Color::BLACK),
+            );
+            read_back(&device, &queue, encoder, &target)
+        };
+        let centre = |p: &[u8]| p[(64 * 128 + 64) * 4..(64 * 128 + 64) * 4 + 3].to_vec();
+        let original = frame(false, false, &moving)?;
+        let open = frame(true, false, &moving)?;
+        assert!(
+            centre(&open)[0] + 20 < centre(&original)[0],
+            "open sky tints the floor"
+        );
+        assert!(
+            open.iter().zip(&original).all(|(a, b)| a <= b),
+            "nothing brightens"
+        );
+        assert_eq!(
+            centre(&frame(true, true, &moving)?),
+            centre(&original),
+            "roof preserves indoor ambient"
+        );
+        assert_eq!(
+            frame(true, false, &moving)?,
+            open,
+            "removing a build refreshes exposure"
+        );
+        moving.update(&queue, &[SceneTransform::default()])?;
+        assert_eq!(
+            centre(&frame(true, false, &moving)?),
+            centre(&original),
+            "moving roof blocks sky"
+        );
+        moving.update(
+            &queue,
+            &[SceneTransform {
+                transform: Mat4::from_translation(Vec3::X * 1000.),
+                ..Default::default()
+            }],
+        )?;
+        assert_eq!(
+            frame(true, false, &moving)?,
+            open,
+            "moving away restores exposure"
+        );
+        moving.update(&queue, &[])?;
+        assert_eq!(
+            frame(true, false, &moving)?,
+            open,
+            "removal clears the moving overlay"
+        );
+    }
+    Ok(())
+}
