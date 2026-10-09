@@ -37,7 +37,7 @@
 - `cargo test -p bri-render --test shader_validation`, `-p bri-content atmosphere`
   (real sun above and under the horizon, moon flip), `-p bri-ui options`
   (Sky menu defaults to Original, saves, not part of Quality presets).
-- `cargo test -p bri-render --test enhanced_sky` on a software (lavapipe) GPU:
+- `cargo test -p bri-render --test lighting_environment sky` on a software (lavapipe) GPU:
   Original unchanged by the sun; Enhanced blue noon, red sunset horizon, dark
   navy night; a far wall in fog leaves no silhouette against the sky.
   `BRI_SKY_DUMP=<dir>` writes frames; see project file `sky/enhanced-sky-day.png`.
