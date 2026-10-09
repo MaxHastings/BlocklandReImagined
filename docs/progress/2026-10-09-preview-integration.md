@@ -48,9 +48,13 @@ until he has played it and confirmed each piece by name.
 - Windows CI: PR #31 hit software-GPU wait timeouts in shards 2 and 3
   (item_ghost, multiplayer, mirrors past 600 s). Main is also red on
   `persistent_scene::display_colors_match_on_srgb_and_unorm_output_attachments`
-  (same timeout; seen again on docs PR #33). Not yet known whether the
-  larger scene.wgsl slows the software renderer; next step is timing
-  `cargo test -p bri-render --test mirrors` on main vs the branch.
+  (same timeout; seen again on docs PR #33). Docs-only PR #33 also had
+  `bri-render/mirrors` run past 600 s in test (3), with
+  `a_portal_the_eye_is_about_to_go_through_shows_what_the_far_side_will`
+  failing, so the mirrors timeout happens without any sky code. The
+  timeouts look like main's software-GPU flakiness rather than the sky;
+  timing `cargo test -p bri-render --test mirrors` on main vs the branch
+  would confirm it.
 - Known AO limitation: Glow bricks (colour FX 3) still get crease shading;
   excluding them needs a mask the frame does not have yet.
 
