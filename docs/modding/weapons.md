@@ -376,6 +376,17 @@ A state's `"arm"` swings the holder's arm as the image enters it
 image's name in script, so give your own tools this instead, for example
 a swing on `PreFire` and a rest on `StopFire`.
 
+A package-fired gun may keep its actual `projectile` reference alongside
+`command`. The top-level `command` replaces the native shot; it does not
+launch a second projectile. For a constant-speed shot, that reference lets
+v0.2.8's existing bot executor read flight, range and blast. Use
+`"bot": {"fire": "hold"}` for an authored automatic cycle, or `"tap"`
+for a semi-automatic cycle. The package still owns ammo and reloads through
+the ordinary image states. This supplies basic use of an assigned gun;
+package-owned ammo does not supply native ammo-aware inventory switching,
+and the native attack planner does not model arbitrary package commands.
+Variable-charge shots and cooked grenades require richer descriptions.
+
 More moments can run commands through the image's `commands`:
 
 ```json
