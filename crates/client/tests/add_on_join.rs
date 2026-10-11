@@ -735,12 +735,21 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         "the host's vehicle list lacks {VEHICLE}"
     );
     join(&mut guest, &host_app)?;
+    let screens = std::cell::RefCell::new(vec![screen(&guest.ui.core.conn)]);
     until(
         &mut [&mut host_app, &mut guest],
         "guest in game",
         300,
-        |a| in_game(a[1]),
+        |a| {
+            let now = screen(&a[1].ui.core.conn);
+            let mut seen = screens.borrow_mut();
+            if seen.last() != Some(&now) {
+                seen.push(now);
+            }
+            in_game(a[1])
+        },
     )?;
+    join_screens_are_honest(&screens.into_inner(), &host_app)?;
     let cache = guest_cache_ids(&guest);
     ensure!(
         cache.iter().any(|id| id == PLANE),
@@ -751,6 +760,70 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         "the guest's vehicle list lacks {VEHICLE}"
     );
     leave(&mut [&mut guest, &mut host_app])?;
+    Ok(())
+}
+
+/// What a joining player sees, one line per change: the Connecting
+/// dialog's text, or the loading screen's map and bar text.
+fn screen(conn: &ConnectionState) -> String {
+    match conn {
+        ConnectionState::Connecting { text } => format!("dialog: {text}"),
+        ConnectionState::Loading { map, status, .. } => format!("loading {map}: {status}"),
+        ConnectionState::InGame { .. } => "in game".into(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// v0.2.8: a friend sat 20 s on "Connecting to ..." while the host's
+/// Add-Ons downloaded. A join that downloads and loads Add-Ons shows each
+/// of those steps on the loading screen, naming the host's map, and never
+/// goes back to the Connecting dialog once there.
+fn join_screens_are_honest(screens: &[String], host: &App) -> Result<()> {
+    eprintln!("Join screens:\n  {}", screens.join("\n  "));
+    let first_loading = screens
+        .iter()
+        .position(|s| s.starts_with("loading "))
+        .context("the join never showed the loading screen")?;
+    ensure!(
+        screens[..first_loading]
+            .iter()
+            .all(|s| s.starts_with("dialog: Connecting to ")
+                || s == "dialog: Checking your game content…"
+                || s.starts_with("Idle")),
+        "the dialog showed more than connecting: {screens:?}"
+    );
+    ensure!(
+        !screens[first_loading..]
+            .iter()
+            .any(|s| s.starts_with("dialog: ")),
+        "the join went back to the Connecting dialog: {screens:?}"
+    );
+    let map = host
+        .ui
+        .core
+        .maps
+        .iter()
+        .find(|m| m.id == SLATE)
+        .context("the host's map")?;
+    // Over loopback a test Add-On downloads and installs faster than a
+    // frame, so a step may be over before a frame looks; the session log
+    // names every step either way, as the screen showed it or as having
+    // passed between frames. Over the internet each is on screen.
+    let log: Vec<String> = bri_console::log::lines()
+        .into_iter()
+        .map(|l| l.text)
+        .collect();
+    for stage in [
+        "DOWNLOADING ADD-ONS",
+        "VERIFYING ADD-ONS",
+        "LOADING ADD-ONS",
+    ] {
+        let line = format!("Loading {}: {stage}", map.name);
+        ensure!(
+            log.iter().any(|l| l.starts_with(&line)),
+            "no {line} in the session log; screens: {screens:?}"
+        );
+    }
     Ok(())
 }
 

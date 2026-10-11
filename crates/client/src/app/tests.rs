@@ -1666,6 +1666,7 @@ fn every_stage_of_a_join_is_on_screen() -> anyhow::Result<()> {
             std::future::pending(),
         );
         attempt.progress = progress.clone();
+        attempt.stages_ended = 0;
         let mut loading = false;
         for (step, stage) in JOIN.into_iter().enumerate() {
             // The host answers the first Connecting with its listing.

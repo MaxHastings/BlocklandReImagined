@@ -729,6 +729,7 @@ impl App {
             progress,
             progress_seen: 0,
             logged_stage: None,
+            stages_ended: 0,
             saved_revision: None,
             settling: None,
             identity_changed: Default::default(),
@@ -1047,6 +1048,7 @@ impl App {
             progress,
             progress_seen: 0,
             logged_stage: None,
+            stages_ended: 0,
             saved_revision: None,
             settling: None,
             identity_changed,
@@ -1297,6 +1299,8 @@ impl App {
             return;
         }
         a.progress_seen = snapshot.revision;
+        let (passed, ended) = a.progress.ended_since(a.stages_ended);
+        a.stages_ended = ended;
         let subject = a.progress.subject();
         let showing = match &self.ui.core.conn {
             ConnectionState::Connecting { .. } | ConnectionState::Loading { .. } => true,
@@ -1316,7 +1320,20 @@ impl App {
         }
         // Each stage the screen shows goes to the session log with how long
         // the one before took, so a player's log says where a slow or stuck
-        // load sat.
+        // load sat. A stage that began and ended between two frames (a
+        // small download over a fast link) is named too.
+        let what = subject.as_ref().map_or_else(
+            || format!("Joining {}", a.name),
+            |map| format!("Loading {map}"),
+        );
+        for (i, ended) in passed.iter().enumerate() {
+            let logged = a
+                .logged_stage
+                .is_some_and(|(stage, _)| stage == ended.stage);
+            if i > 0 || !logged {
+                bri_console::echo(format!("{what}: {} (between frames)", ended.status()));
+            }
+        }
         if a.logged_stage
             .is_none_or(|(stage, _)| stage != snapshot.stage)
         {
@@ -1324,10 +1341,6 @@ impl App {
             let previous = a.logged_stage.map_or(String::new(), |(_, since)| {
                 format!(" (after {} ms)", now.duration_since(since).as_millis())
             });
-            let what = subject.as_ref().map_or_else(
-                || format!("Joining {}", a.name),
-                |map| format!("Loading {map}"),
-            );
             bri_console::echo(format!("{what}: {}{previous}", snapshot.status()));
             a.logged_stage = Some((snapshot.stage, now));
         }
