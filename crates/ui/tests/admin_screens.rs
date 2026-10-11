@@ -984,6 +984,7 @@ fn the_environment_window_applies_a_draft_through_the_host() {
 #[test]
 fn environment_changes_go_to_the_host_live_once_they_settle() {
     use bri_content::atmosphere::{Authored, Settings, light_direction};
+    use bri_ui::input::{InputEvent, MouseButton};
     use bri_ui::{
         api::{ConnectionState, Settings as UiSettings, UiUpdate},
         binds::Platform,
@@ -1059,6 +1060,21 @@ fn environment_changes_go_to_the_host_live_once_they_settle() {
             .collect()
     };
     let request = |ui: &Ui| *ui.core.admin.pending.keys().next().unwrap();
+    let click = |ui: &mut Ui, screen: ScreenId, key: &str| {
+        let (x, y) = ui.control_center(screen, key).unwrap();
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.update(16);
+    };
     // Opening sends nothing, however long the window sits.
     ui.update(1000);
     assert!(sent(&ui).is_empty());
@@ -1108,6 +1124,33 @@ fn environment_changes_go_to_the_host_live_once_they_settle() {
     ui.update(300);
     assert_eq!(sent(&ui).len(), 1);
     assert_eq!(sent(&ui)[0].sun_elevation, Some(40.0));
+    // A colour picker goes live too: moving its sliders sends the colour
+    // once they settle, with the picker still open.
+    let id = request(&ui);
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    ui.apply(UiUpdate::Environment(view(ui.core.environment.settings())));
+    ui.update(300);
+    assert!(sent(&ui).is_empty());
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvTabAdvanced");
+    click(&mut ui, ScreenId::AdminEnvironment, "Env_ShadowColor");
+    assert_eq!(ui.top_id(), ScreenId::AdminColorPicker);
+    click(&mut ui, ScreenId::AdminColorPicker, "EnvPick0");
+    ui.update(300);
+    let live = sent(&ui);
+    assert_eq!(live.len(), 1, "the picker's colour went live");
+    let picked = live[0].shadow_color.expect("shadow colour sent");
+    assert_eq!(ui.top_id(), ScreenId::AdminColorPicker);
+    // Cancel sends the colour from before back.
+    let id = request(&ui);
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    ui.apply(UiUpdate::Environment(view(live[0].clone())));
+    click(&mut ui, ScreenId::AdminColorPicker, "EnvPickCancel");
+    assert_eq!(ui.top_id(), ScreenId::AdminEnvironment);
+    ui.update(300);
+    let back = sent(&ui);
+    assert_eq!(back.len(), 1, "Cancel reverts the host");
+    assert_ne!(back[0].shadow_color, Some(picked));
+    assert_eq!(back[0].shadow_color, None);
 }
 
 /// Live apply with a day cycle on: the settled change carries the cycle,

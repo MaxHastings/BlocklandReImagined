@@ -10,6 +10,7 @@ use crate::models::admin::{AdminAction, AdminFeature};
 use crate::models::environment::{ColorField, NumberField, hsv, rgb};
 use crate::view::EventKind;
 use bri_console::Clamp;
+use bri_content::atmosphere::Settings;
 
 fn named(mut c: Control, name: &str) -> Control {
     c.name = Some(name.into());
@@ -591,6 +592,8 @@ pub struct ColorPicker {
     view: View,
     field: Option<ColorField>,
     before: [f32; 4],
+    /// The rows as they were when the picker opened, for Cancel.
+    saved: Option<Settings>,
     color: [f32; 4],
     hsv: bool,
 }
@@ -640,6 +643,7 @@ impl ColorPicker {
             view,
             field,
             before: color,
+            saved: core.environment.draft.clone(),
             color,
             hsv: false,
         };
@@ -718,6 +722,15 @@ impl ColorPicker {
         }
     }
 }
+impl ColorPicker {
+    /// Close without keeping the colour: the rows (and, once they have
+    /// settled, the host) go back to what they were.
+    fn cancel(&mut self, core: &mut Core) {
+        core.environment.restore_draft(self.saved.take());
+        core.environment.picking = None;
+        core.pop(ScreenId::AdminColorPicker);
+    }
+}
 impl Screen for ColorPicker {
     fn id(&self) -> ScreenId {
         ScreenId::AdminColorPicker
@@ -730,16 +743,14 @@ impl Screen for ColorPicker {
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
         if key == Key::Escape {
-            core.environment.picking = None;
-            core.pop(ScreenId::AdminColorPicker);
+            self.cancel(core);
             return true;
         }
         false
     }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if ev.kind == EventKind::Close {
-            core.environment.picking = None;
-            core.pop(ScreenId::AdminColorPicker);
+            self.cancel(core);
             return;
         }
         if !self.view.node(ev.node).state.active {
@@ -748,6 +759,10 @@ impl Screen for ColorPicker {
         if ev.kind == EventKind::Changed {
             self.read();
             self.show();
+            // Live: the Environment window sends it once the sliders settle.
+            if let Some(f) = self.field {
+                core.environment.set_color(f, self.color);
+            }
             return;
         }
         if ev.kind != EventKind::Click {
@@ -757,14 +772,10 @@ impl Screen for ColorPicker {
             "EnvPickRgb" => self.hsv = false,
             "EnvPickHsv" => self.hsv = true,
             "EnvPickCancel" => {
-                core.environment.picking = None;
-                core.pop(ScreenId::AdminColorPicker);
+                self.cancel(core);
                 return;
             }
             "EnvPickDone" => {
-                if let Some(f) = self.field {
-                    core.environment.set_color(f, self.color);
-                }
                 core.environment.picking = None;
                 core.pop(ScreenId::AdminColorPicker);
                 return;
