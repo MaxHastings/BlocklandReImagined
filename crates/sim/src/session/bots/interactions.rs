@@ -983,16 +983,40 @@ impl Session {
         body: &crate::nav::Body,
         toward: Vec3,
         off_route: bool,
+        grounded: bool,
     ) -> bool {
         let Some(hurts) = self.bot_safe_drop(bot) else {
             return false;
         };
         // Off its route (footwork, a strafe, a goof's walk) it keeps to
-        // floor it can walk back up from; a route plans its own drops, so
-        // on it no drop the route may take is refused, nor one that does
-        // not hurt.
+        // floor it can walk back up from, on its feet or in the air (a
+        // jump in place): measured from the floor under it, not from its
+        // feet in the air, from where any floor at all would do. A route
+        // plans its own drops, so on it no drop the route may take is
+        // refused, nor one that does not hurt.
         let depth = if off_route {
-            body.step + body.drop
+            // Standing, its feet are on that floor. In the air it is the
+            // highest floor under any part of its body (its middle may be
+            // out over a rim it jumped from).
+            let reach = body.width * 0.4;
+            let above = if grounded {
+                0.0
+            } else {
+                [
+                    Vec3::ZERO,
+                    Vec3::X * reach,
+                    -Vec3::X * reach,
+                    Vec3::Z * reach,
+                    -Vec3::Z * reach,
+                ]
+                .into_iter()
+                .filter_map(|side| {
+                    self.world_ray(feet + side + Vec3::Y * 0.5, Vec3::NEG_Y, 0.5 + hurts)
+                })
+                .reduce(f32::min)
+                .map_or(0.0, |d| (d - 0.5).max(0.0))
+            };
+            above + body.step + body.drop
         } else {
             hurts.max(body.drop + ROUTE_DROP_SLACK)
         };

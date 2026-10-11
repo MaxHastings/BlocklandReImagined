@@ -288,9 +288,9 @@ impl Session {
     /// into a live blast that would catch it, nor deeper into one it stands
     /// in; and never off an edge whose fall would hurt it. What it wants
     /// beyond is not worth the fall: it stands at the edge and gets
-    /// nowhere, so it plans again. Off its route on its feet it does not
-    /// step down where it could not walk back up; in the air (footwork, a
-    /// goof, a hop) it does not steer out over a fall that hurts. Its
+    /// nowhere, so it plans again. Off its route it does not step down
+    /// where it could not walk back up, on its feet or in the air
+    /// (footwork, a goof, a hop or a jump in place). Its
     /// route's own way through the air, and its jets, it keeps. A hop
     /// pressed goes only where it comes down on floor along the walk it
     /// takes. The walk, whether an edge held it back, and the jump.
@@ -333,7 +333,8 @@ impl Session {
                 feet,
                 body,
                 flat(walk).normalize_or_zero(),
-                off_route && state.grounded,
+                off_route,
+                state.grounded,
             );
         if held_back {
             walk = Vec3::ZERO;

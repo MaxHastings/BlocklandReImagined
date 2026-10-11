@@ -23,3 +23,21 @@ Evidence (`crates/chaos/tests/bot_hardening.rs`):
   except the soccer scoring test that already fails on Linux main (PR #65).
 
 This branch includes PR #56 (the scenario's harness); merge that first.
+
+## Follow-up: no steering out over the edge in the air
+
+Windows CI failed the new test with 2 falls (1.25 and 2 at z 55.5) where
+Linux had 0. Shifting the file and its enemy a little on Linux reproduced
+falls, and a per-tick trace showed the cause: a bot held at the edge (its
+footwork pointing out over it) jumps in place, and in the air the edge check
+measured the drop from its feet in the air, with the depth of a fall that
+hurts; a 6-high deck does not hurt, so the footwork steered it out over the
+edge. Off its route in the air the check now uses the same rule as on its
+feet (no drop it could not walk back up), measured from the highest floor
+under any part of its body.
+
+Evidence: 12 shifts (0 to 0.41) x the 4 layouts went from 2 falls to 0. The
+test adds the two shifted layouts that lost a bot each on Linux before (it
+fails without the fix: 2 falls). `cargo test -p bri-sim --lib` and every
+`bri-chaos` `bot_*` suite pass, except `bot_soccer_teams`' known Linux
+bound (PR #65).
