@@ -15,7 +15,7 @@ rules from `crates/client/src/motion.rs`, 120 Hz wakeups and 8-step
 catch-up).
 
 ```sh
-BRI_CONTENT=<content> BRI_STRESS_WORLD=<afghan.world> BRI_STRESS_BOTS=32 \
+BRI_STRESS=1 BRI_CONTENT=<content> BRI_STRESS_WORLD=<afghan.world> BRI_STRESS_BOTS=32 \
 BRI_STRESS_SECONDS=60 cargo test --release -p bri-chaos \
   --test bot_deathmatch_stress -- --ignored --nocapture
 ```
