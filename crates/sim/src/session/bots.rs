@@ -178,6 +178,8 @@ fn ticks(seconds: f32) -> u64 {
 }
 /// Ticks before a bot's failing step is told again.
 const BOT_FAILURE_EVERY: u64 = 60 * 120;
+/// Failed steps kept for [`Session::bot_step_failures`].
+const FAILURES_KEPT: usize = 32;
 /// Seconds a rules bot waits past its game's respawn time, as a seeded range.
 const RULES_RESPAWN: (f32, f32) = (0.3, 1.5);
 /// Seconds a brick bot waits past its respawn time, as a seeded range.
@@ -294,6 +296,10 @@ pub(super) struct Bots {
     failed_told: BTreeMap<OwnerId, u64>,
     /// A bot whose every step fails, for tests of that isolation.
     failing: Option<OwnerId>,
+    /// Every failed step since the session began, told or not, and the
+    /// first few as (bot, tick, error) ([`Session::bot_step_failures`]).
+    failed_steps: u64,
+    failures: Vec<(OwnerId, u64, String)>,
     /// Geometry observed once per tick; admission still reads live occupancy.
     objects: Vec<bri_vehicles::VehicleSnapshot>,
     claims: claims::Claims,
@@ -1146,9 +1152,7 @@ impl Session {
         let changes = self.simulation.take_collision_changes();
         let tick = self.simulation.state().tick;
         for (body, nav) in &mut self.bots.navs {
-            for (min, max) in &changes {
-                nav.invalidate(*min, *max, body);
-            }
+            nav.invalidate_all(&changes, body);
             nav.begin_tick();
             nav.set_now(tick);
         }
@@ -1202,11 +1206,22 @@ impl Session {
         self.hear_fighting(tick);
         Ok(())
     }
+    /// `bot` is no longer a bot: a rule's hook run inside this tick's
+    /// turns (`on_damage` from a hit, `on_drop`, an activated brick's
+    /// events) removed it, at once (`remove_bot`). Its turn, or the turn the
+    /// tick still had for it, ends there; nothing it held is looked up again.
+    fn bot_gone(&self, bot: OwnerId) -> bool {
+        !self.bots.brains.contains_key(&bot)
+    }
     /// Tell that `bot`'s step failed: to the log and the host's admins as
     /// an Add-On problem (`packages::note`, told at most once a minute per
     /// code), and at most once a minute per bot however often it fails.
     /// The bot stays; it steps again next tick.
     fn bot_step_failed(&mut self, bot: OwnerId, tick: u64, error: &anyhow::Error) {
+        self.bots.failed_steps += 1;
+        if self.bots.failures.len() < FAILURES_KEPT {
+            self.bots.failures.push((bot, tick, format!("{error:#}")));
+        }
         let due = self
             .bots
             .failed_told
@@ -1230,6 +1245,13 @@ impl Session {
             ),
             None => bri_console::warn(&message),
         }
+    }
+    /// How many bot steps have failed since the session began, and the
+    /// first few failures as (bot, tick, error): a bot's step should not
+    /// fail in ordinary play, so tests read this to say none did.
+    #[doc(hidden)]
+    pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
+        (self.bots.failed_steps, &self.bots.failures)
     }
     /// Make every step of `bot` fail (None: none), to test that one bot's
     /// failure leaves the others thinking.
@@ -1564,6 +1586,9 @@ impl Session {
         if let (Some(m), Some(seen)) = (bites, target) {
             self.bot_bite(bot, seen.owner, m, tick)?;
         }
+        if self.bot_gone(bot) {
+            return Ok(());
+        }
         if behaviour == Behaviour::Objective {
             if let Some(view) = objective {
                 // The step's tool slot as planned; one emptied since (the
@@ -1599,6 +1624,9 @@ impl Session {
                 }
             }
             self.bot_objective_act(bot, tick)?;
+            if self.bot_gone(bot) {
+                return Ok(());
+            }
         }
         if (behaviour != Behaviour::Objective
             || gunning
@@ -1607,6 +1635,22 @@ impl Session {
             && !self.vehicles.weapon_seat(bot)
         {
             if let Some(choice) = native_choice {
+                // The choice was made against this tick's tools and seat
+                // before the bot acted on anything; its own turn can since
+                // have changed them (a goof dropped the tool, a rule's hook
+                // took it, the bot left the gun seat a seat gun's choice was
+                // for). A choice whose slot no longer holds anything is a
+                // plan that failed, seen: it is dropped, and the next tick
+                // chooses again from what the bot has.
+                let holds = |a: &bri_weapons::Actor| {
+                    a.inventory.get(choice.slot).is_some_and(Option::is_some)
+                };
+                if self.weapons.actor(ActorId(bot)).is_some_and(|a| !holds(a)) {
+                    let brain = self.bots.brains.get_mut(&bot).unwrap();
+                    brain.combat.forget_intent();
+                    brain.fire_down = false;
+                    return Ok(());
+                }
                 if self
                     .weapons
                     .actor(ActorId(bot))
@@ -1889,6 +1933,10 @@ impl Session {
     fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
         if self.bots.failing == Some(bot) {
             anyhow::bail!("this bot's steps were made to fail");
+        }
+        // A rule's hook in an earlier bot's turn this tick took it away.
+        if self.bot_gone(bot) {
+            return Ok(());
         }
         if self.bots.brains[&bot].objective.drive(self, bot).is_none() {
             self.promote_bot_seat(bot)?;
@@ -2864,6 +2912,9 @@ impl Session {
             .surprise
             .goof(&brain.kind.surprise, brain.kind.hold(), &pause, tick);
         let act = self.surprise_act(bot, moment, feet, eye, tick)?;
+        if self.bot_gone(bot) {
+            return Ok(());
+        }
         let extra = self.bot_extras(
             bot,
             extras::Scene {
@@ -2878,6 +2929,9 @@ impl Session {
             },
             tick,
         )?;
+        if self.bot_gone(bot) {
+            return Ok(());
+        }
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets: settled, or no way there):
         // swing, after holding it up a moment.
