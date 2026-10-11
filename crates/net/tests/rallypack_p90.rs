@@ -456,11 +456,15 @@ fn bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry() -> R
     // The P90 alone until it is dry (a bot given both prefers the v20 gun),
     // then the probe hands the bot a second gun.
     let (mut game, host, bot, _probe) = bot_duel([Some(ITEM.into()), None, None, None, None])?;
-    let p90_shot = |game: &Session| {
+    // Rounds fired before the gun went dry keep flying for their lifetime;
+    // only a round newer than the last one at that moment is a dry shot.
+    let newest_p90 = |game: &Session| {
         game.weapon_view()
             .projectiles
             .iter()
-            .any(|p| p.definition.ends_with("r_assaultrifleprojectile"))
+            .filter(|p| p.definition.ends_with("r_assaultrifleprojectile"))
+            .map(|p| p.id)
+            .max()
     };
     let other_shot = |game: &Session| {
         game.weapon_view()
@@ -497,12 +501,12 @@ fn bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry() -> R
         value(&game, bot, "spares"),
         game.bot_why()
     );
-    // Rounds already in the air may still be flying for a moment.
-    steps(&mut game, 300)?;
-    for _ in 0..600 {
+    let last = newest_p90(&game).unwrap_or(0);
+    let dry_shot = |game: &Session| newest_p90(game).is_some_and(|id| id > last);
+    for _ in 0..900 {
         game.step()?;
         ensure!(
-            !p90_shot(&game),
+            !dry_shot(&game),
             "a bot with only an empty P90 fired it: {:?}",
             game.bot_why()
         );
@@ -519,13 +523,11 @@ fn bot_switches_from_an_empty_p90_to_its_other_gun_and_never_fires_it_dry() -> R
     let mut other = false;
     for tick in 0..6000 {
         game.step()?;
-        if tick > 300 {
-            ensure!(
-                !p90_shot(&game),
-                "the bot fired the empty P90 with another gun to hand: {:?}",
-                game.bot_why()
-            );
-        }
+        ensure!(
+            !dry_shot(&game),
+            "the bot fired the empty P90 with another gun to hand: {:?}",
+            game.bot_why()
+        );
         other |= other_shot(&game);
         if other && tick > 600 {
             break;
