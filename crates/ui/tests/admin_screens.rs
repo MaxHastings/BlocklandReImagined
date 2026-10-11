@@ -977,6 +977,171 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     assert!(!ui.stack().contains(&ScreenId::AdminEnvironment));
 }
 
+/// The Environment window's favourites: Store keeps the rows in a slot
+/// (saved with the player's settings), Load fills the rows from one, and
+/// nothing reaches the host until Apply.
+#[test]
+fn environment_favorites_store_and_load_the_rows_without_applying() {
+    use bri_content::atmosphere::{Authored, Settings, light_direction};
+    use bri_ui::{
+        api::{ConnectionState, Settings as UiSettings, UiAction, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, MouseButton},
+        models::environment::{EnvironmentView, NumberField},
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+        view::EventKind,
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "escapeMenu",
+        "adminGui",
+    ] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        UiSettings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    ui.apply(UiUpdate::Environment(EnvironmentView {
+        authored: Authored {
+            sun_direction: light_direction(90.0, 45.0),
+            direct_light: [0.6; 3],
+            ambient_light: [0.3; 3],
+            fog_start: 0.0,
+            fog_end: 0.0,
+            fog_color: [0.5; 3],
+        },
+        settings: Settings::default(),
+        tick: 2400,
+    }));
+    let click = |ui: &mut Ui, screen: ScreenId, key: &str| {
+        let (x, y) = ui.control_center(screen, key).unwrap();
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.update(16);
+    };
+    let mut snapshot = state(AdminRole::Admin, false);
+    snapshot.supported.insert(AdminFeature::Environment);
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(snapshot)));
+    ui.core.push(ScreenId::Admin);
+    ui.update(0);
+    click(&mut ui, ScreenId::Admin, "NativeEnvironment");
+    assert_eq!(ui.top_id(), ScreenId::AdminEnvironment);
+    ui.drain_actions();
+    fn env(ui: &mut Ui) -> &mut bri_ui::view::View {
+        let i = ui
+            .dialogs
+            .iter()
+            .rposition(|s| s.id() == ScreenId::AdminEnvironment)
+            .unwrap();
+        ui.dialogs[i].view_mut()
+    }
+    // Every slot starts empty.
+    let favs = env(&mut ui).id("EnvFavs").unwrap();
+    assert_eq!(env(&mut ui).state(favs).items.len(), 10);
+    assert_eq!(env(&mut ui).state(favs).items[2].0, "Slot 3 (empty)");
+    // Loading an empty slot changes nothing and says so.
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvFavLoad");
+    assert!(!ui.core.environment.changed());
+    assert_eq!(ui.core.admin.status, "Slot 1 is empty.");
+    // Set a look up: a day cycle at 18:00 and a sun azimuth.
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
+    ui.core.environment.set_number(NumberField::TimeOfDay, 18.0);
+    ui.core
+        .environment
+        .set_number(NumberField::SunAzimuth, 200.0);
+    ui.update(16);
+    // Store it in slot 3, picked from the list.
+    env(&mut ui).select(favs, Some(2));
+    {
+        let node = favs;
+        let ev = bri_ui::view::ViewEvent {
+            node,
+            kind: EventKind::Changed,
+        };
+        let i = ui
+            .dialogs
+            .iter()
+            .rposition(|s| s.id() == ScreenId::AdminEnvironment)
+            .unwrap();
+        let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+        dialogs[i].on_event(&ev, core);
+    }
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvFavSave");
+    let saved = ui.core.settings.environment_favorites[&2].clone();
+    assert_eq!(saved.sun_azimuth, Some(200.0));
+    let cycle = saved.day_cycle.expect("the cycle is kept");
+    assert_eq!(cycle.anchor_tick, 0, "a favourite has no server tick");
+    assert!((cycle.time - 0.75).abs() < 0.001, "{}", cycle.time);
+    assert_eq!(env(&mut ui).state(favs).items[2].0, "Slot 3");
+    assert_eq!(ui.core.admin.status, "Saved in slot 3.");
+    assert!(
+        ui.drain_actions()
+            .iter()
+            .any(|(_, a)| matches!(a, UiAction::SaveSettings(s) if s.environment_favorites.contains_key(&2))),
+        "Store saves the player's settings"
+    );
+    // Nothing went to the host.
+    assert!(ui.core.admin.pending.is_empty());
+    // Reset the rows, then Load brings the look back, anchored at the
+    // server's tick, still not applied.
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvReset");
+    assert_eq!(ui.core.environment.settings().sun_azimuth, None);
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvFavLoad");
+    let draft = ui.core.environment.settings();
+    assert_eq!(draft.sun_azimuth, Some(200.0));
+    assert_eq!(draft.day_cycle.unwrap().anchor_tick, 2400);
+    assert_eq!(draft.day_cycle.unwrap().time, cycle.time);
+    assert!(ui.core.environment.changed());
+    assert_eq!(ui.core.admin.status, "Loaded slot 3. Not applied yet.");
+    assert!(ui.core.admin.pending.is_empty());
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
+    let sent = ui.core.admin.pending.values().find_map(|a| match a {
+        AdminAction::SetEnvironment { settings } => Some(settings.clone()),
+        _ => None,
+    });
+    assert_eq!(sent.map(|s| s.sun_azimuth), Some(Some(200.0)));
+    // The favourites come back with the settings on the next run.
+    let json = serde_json::to_string(&ui.core.settings).unwrap();
+    let back: UiSettings = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.environment_favorites[&2], saved);
+}
+
 /// Change Map shows the picked map's own picture over changeMapGui's
 /// "UNKNOWN MAP" placeholder, and the placeholder again for a map without one.
 fn change_map_shows_the_picked_maps_picture(pack: std::rc::Rc<bri_ui::pack::Pack>) {

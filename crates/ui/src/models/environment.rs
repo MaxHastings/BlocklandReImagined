@@ -366,6 +366,25 @@ impl EnvironmentModel {
             .iter()
             .position(|(_, look)| *look == s)
     }
+    /// The rows as a favourite: a day cycle is kept by its length and time
+    /// of day, so the tick it was set at (another server's) is dropped.
+    pub fn favorite(&self) -> Settings {
+        let mut s = self.settings();
+        if let Some(d) = s.day_cycle.as_mut() {
+            d.time = d.time_at(self.tick() as f64) as f32;
+            d.anchor_tick = 0;
+        }
+        s
+    }
+    /// Fill the rows from a favourite (nothing is applied). Its day cycle
+    /// starts at the saved time of day from now.
+    pub fn load_favorite(&mut self, mut s: Settings) {
+        self.revision += 1;
+        if let Some(d) = s.day_cycle.as_mut() {
+            d.anchor_tick = self.tick();
+        }
+        self.draft = Some(s);
+    }
     /// Every setting back to the map's own (on Apply).
     pub fn reset(&mut self) {
         self.revision += 1;
@@ -507,6 +526,45 @@ mod tests {
         m.set_number(NumberField::TimeOfDay, 6.0);
         assert!(m.changed());
         assert_ne!(m.settings().day_cycle, host.day_cycle);
+    }
+
+    #[test]
+    fn a_favorite_keeps_the_time_of_day_and_starts_its_cycle_from_now() {
+        let mut m = EnvironmentModel::default();
+        m.apply(view());
+        m.begin();
+        m.set_day_cycle(true);
+        m.set_number(NumberField::DayLength, 60.0);
+        m.set_number(NumberField::TimeOfDay, 18.0);
+        m.set_color(ColorField::SkyColor, [0.2, 0.3, 0.9, 1.0]);
+        // The cycle has run ten seconds since it was set.
+        let mut later = view();
+        later.settings = m.settings();
+        later.tick = 1200 + 10 * atmosphere::TICKS_PER_SECOND;
+        m.apply(later);
+        let fav = m.favorite();
+        let cycle = fav.day_cycle.unwrap();
+        assert_eq!(cycle.anchor_tick, 0);
+        assert!(
+            (cycle.time - (0.75 + 10.0 / 60.0)).abs() < 0.01,
+            "{}",
+            cycle.time
+        );
+        assert_eq!(fav.sky_color, Some([0.2, 0.3, 0.9]));
+        fav.validate().unwrap();
+        // Loading on another server anchors the cycle at its tick.
+        let mut other = EnvironmentModel::default();
+        other.apply(EnvironmentView {
+            tick: 9000,
+            ..view()
+        });
+        other.begin();
+        other.load_favorite(fav.clone());
+        let loaded = other.draft.as_ref().unwrap().day_cycle.unwrap();
+        assert_eq!(loaded.anchor_tick, 9000);
+        assert_eq!(loaded.time, cycle.time);
+        assert!((other.number(NumberField::TimeOfDay) - 24.0 * cycle.time).abs() < 0.01);
+        assert!(other.changed());
     }
 
     #[test]

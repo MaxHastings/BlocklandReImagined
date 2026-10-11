@@ -1790,6 +1790,10 @@ pub struct Settings {
     /// Add-On Settings favourites by slot 0..=9 (Slayer's
     /// `config/client/Slayer/config_saved`): every setting and the teams.
     pub addon_favorites: BTreeMap<u8, AddOnFavorite>,
+    /// Environment window favourites by slot 0..=9: the host's settings
+    /// over the map's own look, saved from the window's rows (a day cycle
+    /// keeps its length and time of day, not the tick it was set at).
+    pub environment_favorites: BTreeMap<u8, bri_content::atmosphere::Settings>,
 }
 
 /// One Add-On Settings favourite: the settings by `namespace:key` and the

@@ -49,6 +49,11 @@ fn slider(r: Rect, name: &str, (lo, hi): (f32, f32)) -> Control {
     c.fields.insert("snap".into(), "0".into());
     c
 }
+fn popup(r: Rect, name: &str) -> Control {
+    let mut c = named(ctrl("GuiPopUpMenuCtrl", "GuiPopUpMenuProfile", r), name);
+    c.command = Some(name.into());
+    c
+}
 fn check(r: Rect, label: &str, name: &str) -> Control {
     let mut c = named(ctrl("GuiCheckBoxCtrl", "GuiCheckBoxProfile", r), name);
     c.text = Some(label.into());
@@ -114,6 +119,10 @@ const ROWS: [Row; 16] = [
     Row::VignetteMultiply,
 ];
 const ROW_HEIGHT: i32 = 28;
+/// The favourites slots' list (Add-On Settings keeps its favourites the
+/// same way: a slot list with Load and Store).
+const FAVS: &str = "EnvFavs";
+const FAV_SLOTS: u8 = 10;
 const COLOR_FIELDS: [ColorField; 7] = [
     ColorField::DirectLight,
     ColorField::AmbientLight,
@@ -138,7 +147,7 @@ pub struct Environment {
 impl Environment {
     pub fn new(core: &mut Core) -> Self {
         core.environment.begin();
-        let (mut root, mut win) = dialog("Environment", 440, 440);
+        let (mut root, mut win) = dialog("Environment", 440, 470);
         win.children.push(push_button(
             Rect::new(12, 30, 100, 24),
             "Simple",
@@ -254,8 +263,25 @@ impl Environment {
         }
         advanced.children.push(rows);
         win.children.push(advanced);
+        // Favourites: a slot to Load the rows from or Store them in.
+        win.children.push(text(
+            "GuiTextProfile",
+            Rect::new(12, 372, 70, 20),
+            "Favorites:",
+        ));
+        win.children.push(popup(Rect::new(84, 372, 110, 20), FAVS));
+        win.children.push(push_button(
+            Rect::new(198, 370, 56, 24),
+            "Load",
+            "EnvFavLoad",
+        ));
+        win.children.push(push_button(
+            Rect::new(258, 370, 56, 24),
+            "Store",
+            "EnvFavSave",
+        ));
         let mut status = named(
-            text("GuiMLTextProfile", Rect::new(12, 370, 416, 20), ""),
+            text("GuiMLTextProfile", Rect::new(12, 400, 416, 20), ""),
             "EnvStatus",
         );
         status.class = "GuiMLTextCtrl".into();
@@ -266,7 +292,7 @@ impl Environment {
             (330, "Apply", "EnvApply"),
         ] {
             win.children
-                .push(push_button(Rect::new(x, 398, 98, 28), label, name));
+                .push(push_button(Rect::new(x, 428, 98, 28), label, name));
         }
         root.children.push(win);
         let mut view = View::new(&root);
@@ -283,8 +309,58 @@ impl Environment {
             advanced: false,
             seen: None,
         };
+        screen.fill_favorites(core);
         screen.refresh(core);
         screen
+    }
+    /// The slot list, each slot saying whether it holds a favourite; the
+    /// picked slot stays picked.
+    fn fill_favorites(&mut self, core: &Core) {
+        if let Some(n) = self.view.id(FAVS) {
+            let current = self.view.selected(n).unwrap_or(0);
+            self.view.state(n).items = (0..FAV_SLOTS)
+                .map(|slot| {
+                    let label = if core.settings.environment_favorites.contains_key(&slot) {
+                        format!("Slot {}", slot + 1)
+                    } else {
+                        format!("Slot {} (empty)", slot + 1)
+                    };
+                    (label, i64::from(slot))
+                })
+                .collect();
+            self.view.select(n, Some(current));
+        }
+    }
+    fn favorite_slot(&self) -> u8 {
+        self.view
+            .id(FAVS)
+            .and_then(|n| self.view.selected(n))
+            .and_then(|s| u8::try_from(s).ok())
+            .filter(|s| *s < FAV_SLOTS)
+            .unwrap_or(0)
+    }
+    /// Keep the rows in the picked slot (what they show, applied or not).
+    fn save_favorite(&mut self, core: &mut Core) {
+        let slot = self.favorite_slot();
+        let favorite = core.environment.favorite();
+        core.settings.environment_favorites.insert(slot, favorite);
+        core.save_settings();
+        self.fill_favorites(core);
+        core.admin.status = format!("Saved in slot {}.", slot + 1);
+    }
+    /// Fill the rows from the picked slot; Apply then sends them.
+    fn load_favorite(&mut self, core: &mut Core) {
+        let slot = self.favorite_slot();
+        let Some(favorite) = core.settings.environment_favorites.get(&slot).cloned() else {
+            core.admin.status = format!("Slot {} is empty.", slot + 1);
+            return;
+        };
+        if let Err(e) = favorite.validate() {
+            core.admin.status = format!("Slot {} cannot be used: {e}", slot + 1);
+            return;
+        }
+        core.environment.load_favorite(favorite);
+        core.admin.status = format!("Loaded slot {}. Not applied yet.", slot + 1);
     }
     fn refresh(&mut self, core: &Core) {
         self.seen = Some(core.environment.revision);
@@ -348,8 +424,10 @@ impl Environment {
                     }),
             );
         }
-        if let Some(n) = v.id("EnvReset") {
-            v.set_active(n, !busy);
+        for name in ["EnvReset", "EnvFavLoad", "EnvFavSave"] {
+            if let Some(n) = v.id(name) {
+                v.set_active(n, !busy);
+            }
         }
         let status = if !core.admin.status.is_empty() {
             core.admin.status.clone()
@@ -445,6 +523,8 @@ impl Screen for Environment {
                 core.admin.status.clear();
                 core.environment.reset();
             }
+            "EnvFavSave" => self.save_favorite(core),
+            "EnvFavLoad" => self.load_favorite(core),
             "EnvClose" => {
                 Self::close(core);
                 return;
