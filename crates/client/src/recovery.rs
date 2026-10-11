@@ -94,6 +94,35 @@ pub fn keep(state_dir: &Path, saves: &crate::saves::Store) -> Result<String> {
     Ok(name)
 }
 
+/// What [`make_room`] did with a snapshot an earlier game left.
+#[derive(Debug, PartialEq)]
+pub enum Room {
+    /// Nothing was left.
+    Free,
+    /// It was kept as a save with this name.
+    Kept(String),
+    /// It does not load, so it can never be kept: it was moved to this
+    /// path, out of the slot, so that this game is still protected.
+    SetAside(PathBuf),
+}
+
+/// Free the slot for a game about to be hosted. A snapshot an earlier game
+/// left is kept as a save first, never overwritten; one that is damaged
+/// beyond loading is set aside beside the slot (the latest damaged one
+/// only). An error (the save could not be written) leaves the slot taken,
+/// and the new game then keeps no snapshot rather than lose the old one.
+pub fn make_room(state_dir: &Path, saves: &crate::saves::Store) -> Result<Room> {
+    let Some(left) = left(state_dir, saves) else {
+        return Ok(Room::Free);
+    };
+    if bri_world::build::decode(&std::fs::read(&left.path)?).is_err() {
+        let aside = left.path.with_file_name("hosted-world.damaged.build");
+        std::fs::rename(&left.path, &aside)?;
+        return Ok(Room::SetAside(aside));
+    }
+    keep(state_dir, saves).map(Room::Kept)
+}
+
 /// Remove the left snapshot.
 pub fn discard(state_dir: &Path) -> Result<()> {
     match std::fs::remove_file(path(state_dir)) {
@@ -139,6 +168,75 @@ mod tests {
         std::fs::write(&slot, bri_world::build::encode(&build)?)?;
         assert_ne!(keep(state.path(), &saves)?, name);
         std::fs::write(&slot, b"anything")?;
+        discard(state.path())?;
+        assert!(left(state.path(), &saves).is_none());
+        Ok(())
+    }
+
+    /// A snapshot cut short (a disk that lost its tail, a copy cut off):
+    /// it is still offered, but Keep refuses it whole and leaves it for
+    /// Discard; a new hosted game sets it aside instead of running
+    /// unprotected because the slot is taken.
+    #[test]
+    fn a_damaged_snapshot_is_offered_refused_whole_and_set_aside_for_a_new_game() -> Result<()> {
+        let state = tempfile::tempdir()?;
+        let saves = crate::saves::Store::for_tests(
+            state.path().join("saves"),
+            [("map/one".to_string(), "One".to_string())].into(),
+            None,
+        );
+        let mut world = bri_world::World::new("w".into(), "map/one".into(), vec![[1.0; 4]]);
+        for id in 1..=200 {
+            world.bricks.insert(
+                id,
+                bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved("plate".into()),
+                    [id as f32, 0.1, 0.0],
+                    1,
+                ),
+            );
+        }
+        world.next_brick_id = 201;
+        let whole = bri_world::build::encode(&bri_world::build::SavedBuild::new(world))?;
+        let slot = path(state.path());
+        std::fs::create_dir_all(slot.parent().unwrap())?;
+        assert_eq!(make_room(state.path(), &saves)?, Room::Free);
+        // Cut early (no head) and late (head intact, body short).
+        for cut in [whole.len() / 50, whole.len() - 7] {
+            std::fs::write(&slot, &whole[..cut])?;
+            let found = left(state.path(), &saves).context("a damaged slot is not offered")?;
+            let asked = question(&found, None);
+            assert!(
+                asked.text.contains("did not close normally"),
+                "{}",
+                asked.text
+            );
+            if found.bricks != 0 {
+                assert_eq!((found.map.as_str(), found.bricks), ("One", 200));
+            } else {
+                assert_eq!(found.map, "an unknown map");
+            }
+            let refused = keep(state.path(), &saves).expect_err("a damaged build was kept");
+            assert!(format!("{refused:#}").contains("damaged"), "{refused:#}");
+            assert!(slot.exists(), "a refused build was removed");
+            assert!(saves.list()?.is_empty(), "a damaged build became a save");
+        }
+        // Hosting again: the slot is freed for the new game's snapshot,
+        // and the damaged file is kept beside it, not deleted.
+        let Room::SetAside(aside) = make_room(state.path(), &saves)? else {
+            panic!("the damaged snapshot was not set aside");
+        };
+        assert!(!slot.exists());
+        assert_eq!(std::fs::read(&aside)?, &whole[..whole.len() - 7]);
+        assert!(left(state.path(), &saves).is_none());
+        // An undamaged one is still kept as a save, as before.
+        std::fs::write(&slot, &whole)?;
+        let Room::Kept(name) = make_room(state.path(), &saves)? else {
+            panic!("a whole snapshot was not kept");
+        };
+        assert_eq!(saves.load("One", &name)?.world.bricks.len(), 200);
+        // Discard always clears a damaged one.
+        std::fs::write(&slot, &whole[..10])?;
         discard(state.path())?;
         assert!(left(state.path(), &saves).is_none());
         Ok(())
