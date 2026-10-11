@@ -56,5 +56,5 @@ PC gate is the authority.
 
 - No new screenshot of the Brick Selector hint or the message box; the
   offscreen render tests did not run here.
-- The upgrade for a real router is untested here: only the report wording
+- A real blocked router is untested here: only the report wording
   and verdict logic are covered, not an actual blocked router.
