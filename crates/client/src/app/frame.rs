@@ -1193,7 +1193,9 @@ impl App {
                 local,
                 self.motion.local_eye(),
             );
+            let sync_span = crate::frame_trace::span("effects sync");
             let synced = self.fx.effects.sync(view.world.clone(), meshes);
+            drop(sync_span);
             self.cosmetic_faults.absorb("world effects", synced);
             self.foliage.advance(game_elapsed);
             // Match the actual view for flare occlusion, including third-person camera collision.

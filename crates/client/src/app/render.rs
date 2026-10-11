@@ -893,6 +893,14 @@ impl App {
             [frame.size.0, frame.size.1],
             self.avatar.animation_time as f32,
         );
+        // Brick emitters no view this frame can see sleep; ones a view can
+        // see again wake with their cloud refilled before any snapshot.
+        let culled_views: Vec<_> = std::iter::once(effects_camera.view_projection)
+            .chain(other_views.iter().map(|v| v.view_projection))
+            .collect();
+        let cull_span = crate::frame_trace::span("effects cull");
+        self.fx.effects.world.cull_sources(&culled_views);
+        drop(cull_span);
         let world_frame = self.fx.effects.world.snapshot_in_view(&effects_camera);
         let weapon_frame = self
             .fx
