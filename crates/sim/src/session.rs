@@ -943,6 +943,26 @@ struct ThreadTimer {
     thread: u8,
     sequence: String,
 }
+/// A build save taken off the tick: the world as it was at the command's
+/// tick (a clone of the persistent maps, microseconds) with the strip,
+/// validation and encoding left for a blocking thread (`finish`).
+pub struct DeferredSave {
+    world: bri_world::World,
+    minigame: Option<serde_json::Value>,
+    events: bool,
+    ownership: bool,
+}
+impl DeferredSave {
+    /// The saved build: the whole-world work of a save.
+    pub fn finish(self) -> Result<bri_world::build::SavedBuild> {
+        let mut build =
+            bri_world::build::SavedBuild::capture(&self.world, self.events, self.ownership)?;
+        build.minigame = self.minigame;
+        build.validate()?;
+        Ok(build)
+    }
+}
+
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
@@ -960,6 +980,10 @@ pub struct Session {
     damage_recorded: u64,
     spawn_points: Vec<Vec3>,
     spawn_seed: u64,
+    /// Whether `SaveBuild` answers `Accepted` and leaves the build for
+    /// `take_deferred_save` (the host loop finishes it off the tick).
+    deferred_saves: bool,
+    deferred_save: Option<DeferredSave>,
     private_notices: VecDeque<(OwnerId, Notice)>,
     /// When each builder no longer here left (for the Public Domain Timeout).
     abandoned_at: BTreeMap<OwnerId, u64>,
@@ -1119,6 +1143,8 @@ impl Session {
             spawn_points: Vec::new(),
             spawn_seed: 0x9E37_79B9_7F4A_7C15,
             private_notices: VecDeque::new(),
+            deferred_saves: false,
+            deferred_save: None,
             abandoned_at: BTreeMap::new(),
             cleared_bricks_at: BTreeMap::new(),
             cancelled_events_at: BTreeMap::new(),
@@ -1733,6 +1759,15 @@ impl Session {
     /// The world as every save keeps it: manual saves and the dedicated
     /// server's shutdown save alike. A blown-up brick
     /// is only fake-dead; v20 saves it as it will respawn, not hidden.
+    /// Have `SaveBuild` leave the whole-world work of a save to the caller
+    /// (`take_deferred_save` after the command), answering `Accepted`.
+    pub fn set_deferred_saves(&mut self, deferred: bool) {
+        self.deferred_saves = deferred;
+    }
+    /// The save the last `SaveBuild` left for the caller to finish.
+    pub fn take_deferred_save(&mut self) -> Option<DeferredSave> {
+        self.deferred_save.take()
+    }
     pub fn saved_world(&self) -> bri_world::World {
         let mut world = self.simulation.state().clone();
         for id in self.events.respawns.keys() {
@@ -2322,11 +2357,18 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::SaveBuild { events, ownership } => {
-                let mut build =
-                    bri_world::build::SavedBuild::capture(&self.saved_world(), events, ownership)?;
-                build.minigame = self.saved_minigame(owner);
-                build.validate()?;
-                Ok(Reply::Saved(Box::new(build)))
+                let save = DeferredSave {
+                    world: self.saved_world(),
+                    minigame: self.saved_minigame(owner),
+                    events,
+                    ownership,
+                };
+                if self.deferred_saves {
+                    self.deferred_save = Some(save);
+                    Ok(Reply::Accepted)
+                } else {
+                    Ok(Reply::Saved(Box::new(save.finish()?)))
+                }
             }
             Command::LoadBuild { build, ownership } => {
                 let bricks = self.start_build_load(owner, *build, ownership)?;

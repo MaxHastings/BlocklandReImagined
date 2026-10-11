@@ -474,6 +474,47 @@ fn encode_transfer(transfer: WorldTransfer, traffic: Arc<Traffic>, recipients: u
     });
     Frame::Pending(frames)
 }
+/// Finish a deferred build save on a blocking thread and reply with it,
+/// in place in the peer's stream.
+fn encode_save_reply(
+    save: bri_sim::session::DeferredSave,
+    sequence: u64,
+    traffic: Arc<Traffic>,
+) -> Frame {
+    let (ready, frames) = watch::channel(Arc::new(EncodedTransfer::default()));
+    tokio::task::spawn_blocking(move || {
+        use bri_sim::session::{Rejection, Reply};
+        let result = save
+            .finish()
+            .map(|build| Reply::Saved(Box::new(build)))
+            .map_err(|e| Rejection::from_error(&e));
+        let encoded = codec::encode(&Message::Reply { sequence, result }).or_else(|error| {
+            codec::encode(&Message::Reply {
+                sequence,
+                result: Err(Rejection::message(format!(
+                    "Could not transfer reply: {error}"
+                ))),
+            })
+        });
+        let done = match encoded {
+            Ok(bytes) => {
+                traffic.add(Kind::Reply, bytes.len(), 1);
+                EncodedTransfer {
+                    frames: vec![Arc::new(bytes)],
+                    done: true,
+                    error: None,
+                }
+            }
+            Err(error) => EncodedTransfer {
+                frames: Vec::new(),
+                done: true,
+                error: Some(format!("{error:#}")),
+            },
+        };
+        ready.send_replace(Arc::new(done));
+    });
+    Frame::Pending(frames)
+}
 /// Frames a peer's writer has not sent yet. Bounded in frames and in bytes:
 /// a joining peer receives a legal world of up to the transfer budget while
 /// every tick's deltas queue behind it, so the bound must be generous in
@@ -712,6 +753,7 @@ fn start_stepping(
     // the first tick it would hold the server's loop, and the handshakes
     // waiting behind it, for as long as a big world takes.
     session.prepare_events();
+    session.set_deferred_saves(true);
     // Recording starts from the session as it is served.
     let recorder = match recording {
         None => Recorder::off(),
@@ -1563,9 +1605,17 @@ async fn run(
                     let old_admin_revision=session.admin_revision();
                     let result=match fuse.guard("a player's request",||recorder.command(&mut session,owner,request.sequence,request.command,request.aim,|state|match admin_store.as_mut(){Some(store)=>store.persist(state),None=>anyhow::bail!("Persistent administration storage is not configured")}))? {Ok(result)=>result,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                     if result.is_err(){rejected+=1;}
+                    if let Some(save)=session.take_deferred_save(){
+                        // A save's strip, validation and encoding (hundreds of
+                        // milliseconds on a big build) run off the tick; the
+                        // pending frame keeps the reply in its place in the
+                        // peer's stream.
+                        peer.send(encode_save_reply(save,request.sequence,peer.traffic.clone()));
+                    } else {
                     match codec::encode(&Message::Reply{sequence:request.sequence,result:result.map_err(|e|bri_sim::session::Rejection::from_error(&e))}) {
                         Ok(bytes)=>{traffic.add(Kind::Reply,bytes.len(),1);peer.send(Frame::Ready(Arc::new(bytes)))},
                         Err(error)=>peer.send_message(Kind::Reply,&Message::Reply{sequence:request.sequence,result:Err(bri_sim::session::Rejection::message(format!("Could not transfer reply: {error}")))}),
+                    }
                     }
                     close_admin_disconnects(&mut session,&mut recorder,&mut peers);
                     if old_admin_revision!=session.admin_revision(){broadcast_admin_snapshots(&session,&peers);}
@@ -1573,7 +1623,7 @@ async fn run(
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
                                 // A loader that panics still answers the administrator.
-                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load_with_save(&map).map(|(mut new,save)|{new.prepare_events();(new,save)}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load_with_save(&map).map(|(mut new,save)|{new.prepare_events();new.set_deferred_saves(true);(new,save)}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
                                 let _=tx.blocking_send((admin,map,loaded));});}
                             None=>recorder.map_change_failed(&mut session,admin,"This host cannot change maps"),
                         }
