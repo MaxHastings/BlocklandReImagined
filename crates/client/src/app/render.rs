@@ -62,6 +62,15 @@ impl App {
         let span = crate::frame_trace::span("pipelines wait");
         let renderer = building.wait();
         drop(span);
+        if let Some(mut owner) = self.gpu.retired_renderer.take()
+            && let Err(error) = renderer.adopt_scenes(&mut owner)
+        {
+            bri_console::warn(format!("Uploading the world again: {error:#}"));
+            self.gpu.gpu_scene = None;
+            self.gpu.gpu_terrain.clear();
+            self.gpu.gpu_palette = None;
+            self.gpu.gpu_chunks.clear();
+        }
         renderer.set_filtering(frame.device, self.graphics.filtering);
         // Player sessions time the passes all the time, for the session
         // log's GPU line (`crate::quality::FrameLog::gpu`).
@@ -1465,7 +1474,8 @@ impl App {
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
-        if std::mem::take(&mut self.gpu.gpu_restart)
+        let restart = std::mem::take(&mut self.gpu.gpu_restart);
+        if restart
             || bri_render::color::color_vision() != vision
             || self
                 .gpu
@@ -1478,7 +1488,48 @@ impl App {
         {
             crate::frame_trace::note("renderers rebuilt for a graphics option or a new map");
             let _span = crate::frame_trace::span("graphics rebuild");
+            // A graphics option on the same device and map keeps the world
+            // uploaded: sending every chunk again took 0.5-1 s on a
+            // 190,000-brick build. The new renderer draws them once it takes
+            // them from the one that uploaded them (`adopt_scenes`).
+            let same_device = self.gpu.device.as_ref().is_some_and(|(device, _, format)| {
+                device == frame.device && *format == frame.format
+            });
+            let kept = if restart || !same_device {
+                None
+            } else {
+                // Until the newest renderer has taken the scenes, the one it
+                // would take them from still owns them.
+                let owner = match self.gpu.retired_renderer.take() {
+                    Some(owner) => Some(owner),
+                    None => self
+                        .gpu
+                        .renderer
+                        .take()
+                        .and_then(crate::gpu_build::Building::into_ready),
+                };
+                owner.map(|owner| {
+                    (
+                        owner,
+                        self.gpu.gpu_scene.take(),
+                        std::mem::take(&mut self.gpu.gpu_terrain),
+                        self.gpu.gpu_palette.take(),
+                        std::mem::take(&mut self.gpu.gpu_chunks),
+                    )
+                })
+            };
             self.gpu_ready(frame.device, frame.queue, frame.format)?;
+            if let Some((owner, scene, terrain, palette, chunks)) = kept {
+                self.gpu.retired_renderer = Some(owner);
+                self.gpu.gpu_scene = scene;
+                self.gpu.gpu_terrain = terrain;
+                self.gpu.gpu_palette = palette;
+                self.gpu.gpu_chunks = chunks;
+                // The new renderer binds no light volume or map lights yet,
+                // and its environment probe faces are drawn again as before.
+                self.lighting.light_volume.uploaded = false;
+                self.lighting.environment_probe = None;
+            }
         }
         // A successful Add-On reload replaces the CPU effects worlds without
         // restarting the device or unrelated scene pipelines. Rebuild their

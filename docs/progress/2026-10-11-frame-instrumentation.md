@@ -111,6 +111,51 @@ From the log tail in `crash-20261010-214554.txt` (session
   steady frames and per-pass GPU time at each level. Every view reports its
   slowest frame's breakdown.
 
+## Windows evidence (Max's PC)
+
+`large_build_perf` on Max's RTX 4070 SUPER (DX12) with his own settings
+at 1920x1080, on Crazy Collage Madness (187,762 bricks, the game's own
+`.world.json` save, which the benchmark now loads), at two fixed Bedroom
+views agreed with the shadows thread (`roomA`, `roomB`). Runs A and D;
+runs B and C were contaminated by other builds on the PC and are being
+rerun.
+
+- **Outside renderer rebuilds there are no long frames.** The slowest
+  steady frame in every view was 5-12 ms.
+- **A Shadow Quality change takes one 700-962 ms frame**, for example
+  "Shadow Quality 2: the change took a 764.2 ms frame: draw 695.9 ms (chunk
+  uploads 414.4, world upload 182.3, prepare 33.4, pipelines wait 25.7,
+  record passes 2.0, light volume 0.7), GPU wait 62.5 ms". Across the
+  changes: chunk uploads 380-510 ms (316 chunks, 5.9M vertices), world
+  upload 160-235 ms, prepare 28-48, pipelines wait 25-39, GPU wait 60-70.
+  So the rebuild spikes in the v0.2.8 logs are the world being uploaded
+  again, not the shader compile.
+
+## Settings rebuilds keep the world uploaded
+
+A rebuild for a graphics option (Shadow Quality, anti-aliasing, colour
+vision) on the same device and map no longer drops the world's GPU scenes.
+`render.rs` takes the map scene, terrain, brick palette and chunks, and the
+renderer that uploaded them, out before `gpu_ready` and puts them back
+after; the new renderer takes them over on its first world frame with
+`SceneRenderer::adopt_scenes`. Material bind groups stay valid because both
+renderers build the same material layout descriptor, which wgpu-core
+deduplicates into one layout; the new renderer takes the old one's chunk
+pools and its environment probe map (which Metal materials sample) and
+rebuilds its camera bind groups. The light volume is bound again and the
+environment probe redrawn, as before. A map change or a new device still
+uploads everything; a failed adoption falls back to a full upload with a
+console warning.
+
+Regression test `graphics_rebuild.rs`
+(`a_shadow_quality_change_keeps_the_world_uploaded`, made-up content; an
+ignored variant on v20 content): a 864-brick block, Shadow Quality 0 to 3.
+Without the fix it fails ("the map was uploaded again: ... world upload,
+chunk uploads ...; events: ... uploaded the map"); with it, the change
+frame has no world upload, the new renderer uploads no palette geometry,
+and the settled frame matches one drawn after a fresh upload (0 of 76,800
+pixels differ).
+
 ## Tests
 
 - `cargo test -p bri-client --lib -- frame_trace quality client_code`:
@@ -121,15 +166,19 @@ From the log tail in `crash-20261010-214554.txt` (session
 - `cargo test -p bri-client-sandbox -- --include-ignored`: all pass,
   including the two calibration tests and the llvmpipe render tests.
 - `cargo clippy -p bri-client -p bri-render -p bri-client-sandbox --all-targets -D warnings`.
-- `large_build_perf` compiles; it needs content, a save and a real GPU, so it
-  has not run in this container.
+- `cargo test -p bri-client --test graphics_rebuild` (fails without the
+  keep, passes with it), and `cargo test -p bri-client --lib --
+  render_scale save_picture world_pipelines frame_trace`.
+- `cargo clippy -p bri-client -p bri-render --all-targets -D warnings`.
+- `large_build_perf` needs content, a save and a real GPU; it ran on Max's
+  PC (above), not in this container.
 
 ## Next
 
-- Max's next session log (or the benchmark on his PC with the Crazy Collage
-  Madness save) names the work in each long frame and the GPU passes per
-  Shadow Quality. If the rebuild frame is dominated by the chunk re-upload,
-  the standard fix is a per-frame upload budget (or keeping chunk buffers
-  across a shadow-only rebuild); if it is the pipelines wait, keep drawing
-  the old renderer until the new one is ready. Shadow or AO pass costs go
-  to the shadows thread.
+- Re-measure the Shadow Quality change frame on Max's PC with this branch.
+- The pipelines wait (25-39 ms there, seconds with FXC or a software
+  adapter) and the new shadow maps' first frames remain in the change frame;
+  drawing the old renderer until the new one compiles would remove the
+  first if it matters.
+- B and C reruns (1440p, AO and soft shading) for per-pass GPU costs; shadow
+  and AO costs go to the shadows thread.

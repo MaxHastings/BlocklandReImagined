@@ -161,6 +161,7 @@ impl App {
                 hidden_uploaded: None,
                 hidden_outlines: Default::default(),
                 effects_renderer: None,
+                retired_renderer: None,
                 gpu_scene: None,
                 gpu_broken: BTreeSet::new(),
                 gpu_terrain: Vec::new(),

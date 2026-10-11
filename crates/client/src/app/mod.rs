@@ -1648,6 +1648,7 @@ impl PlatformApp for App {
         self.shapes_uploaded = None;
         self.gpu.hidden_uploaded = None;
         self.rebuild_effects_renderer(device, queue, format)?;
+        self.gpu.retired_renderer = None;
         self.gpu.gpu_scene = None;
         self.gpu.gpu_terrain.clear();
         self.gpu.gpu_palette = None;
@@ -1702,6 +1703,7 @@ impl PlatformApp for App {
         self.gpu.shell_gpu = None;
         self.avatar.gpu_stopped();
         self.gpu.renderer = None;
+        self.gpu.retired_renderer = None;
         self.lighting.reflections = None;
         self.lighting.environment_probe = None;
         self.foliage.gpu_stopped();
