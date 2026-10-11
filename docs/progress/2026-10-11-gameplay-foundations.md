@@ -68,6 +68,15 @@ again), which the report says. Unrequired operations behave as before. The
 check for `take_item` is strict: nothing to take is a failure, where the
 unrequired call still does nothing quietly.
 
+**Hooks that edit the world mid-loop (`session/items.rs`, after the
+integration thread's review).** The pickup loop re-finds its spawner after
+every hook: `on_pickup` may remove the brick it was asked about (the
+soccer-crash PR's guard, ported here so this branch merges on its own), and
+`onItemPickup` and `on_collected` run after the take, so `reconcile_items`
+runs again after them. A spawner a result hook removed offers nothing to a
+later contact in the same tick, and no respawn is booked for a gone brick.
+`crates/sim/tests/item_hook_removal.rs` covers both, in both restore modes.
+
 ## Decisions
 
 - No transactions. "Check what you can, then keep the call only if every
