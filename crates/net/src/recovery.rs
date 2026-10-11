@@ -81,6 +81,10 @@ impl Schedule {
     }
 }
 
+/// A staging file this old belongs to a writer that is gone: a snapshot
+/// takes seconds to write.
+const STALE_STAGING: Duration = Duration::from_secs(600);
+
 /// A running host's recovery slot.
 pub(crate) struct Keeper {
     path: PathBuf,
@@ -89,6 +93,8 @@ pub(crate) struct Keeper {
 }
 impl Keeper {
     pub(crate) fn new(recovery: Recovery, session: &Session) -> Self {
+        // A writer killed mid-snapshot leaves its staging file behind.
+        bri_files::sweep_stale(&recovery.path, STALE_STAGING);
         Self {
             schedule: Schedule::new(recovery.every, Instant::now(), &session.recovery_snapshot()),
             path: recovery.path,
