@@ -45,11 +45,15 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
     wait::until_done(app, what, step, ready)
 }
+/// As the Options screen saves: the interface's prefs change too, so a later
+/// save keeps them (a second save of only Shadow Quality once put Lighting
+/// back to Unified, which takes the map's switchable light sheets and so
+/// uploads the map again).
 fn save_settings(app: &mut App, prefs: &[(&str, &str)]) -> Result<()> {
-    let mut settings = app.ui.settings();
     for (key, value) in prefs {
-        settings.prefs.insert((*key).into(), (*value).into());
+        app.ui.core.prefs.set(key, (*value).to_string());
     }
+    let settings = app.ui.settings();
     app.ui
         .core
         .request(UiAction::SaveSettings(Box::new(settings)));
@@ -252,6 +256,16 @@ fn a_shadow_quality_change_keeps_the_world_uploaded(f: &ContentRoot) -> Result<(
 
     // Low shadows: the renderers are rebuilt, the world stays uploaded.
     save_settings(&mut app, &[("$pref::ShadowQuality", "3")])?;
+    let lighting = app
+        .ui
+        .settings()
+        .prefs
+        .get(bri_client::graphics::LIGHTING)
+        .cloned();
+    ensure!(
+        lighting.as_deref() == Some("0"),
+        "Shadow Quality changed Lighting too ({lighting:?})"
+    );
     frame_trace::reset();
     capture(&mut app, &gpu, &mut renderer)?;
     let change = frame_trace::finish(Duration::ZERO, false);
