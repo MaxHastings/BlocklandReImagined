@@ -771,9 +771,7 @@ impl App {
             let (center, radius) = avatar.bounding_sphere();
             // A body part way through an opening draws on both sides.
             avatar.straddle = body_straddle(&self.vehicles, view, &passages, *owner, avatar);
-            let through = avatar
-                .straddle
-                .map(|s| s.carry.transform_point3(center));
+            let through = avatar.straddle.map(|s| s.carry.transform_point3(center));
             let seen = |c: Vec3| {
                 (!own_hidden && in_view.sees_sphere(c, radius))
                     || (others_see && elsewhere.sees_sphere(c, radius))

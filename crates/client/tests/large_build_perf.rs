@@ -657,7 +657,10 @@ fn large_build_frame_times() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    ensure!(bots <= 32, "BRI_PERF_BOTS is at most 32 (the host's bot limit)");
+    ensure!(
+        bots <= 32,
+        "BRI_PERF_BOTS is at most 32 (the host's bot limit)"
+    );
     let size = std::env::var("BRI_PERF_SIZE")
         .ok()
         .and_then(|s| {
@@ -1060,7 +1063,10 @@ fn large_build_frame_times() -> Result<()> {
     // them into the real content.
     if let Ok(entries) = std::fs::read_dir(state.join("content")) {
         for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_symlink() || t.is_dir()) {
+            if entry
+                .file_type()
+                .is_ok_and(|t| t.is_symlink() || t.is_dir())
+            {
                 let _ = std::fs::remove_dir(entry.path())
                     .or_else(|_| std::fs::remove_file(entry.path()));
             }

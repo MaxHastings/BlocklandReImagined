@@ -4443,8 +4443,8 @@ impl SceneRenderer {
                     }
                     hash.finish()
                 };
-                let moving_kept = self.shadows.dynamic_tiles.replace(Some(moving_key))
-                    == Some(moving_key);
+                let moving_kept =
+                    self.shadows.dynamic_tiles.replace(Some(moving_key)) == Some(moving_key);
                 if moving_kept && self.shadows.lamps.iter().any(Option::is_some) {
                     let mut stats = self.stats.get();
                     stats.shadow_layers_kept += 1;
