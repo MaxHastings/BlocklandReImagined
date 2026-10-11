@@ -786,11 +786,13 @@ impl App {
         saved.save(&path)
     }
     pub(super) fn join(&mut self, id: RequestId, address: String, password: String) -> Result<()> {
-        self.join_resuming(id, address, password, None, None)
+        self.join_resuming(id, address, password, None, None, None)
     }
     /// [`App::join`] presenting `resume`, the lost connection's ticket, so
     /// the host gives the player back their number (and so their bricks)
-    /// even before it has timed the old connection out. `shown` is the map
+    /// even before it has timed the old connection out, and `kept` the
+    /// bricks that connection held, so the host sends only what changed
+    /// since the drop. `shown` is the map
     /// the loading screen already names when the join resumes from it (the
     /// host's Add-Ons were downloaded and loaded): it stays on that screen
     /// instead of going back to the Connecting dialog.
@@ -800,6 +802,7 @@ impl App {
         address: String,
         password: String,
         resume: Option<bri_net::protocol::ResumeToken>,
+        kept: Option<bri_net::client::KeptBricks>,
         shown: Option<String>,
     ) -> Result<()> {
         ensure!(
@@ -910,6 +913,7 @@ impl App {
                 player,
                 local.clone(),
                 resume,
+                kept,
                 None,
                 &native_identity,
                 &cache,

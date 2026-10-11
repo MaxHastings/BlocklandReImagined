@@ -2080,6 +2080,7 @@ fn hello_for_proof(name: &str) -> Hello {
         host: None,
         identity: None,
         accept_differences: false,
+        kept: None,
     }
 }
 
@@ -3090,5 +3091,177 @@ async fn a_client_behind_on_its_updates_still_gets_its_reply() -> Result<()> {
     client.command(Command::EquipTool { slot: None }).await?;
     client.close();
     server.stop().await?;
+    Ok(())
+}
+
+/// A player whose network dropped resumes over the bricks they still hold:
+/// the host sends only what changed since (finding 13 of the v0.2.10 perf
+/// waste audit). When the kept world cannot be matched (another map, a
+/// cursor the host never reached) the whole world goes out as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_over_kept_bricks_downloads_only_the_changes() -> Result<()> {
+    use bri_net::client::KeptBricks;
+    use bri_net::traffic::Kind;
+    let server = server::start(tool_session(), options())?;
+    let plant = |position: [f32; 3]| Command::Plant {
+        definition: "plate".into(),
+        position,
+        quarter_turns: 0,
+        color: 0,
+    };
+    let mut a = Client::connect(
+        server.address,
+        &server.certificate,
+        "A".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let mut b = Client::connect(
+        server.address,
+        &server.certificate,
+        "B".into(),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    let Reply::Planted(first) = a.command(plant([0.5, 0.1, -3.25])).await? else {
+        panic!()
+    };
+    let Reply::Planted(second) = a.command(plant([4.5, 0.1, -3.25])).await? else {
+        panic!()
+    };
+    wait(&mut b, |c| {
+        c.replica.world.bricks.contains_key(&first) && c.replica.world.bricks.contains_key(&second)
+    })
+    .await?;
+    let owner = b.owner;
+    let token = b.resume.clone();
+    let kept = b.kept_bricks().context("B holds the whole world")?;
+    assert_eq!(kept.bricks.len(), 2);
+    b.close();
+    drop(b);
+    wait(&mut a, |c| !c.replica.names.contains_key(&owner)).await?;
+    // While B is away: one brick more, and the first one hammered.
+    let Reply::Planted(third) = a.command(plant([8.5, 0.1, -3.25])).await? else {
+        panic!()
+    };
+    aim(&mut a).await?;
+    assert!(swing(&mut a, 0).await?.is_none());
+    wait(&mut a, |c| {
+        !c.replica.world.bricks.contains_key(&first) && c.replica.world.bricks.contains_key(&third)
+    })
+    .await?;
+    let full = {
+        let before = server.traffic.sample();
+        let fresh = Client::connect(
+            server.address,
+            &server.certificate,
+            "Fresh".into(),
+            Vec::new(),
+            None,
+        )
+        .await?;
+        let sent = server.traffic.sample().since(&before);
+        fresh.close();
+        sent
+    };
+    // A transfer is its head and its chunks; the whole world fits one chunk.
+    assert_eq!(
+        full.messages(Kind::World),
+        2,
+        "a fresh join downloads the world"
+    );
+    let before = server.traffic.sample();
+    let mut resumed = Client::connect_resuming(
+        server.address,
+        &server.certificate,
+        "B".into(),
+        Vec::new(),
+        token.clone(),
+        Some(kept.clone()),
+    )
+    .await?;
+    let sent = server.traffic.sample().since(&before);
+    assert_eq!(resumed.owner, owner);
+    assert_eq!(resumed.replica.world, a.replica.world);
+    assert_eq!(resumed.replica.cursor, a.replica.cursor);
+    assert_eq!(
+        sent.messages(Kind::World),
+        2,
+        "the head and one chunk with the one brick that changed"
+    );
+    // The resumed replica follows the host from there like any other.
+    let Reply::Planted(fourth) = a.command(plant([12.5, 0.1, -3.25])).await? else {
+        panic!()
+    };
+    wait(&mut resumed, |c| {
+        c.replica.world.bricks.contains_key(&fourth)
+    })
+    .await?;
+    wait(&mut a, |c| c.replica.world.bricks.contains_key(&fourth)).await?;
+    assert_eq!(resumed.replica.world, a.replica.world);
+    // A kept world of another map, or current to a cursor the host never
+    // reached, is not resumed over: the whole world comes as to a fresh join.
+    for (what, kept) in [
+        (
+            "another map",
+            KeptBricks {
+                map_id: "another-map".into(),
+                ..resumed.kept_bricks().context("world held")?
+            },
+        ),
+        (
+            "a cursor ahead of the host",
+            KeptBricks {
+                cursor: u64::MAX,
+                ..resumed.kept_bricks().context("world held")?
+            },
+        ),
+    ] {
+        let token = resumed.resume.clone();
+        resumed.close();
+        drop(resumed);
+        wait(&mut a, |c| !c.replica.names.contains_key(&owner)).await?;
+        let before = server.traffic.sample();
+        resumed = Client::connect_resuming(
+            server.address,
+            &server.certificate,
+            "B".into(),
+            Vec::new(),
+            token,
+            Some(kept),
+        )
+        .await?;
+        let sent = server.traffic.sample().since(&before);
+        assert_eq!(resumed.owner, owner);
+        assert_eq!(resumed.replica.world, a.replica.world, "{what}");
+        assert_eq!(
+            sent.messages(Kind::World),
+            2,
+            "{what}: the whole world went out"
+        );
+    }
+    // A ticket the host does not know is refused with or without a kept world.
+    assert!(
+        Client::connect_resuming(
+            server.address,
+            &server.certificate,
+            "B".into(),
+            Vec::new(),
+            ResumeToken([3; 32]),
+            resumed.kept_bricks(),
+        )
+        .await
+        .is_err()
+    );
+    resumed.close();
+    a.close();
+    let report = server.stop().await?;
+    assert_eq!(
+        (report.resumes, report.kept_resumes),
+        (3, 1),
+        "one resume of three downloaded only the changes"
+    );
     Ok(())
 }

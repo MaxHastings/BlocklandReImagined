@@ -140,6 +140,7 @@ async fn raw_join(server: &server::ServerHandle, name: &str) -> Result<RawPeer> 
         host: None,
         identity: None,
         accept_differences: false,
+        kept: None,
     };
     codec::write_small_request(&mut send, &hello).await?;
     let welcome: Message =
