@@ -1713,7 +1713,7 @@ fn fresh_revision() -> Arc<std::sync::atomic::AtomicU64> {
 pub(crate) fn casters_signature(casters: ShadowCasters<'_>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    let mut scene = |scene: &GpuScene, hash: &mut std::collections::hash_map::DefaultHasher| {
+    let scene = |scene: &GpuScene, hash: &mut std::collections::hash_map::DefaultHasher| {
         (std::ptr::from_ref(scene) as usize).hash(hash);
         scene
             .sky_revision

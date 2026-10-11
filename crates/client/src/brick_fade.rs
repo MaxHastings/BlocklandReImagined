@@ -243,6 +243,9 @@ pub struct FadeDiagnostics {
     pub uploads: u64,
     /// Vertex rewrites of an uploaded mesh.
     pub vertex_updates: u64,
+    /// Of those, repaints that only rewrote the painted vertices' colour
+    /// (no rebuild of the brick's geometry).
+    pub recolors: u64,
     /// Images those uploads carried. The shared brick palette holds every
     /// brick texture, so this stays 0: easing never uploads a texture.
     pub images_uploaded: u64,
@@ -259,6 +262,47 @@ pub struct FadeMeshes {
 struct FadeMesh {
     data: SceneData,
     drawn: [f32; 4],
+    /// Per vertex, whether its colour is the paint colour (else it is fixed
+    /// by the brick: an authored vertex colour). `None` when the brick's
+    /// geometry or other vertex data changes with its paint: it is rebuilt.
+    paint: Option<Vec<bool>>,
+    /// The brick it was built from (recoloured): any other change rebuilds.
+    brick: bri_world::Brick,
+}
+/// Which vertices of `data`, built painted `drawn`, take the paint colour:
+/// the brick built again painted a different colour of the same alpha
+/// must differ only in those vertices' colours, each equal to its paint.
+fn paint_vertices(
+    data: &SceneData,
+    drawn: [f32; 4],
+    probe: Option<&SceneData>,
+    other: [f32; 4],
+) -> Option<Vec<bool>> {
+    let probe = probe?;
+    if probe.vertices.len() != data.vertices.len()
+        || probe.indices != data.indices
+        || probe.batches.len() != data.batches.len()
+        || probe
+            .batches
+            .iter()
+            .zip(&data.batches)
+            .any(|(a, b)| a.indices != b.indices || a.material != b.material)
+    {
+        return None;
+    }
+    data.vertices
+        .iter()
+        .zip(&probe.vertices)
+        .map(|(a, b)| {
+            let same = (a.position, a.normal, a.uv, a.lightmap_uv, a.fx)
+                == (b.position, b.normal, b.uv, b.lightmap_uv, b.fx);
+            match (a.color == drawn && b.color == other, a.color == b.color) {
+                (true, _) if same => Some(true),
+                (false, true) if same => Some(false),
+                _ => None,
+            }
+        })
+        .collect()
 }
 /// What must match for a colour change to be a vertex update only.
 #[derive(PartialEq)]
@@ -320,8 +364,27 @@ impl FadeMeshes {
                 .get(&id)
                 .is_some_and(|m| m.data.materials.len() == palette.scene.materials.len());
             let job = match self.meshes.get_mut(&id).filter(|_| same_palette) {
+                // A repaint at the same alpha changes only the painted
+                // vertices' colour: rewrite them, no rebuild.
+                Some(mesh)
+                    if mesh.paint.is_some() && mesh.drawn[3] == drawn[3] && mesh.brick == brick =>
+                {
+                    let paint = mesh.paint.as_ref().expect("checked above");
+                    for (vertex, painted) in mesh.data.vertices.iter_mut().zip(paint) {
+                        if *painted {
+                            vertex.color = colors[0];
+                        }
+                    }
+                    mesh.drawn = drawn;
+                    self.diagnostics.recolors += 1;
+                    FadeWork::Vertices
+                }
                 Some(mesh) => {
                     let before = Layout::of(&mesh.data);
+                    // Only a repaint (the same alpha) is worth learning
+                    // which vertices take the paint: an alpha fade
+                    // rebuilds every frame anyway.
+                    let repaint = mesh.drawn[3] == drawn[3];
                     crate::world_chunks::rebuild_brick(
                         &mut mesh.data,
                         &brick,
@@ -331,6 +394,12 @@ impl FadeMeshes {
                         Some(materials),
                     )?;
                     mesh.drawn = drawn;
+                    mesh.paint = if repaint {
+                        probe_paint(&mesh.data, &brick, colors[0], meshes, palette, materials)
+                    } else {
+                        None
+                    };
+                    mesh.brick = brick;
                     if Layout::of(&mesh.data) == before {
                         FadeWork::Vertices
                     } else {
@@ -345,7 +414,16 @@ impl FadeMeshes {
                         palette,
                         Some(materials),
                     )?;
-                    self.meshes.insert(id, FadeMesh { data, drawn });
+                    let paint = probe_paint(&data, &brick, colors[0], meshes, palette, materials);
+                    self.meshes.insert(
+                        id,
+                        FadeMesh {
+                            data,
+                            drawn,
+                            paint,
+                            brick,
+                        },
+                    );
                     FadeWork::Upload
                 }
             };
@@ -426,6 +504,27 @@ impl FadeModels {
     pub fn scenes(&self) -> impl Iterator<Item = &GpuScene> {
         self.models.values()
     }
+}
+
+/// [`paint_vertices`] of `data`, `brick` built painted `color`, against a
+/// second build painted another colour of the same alpha.
+fn probe_paint(
+    data: &SceneData,
+    brick: &bri_world::Brick,
+    color: [f32; 4],
+    meshes: &BTreeMap<String, bri_content::brick::Brick>,
+    palette: &crate::world_chunks::BrickPalette,
+    materials: &crate::materials::BrickMaterials,
+) -> Option<Vec<bool>> {
+    let other = [
+        if color[0] < 0.5 { 0.75 } else { 0.25 },
+        if color[1] < 0.5 { 0.625 } else { 0.375 },
+        if color[2] < 0.5 { 0.875 } else { 0.125 },
+        color[3],
+    ];
+    let probe =
+        crate::world_chunks::build_brick(brick, &[other], meshes, palette, Some(materials)).ok();
+    paint_vertices(data, color, probe.as_ref(), other)
 }
 
 /// `id` as it stands in `world`, recoloured to index a one-colour palette
@@ -737,6 +836,64 @@ mod tests {
         )
         .unwrap();
         assert!(fades.is_empty() && cpu.is_empty());
+    }
+
+    /// A repaint eases only the colour: after the first frame's build each
+    /// frame rewrites the painted vertices' colour instead of rebuilding
+    /// the brick, and the mesh stays what a fresh build would be.
+    #[test]
+    fn repaints_rewrite_colours_without_rebuilding() {
+        const PAINTED: u64 = 16;
+        let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
+        let white = row(PAINTED, true);
+        let mut black = white.clone();
+        for id in 1..=PAINTED {
+            let mut brick = black.bricks.get(&id).unwrap().clone();
+            brick.color = 0;
+            black.bricks.insert(id, brick);
+        }
+        let mut fades = BrickFades::default();
+        fades.observe(&black, &white, 1..=PAINTED);
+        let out = fades.left_out();
+        assert_eq!(out.len(), PAINTED as usize);
+        fades.chunks_applied(&out);
+        let mut cpu = FadeMeshes::default();
+        let mut frames = 0;
+        loop {
+            fades.advance(1.0 / 60.0, &out);
+            cpu.update(&fades, &out, &white, &meshes, &palette, &materials)
+                .unwrap();
+            frames += 1;
+            for id in 1..=PAINTED {
+                let drawn = fades.drawn(id).unwrap();
+                let fresh = brick_scene(&white, id, drawn, &meshes, &palette, &materials)
+                    .unwrap()
+                    .unwrap();
+                let kept = cpu.data(id).unwrap();
+                let vertices = |d: &SceneData| {
+                    d.vertices
+                        .iter()
+                        .map(|v| (v.position, v.normal, v.uv, v.lightmap_uv, v.color, v.fx))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(vertices(kept), vertices(&fresh), "frame {frames}");
+                assert_eq!(kept.indices, fresh.indices);
+            }
+            if fades.left_out().is_empty() {
+                break;
+            }
+            assert!(frames < 200, "never settles");
+        }
+        let d = &cpu.diagnostics;
+        eprintln!("{frames} frames: {d:?}");
+        assert_eq!(d.uploads, PAINTED, "one upload per brick: {d:?}");
+        assert_eq!(
+            d.recolors,
+            PAINTED * (frames - 1),
+            "every frame after the first only recolours: {d:?}"
+        );
     }
 
     #[test]
