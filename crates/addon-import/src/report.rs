@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::fmt::Write;
 
-pub const REPORT_SCHEMA: u32 = 2;
+pub const REPORT_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Report {
@@ -24,6 +24,9 @@ pub struct Report {
     pub ported: Vec<Finding>,
     pub ambiguous: Vec<Finding>,
     pub needs_behaviour: Vec<crate::behaviour::NeedsBehaviour>,
+    /// Each item a player can pick in the game (its `uiName`), with how
+    /// much of it the import carries ([`crate::coverage`]).
+    pub items: Vec<crate::coverage::ItemCoverage>,
     /// The listed native port for this Add-On (`crates/addon-import/ports`),
     /// whether it was applied, and why not.
     pub ports: Vec<crate::ports::Applied>,
@@ -102,6 +105,10 @@ pub struct Summary {
     /// What the importer could not convert that the port carries out
     /// ([`Report::ported`]).
     pub ported: usize,
+    /// Items a player can pick, and how many are at each coverage level
+    /// ([`crate::coverage::LEVELS`]).
+    pub items: usize,
+    pub items_by_coverage: std::collections::BTreeMap<String, usize>,
     /// `converted`, `converted_with_gaps` or `recognised_only`.
     pub verdict: String,
 }
@@ -118,6 +125,14 @@ pub struct AssetEntry {
     pub output: Option<String>,
     pub id: Option<String>,
     pub notes: Vec<String>,
+    /// Where the converted asset shows less than v20 did and needs adapting
+    /// (a billboard detail, a decal animation).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<String>,
+    /// Source the asset uses that the import could not find (stock art the
+    /// installed game lacks), drawn with a stand-in.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +248,11 @@ impl Report {
                 .filter(|b| b.port.as_ref().is_some_and(|p| p.applied))
                 .count(),
             ported: self.ported.len(),
+            items: self.items.len(),
+            items_by_coverage: self.items.iter().fold(Default::default(), |mut m, i| {
+                *m.entry(i.coverage.clone()).or_default() += 1;
+                m
+            }),
             verdict: String::new(),
         };
         let verdict = if s.datablocks_converted == 0 {
@@ -304,6 +324,32 @@ impl Report {
                 n.to_string()
             };
             let _ = writeln!(m, "| {label} | {n} |");
+        }
+        if !self.items.is_empty() {
+            let _ = writeln!(m, "\n## Items\n");
+            let _ = writeln!(
+                m,
+                "What a player can pick, and how much of it this import carries: preserved, ported, approximate, unsupported, or missing source (worst of what it is made of).\n"
+            );
+            let _ = writeln!(
+                m,
+                "| Item | Datablock | Coverage | Why |\n|---|---|---|---|"
+            );
+            for i in &self.items {
+                let why = match i.reasons.len() {
+                    0 => String::new(),
+                    1 => i.reasons[0].clone(),
+                    n => format!("{} (+{} more)", i.reasons[0], n - 1),
+                };
+                let _ = writeln!(
+                    m,
+                    "| {} | `{}` | {} | {} |",
+                    i.ui_name.replace('|', "\\|"),
+                    i.name,
+                    i.coverage.replace('_', " "),
+                    why.replace('|', "\\|")
+                );
+            }
         }
         if !self.dependencies.is_empty() {
             let _ = writeln!(m, "\n## Dependencies\n");

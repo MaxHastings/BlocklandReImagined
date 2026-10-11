@@ -116,6 +116,16 @@ fn shotgun_port_fires_the_spread() {
     assert_eq!(on_fire.function, "shotgunImage::onFire");
     assert!(on_fire.port.as_ref().is_some_and(|p| p.applied));
     assert_eq!(report.summary.needs_behaviour_ported, 1);
+    // The gun's firing is the port's. The stand-in copy ships no model, so
+    // the gun as a whole is missing its source, worst reason first.
+    let gun = &report.items[0];
+    assert_eq!(gun.name, "shotgunItem");
+    assert_eq!(gun.coverage, "missing_source", "{gun:#?}");
+    assert!(gun.reasons[0].contains("shotgun.dts is not in this Add-On"));
+    assert_eq!(
+        gun.reasons.last().unwrap(),
+        "ported: shotgunImage::onFire by port weapon_shotgun"
+    );
     let md = std::fs::read_to_string(out.join("IMPORT-REPORT.md")).unwrap();
     assert!(
         md.contains("**Ported** by `weapon_shotgun` (verified)"),
@@ -177,6 +187,18 @@ fn a_copy_that_does_not_match_is_named_not_patched() {
             .is_some_and(|p| !p.applied)
     );
     assert_eq!(report.summary.needs_behaviour_ported, 0);
+    // Its firing script is unported, so the gun's firing is unsupported.
+    let reasons = &report.items[0].reasons;
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.starts_with("unsupported: shotgunImage::onFire needs native behaviour")),
+        "{reasons:?}"
+    );
+    assert!(
+        !reasons.iter().any(|r| r.starts_with("ported:")),
+        "{reasons:?}"
+    );
     assert_eq!(click(&out, ITEM).0.len(), 1);
     std::fs::remove_dir_all(dir).unwrap();
 }

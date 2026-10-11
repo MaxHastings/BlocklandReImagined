@@ -70,7 +70,11 @@ fn name(names: &[String], value: i32) -> Result<String> {
 pub struct Provenance {
     pub version: u32,
     pub exporter: u32,
+    /// What the native shape cannot show as Torque did: it needs adapting.
     pub warnings: Vec<String>,
+    /// Records read other than at face value, the way Torque reads them:
+    /// noted for provenance, with nothing drawn differently from v20.
+    pub faithful: Vec<String>,
     pub material_flags: Vec<u32>,
     pub mesh_flags: Vec<u32>,
     pub opaque_sections: Vec<Vec<u32>>,
@@ -81,6 +85,7 @@ impl Provenance {
             version,
             exporter,
             warnings: vec![],
+            faithful: vec![],
             material_flags: vec![],
             mesh_flags: vec![],
             opaque_sections: vec![],
@@ -589,7 +594,7 @@ fn mesh(
         && primitives.iter().all(|p| p.triangles.is_empty())
     {
         provenance
-            .warnings
+            .faithful
             .push("Explicit empty mesh slot normalized to null".into());
         return Ok(None);
     }
@@ -839,7 +844,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
     }
     for (material, f) in materials.iter().zip(&flags) {
         if f & (ADDITIVE | SUBTRACTIVE) != 0 && f & TRANSLUCENT == 0 {
-            provenance.warnings.push(format!(
+            provenance.faithful.push(format!(
                 "material {} marks {} without translucent ({f:#x}): drawn opaque, as Torque draws it",
                 material.name,
                 if f & ADDITIVE != 0 { "additive" } else { "subtractive" }
@@ -851,7 +856,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
     // after it (some exporters pad the file) are never read in Torque.
     match file.remaining() {
         0 => {}
-        n if n <= MAX_TRAILING_BYTES => provenance.warnings.push(format!(
+        n if n <= MAX_TRAILING_BYTES => provenance.faithful.push(format!(
             "{n} bytes after the material list ignored, as Torque does"
         )),
         _ => file.finish()?,

@@ -1756,3 +1756,95 @@ datablock ShapeBaseImageData(pathGunImage) { shapeFile = $PG::ModelPath @ "gun.d
     assert_ne!(model["source"], "placeholder", "{model}");
     assert!(!model.is_null(), "{}", presentation["models"]);
 }
+
+/// Each item a player can pick gets one coverage level, the worst of what
+/// it is made of, with the reasons: a gun of plain data is preserved, one
+/// whose firing is a script with no port is unsupported, one whose model
+/// file is missing is missing its source, and one whose projectile names a
+/// damage type nobody declares is approximate. A sound offered to events
+/// is an item too; a datablock without a `uiName` (an image, a projectile)
+/// is part of its item. A material Torque found no texture for either is
+/// drawn as Torque drew it, so the plain gun stays preserved.
+#[test]
+fn each_item_gets_the_worst_coverage_of_what_it_is_made_of() {
+    let source = fresh("coverage-source").with_file_name("Weapon_Coverage");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Coverage\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./guns.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("gun.dts"),
+        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["nowhere"]),
+    )
+    .unwrap();
+    std::fs::write(source.join("beep.wav"), wav()).unwrap();
+    std::fs::write(
+        source.join("guns.cs"),
+        r#"
+datablock AudioProfile(beepSound) { fileName = "./beep.wav"; preload = true; uiName = "Beep"; };
+datablock ProjectileData(zapProjectile) { directDamage = 10; directDamageType = $DamageType::Zap; muzzleVelocity = 50; lifetime = 1000; };
+datablock ItemData(zapGunItem) { shapeFile = "./gun.dts"; uiName = "Zap Gun"; image = zapGunImage; };
+datablock ShapeBaseImageData(zapGunImage) { shapeFile = "./gun.dts"; item = zapGunItem; projectile = zapProjectile; stateName[0] = "Ready"; };
+datablock ItemData(plainGunItem) { shapeFile = "./gun.dts"; uiName = "Plain Gun"; image = plainGunImage; };
+datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = plainGunItem; stateName[0] = "Ready"; };
+datablock ItemData(scriptGunItem) { shapeFile = "./gun.dts"; uiName = "Script Gun"; image = scriptGunImage; };
+datablock ShapeBaseImageData(scriptGunImage) { shapeFile = "./gun.dts"; item = scriptGunItem; stateName[0] = "Ready"; stateTransitionOnTriggerDown[0] = "Fire"; stateName[1] = "Fire"; stateScript[1] = "onFire"; stateTimeoutValue[1] = 0.2; stateTransitionOnTimeout[1] = "Ready"; };
+datablock ItemData(lostGunItem) { shapeFile = "./lost.dts"; uiName = "Lost Gun"; image = lostGunImage; };
+datablock ShapeBaseImageData(lostGunImage) { shapeFile = "./lost.dts"; item = lostGunItem; stateName[0] = "Ready"; };
+function scriptGunImage::onFire(%this, %obj, %slot)
+{
+    %obj.setWhiteOut(1);
+    %obj.client.score += 5;
+}
+"#,
+    )
+    .unwrap();
+    let out = fresh("coverage-out").join("weapon_coverage");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let coverage: Vec<(&str, &str)> = report
+        .items
+        .iter()
+        .map(|i| (i.ui_name.as_str(), i.coverage.as_str()))
+        .collect();
+    assert_eq!(
+        coverage,
+        [
+            ("Lost Gun", "missing_source"),
+            ("Plain Gun", "preserved"),
+            ("Script Gun", "unsupported"),
+            ("Zap Gun", "approximate"),
+            ("Beep", "preserved"),
+        ],
+        "{:#?}",
+        report.items
+    );
+    let item = |name: &str| report.items.iter().find(|i| i.ui_name == name).unwrap();
+    assert!(item("Plain Gun").reasons.is_empty());
+    assert_eq!(item("Plain Gun").uses, ["plainGunItem", "plainGunImage"]);
+    assert!(
+        item("Script Gun").reasons[0]
+            .starts_with("unsupported: scriptGunImage::onFire needs native behaviour"),
+        "{:?}",
+        item("Script Gun").reasons
+    );
+    assert!(
+        item("Lost Gun").reasons[0].contains("lost.dts is not in this Add-On"),
+        "{:?}",
+        item("Lost Gun").reasons
+    );
+    assert_eq!(report.summary.items, 5);
+    assert_eq!(report.summary.items_by_coverage["missing_source"], 1);
+    let markdown = report.markdown();
+    assert!(
+        markdown.contains("| Lost Gun | `lostGunItem` | missing source | missing_source: "),
+        "{markdown}"
+    );
+}

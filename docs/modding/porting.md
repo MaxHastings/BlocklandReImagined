@@ -76,6 +76,26 @@ names the port. If they do not match (a different version of the Add-On), it
 changes nothing, and the report names the port and says which part did not
 match.
 
+The report also rates each item a player can pick (each datablock with a
+`uiName`: a weapon, vehicle, brick, player type, or a projectile, emitter or
+sound offered to events). `items` in `import-report.json`, and the Items table
+in `IMPORT-REPORT.md`, give each one coverage level, the worst of the
+datablocks, files, dependencies and script callbacks it is made of, with the
+reasons worst first:
+
+| Coverage | Means |
+|---|---|
+| `preserved` | its original art, sounds and data, shown as v20 showed them |
+| `ported` | its script behaviour is carried out by a verified port |
+| `approximate` | converted, but shown or behaving differently: a partial port, a datablock converted with gaps, a model part needing adaptation, a damage type nobody declares |
+| `unsupported` | script behaviour with no port, or a datablock or file with no native form |
+| `missing_source` | a file, datablock or Add-On it names was not found (give `--reference` and `--installed`), or stock art the installed game lacks, so a stand-in is drawn |
+
+A model material whose texture v20 could not find either is drawn as Torque
+drew it, in the colour shift, so it does not lower the level; one whose
+texture is v20's stock art (`base/data/shapes/red.png`) missing from the
+installed game does.
+
 An applied port also settles its datablocks: a function it covers, or an image
 state script that calls one, becomes "ported by" that port, and a state script
 the Add-On leaves to the stock `WeaponImage` (`onFire`, `onCharge` and the
