@@ -302,3 +302,63 @@ fn a_call_to_no_function_is_a_warning_at_its_line() {
         "{report}"
     );
 }
+
+/// What a script weapon's data does only while the game runs, found by the
+/// check: an empty gun that dry-fires and reloads by itself, and state that
+/// starts too large for its limit, each named with the image or key.
+#[test]
+fn timing_and_state_limits_are_named_before_the_game_runs() {
+    let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/samples/sample-bubble-blaster");
+    let dir = tempfile::tempdir().unwrap();
+    let gun = dir.path().join("gun");
+    write(
+        &gun,
+        "package.json",
+        manifest(
+            "gun",
+            json!({ "provides": [
+                { "kind": "behaviour", "id": "gun:behaviour/main", "file": "behaviour.json" },
+                { "kind": "script", "id": "gun:script/main", "file": "main.rhai" }
+            ] }),
+        ),
+    );
+    write(
+        &gun,
+        "behaviour.json",
+        json!({ "schema_version": 1, "script": "main.rhai",
+                "commands": [{ "name": "dry", "args": [], "tool_only": true }],
+                "state": { "player": { "log": { "default": "x".repeat(3000) } } } }),
+    );
+    std::fs::write(gun.join("main.rhai"), "fn cmd_dry(p) { }").unwrap();
+    let mut weapons: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sample.join("assets/weapons.json")).unwrap())
+            .unwrap();
+    let image = weapons["images"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    image["states"] = json!([
+        { "name": "Ready", "ticks": 0, "no_ammo": 1 },
+        { "name": "Dry", "ticks": 6, "script": "onDryFire", "timeout": 0 }
+    ]);
+    image["commands"] = json!({ "states": { "ondryfire": "gun:dry" } });
+    write(&gun.join("assets"), "weapons.json", weapons);
+    let report = check(&gun);
+    assert!(report.ok, "{report}");
+    let found: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("weapon.") || d.code.starts_with("state."))
+        .collect();
+    let codes: Vec<&str> = found.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(
+        codes,
+        ["weapon.idle_cycle", "state.value_large"],
+        "{report}"
+    );
+    assert!(found[0].message.contains("Ready → Dry → Ready"), "{report}");
+    assert!(found[1].message.contains("`log`"), "{report}");
+}

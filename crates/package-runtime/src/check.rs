@@ -255,6 +255,10 @@ pub fn check(folder: &Path) -> Report {
                 continue;
             }
         };
+        diagnostics.extend(crate::timing::weapon_timing(
+            &pack,
+            &format!("{}/assets/weapons.json", manifest.id),
+        ));
         // The Add-On's own models (`*.shape.json` beside weapons.json) and
         // the PNG each of their materials names.
         let assets = parent.join(dir).join("assets");
@@ -286,6 +290,17 @@ pub fn check(folder: &Path) -> Report {
                     .at(format!("{}/assets/presentation.json", manifest.id))
                     .hint("items then use the stock models and icons they name; run bri-import-addon to convert the Add-On's own art"),
             );
+        }
+    }
+    // The state each behaviour declares, against the limits it will meet.
+    for (manifest, dir) in &found {
+        for provided in manifest.provides.iter().filter(|p| p.kind == "behaviour") {
+            let Ok(bytes) = std::fs::read(parent.join(dir).join(&provided.file)) else {
+                continue;
+            };
+            if let Ok(behaviour) = serde_json::from_slice::<crate::content::Behaviour>(&bytes) {
+                diagnostics.extend(crate::timing::state_budget(&manifest.id, &behaviour));
+            }
         }
     }
     // Missing dependencies are reported above, with where to put them.
