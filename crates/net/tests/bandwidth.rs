@@ -4,7 +4,7 @@
 //!
 //! Print the table: cargo test -p bri-net --test bandwidth -- --nocapture
 mod common;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bri_net::{
     client::Client,
     server::{self, ServerHandle},
@@ -498,12 +498,11 @@ async fn crowd(
     Ok((report, clients, server))
 }
 
-async fn finish(clients: Vec<Client>, server: ServerHandle) -> Result<()> {
+async fn finish(clients: Vec<Client>, server: ServerHandle) -> Result<server::ServerReport> {
     for client in &clients {
         client.close();
     }
-    server.stop().await?;
-    Ok(())
+    server.stop().await
 }
 
 /// 32 players running, spread over a map and crowded at spawn.
@@ -831,5 +830,49 @@ async fn a_joiner_drops_a_projectile_that_ended_before_the_next_update() -> Resu
         client.close();
     }
     server.stop().await?;
+    Ok(())
+}
+
+/// A player whose network dropped resumes over the bricks they kept: with
+/// nothing changed since, no world bytes go out at all, where a fresh join
+/// of the same build downloads every brick (finding 13 of the v0.2.10 perf
+/// waste audit).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resume_over_kept_bricks_sends_no_world_when_nothing_changed() -> Result<()> {
+    let bricks = 100_000;
+    let server = host(big_world(bricks))?;
+    let before = server.traffic.sample();
+    let mut clients = join(&server, 1).await?;
+    let mut client = clients.pop().context("joined")?;
+    client.await_world().await?;
+    let full = server.traffic.sample().since(&before);
+    let token = client.resume.clone();
+    let kept = client.kept_bricks().context("world held")?;
+    assert_eq!(kept.bricks.len() as u64, bricks);
+    client.close();
+    drop(client);
+    let before = server.traffic.sample();
+    let resumed = Client::connect_resuming(
+        server.address,
+        &server.certificate,
+        "Player0".into(),
+        Vec::new(),
+        token,
+        Some(kept),
+    )
+    .await?;
+    let sent = server.traffic.sample().since(&before);
+    eprintln!(
+        "resume over {bricks} kept bricks, nothing changed: {} bytes of world ({} bytes on a fresh join)",
+        sent.bytes(Kind::World),
+        full.bytes(Kind::World)
+    );
+    assert_eq!(resumed.replica.world.bricks.len() as u64, bricks);
+    // The resume's world traffic is the head alone: no chunk follows it.
+    assert_eq!(sent.messages(Kind::World), 1);
+    assert!(full.messages(Kind::World) >= 2);
+    assert!(sent.bytes(Kind::World) * 5 < full.bytes(Kind::World));
+    let report = finish(vec![resumed], server).await?;
+    assert_eq!(report.kept_resumes, 1);
     Ok(())
 }

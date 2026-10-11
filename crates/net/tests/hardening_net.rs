@@ -133,6 +133,7 @@ fn hello(name: &str) -> Hello {
         host: None,
         identity: None,
         accept_differences: false,
+        kept: None,
     }
 }
 
@@ -664,6 +665,7 @@ async fn a_rejoin_with_its_ticket_comes_back_as_the_same_player() -> Result<()> 
             "Ann".into(),
             Vec::new(),
             resume,
+            None,
             None,
             &key_a,
             &cache,

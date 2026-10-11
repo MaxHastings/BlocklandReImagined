@@ -443,7 +443,8 @@ impl App {
                     self.net.join_notices.push(text);
                     self.addons.skip_add_on_reload = true;
                 }
-                if let Err(error) = self.join_resuming(id, address, String::new(), None, Some(map))
+                if let Err(error) =
+                    self.join_resuming(id, address, String::new(), None, None, Some(map))
                 {
                     self.net.join_notices.clear();
                     self.answer(id, Err(error));

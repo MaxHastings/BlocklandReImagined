@@ -39,8 +39,9 @@ impl App {
             {
                 self.net.reconnects += 1;
                 let resume = a.view.as_ref().map(|view| view.resume.clone());
+                let kept = a.view.as_ref().and_then(|view| view.kept.clone());
                 if self
-                    .join_resuming(id, target, String::new(), resume, None)
+                    .join_resuming(id, target, String::new(), resume, kept, None)
                     .is_ok()
                 {
                     return Ok(());
