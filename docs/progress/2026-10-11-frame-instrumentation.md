@@ -24,6 +24,25 @@ From the log tail in `crash-20261010-214554.txt` (session
   map change). 245.6 ms is the minute of the Skylands map change. Max was
   switching Shadow Quality for the Bedroom screenshots then. The 353.1 ms
   minute has no rebuild line and stays unattributed.
+- **Across all eight v0.2.8 session logs** (read from Max's install, read
+  only), 11 of the 12 frames of 245 ms or more fall in a minute with a
+  renderer rebuild ("Compiled scene pipelines" after joining) or a map
+  change: 707.8 ms (two Shadow Quality changes, `142458`), 466.8
+  (`145646`), 390.6, 336.9, 245.6 (`210717`), 383.0, 344.1, 289.5, 276.8,
+  258.2, 257.4 (`214615`). The twelfth is the 353.1 ms above. The minute
+  after joining also carries one 97-423 ms frame in every session (the
+  join's own first frames). Frames of 90-120 ms with no event otherwise
+  appear about once per long session.
+- **Add-On GPU calibration reads low at join.** The first measurement in
+  each session is 3.7e8 to 1.4e9 shader operations per ms; the ones after a
+  rebuild read 1.4e9 to 4.8e9, up to 13 times more, on the same RTX 4070
+  SUPER. That fits a GPU still at idle clocks when the game enters (an
+  inference, not measured). With calibration now once per adapter, a
+  session keeps its join-time figure after a graphics change, where v0.2.8
+  happened to re-measure; Add-On shader loop caps were already set from the
+  join-time figure in every session without a rebuild. Passed to the Add-On
+  scripting owner: warm the GPU (or measure after a few game frames) before
+  calibrating.
 - A rebuild does all of this on the main thread in the next frame: waits
   for the world's pipelines (`Building::wait`, 47 ms in that log, seconds
   with FXC), uploads the map and every brick chunk again (about 188k bricks
