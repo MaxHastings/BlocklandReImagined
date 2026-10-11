@@ -1,8 +1,10 @@
 //! The Admin Menu's Environment window and its colour picker, laid out after
 //! v21's `EnvironmentGui` and `ColorPickerGui` and built natively (none of
 //! v21's GUI files are used). Simple picks a whole look; Advanced sets each
-//! value. Apply sends the draft to the host, which checks the rank and every
-//! value, then gives it to every player.
+//! value. A change is sent to the host once the rows have been still for a
+//! moment (so a slider's every step is not a request), and Apply sends it
+//! at once; the host checks the rank and every value, then gives it to every
+//! player.
 use super::*;
 use crate::models::admin::{AdminAction, AdminFeature};
 use crate::models::environment::{ColorField, NumberField, hsv, rgb};
@@ -47,6 +49,11 @@ fn slider(r: Rect, name: &str, (lo, hi): (f32, f32)) -> Control {
     let mut c = named(ctrl("GuiSliderCtrl", "GuiDefaultProfile", r), name);
     c.fields.insert("range".into(), format!("{lo} {hi}"));
     c.fields.insert("snap".into(), "0".into());
+    c
+}
+fn popup(r: Rect, name: &str) -> Control {
+    let mut c = named(ctrl("GuiPopUpMenuCtrl", "GuiPopUpMenuProfile", r), name);
+    c.command = Some(name.into());
     c
 }
 fn check(r: Rect, label: &str, name: &str) -> Control {
@@ -114,6 +121,12 @@ const ROWS: [Row; 16] = [
     Row::VignetteMultiply,
 ];
 const ROW_HEIGHT: i32 = 28;
+/// The favourites slots' list (Add-On Settings keeps its favourites the
+/// same way: a slot list with Load and Store).
+const FAVS: &str = "EnvFavs";
+const FAV_SLOTS: u8 = 10;
+/// How long the rows stay still before a change goes to the host.
+const LIVE_DELAY_MS: u64 = 250;
 const COLOR_FIELDS: [ColorField; 7] = [
     ColorField::DirectLight,
     ColorField::AmbientLight,
@@ -134,11 +147,17 @@ pub struct Environment {
     view: View,
     advanced: bool,
     seen: Option<u64>,
+    /// The model revision the rows last changed at, and how long ago.
+    last_revision: u64,
+    idle_ms: u64,
+    /// The revision last sent to the host: a change goes once, and a
+    /// rejected one is not sent again until the rows change.
+    sent_revision: u64,
 }
 impl Environment {
     pub fn new(core: &mut Core) -> Self {
         core.environment.begin();
-        let (mut root, mut win) = dialog("Environment", 440, 440);
+        let (mut root, mut win) = dialog("Environment", 440, 470);
         win.children.push(push_button(
             Rect::new(12, 30, 100, 24),
             "Simple",
@@ -201,7 +220,7 @@ impl Environment {
         let mut hint = text(
             "GuiMLTextProfile",
             Rect::new(0, 232, 416, 60),
-            "Pick a look, then Apply. Everyone in the server sees it. \
+            "Pick a look: everyone in the server sees it as you change it. \
              Advanced sets each value; Reset gives the map its own look back.",
         );
         hint.class = "GuiMLTextCtrl".into();
@@ -254,8 +273,25 @@ impl Environment {
         }
         advanced.children.push(rows);
         win.children.push(advanced);
+        // Favourites: a slot to Load the rows from or Store them in.
+        win.children.push(text(
+            "GuiTextProfile",
+            Rect::new(12, 372, 70, 20),
+            "Favorites:",
+        ));
+        win.children.push(popup(Rect::new(84, 372, 110, 20), FAVS));
+        win.children.push(push_button(
+            Rect::new(198, 370, 56, 24),
+            "Load",
+            "EnvFavLoad",
+        ));
+        win.children.push(push_button(
+            Rect::new(258, 370, 56, 24),
+            "Store",
+            "EnvFavSave",
+        ));
         let mut status = named(
-            text("GuiMLTextProfile", Rect::new(12, 370, 416, 20), ""),
+            text("GuiMLTextProfile", Rect::new(12, 400, 416, 20), ""),
             "EnvStatus",
         );
         status.class = "GuiMLTextCtrl".into();
@@ -266,7 +302,7 @@ impl Environment {
             (330, "Apply", "EnvApply"),
         ] {
             win.children
-                .push(push_button(Rect::new(x, 398, 98, 28), label, name));
+                .push(push_button(Rect::new(x, 428, 98, 28), label, name));
         }
         root.children.push(win);
         let mut view = View::new(&root);
@@ -278,13 +314,80 @@ impl Environment {
                 .map(|(i, (name, _))| ((*name).to_string(), i as i64))
                 .collect();
         }
+        let revision = core.environment.revision;
         let mut screen = Self {
             view,
             advanced: false,
             seen: None,
+            last_revision: revision,
+            idle_ms: 0,
+            sent_revision: revision,
         };
+        screen.fill_favorites(core);
         screen.refresh(core);
         screen
+    }
+    /// The slot list, each slot saying whether it holds a favourite; the
+    /// picked slot stays picked.
+    fn fill_favorites(&mut self, core: &Core) {
+        if let Some(n) = self.view.id(FAVS) {
+            let current = self.view.selected(n).unwrap_or(0);
+            self.view.state(n).items = (0..FAV_SLOTS)
+                .map(|slot| {
+                    let label = if core.settings.environment_favorites.contains_key(&slot) {
+                        format!("Slot {}", slot + 1)
+                    } else {
+                        format!("Slot {} (empty)", slot + 1)
+                    };
+                    (label, i64::from(slot))
+                })
+                .collect();
+            self.view.select(n, Some(current));
+        }
+    }
+    fn favorite_slot(&self) -> u8 {
+        self.view
+            .id(FAVS)
+            .and_then(|n| self.view.selected(n))
+            .and_then(|s| u8::try_from(s).ok())
+            .filter(|s| *s < FAV_SLOTS)
+            .unwrap_or(0)
+    }
+    /// Keep the rows in the picked slot (what they show, applied or not).
+    fn save_favorite(&mut self, core: &mut Core) {
+        let slot = self.favorite_slot();
+        let favorite = core.environment.favorite();
+        core.settings.environment_favorites.insert(slot, favorite);
+        core.save_settings();
+        self.fill_favorites(core);
+        core.admin.status = format!("Saved in slot {}.", slot + 1);
+    }
+    /// Send the rows to the host, once per change.
+    fn send(&mut self, core: &mut Core) {
+        let settings = core.environment.settings();
+        let action = AdminAction::SetEnvironment {
+            settings: Box::new(settings),
+        };
+        if core.admin.busy() || !core.admin.allowed(&action) {
+            return;
+        }
+        self.sent_revision = core.environment.revision;
+        core.admin_request(action);
+    }
+    /// Fill the rows from the picked slot; they go to the host like any
+    /// change.
+    fn load_favorite(&mut self, core: &mut Core) {
+        let slot = self.favorite_slot();
+        let Some(favorite) = core.settings.environment_favorites.get(&slot).cloned() else {
+            core.admin.status = format!("Slot {} is empty.", slot + 1);
+            return;
+        };
+        if let Err(e) = favorite.validate() {
+            core.admin.status = format!("Slot {} cannot be used: {e}", slot + 1);
+            return;
+        }
+        core.environment.load_favorite(favorite);
+        core.admin.status = format!("Loaded slot {}.", slot + 1);
     }
     fn refresh(&mut self, core: &Core) {
         self.seen = Some(core.environment.revision);
@@ -348,8 +451,10 @@ impl Environment {
                     }),
             );
         }
-        if let Some(n) = v.id("EnvReset") {
-            v.set_active(n, !busy);
+        for name in ["EnvReset", "EnvFavLoad", "EnvFavSave"] {
+            if let Some(n) = v.id(name) {
+                v.set_active(n, !busy);
+            }
         }
         let status = if !core.admin.status.is_empty() {
             core.admin.status.clone()
@@ -385,8 +490,25 @@ impl Screen for Environment {
         }
         self.refresh(core);
     }
-    fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
-        if self.seen != Some(core.environment.revision) {
+    fn tick(&mut self, dt_ms: u64, core: &mut Core) {
+        let revision = core.environment.revision;
+        if revision != self.last_revision {
+            self.last_revision = revision;
+            self.idle_ms = dt_ms;
+        } else {
+            self.idle_ms = self.idle_ms.saturating_add(dt_ms);
+        }
+        // Live: a change that has settled goes to the host by itself. One
+        // in flight waits; the rows' latest state goes once it is answered.
+        if self.idle_ms >= LIVE_DELAY_MS
+            && revision != self.sent_revision
+            && !core.admin.busy()
+            && core.environment.changed()
+        {
+            self.send(core);
+            self.refresh(core);
+        }
+        if self.seen != Some(revision) {
             self.refresh(core);
         }
     }
@@ -445,16 +567,13 @@ impl Screen for Environment {
                 core.admin.status.clear();
                 core.environment.reset();
             }
+            "EnvFavSave" => self.save_favorite(core),
+            "EnvFavLoad" => self.load_favorite(core),
             "EnvClose" => {
                 Self::close(core);
                 return;
             }
-            "EnvApply" => {
-                let settings = core.environment.settings();
-                core.admin_request(AdminAction::SetEnvironment {
-                    settings: Box::new(settings),
-                });
-            }
+            "EnvApply" => self.send(core),
             command => {
                 if let Some(f) = COLOR_FIELDS.into_iter().find(|f| command == color_name(*f)) {
                     core.environment.picking = Some(f);
