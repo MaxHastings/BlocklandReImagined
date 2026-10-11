@@ -1,6 +1,9 @@
 //! Private-content acceptance for the native P90, on the exact v0.2.8 runtime.
 //! Run ignored tests with BRI_P90_TEST_ROOT pointing at the builder output and
 //! BRI_P90_CONTENT_ROOT pointing at the unmodified installed game's content.
+//! That folder needs the `packages.json` an installed game has; a checkout's
+//! generated `content/` has none (copy `crates/package/base-packages.json`
+//! there as `packages.json` for the run).
 use anyhow::{Context, Result, ensure};
 use bri_net::{
     client::Client,
